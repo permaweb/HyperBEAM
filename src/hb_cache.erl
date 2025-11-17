@@ -38,6 +38,7 @@
 %%% `ensure_all_loaded', the caller can specify additional options to use when
 %%% loading the data -- overriding the suggested options in the link.
 -module(hb_cache).
+-export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
@@ -72,7 +73,14 @@ ensure_loaded(Ref,
             {store, Store}
         }
     ),
-    case hb_cache:read(ID, hb_util:deep_merge(Opts, LkOpts, Opts)) of
+    CacheReadResult = 
+        case hb_opts:get(commitment, undefined, Opts) of
+            true ->
+                do_read_commitment(ID, hb_util:deep_merge(Opts, LkOpts, Opts));
+            _ ->
+                hb_cache:read(ID, hb_util:deep_merge(Opts, LkOpts, Opts))
+        end,
+    case CacheReadResult of
         {ok, Next} ->
             ?event(debug_cache,
                 {loaded,
@@ -106,7 +114,14 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
     % the options that are already set in the link.
     UnscopedOpts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
     Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LinkOpts)),
-    case hb_cache:read(ID, Opts) of
+    CacheReadResult = 
+        case hb_opts:get(commitment, undefined, Opts) of
+            true ->
+                do_read_commitment(ID, Opts);
+            _ ->
+                read(ID, Opts)
+        end,
+    case CacheReadResult of
         {ok, LoadedMsg} ->
             ?event(caching,
                 {lazy_loaded,
@@ -380,13 +395,72 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
+    StoreReadResult =
+        store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
+    case StoreReadResult of 
+        {ok, Res} ->
+            {ok, hb_message:normalize_commitments(Res, Opts)};
+        _ -> StoreReadResult
+    end.
+do_read_commitment(Path, Opts) ->
     store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
+%% @doc Load all of the commitments for a message into memory.
+read_all_commitments(Msg, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
+    CommitmentsPath =
+        hb_store:resolve(
+            Store,
+            hb_store:path(Store, [UncommittedID, <<"commitments">>])
+        ),
+    FoundCommitments =
+        case hb_store:list(Store, CommitmentsPath) of
+            {ok, CommitmentIDs} ->
+                lists:filtermap(
+                    fun(CommitmentID) ->
+                        ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
+                        ResolvedCommPath =
+                            hb_store:path(
+                                Store,
+                                [CommitmentsPath, CommitmentID]
+                            ),
+                        case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
+                            {ok, Commitment} ->
+                                {
+                                    true,
+                                    {
+                                        CommitmentID,
+                                        ensure_all_loaded(
+                                            Commitment,
+                                            Opts#{ commitment => true }
+                                        )
+                                    }
+                                };
+                            _ ->
+                                false
+                        end
+                    end,
+                    CommitmentIDs
+                );
+            not_found ->
+                []
+    end,
+    NewCommitments =
+        hb_maps:merge(
+            CurrentCommitments,
+            maps:from_list(FoundCommitments)
+        ),
+    Msg#{ <<"commitments">> => NewCommitments }.
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
-store_read(_Path, no_viable_store, _) ->
-    not_found;
 store_read(Path, Store, Opts) ->
+    store_read(Path, Path, Store, Opts).
+store_read(_Target, _Path, no_viable_store, _) ->
+    not_found;
+store_read(Target, Path, Store, Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
@@ -413,11 +487,17 @@ store_read(Path, Store, Opts) ->
                             {subpaths, {explicit, Subpaths}}
                         }
                     ),
-                    % Generate links for all subpaths except `commitments' and
-                    % `ao-types'. `commitments' is always read in its entirety,
-                    % such that all messages have their IDs and signatures
-                    % locally available.
-                    Msg = prepare_links(ResolvedFullPath, Subpaths, Store, Opts),
+                    % Generate links for each of the listed keys. We only list
+                    % the target ID given in the case of multiple known
+                    % commitments.
+                    Msg =
+                        prepare_links(
+                            Target,
+                            ResolvedFullPath,
+                            Subpaths,
+                            Store,
+                            Opts
+                        ),
                     ?event(
                         {completed_read,
                             {resolved_path, ResolvedFullPath},
@@ -432,7 +512,7 @@ store_read(Path, Store, Opts) ->
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.
-prepare_links(RootPath, Subpaths, Store, Opts) ->
+prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
     {ok, Implicit, Types} = read_ao_types(RootPath, Subpaths, Store, Opts),
     Res =
         maps:from_list(lists:filtermap(
@@ -444,20 +524,33 @@ prepare_links(RootPath, Subpaths, Store, Opts) ->
                     CommPath =
                         hb_store:resolve(
                             Store,
-                            hb_store:path(Store, [RootPath, <<"commitments">>])
+                            hb_store:path(
+                                Store,
+                                [
+                                    RootPath,
+                                    <<"commitments">>,
+                                    Target
+                                ]
+                            )
                         ),
-                    ?event(
-                        {reading_commitments,
+                    ?event(read_commitment,
+                        {reading_commitment,
+                            {target, Target},
                             {root_path, RootPath},
                             {commitments_path, CommPath}
                         }
                     ),
-                    case hb_store:list(Store, CommPath) of
-                        {ok, CommitmentIDs} ->
-                            ?event(
-                                {found_commitments,
+                    case do_read_commitment(CommPath, Opts) of
+                        {ok, Commitment} ->
+                            LoadedCommitment = 
+                                ensure_all_loaded(
+                                    Commitment,
+                                    Opts#{ commitment => true }
+                                ),
+                            ?event(read_commitment,
+                                {found_target_commitment,
                                     {path, CommPath},
-                                    {ids, CommitmentIDs}
+                                    {commitment, LoadedCommitment}
                                 }
                             ),
                             % We have commitments, so we read each commitment
@@ -466,27 +559,7 @@ prepare_links(RootPath, Subpaths, Store, Opts) ->
                                 true,
                                 {
                                     <<"commitments">>,
-                                    maps:from_list(lists:map(
-                                        fun(CommitmentID) ->
-                                            {ok, Commitment} =
-                                                read(
-                                                    <<
-                                                        CommPath/binary,
-                                                        "/",
-                                                        CommitmentID/binary
-                                                    >>,
-                                                    Opts
-                                                ),
-                                            {
-                                                CommitmentID,
-                                                ensure_all_loaded(
-                                                    Commitment,
-                                                    Opts
-                                                )
-                                            }
-                                        end,
-                                        CommitmentIDs
-                                    ))
+                                    #{ Target => LoadedCommitment }
                                 }
                             };
                         _ ->
@@ -555,12 +628,16 @@ prepare_links(RootPath, Subpaths, Store, Opts) ->
         )),
     Merged = maps:merge(Res, Implicit),
     % Convert the message to an ordered list if the ao-types indicate that it
-    % should be so.
+    % should be so. If it is a message, we ensure that the commitments are 
+    % normalized (have an unsigned comm. ID) and loaded into memory.
     case dev_codec_structured:is_list_from_ao_types(Types, Opts) of
         true ->
             hb_util:message_to_ordered_list(Merged, Opts);
         false ->
-            Merged
+            case hb_opts:get(lazy_loading, true, Opts) of
+                true -> Merged;
+                false -> ensure_all_loaded(Merged, Opts)
+            end
     end.
 
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
@@ -799,8 +876,14 @@ test_store_simple_signed_message(Store) ->
     % ?assert(MatchRes),
     {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
-    ?event({retreived_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
-    MatchResSigned = hb_message:match(Item, RetrievedItemSigned, strict, Opts),
+    ?event({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
+    MatchResSigned = 
+        hb_message:match(
+            Item,
+            hb_message:normalize_commitments(RetrievedItemSigned, Opts),
+            strict,
+            Opts
+        ),
     ?event({match_result_signed, MatchResSigned}),
     ?assert(MatchResSigned),
     ok.
@@ -920,12 +1003,21 @@ test_match_linked_message(Store) ->
     {ok, [MatchedID]} = match(#{ <<"b">> => <<"c">> }, Opts),
     {ok, Read1} = read(MatchedID, Opts),
     ?assertEqual(
-        #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> },
+        hb_message:normalize_commitments(
+            #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> },
+            Opts
+        ),
         hb_cache:ensure_all_loaded(Read1, Opts)
     ),
     {ok, [MatchedID2]} = match(#{ <<"a">> => Inner }, Opts),
     {ok, Read2} = read(MatchedID2, Opts),
-    ?assertEqual(#{ <<"a">> => Inner }, ensure_all_loaded(Read2, Opts)).
+    ?assertEqual(
+        hb_message:normalize_commitments(
+            #{ <<"a">> => Inner },
+            Opts
+        ),
+        ensure_all_loaded(Read2, Opts)
+    ).
 
 test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
     skip;
@@ -945,10 +1037,16 @@ test_match_typed_message(Store) ->
     {ok, _ID} = write(Msg, Opts),
     {ok, [MatchedID]} = match(#{ <<"int-key">> => 1337 }, Opts),
     {ok, Read1} = read(MatchedID, Opts),
-    ?assertEqual(Msg, ensure_all_loaded(Read1, Opts)),
+    ?assertEqual(
+        hb_message:normalize_commitments(Msg, Opts),
+        ensure_all_loaded(Read1, Opts)
+    ),
     {ok, [MatchedID2]} = match(#{ <<"atom-key">> => atom }, Opts),
     {ok, Read2} = read(MatchedID2, Opts),
-    ?assertEqual(Msg, ensure_all_loaded(Read2, Opts)).
+    ?assertEqual(
+        hb_message:normalize_commitments(Msg, Opts),
+        ensure_all_loaded(Read2, Opts)
+    ).
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
@@ -983,4 +1081,4 @@ test_device_map_cannot_be_written_test() ->
 %% @doc Run a specific test with a given store module.
 run_test() ->
     Store = hb_test_utils:test_store(hb_store_lmdb),
-    test_match_message(Store).
+    test_match_typed_message(Store).

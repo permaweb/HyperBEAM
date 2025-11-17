@@ -166,10 +166,17 @@ lookup_spawn_test() ->
         ?TEST_NAME,
         Opts
     ),
-    ?assertEqual(
-        hb_cache:ensure_all_loaded(Process1, Opts),
-        hb_cache:ensure_all_loaded(Process2, Opts)
-    ).
+    LoadedProcess1 = 
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(Process1, Opts),
+            Opts
+        ),
+    LoadedProcess2 = 
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(Process2, Opts),
+            Opts
+        ),
+    ?assertEqual(LoadedProcess1, LoadedProcess2).
 
 %% @doc Test that a process can be spawned, executed upon, and its result retrieved.
 lookup_execute_test() ->

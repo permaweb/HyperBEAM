@@ -1,18 +1,31 @@
 %%% @doc Library functions for decoding ANS-104-style data items to TABM form.
 -module(dev_codec_ans104_from).
--export([fields/2, tags/2, data/4, committed/5, base/5]).
--export([with_commitments/5]).
+-export([fields/3, tags/2, data/4, committed/6, base/5]).
+-export([with_commitments/7]).
 -include("include/hb.hrl").
 
 %% @doc Return a TABM message containing the fields of the given decoded
 %% ANS-104 data item that should be included in the base message.
-fields(Item, _Opts) ->
+fields(Item, Prefix, Opts) ->
+    lists:foldl(
+        fun hb_maps:merge/2,
+        #{},
+        [
+            target_field(Item, Prefix, Opts),
+            anchor_field(Item, Prefix, Opts)
+        ]
+    ).
+
+target_field(Item, Prefix, _Opts) ->
     case Item#tx.target of
         ?DEFAULT_TARGET -> #{};
-        Target ->
-            #{
-                <<"target">> => hb_util:encode(Target)
-            }
+        Target -> #{<<Prefix/binary, "target">> => hb_util:encode(Target)}
+    end.
+
+anchor_field(Item, Prefix, _Opts) ->
+    case Item#tx.anchor of
+        ?DEFAULT_ANCHOR -> #{};
+        Anchor -> #{<<Prefix/binary, "anchor">> => hb_util:encode(Anchor)}
     end.
 
 %% @doc Return a TABM of the raw tags of the item, including all metadata
@@ -43,7 +56,8 @@ ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
 ao_types(Tags, _Opts) ->
     Tags.
 
-%% @doc Return a TABM of the keys and values found in the data field of the item.
+%% @doc Return a TABM of the keys and values found in the data field of the
+%% item.
 data(Item, Req, Tags, Opts) ->
     % If the data field is empty, we return an empty map. If it is a map, we
     % return it as such. Otherwise, we return a map with the data key set to
@@ -70,23 +84,27 @@ data(Item, Req, Tags, Opts) ->
 
 %% @doc Calculate the list of committed keys for an item, based on its 
 %% components (fields, tags, and data).
-committed(Item, Fields, Tags, Data, Opts) ->
-    hb_util:unique(
+committed(FieldKeys, Item, Fields, Tags, Data, Opts) ->
+    CommittedKeys = hb_util:unique(
         data_keys(Data, Opts) ++
         tag_keys(Item, Opts) ++
-        field_keys(Fields, Tags, Data, Opts)
+        field_keys(FieldKeys, Fields, Tags, Data, Opts)
+    ),
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        CommittedKeys
     ).
 
 %% @doc Return the list of the keys from the fields TABM.
-field_keys(BaseFields, Tags, Data, Opts) ->
-    HasTarget =
-        hb_maps:is_key(<<"target">>, BaseFields, Opts) orelse
-        hb_maps:is_key(<<"target">>, Tags, Opts) orelse
-        hb_maps:is_key(<<"target">>, Data, Opts),
-    case HasTarget of
-        true -> [<<"target">>];
-        false -> []
-    end.
+field_keys(FieldKeys, BaseFields, Tags, Data, Opts) ->
+    lists:filter(
+        fun(Key) ->
+            hb_maps:is_key(Key, BaseFields, Opts) orelse
+            hb_maps:is_key(Key, Tags, Opts) orelse
+            hb_maps:is_key(Key, Data, Opts)
+        end,
+        FieldKeys
+    ).
 
 %% @doc Return the list of the keys from the data TABM.
 data_keys(Data, Opts) ->
@@ -103,9 +121,10 @@ tag_keys(Item, _Opts) ->
     ],
     lists:filtermap(
         fun({Tag, _}) ->
-            case lists:member(Tag, MetaTags) of
+            NormalizedTag = hb_util:to_lower(hb_ao:normalize_key(Tag)),
+            case lists:member(NormalizedTag, MetaTags) of
                 true -> false;
-                false -> {true, hb_util:to_lower(hb_ao:normalize_key(Tag))}
+                false -> {true, NormalizedTag}
             end
         end,
         Item#tx.tags
@@ -120,17 +139,17 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
     hb_maps:from_list(
         lists:map(
             fun(Key) ->
-                case hb_maps:find(Key, Data, Opts) of
+                case dev_arweave_common:find_key(Key, Data, Opts) of
                     error ->
-                        case hb_maps:find(Key, Fields, Opts) of
+                        case dev_arweave_common:find_key(Key, Fields, Opts) of
                             error ->
-                                case hb_maps:find(Key, Tags, Opts) of
+                                case dev_arweave_common:find_key(Key, Tags, Opts) of
                                     error -> throw({missing_key, Key});
-                                    {ok, Value} -> {Key, Value}
+                                    {FoundKey, Value} -> {FoundKey, Value}
                                 end;
-                            {ok, Value} -> {Key, Value}
+                            {FoundKey, Value} -> {FoundKey, Value}
                         end;
-                    {ok, Value} -> {Key, Value}
+                    {FoundKey, Value} -> {FoundKey, Value}
                 end
             end,
             CommittedKeys
@@ -138,42 +157,42 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
     ).
 
 %% @doc Return a message with the appropriate commitments added to it.
-with_commitments(Item, Tags, Base, CommittedKeys, Opts) ->
+with_commitments(
+        Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
             case normal_tags(Item#tx.tags) of
                 true -> Base;
                 false ->
-                    with_unsigned_commitment(Item, Tags, Base, CommittedKeys, Opts)
+                    with_unsigned_commitment(
+                        Item, Device, FieldCommitments, Tags, Base, 
+                        CommittedKeys, Opts)
             end;
-        _ -> with_signed_commitment(Item, Tags, Base, CommittedKeys, Opts)
+        _ -> with_signed_commitment(
+            Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts)
     end.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.
-with_unsigned_commitment(Item, Tags, UncommittedMessage, CommittedKeys, Opts) ->
+with_unsigned_commitment(
+        Item, Device, CommittedFields, Tags, 
+        UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
     UncommittedMessage#{
         <<"commitments">> => #{
             ID =>
                 filter_unset(
-                    #{
-                        <<"commitment-device">> => <<"ans104@1.0">>,
-                        <<"committed">> => CommittedKeys,
-                        <<"type">> => <<"unsigned-sha256">>,
-                        <<"bundle">> => bundle_commitment_key(Tags, Opts),
-                        <<"original-tags">> => original_tags(Item, Opts),
-                        <<"field-target">> =>
-                            case Item#tx.target of
-                                ?DEFAULT_TARGET -> unset;
-                                Target -> hb_util:encode(Target)
-                            end,
-                        <<"field-anchor">> =>
-                            case Item#tx.anchor of
-                                ?DEFAULT_LAST_TX -> unset;
-                                LastTX -> LastTX
-                            end
-                    },
+                    hb_maps:merge(
+                        CommittedFields,
+                        #{
+                            <<"commitment-device">> => Device,
+                            <<"committed">> => CommittedKeys,
+                            <<"type">> => <<"unsigned-sha256">>,
+                            <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                            <<"original-tags">> => original_tags(Item, Opts)
+                        },
+                        Opts
+                    ),
                     Opts
                 )
         }
@@ -181,32 +200,33 @@ with_unsigned_commitment(Item, Tags, UncommittedMessage, CommittedKeys, Opts) ->
 
 %% @doc Returns a commitments message for an item, containing a signed
 %% commitment.
-with_signed_commitment(Item, Tags, UncommittedMessage, CommittedKeys, Opts) ->
+with_signed_commitment(
+        Item, Device, FieldCommitments, Tags, 
+        UncommittedMessage, CommittedKeys, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
     ID = hb_util:human_id(Item#tx.id),
+    ExtraCommitments = hb_maps:merge(
+        FieldCommitments,
+        hb_maps:with(?BUNDLE_KEYS, Tags),
+        Opts
+    ),
     Commitment =
         filter_unset(
-            #{
-                <<"commitment-device">> => <<"ans104@1.0">>,
-                <<"committer">> => Address,
-                <<"committed">> => CommittedKeys,
-                <<"signature">> => hb_util:encode(Item#tx.signature),
-                <<"keyid">> =>
-                    <<"publickey:", (hb_util:encode(Item#tx.owner))/binary>>,
-                <<"type">> => <<"rsa-pss-sha256">>,
-                <<"bundle">> => bundle_commitment_key(Tags, Opts),
-                <<"original-tags">> => original_tags(Item, Opts),
-                <<"field-anchor">> =>
-                    case Item#tx.anchor of
-                        ?DEFAULT_LAST_TX -> unset;
-                        LastTX -> LastTX
-                    end,
-                <<"field-target">> =>
-                    case Item#tx.target of
-                        ?DEFAULT_TARGET -> unset;
-                        Target -> hb_util:encode(Target)
-                    end
-            },
+            hb_maps:merge(
+                ExtraCommitments,
+                #{
+                    <<"commitment-device">> => Device,
+                    <<"committer">> => Address,
+                    <<"committed">> => CommittedKeys,
+                    <<"signature">> => hb_util:encode(Item#tx.signature),
+                    <<"keyid">> =>
+                        <<"publickey:", (hb_util:encode(Item#tx.owner))/binary>>,
+                    <<"type">> => <<"rsa-pss-sha256">>,
+                    <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                    <<"original-tags">> => original_tags(Item, Opts)
+                },
+                Opts
+            ),
             Opts
         ),
     UncommittedMessage#{

@@ -223,8 +223,13 @@ sandbox(State, [Path | Rest], Opts) ->
     sandbox(NextState, Rest, Opts).
 
 %% @doc Call the Lua script with the given arguments.
-compute(Key, RawBase, Req, Opts) ->
+compute(Key, RawBase, RawReq, Opts) ->
     ?event(debug_lua, compute_called),
+    Req = 
+        hb_cache:read_all_commitments(
+            RawReq,
+            Opts
+        ),
     {ok, Base} = ensure_initialized(RawBase, Req, Opts),
     ?event(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.

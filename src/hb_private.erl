@@ -209,9 +209,11 @@ priv_opts_cache_read_message_test() ->
     {ok, ID} = hb_cache:write(Msg, Opts),
     % Ensure we can read the message using the public store.
     {ok, PubMsg} = hb_cache:read(ID, Opts),
-    PubMsgLoaded = hb_cache:ensure_all_loaded(PubMsg, Opts),
+    PubMsgWithCommitments = hb_cache:read_all_commitments(PubMsg, Opts),
+    PubMsgLoaded = hb_cache:ensure_all_loaded(PubMsgWithCommitments, Opts),
     ?assertEqual(Msg, PubMsgLoaded),
     % Read the message using the private store.
     {ok, PrivMsg} = hb_cache:read(ID, PrivOpts),
-    PrivMsgLoaded = hb_cache:ensure_all_loaded(PrivMsg, PrivOpts),
+    PrivMsgWithCommitments = hb_cache:read_all_commitments(PrivMsg, PrivOpts),
+    PrivMsgLoaded = hb_cache:ensure_all_loaded(PrivMsgWithCommitments, PrivOpts),
     ?assertEqual(Msg, PrivMsgLoaded).

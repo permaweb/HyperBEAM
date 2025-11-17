@@ -161,7 +161,7 @@ do_term({X, Y}, Opts, Indent) when is_atom(X) and is_atom(Y) ->
     indent("~p: ~p", [X, Y], Opts, Indent);
 do_term({X, Y}, Opts, Indent) when is_record(Y, tx) ->
     indent("~p: [TX item]~n~s",
-        [X, ar_bundles:format(Y, Indent + 1, Opts)],
+        [X, ar_format:format(Y, Indent + 1, Opts)],
         Opts,
         Indent
     );
@@ -194,7 +194,7 @@ do_term({X, Y}, Opts, Indent) ->
     );
 do_term(TX, Opts, Indent) when is_record(TX, tx) ->
     indent("[TX item]~n~s",
-        [ar_bundles:format(TX, Indent, Opts)],
+        [ar_format:format(TX, Indent, Opts)],
         Opts,
         Indent
     );

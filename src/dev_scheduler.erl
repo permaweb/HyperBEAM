@@ -570,7 +570,23 @@ schedule(Base, Req, Opts) ->
 post_schedule(Base, Req, Opts) ->
     ?event(scheduling_message),
     % Find the target message to schedule:
-    ToSched = find_message_to_schedule(Base, Req, Opts),
+    RawToSched = find_message_to_schedule(Base, Req, Opts),
+    % If the message can not be properly loaded, this will throw an error
+    % before scheduling the message.    
+    try hb_cache:ensure_all_loaded(RawToSched, Opts) of
+        ToSched ->
+            do_post_schedule(Base, Req, ToSched, Opts)
+    catch
+        error:{necessary_message_not_found, _, _} ->
+            {error,
+                #{
+                    <<"status">> => 404,
+                    <<"body">> => <<"Cannot fully load message to schedule.">>
+                }
+            }
+    end.
+
+do_post_schedule(Base, Req, ToSched, Opts) ->
     ?event({to_sched, ToSched}),
     % Find the ProcessID of the target message:
     % - If it is a Process, use the ID of the message.
@@ -600,7 +616,7 @@ post_schedule(Base, Req, Opts) ->
             case find_server(ProcID, Base, ToSched, Opts) of
                 {local, PID} ->
                     ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
-                    do_post_schedule(ProcID, PID, OnlyCommitted, Opts);
+                    post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
                 {redirect, Redirect} ->
                     ?event({process_is_remote, {redirect, Redirect}}),
                     case hb_opts:get(scheduler_follow_redirects, true, Opts) of
@@ -635,7 +651,7 @@ post_schedule(Base, Req, Opts) ->
 %% @doc Post schedule the message. `Req' by this point has been refined to only
 %% committed keys, and to only include the `target' message that is to be
 %% scheduled.
-do_post_schedule(ProcID, PID, Req, Opts) ->
+post_local_schedule(ProcID, PID, Req, Opts) ->
     % Should we verify the message again before scheduling?
     Verified =
         case hb_opts:get(verify_assignments, true, Opts) of
@@ -874,8 +890,8 @@ find_remote_scheduler(ProcID, [Scheduler | Rest], Opts) ->
     case find_remote_scheduler(ProcID, Rest, Opts) of
         {error, not_found} ->
             find_remote_scheduler(ProcID, Scheduler, Opts);
-        {ok, Redirect} ->
-            {ok, Redirect}
+        {redirect, Redirect} ->
+            {redirect, Redirect}
     end;
 find_remote_scheduler(ProcID, Scheduler, Opts) ->
     % Parse the scheduler location to see if it has a hint. If there is a hint,
@@ -1468,6 +1484,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                                 hb_json:decode(
                                     hb_ao:get(<<"body">>, AssignmentRes, Opts)
                                 ),
+                            ?event({assignment_json, AssignmentJSON}),
                             Assignment =
                                 dev_scheduler_formats:aos2_to_assignment(
                                     AssignmentJSON,
@@ -1996,7 +2013,7 @@ http_get_schedule_test_() ->
 		{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 10),
 		Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
 		?assertEqual(
-			12, % +1 for the hashpath
+			13, % 11 assignments, +1 for the hashpath, +1 for the commitments
 			hb_maps:size(Assignments, Opts)
 		)
 	end}.
@@ -2027,7 +2044,8 @@ http_get_legacy_schedule_slot_range_test_() ->
             "&from=0&to=10">>, Opts),
 		LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
         ?event({res, LoadedRes}),
-        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 11, LoadedRes)
+        % 11 assignments, +1 for the commitments
+        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 12, LoadedRes)
     end}.
 
 http_get_legacy_schedule_as_aos2_test_() ->

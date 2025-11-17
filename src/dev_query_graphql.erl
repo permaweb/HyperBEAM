@@ -95,7 +95,11 @@ handle(_Base, RawReq, Opts) ->
     ?event({request, {processed, Req}}),
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
     OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
-    Vars = hb_maps:get(<<"variables">>, Req, #{}, Opts),
+    Vars = 
+        hb_message:remove_all_commitments(
+            hb_maps:get(<<"variables">>, Req, #{}, Opts),
+            Opts
+        ),
     ?event(
         {graphql_run_called,
             {query, Query},
@@ -326,41 +330,43 @@ lookup_test() ->
 lookup_with_vars_test() ->
     {ok, Opts, _} = dev_query:test_setup(),
     Node = hb_http_server:start_node(Opts),
+    Body =
+        #{
+            <<"path">> => <<"~query@1.0/graphql">>,
+            <<"content-type">> => <<"application/json">>,
+            <<"codec-device">> => <<"json@1.0">>,
+            <<"body">> =>
+                hb_json:encode(#{
+                    <<"query">> => 
+                        <<""" 
+                            query GetMessage($keys: [KeyInput]) { 
+                                message(
+                                    keys: $keys
+                                ) {
+                                    id
+                                    keys {
+                                        name
+                                        value
+                                    }
+                                }
+                            }
+                        """>>,
+                    <<"operationName">> => <<"GetMessage">>,
+                    <<"variables">> => #{
+                        <<"keys">> => 
+                            [
+                                #{
+                                    <<"name">> => <<"basic">>,
+                                    <<"value">> => <<"binary-value">>
+                                }
+                            ]
+                    }
+                })
+        },
     {ok, Res} =
         hb_http:post(
             Node,
-            #{
-                <<"path">> => <<"~query@1.0/graphql">>,
-                <<"content-type">> => <<"application/json">>,
-                <<"codec-device">> => <<"json@1.0">>,
-                <<"body">> =>
-                    hb_json:encode(#{
-                        <<"query">> => 
-                            <<""" 
-                                query GetMessage($keys: [KeyInput]) { 
-                                    message(
-                                        keys: $keys
-                                    ) {
-                                        id
-                                        keys {
-                                            name
-                                            value
-                                        }
-                                    }
-                                }
-                            """>>,
-                        <<"operationName">> => <<"GetMessage">>,
-                        <<"variables">> => #{
-                            <<"keys">> => 
-                                [
-                                    #{
-                                        <<"name">> => <<"basic">>,
-                                        <<"value">> => <<"binary-value">>
-                                    }
-                                ]
-                        }
-                    })
-            },
+            Body,            
             Opts
         ),
     Object = hb_json:decode(hb_maps:get(<<"body">>, Res, <<>>, Opts)),

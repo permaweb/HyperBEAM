@@ -25,7 +25,7 @@ start() ->
     Loaded =
         case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>)) of
             {ok, Conf} ->
-                ?event(boot, {loaded_config, Loc, Conf}),
+                ?event(boot, {loaded_config, {path, Loc}, {config, Conf}}),
                 Conf;
             {error, Reason} ->
                 ?event(boot, {failed_to_load_config, Loc, Reason}),
@@ -42,7 +42,8 @@ start() ->
     UpdatedStoreOpts = 
         case StoreOpts of
             no_store -> no_store;
-            _ when is_list(StoreOpts) -> hb_store_opts:apply(StoreOpts, StoreDefaults);
+            _ when is_list(StoreOpts) ->
+                hb_store_opts:apply(StoreOpts, StoreDefaults);
             _ -> StoreOpts
         end,
     hb_store:start(UpdatedStoreOpts),
@@ -54,7 +55,7 @@ start() ->
                 Loaded
             )
         ),
-    maybe_greeter(MergedConfig, PrivWallet),
+    maybe_greeter(Loaded, PrivWallet),
     start(
         Loaded#{
             priv_wallet => PrivWallet,
@@ -114,7 +115,7 @@ print_greeter(Config, PrivWallet) ->
         "===========================================================~n"
         "== Config:                                               ==~n"
         "===========================================================~n"
-        "   ~s~n"
+        "   ~s~n~n"
         "===========================================================~n",
         [
             ?HYPERBEAM_VERSION,

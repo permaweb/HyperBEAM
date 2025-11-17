@@ -204,7 +204,7 @@ offload_linked_message_test() ->
     ?event(linkify, {test_recvd_linkified, {msg, Structured}}),
     Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
     ?event(linkify, {test_recvd_loaded, {msg, Loaded}}),
-    ?assertEqual(Msg, Loaded).
+    ?assert(hb_message:match(Msg, Loaded, primary, Opts)).
 
 offload_list_test() ->
     Opts = #{},

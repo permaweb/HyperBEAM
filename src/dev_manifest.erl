@@ -57,13 +57,12 @@ route(<<"index">>, M1, M2, Opts) ->
 route(Key, M1, M2, Opts) ->
     ?event({manifest_lookup, Key}),
     {ok, Manifest} = manifest(M1, M2, Opts),
-    {ok,
-        hb_ao:get(
-            <<"paths/", Key/binary>>,
-            {as, <<"message@1.0">>, Manifest},
-            Opts
-        )
-    }.
+    Res = hb_ao:get(
+        <<"paths/", Key/binary>>,
+        {as, <<"message@1.0">>, Manifest},
+        Opts
+    ),
+    {ok, hb_cache:ensure_all_loaded(Res, Opts)}.
 
 %% @doc Find and deserialize a manifest from the given base.
 manifest(Base, _Req, Opts) ->
@@ -139,7 +138,7 @@ resolve_test() ->
         {ok, #{ <<"body">> := <<"Page 1">> }},
         hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
     ),
-    {ok, Res} = hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts),
-    ?event({manifest_resolve_test, Res}),
-    ?assertEqual(<<"Page 2">>, Res),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 2">>}}, 
+        hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
     ok.

@@ -45,19 +45,7 @@ set(Trie, Req, Opts) ->
     KeyVals = hb_maps:to_list(Insertable, Opts),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
-    Trie,
-    Linkified = hb_message:convert(
-        Trie,
-        <<"structured@1.0">>,
-        <<"structured@1.0">>,
-        Opts
-    ),
-    WithoutHMac = hb_message:without_commitments(
-        #{<<"type">> => <<"unsigned">>},
-        Linkified,
-        Opts
-    ),
-    hb_message:commit(WithoutHMac, Opts, #{<<"type">> => <<"unsigned">>});
+    hb_message:normalize_commitments(Trie, Opts, verify);
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
     do_set(NewTrie, KeyVals, Opts).

@@ -88,17 +88,16 @@ id(Base, _, NodeOpts) when is_binary(Base) ->
     % Return the hashpath of the message in native format, to match the native
     % format of the message ID return.
     {ok, hb_util:human_id(hb_path:hashpath(Base, NodeOpts))};
+id(List, Req, NodeOpts) when is_list(List) ->
+    % Return the list of IDs for a list of messages.
+    id(hb_message:convert(List, tabm, NodeOpts), Req, NodeOpts);
 id(RawBase, Req, NodeOpts) ->
     % Ensure that the base message is normalized before proceeding.
     IDOpts = NodeOpts#{ linkify_mode => discard },
-    Base =
-        ensure_commitments_loaded(
-            hb_message:convert(RawBase, tabm, IDOpts),
-            NodeOpts
-        ),
+    Base = ensure_commitments_loaded(RawBase, NodeOpts),
     % Remove the commitments from the base message if there are none, after
     % filtering for the committers specified in the request.
-    ModBase = #{ <<"commitments">> := Commitments }
+    #{ <<"commitments">> := Commitments }
         = with_relevant_commitments(Base, Req, IDOpts),
     ?event(debug_commitments,
         {generating_ids,
@@ -111,7 +110,7 @@ id(RawBase, Req, NodeOpts) ->
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
             ?event(debug_id, no_commitments_found_in_id_call),
-            calculate_id(hb_maps:without([<<"commitments">>], ModBase), Req, IDOpts);
+            calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
             % by module arithmetic of each of the IDs. The effect of this is that:
@@ -135,8 +134,9 @@ id(RawBase, Req, NodeOpts) ->
             }
     end.
 
-calculate_id(Base, Req, NodeOpts) ->
+calculate_id(RawBase, Req, NodeOpts) ->
     % Find the ID device for the message.
+    Base = hb_message:convert(RawBase, tabm, NodeOpts),
     ?event(linkify, {calculate_ids, {base, Base}}),
     IDMod =
         case id_device(Base, NodeOpts) of
@@ -531,11 +531,9 @@ commitment_ids_from_request(Base, Req, Opts) ->
 
 %% @doc Ensure that the `commitments` submessage of a base message is fully
 %% loaded into local memory.
-ensure_commitments_loaded(NonRelevant, _Opts) when not is_map(NonRelevant) ->
-    NonRelevant;
-ensure_commitments_loaded(M = #{ <<"commitments">> := Link}, Opts) when ?IS_LINK(Link) ->
+ensure_commitments_loaded(M = #{ <<"commitments">> := L}, Opts) when ?IS_LINK(L) ->
     M#{
-        <<"commitments">> => hb_cache:ensure_all_loaded(Link, Opts)
+        <<"commitments">> => hb_cache:ensure_all_loaded(L, Opts)
     };
 ensure_commitments_loaded(M, _Opts) ->
     M.

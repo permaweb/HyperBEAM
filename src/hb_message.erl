@@ -63,7 +63,7 @@
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
--export([with_commitments/3, without_commitments/3]).
+-export([with_commitments/3, without_commitments/3, remove_all_commitments/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
@@ -220,35 +220,83 @@ normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
 normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
 
+do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
+    Msg;
 do_normalize_commitments(Msg, Opts, passive) ->
-    ?event(debug_normalize_commitments, {passive, {msg, Msg}}),
-    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
-        not_found ->
-            {ok, #{ <<"commitments">> := Commitments }} =
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    {UnsignedCommitments, SignedCommitments} = 
+        lists:partition(
+            fun({_, #{ <<"committer">> := _Committer }}) -> false;
+               ({_, _}) -> true
+            end,
+            hb_maps:to_list(Commitments)
+        ),
+    ?event({do_normalize_commitments,
+        {unsigned_commitments, UnsignedCommitments},
+        {maybe_signed_commitment, SignedCommitments}
+    }),
+    case {UnsignedCommitments, SignedCommitments} of
+        {[], _} ->
+            {ok, #{ <<"commitments">> := NewCommitments }} =
                 dev_message:commit(
-                    Msg,
-                    #{ <<"type">> => <<"unsigned">> },
+                    uncommitted(Msg),
+                    #{ 
+                        <<"type">> => <<"unsigned">>
+                    },
                     Opts
                 ),
-            Msg#{ <<"commitments">> => Commitments };
+            MergedCommitments = hb_maps:merge(
+                NewCommitments,
+                hb_maps:from_list(SignedCommitments),
+                Opts
+            ),
+            Msg#{ <<"commitments">> => MergedCommitments };
         _ -> Msg
     end;
-do_normalize_commitments(Msg, _Opts, verify) when ?IS_EMPTY_MESSAGE(Msg) ->
-    Msg;
 do_normalize_commitments(Msg, Opts, verify) ->
+    UnsignedCommitment = commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts),
+    {MaybeUnsignedID, MaybeCommittedSpec} =
+        case UnsignedCommitment of
+            {ok, ID, #{ <<"committed">> := Committed }} ->
+                {ID, #{ <<"committed">> => Committed }};
+            _ -> {undefined, #{}}
+        end,
     {ok, #{ <<"commitments">> := NormCommitments }} =
         dev_message:commit(
             uncommitted(Msg),
-            #{ <<"type">> => <<"unsigned">> },
+            MaybeCommittedSpec#{ 
+                <<"type">> => <<"unsigned">>
+            },
             Opts
         ),
     ?event(normalization, {normalizing_commitments, verify}),
     [NormID] = hb_maps:keys(NormCommitments, Opts),
-    MsgCommIDs = hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts),
-    case lists:member(NormID, MsgCommIDs) of
-        true -> Msg;
-        false ->
-            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
+    case {MaybeUnsignedID, NormID} of
+        {MatchedID, MatchedID} ->
+            Msg;
+        {undefined, _NewID} ->
+            % We did not have an unsigned ID to begin with, so we need to add it.
+            attach_phash2(
+                Msg#{
+                    <<"commitments">> =>
+                        hb_maps:merge(
+                            NormCommitments,
+                            hb_maps:get(<<"commitments">>, Msg, #{}, Opts)
+                        )
+                },
+                Opts
+            );
+        {_OldID, _NewID} ->
+            {ok, #{ <<"commitments">> := NewCommitments }} = 
+                dev_message:commit(
+                    uncommitted(Msg),
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            % We had an unsigned ID to begin with and the new one is different.
+            % This means that the committed keys have changed, so we drop any
+            % other commitments and return only the new unsigned one.
+            attach_phash2(Msg#{ <<"commitments">> => NewCommitments }, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
@@ -463,6 +511,25 @@ uncommitted(Msg) -> uncommitted(Msg, #{}).
 uncommitted(Bin, _Opts) when is_binary(Bin) -> Bin;
 uncommitted(Msg, Opts) ->
     hb_maps:remove(<<"commitments">>, Msg, Opts).
+remove_all_commitments(Msg, Opts) ->
+    % Remove commitments at the current level
+    MsgWithoutCommitments = hb_maps:remove(<<"commitments">>, Msg, Opts),
+    % Recursively remove commitments from nested maps
+    maps:map(
+        fun(_Key, Value) when is_map(Value) ->
+            uncommitted(Value, Opts);
+           (_Key, Value) when is_list(Value) ->
+            lists:map(
+                fun(Item) when is_map(Item) -> uncommitted(Item, Opts);
+                   (Item) -> Item
+                end,
+                Value
+            );
+           (_Key, Value) ->
+            Value
+        end,
+        MsgWithoutCommitments
+    ).
 
 %% @doc Return all of the committers on a message that have 'normal', 256 bit, 
 %% addresses.
@@ -510,20 +577,44 @@ match(Map1, Map2, Mode, Opts) ->
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
 %% if they do not.
-unsafe_match(Map1, Map2, Mode, Path, Opts) ->
+unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
+    {_, SignedCommitments1} = 
+        lists:partition(
+            fun({_, #{ <<"committer">> := _Committer }}) -> false;
+               ({_, _}) -> true
+            end,
+            hb_maps:to_list(hb_maps:get(<<"commitments">>, RawMap1, #{}, Opts))
+        ),
+    {_, SignedCommitments2} = 
+        lists:partition(
+            fun({_, #{ <<"committer">> := _Committer }}) -> false;
+               ({_, _}) -> true
+            end,
+            hb_maps:to_list(hb_maps:get(<<"commitments">>, RawMap1, #{}, Opts))
+        ),
+    Map1 = RawMap1#{ <<"commitments">> => SignedCommitments1 },
+    Map2 = RawMap2#{ <<"commitments">> => SignedCommitments2 },
     Keys1 =
         hb_maps:keys(
-            NormMap1 = hb_util:lower_case_key_map(minimize(
-                normalize(hb_ao:normalize_keys(Map1, Opts), Opts),
-                [<<"content-type">>, <<"ao-body-key">>]
-            ), Opts)
+            NormMap1 =
+                minimize(
+                    normalize(
+                        hb_ao:normalize_keys(Map1, Opts),
+                        Opts
+                    ),
+                    [<<"content-type">>, <<"ao-body-key">>]
+                )
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 = hb_util:lower_case_key_map(minimize(
-                normalize(hb_ao:normalize_keys(Map2, Opts), Opts),
-                [<<"content-type">>, <<"ao-body-key">>]
-            ), Opts)
+            NormMap2 =
+                minimize(
+                    normalize(
+                        hb_ao:normalize_keys(Map2, Opts),
+                        Opts
+                    ),
+                    [<<"content-type">>, <<"ao-body-key">>]
+                )
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -544,7 +635,8 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
     case (Keys1 == Keys2) or (Mode == only_present) or PrimaryKeysPresent of
         true ->
             lists:all(
-                fun(Key) ->
+                fun(<<"commitments">>) -> true;
+                (Key) ->
                     ?event(match, {matching_key, Key}),
                     Val1 =
                         hb_ao:normalize_keys(
@@ -695,6 +787,24 @@ commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
         not_found,
         Opts
     );
+commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    UnsignedCommitments =
+        hb_maps:filter(
+            fun(_, #{ <<"committer">> := _Committer }) -> false;
+                (_, _) -> true
+            end,
+            Commitments,
+            Opts
+        ),
+    if 
+        map_size(UnsignedCommitments) == 0 -> not_found;
+        map_size(UnsignedCommitments) == 1 ->
+            CommID = hd(maps:keys(UnsignedCommitments)),
+            {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
+        true ->
+            ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
+            multiple_matches    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),

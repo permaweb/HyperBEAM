@@ -52,19 +52,13 @@ post_tx(_Base, Request, Opts) ->
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID ->
-            case request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts) of
-                {ok, TXHeader} ->
-                    ?event(arweave, {retrieved_tx_header, {tx, TXID}}),
-                    maybe_add_data(TXID, TXHeader, Base, Request, Opts);
-                Other -> Other
-            end
+        TXID -> request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts)
     end.
 
 %% @doc Handle the optional adding of data to the transaction header, depending
 %% on the request. Semantics of the `data' key are described in the `get_tx/3'
 %% documentation.
-maybe_add_data(TXID, Header, Base, Request, Opts) ->
+maybe_add_data(TXID, TXHeader, Base, Request, Opts) ->
     GetData =
         hb_util:atom(hb_ao:get_first(
             [
@@ -76,41 +70,44 @@ maybe_add_data(TXID, Header, Base, Request, Opts) ->
         )),
     case hb_util:atom(GetData) of
         false ->
-            {ok, Header};
+            {ok, TXHeader};
         _ ->
-            case data(Base, Request, Opts) of
-                {ok, Data} ->
-                    FullMessage = Header#{ <<"data">> => Data },
-                    ?event(
-                        arweave,
-                        {retrieved_tx_with_data,
-                            {id, TXID},
-                            {data_size, byte_size(Data)},
-                            {message, FullMessage}
-                        }
-                    ),
-                    {ok, FullMessage};
+            case add_data(TXID, TXHeader, Opts) of
+                {ok, TX} -> {ok, TX};
                 {error, Reason} ->
-                    ?event(arweave,
-                        {data_retrieval_failed_after_header,
-                            {id, TXID},
-                            {error, Reason}
-                        }
-                    ),
-                    if GetData =/= always -> {ok, Header};
+                    if GetData =/= always -> {ok, TXHeader};
                     true -> {error, Reason}
                     end
             end
     end.
 
-%% @doc Retrieve the data of a transaction from Arweave.
-data(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
-        not_found -> {error, not_found};
-        TXID ->
-            ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
-            request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts)
+add_data(TXID, TXHeader, Opts) ->
+    case data(TXID, Opts) of
+        {ok, Data} ->
+            TX = TXHeader#tx{ data = Data },
+            ?event(
+                arweave,
+                {retrieved_tx_with_data,
+                    {id, TXID},
+                    {data_size, byte_size(Data)},
+                    {tx, TX}
+                }
+            ),
+            {ok, TX};
+        {error, Reason} ->
+            ?event(arweave,
+                {data_retrieval_failed_after_header,
+                    {id, TXID},
+                    {error, Reason}
+                }
+            ),
+            {error, Reason}
     end.
+
+%% @doc Retrieve the data of a transaction from Arweave.
+data(TXID, Opts) ->
+    ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
+    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -198,6 +195,28 @@ request(Method, Path, Opts) ->
     to_message(Path, Res, Opts).
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
+to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
+    {error, not_found};
+to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
+    TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+    ?event(arweave,
+        {arweave_tx_response,
+            {path, Path},
+            {raw_body, {explicit, Body}},
+            {body, {explicit, hb_json:decode(Body)}},
+            {tx, TXHeader}
+        }
+    ),
+    {ok, TX} = add_data(TXID, TXHeader, Opts),
+    {
+        ok,
+        hb_message:convert(
+            TX,
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts
+        )
+    };
 to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
     ?event(arweave,
         {arweave_raw_response,
@@ -287,3 +306,76 @@ post_ans104_tx_test() ->
         GetRes
     ),
     ok.
+
+get_tx_basic_data_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx?tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    {ok, Structured} = hb_http:get(Node, Path, #{}),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    % Hash the data to make it easier to match
+    StructuredWithHash = Structured#{
+        <<"data">> => hb_util:encode(
+            crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
+        )
+    },
+    ExpectedMsg = #{
+        <<"data">> => <<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>,
+        <<"reward">> => <<"482143296">>,
+        <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
+    ok.
+
+get_tx_rsa_nested_bundle_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx&tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    {ok, Root} = hb_http:get(Node, Path, #{}),
+    ?event(debug_test, {root, Root}),
+    ?assert(hb_message:verify(Root, all, #{})),
+
+    ChildPath = <<Path/binary, "/1/2">>,
+    {ok, Child} = hb_http:get(Node, ChildPath, #{}),
+    ?event(debug_test, {child, Child}),
+    ?assert(hb_message:verify(Child, all, #{})),
+
+    {ok, ExpectedChild} =
+        hb_ao:resolve(
+            Root,
+            <<"1/2">>,
+            #{}
+        ),
+    ?assert(hb_message:match(ExpectedChild, Child, only_present)),
+
+    ManualChild = #{
+        <<"data">> => <<"{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\"tickedRewardDistributions\":[],\"newPruneGatewaysResults\":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\"gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\"prunedGateways\":[],\"slashedGateways\":[],\"gatewayStakeWithdrawing\":0}]}">>,
+        <<"data-protocol">> => <<"ao">>,
+        <<"from-module">> => <<"cbn0KKrBZH7hdNkNokuXLtGryrWM--PjSTBqIzw9Kkk">>,
+        <<"from-process">> => <<"agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA">>,
+        <<"anchor">> => <<"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAyODAxODg">>,
+        <<"reference">> => <<"280188">>,
+        <<"target">> => <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>,
+        <<"type">> => <<"Message">>,
+        <<"variant">> => <<"ao.TN.1">>
+    },
+    ?assert(hb_message:match(ManualChild, Child, only_present)),
+    ok.
+
+%% @TODO: This test is disabled because it takes too long to run. Re-enable
+%% once some performance optimizations are implemented.
+get_tx_rsa_large_bundle_test_disabled() ->
+    {timeout, 300, fun() ->
+        Node = hb_http_server:start_node(),
+        Path = <<"/~arweave@2.9-pre/tx&tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
+        {ok, Root} = hb_http:get(Node, Path, #{}),
+        ?event(debug_test, {root, Root}),
+        ?assert(hb_message:verify(Root, all, #{})),
+        ok
+    end}.
+
+get_bad_tx_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx?tx=INVALID-ID">>,
+    Res = hb_http:get(Node, Path, #{}),
+    ?assertEqual({error, not_found}, Res).

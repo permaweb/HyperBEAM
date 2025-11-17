@@ -339,7 +339,19 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
     ?event({resp_base, RespBase, WalletDetails}),
     AccessControl = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
-    {ok, _, Commitment} = hb_message:commitment(#{}, AccessControl, Opts),
+    {ok, _, Commitment} = 
+        hb_message:commitment(
+            #{},
+            hb_message:without_commitments(
+                #{
+                    <<"keyid">> => <<"constant:ao">>,
+                    <<"commitment-device">> => <<"httpsig@1.0">> 
+                },
+                AccessControl,
+                Opts
+            ),
+            Opts
+        ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
     Base = RespBase#{ <<"body">> => KeyID },
     % Determine how to persist the wallet.

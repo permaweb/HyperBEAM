@@ -262,7 +262,7 @@ result_to_message(ExpectedID, Item, Opts) ->
             _ -> unsupported_tx_signature_type
         end,
     TX =
-        ar_bundles:reset_ids(#tx {
+        dev_arweave_common:reset_ids(#tx {
             format = ans104,
             anchor =
                 normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),

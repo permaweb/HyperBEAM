@@ -185,7 +185,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                 <<"message">> => Msg
                             }
                     end,
-                    hb_util:lower_case_key_map(
+                    hb_util:lower_case_keys(
                         hb_ao:normalize_keys(hb_private:reset(Outbox)),
                         Opts
                     ),
@@ -239,7 +239,7 @@ maybe_evaluate_message(Message, Opts) ->
 %% the slot number from which it was sent, and the outbox key of the message,
 %% and the depth to which downstream results should be included in the message.
 push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
-    NormMsgToPush = hb_util:lower_case_key_map(MsgToPush, Opts),
+    NormMsgToPush = hb_ao:normalize_keys(MsgToPush, Opts),
     case hb_ao:get(<<"target">>, NormMsgToPush, undefined, Opts) of
         undefined ->
             ?event(push,
@@ -741,12 +741,17 @@ push_as_identity_test_() ->
             hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
         % Validate that the scheduler's wallet was used to sign the message.
-        Committers =
+        Assignment =
             hb_ao:get(
-                <<"schedule/assignments/2/committers">>,
+                <<"schedule/assignments/2">>,
                 Base,
                 Opts
             ),
+        Committers = hb_ao:get(
+            <<"committers">>,
+            hb_cache:read_all_commitments(Assignment, Opts),
+            Opts
+        ),
         ?assert(lists:member(SchedulingID, Committers)),
         ?assert(lists:member(ComputeID, Committers)),
         % Validate that the compute wallet was used to sign the message.
@@ -990,12 +995,12 @@ nested_push_prompts_encoding_change() ->
     {ok, StartingMsgSlot} =
         hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),
     ?event({starting_msg_slot, StartingMsgSlot}),
-    Res =
+    Req2 =
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => StartingMsgSlot
         },
-    {ok, Res} = hb_ao:resolve(Base, Res, Opts),
+    {ok, Res} = hb_ao:resolve(Base, Req2, Opts),
     ?event(push, {res, Res}),
     Msg = hb_message:commit(#{
         <<"path">> => <<"push">>,
