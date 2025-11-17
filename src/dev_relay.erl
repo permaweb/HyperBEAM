@@ -134,6 +134,8 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
+    RequestMethod =
+        hb_maps:get(<<"method">>, TargetMod5, RelayMethod, Opts),
     Client =
         case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
             not_found -> hb_opts:get(relay_http_client, Opts);
@@ -146,14 +148,35 @@ call(M1, RawM2, Opts) ->
         not_found ->
             hb_http:request(TargetMod5, HTTPOpts);
         _ ->
-            ?event(debug_relay, {relaying_to_peer, RelayPeer}),
-            hb_http:request(
-                RelayMethod,
-                RelayPeer,
-                RelayPath,
-                TargetMod5,
-                HTTPOpts
-            )
+            case hb_ao:get(<<"nodes">>, RelayPeer, not_found, Opts) of
+                not_found ->
+                    ?event(debug_relay, {relaying_to_peer, RelayPeer}),
+                    hb_http:request(
+                        RequestMethod,
+                        RelayPeer,
+                        RelayPath,
+                        TargetMod5,
+                        HTTPOpts
+                    );
+                Nodes when is_list(Nodes) ->
+                    relay_nodes_in_order(
+                        hb_util:message_to_ordered_list(Nodes, Opts),
+                        RequestMethod,
+                        RelayPath,
+                        TargetMod5,
+                        HTTPOpts,
+                        Opts
+                    );
+                _ ->
+                    ?event(debug_relay, {relaying_to_peer, RelayPeer}),
+                    hb_http:request(
+                        RequestMethod,
+                        RelayPeer,
+                        RelayPath,
+                        TargetMod5,
+                        HTTPOpts
+                    )
+            end
     end,
     case Res of
         {ok, R} ->
@@ -184,6 +207,118 @@ request(_Base, Req, Opts) ->
                 ]
         }
     }.
+
+%% @doc Try each node in order, respecting per-node HTTP timeouts. Stops at the
+%% first admissible response or when all nodes fail/time out.
+relay_nodes_in_order([], _Method, _Path, _Message, _HTTPOpts, _Opts) ->
+    {error, no_viable_responses};
+relay_nodes_in_order(
+        [Node|Rest],
+        Method,
+        Path,
+        Message,
+        HTTPOpts,
+        Opts
+    ) ->
+    case hb_ao:get(<<"prefix">>, Node, not_found, Opts) of
+        not_found ->
+            relay_nodes_in_order(
+                Rest,
+                Method,
+                Path,
+                Message,
+                HTTPOpts,
+                Opts
+            );
+        Peer ->
+            {PeerTimeout, HTTPOpts1} = peer_http_opts(Node, HTTPOpts, Opts),
+            ?event(debug_relay, {relaying_to_peer, Peer}),
+            RequestFun =
+                fun() ->
+                    hb_http:request(Method, Peer, Path, Message, HTTPOpts1)
+                end,
+            case relay_request_with_timeout(RequestFun, PeerTimeout) of
+                {ok, Res} ->
+                    case relay_response_ok(Res, Opts) of
+                        true -> {ok, Res};
+                        false ->
+                            relay_nodes_in_order(
+                                Rest,
+                                Method,
+                                Path,
+                                Message,
+                                HTTPOpts,
+                                Opts
+                            )
+                    end;
+                {error, _Reason} ->
+                    relay_nodes_in_order(
+                        Rest,
+                        Method,
+                        Path,
+                        Message,
+                        HTTPOpts,
+                        Opts
+                    )
+            end
+    end.
+
+relay_response_ok(Res, Opts) ->
+    Status = hb_util:int(hb_ao:get(<<"status">>, Res, 500, Opts)),
+    Status < 400.
+
+%% @doc Run a request with an optional hard timeout. When no timeout is provided
+%% the request executes in the caller; otherwise we spawn and kill the worker if
+%% it exceeds the limit.
+relay_request_with_timeout(
+        RequestFun,
+        Timeout
+    ) when Timeout == not_found; Timeout == undefined ->
+    RequestFun();
+relay_request_with_timeout(RequestFun, Timeout) ->
+    Parent = self(),
+    Ref = make_ref(),
+    Worker =
+        spawn(fun() ->
+            Parent ! {Ref, RequestFun()}
+        end),
+    receive
+        {Ref, Res} -> Res
+    after Timeout ->
+        exit(Worker, kill),
+        {error, relay_peer_timeout}
+    end.
+
+peer_http_opts(Node, HTTPOpts, Opts) ->
+    NodeOpts =
+        case hb_maps:get(<<"opts">>, Node, #{}, Opts) of
+            Map when is_map(Map) -> Map;
+            _ -> #{}
+        end,
+    Normalized = hb_opts:mimic_default_types(NodeOpts, new_atoms, Opts),
+    case peer_timeout(Node, NodeOpts, Opts) of
+        not_found ->
+            {not_found, maps:merge(HTTPOpts, Normalized)};
+        Timeout ->
+            TimeoutMs = hb_util:int(Timeout),
+            {
+                TimeoutMs,
+                maps:merge(
+                    HTTPOpts,
+                    Normalized#{
+                        http_request_send_timeout => TimeoutMs,
+                        http_connect_timeout => TimeoutMs
+                    }
+                )
+            }
+    end.
+
+peer_timeout(Node, NodeOpts, Opts) ->
+    case hb_ao:get(<<"http-timeout">>, Node, not_found, Opts) of
+        not_found ->
+            hb_maps:get(<<"http-timeout">>, NodeOpts, not_found, Opts);
+        Timeout -> Timeout
+    end.
 
 
 %%% Tests
@@ -320,15 +455,20 @@ relay_failover_test() ->
                         <<"template">> => <<"/~meta@1.0/info.*">>,
                         <<"nodes">> => [
                             #{
-                                % Note: Will need update when Google runs 
-                                % HyperBEAM.
-                                <<"prefix">> => <<"http://google.com/">>
+                                % Remote peer used to exercise timeout-driven
+                                % failover. When Google one day runs HB, we can
+                                % lower this again.
+                                <<"prefix">> => <<"http://google.com/">>,
+                                <<"http-timeout">> => 10000
                             },
                             #{
-                                <<"prefix">> => <<"http://doesnotroute.invalid/">>
+                                <<"prefix">> => <<"http://doesnotroute.invalid/">>,
+                                <<"http-timeout">> => 2000
                             },
                             #{
-                                <<"prefix">> => Peer
+                                % Local peer that should eventually succeed.
+                                <<"prefix">> => Peer,
+                                <<"http-timeout">> => 5000
                             }
                         ]
                     }
