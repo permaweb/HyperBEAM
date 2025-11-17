@@ -34,13 +34,15 @@
 %%%               User.balance.
 %%% '''
 -module(dev_pot_math).
--export([minted_between/5]).
+-export([minted_between/6]).
 -export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
 
-minted_between(Minted, Max, Proportion, LastT, T) ->
+minted_between(Minted, Max, PropN, PropD, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
-    Remaining * (1 - math:pow(1 - Proportion, Steps)).
+    NComplementOverTime = trunc(math:pow(PropD - PropN, Steps)),
+    DOverTime = trunc(math:pow(PropD, Steps)),
+    Remaining * (DOverTime - NComplementOverTime) div DOverTime.
 
 drip_global(Acc, ToMint, TotalWeightedUnits) ->
     Acc + (ToMint / TotalWeightedUnits).

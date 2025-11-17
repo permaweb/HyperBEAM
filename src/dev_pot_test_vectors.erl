@@ -4,12 +4,12 @@
 -include("include/hb.hrl").
 
 mint_quantity_test() ->
-    ?assertEqual(50.0, dev_pot_math:minted_between(0, 100, 0.5, 0, 1)),
-    ?assertEqual(75.0, dev_pot_math:minted_between(0, 100, 0.5, 0, 2)),
-    ?assertEqual(87.5, dev_pot_math:minted_between(0, 100, 0.5, 0, 3)),
-    Period1 = dev_pot_math:minted_between(0, 100, 0.5, 0, 2),
-    Period2 = dev_pot_math:minted_between(Period1, 100, 0.5, 2, 3),
-    ?assertEqual(87.5, Period1 + Period2).
+    ?assertEqual(50, dev_pot_math:minted_between(0, 100, 1, 2, 0, 1)),
+    ?assertEqual(75, dev_pot_math:minted_between(0, 100, 1, 2, 0, 2)),
+    ?assertEqual(87, dev_pot_math:minted_between(0, 100, 1, 2, 0, 3)),
+    Period1 = dev_pot_math:minted_between(0, 100, 1, 2, 0, 2),
+    Period2 = dev_pot_math:minted_between(Period1, 100, 1, 2, 2, 3),
+    ?assertEqual(87, Period1 + Period2).
 
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
@@ -22,7 +22,7 @@ single_resource_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             ResourceID => #{
                 <<"weight">> => 1,
@@ -47,9 +47,9 @@ single_resource_test() ->
     S5 = dev_pot:modify_deposit(Addr1, ResourceID, 20, S4, Opts),
     report(S5),
     % Calculate the expected balance for Addr1. It is 50% of the remaining supply
-    % to mint (25 units), multiplied by the proportion of the total deposits that
-    % Addr1 has (3/4), plus the existing balance (37.5).
-    NewExpectedB1 = ((25 / 2) * (3 / 4)) + 37.5,
+    % to mint (25 units) performed using integer arith, multiplied by the proportion 
+    % of the total deposits that Addr1 has (3/4), plus the existing balance (37.5).
+    NewExpectedB1 = (12 * 3 / 4) + 37.5,
     S6 = dev_pot:drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6)),
@@ -76,7 +76,7 @@ multiple_resources_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             ResourceID => #{
                 <<"weight">> => 1,
@@ -107,10 +107,10 @@ multiple_resources_test() ->
     S5a = dev_pot:modify_deposit(Addr1, ResourceID2, -10, S4, Opts),
     S5b = dev_pot:modify_deposit(Addr2, ResourceID, -10, S5a, Opts),
     % Calculate the expected balance for Addr1. It is 50% of the remaining supply
-    % to mint (25 units), multiplied by the proportion of the total deposits that
-    % Addr1 has (3/4), multiplied by the weight of the resource over the total
-    % weight (1/10), plus the existing balance (37.5).
-    NewExpectedB1 = (((25 / 2) * (1 / 1)) * (1 / 10)) + 37.5,
+    % to mint (25 units) performed using integer arith, multiplied by the proportion
+    % of the total deposits that Addr1 has (3/4), multiplied by the weight of the
+    % resource over the total weight (1/10), plus the existing balance (37.5).
+    NewExpectedB1 = ((12 * (1 / 1)) * (1 / 10)) + 37.5,
     S6 = dev_pot:drip(S5b, #{ <<"t">> => 3 }, Opts),
     report(S6),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6)),
@@ -133,7 +133,7 @@ single_resource_modified_weight_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -159,7 +159,7 @@ multiresource_modified_weight_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -196,7 +196,7 @@ simple_delegation_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             ResourceHydrogen => #{
                 <<"weight">> => 1,
@@ -349,7 +349,7 @@ delegation_liquidation_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -386,7 +386,7 @@ multiple_delegations_liquidation_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -432,7 +432,7 @@ cyclic_delegations_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -469,7 +469,7 @@ deposit_removal_while_delegated_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"oxygen">> => #{
                 <<"weight">> => 1,
@@ -512,7 +512,7 @@ inverted_index_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => 0.5,
+        <<"mint-prop">> => {1, 2},
         <<"resources">> => #{
             <<"hydrogen">> => #{
                 <<"weight">> => 1,

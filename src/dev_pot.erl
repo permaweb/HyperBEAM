@@ -56,7 +56,7 @@ drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= La
 drip_global(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
-        <<"mint-prop">> := Proportion
+        <<"mint-prop">> := {PropN, PropD}
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
@@ -66,7 +66,8 @@ drip_global(S = #{
         dev_pot_math:minted_between(
             AlreadyMinted,
             Max,
-            Proportion,
+            PropN,
+            PropD,
             LastT,
             T
         ),
