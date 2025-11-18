@@ -3,6 +3,7 @@
 -module(hb_http_client).
 -behaviour(gen_server).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 -export([start_link/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
@@ -14,6 +15,7 @@
 
 -define(DEFAULT_RETRIES, 0).
 -define(DEFAULT_RETRY_TIME, 1000).
+-define(MAX_REDIRECTS, 5).
 
 %%% ==================================================================
 %%% Public interface.
@@ -151,6 +153,9 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                             true -> {error, client_error};
                             false -> gun_req(Args, true, Opts)
                         end;
+                    {ok, StatusCode, _Headers, _Body} = Reply
+                        when StatusCode >= 301 andalso StatusCode < 400 ->
+                        follow_redirect(Args, Reply, Opts);
                     Reply ->
                         Reply
                 end;
@@ -176,6 +181,52 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             )
 	end,
 	Response.
+
+follow_redirect(Args, {ok, _, ResponseHeaders, _Body} = Reply, Opts) ->
+    FollowRedirects = maps:get(<<"follow_redirect">>, Opts, false),
+    CurrentRedirects = maps:get(current_redirects, Opts, 0),
+    BellowMaxRedirects = CurrentRedirects < ?MAX_REDIRECTS,
+    case FollowRedirects andalso BellowMaxRedirects of
+        true ->
+	        #{ peer := Peer, path := Path, method := Method } = Args,
+            % Only follow the redirect if method is GET.
+            case Method of
+                <<"GET">> ->
+                    Location = proplists:get_value(<<"location">>, ResponseHeaders),
+                    #{peer := Peer2, path := Path2} = NewArgs = case Location of
+                        <<"/", _/binary>> = RedirectPath ->
+                            Args#{path => RedirectPath};
+                        <<"http", _/binary>> ->
+                            URI = uri_string:parse(Location),
+                            NewPeer = uri_string:normalize(maps:remove(path, URI)),
+                            NewPath = maps:get(path, URI),
+                            Args#{peer => NewPeer, path => NewPath};
+                        undefined ->
+                            ?event(http_client, {error, no_location_header_provided}),
+                            Args
+                    end,
+                    ?event(
+                        http_client,
+                        {follow_redirect,
+                            {from, {peer, Peer}, {path, Path}},
+                            {to, {peer, Peer2},{path, Path2}}
+                        }
+                    ),
+                    NewOpts = maps:update_with(
+                        current_redirects,
+                        fun (Value) -> Value + 1 end,
+                        1,
+                        Opts
+                    ),
+                    gun_req(NewArgs, true, NewOpts);
+                _ ->
+                    ?event(http_client, {error, unsupported_redirect_method}),
+                    Reply
+            end;
+        false ->
+            ?event(http_client, {error, follow_redirect_not_enabled}),
+            Reply
+    end.
 
 %% @doc Record the duration of the request in an async process. We write the 
 %% data to prometheus if the application is enabled, as well as invoking the
@@ -782,3 +833,69 @@ get_status_class(Data) when is_atom(Data) ->
 	atom_to_binary(Data);
 get_status_class(_) ->
 	<<"unknown">>.
+
+%% Tests
+
+start_mock_gateway(Responses) ->
+    DefaultResponse = {200, <<>>},
+    Endpoints = [
+        {"/redirect1", redirect1, maps:get(redirect1, Responses, DefaultResponse)},
+        {"/redirect2", redirect2, maps:get(redirect2, Responses, DefaultResponse)},
+        {"/redirect3", redirect3, maps:get(redirect3, Responses, DefaultResponse)},
+        {"/redirect4", redirect4, maps:get(redirect4, Responses, DefaultResponse)},
+        {"/redirect5", redirect5, maps:get(redirect5, Responses, DefaultResponse)},
+        {"/redirect6", redirect6, maps:get(redirect6, Responses, DefaultResponse)},
+        {"/ok", ok, maps:get(ok, Responses, DefaultResponse)}
+    ],
+    hb_mock_server:start(Endpoints).
+
+do_not_follow_redirect_by_default_test() ->
+    application:ensure_all_started(hb),
+    {ok, MockServer, ServerHandle} = start_mock_gateway(#{
+        redirect1 => {301, <<"1">>, #{<<"location">> => <<"/ok">>}}
+    }),
+    try
+        Opts = #{},
+        Args = #{peer => MockServer, path => "/redirect1", method => <<"GET">>},
+        Response = request(Args, Opts),
+        ?assertMatch({ok, 301, _, _}, Response),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+follow_redirect_test() ->
+    application:ensure_all_started(hb),
+    {ok, MockServer, ServerHandle} = start_mock_gateway(#{
+        redirect1 => {301, <<"1">>, #{<<"location">> => <<"/ok">>}}
+    }),
+    try
+        Opts = #{<<"follow_redirect">> => true},
+        Args = #{peer => MockServer, path => "/redirect1", method => <<"GET">>},
+        Response = request(Args, Opts),
+        ?assertMatch({ok, 200, _, _}, Response),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+max_redirect_test() ->
+    application:ensure_all_started(hb),
+    {ok, MockServer, ServerHandle} = start_mock_gateway(#{
+        redirect1 => {301, <<"1">>, #{<<"location">> => <<"/redirect2">>}},
+        redirect2 => {301, <<"2">>, #{<<"location">> => <<"/redirect3">>}},
+        redirect3 => {301, <<"3">>, #{<<"location">> => <<"/redirect4">>}},
+        redirect4 => {301, <<"4">>, #{<<"location">> => <<"/redirect5">>}},
+        redirect5 => {301, <<"5">>, #{<<"location">> => <<"/redirect6">>}},
+        redirect6 => {301, <<"6">>, #{<<"location">> => <<"/ok">>}}
+    }),
+    try
+        Opts = #{<<"follow_redirect">> => true},
+        Args = #{peer => MockServer, path => "/redirect1", method => <<"GET">>},
+        Response = request(Args, Opts),
+        %% Return the last response
+        ?assertMatch({ok, 301, _, <<"6">>}, Response),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
