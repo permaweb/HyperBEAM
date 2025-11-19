@@ -257,9 +257,13 @@ result_to_message(ExpectedID, Item, Opts) ->
         ),
 	SignatureType =
         case byte_size(Signature) of
-            65 -> {ecdsa, 256};
-            512 -> {rsa, 65537};
-            _ -> unsupported_tx_signature_type
+            65 ->
+                {ecdsa, 256};
+            512 ->
+                {rsa, 65537};
+            SignatureByteSize ->
+                ?event(error, {unsupported_tx_signature_type, {byte_size, SignatureByteSize}}),
+                unsupported_tx_signature_type
         end,
     TX =
         dev_arweave_common:reset_ids(#tx {
