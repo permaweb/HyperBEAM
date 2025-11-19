@@ -270,28 +270,7 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                             {slot, NextSlotOnProc}
                         }
                     ),
-                    {ok, TargetBase} = hb_cache:read(TargetID, Opts),
-                    TargetAsProcess = dev_process_lib:ensure_process_key(TargetBase, Opts),
-                    RecvdID = hb_message:id(TargetBase, all, Opts),
-                    ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
-                    % Push the message downstream. We decrease the result-depth.
-                    Recurse =
-                        hb_ao:resolve(
-                            {as, <<"process@1.0">>, TargetAsProcess},
-                            #{
-                                <<"path">> => <<"push">>,
-                                <<"slot">> => NextSlotOnProc,
-                                <<"result-depth">> =>
-                                    hb_ao:get(
-                                        <<"result-depth">>,
-                                        Origin,
-                                        1,
-                                        Opts
-                                    ) - 1
-                            },
-                            Opts#{ cache_control => <<"always">> }
-                        ),
-                    case Recurse of
+                    case push_downstream(TargetID, NextSlotOnProc, Origin, Opts) of
                         {ok, Downstream} ->
                             #{
                                 <<"id">> => PushedMsgID,
@@ -316,6 +295,87 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                     }
             end
     end.
+
+%% @doc Push a downstream resultant message that has already been scheduled.
+%% We determine whether to push the message locally or remotely based on the
+%% `push_route_downstream' option.
+push_downstream(TargetID, NextSlotOnProc, Origin, Opts) ->
+    case hb_opts:get(push_route_downstream, false, Opts) of
+        true -> push_downstream_remote(TargetID, NextSlotOnProc, Origin, Opts);
+        false -> push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts)
+    end.
+
+%% @doc Push a downstream message on a remote node if a route can be found to
+%% perform the action. If no route is found, we execute the action locally.
+push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
+    Path = <<TargetID/binary, "/push&slot=", (hb_util:bin(NextSlotOnProc))/binary>>,
+    RouteReq =
+        #{
+            <<"path">> => <<"match">>,
+            <<"route-path">> => Path
+        },
+    Opts =
+        case dev_whois:ensure_host(RawOpts) of
+            {ok, NewOpts} -> NewOpts;
+            _ -> RawOpts
+        end,
+    Self = hb_opts:get(host, host_not_specified, Opts),
+    case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
+        {error, no_matching_route} ->
+            ?event(push,
+                {no_push_route_found,
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {continuing, locally}
+                },
+                Opts
+            ),
+            push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
+        {ok, Self} ->
+            % If we matched ourselves as the route, we can just push locally.
+            ?event(push,
+                {routing_matched_self,
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {continuing, locally}
+                },
+                Opts
+            ),
+            push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
+        {ok, Node} ->
+            ?event(push,
+                {routing_matched_remote,
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {node, Node}
+                },
+                Opts
+            ),
+            hb_http:post(Node, Path, Opts)
+    end.
+
+%% @doc Push a resulting message recursively, executing the action on this node.
+push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
+    {ok, TargetBase} = hb_cache:read(TargetID, Opts),
+    TargetAsProcess = dev_process:ensure_process_key(TargetBase, Opts),
+    RecvdID = hb_message:id(TargetBase, all, Opts),
+    ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
+    % Push the message downstream. We decrease the result-depth.
+    hb_ao:resolve(
+        {as, <<"process@1.0">>, TargetAsProcess},
+        #{
+            <<"path">> => <<"push">>,
+            <<"slot">> => NextSlotOnProc,
+            <<"result-depth">> =>
+                hb_ao:get(
+                    <<"result-depth">>,
+                    Origin,
+                    1,
+                    Opts
+                ) - 1
+        },
+        Opts#{ cache_control => <<"always">> }
+    ).
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
 normalize_message(MsgToPush, Opts) ->
