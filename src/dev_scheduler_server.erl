@@ -37,33 +37,28 @@ start(ProcID, Proc, Opts) ->
                     throw({scheduling_disabled_on_node, {requested_for, ProcID}});
                 _ -> ok
             end,
-            {CurrentSlot, HashChain} =
+            HashpathAlg = hb_path:hashpath_alg(Proc, Opts),
+            {CurrentSlot, BaseStateHashpath} =
                 case dev_scheduler_cache:latest(ProcID, Opts) of
                     not_found ->
                         ?event({starting_new_schedule, {proc_id, ProcID}}),
-                        {-1, <<>>};
-                    {Slot, Chain} ->
-                        ?event(
-                            {continuing_schedule,
-                                {proc_id, ProcID},
-                                {current_slot, Slot},
-                                {hash_chain, Chain}
-                            }
-                        ),
-                        {Slot, Chain}
+                        {-1, undefined};
+                    {Slot, Base} ->
+                        {Slot, Base}
                 end,
             ?event(
                 {scheduler_got_process_info,
                     {proc_id, ProcID},
-                    {current, CurrentSlot},
-                    {hash_chain, HashChain}
+                    {initial_slot, CurrentSlot},
+                    {base_state_hashpath, BaseStateHashpath}
                 }
             ),
             server(
                 #{
                     id => ProcID,
                     current => CurrentSlot,
-                    hash_chain => HashChain,
+                    base_state_hashpath => BaseStateHashpath,
+                    hashpath_alg => HashpathAlg,
                     wallets => commitment_wallets(Proc, Opts),
                     mode =>
                         hb_opts:get(
@@ -153,7 +148,9 @@ server(State) ->
         {info, Reply} ->
             Reply ! {info, State},
             server(State);
-        stop -> ok
+        stop ->
+            ?event({stopping_scheduler_server, {proc_id, maps:get(id, State)}}),
+            ok
     end.
 
 %% @doc Assign a message to the next slot.
@@ -162,7 +159,7 @@ assign(State, Message, ReplyPID) ->
         do_assign(State, Message, ReplyPID)
     catch
         _Class:Reason:Stack ->
-            ?event({error_scheduling, Reason, Stack}),
+            ?event({error_scheduling, {reason, Reason}, {trace, Stack}}),
             State
     end.
 
@@ -175,42 +172,36 @@ do_assign(State, Message, ReplyPID) ->
             Message,
             Opts = maps:get(opts, State)
         ),
-    HashChain =
-        next_hashchain(
-            maps:get(hash_chain, State),
-            OnlyAttested,
-            Opts
-        ),
+    % Generate parameters for the assignment message and commit to it.
+    BaseStateHashpath = base_state(State),
     NextSlot = maps:get(current, State) + 1,
-    % Run the signing of the assignment and writes to the disk in a separate
-    % process.
-    AssignFun =
+    {Timestamp, Height, Hash} = ar_timestamp:get(),
+    Assignment =
+        commit_assignment(
+            #{
+                <<"path">> =>
+                    case hb_path:from_message(request, Message, Opts) of
+                        undefined -> <<"compute">>;
+                        Path -> hb_path:to_binary(Path)
+                    end,
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"process">> => hb_util:id(maps:get(id, State)),
+                <<"epoch">> => <<"0">>,
+                <<"slot">> => NextSlot,
+                <<"block-height">> => Height,
+                <<"block-hash">> => hb_util:human_id(Hash),
+                <<"block-timestamp">> => Timestamp,
+                % Note: Local time on the SU, not Arweave
+                <<"timestamp">> => scheduler_time(),
+                <<"base-hashpath">> => BaseStateHashpath,
+                <<"body">> => OnlyAttested,
+                <<"type">> => <<"Assignment">>
+            },
+            State
+        ),
+    DispatchFun =
         fun() ->
-            {Timestamp, Height, Hash} = ar_timestamp:get(),
-            Assignment =
-                commit_assignment(
-                    #{
-                        <<"path">> =>
-                            case hb_path:from_message(request, Message, Opts) of
-                                undefined -> <<"compute">>;
-                                Path -> hb_path:to_binary(Path)
-                            end,
-                        <<"data-protocol">> => <<"ao">>,
-                        <<"variant">> => <<"ao.N.1">>,
-                        <<"process">> => hb_util:id(maps:get(id, State)),
-                        <<"epoch">> => <<"0">>,
-                        <<"slot">> => NextSlot,
-                        <<"block-height">> => Height,
-                        <<"block-hash">> => hb_util:human_id(Hash),
-                        <<"block-timestamp">> => Timestamp,
-                        % Note: Local time on the SU, not Arweave
-                        <<"timestamp">> => scheduler_time(),
-                        <<"hash-chain">> => hb_util:id(HashChain),
-                        <<"body">> => OnlyAttested,
-                        <<"type">> => <<"Assignment">>
-                    },
-                    State
-                ),
             AssignmentID = hb_message:id(Assignment, all),
             ?event(scheduling,
                 {assigned,
@@ -249,14 +240,15 @@ do_assign(State, Message, ReplyPID) ->
         end,
     case hb_opts:get(scheduling_mode, sync, Opts) of
         aggressive ->
-            spawn(AssignFun);
+            spawn(DispatchFun);
         Other ->
             ?event({scheduling_mode, Other}),
-            AssignFun()
+            DispatchFun()
     end,
+    % Update the state with the next hashpath.
     State#{
         current := NextSlot,
-        hash_chain := HashChain
+        base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
     }.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
@@ -281,21 +273,31 @@ maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
         _ -> ok
     end.
 
-%% @doc Create the next element in a chain of hashes that links this and prior
-%% assignments.
-next_hashchain(HashChain, Message, Opts) ->
-    ?event({creating_next_hashchain, {hash_chain, HashChain}, {message, Message}}),
-    ID = hb_message:id(Message, all, Opts),
-    crypto:hash(
-        sha256,
-        << HashChain/binary, ID/binary >>
+%% @doc Find the hashpath of the base state upon which a new assignment should
+%% be applied.
+base_state(S = #{ base_state_hashpath := undefined }) ->
+    hb_util:id(maps:get(id, S));
+base_state(#{ base_state_hashpath := BaseStateHashpath }) ->
+    BaseStateHashpath.
+
+%% @doc Generate the next hashpath for a new assignment.
+next_hashpath(
+        BaseStateHashpath,
+        NewAssignment,
+        #{ hashpath_alg := HashpathAlg, opts := Opts }
+    ) ->
+    hb_path:hashpath(
+        BaseStateHashpath,
+        hb_message:id(NewAssignment, all, Opts),
+        HashpathAlg,
+        Opts
     ).
 
 %% @doc Return the current time in milliseconds.
 scheduler_time() ->
     erlang:system_time(millisecond).
 
-%% TESTS
+%%% Tests
 
 %% @doc Test the basic functionality of the server.
 new_proc_test() ->
