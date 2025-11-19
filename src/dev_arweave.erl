@@ -450,3 +450,36 @@ get_bad_tx_test() ->
     Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).
+
+%% @doc: helper test to generate and write a dataitem to disk so that we
+%% can validate it using 3rd-party js libraries and gateways.
+serialize_data_item_test_disabled() ->
+    DataItem = ar_bundles:sign_item(
+        #tx{
+            data = <<"Hello from HyperBEAM test!">>,
+            tags = [
+                {<<"content-type">>, <<"text/plain">>},
+                {<<"test-tag">>, <<"test-value">>},
+                {<<"app-name">>, <<"HyperBEAM">>}
+            ]
+        },
+        hb:wallet()
+    ),
+    SerializedItem = ar_bundles:serialize(DataItem),
+    % Write to disk in the test directory
+    OutputPath = filename:join([
+        "test",
+        "arbundles.js",
+        "hyperbeam-test-item.bin"
+    ]),
+    ok = filelib:ensure_dir(OutputPath),
+    ok = file:write_file(OutputPath, SerializedItem),
+    ?event({wrote_data_item, {path, OutputPath}, {size, byte_size(SerializedItem)}}),
+    ?assert(filelib:is_file(OutputPath)),
+    % Read it back and verify it deserializes correctly
+    {ok, ReadData} = file:read_file(OutputPath),
+    VerifiedItem = ar_bundles:deserialize(ReadData),
+    ?assertEqual(DataItem#tx.data, VerifiedItem#tx.data),
+    ?assertEqual(length(DataItem#tx.tags), length(VerifiedItem#tx.tags)),
+    ?assert(ar_bundles:verify_item(VerifiedItem)),
+    ok.
