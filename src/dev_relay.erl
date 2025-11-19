@@ -144,40 +144,29 @@ call(M1, RawM2, Opts) ->
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ http_client => Client, http_only_result => false },
-    Res = case RelayPeer of
-        not_found ->
-            hb_http:request(TargetMod5, HTTPOpts);
-        _ ->
-            case hb_ao:get(<<"nodes">>, RelayPeer, not_found, Opts) of
-                not_found ->
-                    ?event(debug_relay, {relaying_to_peer, RelayPeer}),
-                    hb_http:request(
-                        RequestMethod,
-                        RelayPeer,
-                        RelayPath,
-                        TargetMod5,
-                        HTTPOpts
-                    );
-                Nodes when is_list(Nodes) ->
-                    relay_nodes_in_order(
-                        hb_util:message_to_ordered_list(Nodes, Opts),
-                        RequestMethod,
-                        RelayPath,
-                        TargetMod5,
-                        HTTPOpts,
-                        Opts
-                    );
-                _ ->
-                    ?event(debug_relay, {relaying_to_peer, RelayPeer}),
-                    hb_http:request(
-                        RequestMethod,
-                        RelayPeer,
-                        RelayPath,
-                        TargetMod5,
-                        HTTPOpts
-                    )
-            end
-    end,
+    Res =
+        case RelayPeer of
+            not_found ->
+                hb_http:request(TargetMod5, HTTPOpts);
+            Peer when is_map(Peer) ->
+                Prepared = prepare_relay_peer(Peer, Opts),
+                hb_http:request(
+                    RequestMethod,
+                    Prepared,
+                    RelayPath,
+                    TargetMod5,
+                    HTTPOpts
+                );
+            Peer ->
+                ?event(debug_relay, {relaying_to_peer, Peer}),
+                hb_http:request(
+                    RequestMethod,
+                    Peer,
+                    RelayPath,
+                    TargetMod5,
+                    HTTPOpts
+                )
+        end,
     case Res of
         {ok, R} ->
             {ok, hb_maps:without([<<"set-cookie">>], R)};
@@ -208,116 +197,48 @@ request(_Base, Req, Opts) ->
         }
     }.
 
-%% @doc Try each node in order, respecting per-node HTTP timeouts. Stops at the
-%% first admissible response or when all nodes fail/time out.
-relay_nodes_in_order([], _Method, _Path, _Message, _HTTPOpts, _Opts) ->
-    {error, no_viable_responses};
-relay_nodes_in_order(
-        [Node|Rest],
-        Method,
-        Path,
-        Message,
-        HTTPOpts,
-        Opts
-    ) ->
-    case hb_ao:get(<<"prefix">>, Node, not_found, Opts) of
-        not_found ->
-            relay_nodes_in_order(
-                Rest,
-                Method,
-                Path,
-                Message,
-                HTTPOpts,
-                Opts
-            );
-        Peer ->
-            {PeerTimeout, HTTPOpts1} = peer_http_opts(Node, HTTPOpts, Opts),
-            ?event(debug_relay, {relaying_to_peer, Peer}),
-            RequestFun =
-                fun() ->
-                    hb_http:request(Method, Peer, Path, Message, HTTPOpts1)
-                end,
-            case relay_request_with_timeout(RequestFun, PeerTimeout) of
-                {ok, Res} ->
-                    case relay_response_ok(Res, Opts) of
-                        true -> {ok, Res};
-                        false ->
-                            relay_nodes_in_order(
-                                Rest,
-                                Method,
-                                Path,
-                                Message,
-                                HTTPOpts,
-                                Opts
-                            )
-                    end;
-                {error, _Reason} ->
-                    relay_nodes_in_order(
-                        Rest,
-                        Method,
-                        Path,
-                        Message,
-                        HTTPOpts,
-                        Opts
-                    )
-            end
+prepare_relay_peer(Peer, Opts) ->
+    case hb_ao:get(<<"nodes">>, Peer, not_found, Opts) of
+        Nodes when is_list(Nodes) ->
+            Peer#{ <<"nodes">> => prepare_relay_nodes(Nodes, Opts) };
+        _ ->
+            Peer
     end.
 
-relay_response_ok(Res, Opts) ->
-    Status = hb_util:int(hb_ao:get(<<"status">>, Res, 500, Opts)),
-    Status < 400.
+prepare_relay_nodes(Nodes, Opts) ->
+    [
+        prepare_relay_node(Node, Opts)
+    ||
+        Node <- hb_util:message_to_ordered_list(Nodes, Opts)
+    ].
 
-%% @doc Run a request with an optional hard timeout. When no timeout is provided
-%% the request executes in the caller; otherwise we spawn and kill the worker if
-%% it exceeds the limit.
-relay_request_with_timeout(
-        RequestFun,
-        Timeout
-    ) when Timeout == not_found; Timeout == undefined ->
-    RequestFun();
-relay_request_with_timeout(RequestFun, Timeout) ->
-    Parent = self(),
-    Ref = make_ref(),
-    Worker =
-        spawn(fun() ->
-            Parent ! {Ref, RequestFun()}
-        end),
-    receive
-        {Ref, Res} -> Res
-    after Timeout ->
-        exit(Worker, kill),
-        {error, relay_peer_timeout}
-    end.
-
-peer_http_opts(Node, HTTPOpts, Opts) ->
-    NodeOpts =
+prepare_relay_node(Node, Opts) ->
+    NormalizedOpts =
         case hb_maps:get(<<"opts">>, Node, #{}, Opts) of
-            Map when is_map(Map) -> Map;
+            Map when is_map(Map) -> hb_opts:mimic_default_types(Map, new_atoms, Opts);
             _ -> #{}
         end,
-    Normalized = hb_opts:mimic_default_types(NodeOpts, new_atoms, Opts),
-    case peer_timeout(Node, NodeOpts, Opts) of
-        not_found ->
-            {not_found, maps:merge(HTTPOpts, Normalized)};
-        Timeout ->
-            TimeoutMs = hb_util:int(Timeout),
-            {
-                TimeoutMs,
-                maps:merge(
-                    HTTPOpts,
-                    Normalized#{
-                        http_request_send_timeout => TimeoutMs,
-                        http_connect_timeout => TimeoutMs
-                    }
-                )
-            }
-    end.
+    Node#{
+        <<"opts">> => apply_node_timeout(Node, NormalizedOpts, Opts)
+    }.
 
-peer_timeout(Node, NodeOpts, Opts) ->
-    case hb_ao:get(<<"http-timeout">>, Node, not_found, Opts) of
+apply_node_timeout(Node, NodeOpts, Opts) ->
+    Timeout =
+        case hb_ao:get(<<"http-timeout">>, Node, not_found, Opts) of
+            not_found ->
+                hb_maps:get(<<"http-timeout">>, NodeOpts, not_found, Opts);
+            TimeoutValue ->
+                TimeoutValue
+        end,
+    case Timeout of
         not_found ->
-            hb_maps:get(<<"http-timeout">>, NodeOpts, not_found, Opts);
-        Timeout -> Timeout
+            NodeOpts;
+        _ ->
+            TimeoutMs = hb_util:int(Timeout),
+            NodeOpts#{
+                http_request_send_timeout => TimeoutMs,
+                http_connect_timeout => TimeoutMs
+            }
     end.
 
 

@@ -69,6 +69,13 @@ request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is
     % `multirequest' functionality, rather than a single request.
     hb_http_multi:request(Config, Method, Path, Message, Opts);
 request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
+    ExplicitMethod =
+        hb_maps:get(
+            <<"method">>,
+            Message,
+            not_found,
+            Opts
+        ),
     % The request has a set of additional options, so we apply them to the
     % request.
     MergedOpts =
@@ -85,7 +92,12 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
             Message#{ <<"path">> => URI, <<"method">> => Method },
             MergedOpts
         ),
-    request(NewMethod, Node, NewPath, NewMsg, NewOpts);
+    FinalMethod =
+        case ExplicitMethod of
+            not_found -> NewMethod;
+            _ -> Method
+        end,
+    request(FinalMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
