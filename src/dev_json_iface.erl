@@ -238,7 +238,29 @@ prepare_header_case_tags(TABM, Opts) ->
 json_to_message(JSON, Opts) when is_binary(JSON) ->
     json_to_message(hb_json:decode(JSON), Opts);
 json_to_message(Resp, Opts) when is_map(Resp) ->
-    {ok, Data, Messages, Patches} = normalize_results(Resp),
+    {ok, Data, Messages, Patches, Assignments} = normalize_results(Resp),
+    ?event(json, {json_to_message, {msgs, Messages}, {patches, Patches}, {assignments, Assignments}}),
+    NewAssignments = 
+        lists:flatmap(
+            fun(#{ <<"Message">> := MessageId, <<"Processes">> := Processes }) -> 
+                {ok, Msg} = hb_cache:read(MessageId, Opts),
+                ?event(json, {json_to_message, {msg, Msg}}),
+                List = lists:map(
+                    fun(Process) -> 
+                        MsgWithTarget =
+                            hb_ao:set(Msg, #{ <<"target">> => Process }, Opts),
+                        hb_cache:write(MsgWithTarget, Opts),
+                        MsgWithTarget
+                    end, 
+                    Processes
+                ),
+                ?event(json, {json_to_message, {list, List}}),
+                List
+            end,
+            Assignments
+        ),
+    ?event(json, {json_to_message, {new_assignments, NewAssignments}}),
+    AllMessages = Messages ++ NewAssignments,
     Output = 
         #{
             <<"outbox">> =>
@@ -248,14 +270,16 @@ json_to_message(Resp, Opts) when is_map(Resp) ->
                     ||
                         {MessageNum, Msg} <-
                             lists:zip(
-                                lists:seq(1, length(Messages)),
-                                Messages
+                                lists:seq(1, length(AllMessages)),
+                                AllMessages
                             )
                     ]
                 ),
+            <<"assignments">> => Assignments,
             <<"patches">> => lists:map(fun(Patch) -> tags_to_map(Patch, Opts) end, Patches),
             <<"data">> => Data
         },
+    ?event(json, {json_to_message, {output, Output}}),
     {ok, Output};
 json_to_message(#{ <<"ok">> := false, <<"error">> := Error }, _Opts) ->
     {error, Error};
@@ -379,7 +403,7 @@ env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
 
 %% @doc Normalize the results of an evaluation.
 normalize_results(#{ <<"Error">> := Error }) ->
-    {ok, Error, [], []};
+    {ok, Error, [], [], []};
 normalize_results(Msg) ->
     try
         Output = maps:get(<<"Output">>, Msg, #{}),
@@ -387,11 +411,12 @@ normalize_results(Msg) ->
         {ok,
             Data,
             maps:get(<<"Messages">>, Msg, []),
-            maps:get(<<"patches">>, Msg, [])
+            maps:get(<<"patches">>, Msg, []),
+            maps:get(<<"Assignments">>, Msg, [])
         }
     catch
         _:_ ->
-            {ok, <<>>, [], []}
+            {ok, <<>>, [], [], []}
     end.
 
 %% @doc After the process returns messages from an evaluation, the

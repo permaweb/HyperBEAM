@@ -73,31 +73,39 @@ delegate_request(Msg, Req, Opts) ->
 
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(Msg, Req, Opts) ->
-    % Resolve the `delegated-compute@1.0' device.
-    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
-        {ok, Res} ->
-            PatchResult = 
-                hb_ao:resolve(
-                    Res,
-                    {
-                        as,
-                        <<"patch@1.0">>,
-                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
-                    },
-                    Opts
-                ),
-            % Resolve the `patch@1.0' device.
-            case PatchResult of 
-                {ok, Msg4} ->
-                    % Return the patched message.
-                    {ok, Msg4};
+    ?event(dedup, {do_compute, {msg, Msg}, {req, Req}}),
+    % Dedup the msg
+    {DedupStatus, _} = hb_ao:resolve(Msg, {as, <<"dedup@1.0">>, Req}, Opts),
+    ?event(dedup, {dedup_status, DedupStatus}),
+    case DedupStatus of
+        ok ->
+            % Resolve the `delegated-compute@1.0' device.
+            case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
+                {ok, Res} ->
+                    PatchResult = 
+                        hb_ao:resolve(
+                            Res,
+                            {
+                                as,
+                                <<"patch@1.0">>,
+                                Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                            },
+                            Opts
+                        ),
+                    % Resolve the `patch@1.0' device.
+                    case PatchResult of 
+                        {ok, Msg4} ->
+                            % Return the patched message.
+                            {ok, Msg4};
+                        {error, Error} ->
+                            % Return the error.
+                            {error, Error}
+                    end;
                 {error, Error} ->
                     % Return the error.
                     {error, Error}
             end;
-        {error, Error} ->
-            % Return the error.
-            {error, Error}
+        _ -> {ok, #{}}
     end.
 
 %% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
@@ -696,6 +704,25 @@ schedule_aos_call(Base, Code, Action, Opts) ->
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req).
 
+double_schedule_aos_call(Base, Code) ->
+    double_schedule_aos_call(Base, Code, <<"Eval">>, #{}).
+double_schedule_aos_call(Base, Code, Action) ->
+    double_schedule_aos_call(Base, Code, Action, #{}).
+double_schedule_aos_call(Base, Code, Action, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    ProcID = hb_message:id(Base, all),
+    Req =
+        hb_message:commit(
+            #{
+                <<"action">> => Action,
+                <<"data">> => Code,
+                <<"target">> => ProcID,
+                <<"timestamp">> => 1
+            },
+            #{ priv_wallet => Wallet }
+        ),
+    {ok, _} = schedule_test_message(Base, <<"TEST MSG">>, Req),
+    {ok, _} = schedule_test_message(Base, <<"TEST MSG">>, Req).
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
 spawn_and_execute_slot() ->
@@ -740,6 +767,95 @@ spawn_and_execute_slot() ->
     ),
     {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
     ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Result)).
+
+spawn_and_dedup_test_() ->
+    { timeout, 900, fun spawn_and_dedup_test/0 }.
+spawn_and_dedup_test() ->
+    application:ensure_all_started(hb),
+    Opts = #{
+        priv_wallet => hb:wallet(),
+        cache_control => <<"always">>,
+        store => hb_opts:get(store)
+    },
+    Base = test_genesis_wasm_process(),
+    hb_cache:write(Base, Opts),
+    {ok, _SchedInit} = 
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            Opts
+        ),
+    {ok, _} = double_schedule_aos_call(
+        Base,
+        <<"
+            ao.assign({ 
+                Processes = {ao.id},
+                Message = \"P1iLP-iKiTr44wR6H6kBaBVcTOjaqubFR1-jBn5cWNE\" 
+            })
+        ">>
+    ),
+    {ok, SchedulerRes} =
+        hb_ao:resolve(Base, #{
+            <<"method">> => <<"GET">>,
+            <<"path">> => <<"schedule">>
+        }, Opts),
+    ?event(assign, {scheduler_res, SchedulerRes}),
+    % Verify process message is scheduled first
+    % ?assertMatch(
+    %     <<"Process">>,
+    %     hb_ao:get(<<"assignments/0/body/type">>, SchedulerRes)
+    % ),
+    % % Verify messages are scheduled
+    % ?assertMatch(
+    %     1,
+    %     hb_ao:get(<<"assignments/1/body/timestamp">>, SchedulerRes)
+    % ),
+    % ?assertMatch(
+    %     1,
+    %     hb_ao:get(<<"assignments/2/body/timestamp">>, SchedulerRes)
+    % ),
+    {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    ?event(assign, {result, Result}),
+    {ok, PushRes1} = 
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => 1,
+                <<"result-depth">> => 1
+            },
+            Opts
+        ),
+    ?event(assign, {push_res1, PushRes1}),
+    {ok, PushRes2} = 
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => 2,
+                <<"result-depth">> => 1
+            },
+            Opts
+        ),
+    ?event(assign, {push_res2, PushRes2}),
+    {ok, SchedulerRes2} = hb_ao:resolve(Base, #{
+        <<"method">> => <<"GET">>,
+        <<"path">> => <<"schedule">>
+    }, Opts),
+    ?event(assign, {scheduler_res2, SchedulerRes2}),
+    {ok, Now} = 
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"now">> },
+            Opts
+        ),
+    ?event(assign, {result, Now}),
+    ?assertEqual(<<"4">>, <<"4">>).
+
 
 compare_result_genesis_wasm_and_wasm_test_() ->
     { timeout, 900, fun compare_result_genesis_wasm_and_wasm/0 }.

@@ -73,6 +73,7 @@ is_async(Process, Req, Opts) ->
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
+    ?event(dedup, {do_push, {primary_process, PrimaryProcess}, {assignment, Assignment}}),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
     UncommittedID =
@@ -96,6 +97,10 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
             Opts#{ hashpath => ignore }
         ),
+    ?event(assign, {resolved,
+        {status, Status}, 
+        {result, Result}
+    }),
     % Determine if we should include the full compute result in our response.
     IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =
@@ -117,12 +122,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                 end
             }
         }),
-    case {Status, hb_ao:get(<<"outbox">>, Result, #{}, Opts)} of
+    MaybeOutbox = hb_ao:get(<<"outbox">>, Result, #{}, Opts),
+    ?event(assign, {maybe_outbox, MaybeOutbox}),
+    OutboxPushRes = case {Status, MaybeOutbox} of
         {ok, NoResults} when ?IS_EMPTY_MESSAGE(NoResults) ->
-            ?event(push_short, {done, {process, {string, ID}}, {slot, Slot}}),
+            ?event(dedup, {done, {process, {string, ID}}, {slot, Slot}}),
             {ok, AdditionalRes#{ <<"slot">> => Slot, <<"process">> => ID }};
         {ok, Outbox} ->
-            ?event(push, {push_found_outbox, {outbox, Outbox}}),
+            ?event(dedup, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
                 hb_maps:map(
                     fun(Key, RawMsgToPush = #{ <<"target">> := Target }) ->
@@ -139,6 +146,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                         <<"source">> => RawMsgToPush
                                     }
                             end,
+                        ?event(dedup, {msg_to_push, MsgToPush}),
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
                                 push_result_message(
@@ -198,9 +206,36 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         {Err, Error} when Err == error; Err == failure ->
             ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
             {error, Error}
-    end.
+    end,
+    ?event(assign, {outbox_push_res, OutboxPushRes}),
+    OutboxPushRes.
+    % MaybeAssignments = hb_ao:get(<<"assignments">>, Result, #{}, Opts),
+    % ?event(assign, {maybe_assignments, MaybeAssignments}),
+    % case {Status, MaybeAssignments} of
+    %     {ok, NoAssignments} when ?IS_EMPTY_MESSAGE(NoAssignments) ->
+    %         OutboxPushRes;
+    %     {ok, Assignments} ->
+    %         lists:map(
+    %         fun(Assignment) -> 
+    %                 ?event(push_assignment, {assignment, Assignment}),
+    %                 push_assignments(hb_cache:ensure_all_loaded(Assignment, Opts), Opts) 
+    %             end,
+    %             Assignments
+    %         );
+    %     {AssignmentErr, AssignmentError} when AssignmentErr == error; AssignmentErr == failure ->
+    %         {error, AssignmentError}
+    % end,
+    % OutboxPushRes.
 
+% push_assignments(#{ <<"Message">> := Message, <<"Processes">> := Processes }, Opts) ->
+%     ?event(push_assignment, {multiple, {message, Message}, {processes, Processes}}),
+%     lists:map(fun(Process) -> push_assignment(Message, Process, Opts) end, Processes).
+% push_assignment(Process, Msg, Opts) ->
+%     ?event(push_assignment, {single, {message, Msg}, {process, Process}}),
+%     LoadedMsg = hb_cache:read(Msg, Opts),
+%     ?event(push_assignment, {loaded_msg, LoadedMsg}),
 
+%     end.
 %% @doc If the outbox message has a path we interpret it as a request to perform
 %% AO-Core eval and schedule the result. Additionally, we  remove the `target` 
 %% from the base message before execution and re-add it to the result, such that
