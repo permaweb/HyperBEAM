@@ -60,6 +60,7 @@ start(ProcID, Proc, Opts) ->
                     base_state_hashpath => BaseStateHashpath,
                     hashpath_alg => HashpathAlg,
                     wallets => commitment_wallets(Proc, Opts),
+                    committment_spec => commitment_spec(Proc, Opts),
                     mode =>
                         hb_opts:get(
                             scheduling_mode,
@@ -92,6 +93,20 @@ commitment_wallets(ProcMsg, Opts) ->
             end
         end,
         dev_scheduler:parse_schedulers(SchedulerVal)
+    ).
+
+%% @doc Returns the commitment specification which should be used to commit
+%% assignments for a process.
+commitment_spec(Proc, Opts) ->
+    hb_ao:get(
+        <<"scheduler-commitment-spec">>,
+        {as, <<"message@1.0">>, Proc},
+        hb_opts:get(
+            scheduler_default_commitment_spec,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+        Opts
     ).
 
 %% @doc Call the appropriate scheduling server to assign a message.
@@ -257,9 +272,14 @@ do_assign(State, Message, ReplyPID) ->
 commit_assignment(BaseAssignment, State) ->
     Wallets = maps:get(wallets, State),
     Opts = maps:get(opts, State),
+    CommittmentSpec = maps:get(committment_spec, State),
     lists:foldr(
         fun(Wallet, Assignment) ->
-            hb_message:commit(Assignment, Opts#{ priv_wallet => Wallet })
+            hb_message:commit(
+                Assignment,
+                Opts#{ priv_wallet => Wallet },
+                CommittmentSpec
+            )
         end,
         BaseAssignment,
         Wallets
