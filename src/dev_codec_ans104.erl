@@ -45,17 +45,34 @@ commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
             <<"ans104@1.0">>,
             Opts
         ),
-    {ok, SignedStructured};
+    ?event({signed_structured, SignedStructured}),
+    commit(SignedStructured, Req#{ <<"type">> => <<"unsigned">> }, Opts);
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.
     % This forces the message to be normalized and the unsigned ID to be
     % recalculated.
+    ?event({adding_unsigned_commitment, Msg}),
+    WithoutExistingUnsigned =
+        hb_message:without_commitments(
+            #{ <<"type">> => <<"unsigned-sha256">> },
+            Msg,
+            Opts
+        ),
+    ?event({without_existing_unsigned, WithoutExistingUnsigned}),
+    WithoutExistingUnsignedEncoded =
+        hb_message:convert(
+            WithoutExistingUnsigned,
+            <<"ans104@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    ?event({without_existing_unsigned_encoded, WithoutExistingUnsignedEncoded}),
     {
         ok,
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
-            <<"ans104@1.0">>,
+            WithoutExistingUnsignedEncoded,
             <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             Opts
         )
     }.
@@ -131,7 +148,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"ans104@1.0">> },
+        #{ <<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => <<"rsa-pss-sha256">> },
         RawTABM,
         Opts
     ),

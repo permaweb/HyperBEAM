@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_empty_map_test(
-        <<"structured@1.0">>,
+    signed_message_encode_decode_verify_test(
+        <<"ans104@1.0">>,
         test_opts(normal)
     ).
 
