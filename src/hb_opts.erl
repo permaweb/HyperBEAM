@@ -363,6 +363,7 @@ default_message() ->
                     }
             }
         },
+        scheduler_default_commitment_spec => <<"httpsig@1.0">>,
         genesis_wasm_import_authorities =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
