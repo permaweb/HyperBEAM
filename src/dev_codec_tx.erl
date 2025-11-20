@@ -117,14 +117,8 @@ to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
-    MaybeCommitment = hb_message:commitment(
-        #{ 
-            <<"commitment-device">> => <<"tx@1.0">>,
-            <<"type">> => <<"rsa-pss-sha256">>
-        },
-        RawTABM,
-        Opts
-    ),
+    MaybeCommitment = dev_codec_ans104_to:commitment(
+        <<"tx@1.0">>, RawTABM, Opts),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
     ?event({to, {raw_tabm, RawTABM}, {is_bundle, IsBundle}, {maybe_bundle, MaybeBundle}, {req, Req}, {opts, Opts}}),

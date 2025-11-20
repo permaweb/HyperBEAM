@@ -149,14 +149,8 @@ to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
-    MaybeCommitment = hb_message:commitment(
-        #{ 
-            <<"commitment-device">> => <<"ans104@1.0">>,
-            <<"type">> => <<"rsa-pss-sha256">>
-        },
-        RawTABM,
-        Opts
-    ),
+    MaybeCommitment = dev_codec_ans104_to:commitment(
+        <<"ans104@1.0">>, RawTABM, Opts),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
     ?event({to, {maybe_bundle, MaybeBundle}}),
@@ -260,9 +254,9 @@ unsigned_duplicated_tag_name_test() ->
         ]
     }),
     Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({msg, Msg}),
+    ?event(debug_test, {msg, Msg}),
     TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
-    ?event({tx2, TX2}),
+    ?event(debug_test, {tx2, TX2}),
     ?assertEqual(TX, TX2).
 
 signed_duplicated_tag_name_test() ->
@@ -491,7 +485,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
         }
     },
     {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
-    ?event({tx, UnsignedTX}),
+    ?event(debug_test, {tx, UnsignedTX}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -501,8 +495,33 @@ unsigned_lowercase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     ?assert(UnsignedTX#tx.manifest =/= undefined),
     {ok, TABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
-    ?event({tabm, TABM}),
-    ?assertEqual(UnsignedTABM, TABM).
+    ?event(debug_test, {tabm, {explicit, TABM}}),
+    ExpectedTABM = UnsignedTABM#{ 
+        <<"commitments">> => #{
+            <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">> => #{
+                <<"bundle">> => <<"true">>,
+                <<"comitment-device">> => <<"ans104@1.0">>,
+                <<"committed">> => [<<"data">>, <<"a1">>, <<"c1">>],
+                <<"signature">> => <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">>,
+                <<"type">> => <<"unsigned-sha256">>
+            }
+        },
+        <<"data">> => #{
+            <<"commitments">> => #{
+                <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8s">> => #{
+                    <<"bundle">> => <<"false">>,
+                    <<"comitment-device">> => <<"ans104@1.0">>,
+                    <<"committed">> => [<<"data">>, <<"a2">>, <<"c2">>],
+                    <<"signature">> => <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8s">>,
+                    <<"type">> => <<"unsigned-sha256">>
+                }
+            },
+            <<"data">> => <<"testdata">>,
+            <<"a2">> => <<"value2">>,
+            <<"c2">> => <<"value3">>
+        }
+    },
+    ?assertEqual(ExpectedTABM, TABM).
 
 unsigned_mixedcase_bundle_list_tags_1_test() ->
     UnsignedTX = dev_arweave_common:normalize(#tx{

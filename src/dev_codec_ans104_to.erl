@@ -1,7 +1,7 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
 -module(dev_codec_ans104_to).
 -export([is_bundle/3, maybe_load/3, data/3, tags/5, excluded_tags/3]).
--export([siginfo/4, fields_to_tx/4]).
+-export([commitment/3, siginfo/4, fields_to_tx/4]).
 -include("include/hb.hrl").
 
 is_bundle({ok, _, Commitment}, _Req, Opts) ->
@@ -37,6 +37,28 @@ maybe_load(RawTABM, true, Opts) ->
 maybe_load(RawTABM, false, _Opts) ->
     RawTABM.
 
+commitment(Device, TABM, Opts) ->
+    SignedCommitment = hb_message:commitment(
+        #{
+            <<"commitment-device">> => Device,
+            <<"type">> => <<"rsa-pss-sha256">>
+        },
+        TABM,
+        Opts
+    ),
+    case SignedCommitment of
+        {ok, _, _} -> SignedCommitment;
+        _ -> 
+            hb_message:commitment(
+                #{
+                    <<"commitment-device">> => Device,
+                    <<"type">> => <<"unsigned-sha256">>
+                },
+                TABM,
+                Opts
+            )
+    end.
+
 %% @doc Calculate the fields for a message, returning an initial TX record.
 %% One of the nuances here is that the `target' field must be set correctly.
 %% If the message has a commitment, we extract the `field-target' if found and
@@ -55,10 +77,7 @@ siginfo(Message, multiple_matches, _FieldsFun, _Opts) ->
 %% tags, and last TX from the commitment. If the value is not present, the
 %% default value is used.
 commitment_to_tx(Commitment, FieldsFun, Opts) ->
-    Signature =
-        hb_util:decode(
-            maps:get(<<"signature">>, Commitment, hb_util:encode(?DEFAULT_SIG))
-        ),
+    Signature = signature_from_commitment(Commitment),
     Owner =
         case hb_maps:find(<<"keyid">>, Commitment, Opts) of
             {ok, KeyID} ->
@@ -81,6 +100,11 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         tags = Tags
     },
     FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
+
+signature_from_commitment(#{ <<"type">> := <<"unsigned-sha256">> }) ->
+    ?DEFAULT_SIG;
+signature_from_commitment(Commitment) ->
+    hb_util:decode(maps:get(<<"signature">>, Commitment)).
 
 
 %% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
