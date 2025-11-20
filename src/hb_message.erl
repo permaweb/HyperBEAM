@@ -842,11 +842,13 @@ commitments(_Spec, _Msg, _Opts) ->
 
 %% @doc Return the devices for which there are commitments on a message.
 commitment_devices(#{ <<"commitments">> := Commitments }, Opts) ->
-    lists:map(
-        fun(CommMsg) ->
-            hb_ao:get(<<"commitment-device">>, CommMsg, Opts)
-        end,
-        maps:values(Commitments)
+    hb_util:unique(
+        lists:map(
+            fun(CommMsg) ->
+                hb_ao:get(<<"commitment-device">>, CommMsg, Opts)
+            end,
+            maps:values(Commitments)
+        )
     );
 commitment_devices(_Msg, _Opts) ->
     [].
