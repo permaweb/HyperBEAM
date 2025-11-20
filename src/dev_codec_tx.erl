@@ -118,7 +118,10 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"tx@1.0">> },
+        #{ 
+            <<"commitment-device">> => <<"tx@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        },
         RawTABM,
         Opts
     ),

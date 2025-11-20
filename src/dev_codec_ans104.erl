@@ -35,9 +35,11 @@ commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
 commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
+    ?event({commit, {input_message, Msg}}),
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = ar_bundles:sign_item(TX, Wallet),
+    ?event({commit, {signed_item, Signed}}),
     SignedStructured =
         hb_message:convert(
             Signed,
@@ -45,7 +47,7 @@ commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
             <<"ans104@1.0">>,
             Opts
         ),
-    ?event({signed_structured, SignedStructured}),
+    ?event({commit, {signed_structured, SignedStructured}}),
     commit(SignedStructured, Req#{ <<"type">> => <<"unsigned">> }, Opts);
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.
@@ -148,7 +150,10 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => <<"rsa-pss-sha256">> },
+        #{ 
+            <<"commitment-device">> => <<"ans104@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        },
         RawTABM,
         Opts
     ),
