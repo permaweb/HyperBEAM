@@ -521,18 +521,21 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                     % List the commitments for this message, and load them into
                     % memory. If there no commitments at the path, we exclude
                     % commitments from the list of links.
-                    CommPath =
-                        hb_store:resolve(
-                            Store,
-                            hb_store:path(
-                                Store,
-                                [
-                                    RootPath,
-                                    <<"commitments">>,
-                                    Target
-                                ]
-                            )
+                    ScopedOpts =
+                        hb_store:scope(
+                            Opts,
+                            hb_opts:get(store_scope_resolved, local, Opts)
                         ),
+                    RootCommPath = 
+                        hb_store:path(
+                            Store,
+                            [
+                                RootPath,
+                                <<"commitments">>,
+                                Target
+                            ]
+                        ),
+                    CommPath = hb_store:resolve(Store, RootCommPath),
                     ?event(read_commitment,
                         {reading_commitment,
                             {target, Target},
@@ -540,12 +543,12 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                             {commitments_path, CommPath}
                         }
                     ),
-                    case do_read_commitment(CommPath, Opts) of
+                    case do_read_commitment(CommPath, ScopedOpts) of
                         {ok, Commitment} ->
                             LoadedCommitment = 
                                 ensure_all_loaded(
                                     Commitment,
-                                    Opts#{ commitment => true }
+                                    ScopedOpts#{ commitment => true }
                                 ),
                             ?event(read_commitment,
                                 {found_target_commitment,
