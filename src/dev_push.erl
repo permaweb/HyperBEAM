@@ -104,7 +104,13 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             _ -> #{}
         end,
     ?event(push_depth, {depth, IncludeDepth, {assignment, Assignment}}),
-    ?event(push, {push_computed, {process, ID}, {slot, Slot}}),
+    ?event(push,
+        {push_compute_result,
+            {process, ID},
+            {slot, Slot},
+            {status, Status}
+        }
+    ),
     ?event(debug,
         {push_computed,
             {status, Status},
@@ -331,7 +337,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
                 Opts
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
-        {ok, Self} ->
+        {ok, #{ <<"node">> := Self }} ->
             % If we matched ourselves as the route, we can just push locally.
             ?event(push,
                 {routing_matched_self,
@@ -342,7 +348,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
                 Opts
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
-        {ok, Node} ->
+        {ok, #{ <<"node">> := Node }} ->
             ?event(push,
                 {routing_matched_remote,
                     {target, TargetID},
@@ -1000,6 +1006,89 @@ push_prompts_encoding_change() ->
             Opts
         ),
     ?assertMatch({error, #{ <<"status">> := 422 }}, Res).
+
+remote_routed_push_test_() ->
+    {timeout, 60, fun remote_routed_push/0}.
+remote_routed_push() ->
+    W = hb:wallet(),
+    DefaultStores = hb_opts:get(store),
+    BaseOpts =
+        #{
+            store => [hb_test_utils:test_store() | DefaultStores],
+            priv_wallet => W
+        },
+    P1Base = dev_process:test_aos_process(BaseOpts),
+    P1 = hb_cache:ensure_all_loaded(P1Base, BaseOpts),
+    ProcID1 = hb_message:id(P1, all, BaseOpts),
+    P2 = hb_cache:ensure_all_loaded(dev_process:test_aos_process(BaseOpts), BaseOpts),
+    OptsN2 = BaseOpts,
+    N2 = hb_http_server:start_node(OptsN2),
+    RoutesP1 =
+        [
+            #{
+                <<"template">> => <<ProcID1/binary, "/.*">>,
+                <<"node">> => N2
+            }
+        ],
+    OptsN1 = BaseOpts#{ routes => RoutesP1 },
+    N1 = hb_http_server:start_node(OptsN1),
+    hb_cache:write(P1, OptsN1),
+    hb_cache:write(P2, OptsN1),
+    hb_cache:write(P1, OptsN2),
+    hb_cache:write(P2, OptsN2),
+    RouteOpts =
+        OptsN1#{
+            routes => RoutesP1,
+            push_route_downstream => true,
+            host => N1
+        },
+    % Sanity check that routing resolves the P1 path to N2.
+    RouteRes =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"router@1.0">>, routes => RoutesP1 },
+            #{
+                <<"path">> => <<"match">>,
+                <<"route-path">> => <<ProcID1/binary, "/push&slot=1">>
+            },
+            RouteOpts
+        ),
+    ?assertMatch(
+        {ok, #{ <<"node">> := N2 }},
+        RouteRes
+    ),
+    Script = ping_pong_script(0),
+    {ok, ReqP1N1} = dev_process:schedule_aos_call(P1, Script, OptsN1),
+    SlotP1N1 = hb_ao:get(<<"slot">>, ReqP1N1, OptsN1),
+    {ok, _} =
+        hb_ao:resolve(
+            P1,
+            #{ <<"path">> => <<"push">>, <<"slot">> => SlotP1N1 },
+            RouteOpts
+        ),
+    P2Script =
+        <<
+            Script/binary,
+            "Send({ Target = \"", ProcID1/binary, "\", Action = \"Ping\", Count = 1 })\n"
+        >>,
+    {ok, ReqP2} = dev_process:schedule_aos_call(P2, P2Script, OptsN1),
+    SlotP2 = hb_ao:get(<<"slot">>, ReqP2, OptsN1),
+    hb_cache:write(ReqP2, OptsN1),
+    hb_cache:write(ReqP2, OptsN2),
+    {ok, ResP2N2M1} =
+        hb_ao:resolve(
+            P2,
+            #{ <<"path">> => <<"push">>, <<"slot">> => SlotP2 },
+            RouteOpts
+        ),
+    ?event({res_p2_n2_m1, ResP2N2M1}),
+    ?assertEqual(
+        {ok, 0},
+        hb_ao:resolve(P1, <<"now/at-slot">>, OptsN2)
+    ),
+    ?assertMatch(
+        {ok, Slot} when Slot > 0,
+        hb_ao:resolve(P1, <<"now/at-slot">>, OptsN1)
+    ).
 
 oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
 oracle_push() ->
