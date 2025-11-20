@@ -159,50 +159,63 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
 %% @doc Return a message with the appropriate commitments added to it.
 with_commitments(
         Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts) ->
+    {UnsignedID, UnsignedCommitment} =
+        unsigned_commitment(
+            Item,
+            Device,
+            FieldCommitments,
+            Tags,
+            CommittedKeys,
+            Opts
+        ),
     case Item#tx.signature of
         ?DEFAULT_SIG ->
-            case normal_tags(Item#tx.tags) of
-                true -> Base;
-                false ->
-                    with_unsigned_commitment(
-                        Item, Device, FieldCommitments, Tags, Base, 
-                        CommittedKeys, Opts)
-            end;
-        _ -> with_signed_commitment(
-            Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts)
+            Base#{ <<"commitments">> => #{ UnsignedID => UnsignedCommitment } };
+        _ ->
+            {SignedID, SignedCommitment} =
+                signed_commitment(
+                    Item,
+                    Device,
+                    FieldCommitments,
+                    Tags,
+                    CommittedKeys,
+                    Opts
+                ),
+            Base#{
+                <<"commitments">> =>
+                    #{
+                        SignedID => SignedCommitment,
+                        UnsignedID => UnsignedCommitment
+                    }
+                }
     end.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.
-with_unsigned_commitment(
-        Item, Device, CommittedFields, Tags, 
-        UncommittedMessage, CommittedKeys, Opts) ->
+unsigned_commitment(Item, Device, CommittedFields, Tags, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
-    UncommittedMessage#{
-        <<"commitments">> => #{
-            ID =>
-                filter_unset(
-                    hb_maps:merge(
-                        CommittedFields,
-                        #{
-                            <<"commitment-device">> => Device,
-                            <<"committed">> => CommittedKeys,
-                            <<"type">> => <<"unsigned-sha256">>,
-                            <<"bundle">> => bundle_commitment_key(Tags, Opts),
-                            <<"original-tags">> => original_tags(Item, Opts)
-                        },
-                        Opts
-                    ),
-                    Opts
-                )
-        }
+    {
+        ID,
+        filter_unset(
+            hb_maps:merge(
+                CommittedFields,
+                #{
+                    <<"commitment-device">> => Device,
+                    <<"committed">> => CommittedKeys,
+                    <<"type">> => <<"unsigned-sha256">>,
+                    <<"signature">> => ID,
+                    <<"bundle">> => bundle_commitment_key(Tags, Opts),
+                    <<"original-tags">> => original_tags(Item, Opts)
+                },
+                Opts
+            ),
+            Opts
+        )
     }.
 
 %% @doc Returns a commitments message for an item, containing a signed
 %% commitment.
-with_signed_commitment(
-        Item, Device, FieldCommitments, Tags, 
-        UncommittedMessage, CommittedKeys, Opts) ->
+signed_commitment(Item, Device, FieldCommitments, Tags, CommittedKeys, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
     ID = hb_util:human_id(Item#tx.id),
     ExtraCommitments = hb_maps:merge(
@@ -229,11 +242,7 @@ with_signed_commitment(
             ),
             Opts
         ),
-    UncommittedMessage#{
-        <<"commitments">> => #{
-            ID => Commitment
-        }
-    }.
+    {ID, Commitment}.
 
 %% @doc Return the bundle key for an item.
 bundle_commitment_key(Tags, Opts) ->
