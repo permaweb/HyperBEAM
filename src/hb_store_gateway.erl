@@ -72,7 +72,8 @@ read(BaseStoreOpts, Key) ->
 %% @doc Normalize the routes in the given `Opts`.
 opts(Opts) ->
     case hb_maps:find(<<"node">>, Opts) of
-        error -> Opts;
+        error ->
+            hb_opts:mimic_default_types(Opts, existing, Opts);
         {ok, Node} ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
@@ -215,21 +216,48 @@ cache_read_message_test() ->
 %% know that the module is not respecting the route list.
 specific_route_test() ->
     hb_http_server:start_node(#{}),
+    CustomID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    DefaultResponse = {200, <<"specific_route_test">>},
+    Endpoints = [{<<"/raw/", CustomID/binary>>, ok, DefaultResponse}],
+    {ok, MockServer, _ServerHandle} = hb_mock_server:start(Endpoints),
+    PreloadedDevices = maps:get(preloaded_devices, hb_opts:default_message()),
     Opts = #{
         store =>
             [
                 #{ <<"store-module">> => hb_store_gateway, 
-                   <<"routes">> => [],
+                   <<"routes">> => [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => httpc, 
+                                    <<"protocol">> => http2
+                                }
+                            }
+                        ]
+                    },
+                    #{
+                        <<"template">> => <<"/raw">>,
+                        <<"node">> =>
+                            #{
+                                <<"prefix">> => MockServer,
+                                <<"opts">> => #{ 
+                                    <<"http_client">> => httpc, 
+                                    <<"protocol">> => http2 
+                                }
+                            }
+                     }
+                   ],
+                   preloaded_devices => PreloadedDevices,
                    <<"only">> => local
                 }
             ]
     },
     ?assertMatch(
-        not_found,
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            Opts
-        )
+       {ok, #{<<"data">> := <<"specific_route_test">>}},
+        hb_cache:read(CustomID, Opts)
     ).
 
 %% @doc Test that the default node config allows for data to be accessed.
