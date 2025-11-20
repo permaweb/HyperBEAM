@@ -670,7 +670,7 @@ assert_data_item(KeyType, Owner, Target, Anchor, Tags, Data, DataItem) ->
     ?assertEqual(byte_size(Data), DataItem#tx.data_size).
 
 empty_bundle_test() ->
-    Bundle = serialize(dev_arweave_common:normalize([])),
+    Bundle = serialize(dev_arweave_common:normalize(#tx{data = []})),
     ?event(debug_test, {bundle, {explicit, Bundle}}),
     BundleItem = deserialize(Bundle),
     ?assertEqual(#{}, BundleItem#tx.data).
@@ -683,7 +683,7 @@ bundle_with_one_item_test() ->
         ItemData = crypto:strong_rand_bytes(1000)
     ),
     ?event(debug_test, {item, Item}),
-    Bundle = serialize(dev_arweave_common:normalize([Item])),
+    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item]})),
     ?event(debug_test, {bundle, {explicit, Bundle}}),
     Deserialized = deserialize(Bundle),
     ?event(debug_test, {bundle_item, Deserialized}),
@@ -702,7 +702,7 @@ bundle_with_two_items_test() ->
         [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
         ItemData2 = crypto:strong_rand_bytes(32)
     ),
-    Bundle = serialize(dev_arweave_common:normalize([Item1, Item2])),
+    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item1, Item2]})),
     BundleItem = deserialize(Bundle),
     ?assertEqual(ItemData1, (maps:get(<<"1">>, BundleItem#tx.data))#tx.data),
     ?assertEqual(ItemData2, (maps:get(<<"2">>, BundleItem#tx.data))#tx.data).
@@ -724,7 +724,7 @@ recursive_bundle_test() ->
         anchor = crypto:strong_rand_bytes(32),
         data = [Item2]
     }, W),
-    Bundle = serialize(dev_arweave_common:normalize([Item3])),
+    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item3]})),
     BundleItem = deserialize(Bundle),
     #{<<"1">> := UnbundledItem3} = BundleItem#tx.data,
     #{<<"1">> := UnbundledItem2} = UnbundledItem3#tx.data,

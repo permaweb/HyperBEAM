@@ -385,44 +385,46 @@ handle_request(RawReq, Body, ServerID) ->
                 }
             ),
             % Parse the HTTP request into HyerBEAM's message format.
-            ReqSingleton =
-                try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)
-                catch ParseError:ParseDetails:ParseStacktrace ->
-                    {parse_error, ParseError, ParseDetails, ParseStacktrace}
-                end,
-            try 
-                case ReqSingleton of
-                    {parse_error, PType, PDetails, PStacktrace} ->
-                        erlang:raise(PType, PDetails, PStacktrace);
-                    _ ->
-                        ok
-                end,
-                CommitmentCodec = hb_http:accept_to_codec(ReqSingleton, NodeMsg),
-                ?event(http,
-                    {parsed_singleton,
-                        {req_singleton, ReqSingleton},
-                        {accept_codec, CommitmentCodec}},
-                    #{}
-                ),
-                % Invoke the meta@1.0 device to handle the request.
-                {ok, Res} =
-                    dev_meta:handle(
-                        NodeMsg#{
-                            commitment_device => CommitmentCodec
-                        },
-                        ReqSingleton
-                    ),
-                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
-            catch
-                Type:Details:Stacktrace ->
-                    handle_error(
-                        Req,
-                        ReqSingleton,
-                        Type,
-                        Details,
-                        Stacktrace,
-                        NodeMsg
-                    )
+            try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
+                ReqSingleton ->
+                    try
+                        CommitmentCodec =
+                            hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+                        ?event(http,
+                            {parsed_singleton,
+                                {req_singleton, ReqSingleton},
+                                {accept_codec, CommitmentCodec}},
+                            #{}
+                        ),
+                        % Invoke the meta@1.0 device to handle the request.
+                        {ok, Res} =
+                            dev_meta:handle(
+                                NodeMsg#{
+                                    commitment_device => CommitmentCodec
+                                },
+                                ReqSingleton
+                            ),
+                        hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                    catch
+                        Type:Details:Stacktrace ->
+                            handle_error(
+                                Req,
+                                ReqSingleton,
+                                Type,
+                                Details,
+                                Stacktrace,
+                                NodeMsg
+                            )
+                    end
+            catch ParseError:ParseDetails:ParseStacktrace ->
+                handle_error(
+                    Req,
+                    #{},
+                    ParseError,
+                    ParseDetails,
+                    ParseStacktrace,
+                    NodeMsg
+                )
             end
     end.
 

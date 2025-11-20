@@ -108,25 +108,18 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
 upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
-    ?event({msg_to_convert, Msg}),
-    Converted = hb_message:convert(Msg, <<"ans104@1.0">>, Opts),
-    ?event({msg_to_tx_res, {converted, Converted}}),
-    Serialized = ar_bundles:serialize(Converted),
-    ?event({converted_msg_to_tx, Serialized}),
-    upload(Serialized, Opts, <<"ans104@1.0">>);
-upload(Serialized, Opts, <<"ans104@1.0">>) when is_binary(Serialized) ->
-    ?event({uploading_item, Serialized}),
-    hb_http:post(
-        hb_opts:get(bundler_ans104, not_found, Opts),
-        #{
-            <<"path">> => <<"/tx">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized
-        },
-        Opts#{
-            http_client =>
-                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
-        }
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        Msg#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
+        Opts
+    );
+upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
+    dev_arweave:post_binary_ans104(Msg, Opts);
+upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        Msg#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
+        Opts
     ).
 
 %%% Tests
