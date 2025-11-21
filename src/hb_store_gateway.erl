@@ -292,7 +292,7 @@ specific_route_test() ->
     Data = <<"specific_route_testx">>,
     DefaultResponse = {200, Data},
     Endpoints = [{<<"/raw/", ID/binary>>, ok, DefaultResponse}],
-    {ok, MockServer, _ServerHandle} = hb_mock_server:start(Endpoints),
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     %% Define configuration, we use a valid gateway to obtain a valid response
     %% and then mock the raw endpoint to our mockserver.
     Opts = #{
@@ -327,7 +327,11 @@ specific_route_test() ->
                 }
             ]
     },
-    ?assertMatch({ok, #{<<"data">> := Data}}, hb_cache:read(ID, Opts)).
+    try
+        ?assertMatch({ok, #{<<"data">> := Data}}, hb_cache:read(ID, Opts))
+    after 
+        hb_mock_server:stop(ServerHandle)
+    end.
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->
