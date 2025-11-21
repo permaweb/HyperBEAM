@@ -5,7 +5,7 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_binary_ans104/2]).
+-export([post_tx/3, post_tx/4, post_binary_ans104/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
