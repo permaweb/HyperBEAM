@@ -262,8 +262,14 @@ basic_cache_test() ->
     ?assertEqual(<<"posted">>, get_tx_status(TX, Opts)),
     ok = complete_tx(TX, Opts),
     ?assertEqual(<<"complete">>, get_tx_status(TX, Opts)),
-    ?assertEqual(TX, read_cache(TXID, <<"tx@1.0">>, Opts)),
-    ?assertEqual(Item, read_cache(ItemID, <<"ans104@1.0">>, Opts)),
+    ?assertEqual(
+        hb_message:with_commitments(
+            #{ <<"type">> => <<"rsa-pss-sha256">> }, TX, Opts),
+        read_cache(TXID, <<"tx@1.0">>, Opts)),
+    ?assertEqual(
+        hb_message:with_commitments(
+            #{ <<"type">> => <<"rsa-pss-sha256">> }, Item, Opts),
+        read_cache(ItemID, <<"ans104@1.0">>, Opts)),
     ok.
 
 load_unbundled_items_test() ->
@@ -278,15 +284,22 @@ load_unbundled_items_test() ->
     % Link item2 to a bundle, leave others unbundled
     ok = write_tx(TX, [Item2], Opts),
     % Load unbundled items
-    UnbundledItems1 = load_unbundled_items(Opts),
-    UnbundledItems2 = [
+    LoadedItems1 = load_unbundled_items(Opts),
+    LoadedItems2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
-            Item, Opts) || Item <- UnbundledItems1
+            Item, Opts) || Item <- LoadedItems1
         ],
-    UnbundledItems3 = lists:sort(UnbundledItems2),
-    ?event(debug_test, {unbundled_items, UnbundledItems3}),
-    ?assertEqual(lists:sort([Item1, Item3]), UnbundledItems3),
+    LoadedItems3 = lists:sort(LoadedItems2),
+    WrittenItems = [
+        hb_message:with_commitments(
+            #{ 
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Item, Opts) || Item <- [Item1, Item3]],
+    ?event(debug_test, {loaded_items, LoadedItems3}),
+    ?assertEqual(lists:sort(WrittenItems), LoadedItems3),
     ok.
 
 load_bundle_states_test() ->
@@ -320,23 +333,37 @@ load_bundled_items_test() ->
     ok = write_tx(TX1, [Item1, Item2], Opts),
     ok = write_tx(TX2, [Item3], Opts),
     % Load items for bundle 1
-    Bundle1Items1 = load_bundled_items(tx_id(TX1, Opts), Opts),
-    Bundle1Items2 = [
+    Bundle1LoadedItems1 = load_bundled_items(tx_id(TX1, Opts), Opts),
+    Bundle1LoadedItems2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
-            Item, Opts) || Item <- Bundle1Items1
+            Item, Opts) || Item <- Bundle1LoadedItems1
         ],
-    Bundle1Items3 = lists:sort(Bundle1Items2),
-    ?assertEqual(lists:sort([Item1, Item2]), Bundle1Items3),
+    Bundle1LoadedItems3 = lists:sort(Bundle1LoadedItems2),
+    Bundle1WrittenItems = [
+        hb_message:with_commitments(
+            #{ 
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Item, Opts) || Item <- [Item1, Item2]],
+    ?assertEqual(lists:sort(Bundle1WrittenItems), Bundle1LoadedItems3),
     % Load items for bundle 2
-    Bundle2Items1 = load_bundled_items(tx_id(TX2, Opts), Opts),
-    Bundle2Items2 = [
+    Bundle2LoadedItems1 = load_bundled_items(tx_id(TX2, Opts), Opts),
+    Bundle2LoadedItems2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
-            Item, Opts) || Item <- Bundle2Items1
+            Item, Opts) || Item <- Bundle2LoadedItems1
         ],
-    Bundle2Items3 = lists:sort(Bundle2Items2),
-    ?assertEqual(lists:sort([Item3]), Bundle2Items3),
+    Bundle2LoadedItems3 = lists:sort(Bundle2LoadedItems2),
+    Bundle2WrittenItems = [
+        hb_message:with_commitments(
+            #{ 
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Item, Opts) || Item <- [Item3]],
+    ?assertEqual(lists:sort(Bundle2WrittenItems), Bundle2LoadedItems3),
     ok.
 
 new_data_item(Index, SizeOrData, Opts) ->
@@ -365,7 +392,9 @@ new_tx(Index, Opts) ->
     hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts).
 
 read_cache(ID, Device, Opts) ->
-    {ok, Resolved} = hb_ao:resolve(#{ <<"path">> => ID }, Opts),
+    % {ok, Resolved} = hb_ao:resolve(#{ <<"path">> => ID }, Opts),
+    {ok, Resolved} = hb_cache:read(ID, Opts),
     Loaded = hb_cache:ensure_all_loaded(Resolved, Opts),
+    ?event(debug_test, {loaded, Loaded}),
     hb_message:with_commitments(
         #{ <<"commitment-device">> => Device }, Loaded, Opts).

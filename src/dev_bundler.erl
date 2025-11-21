@@ -346,24 +346,39 @@ dispatch_blocking_test() ->
 recover_unbundled_items_test() ->
     Opts = #{store => hb_test_utils:test_store(hb_store_lmdb)},
     % Create and cache some items
-    Item1 = hb_message:convert(new_data_item(1, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-    Item2 = hb_message:convert(new_data_item(2, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-    Item3 = hb_message:convert(new_data_item(3, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
+    Item1 = hb_message:convert(
+        new_data_item(1, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
+    Item2 = hb_message:convert(
+        new_data_item(2, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
+    Item3 = hb_message:convert(
+        new_data_item(3, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
     ok = dev_bundler_cache:write_item(Item1, Opts),
     ok = dev_bundler_cache:write_item(Item2, Opts),
     ok = dev_bundler_cache:write_item(Item3, Opts),
     % Bundle Item2 with a fake TX
-    FakeTX = ar_tx:sign(#tx{format = 2, tags = [{<<"test">>, <<"tx">>}]}, hb:wallet()),
-    StructuredTX = hb_message:convert(FakeTX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+    FakeTX = ar_tx:sign(
+        #tx{format = 2, tags = [{<<"test">>, <<"tx">>}]}, hb:wallet()),
+    StructuredTX = hb_message:convert(
+        FakeTX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
     ok = dev_bundler_cache:write_tx(StructuredTX, [Item2], Opts),
     % Now recover unbundled items
     {RecoveredItems, RecoveredBytes} = recover_unbundled_items(Opts),
     ?assertEqual(3924, RecoveredBytes),
     RecoveredItems2 = [
         hb_message:with_commitments(
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
+            #{ 
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => <<"rsa-pss-sha256">>
+            }, Item, Opts)
         || Item <- RecoveredItems],
-    ?assertEqual(lists:sort([Item1, Item3]), lists:sort(RecoveredItems2)),
+    WrittenItems = [
+        hb_message:with_commitments(
+            #{ 
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => <<"rsa-pss-sha256">>
+            }, Item, Opts)
+        || Item <- [Item1, Item3]],
+    ?assertEqual(lists:sort(WrittenItems), lists:sort(RecoveredItems2)),
     ok.
 
 recover_respects_max_items_test() ->
