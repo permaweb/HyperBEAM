@@ -278,7 +278,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     hb_store:make_group(Store, UncommittedID),
     maps:map(
         fun(Key, Value) ->
-            write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
+            write_key(UncommittedID, Key, MsgHashpathAlg, Value, Msg, Store, Opts)
         end,
         maps:without([<<"priv">>], Msg)
     ),
@@ -298,17 +298,29 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     {ok, UncommittedID}.
 
 %% @doc Write a single key for a message into the store.
-write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
+write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, ParentMsg, Store, Opts) ->
     % The commitments are a special case: We calculate the single-part hashpath
     % for the `baseID/commitments` key, then write each commitment to the store
     % and link it to `baseCommHP/commitmentID`.
     Commitments = prepare_commitments(RawCommitments, Opts),
+    CommsWithBase =
+        case maps:is_key(Base, Commitments) of
+            true -> Commitments;
+            false ->
+                #{ <<"commitments">> := NewCommitments } =
+                    hb_message:commit(
+                        ParentMsg,
+                        Opts,
+                        #{ <<"type">> => <<"unsigned">> }
+                    ),
+                prepare_commitments(NewCommitments, Opts)
+        end,
     CommitmentsBase = commitment_path(Base, Opts),
     ok = hb_store:make_group(Store, CommitmentsBase),
     ?event(
         {writing_commitments,
             {base, Base},
-            {commitments_message, Commitments},
+            {commitments_message, CommsWithBase},
             {commitments_base, CommitmentsBase}
         }
     ),
@@ -322,11 +334,11 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
                 << CommitmentsBase/binary, "/", BaseCommID/binary >>
             )
         end,
-        Commitments
+        CommsWithBase
     ),
     % Link the commitments base to `base/commitments`.
     hb_store:make_link(Store, CommitmentsBase, <<Base/binary, "/commitments">>);
-write_key(Base, Key, HPAlg, Value, Store, Opts) ->
+write_key(Base, Key, HPAlg, Value, _ParentMsg, Store, Opts) ->
     KeyHashPath =
         hb_path:hashpath(
             Base,
