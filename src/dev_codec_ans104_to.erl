@@ -44,17 +44,20 @@ replace_commitments_recursive(LoadedTABM, RawTABM)
     % First, replace commitments at this level
     RawCommitments = maps:get(<<"commitments">>, RawTABM, #{}),
     LoadedTABM2 = LoadedTABM#{ <<"commitments">> => RawCommitments },
-    % Then recursively process nested maps
+    % Then recursively process nested maps, but do not recurse into the
+    % `commitments' map itself (we only replace it at each level).
     maps:map(
-        fun(Key, Value) when is_map(Value) ->
-            case maps:get(Key, RawTABM, undefined) of
-                RawValue when is_map(RawValue) ->
-                    replace_commitments_recursive(Value, RawValue);
-                _ ->
-                    Value
-            end;
+        fun(<<"commitments">>, Value) ->
+                Value;
+           (Key, Value) when is_map(Value) ->
+                case maps:get(Key, RawTABM, undefined) of
+                    RawValue when is_map(RawValue) ->
+                        replace_commitments_recursive(Value, RawValue);
+                    _ ->
+                        Value
+                end;
            (_Key, Value) ->
-            Value
+                Value
         end,
         LoadedTABM2
     );
