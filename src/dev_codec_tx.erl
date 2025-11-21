@@ -857,7 +857,7 @@ do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req) ->
     TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tx_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
+    ?assert(hb_message:match(UnsignedTABM, TABM), unsigned_tx_roundtrip),
     % TABM -> TX
     TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
@@ -887,7 +887,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req) ->
             #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
     ?event(debug_test, {signed_tx_roundtrip,
         {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
+    ?assert(hb_message:match(SignedTABM, TABM), signed_tx_roundtrip),
     % TABM -> TX
     TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = SignedTX#tx{ 
@@ -921,7 +921,7 @@ do_unsigned_tabm_roundtrip(UnsignedTX0, UnsignedTABM, Req) ->
     TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tabm_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(UnsignedTABM, TABM, unsigned_tabm_roundtrip).
+    ?assert(hb_message:match(UnsignedTABM, TABM), unsigned_tabm_roundtrip).
 
 do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % Commit TABM
@@ -931,7 +931,10 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
     ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
     {ok, _, SignedCommitment} = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"tx@1.0">> },
+        #{
+            <<"commitment-device">> => <<"tx@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        },
         SignedTABM,
         #{}
     ),
@@ -960,7 +963,7 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
         }, SignedTX, signed_tabm_roundtrip),
     % TX -> TABM
     FinalTABM = hb_util:ok(from(SignedTX, Req, #{})),
-    ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).
+    ?assert(hb_message:match(SignedTABM, FinalTABM), signed_tabm_roundtrip).
 
 bundle_commitment_test() ->
     test_bundle_commitment(unbundled, unbundled, unbundled),
@@ -986,7 +989,14 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => ToBool(Commit) }),
     ?event(debug_test, {committed, Label, {explicit, Committed}}),
     ?assert(hb_message:verify(Committed, all, Opts), Label),
-    {ok, _, CommittedCommitment} = hb_message:commitment(#{}, Committed, Opts),
+    {ok, _, CommittedCommitment} =
+        hb_message:commitment(
+            #{
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Committed,
+            Opts
+        ),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
@@ -1008,7 +1018,14 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
-    {ok, _, DecodedCommitment} = hb_message:commitment(#{}, Decoded, Opts),
+    {ok, _, DecodedCommitment} =
+        hb_message:commitment(
+            #{
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Decoded,
+            Opts
+        ),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
         Label),
