@@ -216,11 +216,14 @@ cache_read_message_test() ->
 %% know that the module is not respecting the route list.
 specific_route_test() ->
     hb_http_server:start_node(#{}),
-    CustomID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-    DefaultResponse = {200, <<"specific_route_test">>},
-    Endpoints = [{<<"/raw/", CustomID/binary>>, ok, DefaultResponse}],
+    %% Define the response we want
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    Data = <<"specific_route_testx">>,
+    DefaultResponse = {200, Data},
+    Endpoints = [{<<"/raw/", ID/binary>>, ok, DefaultResponse}],
     {ok, MockServer, _ServerHandle} = hb_mock_server:start(Endpoints),
-    PreloadedDevices = maps:get(preloaded_devices, hb_opts:default_message()),
+    %% Define configuration, we use a valid gateway to obtain a valid response
+    %% and then mock the raw endpoint to our mockserver.
     Opts = #{
         store =>
             [
@@ -232,7 +235,7 @@ specific_route_test() ->
                             #{
                                 <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                                 <<"opts">> => #{
-                                    <<"http_client">> => httpc, 
+                                    <<"http_client">> => httpc,
                                     <<"protocol">> => http2
                                 }
                             }
@@ -243,22 +246,17 @@ specific_route_test() ->
                         <<"node">> =>
                             #{
                                 <<"prefix">> => MockServer,
-                                <<"opts">> => #{ 
-                                    <<"http_client">> => httpc, 
+                                <<"opts">> => #{
+                                    <<"http_client">> => gun,
                                     <<"protocol">> => http2 
                                 }
                             }
                      }
-                   ],
-                   preloaded_devices => PreloadedDevices,
-                   <<"only">> => local
+                   ]
                 }
             ]
     },
-    ?assertMatch(
-       {ok, #{<<"data">> := <<"specific_route_test">>}},
-        hb_cache:read(CustomID, Opts)
-    ).
+    ?assertMatch({ok, #{<<"data">> := Data}}, hb_cache:read(ID, Opts)).
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->

@@ -338,8 +338,9 @@ apply_routes(Msg, R, Opts) ->
 apply_route(Msg, Route, Opts) ->
     % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
     RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
+    RouteOpts2 = hb_opts:mimic_default_types(RouteOpts, existing, Opts),
     {ok, #{
-        <<"opts">> => RouteOpts,
+        <<"opts">> => RouteOpts2,
         <<"uri">> =>
             hb_util:ok(
                 do_apply_route(
