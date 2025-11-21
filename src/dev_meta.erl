@@ -371,6 +371,8 @@ message_to_status(_Item, _NodeMsg) ->
 %% @doc Sign the result of a device call if the node is configured to do so.
 maybe_sign({Status, Res}, NodeMsg) ->
     {Status, maybe_sign(Res, NodeMsg)};
+maybe_sign(Res = #{ <<"stream_generator">> := _ }, _NodeMsg) ->
+    Res;
 maybe_sign(Res, NodeMsg) ->
     ?event({maybe_sign, Res}),
     case hb_opts:get(force_signed, false, NodeMsg) of

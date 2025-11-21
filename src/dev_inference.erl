@@ -1,5 +1,5 @@
 -module(dev_inference).
--export([info/1, completions/3, chat/3, health/3]).
+-export([info/1, completions/3, chat/3, health/3, v1/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -9,7 +9,7 @@
 
 info(_Opts) ->
     #{
-        exports => [<<"completions">>, <<"chat">>, <<"health">>],
+        exports => [<<"completions">>, <<"chat">>, <<"health">>, <<"v1">>],
         description => <<"Inference device with OpenAI-compatible API">>,
         version => <<"1.0">>
     }.
@@ -27,6 +27,15 @@ chat(Base, Req, Opts) ->
         Req#{
             <<"device">> => <<"inference@1.0">>,
             <<"chat-mode">> => true
+        }, 
+        Opts
+    )}.
+
+v1(Base, Req, Opts) ->
+    {ok, hb_util:deep_merge(
+        Base, 
+        Req#{
+            <<"device">> => <<"inference@1.0">>
         }, 
         Opts
     )}.
@@ -70,12 +79,29 @@ forward_health_check(Opts) ->
     end.
 
 do_inference_request(_Base, Req, Opts, Path) ->
-    Body = prepare_request_body(Req, Opts),
-    Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
-    
-    case should_include_attestation(Req, Opts) of
-        true -> add_attestation(Response, Req, Opts);
-        false -> format_response(Response, Opts)
+    Params = extract_inference_params(Req, Opts),
+    IsStream = case maps:get(<<"stream">>, Params, false) of
+        true -> true;
+        <<"true">> -> true;
+        _ -> false
+    end,
+
+    case IsStream of
+        true ->
+            Body = hb_json:encode(Params),
+            #{
+                <<"stream_generator">> => fun(Sender) -> 
+                    stream_from_backend(Sender, <<"POST">>, Path, Body, Opts) 
+                end
+            };
+        false ->
+            Body = prepare_request_body(Req, Opts),
+            Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
+            
+            case should_include_attestation(Req, Opts) of
+                true -> add_attestation(Response, Req, Opts);
+                false -> format_response(Response, Opts)
+            end
     end.
 
 prepare_request_body(Req, Opts) ->
@@ -173,3 +199,32 @@ add_attestation({ok, Res}, Req, Opts) ->
     }};
 add_attestation({error, Error}, _Req, Opts) ->
     format_response({error, Error}, Opts).
+
+stream_from_backend(Sender, Method, Path, Body, _Opts) ->
+    {ok, ConnPid} = gun:open("localhost", list_to_integer(?SERVER_PORT)),
+    {ok, _Protocol} = gun:await_up(ConnPid),
+    StreamRef = gun:request(ConnPid, Method, Path, [{<<"content-type">>, <<"application/json">>}], Body),
+    receive_stream(ConnPid, StreamRef, Sender).
+
+receive_stream(ConnPid, StreamRef, Sender) ->
+    receive
+        {gun_response, ConnPid, StreamRef, nofin, _Status, _Headers} ->
+            receive_stream(ConnPid, StreamRef, Sender);
+        {gun_response, ConnPid, StreamRef, fin, _Status, _Headers} ->
+            ok;
+        {gun_data, ConnPid, StreamRef, nofin, Data} ->
+            Sender(Data),
+            receive_stream(ConnPid, StreamRef, Sender);
+        {gun_data, ConnPid, StreamRef, fin, Data} ->
+            Sender(Data);
+        {gun_error, ConnPid, StreamRef, Reason} ->
+            ?event(inference_error, {stream_error, Reason}),
+            ok;
+        {gun_down, ConnPid, _Protocol, _Reason, _KilledStreams} ->
+             ok;
+        Other ->
+            ?event(inference_debug, {unexpected_stream_msg, Other}),
+            receive_stream(ConnPid, StreamRef, Sender)
+    after 30000 ->
+        ok
+    end.
