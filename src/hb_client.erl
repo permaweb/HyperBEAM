@@ -107,19 +107,22 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
-upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
-    hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        Msg#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
-        Opts
-    );
 upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
     dev_arweave:post_binary_ans104(Msg, Opts);
-upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
-    hb_ao:resolve(
+upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
+    ?event({uploading_item, Msg}),
+    dev_arweave:post_tx(
         #{ <<"device">> => <<"arweave@2.9-pre">> },
-        Msg#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
-        Opts
+        Msg,
+        Opts,
+        <<"ans104@1.0">>
+    );
+upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
+    dev_arweave:post_tx(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        Msg,
+        Opts,
+        <<"tx@1.0">>
     ).
 
 %%% Tests
