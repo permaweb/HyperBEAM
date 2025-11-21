@@ -327,7 +327,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                         AttName = hd(hb_maps:keys(Comms, Opts)),
                         Comm = hb_maps:get(AttName, Comms, not_found, Opts),
                         Structured#{
-                            <<"commitments">> => #{
+                            <<"commitments">> => Comms#{
                                 AttName =>
                                     Comm#{
                                         <<"trusted-keys">> =>
