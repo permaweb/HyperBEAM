@@ -14,6 +14,8 @@
 
 -define(DEFAULT_RETRIES, 0).
 -define(DEFAULT_RETRY_TIME, 1000).
+-define(DEFAULT_KEEPALIVE_TIMEOUT, 60_000).
+-define(DEFAULT_CONNECT_TIMEOUT, 60_000).
 
 %%% ==================================================================
 %%% Public interface.
@@ -518,7 +520,7 @@ open_connection(#{ peer := Peer }, Opts) ->
                     keepalive =>
                         hb_opts:get(
                             http_keepalive,
-                            no_keepalive_timeout,
+                            ?DEFAULT_KEEPALIVE_TIMEOUT,
                             Opts
                         )
                 },
@@ -526,7 +528,7 @@ open_connection(#{ peer := Peer }, Opts) ->
             connect_timeout =>
                 hb_opts:get(
                     http_connect_timeout,
-                    no_connect_timeout,
+                    ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
                 )
         },
