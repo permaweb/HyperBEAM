@@ -23,10 +23,15 @@ query(List, <<"edges">>, _Args, _Opts) ->
     {ok, [{ok, Msg} || Msg <- List]};
 query(Msg, <<"node">>, _Args, _Opts) ->
     {ok, Msg};
-query(Obj, <<"transaction">>, Args, Opts) ->
-    case query(Obj, <<"transactions">>, Args, Opts) of
-        {ok, []} -> {ok, null};
-        {ok, [Msg|_]} -> {ok, Msg}
+query(Obj, <<"transaction">>, #{ <<"id">> := ID }, Opts) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} ->
+            case hb_message:commitment(ID, Msg, Opts) of
+                {ok, ID, Comm} ->
+                    {ok, Msg#{ <<"commitments">> => #{ ID => Comm } }};
+                not_found -> {ok, null}
+            end;
+        not_found -> {ok, null}
     end;
 query(Obj, <<"transactions">>, Args, Opts) ->
     ?event({transactions_query,

@@ -781,12 +781,16 @@ commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
         when is_binary(ID), is_map_key(ID, Commitments) ->
-    hb_maps:get(
-        ID,
-        Commitments,
-        not_found,
-        Opts
-    );
+    FindRes = 
+        hb_maps:find(
+            ID,
+            Commitments,
+            Opts
+        ),
+    case FindRes of
+        error -> not_found;
+        {ok, Comm} -> {ok, ID, Comm}
+    end;
 commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     UnsignedCommitments =
@@ -804,7 +808,8 @@ commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
             {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
         true ->
             ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
-            multiple_matches    end;
+            multiple_matches
+    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
