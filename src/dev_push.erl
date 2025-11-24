@@ -648,7 +648,8 @@ full_push_test_() ->
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),
-            cache_control => <<"always">>
+            cache_control => <<"always">>,
+            store => [hb_test_utils:test_store()]
         },
         Base = dev_process:test_aos_process(Opts),
         hb_cache:write(Base, Opts),
@@ -700,7 +701,8 @@ push_as_identity_test_() ->
                 ComputeID => #{
                     priv_wallet => ComputeWallet
                 }
-            }
+            },
+            store => [hb_test_utils:test_store()]
         },
         % Create a new test AOS process, which will use the given identities as
         % its authority and scheduler.
@@ -766,7 +768,8 @@ multi_process_push_test_() ->
         dev_process:init(),
         Opts = #{
             priv_wallet => hb:wallet(),
-            cache_control => <<"always">>
+            cache_control => <<"always">>,
+            store => [hb_test_utils:test_store()]
         },
         Proc1 = dev_process:test_aos_process(Opts),
         hb_cache:write(Proc1, Opts),
@@ -822,15 +825,9 @@ multi_process_push_test_() ->
 push_with_redirect_hint_test_disabled() ->
     {timeout, 30, fun() ->
         dev_process:init(),
-        Stores =
-            [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST">>
-                }
-            ],
-        ExtOpts = #{ priv_wallet => ar_wallet:new(), store => Stores },
-        LocalOpts = #{ priv_wallet => hb:wallet(), store => Stores },
+        StoreOpts = [hb_test_utils:test_store(hb_store_fs)],
+        ExtOpts = #{ priv_wallet => ar_wallet:new(), store => StoreOpts },
+        LocalOpts = #{ priv_wallet => hb:wallet(), store => StoreOpts },
         ExtScheduler = hb_http_server:start_node(ExtOpts),
         ?event(push, {external_scheduler, {location, ExtScheduler}}),
         % Create the Pong server and client
@@ -944,21 +941,22 @@ push_prompts_encoding_change() ->
 oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
 oracle_push() ->
     dev_process:init(),
-    Client = dev_process:test_aos_process(),
-    {ok, _} = hb_cache:write(Client, #{}),
-    {ok, _} = dev_process:schedule_aos_call(Client, oracle_script()),
+    Opts = #{ priv_wallet => hb:wallet(), store => [hb_test_utils:test_store()] },
+    Client = dev_process:test_aos_process(Opts),
+    {ok, _} = hb_cache:write(Client, Opts),
+    {ok, _} = dev_process:schedule_aos_call(Client, oracle_script(), Opts),
     Res =
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => 0
         },
-    {ok, PushResult} = hb_ao:resolve(Client, Res, #{ priv_wallet => hb:wallet() }),
+    {ok, PushResult} = hb_ao:resolve(Client, Res, Opts),
     ?event({result, PushResult}),
     ComputeRes =
         hb_ao:resolve(
             Client,
             <<"now/results/data">>,
-            #{ priv_wallet => hb:wallet() }
+            Opts
         ),
     ?event({compute_res, ComputeRes}),
     ?assertMatch({ok, _}, ComputeRes).
@@ -974,7 +972,17 @@ nested_push_prompts_encoding_change() ->
     Opts = #{
         priv_wallet => hb:wallet(),
         cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        store => [
+            #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-TEST/lmdb">> },
+            % Include a gateway store so that we can get the legacynet 
+            % process when needed.
+            #{ <<"store-module">> => hb_store_gateway,
+                <<"store">> => #{
+                    <<"store-module">> => hb_store_lmdb,
+                    <<"name">> => <<"cache-TEST/lmdb">>
+                }
+            }
+        ]
     },
     ?event(push_debug, {opts, Opts}),
     Base = dev_process:test_aos_process(Opts),
@@ -990,7 +998,7 @@ nested_push_prompts_encoding_change() ->
     ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
     Script = message_to_legacynet_scheduler_script(),
     ?event({script, Script}),
-    {ok, Req} = dev_process:schedule_aos_call(Base, Script),
+    {ok, Req} = dev_process:schedule_aos_call(Base, Script, Opts),
     ?event(push, {msg_sched_result, Req}),
     {ok, StartingMsgSlot} =
         hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),

@@ -211,45 +211,29 @@ transform(Base, Key, Opts) ->
                     % - The prefixes for the device.
                     % - The prior prefixes for later restoration.
 					?event({activating_device, DevMsg}),
+                    {IPrefix, OPrefix, PDevice, PIPrefix, POPrefix} =
+                        hb_ao:get_many(
+                            [
+                                [<<"input-prefixes">>, Key],
+                                [<<"output-prefixes">>, Key],
+                                <<"device">>,
+                                <<"previous-input-prefix">>,
+                                <<"previous-output-prefix">>
+                            ],
+                            {as, dev_message, Base},
+                            [undefined, undefined, undefined, undefined, undefined],
+                            Opts
+                        ),
 					dev_message:set(
                         Base,
 						#{
 							<<"device">> => DevMsg,
                             <<"device-key">> => Key,
-                            <<"input-prefix">> =>
-                                hb_ao:get(
-                                    [<<"input-prefixes">>, Key],
-                                    {as, dev_message, Base},
-                                    undefined,
-                                    Opts
-                                ),
-                            <<"output-prefix">> =>
-                                hb_ao:get(
-                                    [<<"output-prefixes">>, Key],
-                                    {as, dev_message, Base},
-                                    undefined,
-                                    Opts
-                                ),
-                            <<"previous-device">> =>
-                                hb_ao:get(
-                                    <<"device">>,
-                                    {as, dev_message, Base},
-                                    Opts
-                                ),
-                            <<"previous-input-prefix">> =>
-                                hb_ao:get(
-                                    <<"input-prefix">>,
-                                    {as, dev_message, Base},
-                                    undefined,
-                                    Opts
-                                ),
-                            <<"previous-output-prefix">> =>
-                                hb_ao:get(
-                                    <<"output-prefix">>,
-                                    {as, dev_message, Base},
-                                    undefined,
-                                    Opts
-                                )
+                            <<"input-prefix">> => IPrefix,
+                            <<"output-prefix">> => OPrefix,
+                            <<"previous-device">> => PDevice,
+                            <<"previous-input-prefix">> => PIPrefix,
+                            <<"previous-output-prefix">> => POPrefix
 						},
                         Opts
                     );
@@ -270,24 +254,22 @@ resolve_fold(Base, Request, Opts) ->
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
         {ok, Result} ->
+            {InputPrefix, OutputPrefix} = 
+                hb_ao:get_many(
+                    [
+                        <<"previous-input-prefix">>,
+                        <<"previous-output-prefix">>
+                    ],
+                    {as, dev_message, Result},
+                    [undefined, undefined],
+                    Opts
+                ),
             dev_message:set(
                 Result,
                 #{
                     <<"device">> => InitDevMsg,
-                    <<"input-prefix">> =>
-                        hb_ao:get(
-                            <<"previous-input-prefix">>,
-                            {as, dev_message, Result},
-                            undefined,
-                            Opts
-                        ),
-                    <<"output-prefix">> =>
-                        hb_ao:get(
-                            <<"previous-output-prefix">>,
-                            {as, dev_message, Result},
-                            undefined,
-                            Opts
-                        ),
+                    <<"input-prefix">> => InputPrefix,
+                    <<"output-prefix">> => OutputPrefix,
                     <<"device-key">> => unset,
                     <<"device-stack-previous">> => unset,
                     <<"pass">> => StartingPassValue
