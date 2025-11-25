@@ -57,7 +57,7 @@ You can build and deploy your own devices in Erlang to introduce entirely new, h
 
 **Use Case:** You could build a custom device that acts as a bridge to another blockchain's API, allowing your AO processes to interact with external systems seamlessly.
 
-> Learn how to [Build Your Own Device](../devices/building-devices.html).
+> Learn how to [Build Your Own Device](../devices/source-code/building-devices.html).
 
 #### Achieve Raw Performance with Native Code
 For the most demanding, performance-critical tasks, you can write Native Implemented Functions (NIFs) in low-level languages like C or Rust. These NIFs integrate directly with the Erlang VM, offering the highest possible performance.
