@@ -233,7 +233,8 @@ avoid_double_read_test() ->
             [
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local],
-                    <<"routes">> => custom_raw_routes(MockServer)
+                    %% To be replaced with `<<"routes">>` after PR 563
+                    routes => custom_raw_routes(MockServer)
                 }
             ]
     },
