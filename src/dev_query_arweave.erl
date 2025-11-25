@@ -51,6 +51,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
             end,
             Matches
         ),
+    ?event({transactions_messages, Messages}),
     {ok, Messages};
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
@@ -194,20 +195,14 @@ match_args([], Results, Opts) ->
     Matches =
         lists:foldl(
             fun(Result, Acc) ->
-                hb_util:list_with(resolve_ids(Result, Opts), Acc)
+                hb_util:list_with(Result, Acc)
             end,
-            resolve_ids(hd(Results), Opts),
+            hd(Results),
             tl(Results)
         ),
-    hb_util:unique(
-        lists:flatten(
-            [
-                all_ids(ID, Opts)
-            ||
-                ID <- Matches
-            ]
-        )
-    );
+    ?event({match_args_results,
+        {results, Results}, {matches, Matches}}),
+    Matches;
 match_args([{Field, X} | Rest], Acc, Opts) ->
     MatchRes = match(Field, X, Opts),
     ?event({match, {field, Field}, {arg, X}, {match_res, MatchRes}}),
@@ -247,13 +242,13 @@ match(<<"id">>, ID, _Opts) ->
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
-    hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+    {ok, Matches} = 
+        hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts),
+    {ok, all_ids(Matches, Opts)};
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->
-    Res =  matching_commitments(<<"committer">>, Owner, Opts),
-    ?event({match_owner, Owner, Res}),
-    {ok, Res};
+    {ok, matching_commitments(<<"committer">>, Owner, Opts)};
 match(<<"recipients">>, Recipients, Opts) ->
     {ok, matching_commitments(<<"field-target">>, Recipients, Opts)};
 match(UnsupportedFilter, _, _) ->
@@ -275,14 +270,18 @@ matching_commitments(Field, Values, Opts) when is_list(Values) ->
 matching_commitments(Field, Value, Opts) when is_binary(Value) ->
     case hb_cache:match(#{ Field => Value }, Opts) of
         {ok, IDs} ->
+            BaseIDs = 
+                lists:map(
+                    fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs),
             ?event(
                 {found_matching_commitments,
                     {field, Field},
                     {value, Value},
-                    {ids, IDs}
+                    {ids, IDs},
+                    {base_ids, BaseIDs}
                 }
             ),
-            lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
+            BaseIDs;
         not_found -> not_found
     end.
 
@@ -299,29 +298,25 @@ commitment_id_to_base_id(ID, Opts) ->
     end.
 
 %% @doc Find all IDs for a message, by any of its other IDs.
-all_ids(ID, Opts) ->
+all_ids(IDs, Opts) ->
+    all_ids(IDs, [], Opts).
+all_ids([], Results, _Opts) ->
+    hb_util:unique(
+        lists:flatten(
+            Results
+        )
+    );
+all_ids([ID | Rest], Results, Opts) ->
     Store = hb_opts:get(store, no_store, Opts),
-    case hb_store:list(Store, << ID/binary, "/commitments">>) of
+    IDs = case hb_store:list(Store, << ID/binary, "/commitments">>) of
         {ok, []} -> [ID];
         {ok, CommitmentIDs} -> CommitmentIDs;
         _ -> []
-    end.
+    end,
+    all_ids(Rest, [IDs | Results], Opts).
 
 %% @doc Scope the stores used for block matching. The searched stores can be
 %% scoped by setting the `query_arweave_scope' option.
 scope(Opts) ->
     Scope = hb_opts:get(query_arweave_scope, [local], Opts),
     hb_store:scope(Opts, Scope).
-
-%% @doc Resolve a list of IDs to their store paths, using the stores provided.
-resolve_ids(IDs, Opts) ->
-    Scoped = scope(Opts),
-    lists:map(
-        fun(ID) ->
-            case hb_cache:read(ID, Opts) of
-                {ok, Msg} -> hb_message:id(Msg, uncommitted, Scoped);
-                not_found -> ID
-            end
-        end,
-        IDs
-    ).
