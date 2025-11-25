@@ -1,5 +1,5 @@
 -module(dev_inference).
--export([info/1, completions/3, chat/3, health/3, v1/3]).
+-export([info/1, completions/3, chat/3, health/3, v1/3, stop/0]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -13,6 +13,15 @@ info(_Opts) ->
         description => <<"Inference device with OpenAI-compatible API">>,
         version => <<"1.0">>
     }.
+
+stop() ->
+    case whereis(inference_server) of
+        undefined -> ok;
+        Pid -> 
+            exit(Pid, kill),
+            unregister(inference_server),
+            ok
+    end.
 
 completions(Base, Req, Opts) ->
     Path = case hb_ao:get(<<"chat-mode">>, Base, false, Opts) of
@@ -79,29 +88,103 @@ forward_health_check(Opts) ->
     end.
 
 do_inference_request(_Base, Req, Opts, Path) ->
-    Params = extract_inference_params(Req, Opts),
-    IsStream = case maps:get(<<"stream">>, Params, false) of
-        true -> true;
-        <<"true">> -> true;
-        _ -> false
-    end,
-
-    case IsStream of
+    case ensure_started(Opts) of
         true ->
-            Body = hb_json:encode(Params),
-            #{
-                <<"stream_generator">> => fun(Sender) -> 
-                    stream_from_backend(Sender, <<"POST">>, Path, Body, Opts) 
-                end
-            };
+            Params = extract_inference_params(Req, Opts),
+            IsStream = case maps:get(<<"stream">>, Params, false) of
+                true -> true;
+                <<"true">> -> true;
+                _ -> false
+            end,
+
+            case IsStream of
+                true ->
+                    Body = hb_json:encode(Params),
+                    #{
+                        <<"stream_generator">> => fun(Sender) -> 
+                            stream_from_backend(Sender, <<"POST">>, Path, Body, Opts) 
+                        end
+                    };
+                false ->
+                    Body = prepare_request_body(Req, Opts),
+                    Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
+                    
+                    case should_include_attestation(Req, Opts) of
+                        true -> add_attestation(Response, Req, Opts);
+                        false -> format_response(Response, Opts)
+                    end
+            end;
         false ->
-            Body = prepare_request_body(Req, Opts),
-            Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
-            
-            case should_include_attestation(Req, Opts) of
-                true -> add_attestation(Response, Req, Opts);
-                false -> format_response(Response, Opts)
-            end
+            {error, #{
+                <<"status">> => 503,
+                <<"message">> => <<"Inference server failed to start">>
+            }}
+    end.
+
+ensure_started(Opts) ->
+    ?event(inference, []),
+    case whereis(inference_server) of
+        undefined -> start_server(Opts);
+        _ -> true
+    end.
+
+start_server(Opts) ->
+    {ok, Cwd} = file:get_cwd(),
+    InferenceDir = filename:join([Cwd, "_build", "deterministic-inference"]),
+    PythonBin = filename:join([InferenceDir, ".venv", "bin", "python"]),
+    
+    InferenceOpts = hb_opts:get(inference_opts, #{}, Opts),
+    ModelName = hb_util:list(maps:get(<<"model_name">>, InferenceOpts, "")),
+    Port = ?SERVER_PORT,
+    
+    Args = ["-m", "deterministic_inference", "--model-path", ModelName, "--port", Port],
+    
+    ?event(inference, {executable, PythonBin, args, Args}),
+    
+    Pid = spawn(fun() -> 
+        process_flag(trap_exit, true),
+        PortRef = open_port({spawn_executable, PythonBin}, [{args, Args}, stream, binary, exit_status, stderr_to_stdout]),
+        server_loop(PortRef)
+    end),
+    register(inference_server, Pid),
+    wait_for_start(Opts, 30).
+
+server_loop(Port) ->
+    receive
+        {Port, {data, Data}} ->
+            io:format("~s", [Data]),
+            server_loop(Port);
+        {Port, {exit_status, Status}} ->
+            io:format("Inference server exited with status ~p~n", [Status]),
+            exit(normal);
+        stop ->
+            port_close(Port),
+            exit(normal)
+    end.
+
+wait_for_start(_Opts, 0) -> false;
+wait_for_start(Opts, N) ->
+    case is_server_running(Opts) of
+        true -> true;
+        false ->
+            timer:sleep(1000),
+            wait_for_start(Opts, N-1)
+    end.
+
+is_server_running(Opts) ->
+    Peer = iolist_to_binary(["http://localhost:", ?SERVER_PORT]),
+    case hb_http_client:request(
+        #{
+            method => <<"GET">>,
+            peer => Peer,
+            path => <<"/health">>,
+            headers => #{},
+            body => <<>>
+        },
+        Opts
+    ) of
+        {ok, 200, _, _} -> true;
+        _ -> false
     end.
 
 prepare_request_body(Req, Opts) ->
@@ -218,12 +301,12 @@ receive_stream(ConnPid, StreamRef, Sender) ->
         {gun_data, ConnPid, StreamRef, fin, Data} ->
             Sender(Data);
         {gun_error, ConnPid, StreamRef, Reason} ->
-            ?event(inference_error, {stream_error, Reason}),
+            ?event(inference, {stream_error, Reason}),
             ok;
         {gun_down, ConnPid, _Protocol, _Reason, _KilledStreams} ->
              ok;
         Other ->
-            ?event(inference_debug, {unexpected_stream_msg, Other}),
+            ?event(inference, {unexpected_stream_msg, Other}),
             receive_stream(ConnPid, StreamRef, Sender)
     after 30000 ->
         ok
