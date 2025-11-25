@@ -24,14 +24,10 @@ query(List, <<"edges">>, _Args, _Opts) ->
 query(Msg, <<"node">>, _Args, _Opts) ->
     {ok, Msg};
 query(Obj, <<"transaction">>, #{ <<"id">> := ID }, Opts) ->
-    case hb_cache:read(ID, Opts) of
-        {ok, Msg} ->
-            case hb_message:commitment(ID, Msg, Opts) of
-                {ok, ID, Comm} ->
-                    {ok, Msg#{ <<"commitments">> => #{ ID => Comm } }};
-                not_found -> {ok, null}
-            end;
-        not_found -> {ok, null}
+    Messages = read_filtered_messages([ID], Opts),
+    case Messages of
+        [Msg] -> {ok, Msg};
+        [] -> {ok, null}
     end;
 query(Obj, <<"transactions">>, Args, Opts) ->
     ?event({transactions_query,
@@ -41,16 +37,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     Matches = match_args(Args, Opts),
     ?event({transactions_matches, Matches}),
-    Messages =
-        lists:filtermap(
-            fun(Match) ->
-                case hb_cache:read(Match, Opts) of
-                    {ok, Msg} -> {true, Msg};
-                    not_found -> false
-                end
-            end,
-            Matches
-        ),
+    Messages = read_filtered_messages(Matches, Opts),
     ?event({transactions_messages, Messages}),
     {ok, Messages};
 query(Obj, <<"block">>, Args, Opts) ->
@@ -314,6 +301,25 @@ all_ids([ID | Rest], Results, Opts) ->
         _ -> []
     end,
     all_ids(Rest, [IDs | Results], Opts).
+
+%% @doc Read the provided IDs and remove any messages that don't exist or
+%% are unsigned.
+read_filtered_messages(IDs, Opts) ->
+    lists:filtermap(
+        fun(ID) ->
+            case hb_cache:read(ID, Opts) of
+                {ok, Msg} ->
+                    case hb_message:commitment(ID, Msg, Opts) of
+                        {ok, ID, #{ <<"committer">> := _ } = Comm} ->
+                            {true, Msg#{ <<"commitments">> => #{ ID => Comm } }};
+                        {ok, _ID, _CommWithoutCommitter} -> false;
+                        not_found -> false
+                    end;
+                not_found -> false
+            end
+        end,
+        IDs
+    ).
 
 %% @doc Scope the stores used for block matching. The searched stores can be
 %% scoped by setting the `query_arweave_scope' option.
