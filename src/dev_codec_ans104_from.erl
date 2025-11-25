@@ -207,6 +207,7 @@ unsigned_commitment(Item, Device, CommittedFields, Tags, CommittedKeys, Opts) ->
                     <<"committed">> => CommittedKeys,
                     <<"type">> => <<"unsigned-sha256">>,
                     <<"signature">> => ID,
+                    <<"committer">> => ID,
                     <<"bundle">> => bundle_commitment_key(Tags, Opts),
                     <<"original-tags">> => original_tags(Item, Opts)
                 },

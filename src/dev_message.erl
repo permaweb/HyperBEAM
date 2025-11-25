@@ -474,11 +474,6 @@ commitment_ids_from_request(Base, Req, Opts) ->
             X2 when is_list(X2) -> X2;
             CommitmentDescriptor -> hb_ao:normalize_key(CommitmentDescriptor)
         end,
-    ?event(debug_commitments,
-        {commitment_ids_from_request,
-            {req_commitments, ReqCommitments},
-            {req_committers, ReqCommitters}}
-    ),
     % Get the commitments to verify.
     FromCommitmentIDs =
         case ReqCommitments of
@@ -526,7 +521,15 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 );
             FinalCommitmentIDs -> FinalCommitmentIDs
         end,
-    ?event({commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}),
+    ?event(debug_commitments,
+        {commitment_ids_from_request,
+            {base, Base}, {req, Req}, {res, Res},
+            {req_commitments, ReqCommitments},
+            {req_committers, ReqCommitters},
+            {from_commitment_ids, FromCommitmentIDs},
+            {from_committer_addrs, FromCommitterAddrs}
+        }
+    ),
     Res.
 
 %% @doc Ensure that the `commitments` submessage of a base message is fully
