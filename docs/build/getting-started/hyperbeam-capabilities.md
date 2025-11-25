@@ -8,7 +8,7 @@ Designed to be **modular**, **composable**, and **extensible**, HyperBEAM lets y
 
 While [AO-Core](../introduction/what-is-ao-core.html) establishes the foundational concepts of Messages, Devices, and Paths, building on HyperBEAM can be simplified to four key principles:
 
-1.  **Everything is a [message](../introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
+1.  **Everything is a [message](../introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](../devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
 
 2.  **[Paths](./pathing-in-hyperbeam.md) are pipelines of messages.** A path defines a sequence of 'request' messages to be executed. You can set a key in a message directly within the path using the `&key=value` syntax. Headers and parameters added after a `?` are applied to all messages in the pipeline.
 
@@ -57,7 +57,7 @@ You can build and deploy your own devices in Erlang to introduce entirely new, h
 
 **Use Case:** You could build a custom device that acts as a bridge to another blockchain's API, allowing your AO processes to interact with external systems seamlessly.
 
-> Learn how to [Build Your Own Device](../build/devices/building-devices.html).
+> Learn how to [Build Your Own Device](../devices/building-devices.html).
 
 #### Achieve Raw Performance with Native Code
 For the most demanding, performance-critical tasks, you can write Native Implemented Functions (NIFs) in low-level languages like C or Rust. These NIFs integrate directly with the Erlang VM, offering the highest possible performance.
