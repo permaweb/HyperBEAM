@@ -167,7 +167,7 @@ extract_json_res(Response, Opts) ->
     end.
 
 get_process_id(Base, Req, Opts) ->
-    RawProcessID = dev_process:process_id(Base, #{}, Opts),
+    RawProcessID = dev_process_lib:process_id(Base, #{}, Opts),
     case RawProcessID of
         not_found -> hb_ao:get(<<"process-id">>, Req, Opts);
         ProcID -> ProcID
@@ -209,7 +209,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 %% `GET /snapshot' endpoint.
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
-    ProcID = dev_process:process_id(Msg, #{}, Opts),
+    ProcID = dev_process_lib:process_id(Msg, #{}, Opts),
     Res = 
         hb_ao:resolve(
             #{

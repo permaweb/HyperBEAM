@@ -31,7 +31,7 @@ group(Base, Req, Opts) ->
     end.
 
 process_to_group_name(Base, Opts) ->
-    Initialized = dev_process:ensure_process_key(Base, Opts),
+    Initialized = dev_process_lib:ensure_process_key(Base, Opts),
     ProcMsg = hb_ao:get(<<"process">>, Initialized, Opts#{ hashpath => ignore }),
     ID = hb_message:id(ProcMsg, all),
     ?event({process_to_group_name, {id, ID}, {base, Base}}),
@@ -170,13 +170,13 @@ test_init() ->
 
 info_test() ->
     test_init(),
-    M1 = dev_process:test_wasm_process(<<"test/aos-2-pure-xs.wasm">>),
+    M1 = dev_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao_device:info(M1, #{}),
     ?assertEqual(fun dev_process_worker:group/3, hb_maps:get(grouper, Res, undefined, #{})).
 
 grouper_test() ->
     test_init(),
-    M1 = dev_process:test_aos_process(),
+    M1 = dev_process_test_vectors:aos_process(),
     M2 = #{ <<"path">> => <<"compute">>, <<"v">> => 1 },
     M3 = #{ <<"path">> => <<"compute">>, <<"v">> => 2 },
     M4 = #{ <<"path">> => <<"not-compute">>, <<"v">> => 3 },
