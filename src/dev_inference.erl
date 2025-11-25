@@ -1,12 +1,15 @@
+%%% @doc Inference device with OpenAI-compatible API.
+%%% This module provides an interface to a local Python-based inference server.
 -module(dev_inference).
 -export([info/1, completions/3, chat/3, health/3, v1/3, stop/0]).
 -include_lib("eunit/include/eunit.hrl").
--include_lib("include/hb.hrl").
+-include("include/hb.hrl").
 
 -define(SERVER_PORT, "8080").
 
 %% Device API
 
+%% @doc Return information about the device.
 info(_Opts) ->
     #{
         exports => [<<"completions">>, <<"chat">>, <<"health">>, <<"v1">>],
@@ -14,15 +17,17 @@ info(_Opts) ->
         version => <<"1.0">>
     }.
 
+%% @doc Stop the inference server process.
 stop() ->
     case whereis(inference_server) of
         undefined -> ok;
         Pid -> 
-            exit(Pid, kill),
+            Pid ! stop,
             unregister(inference_server),
             ok
     end.
 
+%% @doc Handle completion requests.
 completions(Base, Req, Opts) ->
     Path = case hb_ao:get(<<"chat-mode">>, Base, false, Opts) of
         true -> <<"/v1/chat/completions">>;
@@ -30,6 +35,7 @@ completions(Base, Req, Opts) ->
     end,
     do_inference_request(Base, Req, Opts, Path).
 
+%% @doc Handle chat completion requests.
 chat(Base, Req, Opts) ->
     {ok, hb_util:deep_merge(
         Base, 
@@ -40,6 +46,7 @@ chat(Base, Req, Opts) ->
         Opts
     )}.
 
+%% @doc Handle v1 API requests.
 v1(Base, Req, Opts) ->
     {ok, hb_util:deep_merge(
         Base, 
@@ -49,6 +56,7 @@ v1(Base, Req, Opts) ->
         Opts
     )}.
 
+%% @doc Check the health of the inference server.
 health(_Base, _Req, Opts) ->
     forward_health_check(Opts).
 
