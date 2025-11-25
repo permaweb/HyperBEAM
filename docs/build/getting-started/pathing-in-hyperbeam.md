@@ -21,7 +21,7 @@ The HTTP response from this node includes a signature from the host's key. By ac
 Every path in AO-Core represents a program. Think of the URL bar as a Unix-style command-line interface, providing access to AO's trustless and verifiable compute. Each path component (between `/` characters) represents a step in the computation. In this example, we instruct the AO-Core node to:
 
 1. Load a specific message from its caches (local, another node, or Arweave)
-2. Interpret it with the [`~process@1.0`](../build/devices/foundational/process-at-1-0.md) device
+2. Interpret it with the [`~process@1.0`](../devices/foundational/process-at-1-0.md) device
 3. The process device implements a shared computing environment with consistent state between users
 
 ### State Access (`/now` or `/compute`)
@@ -53,7 +53,7 @@ This shows the 'cache' of your process. Each response is:
 Beyond path segments, HyperBEAM URLs can include query parameters that utilize a special type casting syntax. This allows specifying the desired data type for a parameter directly within the URL using the format `key+type=value`.
 
 - **Syntax**: A `+` symbol separates the parameter key from its intended type (e.g., `count+integer=42`, `items+list="apple",7`).
-- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../devices/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../build/source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
+- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../devices/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
 - **Supported Types**: Common types include `integer`, `float`, `list`, `map`, `atom`, `binary` (often implicit), and `resolve` (for path resolution). List values often follow the [HTTP Structured Fields format (RFC 8941)](https://www.rfc-editor.org/info/rfc8941).
 
 This powerful feature enables the expression of complex data structures directly in URLs.
