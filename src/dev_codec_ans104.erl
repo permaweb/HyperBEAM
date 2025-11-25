@@ -69,15 +69,17 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
             Opts
         ),
     ?event({without_existing_unsigned_encoded, WithoutExistingUnsignedEncoded}),
-    {
-        ok,
-        hb_message:convert(
-            WithoutExistingUnsignedEncoded,
-            <<"structured@1.0">>,
-            <<"ans104@1.0">>,
-            Opts
-        )
-    }.
+    Committed = hb_message:convert(
+        WithoutExistingUnsignedEncoded,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ),
+    ?event({committed, Committed}),
+    WithNormalizedCommitments = hb_message:normalize_commitments(
+        Committed, Opts, add),
+    ?event({with_normalized_commitments, WithNormalizedCommitments}),
+    {ok, WithNormalizedCommitments}.
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
@@ -127,7 +129,7 @@ do_from(RawTX, Req, Opts) ->
     FieldCommitments = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
         TX, <<"ans104@1.0">>, FieldCommitments, Tags, Base, Keys, Opts),
-    ?event({from, {parsed_message, WithCommitments}}),
+    ?event({from, {result, WithCommitments}}),
     {ok, WithCommitments}.
 
 %% @doc Internal helper to translate a message to its #tx record representation,

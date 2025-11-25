@@ -168,27 +168,30 @@ with_commitments(
             CommittedKeys,
             Opts
         ),
-    case Item#tx.signature of
-        ?DEFAULT_SIG ->
-            Base#{ <<"commitments">> => #{ UnsignedID => UnsignedCommitment } };
-        _ ->
-            {SignedID, SignedCommitment} =
-                signed_commitment(
-                    Item,
-                    Device,
-                    FieldCommitments,
-                    Tags,
-                    CommittedKeys,
-                    Opts
-                ),
-            Base#{
-                <<"commitments">> =>
-                    #{
-                        SignedID => SignedCommitment,
-                        UnsignedID => UnsignedCommitment
+    WithCommitments = 
+        case Item#tx.signature of
+            ?DEFAULT_SIG ->
+                Base#{ <<"commitments">> =>
+                    #{ UnsignedID => UnsignedCommitment } };
+            _ ->
+                {SignedID, SignedCommitment} =
+                    signed_commitment(
+                        Item,
+                        Device,
+                        FieldCommitments,
+                        Tags,
+                        CommittedKeys,
+                        Opts
+                    ),
+                Base#{
+                    <<"commitments">> =>
+                        #{
+                            SignedID => SignedCommitment,
+                            UnsignedID => UnsignedCommitment
+                        }
                     }
-                }
-    end.
+        end,
+    hb_message:normalize_commitments(WithCommitments, Opts, add).
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.

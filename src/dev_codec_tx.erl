@@ -29,20 +29,38 @@ commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
             <<"tx@1.0">>,
             Opts
         ),
-    {ok, SignedStructured};
+    ?event({commit, {signed_structured, SignedStructured}}),
+    commit(SignedStructured, Req#{ <<"type">> => <<"unsigned">> }, Opts);
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to an L1 TX, 
     % then back. This forces the message to be normalized and the unsigned ID
     % to be recalculated.
-    {
-        ok,
+    ?event({adding_unsigned_commitment, Msg}),
+    WithoutExistingUnsigned =
+        hb_message:without_commitments(
+            #{ <<"type">> => <<"unsigned-sha256">> },
+            Msg,
+            Opts
+        ),
+    ?event({without_existing_unsigned, WithoutExistingUnsigned}),
+    WithoutExistingUnsignedEncoded =
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            WithoutExistingUnsigned,
             <<"tx@1.0">>,
             <<"structured@1.0">>,
             Opts
-        )
-    }.
+        ),
+    ?event({without_existing_unsigned_encoded, WithoutExistingUnsignedEncoded}),
+    Committed = hb_message:convert(
+        WithoutExistingUnsignedEncoded,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ),
+    ?event({committed, Committed}),
+    WithNormalizedCommitments = hb_message:normalize_commitments(Committed, Opts),
+    ?event({with_normalized_commitments, WithNormalizedCommitments}),
+    {ok, WithNormalizedCommitments}.
 
 %% @doc Verify an L1 TX commitment.
 verify(Msg, Req, Opts) ->
