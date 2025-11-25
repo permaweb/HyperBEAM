@@ -188,7 +188,7 @@ id(Msg, RawCommitters, Opts) ->
             signed -> #{ <<"committers">> => <<"all">> };
             List when is_list(List) -> #{ <<"committers">> => List }
         end,
-    ?event(debug_test, {getting_id, {msg, Msg}, {spec, CommSpec}}),
+    ?event({getting_id, {msg, Msg}, {spec, CommSpec}}),
     {ok, ID} =
         dev_message:id(
             Msg,
@@ -298,11 +298,11 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 Opts
             );
         {_OldID, _NewID} ->
-            NormCommitments = generate_norm_commitments(Msg, #{}, Opts),
+            NewCommitments = generate_norm_commitments(Msg, #{}, Opts),
             % We had an unsigned ID to begin with and the new one is different.
             % This means that the committed keys have changed, so we drop any
             % other commitments and return only the new unsigned one.
-            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
+            attach_phash2(Msg#{ <<"commitments">> => NewCommitments }, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),

@@ -76,10 +76,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
         Opts
     ),
     ?event({committed, Committed}),
-    WithNormalizedCommitments = hb_message:normalize_commitments(
-        Committed, Opts, add),
-    ?event({with_normalized_commitments, WithNormalizedCommitments}),
-    {ok, WithNormalizedCommitments}.
+    {ok, Committed}.
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
@@ -552,7 +549,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -600,7 +597,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -649,7 +646,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -696,7 +693,7 @@ signed_lowercase_bundle_map_tags_test() ->
     ?event({signed_tabm, SignedTABM}),
     % Recursively exclude commitments from the SignedTABM for the match test.
     ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
     ?event({commitment, Commitment}),
     ExpectedCommitment = #{
@@ -755,7 +752,7 @@ signed_mixedcase_bundle_map_tags_test() ->
     ?event(debug_test, {signed_tabm, SignedTABM}),
     % Recursively exclude commitments from the SignedTABM for the match test.
     ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{

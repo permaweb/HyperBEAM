@@ -58,9 +58,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
         Opts
     ),
     ?event({committed, Committed}),
-    WithNormalizedCommitments = hb_message:normalize_commitments(Committed, Opts),
-    ?event({with_normalized_commitments, WithNormalizedCommitments}),
-    {ok, WithNormalizedCommitments}.
+    {ok, Committed}.
 
 %% @doc Verify an L1 TX commitment.
 verify(Msg, Req, Opts) ->

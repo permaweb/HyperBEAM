@@ -191,7 +191,7 @@ with_commitments(
                         }
                     }
         end,
-    hb_message:normalize_commitments(WithCommitments, Opts, add).
+    WithCommitments.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.
