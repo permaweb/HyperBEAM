@@ -203,7 +203,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
 find_next_assignment(_Base, _Req, Schedule = [_Next|_], _LastSlot, _Opts) ->
     {ok, Schedule, undefined};
 find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
-    ProcID = dev_process:process_id(Base, Req, Opts),
+    ProcID = dev_process_lib:process_id(Base, Req, Opts),
     LocalCacheRes =
         case hb_util:atom(hb_opts:get(scheduler_ignore_local_cache, false, Opts)) of
             true -> not_found;

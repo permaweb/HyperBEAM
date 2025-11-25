@@ -20,7 +20,7 @@
 %%  `/push-mode':    Whether or not the push should be done asynchronously.
 %%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
-    Process = dev_process:as_process(Base, Opts),
+    Process = dev_process_lib:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -74,9 +74,9 @@ is_async(Process, Req, Opts) ->
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
+    ID = dev_process_lib:process_id(PrimaryProcess, #{}, Opts),
     UncommittedID =
-        dev_process:process_id(
+        dev_process_lib:process_id(
             PrimaryProcess,
             #{ <<"commitments">> => <<"none">> },
             Opts
@@ -271,7 +271,7 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                         }
                     ),
                     {ok, TargetBase} = hb_cache:read(TargetID, Opts),
-                    TargetAsProcess = dev_process:ensure_process_key(TargetBase, Opts),
+                    TargetAsProcess = dev_process_lib:ensure_process_key(TargetBase, Opts),
                     RecvdID = hb_message:id(TargetBase, all, Opts),
                     ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
                     % Push the message downstream. We decrease the result-depth.
@@ -644,13 +644,13 @@ parse_redirect(Location, Opts) ->
 
 full_push_test_() ->
     {timeout, 30, fun() ->
-        dev_process:init(),
+        dev_process_test_vectors:init(),
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),
             cache_control => <<"always">>
         },
-        Base = dev_process:test_aos_process(Opts),
+        Base = dev_process_test_vectors:aos_process(Opts),
         hb_cache:write(Base, Opts),
         {ok, SchedInit} =
             hb_ao:resolve(Base, #{
@@ -663,7 +663,7 @@ full_push_test_() ->
         ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
         Script = ping_pong_script(2),
         ?event({script, Script}),
-        {ok, Req} = dev_process:schedule_aos_call(Base, Script, Opts),
+        {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script, Opts),
         ?event({msg_sched_result, Req}),
         {ok, StartingMsgSlot} =
             hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),
@@ -682,7 +682,7 @@ full_push_test_() ->
 
 push_as_identity_test_() ->
     {timeout, 90, fun() ->
-        dev_process:init(),
+        dev_process_test_vectors:init(),
         % Create a new identity for the scheduler.
         DefaultWallet = hb:wallet(),
         SchedulingWallet = ar_wallet:new(),
@@ -705,7 +705,7 @@ push_as_identity_test_() ->
         % Create a new test AOS process, which will use the given identities as
         % its authority and scheduler.
         Base =
-            dev_process:test_aos_process(
+            dev_process_test_vectors:aos_process(
                 Opts#{
                     authority => ComputeID,
                     scheduler => [SchedulingID, ComputeID]
@@ -725,7 +725,7 @@ push_as_identity_test_() ->
         ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
         Script = ping_pong_script(2),
         ?event({script, Script}),
-        {ok, Req} = dev_process:schedule_aos_call(Base, Script),
+        {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script),
         ?event(push, {msg_sched_result, Req}),
         {ok, StartingMsgSlot} =
             hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),
@@ -763,12 +763,12 @@ push_as_identity_test_() ->
 
 multi_process_push_test_() ->
     {timeout, 30, fun() ->
-        dev_process:init(),
+        dev_process_test_vectors:init(),
         Opts = #{
             priv_wallet => hb:wallet(),
             cache_control => <<"always">>
         },
-        Proc1 = dev_process:test_aos_process(Opts),
+        Proc1 = dev_process_test_vectors:aos_process(Opts),
         hb_cache:write(Proc1, Opts),
         {ok, _SchedInit1} =
             hb_ao:resolve(Proc1, #{
@@ -778,8 +778,8 @@ multi_process_push_test_() ->
             },
             Opts
         ),
-        {ok, _} = dev_process:schedule_aos_call(Proc1, reply_script()),
-        Proc2 = dev_process:test_aos_process(Opts),
+        {ok, _} = dev_process_test_vectors:schedule_aos_call(Proc1, reply_script()),
+        Proc2 = dev_process_test_vectors:aos_process(Opts),
         hb_cache:write(Proc2, Opts),
         {ok, _SchedInit2} =
             hb_ao:resolve(Proc2, #{
@@ -792,7 +792,7 @@ multi_process_push_test_() ->
         ProcID1 = hb_message:id(Proc1, all, Opts),
         ProcID2 = hb_message:id(Proc2, all, Opts),
         ?event(push, {testing_with, {proc1_id, ProcID1}, {proc2_id, ProcID2}}),
-        {ok, ToPush} = dev_process:schedule_aos_call(
+        {ok, ToPush} = dev_process_test_vectors:schedule_aos_call(
             Proc2,
             <<
                 "Handlers.add(\"Pong\",\n"
@@ -821,7 +821,7 @@ multi_process_push_test_() ->
 
 push_with_redirect_hint_test_disabled() ->
     {timeout, 30, fun() ->
-        dev_process:init(),
+        dev_process_test_vectors:init(),
         Stores =
             [
                 #{
@@ -834,8 +834,8 @@ push_with_redirect_hint_test_disabled() ->
         ExtScheduler = hb_http_server:start_node(ExtOpts),
         ?event(push, {external_scheduler, {location, ExtScheduler}}),
         % Create the Pong server and client
-        Client = dev_process:test_aos_process(),
-        PongServer = dev_process:test_aos_process(ExtOpts),
+        Client = dev_process_test_vectors:aos_process(),
+        PongServer = dev_process_test_vectors:aos_process(ExtOpts),
         % Push the new process that runs on the external scheduler
         {ok, ServerSchedResp} =
             hb_http:post(
@@ -849,7 +849,7 @@ push_with_redirect_hint_test_disabled() ->
         PongServerID =
             hb_ao:get(
                 <<"process/id">>,
-                dev_process:ensure_process_key(PongServer, LocalOpts),
+                dev_process_lib:ensure_process_key(PongServer, LocalOpts),
                 LocalOpts
             ),
         {ok, ServerScriptSchedResp} =
@@ -872,7 +872,7 @@ push_with_redirect_hint_test_disabled() ->
             ),
         ?event(push, {pong_server_script_sched_resp, ServerScriptSchedResp}),
         {ok, ToPush} =
-            dev_process:schedule_aos_call(
+            dev_process_test_vectors:schedule_aos_call(
                 Client,
                 <<
                     "Handlers.add(\"Pong\",\n"
@@ -905,7 +905,7 @@ push_with_redirect_hint_test_disabled() ->
 push_prompts_encoding_change_test_() ->
     {timeout, 30, fun push_prompts_encoding_change/0}.
 push_prompts_encoding_change() ->
-    dev_process:init(),
+    dev_process_test_vectors:init(),
     Opts = #{
         priv_wallet => hb:wallet(),
         cache_control => <<"always">>,
@@ -943,10 +943,10 @@ push_prompts_encoding_change() ->
 
 oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
 oracle_push() ->
-    dev_process:init(),
-    Client = dev_process:test_aos_process(),
+    dev_process_test_vectors:init(),
+    Client = dev_process_test_vectors:aos_process(),
     {ok, _} = hb_cache:write(Client, #{}),
-    {ok, _} = dev_process:schedule_aos_call(Client, oracle_script()),
+    {ok, _} = dev_process_test_vectors:schedule_aos_call(Client, oracle_script()),
     Res =
         #{
             <<"path">> => <<"push">>,
@@ -970,14 +970,14 @@ oracle_push() ->
 nested_push_prompts_encoding_change_test_() ->
     {timeout, 30, fun nested_push_prompts_encoding_change/0}.
 nested_push_prompts_encoding_change() ->
-    dev_process:init(),
+    dev_process_test_vectors:init(),
     Opts = #{
         priv_wallet => hb:wallet(),
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
     ?event(push_debug, {opts, Opts}),
-    Base = dev_process:test_aos_process(Opts),
+    Base = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Base, Opts),
     {ok, SchedInit} =
         hb_ao:resolve(Base, #{
@@ -990,7 +990,7 @@ nested_push_prompts_encoding_change() ->
     ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
     Script = message_to_legacynet_scheduler_script(),
     ?event({script, Script}),
-    {ok, Req} = dev_process:schedule_aos_call(Base, Script),
+    {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script),
     ?event(push, {msg_sched_result, Req}),
     {ok, StartingMsgSlot} =
         hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),

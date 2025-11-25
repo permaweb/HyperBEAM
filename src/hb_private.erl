@@ -205,7 +205,7 @@ priv_opts_cache_read_message_test() ->
     PrivOpts = opts(Opts),
     % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a
     % complex message into the public store.
-    Msg = hb_cache:ensure_all_loaded(dev_process:test_aos_process(Opts), Opts),
+    Msg = hb_cache:ensure_all_loaded(dev_process_test_vectors:aos_process(Opts), Opts),
     {ok, ID} = hb_cache:write(Msg, Opts),
     % Ensure we can read the message using the public store.
     {ok, PubMsg} = hb_cache:read(ID, Opts),
