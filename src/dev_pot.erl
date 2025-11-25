@@ -33,9 +33,9 @@
 %%% Public API.
 -export([drip/3]).
 %%% `~pot@1.0` Private Utilities.
--export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5, set_weight/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
--export([user/3, balance/2, balances/1, deposit/3, deposits/1, deposits/2]).
+-export([user/3, balance/2, balances/1, get_deposit/3, get_deposits/1, get_deposits/2]).
 
 %%% Pot Model Functions.
 
@@ -166,15 +166,15 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
             dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
     end.
 
-%% @doc Modify the deposit of a specific address in a specific resource.
-modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
+%% @doc Deposit a quantity of a resource for a given address.
+deposit(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
     % Drip the global state and the resource, then extract necessary components.
     GlobalDrippedS = drip_global(S0, Opts),
     DrippedS = #{
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ExistingDeposit = deposit(Addr, ResourceID, DrippedS),
+    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     ResourceAcc =
@@ -220,20 +220,201 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
             <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
             <<"balances">> => Balances#{ Addr => NewBalance }
         },
-    LiquidatedS =
-        maybe_liquidate_delegations(
-            Addr,
-            ResourceID,
-            UpdatedDepositS,
-            Opts
-        ),
     update_deposit_index(
         Addr,
         ResourceID,
-        deposit(Addr, ResourceID, LiquidatedS),
-        LiquidatedS,
+        get_deposit(Addr, ResourceID, UpdatedDepositS),
+        UpdatedDepositS,
         Opts
     ).
+
+%% @doc Withdraw a quantity of a resource for a given address. If the quantity
+%% is insufficient, we'll revoke delegations until the withdrawal can be completed.
+withdraw(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
+    ExistingDeposit = get_deposit(Addr, ResourceID, S0),
+    S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
+    LiquidatedDeposit = get_deposit(Addr, ResourceID, S1),
+    S2 = hb_ao:set(
+        S1,
+        <<
+            "/resources/",
+            ResourceID/binary,
+            "/deposits/",
+            Addr/binary,
+            "/quantity"
+        >>,
+        LiquidatedDeposit - Amount,
+        Opts
+    ),
+    update_deposit_index(
+        Addr,
+        ResourceID,
+        get_deposit(Addr, ResourceID, S2),
+        S2,
+        Opts
+    ).
+
+%% @doc For a given address, undelegate their delegations until the specified
+%% quantity has been reclaimed.
+liquidate(Addr, ResourceID, Amount, S, Opts) when Amount =< 0 -> S;
+liquidate(Addr, ResourceID, Amount, S, Opts) ->
+    ExistingDelegations =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                Addr/binary,
+                "/delegations">>,
+            S,
+            #{},
+            Opts
+        ),
+    LargestDelegation =
+        lists:max(
+            hb_maps:values(
+                hb_private:reset(ExistingDelegations)
+            )
+        ),
+    {LargestDelegationAddr, _} =
+        lists:keyfind(
+            LargestDelegation,
+            2,
+            hb_maps:to_list(ExistingDelegations)
+        ),
+    RevokeAmount = min(Amount, LargestDelegation),
+    S0 = undelegate(Addr, LargestDelegationAddr, ResourceID, RevokeAmount, S, Opts),
+    liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts).
+
+%% @doc Delegate some quantity of a resource from one address to another.
+delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+    ?event(
+        {delegating,
+            {from_addr, FromAddr},
+            {to_addr, ToAddr},
+            {resource_id, ResourceID},
+            {amount, Amount}
+        }
+    ),
+    ExistingDeposit = get_deposit(FromAddr, ResourceID, S),
+    S0 =
+        hb_ao:set(
+            S,
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/quantity"
+            >>,
+            ExistingDeposit - Amount,
+            Opts
+        ),
+    ExistingDelegation =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations/",
+                ToAddr/binary
+            >>,
+            S0,
+            0,
+            Opts
+        ),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations/",
+                ToAddr/binary
+            >>,
+            ExistingDelegation + Amount,
+            Opts
+        ),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
+    S2 =
+        hb_ao:set(
+            S1,
+            <<
+                "/resources/", 
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/quantity"
+            >>,
+            RecipientDeposit + Amount,
+            Opts
+        ),
+    send_delegation_notice(ToAddr, ResourceID, Amount, S2, Opts).
+
+%% @doc Undelegate some quantity of a resource from one address to another.
+undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
+    S0 = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
+    NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S0),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/quantity"
+            >>,
+            NewRecipientDeposit - Amount,
+            Opts
+        ),
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1),
+    S2 =
+        hb_ao:set(
+            S1,
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/quantity"
+            >>,
+            DelegatorDeposit + Amount,
+            Opts
+        ),
+    ExistingDelegation =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations/",
+                ToAddr/binary
+            >>,
+            S2,
+            0,
+            Opts
+        ),
+    S3 =
+        hb_ao:set(
+            S2,
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations/",
+                ToAddr/binary
+            >>,
+            ExistingDelegation - Amount,
+            Opts
+        ),
+    send_delegation_notice(ToAddr, ResourceID, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
 set_weight(ResourceID, Weight, S, Opts) ->
@@ -261,132 +442,6 @@ set_weight(ResourceID, Weight, S, Opts) ->
             },
             <<"total-weighted-units">> => NewTotalWeightedUnits
         },
-        Opts
-    ).
-
-%% @doc Delegate a specific amount of a resource from one address to another.
-delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
-    ?event(
-        {delegating,
-            {from_addr, FromAddr},
-            {to_addr, ToAddr},
-            {resource_id, ResourceID},
-            {amount, Amount}
-        }
-    ),
-    S0 = modify_deposit(FromAddr, ResourceID, -Amount, S, Opts),
-    S1Unnormalized = modify_deposit(ToAddr, ResourceID, Amount, S0, Opts),
-    S1 =
-        maybe_liquidate_delegations(
-            deposit(ToAddr, ResourceID, S1Unnormalized),
-            ToAddr,
-            ResourceID,
-            S1Unnormalized,
-            Opts
-        ),
-    ExistingQuantity =
-        hb_ao:get(
-            <<
-                "/resources/", 
-                ResourceID/binary, 
-                "/deposits/", 
-                FromAddr/binary, 
-                "/delegations/", 
-                ToAddr/binary
-            >>,
-            S1,
-            0,
-            Opts
-        ),
-    S2 =
-        hb_ao:set(
-            S1,
-            <<
-                "/resources/",
-                ResourceID/binary,
-                "/deposits/",
-                FromAddr/binary,
-                "/delegations/",
-                ToAddr/binary
-            >>,
-            ExistingQuantity + Amount,
-            Opts
-        ),
-    S3 = send_delegation_notice(ToAddr, ResourceID, Amount, S2, Opts),
-    maybe_liquidate_delegations(
-        FromAddr,
-        ResourceID,
-        S3,
-        Opts
-    ).
-
-%% @doc Recursively liquidate delegations as necessary until the deposit for a
-%% delegating address is non-negative.
-maybe_liquidate_delegations(Addr, ResourceID, S, Opts) ->
-    maybe_liquidate_delegations(
-        deposit(Addr, ResourceID, S),
-        Addr,
-        ResourceID,
-        S,
-        Opts
-    ).
-maybe_liquidate_delegations(Deposit, Addr, _Res, S, _Opts) when Deposit >= 0 ->
-    ?event({no_liquidation_necessary, {deposit, Deposit}, {addr, Addr}}),
-    S;
-maybe_liquidate_delegations(Deposit, Addr, ResourceID, S, Opts) ->
-    Overdraw = abs(Deposit),
-    % Find the existing delegations for this address.
-    ExistingDelegations =
-        hb_ao:get(
-            <<
-                "/resources/", 
-                ResourceID/binary, 
-                "/deposits/", 
-                Addr/binary, 
-                "/delegations">>,
-            S,
-            #{},
-            Opts
-        ),
-    % Determine the largest delegation to liquidate.
-    LargestDelegation =
-        lists:max(
-            hb_maps:values(
-                hb_private:reset(ExistingDelegations)
-            )
-        ),
-    {LargestDelegationAddr, _} =
-        lists:keyfind(
-            LargestDelegation,
-            2,
-            hb_maps:to_list(ExistingDelegations)
-        ),
-    RevokeAmount = min(Overdraw, LargestDelegation),
-    ?event(
-        {liquidating_delegation,
-            {addr, Addr},
-            {overdrawn, Overdraw},
-            {recouping, RevokeAmount},
-            {largest_delegation, LargestDelegation},
-            {delegated_to, LargestDelegationAddr}
-        }
-    ),
-    % Revoke the largest delegation.
-    NewS =
-        delegate(
-            Addr,
-            LargestDelegationAddr,
-            ResourceID,
-            -RevokeAmount,
-            S,
-            Opts
-        ),
-    % Recursively liquidate the remaining quantity.
-    maybe_liquidate_delegations(
-        Deposit + RevokeAmount,
-        Addr,
-        ResourceID,
-        NewS,
         Opts
     ).
 
@@ -433,7 +488,7 @@ send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
 %%% Helpers.
 
 %% @doc Get the deposit quantity for a specific address in a specific resource.
-deposit(Addr, ResourceID, S) ->
+get_deposit(Addr, ResourceID, S) ->
     hb_ao:get(
         <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
         S,
@@ -446,16 +501,16 @@ balances(S = #{ <<"balances">> := Bs }) ->
     hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
 
 %% @doc Return only the deposits submessage for all resources in the state.
-deposits(S = #{ <<"resources">> := Resources }) ->
-    hb_maps:map(fun(ResourceID, _) -> deposits(ResourceID, S) end, Resources).
-deposits(ResourceID, S) ->
+get_deposits(S = #{ <<"resources">> := Resources }) ->
+    hb_maps:map(fun(ResourceID, _) -> get_deposits(ResourceID, S) end, Resources).
+get_deposits(ResourceID, S) ->
     Ds = hb_ao:get(
         <<"/resources/", ResourceID/binary, "/deposits">>,
         S,
         #{},
         #{}
     ),
-    hb_maps:map(fun(Addr, _) -> deposit(Addr, ResourceID, S) end, Ds).
+    hb_maps:map(fun(Addr, _) -> get_deposit(Addr, ResourceID, S) end, Ds).
 
 %% @doc Return the contents of the inverted index for a specific address.
 user(Addr, S, Opts) ->
