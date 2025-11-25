@@ -64,13 +64,13 @@ The following examples illustrate using HTTP paths with various AO-Core processe
 
 ### Example 1: Accessing Full Process State
 
-To get the complete, real-time state of a process identified by `<procId>`, use the `/now` path component with the [`~process@1.0`](https://hyperbeam.arweave.net/build/devices/foundational/process-at-1-0.html) device:
+To get the complete, real-time state of a process identified by `<procId>`, use the `/now` path component with the [`~process@1.0`](../devices/foundational/process-at-1-0.md) device:
 
 ```bash
 GET /<procId>~process@1.0/now
 ```
 
-This instructs the AO-Core node to load the process and execute the `now` function on the [`~process@1.0`](https://hyperbeam.arweave.net/build/devices/foundational/process-at-1-0.html) device.
+This instructs the AO-Core node to load the process and execute the `now` function on the [`~process@1.0`](../devices/foundational/process-at-1-0.md) device.
 
 ### Example 2: Navigating to Specific Process Data
 
