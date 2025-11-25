@@ -53,7 +53,7 @@ This shows the 'cache' of your process. Each response is:
 Beyond path segments, HyperBEAM URLs can include query parameters that utilize a special type casting syntax. This allows specifying the desired data type for a parameter directly within the URL using the format `key+type=value`.
 
 - **Syntax**: A `+` symbol separates the parameter key from its intended type (e.g., `count+integer=42`, `items+list="apple",7`).
-- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../devices/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
+- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../devices/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../devices/source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
 - **Supported Types**: Common types include `integer`, `float`, `list`, `map`, `atom`, `binary` (often implicit), and `resolve` (for path resolution). List values often follow the [HTTP Structured Fields format (RFC 8941)](https://www.rfc-editor.org/info/rfc8941).
 
 This powerful feature enables the expression of complex data structures directly in URLs.
