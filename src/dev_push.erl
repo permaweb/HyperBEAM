@@ -338,7 +338,7 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
 %% We determine whether to push the message locally or remotely based on the
 %% `push_route_downstream' option.
 push_downstream(TargetID, NextSlotOnProc, Origin, Opts) ->
-    case hb_opts:get(push_route_downstream, false, Opts) of
+    case hb_opts:get(push_route_downstream, true, Opts) of
         true -> push_downstream_remote(TargetID, NextSlotOnProc, Origin, Opts);
         false -> push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts)
     end.
@@ -368,7 +368,6 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
     ),
     case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
         {error, no_matches} ->
-            throw({no_matching_route, {target, TargetID}, {slot, NextSlotOnProc}}),
             ?event(push,
                 {no_push_route_found,
                     {target, TargetID},
