@@ -211,5 +211,4 @@ do_not_crash_with_unsupported_signature_type_test() ->
             data_size = 3,
             data = <<0, 1, 2>>
            },
-    R = reset_ids(TX),
-    erlang:display({r, R}).
+    ?assert(is_record(reset_ids(TX), tx)).
