@@ -8,13 +8,23 @@
 process_id(Base, Req, Opts) ->
     case hb_ao:get(<<"process">>, Base, Opts#{ hashpath => ignore }) of
         not_found ->
-            process_id(dev_process_lib:ensure_process_key(Base, Opts), Req, Opts);
+            process_id(ensure_process_key(Base, Opts), Req, Opts);
         Process ->
-            hb_message:id(
-                Process,
-                hb_util:atom(maps:get(<<"commitments">>, Req, <<"all">>)),
-                Opts
-            )
+            Signers = hb_message:signers(Process, Opts),
+            case {hb_message:verify(Process, Opts), Signers} of
+                {false, _} ->
+                    ?event({process_not_verified, {process, Process}}),
+                    throw({process_not_verified, Process});
+                {true, []} ->
+                    ?event({process_has_no_signers, {process, Process}}),
+                    throw({process_has_no_signers, Process});
+                {true, _} ->
+                    hb_message:id(
+                        Process,
+                        hb_util:atom(maps:get(<<"commitments">>, Req, <<"signed">>)),
+                        Opts
+                    )
+            end
     end.
 
 %% @doc Run a message against Base, with the device being swapped out for
