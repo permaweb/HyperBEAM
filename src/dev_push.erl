@@ -372,7 +372,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
 %% @doc Push a resulting message recursively, executing the action on this node.
 push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
     {ok, TargetBase} = hb_cache:read(TargetID, Opts),
-    TargetAsProcess = dev_process:ensure_process_key(TargetBase, Opts),
+    TargetAsProcess = dev_process_lib:ensure_process_key(TargetBase, Opts),
     RecvdID = hb_message:id(TargetBase, all, Opts),
     ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
     % Push the message downstream. We decrease the result-depth.
@@ -1055,7 +1055,7 @@ remote_routed_push() ->
         },
     N2 = hb_http_server:start_node(N2Opts),
     % Create the second process on the second node.
-    Proc2 = dev_process:test_aos_process(N2Opts),
+    Proc2 = dev_process_test_vectors:aos_process(N2Opts),
     LoadedProc2 = hb_cache:ensure_all_loaded(Proc2, N2Opts),
     Proc2ID = hb_message:id(Proc2, signed, N2Opts),
     % Next, create the first node and process.
@@ -1082,7 +1082,7 @@ remote_routed_push() ->
         )
     ),
     % Create the first process on the first node.
-    Proc1 = dev_process:test_aos_process(N1Opts),
+    Proc1 = dev_process_test_vectors:aos_process(N1Opts),
     LoadedProc1 = hb_cache:ensure_all_loaded(Proc1, N1Opts),
     Proc1ID = hb_message:id(LoadedProc1, all, N1Opts),
     % Write both processes to each of the nodes' caches, such that both are
@@ -1112,9 +1112,9 @@ remote_routed_push() ->
             "ao.isAssignable = function(m) return true end"
         >>,
     {ok, SetAuthProc1} =
-        dev_process:schedule_aos_call(LoadedProc1, SetAuthoritiesCommand, N1Opts),
+        dev_process_test_vectors:schedule_aos_call(LoadedProc1, SetAuthoritiesCommand, N1Opts),
     {ok, SetAuthProc2} =
-        dev_process:schedule_aos_call(LoadedProc2, SetAuthoritiesCommand, N2Opts),
+        dev_process_test_vectors:schedule_aos_call(LoadedProc2, SetAuthoritiesCommand, N2Opts),
     ?event(debug_test,
         {set_authorities, 
             {command, {string, SetAuthoritiesCommand}},
@@ -1126,13 +1126,13 @@ remote_routed_push() ->
     % reply script, and the first process has reply script with a trigger to
     % send a message to the second process.
     {ok, P2ScriptLoadRes} =
-        dev_process:schedule_aos_call(
+        dev_process_test_vectors:schedule_aos_call(
             LoadedProc2,
             reply_script(),
             N2Opts
         ),
     {ok, P1ScriptLoadRes} =
-        dev_process:schedule_aos_call(
+        dev_process_test_vectors:schedule_aos_call(
             LoadedProc1,
             reply_script(Proc2ID),
             N1Opts
