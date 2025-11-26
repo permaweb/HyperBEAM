@@ -82,8 +82,11 @@ generate_id(TX, unsigned) ->
 
 generate_signature_data_segment(TX = #tx{ format = ans104 }) ->
     try ar_bundles:data_item_signature_data(TX) catch 
-        _:_ ->
-            ?DEFAULT_ID
+        Class:Error:Stack ->
+            ?event(error, {invalid_tx, {class, Class},
+                           {error, Error},
+                           {stack, Stack}}),
+            <<>>
     end;
 generate_signature_data_segment(TX) ->
     ar_tx:generate_signature_data_segment(TX).
@@ -196,3 +199,17 @@ normalize_data_root(Item = #tx{data = Bin, format = 2})
     Item#tx{data_root = ar_tx:data_root(Bin)};
 normalize_data_root(Item) -> Item.
 
+%% Tests
+
+do_not_crash_with_unsupported_signature_type_test() ->
+    SignatureType = unsupported_tx_signature_type,
+    TX = #tx{
+            format = ans104,
+            signature = <<0:256>>,
+            signature_type = SignatureType,
+            owner = <<0:256>>,
+            data_size = 3,
+            data = <<0, 1, 2>>
+           },
+    R = reset_ids(TX),
+    erlang:display({r, R}).
