@@ -81,7 +81,10 @@ generate_id(TX, unsigned) ->
         generate_signature_data_segment(TX#tx{ owner = ?DEFAULT_OWNER })).
 
 generate_signature_data_segment(TX = #tx{ format = ans104 }) ->
-    ar_bundles:data_item_signature_data(TX);
+    try ar_bundles:data_item_signature_data(TX) catch 
+        _:_ ->
+            ?DEFAULT_ID
+    end;
 generate_signature_data_segment(TX) ->
     ar_tx:generate_signature_data_segment(TX).
 
@@ -192,5 +195,4 @@ normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_root = ar_tx:data_root(Bin)};
 normalize_data_root(Item) -> Item.
-
 
