@@ -317,7 +317,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
     Path = <<TargetID/binary, "/push&slot=", (hb_util:bin(NextSlotOnProc))/binary>>,
     RouteReq =
         #{
-            <<"path">> => <<"match">>,
+            <<"path">> => <<"route">>,
             <<"route-path">> => Path
         },
     Opts =
@@ -326,8 +326,17 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             _ -> RawOpts
         end,
     Self = hb_opts:get(host, host_not_specified, Opts),
+    ?event(remote_push,
+        {push_downstream_remote,
+            {target, TargetID},
+            {slot, NextSlotOnProc},
+            {origin, Origin},
+            {opts, Opts}
+        }
+    ),
     case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
-        {error, no_matching_route} ->
+        {error, no_matches} ->
+            throw({no_matching_route, {target, TargetID}, {slot, NextSlotOnProc}}),
             ?event(push,
                 {no_push_route_found,
                     {target, TargetID},
@@ -337,7 +346,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
                 Opts
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
-        {ok, #{ <<"node">> := Self }} ->
+        {ok, Self} ->
             % If we matched ourselves as the route, we can just push locally.
             ?event(push,
                 {routing_matched_self,
@@ -348,7 +357,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
                 Opts
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
-        {ok, #{ <<"node">> := Node }} ->
+        {ok, Node} ->
             ?event(push,
                 {routing_matched_remote,
                     {target, TargetID},
@@ -1010,84 +1019,143 @@ push_prompts_encoding_change() ->
 remote_routed_push_test_() ->
     {timeout, 60, fun remote_routed_push/0}.
 remote_routed_push() ->
-    W = hb:wallet(),
-    DefaultStores = hb_opts:get(store),
-    BaseOpts =
+    % Creates a network of nodes and processes with the following structure:
+    % Node 1:
+    %   - Schedules for process 1.
+    %   - Routes requests for process 2 to Node 2.
+    % Node 2:
+    %   - Schedules for process 2.
+    %
+    % Process 1:
+    %   - Has an `owner` of Node 1's wallet.
+    %   - Has both node 1 and node 2 as authorities.
+    %   - Pushes a `pong` message to process 2 on recipient of an `action: ping`
+    %     message.
+    % 
+    % Process 2:
+    %   - Has an `owner` of Node 2's wallet.
+    %   - Has both node 1 and node 2 as authorities.
+    %   - Pushes a `pong` message to process 1 on recipient of a message.
+    % 
+    % After establishing the network, we ensure that a message can be correctly
+    % pushed from user to process 1, to process 2, then back to process 1.
+    % 
+    % We start by generating the isolated wallets and stores for each node.
+    N1Wallet = hb:wallet(),
+    N1Store = [hb_test_utils:test_store()],
+    N2Wallet = ar_wallet:new(),
+    N2Store = [hb_test_utils:test_store()],
+    % Next, create the second node and process. We do this before node 1 such 
+    % that the routes of node 1 and the target of process 1's message are known
+    % when we create them.
+    N2Opts =
         #{
-            store => [hb_test_utils:test_store() | DefaultStores],
-            priv_wallet => W
+            store => N2Store,
+            priv_wallet => N2Wallet
         },
-    P1Base = dev_process:test_aos_process(BaseOpts),
-    P1 = hb_cache:ensure_all_loaded(P1Base, BaseOpts),
-    ProcID1 = hb_message:id(P1, all, BaseOpts),
-    P2 = hb_cache:ensure_all_loaded(dev_process:test_aos_process(BaseOpts), BaseOpts),
-    OptsN2 = BaseOpts,
-    N2 = hb_http_server:start_node(OptsN2),
-    RoutesP1 =
-        [
-            #{
-                <<"template">> => <<ProcID1/binary, "/.*">>,
-                <<"node">> => N2
-            }
-        ],
-    OptsN1 = BaseOpts#{ routes => RoutesP1 },
-    N1 = hb_http_server:start_node(OptsN1),
-    hb_cache:write(P1, OptsN1),
-    hb_cache:write(P2, OptsN1),
-    hb_cache:write(P1, OptsN2),
-    hb_cache:write(P2, OptsN2),
-    RouteOpts =
-        OptsN1#{
-            routes => RoutesP1,
-            push_route_downstream => true,
-            host => N1
+    N2 = hb_http_server:start_node(N2Opts),
+    % Create the second process on the second node.
+    Proc2 = dev_process:test_aos_process(N2Opts),
+    LoadedProc2 = hb_cache:ensure_all_loaded(Proc2, N2Opts),
+    Proc2ID = hb_message:id(Proc2, signed, N2Opts),
+    % Next, create the first node and process.
+    N1Opts =
+        #{
+            store => N1Store,
+            priv_wallet => N1Wallet,
+            routes =>
+                [
+                    #{
+                        <<"template">> => <<Proc2ID/binary, ".*">>,
+                        <<"node">> => N2
+                    }
+                ]
         },
-    % Sanity check that routing resolves the P1 path to N2.
-    RouteRes =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"router@1.0">>, routes => RoutesP1 },
-            #{
-                <<"path">> => <<"match">>,
-                <<"route-path">> => <<ProcID1/binary, "/push&slot=1">>
-            },
-            RouteOpts
-        ),
+    N1 = hb_http_server:start_node(N1Opts),
+    % Sanity check that routing resolves the Proc2ID path to N2 on the first node.
     ?assertMatch(
-        {ok, #{ <<"node">> := N2 }},
-        RouteRes
+        {ok, N2},
+        hb_http:get(
+            N1,
+            <<"/~router@1.0/route?route-path=", Proc2ID/binary, "/push&slot=1">>,
+            N1Opts
+        )
     ),
-    Script = ping_pong_script(0),
-    {ok, ReqP1N1} = dev_process:schedule_aos_call(P1, Script, OptsN1),
-    SlotP1N1 = hb_ao:get(<<"slot">>, ReqP1N1, OptsN1),
-    {ok, _} =
-        hb_ao:resolve(
-            P1,
-            #{ <<"path">> => <<"push">>, <<"slot">> => SlotP1N1 },
-            RouteOpts
-        ),
-    P2Script =
+    % Create the first process on the first node.
+    Proc1 = dev_process:test_aos_process(N1Opts),
+    LoadedProc1 = hb_cache:ensure_all_loaded(Proc1, N1Opts),
+    Proc1ID = hb_message:id(LoadedProc1, all, N1Opts),
+    % Write both processes to each of the nodes' caches, such that both are
+    % 'globally' available to each other.
+    hb_cache:write(LoadedProc1, N1Opts),
+    hb_cache:write(LoadedProc1, N2Opts),
+    hb_cache:write(LoadedProc2, N1Opts),
+    hb_cache:write(LoadedProc2, N2Opts),
+    ?event(debug_test,
+        {network_setup, 
+            {proc1ID, Proc1ID},
+            {proc2ID, Proc2ID},
+            {n1, N1},
+            {n2, N2}
+        }
+    ),
+    % Set the authorities of the processes to include both wallets.
+    SetAuthoritiesCommand =
         <<
-            Script/binary,
-            "Send({ Target = \"", ProcID1/binary, "\", Action = \"Ping\", Count = 1 })\n"
+            "ao.authorities = { ",
+                "\"", (hb_util:human_id(N1Wallet))/binary, "\",",
+                "\"", (hb_util:human_id(N2Wallet))/binary, "\"",
+            " }"
         >>,
-    {ok, ReqP2} = dev_process:schedule_aos_call(P2, P2Script, OptsN1),
-    SlotP2 = hb_ao:get(<<"slot">>, ReqP2, OptsN1),
-    hb_cache:write(ReqP2, OptsN1),
-    hb_cache:write(ReqP2, OptsN2),
-    {ok, ResP2N2M1} =
-        hb_ao:resolve(
-            P2,
-            #{ <<"path">> => <<"push">>, <<"slot">> => SlotP2 },
-            RouteOpts
+    {ok, SetAuthProc1} =
+        dev_process:schedule_aos_call(LoadedProc1, SetAuthoritiesCommand, N1Opts),
+    {ok, SetAuthProc2} =
+        dev_process:schedule_aos_call(LoadedProc2, SetAuthoritiesCommand, N2Opts),
+    ?event(debug_test,
+        {set_authorities, 
+            {command, SetAuthoritiesCommand},
+            {proc1_result, SetAuthProc1},
+            {proc2_result, SetAuthProc2}
+        }
+    ),
+    % Load the scripts into each process. The second process has the base
+    % reply script, and the first process has reply script with a trigger to
+    % send a message to the second process.
+    {ok, P2ScriptLoadRes} =
+        dev_process:schedule_aos_call(
+            LoadedProc2,
+            reply_script(),
+            N2Opts
         ),
-    ?event({res_p2_n2_m1, ResP2N2M1}),
+    {ok, P1ScriptLoadRes} =
+        dev_process:schedule_aos_call(
+            LoadedProc1,
+            reply_script(Proc2ID),
+            N1Opts
+        ),
+    ?event(debug_test,
+        {script_load, 
+            {proc2_result, P2ScriptLoadRes},
+            {proc1_result, P1ScriptLoadRes}
+        }
+    ),
+    % Get the slot of the message to push on process 1.
+    SlotP1 = hb_ao:get(<<"slot">>, P1ScriptLoadRes, N1Opts),
+    PushRes =
+        hb_http:post(
+            N1,
+            <<Proc1ID/binary, "/push">>,
+            #{ <<"slot">> => SlotP1 },
+            N1Opts
+        ),
+    ?event({push_res, PushRes}),
     ?assertEqual(
         {ok, 0},
-        hb_ao:resolve(P1, <<"now/at-slot">>, OptsN2)
+        hb_ao:resolve(LoadedProc2, <<"now/at-slot">>, N2Opts)
     ),
     ?assertMatch(
         {ok, Slot} when Slot > 0,
-        hb_ao:resolve(P1, <<"now/at-slot">>, OptsN1)
+        hb_ao:resolve(LoadedProc1, <<"now/at-slot">>, N1Opts)
     ).
 
 oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
@@ -1207,6 +1275,11 @@ reply_script() ->
            end
         )
         """
+    >>.
+reply_script(OtherProcessID) ->
+    <<
+        (reply_script())/binary, "\n",
+        "Send({ Target = \"", (OtherProcessID)/binary, "\", Action = \"Ping\" })\n"
     >>.
 
 message_to_legacynet_scheduler_script() ->
