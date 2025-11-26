@@ -1041,7 +1041,7 @@ remote_routed_push() ->
     % pushed from user to process 1, to process 2, then back to process 1.
     % 
     % We start by generating the isolated wallets and stores for each node.
-    N1Wallet = hb:wallet(),
+    N1Wallet = ar_wallet:new(),
     N1Store = [hb_test_utils:test_store()],
     N2Wallet = ar_wallet:new(),
     N2Store = [hb_test_utils:test_store()],
@@ -1096,7 +1096,9 @@ remote_routed_push() ->
             {proc1ID, Proc1ID},
             {proc2ID, Proc2ID},
             {n1, N1},
-            {n2, N2}
+            {n2, N2},
+            {wallet1, ar_wallet:to_address(N1Wallet)},
+            {wallet2, ar_wallet:to_address(N2Wallet)}
         }
     ),
     % Set the authorities of the processes to include both wallets.
@@ -1105,7 +1107,9 @@ remote_routed_push() ->
             "ao.authorities = { ",
                 "\"", (hb_util:human_id(N1Wallet))/binary, "\",",
                 "\"", (hb_util:human_id(N2Wallet))/binary, "\"",
-            " }"
+            " }; ",
+            "ao.addAssignable('foobar', function (msg) return true end); "
+            "ao.isAssignable = function(m) return true end"
         >>,
     {ok, SetAuthProc1} =
         dev_process:schedule_aos_call(LoadedProc1, SetAuthoritiesCommand, N1Opts),
@@ -1113,7 +1117,7 @@ remote_routed_push() ->
         dev_process:schedule_aos_call(LoadedProc2, SetAuthoritiesCommand, N2Opts),
     ?event(debug_test,
         {set_authorities, 
-            {command, SetAuthoritiesCommand},
+            {command, {string, SetAuthoritiesCommand}},
             {proc1_result, SetAuthProc1},
             {proc2_result, SetAuthProc2}
         }
@@ -1141,14 +1145,21 @@ remote_routed_push() ->
     ),
     % Get the slot of the message to push on process 1.
     SlotP1 = hb_ao:get(<<"slot">>, P1ScriptLoadRes, N1Opts),
+    ?event(debug_test, {slot_p1, SlotP1}),
     PushRes =
         hb_http:post(
             N1,
-            <<Proc1ID/binary, "/push">>,
-            #{ <<"slot">> => SlotP1 },
+            #{ 
+                <<"path">> => <<Proc1ID/binary, "/push">>,
+                <<"slot">> => SlotP1
+            },
             N1Opts
         ),
-    ?event({push_res, PushRes}),
+    ?event(debug_test, {push_res, PushRes}),
+    {ok, SchedResP1} = hb_ao:resolve(LoadedProc1, <<"schedule">>, N1Opts),
+    ?event(debug_test, {sched_res_p1, SchedResP1}),
+    {ok, SchedResP2} = hb_ao:resolve(LoadedProc2, <<"schedule">>, N2Opts),
+    ?event(debug_test, {sched_res_p2, SchedResP2}),
     ?assertEqual(
         {ok, 0},
         hb_ao:resolve(LoadedProc2, <<"now/at-slot">>, N2Opts)

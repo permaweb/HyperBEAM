@@ -1531,8 +1531,10 @@ find_target_id(Base, Req, Opts) ->
                 _ ->
                     case hb_ao:resolve(Base, <<"process">>, TempOpts) of
                         {ok, Process} ->
+                            LoadedProcess = hb_cache:read_all_commitments(Process, Opts),
+                            ?event(lookup, {loaded_process, LoadedProcess}),
                             % ID found at Base/process/id
-                            hb_message:id(Process, all, Opts);
+                            hb_message:id(LoadedProcess, all, Opts);
                         _ ->
                             % Does the message have a type of Process?
                             case hb_ao:get(<<"type">>, Base, TempOpts) of
