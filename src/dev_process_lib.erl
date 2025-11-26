@@ -11,7 +11,7 @@ process_id(Base, Req, Opts) ->
             process_id(ensure_process_key(Base, Opts), Req, Opts);
         Process ->
             Signers = hb_message:signers(Process, Opts),
-            case {hb_message:verify(Process, Opts), Signers} of
+            case {hb_message:verify(Process, all, Opts), Signers} of
                 {false, _} ->
                     ?event({process_not_verified, {process, Process}}),
                     throw({process_not_verified, Process});
