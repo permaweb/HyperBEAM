@@ -86,16 +86,48 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         {push_computing_outbox,
             {process_id, ID},
             {base_id, BaseID},
+            {process_uncommitted_id, UncommittedID},
             {slot, Slot}
         }
     ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
     {Status, Result} =
-        hb_ao:resolve(
-            {as, <<"process@1.0">>, PrimaryProcess},
-            #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-            Opts#{ hashpath => ignore }
-        ),
+        try
+            hb_ao:resolve(
+                {as, <<"process@1.0">>, PrimaryProcess},
+                    #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
+                    Opts#{ hashpath => ignore }
+                )
+        catch
+            Class:Reason:Trace ->
+                ?event(
+                    push,
+                    {push_compute_failed,
+                        {process, PrimaryProcess},
+                        {slot, Slot},
+                        {class, Class},
+                        {reason, Reason},
+                        {stack, {trace, Trace}}
+                    },
+                    Opts
+                ),
+                {error,
+                    #{
+                        <<"body">> =>
+                                <<
+                                    "Pushing slot ",
+                                    (hb_util:bin(Slot))/binary,
+                                    " failed on process `",
+                                    (hb_util:bin(ID))/binary,
+                                    "` with error: ",
+                                    (hb_util:bin(hb_format:term(Reason, Opts, 0)))
+                                        /binary
+                                >>,
+                        <<"class">> => Class,
+                        <<"reason">> => Reason
+                    }
+                }
+        end,
     % Determine if we should include the full compute result in our response.
     IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =
