@@ -71,7 +71,9 @@ drip_global(S = #{
             LastT,
             T
         ),
-    NewGlobalAcc = dev_pot_math:drip_global(GlobalAcc, ToMint, TotalWeightedUnits),
+    UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    {NewGlobalAcc, NewUndistributedMint} =
+        dev_pot_math:drip_global(GlobalAcc, ToMint + UndistributedMint, TotalWeightedUnits),
     ?event(
         {minting,
             {to_mint, ToMint},
@@ -82,7 +84,8 @@ drip_global(S = #{
     S#{
         <<"accumulator">> => NewGlobalAcc,
         <<"last-drip">> => T,
-        <<"minted">> => AlreadyMinted + ToMint
+        <<"minted">> => AlreadyMinted + ToMint,
+        <<"undistributed-mint">> => NewUndistributedMint
     }.
 
 %% @doc Drip the state of a specific resource in the pot.
@@ -168,91 +171,14 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
 
 %% @doc Deposit a quantity of a resource for a given address.
 deposit(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
-    % Drip the global state and the resource, then extract necessary components.
-    GlobalDrippedS = drip_global(S0, Opts),
-    DrippedS = #{
-        <<"balances">> := Balances,
-        <<"resources">> := Resources
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS),
-    BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-    NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
-    ResourceAcc =
-        hb_ao:get(
-            <<ResourceID/binary, "/accumulator">>,
-            Resources,
-            0,
-            Opts
-        ),
-    NewResources =
-        hb_ao:set(
-            Resources,
-            #{
-                ResourceID =>
-                    #{
-                        <<"total-deposits">> =>
-                            Amount +
-                                hb_ao:get(
-                                    <<ResourceID/binary, "/total-deposits">>,
-                                    Resources,
-                                    0,
-                                    Opts
-                                ),
-                        <<"deposits">> =>
-                            #{
-                                Addr =>
-                                    #{
-                                        <<"quantity">> => ExistingDeposit + Amount,
-                                        <<"last-resource-accumulator">> =>
-                                            ResourceAcc
-                                    }
-                            }
-                    }
-            },
-            Opts
-        ),
-    ?event({resources_after_modify_deposit, NewResources}),
-    WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
-    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
-    UpdatedDepositS =
-        DrippedS#{
-            <<"resources">> => NewResources,
-            <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
-            <<"balances">> => Balances#{ Addr => NewBalance }
-        },
-    update_deposit_index(
-        Addr,
-        ResourceID,
-        get_deposit(Addr, ResourceID, UpdatedDepositS),
-        UpdatedDepositS,
-        Opts
-    ).
+    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
-    LiquidatedDeposit = get_deposit(Addr, ResourceID, S1),
-    S2 = hb_ao:set(
-        S1,
-        <<
-            "/resources/",
-            ResourceID/binary,
-            "/deposits/",
-            Addr/binary,
-            "/quantity"
-        >>,
-        LiquidatedDeposit - Amount,
-        Opts
-    ),
-    update_deposit_index(
-        Addr,
-        ResourceID,
-        get_deposit(Addr, ResourceID, S2),
-        S2,
-        Opts
-    ).
+    modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
@@ -486,6 +412,70 @@ send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
     ).
 
 %%% Helpers.
+
+%% @doc Used by deposit() and withdraw() to update the state of the world. Note that
+%% the domain of deposit() and withdraw() are the natural numbers, but the domain of
+%% modify_deposit_state() includes negative numbers as well.
+modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
+    % Drip the global state and the resource, then extract necessary components.
+    GlobalDrippedS = drip_global(S0, Opts),
+    DrippedS = #{
+        <<"balances">> := Balances,
+        <<"resources">> := Resources
+    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS),
+    BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
+    NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+    ResourceAcc =
+        hb_ao:get(
+            <<ResourceID/binary, "/accumulator">>,
+            Resources,
+            0,
+            Opts
+        ),
+    NewResources =
+        hb_ao:set(
+            Resources,
+            #{
+                ResourceID =>
+                    #{
+                        <<"total-deposits">> =>
+                            Amount +
+                                hb_ao:get(
+                                    <<ResourceID/binary, "/total-deposits">>,
+                                    Resources,
+                                    0,
+                                    Opts
+                                ),
+                        <<"deposits">> =>
+                            #{
+                                Addr =>
+                                    #{
+                                        <<"quantity">> => ExistingDeposit + Amount,
+                                        <<"last-resource-accumulator">> =>
+                                            ResourceAcc
+                                    }
+                            }
+                    }
+            },
+            Opts
+        ),
+    ?event({resources_after_modify_deposit, NewResources}),
+    WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
+    UpdatedDepositS =
+        DrippedS#{
+            <<"resources">> => NewResources,
+            <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
+            <<"balances">> => Balances#{ Addr => NewBalance }
+        },
+    update_deposit_index(
+        Addr,
+        ResourceID,
+        get_deposit(Addr, ResourceID, UpdatedDepositS),
+        UpdatedDepositS,
+        Opts
+    ).
 
 %% @doc Get the deposit quantity for a specific address in a specific resource.
 get_deposit(Addr, ResourceID, S) ->

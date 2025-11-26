@@ -1,4 +1,4 @@
-%%% @doc Math functions for the dev_pot module. Expresses a model as follows:
+%% @doc Math functions for the dev_pot module. Expresses a model as follows:
 %%% ```
 %%% Initialization:
 %%%   Global:     Acc = 0,
@@ -49,8 +49,12 @@ bignum_exp(_, 0) -> 1;
 bignum_exp(X, 1) -> X;
 bignum_exp(X, Y) -> X * bignum_exp(X, Y - 1).
 
+drip_global(Acc, ToMint, TotalWeightedUnits) when TotalWeightedUnits =:= 0 ->
+    {Acc, ToMint};
 drip_global(Acc, ToMint, TotalWeightedUnits) ->
-    Acc + (ToMint / TotalWeightedUnits).
+    NewAcc = Acc + (ToMint div TotalWeightedUnits),
+    UndistributedMint = ToMint rem TotalWeightedUnits,
+    {NewAcc, UndistributedMint}.
 
 drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
     ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).
