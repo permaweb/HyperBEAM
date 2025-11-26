@@ -1195,12 +1195,18 @@ remote_routed_push() ->
     {ok, SchedResP2} = hb_ao:resolve(LoadedProc2, <<"schedule">>, N2Opts),
     ?event(debug_test, {sched_res_p2, SchedResP2}),
     ?assertEqual(
-        {ok, 0},
-        hb_ao:resolve(LoadedProc2, <<"now/at-slot">>, N2Opts)
+        {error, not_found},
+        hb_ao:resolve_many(
+            [
+                LoadedProc2,
+                #{ <<"path">> => <<"compute">>, <<"init">> => <<"stop">> }
+            ],
+            N1Opts
+        )
     ),
     ?assertMatch(
         {ok, Slot} when Slot > 0,
-        hb_ao:resolve(LoadedProc1, <<"now/at-slot">>, N1Opts)
+        hb_ao:resolve(LoadedProc2, <<"now/at-slot">>, N2Opts)
     ).
 
 oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
