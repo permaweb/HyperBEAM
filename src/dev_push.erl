@@ -403,13 +403,16 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
 
 %% @doc Push a resulting message recursively, executing the action on this node.
 push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
-    {ok, TargetBase} = hb_cache:read(TargetID, Opts),
-    TargetAsProcess = dev_process_lib:ensure_process_key(TargetBase, Opts),
-    RecvdID = hb_message:id(TargetBase, all, Opts),
-    ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
+    ?event(push,
+        {push_downstream_local,
+            {target, TargetID},
+            {slot, NextSlotOnProc},
+            {origin, Origin}
+        }
+    ),
     % Push the message downstream. We decrease the result-depth.
     hb_ao:resolve(
-        {as, <<"process@1.0">>, TargetAsProcess},
+        {as, <<"process@1.0">>, TargetID},
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => NextSlotOnProc,
