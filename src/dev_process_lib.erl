@@ -8,13 +8,23 @@
 process_id(Base, Req, Opts) ->
     case hb_ao:get(<<"process">>, Base, Opts#{ hashpath => ignore }) of
         not_found ->
-            process_id(dev_process_lib:ensure_process_key(Base, Opts), Req, Opts);
+            process_id(ensure_process_key(Base, Opts), Req, Opts);
         Process ->
-            hb_message:id(
-                Process,
-                hb_util:atom(maps:get(<<"commitments">>, Req, <<"all">>)),
-                Opts
-            )
+            Signers = hb_message:signers(Process, Opts),
+            case {hb_message:verify(Process, all, Opts), Signers} of
+                {false, _} ->
+                    ?event({process_not_verified, {process, Process}}),
+                    throw({process_not_verified, Process});
+                {true, []} ->
+                    ?event({process_has_no_signers, {process, Process}}),
+                    throw({process_has_no_signers, Process});
+                {true, _} ->
+                    hb_message:id(
+                        Process,
+                        hb_util:atom(maps:get(<<"commitments">>, Req, <<"signed">>)),
+                        Opts
+                    )
+            end
     end.
 
 %% @doc Run a message against Base, with the device being swapped out for
@@ -96,31 +106,11 @@ ensure_process_key(Base, Opts) ->
             % If the message has lost its signers, we need to re-read it from
             % the cache. This can happen if the message was 'cast' to a different
             % device, leading the signers to be unset.
-            ProcessMsg =
-                case hb_message:signers(Base, Opts) of
-                    [] ->
-                        ?event({process_key_not_found_no_signers, {base, Base}}),
-                        case hb_cache:read(hb_message:id(Base, all, Opts), Opts) of
-                            {ok, Proc} -> Proc;
-                            not_found ->
-                                % Fallback to the original message if we cannot
-                                % read it from the cache.
-                                Base
-                        end;
-                    Signers ->
-                        ?event(
-                            {process_key_not_found_but_signers_present,
-                                {signers, Signers},
-                                {base, Base}
-                            }
-                        ),
-                        Base
-                end,
-            {ok, Committed} = hb_message:with_only_committed(ProcessMsg, Opts),
+            {ok, Committed} = hb_message:with_only_committed(Base, Opts),
             ?event(
                 {process_key_before_set,
                     {base, Base},
-                    {process_msg, {explicit, ProcessMsg}},
+                    {process_msg, Base},
                     {committed, Committed}
                 }
             ),
@@ -133,7 +123,7 @@ ensure_process_key(Base, Opts) ->
             ?event(
                 {set_process_key_res,
                     {base, Base},
-                    {process_msg, ProcessMsg},
+                    {process_msg, Base},
                     {res, Res}
                 }
             ),

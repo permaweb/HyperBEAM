@@ -227,9 +227,15 @@ compute(Base, Req, Opts) ->
         ),
     case TargetSlot of
         not_found ->
-            % The slot is not set, so we need to serve the latest known state.
+            % The slot is not set, so we need to serve the latest known state
+            % unless the `init' key is set to a value aside from `now'.
             % We do this by setting the `process_now_from_cache' option to `true'.
-            now(Base, Req, Opts#{ process_now_from_cache => true });
+            case hb_maps:get(<<"init">>, Req, <<"now">>, Opts) of
+                <<"now">> ->
+                    now(Base, Req, Opts#{ process_now_from_cache => true });
+                _ ->
+                    {error, not_found}
+            end;
         RawSlot ->
             Slot = hb_util:int(RawSlot),
             case dev_process_cache:read(ProcID, Slot, Opts) of
