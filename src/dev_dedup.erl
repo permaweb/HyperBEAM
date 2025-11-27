@@ -88,7 +88,7 @@ handle(Key, M1, M2, Opts) ->
         {true, _} ->
             % If this is the first pass, we need to check if the subject has
             % already been seen.
-            SubjectID = hb_message:id(Subject, all),
+            SubjectID = hb_message:id(Subject, signed, Opts),
             ?event({dedup_checking, {existing, DedupList}}),
             case lists:member(SubjectID, DedupList) of
                 true ->

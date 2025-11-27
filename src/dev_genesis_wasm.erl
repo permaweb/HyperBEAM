@@ -72,32 +72,39 @@ delegate_request(Msg, Req, Opts) ->
 
 
 %% @doc Handle normal compute execution with state persistence (GET method).
-do_compute(Msg, Req, Opts) ->
-    % Resolve the `delegated-compute@1.0' device.
-    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
-        {ok, Res} ->
-            PatchResult = 
-                hb_ao:resolve(
-                    Res,
-                    {
-                        as,
-                        <<"patch@1.0">>,
-                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
-                    },
-                    Opts
-                ),
-            % Resolve the `patch@1.0' device.
-            case PatchResult of 
-                {ok, Msg4} ->
-                    % Return the patched message.
-                    {ok, Msg4};
-                {error, Error} ->
-                    % Return the error.
-                    {error, Error}
-            end;
+do_compute(State, Req, Opts) ->
+    maybe
+        {ok, State2} ?=
+            hb_ao:resolve(
+                State,
+                {as, <<"dedup@1.0">>, Req},
+                Opts
+            ),
+        {ok, State3} ?=
+            hb_ao:resolve(
+                State2,
+                {as, <<"delegated-compute@1.0">>, Req},
+                Opts
+            ),
+        {ok, State4} ?=
+            hb_ao:resolve(
+                State3,
+                {
+                    as,
+                    <<"patch@1.0">>,
+                    Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                },
+                Opts
+            ),
+        {ok, State4}
+    else
         {error, Error} ->
-            % Return the error.
-            {error, Error}
+            % Issue an event and return the error.
+            ?event({genesis_wasm_compute_error, Error}),
+            {error, Error};
+        {skip, ExitState} ->
+            ?event({genesis_wasm_skipping_duplicate, Req}),
+            {skip, ExitState}
     end.
 
 %% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
