@@ -1015,7 +1015,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
-    case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
+    WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
         undefined -> NormalBody;
         P2PPort ->
             % Calculate the peer address from the request. We honor the 
@@ -1036,6 +1036,11 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
                 <<"ao-peer">> => Peer
             }
+    end,
+    % Add device from PrimMsg if present
+    case maps:get(<<"device">>, PrimMsg, not_found) of
+        not_found -> WithPeer;
+        Device -> WithPeer#{<<"device">> => Device}
     end.
 
 %%% Tests

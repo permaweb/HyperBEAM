@@ -1,4 +1,4 @@
-%%% @doc Math functions for the dev_pot module. Expresses a model as follows:
+%% @doc Math functions for the dev_pot module. Expresses a model as follows:
 %%% ```
 %%% Initialization:
 %%%   Global:     Acc = 0,
@@ -34,16 +34,27 @@
 %%%               User.balance.
 %%% '''
 -module(dev_pot_math).
--export([minted_between/5]).
+-export([minted_between/6]).
 -export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
+-export([bignum_exp/2]).
 
-minted_between(Minted, Max, Proportion, LastT, T) ->
+minted_between(Minted, Max, PropN, PropD, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
-    Remaining * (1 - math:pow(1 - Proportion, Steps)).
+    NComplementOverTime = bignum_exp(PropD - PropN, Steps),
+    DOverTime = bignum_exp(PropD, Steps),
+    (Remaining * (DOverTime - NComplementOverTime)) div DOverTime.
 
+bignum_exp(_, 0) -> 1;
+bignum_exp(X, 1) -> X;
+bignum_exp(X, Y) -> X * bignum_exp(X, Y - 1).
+
+drip_global(Acc, ToMint, TotalWeightedUnits) when TotalWeightedUnits =:= 0 ->
+    {Acc, ToMint};
 drip_global(Acc, ToMint, TotalWeightedUnits) ->
-    Acc + (ToMint / TotalWeightedUnits).
+    NewAcc = Acc + (ToMint div TotalWeightedUnits),
+    UndistributedMint = ToMint rem TotalWeightedUnits,
+    {NewAcc, UndistributedMint}.
 
 drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
     ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).

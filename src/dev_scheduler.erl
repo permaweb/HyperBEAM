@@ -203,7 +203,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
 find_next_assignment(_Base, _Req, Schedule = [_Next|_], _LastSlot, _Opts) ->
     {ok, Schedule, undefined};
 find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
-    ProcID = dev_process:process_id(Base, Req, Opts),
+    ProcID = dev_process_lib:process_id(Base, Req, Opts),
     LocalCacheRes =
         case hb_util:atom(hb_opts:get(scheduler_ignore_local_cache, false, Opts)) of
             true -> not_found;
@@ -890,8 +890,8 @@ find_remote_scheduler(ProcID, [Scheduler | Rest], Opts) ->
     case find_remote_scheduler(ProcID, Rest, Opts) of
         {error, not_found} ->
             find_remote_scheduler(ProcID, Scheduler, Opts);
-        {ok, Redirect} ->
-            {ok, Redirect}
+        {redirect, Redirect} ->
+            {redirect, Redirect}
     end;
 find_remote_scheduler(ProcID, Scheduler, Opts) ->
     % Parse the scheduler location to see if it has a hint. If there is a hint,
@@ -1484,6 +1484,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                                 hb_json:decode(
                                     hb_ao:get(<<"body">>, AssignmentRes, Opts)
                                 ),
+                            ?event({assignment_json, AssignmentJSON}),
                             Assignment =
                                 dev_scheduler_formats:aos2_to_assignment(
                                     AssignmentJSON,

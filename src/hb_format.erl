@@ -856,6 +856,10 @@ message(Item, Opts, Indent) ->
 %%% Utility functions.
 
 %% @doc Return a short ID for the different types of IDs used in AO-Core.
+short_id(<<"http://", _/binary>> = Bin) ->
+    Bin;
+short_id(<<"https://", _/binary>> = Bin) ->
+    Bin;
 short_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     short_id(hb_util:human_id(Bin));
 short_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
