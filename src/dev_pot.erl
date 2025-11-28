@@ -222,10 +222,22 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             {amount, Amount}
         }
     ),
-    ExistingDeposit = get_deposit(FromAddr, ResourceID, S),
-    S0 =
+    GlobalDrippedS = drip_global(S, Opts),
+    DrippedS = #{
+        <<"balances">> := Balances
+    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
+    RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
+    S0 = DrippedS#{
+      <<"balance">> => Balances#{
+          FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
+          ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
+      }
+    },
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S),
+    S1 =
         hb_ao:set(
-            S,
+            S0,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -233,7 +245,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                 FromAddr/binary,
                 "/quantity"
             >>,
-            ExistingDeposit - Amount,
+            DelegatorDeposit - Amount,
             Opts
         ),
     ExistingDelegation =
@@ -246,13 +258,13 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                 "/delegations/",
                 ToAddr/binary
             >>,
-            S0,
+            S1,
             0,
             Opts
         ),
-    S1 =
+    S2 =
         hb_ao:set(
-            S0,
+            S1,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -265,9 +277,9 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             Opts
         ),
     RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
-    S2 =
+    S3 =
         hb_ao:set(
-            S1,
+            S2,
             <<
                 "/resources/", 
                 ResourceID/binary,
@@ -278,12 +290,24 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             RecipientDeposit + Amount,
             Opts
         ),
-    send_delegation_notice(ToAddr, ResourceID, Amount, S2, Opts).
+    send_delegation_notice(ToAddr, ResourceID, Amount, S3, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
-    S0 = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
+    Liquidated = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
+    GlobalDrippedS = drip_global(Liquidated, Opts),
+    DrippedS = #{
+        <<"balances">> := Balances
+    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
+    RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
+    S0 = DrippedS#{
+      <<"balance">> => Balances#{
+          FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
+          ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
+      }
+    },
     NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S0),
     S1 =
         hb_ao:set(
