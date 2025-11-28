@@ -85,7 +85,14 @@ do_compute(State, Req, Opts) ->
                 {as, <<"dedup@1.0">>, Req},
                 Opts
             ),
-        ?event(debug_test, {do_compute, dedup_passed}),
+        ?event(dedup_short,
+            {continue,
+                {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
+                {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
+                {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)},
+                {input, hb_ao:get(<<"body/data">>, Req, no_input, Opts)}
+            }
+        ),
         {ok, State3} ?=
             hb_ao:resolve(
                 State2,
@@ -102,6 +109,9 @@ do_compute(State, Req, Opts) ->
                 },
                 Opts
             ),
+        ?event(dedup_short,
+            {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
+        ),
         ?event(debug_test, {do_compute, patched_message}),
         {ok, State4}
     else
@@ -109,9 +119,31 @@ do_compute(State, Req, Opts) ->
             % Issue an event and return the error.
             ?event({genesis_wasm_compute_error, Error}),
             {error, Error};
+        {skip, DoubleSkip = #{ <<"skip">> := true }} ->
+            ?event(dedup_short,
+                {dedup_error,
+                    {cause, double_skip},
+                    {skip_request, DoubleSkip}
+                }
+            ),
+            {error, State};
         {skip, ExitState} ->
-            ?event(debug_test, {genesis_wasm_skipping_duplicate, Req}),
-            {skip, ExitState}
+            Req2 =
+                #{
+                    <<"path">> => hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
+                    <<"slot">> => hb_maps:get(<<"slot">>, Req, -1, Opts),
+                    <<"skip">> => true
+                },
+            ?event(dedup_short,
+                {skip,
+                    {cause, dedup},
+                    {action, run_no_op},
+                    {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
+                    {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
+                    {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)}
+                }
+            ),
+            do_compute(ExitState, Req2, Opts)
     end.
 
 %% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
