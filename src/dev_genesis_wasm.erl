@@ -42,8 +42,12 @@ compute(Msg, Req, Opts) ->
                     },
                     Opts
                 ),
+            ?event({genesis_wasm_patched_message, Msg4}),
             % Return the patched message.
             {ok, Msg4};
+        {skip, Res} ->
+            ?event({genesis_wasm_skipping_duplicate, {req, Req}, {res, Res}, {msg, Msg}}),
+            {ok, Msg};
         {error, Error} ->
             % Return the error.
             {error, Error}
@@ -73,6 +77,7 @@ delegate_request(Msg, Req, Opts) ->
 
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(State, Req, Opts) ->
+    ?event(debug_test, {do_compute, {state, State}, {req, Req}}),
     maybe
         {ok, State2} ?=
             hb_ao:resolve(
@@ -80,6 +85,7 @@ do_compute(State, Req, Opts) ->
                 {as, <<"dedup@1.0">>, Req},
                 Opts
             ),
+        ?event(debug_test, {do_compute, dedup_passed}),
         {ok, State3} ?=
             hb_ao:resolve(
                 State2,
@@ -96,6 +102,7 @@ do_compute(State, Req, Opts) ->
                 },
                 Opts
             ),
+        ?event(debug_test, {do_compute, patched_message}),
         {ok, State4}
     else
         {error, Error} ->
@@ -103,7 +110,7 @@ do_compute(State, Req, Opts) ->
             ?event({genesis_wasm_compute_error, Error}),
             {error, Error};
         {skip, ExitState} ->
-            ?event({genesis_wasm_skipping_duplicate, Req}),
+            ?event(debug_test, {genesis_wasm_skipping_duplicate, Req}),
             {skip, ExitState}
     end.
 
@@ -703,6 +710,85 @@ schedule_aos_call(Base, Code, Action, Opts) ->
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req).
 
+dedup_test() ->
+    application:ensure_all_started(hb),
+    Opts = #{
+        priv_wallet => hb:wallet(),
+        cache_control => <<"always">>,
+        store => hb_opts:get(store)
+    },
+    Base = test_genesis_wasm_process(),
+    hb_cache:write(Base, Opts),
+    ProcID = hb_message:id(Base, all),
+    {ok, _SchedInit} =
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            Opts
+        ),
+    schedule_aos_call(Base, <<"Number = 1">>),
+    % Manually double schedule the same message base
+    MsgBase = 
+        hb_message:commit(
+            #{
+                <<"action">> => <<"Eval">>,
+                <<"data">> => <<"Number = Number + 1; return Number">>,
+                <<"target">> => ProcID,
+                <<"timestamp">> => os:system_time(millisecond)
+            },
+            Opts
+        ),
+    UncommittedBase = hb_message:uncommitted(MsgBase),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        UncommittedBase#{
+                            <<"type">> => <<"Message">>,
+                            <<"test-label">> => <<"TEST MSG">>
+                        },
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    % Schedule the message twice
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
+    % Ensure the message is scheduled twice
+    {ok, SchedulerRes} =
+        hb_ao:resolve(
+            Base, 
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"schedule">>
+            },
+            Opts
+        ),
+    ?event(debug_test, {dedup_test, {scheduler_res, SchedulerRes}}),
+    % Assert successful double schedule
+    ?assertEqual(
+        hb_private:reset(
+            hb_ao:get(<<"assignments/2/body/commitments">>, SchedulerRes)
+        ),
+        hb_private:reset(
+            hb_ao:get(<<"assignments/3/body/commitments">>, SchedulerRes)
+        )
+    ),
+    schedule_aos_call(Base, <<"return Number">>),
+    % Compute with dedup - initialize number to 1, then two increments,
+    % but the second increment should be skipped for dedup - expected result is 2
+    {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    Results = hb_ao:get(<<"results">>, Result),
+    ?event(debug_test, {results, Results}),
+    ok.
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
 spawn_and_execute_slot() ->
@@ -827,13 +913,13 @@ send_message_between_genesis_wasm_processes() ->
     {ok, _SchedInitReceiver} =
         hb_ao:resolve(
             MsgReceiver,
-        #{
-            <<"method">> => <<"POST">>,
-            <<"path">> => <<"schedule">>,
-            <<"body">> => MsgReceiver
-        },
-        Opts
-    ),
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => MsgReceiver
+            },
+            Opts
+        ),
     schedule_aos_call(MsgReceiver, <<"Number = 10">>),
     schedule_aos_call(MsgReceiver, <<"
     Handlers.add('foo', function(msg)
