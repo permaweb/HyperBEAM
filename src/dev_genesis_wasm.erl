@@ -129,11 +129,22 @@ do_compute(State, Req, Opts) ->
             {error, State};
         {skip, ExitState} ->
             Req2 =
-                #{
-                    <<"path">> => hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
-                    <<"slot">> => hb_maps:get(<<"slot">>, Req, -1, Opts),
-                    <<"skip">> => true
-                },
+                hb_message:commit(
+                    (hb_message:remove_all_commitments(Req, Opts))
+                    #{
+                        <<"path">> => 
+                            hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
+                        <<"slot">> =>
+                            hb_maps:get(<<"slot">>, Req, -1, Opts),
+                        <<"skip">> => true,
+                        <<"body">> => 
+                            hb_message:commit(#{
+                                <<"data">> => <<"Dedup no op">>,
+                                <<"timestamp">> => os:system_time(millisecond)
+                            },
+                            Opts
+                        )
+                }, Opts),
             ?event(dedup_short,
                 {skip,
                     {cause, dedup},
@@ -763,7 +774,7 @@ dedup_test() ->
             Opts
         ),
     schedule_aos_call(Base, <<"Number = 1">>),
-    % Manually double schedule the same message base
+    % Manually triple schedule the same message base
     MsgBase = 
         hb_message:commit(
             #{
@@ -791,7 +802,8 @@ dedup_test() ->
             },
             Opts
         ),
-    % Schedule the message twice
+    % Schedule the message thrice
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
     {ok, _} = hb_ao:resolve(Base, Req, Opts),
     {ok, _} = hb_ao:resolve(Base, Req, Opts),
     % Ensure the message is scheduled twice
@@ -814,13 +826,22 @@ dedup_test() ->
             hb_ao:get(<<"assignments/3/body/commitments">>, SchedulerRes)
         )
     ),
+    ?assertEqual(
+        hb_private:reset(
+            hb_ao:get(<<"assignments/3/body/commitments">>, SchedulerRes)
+        ),
+        hb_private:reset(
+            hb_ao:get(<<"assignments/4/body/commitments">>, SchedulerRes)
+        )
+    ),
+    % Schedule twice to avoid nonce warning
+    schedule_aos_call(Base, <<"return Number">>),
     schedule_aos_call(Base, <<"return Number">>),
     % Compute with dedup - initialize number to 1, then two increments,
     % but the second increment should be skipped for dedup - expected result is 2
     {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
-    Results = hb_ao:get(<<"results">>, Result),
-    ?event(debug_test, {results, Results}),
-    ok.
+    Data = hb_ao:get(<<"results/data">>, Result),
+    ?assertEqual(<<"2">>, Data).
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
 spawn_and_execute_slot() ->
