@@ -859,15 +859,20 @@ change_weight_with_deposits_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts =#{},
     % Changing weight should affect future yield distribution
-    S0 = pot_state(Alice, ResourceOxygen, 10),
+    % Use larger mint cap to ensure enough tokens are minted
+    S0 = pot_state(Alice, ResourceOxygen, 10, 1, 1000, {1, 2}),
     S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
-    BalanceT1 = dev_pot:balance(Alice, S1),
+    % Claim yield by performing a deposit
+    S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
+    BalanceT1 = dev_pot:balance(Alice, S1_claim),
     % Change weight from 1 to 10
-    S2 = dev_pot:set_weight(ResourceOxygen, 10, S1, Opts),
-    ?assertEqual(100, hb_maps:get(<<"total-weighted-units">>, S2, 0)),
+    S2 = dev_pot:set_weight(ResourceOxygen, 10, S1_claim, Opts),
+    ?assertEqual(110, hb_maps:get(<<"total-weighted-units">>, S2, 0)),
     S3 = dev_pot:drip(S2, #{<<"t">> => 2}, Opts),
-    BalanceT2 = dev_pot:balance(Alice, S3),
-    % Yield should still accrue (possibly at different rate)
+    % Claim yield by performing another deposit
+    S3_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S3, Opts),
+    BalanceT2 = dev_pot:balance(Alice, S3_claim),
+    % Yield should still accrue
     ?assert(BalanceT2 > BalanceT1).
 
 change_weight_to_negative_test() ->
