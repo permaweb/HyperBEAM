@@ -141,8 +141,13 @@ latest(ProcID, RawOpts) ->
             ),
             {
                 AssignmentNum,
-                hb_ao:get(
-                    <<"hash-chain">>, Assignment, #{ hashpath => ignore })
+                hb_ao:get_first(
+                    [
+                        {Assignment, <<"base-hashpath">>},
+                        {Assignment, <<"hash-chain">>}
+                    ],
+                    #{ hashpath => ignore }
+                )
             }
     end.
 

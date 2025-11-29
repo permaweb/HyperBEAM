@@ -39,6 +39,8 @@ test_suite() ->
             fun as_path_test/1},
         {continue_as, "continue as",
             fun continue_as_test/1},
+        {as_commitments, "as commitment normalization",
+            fun as_commitments_test/1},
         {multiple_as_subresolutions, "multiple as subresolutions",
             fun multiple_as_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
@@ -186,6 +188,7 @@ test_opts() ->
                 device_excludes,
                 deep_set_with_device,
                 as,
+                as_commitments,
                 step_hook
             ]
         }
@@ -822,6 +825,37 @@ continue_as_test(Opts) ->
                 #{ <<"path">> => <<"test_key">> }
             ],
             Opts
+        )
+    ).
+
+as_commitments_test(RawOpts) ->
+    % Test that attempting to cast a message as a device which it already is
+    % does not lose its commitments.
+    OptsWithWallet = RawOpts#{ priv_wallet => hb:wallet() },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"test-key">> => <<"test-value">>
+            },
+            OptsWithWallet
+        ),
+    InitialComms = hb_ao:get(<<"commitments">>, Msg, OptsWithWallet),
+    {ok, ResolvedMsg} =
+        hb_ao:resolve(
+            {as, <<"test-device@1.0">>, Msg},
+            <<"commitments">>,
+            OptsWithWallet
+        ),
+    ?assertEqual(InitialComms, ResolvedMsg),
+    ?assertEqual(
+        {ok, []},
+        hb_ao:resolve_many(
+            [
+                {as, <<"message@1.0">>, Msg},
+                <<"committers">>
+            ],
+            OptsWithWallet
         )
     ).
 

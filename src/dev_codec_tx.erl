@@ -16,6 +16,7 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    ?event({committing, {msg, Msg}, {req, Req}}),
     % Convert the given message to an L1 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
@@ -123,6 +124,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
+    ?event({to, {raw_tabm, RawTABM}, {is_bundle, IsBundle}, {maybe_bundle, MaybeBundle}, {req, Req}, {opts, Opts}}),
     % Calculate and normalize the `data', if applicable.
     Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
     ?event({calculated_data, Data}),
@@ -143,6 +145,18 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     enforce_valid_tx(FinalTX),
     ?event({to_result, FinalTX}),
     {ok, FinalTX};
+%% @doc List of ans104 items is bundled into a single L1 transaction.
+to(RawList, Req, Opts) when is_list(RawList) ->
+    List = lists:map(
+        fun(Item) -> hb_util:ok(dev_codec_ans104:to(Item, Req, Opts)) end,
+        RawList),
+    TX = #tx{
+        format = 2,
+        data = List
+    },
+    Bundle = dev_arweave_common:normalize(TX),
+    ?event({to_result, Bundle}),
+    {ok, Bundle};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
     
@@ -1043,4 +1057,63 @@ test_bundle_uncommitted(Encode, Decode) ->
         bundled ->
             ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label)
     end,
+    ok.
+
+bundle_list_test() ->
+    % Load an arweave.js-created dataitem
+    Item = ar_bundles:deserialize(
+        hb_util:ok(
+            file:read_file(<<"test/arbundles.js/ans104-item.bundle">>)
+        )
+    ),
+    ?event(debug_test, {item, Item}),
+    ?assert(ar_bundles:verify_item(Item)),
+    % Load an arweave.js-created list bundle
+    {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-list-bundle.bundle">>),
+    BundledItem = ar_bundles:sign_item(#tx{ 
+        format = ans104,
+        data = Bin,
+        data_size = byte_size(Bin),
+        tags = [
+            {<<"Bundle-Format">>, <<"binary">>},
+            {<<"Bundle-Version">>, <<"2.0.0">>}
+        ]
+    }, hb:wallet()),
+    ?event(debug_test, {bundled_item, BundledItem}),
+    ?assert(ar_bundles:verify_item(BundledItem)),
+    % Convert both dataitems to structured messages
+    ItemStructured = hb_message:convert(Item,
+        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        #{}),
+    ?event(debug_test, {item_structured, ItemStructured}),
+    ?assert(hb_message:verify(ItemStructured, all, #{})),
+    BundledItemStructured = hb_message:convert(BundledItem,
+        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        #{}),
+    ?event(debug_test, {bundled_item_structured, BundledItemStructured}),
+    ?assert(hb_message:verify(BundledItemStructured, all, #{})),
+    % Use dev_codec_tx:to(List) to create a L1 TX bundle. We use this
+    % interface to mimic the logic used in dev_bundler
+    {ok, BundledTX} = dev_codec_tx:to(
+        [ItemStructured, BundledItemStructured], #{}, #{}),
+    SignedTX = ar_tx:sign(BundledTX, hb:wallet()),
+    ?event(debug_test, {signed_tx, SignedTX}),
+    ?assert(ar_tx:verify(SignedTX)),
+    % Convert the signed TX to a structured message
+    StructuredTX = hb_message:convert(SignedTX,
+        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+        #{}),
+    ?event(debug_test, {structured_tx, StructuredTX}),
+    ?assert(hb_message:verify(StructuredTX, all, #{})),
+    % Convert back to an L1 TX
+    SignedTXRoundtrip = hb_message:convert(StructuredTX,
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+        #{}),
+    ?event(debug_test, {signed_tx_roundtrip, SignedTXRoundtrip}),
+    ?assert(ar_tx:verify(SignedTXRoundtrip)),
+    ?assertEqual(SignedTX, SignedTXRoundtrip),
     ok.

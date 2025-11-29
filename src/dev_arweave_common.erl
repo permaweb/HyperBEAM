@@ -96,9 +96,6 @@ normalize(TX = #tx{data = Bin}) when is_binary(Bin) ->
             normalize_data_size(
                 reset_owner_address(
                     TX))));
-normalize(Bundle) when is_list(Bundle); is_map(Bundle) ->
-    ?event({normalize, bundle}),
-    normalize(#tx{ data = Bundle });
 normalize(TX) ->
     ?event({normalize, TX}),
     {ItemType, SerializedTX} = serialize_data(TX, true),
@@ -106,10 +103,6 @@ normalize(TX) ->
     NormalizedTX = maybe_add_bundle_tags(ItemType, SerializedTX),
     ?event({normalized_tx, NormalizedTX}),
     normalize(NormalizedTX).
-
-%%% XXX TODO: look at these two is_signed checks - might need to do
-%%% has_manifest or similar
-%%% and perhaps it's codec:to where we can check for has_manifest?
 
 serialize_data(TX) -> serialize_data(TX, false).
 serialize_data(Item = #tx{data = Data}, _) when is_binary(Data) ->
@@ -125,7 +118,7 @@ serialize_data(Item = #tx{data = Data}, NormalizeChildren) ->
                 {list, convert_bundle_map_to_list(Data)};
             {_, true, false} ->
                 % Unsigned transaction with list data
-                {list, convert_bundle_list_to_map(Data)};
+                {list, Data};
             {_, false, true} ->
                 {map, Data};
             _ ->

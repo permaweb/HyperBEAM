@@ -302,7 +302,7 @@ import(Base, Req, Opts) ->
                 not_found -> {error, not_found}
             end;
         error ->
-            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
+            ProcID = dev_process_lib:process_id(ProcMsg, #{}, Opts),
             case latest_checkpoint(ProcID, Opts) of
                 {ok, CheckpointMessage} ->
                     do_import(ProcMsg, CheckpointMessage, Opts);
@@ -377,13 +377,13 @@ do_import(Proc, CheckpointMessage, Opts) ->
             ) orelse untrusted,
         true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
         CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
-        ProcID = dev_process:process_id(Proc, #{}, Opts),
+        ProcID = dev_process_lib:process_id(Proc, #{}, Opts),
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
         % Normalize the checkpoint message into a process state message with 
         % a state snapshot.
         {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, CheckpointMessage, Opts),
         Slot = hb_util:int(SlotBin),
-        InitializedProc = dev_process:ensure_process_key(Proc, Opts),
+        InitializedProc = dev_process_lib:ensure_process_key(Proc, Opts),
         WithSnapshot =
             InitializedProc#{
                 <<"at-slot">> => Slot,
@@ -816,7 +816,7 @@ send_message_between_genesis_wasm_processes() ->
     % Create receiver process with handler
     MsgReceiver = test_genesis_wasm_process(),
     hb_cache:write(MsgReceiver, Opts),
-    ProcId = dev_process:process_id(MsgReceiver, #{}, #{}),
+    ProcId = dev_process_lib:process_id(MsgReceiver, #{}, #{}),
     {ok, _SchedInitReceiver} =
         hb_ao:resolve(
             MsgReceiver,
@@ -908,7 +908,7 @@ dryrun_genesis_wasm() ->
             },
             Opts
         ),
-    ProcReceiverId = dev_process:process_id(ProcReceiver, #{}, #{}),
+    ProcReceiverId = dev_process_lib:process_id(ProcReceiver, #{}, #{}),
     % Initialize increment handler
     {ok, _} = schedule_aos_call(ProcReceiver, <<"
     Number = Number or 5
