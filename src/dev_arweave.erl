@@ -32,7 +32,7 @@ post_tx(Base, Request, Opts) ->
     case hb_message:commitment_devices(Request, Opts) of
         [Device] -> post_tx(Base, Request, Opts, Device);
         [] -> 
-            ?event(error,
+            ?event(warning,
                 {no_commitment_devices,
                     {request, Request},
                     {base, Base}
