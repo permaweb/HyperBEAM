@@ -32,8 +32,13 @@ post_tx(Base, Request, Opts) ->
     case hb_message:commitment_devices(Request, Opts) of
         [Device] -> post_tx(Base, Request, Opts, Device);
         [] -> 
-            ?event({no_commitment_devices}),
-            {error, no_commitment_devices};
+            ?event(error,
+                {no_commitment_devices,
+                    {request, Request},
+                    {base, Base}
+                }
+            ),
+            {error, <<"No commitment found on `POST tx` request.">>};
         Devices ->
             ?event({too_many_commitment_devices, Devices}),
             {error, too_many_commitment_devices}
@@ -56,7 +61,7 @@ post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
     ),
     case TXResponse of
         {ok, _} ->
-            ?event({{uploaded, Request}, {result, TXResponse}}),
+            ?event({uploaded_arweave_tx, {request, Request}, {result, TXResponse}}),
             CacheRes = hb_cache:write(Request, Opts),
             ?event(
                 {cache_uploaded_message,
