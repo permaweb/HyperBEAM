@@ -493,6 +493,10 @@ deposit_removal_while_delegated_test() ->
                     <<"bob">> => #{
                         <<"quantity">> => 0,
                         <<"last-resource-accumulator">> => 0
+                    },
+                    <<"charlie">> => #{
+                        <<"quantity">> => 0,
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }
