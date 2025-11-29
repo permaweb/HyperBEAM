@@ -183,6 +183,7 @@ match_args(Args, Opts) when is_map(Args) ->
         [],
         Opts
     ).
+match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
     Matches =
