@@ -748,8 +748,26 @@ liquidate_partial_delegation_test() ->
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     % Alice tries to withdraw 3, but has 0 deposits. Should liquidate 3 from Bob
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 3, S1, Opts),
-    ?assertEqual(3, dev_pot:get_deposit(Alice, ResourceOxygen, S2)),
-    ?assertEqual(7, dev_pot:get_deposit(Bob, ResourceOxygen, S2)).
+    report(S2),
+    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2)),
+    ?assertEqual(7, dev_pot:get_deposit(Bob, ResourceOxygen, S2)),
+    % Alice should still have 7 delegated to Bob
+    ?assertEqual(
+        7, 
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceOxygen/binary, 
+                "/deposits/", 
+                Alice/binary, 
+                "/delegations/", 
+                Bob/binary
+            >>, 
+            S2, 
+            0, 
+            Opts
+        )
+    ).
 
 liquidate_exact_delegation_test() ->
     Alice = <<"alice">>,
@@ -760,8 +778,25 @@ liquidate_exact_delegation_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S1, Opts),
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S2)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S2)).
+    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2)),
+    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S2)),
+    % Delegation should be fully undone
+    ?assertEqual(
+        0, 
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceOxygen/binary, 
+                "/deposits/", 
+                Alice/binary, 
+                "/delegations/", 
+                Bob/binary
+            >>, 
+            S2, 
+            0, 
+            Opts
+        )
+    ).
 
 liquidate_requiring_multiple_delegations_test() ->
     Alice = <<"alice">>,
@@ -786,14 +821,14 @@ liquidate_requiring_multiple_delegations_test() ->
     S3 = dev_pot:delegate(Alice, Denis, ResourceOxygen, 5, S2, Opts),
     % Alice has 0 deposits, 3 delegations of 5 each. Try to withdraw 12
     S4 = dev_pot:withdraw(Alice, ResourceOxygen, 12, S3, Opts),
-    % After liquidation, alice should have 12
-    ?assertEqual(12, dev_pot:get_deposit(Alice, ResourceOxygen, S4)),
-    % Total across all should still be 15
+    % After withdrawal, alice should have 0 (withdrew everything)
+    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S4)),
+    % Total should be 3 (15 - 12 withdrawn)
     Total = dev_pot:get_deposit(Alice, ResourceOxygen, S4) +
             dev_pot:get_deposit(Bob, ResourceOxygen, S4) +
             dev_pot:get_deposit(Charlie, ResourceOxygen, S4) +
             dev_pot:get_deposit(Denis, ResourceOxygen, S4),
-    ?assertEqual(15, Total).
+    ?assertEqual(3, Total).
 
 liquidate_insufficient_delegations_test() ->
     Alice = <<"alice">>,
