@@ -276,7 +276,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation + Amount,
             Opts
         ),
-    RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2),
     S3 =
         hb_ao:set(
             S2,
