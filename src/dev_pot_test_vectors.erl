@@ -244,27 +244,62 @@ multiresource_modified_weight_test() ->
 simple_delegation_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
-    ResourceOxygen = <<"oxygen">>,
     ResourceHydrogen = <<"hydrogen">>,
-    Opts =#{},
-    % Setup: Alice has 200 hydrogen and 25 oxygen, Bob has 25 oxygen
-    S0 = pot_state_empty([ResourceHydrogen, ResourceOxygen]),
-    S1 = dev_pot:deposit(Alice, ResourceHydrogen, 200, S0, Opts),
-    S2 = dev_pot:deposit(Alice, ResourceOxygen, 25, S1, Opts),
-    S3 = dev_pot:deposit(Bob, ResourceOxygen, 25, S2, Opts),
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    % Setup: Alice has 200 hydrogen and 25 oxygen, Bob has 0 hydrogen and 25 oxygen
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => {1, 2},
+        <<"resources">> => #{
+            ResourceHydrogen => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 200,
+                <<"deposits">> => #{
+                    Alice => #{
+                        <<"quantity">> => 200, 
+                        <<"last-resource-accumulator">> => 0
+                    },
+                    Bob => #{
+                        <<"quantity">> => 0, 
+                        <<"last-resource-accumulator">> => 0
+                    }
+                }
+            },
+            ResourceOxygen => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 50,
+                <<"deposits">> => #{
+                    Alice => #{
+                        <<"quantity">> => 25, 
+                        <<"last-resource-accumulator">> => 0
+                    },
+                    Bob => #{
+                        <<"quantity">> => 25, 
+                        <<"last-resource-accumulator">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{},
+        <<"total-weighted-units">> => 250
+    },
     % Alice delegates 20 hydrogen to Bob
-    S4 = dev_pot:delegate(Alice, Bob, ResourceHydrogen, 20, S3, Opts),
+    S1 = dev_pot:delegate(Alice, Bob, ResourceHydrogen, 20, S0, Opts),
     ?assertEqual(
-        20, 
+        20,
         hb_ao:get(
-            <<"/resources/", 
-            ResourceHydrogen/binary, 
-            "/deposits/", 
-            Alice/binary, 
-            "/delegations/", 
-            Bob/binary>>, 
-            S4, 
-            0, 
+            <<"/resources/",
+            ResourceHydrogen/binary,
+            "/deposits/",
+            Alice/binary,
+            "/delegations/",
+            Bob/binary>>,
+            S1,
+            0,
             Opts
         )
     ),
@@ -276,7 +311,7 @@ simple_delegation_test() ->
             "/deposits/",
             Alice/binary,
             "/quantity">>,
-            S4,
+            S1,
             0,
             Opts
         )
@@ -289,13 +324,13 @@ simple_delegation_test() ->
             "/deposits/",
             Bob/binary,
             "/quantity">>,
-            S4,
+            S1,
             0,
             Opts
         )
     ),
     % Alice undelegates 10 hydrogen from Bob
-    S5 = dev_pot:undelegate(Alice, Bob, ResourceHydrogen, 10, S4, Opts),
+    S2 = dev_pot:undelegate(Alice, Bob, ResourceHydrogen, 10, S1, Opts),
     ?assertEqual(
         10,
         hb_ao:get(
@@ -305,7 +340,7 @@ simple_delegation_test() ->
             Alice/binary,
             "/delegations/",
             Bob/binary>>,
-            S5,
+            S2,
             0,
             Opts
         )
@@ -318,7 +353,7 @@ simple_delegation_test() ->
             "/deposits/",
             Alice/binary,
             "/quantity">>,
-            S5,
+            S2,
             0,
             Opts
         )
@@ -331,13 +366,13 @@ simple_delegation_test() ->
             "/deposits/",
             Bob/binary,
             "/quantity">>,
-            S5,
+            S2,
             0,
             Opts
         )
     ),
     % Bob delegates 21 oxygen to Alice
-    S6 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 21, S5, Opts),
+    S3 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 21, S2, Opts),
     ?assertEqual(
         21,
         hb_ao:get(
@@ -347,13 +382,13 @@ simple_delegation_test() ->
             Bob/binary,
             "/delegations/",
             Alice/binary>>,
-            S6,
+            S3,
             0,
             Opts
         )
     ),
-    ?assertEqual(46, dev_pot:get_deposit(Alice, ResourceOxygen, S6)),
-    ?assertEqual(4, dev_pot:get_deposit(Bob, ResourceOxygen, S6)).
+    ?assertEqual(46, dev_pot:get_deposit(Alice, ResourceOxygen, S3)),
+    ?assertEqual(4, dev_pot:get_deposit(Bob, ResourceOxygen, S3)).
 
 delegation_liquidation_test() ->
     Alice = <<"alice">>,
