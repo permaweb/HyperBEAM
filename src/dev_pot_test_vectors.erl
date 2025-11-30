@@ -544,8 +544,10 @@ drip_user_with_zero_quantity_test() ->
     % Test that a user with 0 deposits gets 0 yield
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
-    ?assertEqual(0, dev_pot:balance(Bob, S1)),
-    ?assert(dev_pot:balance(Alice, S1) > 0).
+    % Claim yield by performing a deposit
+    S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
+    ?assertEqual(0, dev_pot:balance(Bob, S1_claim)),
+    ?assert(dev_pot:balance(Alice, S1_claim) > 0).
 
 %%% Minting Boundary Condition Tests
 
@@ -958,14 +960,26 @@ very_small_deposit_yield_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts =#{},
     % 1 unit deposit with large TWU - tests precision
-    S0 = pot_state_multi(ResourceOxygen, [{Alice, 1}, {Bob, 999}]),
+    % Use larger MintCap (100000) so integer division produces results: 50000 / 1000 = 50
+    S0 = 
+        pot_state_multi(
+            ResourceOxygen, 
+            [{Alice, 1}, {Bob, 999}], 
+            1, 
+            100000, 
+            {1, 2}
+        ),
     S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
-    AliceBalance = dev_pot:balance(Alice, S1),
-    BobBalance = dev_pot:balance(Bob, S1),
-    ?assert(AliceBalance > 0),
-    ?assert(AliceBalance < 1),
-    ?assert(BobBalance > 49),
-    ?assert(BobBalance < 51).
+    % Claim yield by performing minimal deposits
+    S1_alice_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
+    S1_bob_claim = dev_pot:deposit(Bob, ResourceOxygen, 1, S1_alice_claim, Opts),
+    AliceBalance = dev_pot:balance(Alice, S1_bob_claim),
+    BobBalance = dev_pot:balance(Bob, S1_bob_claim),
+    % Alice should get 50 (1/1000 of 50000), Bob should get 49950 (999/1000 of 50000)
+    ?assert(AliceBalance >= 50),
+    ?assert(AliceBalance < 100),
+    ?assert(BobBalance >= 49900),
+    ?assert(BobBalance < 50000).
 
 %%% Yield Claiming Tests
 
@@ -1205,9 +1219,10 @@ very_large_minted_amount_test() ->
     S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0),
     % Should mint large amount without overflow
-    report(S1),
     ?assert(Minted > 1000000000000),
-    Balance = dev_pot:balance(Alice, S1),
+    % Claim yield by performing a deposit
+    S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
+    Balance = dev_pot:balance(Alice, S1_claim),
     ?assert(Balance > 1000000000000).
 
 %%% State Corruption/Recovery Tests
