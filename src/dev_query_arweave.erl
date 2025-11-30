@@ -257,8 +257,13 @@ match(UnsupportedFilter, _, _) ->
 %% @doc Return the base IDs for messages that have a matching commitment.
 matching_commitments(Field, Values, Opts) when is_list(Values) ->
     hb_util:unique(lists:flatten(
-        lists:map(
-            fun(Value) -> matching_commitments(Field, Value, Opts) end,
+        lists:filtermap(
+            fun(Value) ->
+                case matching_commitments(Field, Value, Opts) of
+                    not_found -> false;
+                    IDs -> {true, IDs}
+                end
+            end,
             Values
         )
     ));
