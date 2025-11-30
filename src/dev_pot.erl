@@ -170,12 +170,12 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
-deposit(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
+deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
-withdraw(Addr, ResourceID, Amount, S0, Opts) when Amount > 0 ->
+withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
     modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
