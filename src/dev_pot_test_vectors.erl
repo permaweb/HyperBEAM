@@ -505,18 +505,88 @@ inverted_index_test() ->
     Opts =#{},
     S0 = pot_state_empty([ResourceHydrogen, ResourceOxygen]),
     S1 = dev_pot:deposit(Alice, ResourceHydrogen, 5, S0, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceHydrogen => 5}}, dev_pot:user(Alice, S1, Opts), primary)),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceHydrogen => 5
+                }
+            }, 
+            dev_pot:user(Alice, S1, Opts), 
+            primary
+        )
+    ),
     S2 = dev_pot:deposit(Alice, ResourceOxygen, 2, S1, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceHydrogen => 5, ResourceOxygen => 2}}, dev_pot:user(Alice, S2, Opts), primary)),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceHydrogen => 5, 
+                    ResourceOxygen => 2
+                }
+            }, 
+            dev_pot:user(Alice, S2, Opts), 
+            primary
+        )
+    ),
     S3 = dev_pot:deposit(Bob, ResourceHydrogen, 777, S2, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceHydrogen => 777}}, dev_pot:user(Bob, S3, Opts), primary)),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceHydrogen => 777
+                }
+            }, 
+            dev_pot:user(Bob, S3, Opts), 
+            primary
+        )
+    ),
     S4 = dev_pot:withdraw(Alice, ResourceHydrogen, 4, S3, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceHydrogen => 1, ResourceOxygen => 2}}, dev_pot:user(Alice, S4, Opts), primary)),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceHydrogen => 1, 
+                    ResourceOxygen => 2
+                }
+            }, 
+            dev_pot:user(Alice, S4, Opts), 
+            primary
+        )
+    ),
     S5 = dev_pot:withdraw(Alice, ResourceHydrogen, 1, S4, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceOxygen => 2}}, dev_pot:user(Alice, S5, Opts), primary)),
-    ?assert(hb_message:match(#{<<"deposits">> => #{ResourceHydrogen => 777}}, dev_pot:user(Bob, S5, Opts), primary)),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceOxygen => 2
+                }
+            }, 
+            dev_pot:user(Alice, S5, Opts), 
+            primary
+        )
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{
+                    ResourceHydrogen => 777
+                }
+            }, 
+            dev_pot:user(Bob, S5, Opts), 
+            primary
+        )
+    ),
     S6 = dev_pot:withdraw(Bob, ResourceHydrogen, 777, S5, Opts),
-    ?assert(hb_message:match(#{<<"deposits">> => #{}}, dev_pot:user(Bob, S6, Opts), primary)).
+    ?assert(
+        hb_message:match(
+            #{
+                <<"deposits">> => #{}
+            }, 
+            dev_pot:user(Bob, S6, Opts), 
+            primary
+        )
+    ).
 %%% Division by Zero Guard Tests
 
 drip_with_zero_total_weighted_units_test() ->
@@ -585,7 +655,10 @@ deposit_zero_amount_test() ->
     % Depositing 0 should be a no-op
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % deposit/5 has guard `when Amount > 0`, so calling with 0 should not match
-    ?assertError(function_clause, dev_pot:deposit(Alice, ResourceOxygen, 0, S0, Opts)).
+    ?assertError(
+        function_clause, 
+        dev_pot:deposit(Alice, ResourceOxygen, 0, S0, Opts)
+    ).
 
 withdraw_exact_balance_test() ->
     Alice = <<"alice">>,
@@ -605,7 +678,10 @@ delegate_zero_amount_test() ->
     Opts =#{},
     % Delegating 0 should not match the function guard
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(function_clause, dev_pot:delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)).
+    ?assertError(
+        function_clause, 
+        dev_pot:delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
+    ).
 
 delegate_to_self_test() ->
     Alice = <<"alice">>,
@@ -1013,7 +1089,10 @@ deposit_with_negative_amount_test() ->
     Opts =#{},
     % Negative deposits should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(function_clause, dev_pot:deposit(Alice, ResourceOxygen, -10, S0, Opts)).
+    ?assertError(
+        function_clause, 
+        dev_pot:deposit(Alice, ResourceOxygen, -10, S0, Opts)
+    ).
 
 withdraw_with_negative_amount_test() ->
     Alice = <<"alice">>,
@@ -1021,7 +1100,10 @@ withdraw_with_negative_amount_test() ->
     Opts =#{},
     % Negative withdrawals should be rejected
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    ?assertError(function_clause, dev_pot:withdraw(Alice, ResourceOxygen, -5, S0, Opts)).
+    ?assertError(
+        function_clause, 
+        dev_pot:withdraw(Alice, ResourceOxygen, -5, S0, Opts)
+    ).
 
 deposit_non_integer_quantity_test() ->
     Alice = <<"alice">>,
@@ -1048,17 +1130,21 @@ delegate_negative_amount_test() ->
     Opts =#{},
     % Negative delegation amount should be rejected
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(function_clause, dev_pot:delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)).
+    ?assertError(
+        function_clause, 
+        dev_pot:delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
+    ).
 
 deposit_to_nonexistent_resource_test() ->
     Alice = <<"alice">>,
-    ResourceOxygen = <<"oxygen">>,
     ResourceHydrogen = <<"hydrogen">>,
     Opts =#{},
-    % Depositing to a resource that doesn't exist
-    S0 = pot_state_empty([ResourceOxygen]),
-    % Try depositing to non-existent hydrogen resource
-    ?assertError(_, dev_pot:deposit(Alice, ResourceHydrogen, 10, S0, Opts)).
+    % Depositing to a resource that doesn't exist should auto-create it
+    S0 = pot_state_empty([]),
+    % Deposit to non-existent hydrogen resource
+    S1 = dev_pot:deposit(Alice, ResourceHydrogen, 10, S0, Opts),
+    % Verify the resource was created and deposit succeeded
+    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceHydrogen, S1)).
 
 %%% Delegation Notice Tests
 
@@ -1071,13 +1157,19 @@ delegation_notice_message_format_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{<<"results">> => #{<<"outbox">> => []}},
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
-    Outbox = hb_ao:get(<<"results/outbox">>, S1, []),
+    Outbox = hb_ao:get(<<"results/outbox">>, S1, [], Opts),
     ?assertEqual(1, length(Outbox)),
     [Notice] = Outbox,
-    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice)),
-    ?assertEqual(<<"delegation-notice">>, hb_maps:get(<<"action">>, Notice)),
-    ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice)),
-    ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, Notice)).
+    ?assertEqual(
+        Bob, 
+        hb_maps:get(<<"target">>, Notice, Opts)
+    ),
+    ?assertEqual(
+        <<"delegation-notice">>, 
+        hb_maps:get(<<"action">>, Notice, Opts)
+    ),
+    ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice, Opts)),
+    ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, Notice, Opts)).
 
 undelegate_notice_has_negative_quantity_test() ->
     Alice = <<"alice">>,
@@ -1089,10 +1181,11 @@ undelegate_notice_has_negative_quantity_test() ->
     S0WithOutbox = S0#{<<"results">> => #{<<"outbox">> => []}},
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
     S2 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 5, S1, Opts),
-    Outbox = hb_ao:get(<<"results/outbox">>, S2, []),
+    Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
-    [_, UndelegateNotice] = Outbox,
-    Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice),
+    % Outbox is newest first, so undelegate notice is first
+    [UndelegateNotice, _] = Outbox,
+    Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
     ?assert(Quantity =< 0).
 
 multiple_delegations_outbox_order_test() ->
@@ -1106,11 +1199,12 @@ multiple_delegations_outbox_order_test() ->
     S0WithOutbox = S0#{<<"results">> => #{<<"outbox">> => []}},
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
     S2 = dev_pot:delegate(Alice, Charlie, ResourceOxygen, 5, S1, Opts),
-    Outbox = hb_ao:get(<<"results/outbox">>, S2, []),
+    Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
+    % Outbox is newest first: [Charlie (S2), Bob (S1)]
     [Notice1, Notice2] = Outbox,
-    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice1)),
-    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice2)).
+    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, Opts)),
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, Opts)).
 
 %%% Empty/Zero State Tests
 
@@ -1174,7 +1268,10 @@ resource_isolation_test() ->
     % Modify hydrogen
     S3 = dev_pot:withdraw(Bob, ResourceHydrogen, 5, S2, Opts),
     % Oxygen deposit should be unchanged
-    ?assertEqual(InitialOxygenDeposit, dev_pot:get_deposit(Alice, ResourceOxygen, S3)).
+    ?assertEqual(
+        InitialOxygenDeposit, 
+        dev_pot:get_deposit(Alice, ResourceOxygen, S3)
+    ).
 
 weighted_distribution_across_resources_test() ->
     Alice = <<"alice">>,
@@ -1247,8 +1344,11 @@ missing_total_weighted_units_test() ->
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % Remove TWU field to test missing field handling
     S0NoTWU = maps:remove(<<"total-weighted-units">>, S0),
-    % Might crash with division by zero or handle gracefully
-    ?assertError(_, dev_pot:drip(S0NoTWU, #{<<"t">> => 1}, Opts)).
+    S1 = dev_pot:drip(S0NoTWU, #{<<"t">> => 1}, Opts),
+    % All minted tokens should go to undistributed-mint (since TWU=0)
+    Minted = hb_maps:get(<<"minted">>, S1, 0),
+    UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S1, 0),
+    ?assertEqual(Minted, UndistributedMint).
 
 missing_balances_field_test() ->
     Alice = <<"alice">>,
