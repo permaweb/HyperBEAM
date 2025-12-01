@@ -814,10 +814,7 @@ dedup_test() ->
     {ok, SchedulerRes} =
         hb_ao:resolve(
             Base, 
-            #{
-                <<"method">> => <<"GET">>,
-                <<"path">> => <<"schedule">>
-            },
+            <<"schedule">>,
             Opts
         ),
     ?event(debug_test, {dedup_test, {scheduler_res, SchedulerRes}}),
@@ -843,7 +840,7 @@ dedup_test() ->
     schedule_aos_call(Base, <<"return Number">>),
     % Compute with dedup - initialize number to 1, then two increments,
     % but the second increment should be skipped for dedup - expected result is 2
-    {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    {ok, Result} = hb_ao:resolve(Base, <<"now">>, Opts),
     Data = hb_ao:get(<<"results/data">>, Result),
     ?assertEqual(<<"2">>, Data).
 spawn_and_execute_slot_test_() ->
