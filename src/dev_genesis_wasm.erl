@@ -128,23 +128,27 @@ do_compute(State, Req, Opts) ->
             ),
             {error, State};
         {skip, ExitState} ->
+            ReqWithoutCommitments =
+                hb_message:remove_all_commitments(Req, Opts),
             Req2 =
                 hb_message:commit(
-                    (hb_message:remove_all_commitments(Req, Opts))
-                    #{
+                    ReqWithoutCommitments#{
                         <<"path">> => 
                             hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
                         <<"slot">> =>
                             hb_maps:get(<<"slot">>, Req, -1, Opts),
                         <<"skip">> => true,
                         <<"body">> => 
-                            hb_message:commit(#{
-                                <<"data">> => <<"Dedup no op">>,
-                                <<"timestamp">> => os:system_time(millisecond)
-                            },
-                            Opts
-                        )
-                }, Opts),
+                            hb_message:commit(
+                                #{
+                                    <<"timestamp">> => 
+                                        os:system_time(millisecond)
+                                },
+                                Opts
+                            )
+                    },
+                    Opts
+                ),
             ?event(dedup_short,
                 {skip,
                     {cause, dedup},
