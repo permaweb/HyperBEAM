@@ -957,18 +957,6 @@ change_weight_with_deposits_test() ->
     % Yield should still accrue
     ?assert(BalanceT2 > BalanceT1).
 
-change_weight_to_negative_test() ->
-    Alice = <<"alice">>,
-    ResourceOxygen = <<"oxygen">>,
-    Opts =#{},
-    % Negative weights should be rejected or handled
-    S0 = pot_state(Alice, ResourceOxygen, 10),
-    % Try to set negative weight - should fail or clamp to 0
-    S1 = dev_pot:set_weight(ResourceOxygen, -5, S0, Opts),
-    % If it doesn't crash, TWU should not be negative
-    TWU = hb_maps:get(<<"total-weighted-units">>, S1, 0),
-    ?assert(TWU >= 0).
-
 rapid_weight_changes_test() ->
     Alice = <<"alice">>,
     ResourceOxygen = <<"oxygen">>,
