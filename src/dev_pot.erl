@@ -229,7 +229,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
     RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
     S0 = DrippedS#{
-      <<"balance">> => Balances#{
+      <<"balances">> => Balances#{
           FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
           ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
       }
@@ -303,7 +303,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
     RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
     S0 = DrippedS#{
-      <<"balance">> => Balances#{
+      <<"balances">> => Balances#{
           FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
           ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
       }
