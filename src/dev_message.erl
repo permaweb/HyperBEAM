@@ -514,10 +514,17 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 % commitment device, if it exists.
                 lists:filter(
                     fun(CommitmentID) ->
-                        not maps:is_key(
-                            <<"committer">>,
-                            maps:get(CommitmentID, Commitments)
-                        )
+                        Comm = maps:get(CommitmentID, Commitments),
+                        Dev = maps:get(<<"commitment-device">>, Comm, undefined),
+                        case Dev of
+                            ?DEFAULT_ATT_DEVICE ->
+                                not hb_maps:is_key(<<"committer">>, Comm);
+                            _ -> false
+                        end
+                        % not maps:is_key(
+                        %     <<"committer">>,
+                        %     maps:get(CommitmentID, Commitments)
+                        % )
                     end,
                     maps:keys(Commitments)
                 );

@@ -256,6 +256,7 @@ transactions_query_tags_test() ->
         ),
     ?event({transactions_query_tags_test, Res}),
     ExpectedIDs = [
+        hb_message:id(WrittenMsg, none, Opts),
         hb_message:id(WrittenMsg, signed, Opts)
     ],
     assert_query_match(ExpectedIDs, Res, Opts).
@@ -504,54 +505,6 @@ transaction_query_by_signed_id_test() ->
         } when ?IS_ID(ExpectedID),
         Res
     ).
-
-%% @doc Arweave grapqhql filters out unsigned IDs
-transaction_query_by_unsigned_id_test() ->
-    Opts =
-        #{
-            priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
-        },
-    Node = hb_http_server:start_node(Opts),
-    {ok, WrittenMsg} = write_test_message(Opts),
-    ExpectedID = hb_message:id(WrittenMsg, unsigned, Opts),
-    ?assertMatch(
-        {ok, [_]},
-        hb_cache:match(#{<<"type">> => <<"Message">>}, Opts)
-    ),
-    Query =
-        <<"""
-            query($id: ID!) {
-                transaction(id: $id) {
-                    id
-                    tags {
-                        name
-                        value
-                    }
-                }
-            }
-        """>>,
-    Res =
-        dev_query_graphql:test_query(
-            Node,
-            Query,
-            #{
-                <<"id">> => ExpectedID
-            },
-            Opts
-        ),
-    ?event({written_msg, WrittenMsg}),
-    ?event({expected_id, ExpectedID}),
-    ?event({transaction_query_by_id_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transaction">> := null
-            }
-        },
-        Res
-    ).
-
 
 %% @doc Test single transaction query with more fields  
 transaction_query_full_test() ->

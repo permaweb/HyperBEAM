@@ -408,7 +408,7 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
-    % Unsigned dataitems can not be synced from the remote node via graphql.
+    % Unsigned dataitems can not be synced from the remote node via graphql
     ?assertEqual(not_found, hb_cache:read(UnsignedID, ClientOpts)),
     % But signed dataitems can
     {ok, Req} = hb_cache:read(SignedID, ClientOpts),
