@@ -367,8 +367,8 @@ list(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
-        {error, not_found} -> {ok, []};  % Normalize new error format
-        not_found -> {ok, []}  % Handle both old and new format
+        {error, not_found} -> not_found;  % Normalize new error format
+        not_found -> not_found  % Handle both old and new format
     end.
 
 %% @doc Match a series of keys and values against the database. Returns 
@@ -661,7 +661,7 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    ?assertEqual(list(StoreOpts, <<"colors">>), {ok, []}),
+    ?assertEqual(list(StoreOpts, <<"colors">>), not_found),
     % Create immediate children under colors/
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),

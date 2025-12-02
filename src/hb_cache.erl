@@ -41,7 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
--export([match/2, list/2, list_numbered/2]).
+-export([match/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -178,22 +178,7 @@ ensure_all_loaded(Ref, Msg, Opts) ->
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
-    [ hb_util:int(Name) || Name <- list(SlotDir, Opts) ].
-
-%% @doc List all items under a given path.
-list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
-    case hb_opts:get(store, no_viable_store, Opts) of
-        not_found -> [];
-        Store ->
-            list(Path, Store)
-    end;
-list(Path, Store) ->
-    ResolvedPath = hb_store:resolve(Store, Path),
-    case hb_store:list(Store, ResolvedPath) of
-        {ok, Names} -> Names;
-        {error, _} -> [];
-        not_found -> []
-    end.
+    [ hb_util:int(Name) || Name <- hb_store_common:list(SlotDir, Opts) ].
 
 %% @doc Match a template message against the cache, returning a list of IDs
 %% that match the template. We match on the binary representation of values,
@@ -396,279 +381,71 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
     StoreReadResult =
-        store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
+        hb_store_common:store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
     case StoreReadResult of 
         {ok, Res} ->
             {ok, hb_message:normalize_commitments(Res, Opts)};
         _ -> StoreReadResult
     end.
 do_read_commitment(Path, Opts) ->
-    store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
+    hb_store_common:store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
-    CommitmentsPath =
-        hb_store:resolve(
-            Store,
-            hb_store:path(Store, [UncommittedID, <<"commitments">>])
-        ),
-    FoundCommitments =
-        case hb_store:list(Store, CommitmentsPath) of
-            {ok, CommitmentIDs} ->
-                lists:filtermap(
-                    fun(CommitmentID) ->
-                        ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
-                        ResolvedCommPath =
-                            hb_store:path(
-                                Store,
-                                [CommitmentsPath, CommitmentID]
-                            ),
-                        case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
-                            {ok, Commitment} ->
-                                {
-                                    true,
-                                    {
-                                        CommitmentID,
-                                        ensure_all_loaded(
-                                            Commitment,
-                                            Opts#{ commitment => true }
-                                        )
-                                    }
-                                };
-                            _ ->
-                                false
-                        end
-                    end,
-                    CommitmentIDs
-                );
-            not_found ->
-                []
-    end,
+    FoundCommitments = read_all_commitments_by_store(Msg, Store, Opts),
     NewCommitments =
         hb_maps:merge(
             CurrentCommitments,
             maps:from_list(FoundCommitments)
         ),
     Msg#{ <<"commitments">> => NewCommitments }.
-%% @doc List all of the subpaths of a given path and return a map of keys and
-%% links to the subpaths, including their types.
-store_read(Path, Store, Opts) ->
-    store_read(Path, Path, Store, Opts).
-store_read(_Target, _Path, no_viable_store, _) ->
-    not_found;
-store_read(Target, Path, Store, Opts) ->
-    ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
-    ?event({reading,
-        {original_path, {string, PathBin}},
-        {fully_resolved_path, ResolvedFullPath},
-        {store, Store}
-    }),
-    case hb_store:type(Store, ResolvedFullPath) of
-        not_found -> not_found;
-        simple ->
-            ?event({reading_data, ResolvedFullPath}),
-            case hb_store:read(Store, ResolvedFullPath) of
-                {ok, Bin} -> {ok, Bin};
-                not_found -> not_found
-            end;
-        composite ->
-            ?event({reading_composite, ResolvedFullPath}),
-            case hb_store:list(Store, ResolvedFullPath) of
-                {ok, RawSubpaths} ->
-                    Subpaths =
-                        lists:map(fun hb_util:bin/1, RawSubpaths),
-                    ?event(
-                        {listed,
-                            {original_path, Path},
-                            {subpaths, {explicit, Subpaths}}
-                        }
-                    ),
-                    % Generate links for each of the listed keys. We only list
-                    % the target ID given in the case of multiple known
-                    % commitments.
-                    Msg =
-                        prepare_links(
-                            Target,
-                            ResolvedFullPath,
-                            Subpaths,
-                            Store,
-                            Opts
-                        ),
-                    ?event(
-                        {completed_read,
-                            {resolved_path, ResolvedFullPath},
-                            {explicit, Msg}
-                        }
-                    ),
-                    {ok, Msg};
-                _ ->
-                    ?event({empty_composite_message, ResolvedFullPath}),
-                    {ok, #{}}
-            end
-    end.
 
-%% @doc Prepare a set of links from a listing of subpaths.
-prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
-    {ok, Implicit, Types} = read_ao_types(RootPath, Subpaths, Store, Opts),
-    Res =
-        maps:from_list(lists:filtermap(
-            fun(<<"ao-types">>) -> false;
-                (<<"commitments">>) ->
-                    % List the commitments for this message, and load them into
-                    % memory. If there no commitments at the path, we exclude
-                    % commitments from the list of links.
-                    CommPath =
-                        hb_store:resolve(
+read_all_commitments_by_store(Msg, Store, Opts) when not is_list(Store) ->
+    read_all_commitments_by_store(Msg, [Store], Opts);
+read_all_commitments_by_store(_Msg, [], _Opts) ->
+    [];
+read_all_commitments_by_store(Msg, [Store | ReaminingStores], Opts) ->
+    CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
+    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    CommitmentsPath =
+        hb_store:resolve(
+            Store,
+            hb_store:path(Store, [UncommittedID, <<"commitments">>])
+        ),
+    case hb_store:list(Store, CommitmentsPath) of
+        {ok, CommitmentIDs} ->
+            lists:filtermap(
+                fun(CommitmentID) ->
+                    ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
+                    ResolvedCommPath =
+                        hb_store:path(
                             Store,
-                            hb_store:path(
-                                Store,
-                                [
-                                    RootPath,
-                                    <<"commitments">>,
-                                    Target
-                                ]
-                            )
+                            [CommitmentsPath, CommitmentID]
                         ),
-                    ?event(read_commitment,
-                        {reading_commitment,
-                            {target, Target},
-                            {root_path, RootPath},
-                            {commitments_path, CommPath}
-                        }
-                    ),
-                    case do_read_commitment(CommPath, Opts) of
+                    case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
                         {ok, Commitment} ->
-                            LoadedCommitment = 
-                                ensure_all_loaded(
-                                    Commitment,
-                                    Opts#{ commitment => true }
-                                ),
-                            ?event(read_commitment,
-                                {found_target_commitment,
-                                    {path, CommPath},
-                                    {commitment, LoadedCommitment}
-                                }
-                            ),
-                            % We have commitments, so we read each commitment
-                            % into memory, and return it as part of the message.
                             {
                                 true,
                                 {
-                                    <<"commitments">>,
-                                    #{ Target => LoadedCommitment }
+                                    CommitmentID,
+                                    ensure_all_loaded(
+                                        Commitment,
+                                        Opts#{ commitment => true }
+                                    )
                                 }
                             };
                         _ ->
                             false
-                    end;
-                (Subpath) ->
-                    ?event(
-                        {returning_link,
-                            {subpath, Subpath}
-                        }
-                    ),
-                    SubkeyPath = hb_store:path(Store, [RootPath, Subpath]),
-                    case hb_link:is_link_key(Subpath) of
-                        false ->
-                            % The key is a literal value, not a nested composite
-                            % message. Subsequently, we return a resolvable link
-                            % to the subpath, leaving the key as-is.
-                            {true,
-                                {
-                                    Subpath,
-                                    {link,
-                                        SubkeyPath,
-                                        (case Types of
-                                            #{ Subpath := Type } ->
-                                                % We have an `ao-types' entry for the
-                                                % subpath, so we return a link to the
-                                                % subpath with `lazy' set to `true'
-                                                % because we need to resolve the link
-                                                % to get the final value.
-                                                #{
-                                                    <<"type">> => Type,
-                                                    <<"lazy">> => true
-                                                };
-                                            _ ->
-                                                % We do not have an `ao-types' entry for the
-                                                % subpath, so we return a link to the
-                                                % subpath with `lazy' set to `true',
-                                                % because the subpath is a literal
-                                                % value.
-                                                #{
-                                                    <<"lazy">> => true
-                                                }
-                                        end)#{ store => Store }
-                                    }
-                                }
-                            };
-                        true ->
-                            % The key is an encoded link, so we create a resolvable
-                            % link to the underlying link. This requires that we
-                            % dereference the link twice in order to get the final
-                            % value. Returning the data this way avoids having to
-                            % read each of the link keys themselves, which may be
-                            % a large quantity.
-                            {true,
-                                {
-                                    binary:part(Subpath, 0, byte_size(Subpath) - 5),
-                                    {link, SubkeyPath, #{
-                                        <<"type">> => <<"link">>,
-                                        <<"lazy">> => true
-                                    }}
-                                }
-                            }
                     end
                 end,
-            Subpaths
-        )),
-    Merged = maps:merge(Res, Implicit),
-    % Convert the message to an ordered list if the ao-types indicate that it
-    % should be so. If it is a message, we ensure that the commitments are 
-    % normalized (have an unsigned comm. ID) and loaded into memory.
-    case dev_codec_structured:is_list_from_ao_types(Types, Opts) of
-        true ->
-            hb_util:message_to_ordered_list(Merged, Opts);
-        false ->
-            case hb_opts:get(lazy_loading, true, Opts) of
-                true -> Merged;
-                false -> ensure_all_loaded(Merged, Opts)
-            end
+                CommitmentIDs
+            );
+        not_found ->
+            read_all_commitments_by_store(Msg, ReaminingStores, Opts)
     end.
-
-%% @doc Read and parse the ao-types for a given path if it is in the supplied
-%% list of subpaths, returning a map of keys and their types.
-read_ao_types(Path, Subpaths, Store, Opts) ->
-    ?event({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
-    case lists:member(<<"ao-types">>, Subpaths) of
-        true ->
-            {ok, TypesBin} =
-                hb_store:read(
-                    Store,
-                    hb_store:path(Store, [Path, <<"ao-types">>])
-                ),
-            Types = dev_codec_structured:decode_ao_types(TypesBin, Opts),
-            ?event({parsed_ao_types, {types, Types}}),
-            {ok, types_to_implicit(Types), Types};
-        false ->
-            ?event({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
-            {ok, #{}, #{}}
-    end.
-
-%% @doc Convert a map of ao-types to an implicit map of types.
-types_to_implicit(Types) ->
-    maps:filtermap(
-        fun(_K, <<"empty-message">>) -> {true, #{}};
-           (_K, <<"empty-list">>) -> {true, []};
-           (_K, <<"empty-binary">>) -> {true, <<>>};
-           (_, _) -> false
-        end,
-        Types
-    ).
 
 %% @doc Read the result of a computation, using heuristics. The supported
 %% heuristics are as follows:
