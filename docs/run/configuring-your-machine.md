@@ -2,11 +2,13 @@
 
 This guide details the various ways to configure your HyperBEAM node's behavior, including ports, storage, keys, and logging.
 
-## Configuration (`config.flat`)
+## Configuration (`config.json`)
 
-The primary way to configure your HyperBEAM node is through a `config.flat` file located in the node's working directory or specified by the `HB_CONFIG` environment variable.
+The primary way to configure your HyperBEAM node is through a `config.json` file located in the node's working directory or specified by the `HB_CONFIG` environment variable.
 
-This file uses a simple `Key: Value` format.
+### Flat config file
+
+Another possibility is to use `config.flat` that uses a simple `Key: Value` format.
 
 **Example `config.flat`:**
 
@@ -38,7 +40,7 @@ store/2/force_path_style: true
 store/2/region: us-east-1
 ```
 
-Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps and List). For more complex structures, you must use environment variables.
+Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps and List).
 
 ### Core Configuration
 
