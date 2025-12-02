@@ -29,18 +29,19 @@
 prop_state_machine() ->
     ?FORALL(Cmds, commands(?MODULE),
         begin
-            {History, State, Result} = run_commands(?MODULE, Cmds),
-            Result =:= ok
-        end).
+            {History, State, Results} = run_commands(?MODULE, Cmds),
+            Results =:= ok
+        end
+    ).
 
 addr_gen() ->
-    ?LET(Bytes, binary(32), base64:encode(Bytes)).
+    base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 
 weight_gen() ->
     rand:uniform(10_000).
 
 resource_gen() ->
-    rand:uniform(1_000_000_000).
+    base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 
 qty_gen() ->
     rand:uniform(1_000_000).
@@ -50,43 +51,38 @@ initial_state() ->
     StartAddr = addr_gen(),
     StartQty = qty_gen(),
     StartWeight = weight_gen(),
-    ?LET({MintCap, PropN, PropD},
-        % TODO: PropD must be > PropN
-        {
-            choose(1_000, 1_000_000_000_000_000),
-            choose(1, 1_000),
-            choose(1, 10_000)
-        },
-        #state{
-            resources = [StartResource],
-            addrs = [StartAddr],
-            orig_deposits = #{StartResource => #{StartAddr => StartQty}},
-            inverted_orig_deposits = #{StartAddr => #{StartResource => StartQty}},
-            s = #{
-                <<"device">> => <<"pot@1.0">>,
-                <<"t">> => 0,
-                <<"last-drip">> => 0,
-                <<"mint-cap">> => MintCap,
-                <<"mint-prop">> => {PropN, PropD},
-                <<"resources">> => #{
-                    StartResource => #{
-                        <<"weight">> => StartWeight,
-                        <<"total-deposits">> => StartQty,
-                        <<"deposits">> => #{
-                            StartAddr => #{
-                                <<"quantity">> => StartQty,
-                                <<"last-resource-accumulator">> => 0
-                            }
+    % TODO: these next 3 variables are incoherent: MintCap needs a reasonable floor,
+    % PropN must be > 0, and PropD must be > PropN
+    MintCap = rand:uniform(1_000_000_000_000_000),
+    PropN = rand:uniform(1_000),
+    PropD = rand:uniform(10_000),
+    #state{
+        resources = [StartResource],
+        addrs = [StartAddr],
+        orig_deposits = #{StartResource => #{StartAddr => StartQty}},
+        inverted_orig_deposits = #{StartAddr => #{StartResource => StartQty}},
+        s = #{
+            <<"device">> => <<"pot@1.0">>,
+            <<"t">> => 0,
+            <<"last-drip">> => 0,
+            <<"mint-cap">> => MintCap,
+            <<"mint-prop">> => {PropN, PropD},
+            <<"resources">> => #{
+                StartResource => #{
+                    <<"weight">> => StartWeight,
+                    <<"total-deposits">> => StartQty,
+                    <<"deposits">> => #{
+                        StartAddr => #{
+                            <<"quantity">> => StartQty,
+                            <<"last-resource-accumulator">> => 0
                         }
                     }
-                },
-                <<"balances">> => #{ }
-            }
-        }).
+                }
+            },
+            <<"balances">> => #{ }
+        }
+    }.
 
-command(_State) ->
-    % TODO: this clause is necessary for proper reasons, but are we doing it right?
-    ?LET(_, integer(), {call, erlang, self, []});
 command(
     State = #state{
         resources = Resources,
@@ -147,16 +143,17 @@ command(
                     ]
                 }
         ),
+    KeysA = maps:keys(InvertedOrigDeposits),
+    SizeA = length(KeysA),
     WithdrawableAddr =
-        lists:nth(
-            rand:uniform(maps:size(InvertedOrigDeposits), maps:keys(InvertedOrigDeposits))
-        ),
+        lists:nth(rand:uniform(SizeA), KeysA),
     WithdrawableDeposits = maps:get(WithdrawableAddr, InvertedOrigDeposits),
+    KeysR = maps:keys(WithdrawableDeposits),
+    SizeR = length(KeysR),
     WithdrawableResourceID =
-        lists:nth(
-            rand:uniform(maps:size(WithdrawableDeposits), maps:keys(WithdrawableDeposits))
-        ),
+        lists:nth(rand:uniform(SizeR), KeysR),
     WithdrawableQty = maps:get(WithdrawableResourceID, WithdrawableDeposits),
+
     % Call withdraw() for a deposit that actually exists, and for a safe qty
     WithdrawGen =
         ?LET(
@@ -183,16 +180,20 @@ command(
     % TODO: tweak these weights
     frequency([
         {3, SetWeightGen},
-        {3, BalanceGen},
-        {3, DepositGen},
-        {3, WithdrawGen}
-    ]).
+        {0, BalanceGen},
+        {0, DepositGen},
+        {0, WithdrawGen}
+    ]);
+command(_State) ->
+   % TODO: this clause is necessary for proper reasons, but are we doing it right?
+   {call, erlang, self, []}.
 
 next_state(
     _State,
     {call, _Mod, set_weight, [ResourceID, _Weight, _S, _Opts]},
     Result = #state{resources = Resources}
 ) ->
+    % If we generated a new resource type, add it to the state model
     NewResources =
         case lists:member(ResourceID, Resources) of
             true -> Resources;
@@ -200,19 +201,6 @@ next_state(
         end,
     Result#{
         resources => NewResources
-    };
-next_state(
-    _State,
-    {call, _Mod, balance, [Addr, _S]},
-    Result = #state{addrs = Addrs}
-) ->
-    NewAddrs =
-        case lists:member(Addr, Addrs) of
-            true -> Addrs;
-            false -> [Addr | Addrs]
-        end,
-    Result#{
-        addrs => NewAddrs
     };
 next_state(
     _State,
@@ -239,7 +227,8 @@ next_state(
             Addr => #{ResourceID => UserDepositInverted + Amount}
         }
     };
-% TODO: next_state for withdraw and deposit can be collapsed into a single function
+% TODO: next_state for withdraw and deposit can be collapsed into a single function,
+% it's just addition vs subtraction
 next_state(
     _State,
     {call, _Mod, withdraw, [ResourceID, Addr, Amount, _S, _Opts]},
@@ -271,6 +260,17 @@ next_state(_State, _Call, Result) -> Result.
 % TODO: are any preconditions necessary?
 precondition(_State, _Call) -> true.
 
-postcondition(_State, _Command, _Result) ->
-    % TODO: actually write assertions
+% TODO: deeply verify the whole output state, not just specifically chosen keys?
+postcondition(
+    _State, 
+    {call, _Mod, set_weight, [ResourceID, Weight, _S, _Opts]},
+    ResultS
+) ->
+    Weight =:= hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/weight">>,
+        ResultS,
+        0,
+        #{}
+    );
+postcondition(_State, _Command, _ResultS) ->
     true.
