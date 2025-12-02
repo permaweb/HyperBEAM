@@ -463,18 +463,23 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
-    ReqCommitters =
-        case maps:get(<<"committers">>, Req, <<"none">>) of
-            X when is_list(X) -> X;
-            CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
-        end,
     RawReqCommitments = maps:get(<<"commitment-ids">>, Req, <<"none">>),
     ReqCommitments =
         case RawReqCommitments of
             X2 when is_list(X2) -> X2;
             CommitmentDescriptor -> hb_ao:normalize_key(CommitmentDescriptor)
         end,
-    % Get the commitments to verify.
+    ReqCommitters =
+        case maps:get(<<"committers">>, Req, <<"none">>) of
+            X when is_list(X) -> X;
+            CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
+        end,
+    ?event(debug_commitments,
+        {commitment_ids_from_request,
+            {req_commitments, ReqCommitments},
+            {req_committers, ReqCommitters}}
+    ),
+    % Get the commitments to return from explicit commitment IDs.
     FromCommitmentIDs =
         case ReqCommitments of
             <<"none">> -> [];
@@ -509,13 +514,10 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 % commitment device, if it exists.
                 lists:filter(
                     fun(CommitmentID) ->
-                        Comm = maps:get(CommitmentID, Commitments),
-                        Dev = maps:get(<<"commitment-device">>, Comm, undefined),
-                        case Dev of
-                            ?DEFAULT_ATT_DEVICE ->
-                                not hb_maps:is_key(<<"committer">>, Comm);
-                            _ -> false
-                        end
+                        not maps:is_key(
+                            <<"committer">>,
+                            maps:get(CommitmentID, Commitments)
+                        )
                     end,
                     maps:keys(Commitments)
                 );
