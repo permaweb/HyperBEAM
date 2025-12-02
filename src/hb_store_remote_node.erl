@@ -6,7 +6,7 @@
 -module(hb_store_remote_node).
 -export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
 %%% Public utilities.
--export([maybe_cache/2, maybe_cache/3, maybe_read/2]).
+-export([maybe_cache/2, maybe_cache/3, read_local_cache/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -117,8 +117,8 @@ maybe_cache(StoreOpts, Data, Links) ->
     end.
 
 %% @doc Read local store cached value.
-maybe_read(StoreOpts, ID) ->
-    ?event({maybe_read, StoreOpts, ID}),
+read_local_cache(StoreOpts, ID) ->
+    ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false ->
             not_found;

@@ -46,7 +46,7 @@ read(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
-            case hb_store_remote_node:maybe_read(StoreOpts, ID) of
+            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
                     case hb_gateway_client:read(ID, StoreOpts) of
