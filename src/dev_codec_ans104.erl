@@ -92,8 +92,14 @@ verify(Msg, Req, Opts) ->
     ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
     {ok, TX} = to(OnlyWithCommitment, Req, Opts),
     ?event({verify, {encoded, TX}}),
-    Res = ar_bundles:verify_item(TX),
-    {ok, Res}.
+    case maps:get(<<"type">>, Req) of
+        <<"rsa-pss-sha256">> ->
+            {ok, ar_bundles:verify_item(TX)};
+        <<"unsigned-sha256">> ->
+            ID = hb_util:human_id(TX#tx.unsigned_id),
+            Signature = maps:get(<<"signature">>, Req),
+            {ok, Signature =:= ID }
+    end.
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
