@@ -18,7 +18,8 @@
 %%% module without understanding the full implications. You have been warned.
 -module(hb_maps).
 -export([get/2, get/3, get/4, put/3, put/4, find/2, find/3]).
--export([is_key/2, is_key/3, keys/1, keys/2, values/1, values/2]).
+-export([is_key/2, is_key/3, is_map/1, is_map/2]).
+-export([keys/1, keys/2, values/1, values/2]).
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
 -export([fold/3, fold/4, take/2, take/3, size/1, size/2]).
 -export([merge/2, merge/3, remove/2, remove/3]).
@@ -80,6 +81,14 @@ is_key(Key, Map) ->
 -spec is_key(Key :: term(), Map :: map(), Opts :: map()) -> boolean().
 is_key(Key, Map, Opts) ->
     maps:is_key(Key, hb_cache:ensure_loaded(Map, Opts)).
+
+-spec is_map(Map :: map()) -> boolean().
+is_map(Map) ->
+    is_map(Map, #{}).
+
+-spec is_map(Map :: map(), Opts :: map()) -> boolean().
+is_map(Map, Opts) ->
+    erlang:is_map(hb_cache:ensure_loaded(Map, Opts)).
 
 -spec keys(Map :: map()) -> [term()].
 keys(Map) ->
