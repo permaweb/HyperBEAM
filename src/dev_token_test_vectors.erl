@@ -13,43 +13,60 @@
 %% @doc Generate a base token state with default configuration.
 generate_base_state() ->
     generate_base_state(#{}).
-
 generate_base_state(Overrides) ->
-    ?event({generate_base_state, {overrides, Overrides}}),
+    generate_base_state(Overrides, #{}).
+
+generate_base_state(Params, Opts) ->
+    ?event({generate_base_state, {params, Params}}),
     DefaultBalances = #{ <<"device">> => <<"trie@1.0">> },
-    InitialBalances = maps:get(initial_balances, Overrides, #{}),
-    ?event({initial_balances, InitialBalances}),
-    Balances =
-        case maps:size(InitialBalances) of
-            0 ->
-                ?event({no_initial_balances}),
-                DefaultBalances;
-            _ ->
-                ?event({setting_initial_balances}),
-                % Structure balances directly for trie device - store as integers
-                BalancesWithAccounts = maps:fold(
-                    fun(AccountID, Quantity, Acc) ->
-                        maps:put(AccountID, Quantity, Acc)
-                    end,
-                    DefaultBalances,
-                    InitialBalances
-                ),
-                ?event({balances_structured, BalancesWithAccounts}),
-                BalancesWithAccounts
+    InitialBalances = maps:get(initial_balances, Params, #{}),
+    Total =
+        case maps:find(total_supply, Params) of
+            {ok, TotalSupply} -> TotalSupply;
+            error -> lists:sum(hb_maps:values(InitialBalances, Opts))
         end,
+    ?event({initial_supply, {total, Total}, {balances, InitialBalances}}),
+    {ok, Balances} =
+        hb_ao:resolve(
+            DefaultBalances,
+            InitialBalances#{
+                <<"path">> => <<"set">>
+            },
+            Opts
+        ),
     DefaultState = #{
         <<"device">> => <<"token@1.0">>,
-        <<"owner">> => maps:get(owner, Overrides, ?OWNER),
-        <<"mint-authority">> => maps:get(mint_authority, Overrides, ?MINTER),
+        <<"owner">> => maps:get(owner, Params, ?OWNER),
+        <<"mint-authority">> => maps:get(mint_authority, Params, ?MINTER),
         <<"name">> => <<"Test Token">>,
         <<"ticker">> => <<"TEST">>,
         <<"denomination">> => 12,
-        <<"total-supply">> => maps:get(total_supply, Overrides, 0),
+        <<"total-supply">> => Total,
         <<"balances">> => Balances
     },
-    FinalState = maps:merge(DefaultState, maps:get(extra, Overrides, #{})),
+    FinalState = maps:merge(DefaultState, maps:get(extra, Params, #{})),
     ?event({final_state_generated, {balances_size, map_size(Balances)}}),
     FinalState.
+
+generate_process_state(Params, Opts) ->
+    Addr = hb_util:human_id(hb_opts:get(priv_wallet, no_wallet, Opts)),
+    Extra = maps:get(extra, Params, #{}),
+    ExtraWithProcBase =
+        Extra#{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"execution-device">> => <<"token@1.0">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"push-device">> => <<"push@1.0">>,
+            <<"scheduler">> => Addr,
+            <<"authority">> => Addr
+        },
+    Base =
+        generate_base_state(
+            Params#{ extra => ExtraWithProcBase },
+            Opts
+        ),
+    hb_message:commit(Base, Opts).
 
 %% @doc Create a request message.
 make_request(Action, Body) ->
@@ -58,11 +75,30 @@ make_request(Action, Body) ->
 make_request(Action, Body, Opts) ->
     From = maps:get(from, Opts, ?OWNER),
     Req = #{
-        <<"action">> => Action,
-        <<"body">> => Body#{<<"from">> => From}
+        <<"path">> => <<"compute">>,
+        <<"body">> => Body#{ <<"from">> => From, <<"action">> => Action }
     },
     ?event({make_request, {action, Action}, {from, From}}),
     Req.
+
+schedule_request(State, Action, Body, Wallet, Opts) ->
+    From = hb_util:human_id(Wallet),
+    ?event({scheduling_request, {action, Action}, {from, From}}),
+    Signed =
+        hb_message:commit(
+            Body#{ <<"from">> => From, <<"action">> => Action },
+            Opts#{ priv_wallet => Wallet }
+        ),
+    ?event({signed_request, Signed}),
+    Req =
+        Signed#{
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"schedule">>
+        },
+    ?event({scheduling_request, Req}),
+    {ok, Res} = hb_ao:resolve(State, Req, Opts),
+    ?event({schedule_result, Res}),
+    Res.
 
 %% @doc Get balance for an account.
 get_balance(State, Account) ->
@@ -213,10 +249,8 @@ secure_set_by_owner_test() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"name">> => <<"New Token Name">>,
-                <<"ticker">> => <<"NEW">>
-            }
+            <<"name">> => <<"New Token Name">>,
+            <<"ticker">> => <<"NEW">>
         },
         #{from => ?OWNER}
     ),
@@ -230,9 +264,7 @@ secure_set_by_minter_test() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"description">> => <<"Token description">>
-            }
+            <<"description">> => <<"Token description">>
         },
         #{from => ?MINTER}
     ),
@@ -248,9 +280,7 @@ secure_set_unauthorized_test() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"name">> => <<"Hacked Name">>
-            }
+            <<"name">> => <<"Hacked Name">>
         },
         #{from => ?BOB}  % Bob is neither owner nor minter
     ),
@@ -741,12 +771,10 @@ secure_set_multiple_fields_test() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"name">> => <<"Updated Token">>,
-                <<"ticker">> => <<"UPD">>,
-                <<"denomination">> => 18,
-                <<"description">> => <<"A comprehensive test token">>
-            }
+            <<"name">> => <<"Updated Token">>,
+            <<"ticker">> => <<"UPD">>,
+            <<"denomination">> => 18,
+            <<"description">> => <<"A comprehensive test token">>
         },
         #{from => ?OWNER}
     ),
@@ -763,11 +791,9 @@ secure_set_custom_fields_test() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"logo">> => <<"https://example.com/logo.png">>,
-                <<"website">> => <<"https://example.com">>,
-                <<"social-twitter">> => <<"@testtoken">>
-            }
+            <<"logo">> => <<"https://example.com/logo.png">>,
+            <<"website">> => <<"https://example.com">>,
+            <<"social-twitter">> => <<"@testtoken">>
         },
         #{from => ?OWNER}
     ),
@@ -786,7 +812,7 @@ secure_set_sequential_test() ->
     Req1 = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{<<"name">> => <<"First Name">>}
+            <<"name">> => <<"First Name">>
         },
         #{from => ?OWNER}
     ),
@@ -796,7 +822,7 @@ secure_set_sequential_test() ->
     Req2 = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{<<"name">> => <<"Second Name">>}
+            <<"name">> => <<"Second Name">>
         },
         #{from => ?OWNER}
     ),
@@ -1065,11 +1091,9 @@ cant_directly_modify_balances_via_set_test_disabled() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"balances">> => #{
-                    <<"device">> => <<"trie@1.0">>, 
-                    ?ALICE => 999999
-                }
+            <<"balances">> => #{
+                <<"device">> => <<"trie@1.0">>, 
+                ?ALICE => 999999
             }
         },
         #{from => ?OWNER}
@@ -1099,9 +1123,7 @@ cant_directly_modify_supply_via_set_test_disabled() ->
     Req = make_request(
         <<"set">>,
         #{
-            <<"updates">> => #{
-                <<"total-supply">> => 999_999_999
-            }
+            <<"total-supply">> => 999_999_999
         },
         #{from => ?OWNER}
     ),
@@ -1127,7 +1149,7 @@ authority_change_enforced_immediately_test() ->
     NewMinter = <<"new-minter-id">>,
     Req1 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"mint-authority">> => NewMinter}},
+        #{ <<"mint-authority">> => NewMinter },
         #{from => ?OWNER}
     ),
     {ok, State1} = dev_token:compute(Base, Req1, #{}),
@@ -1506,14 +1528,14 @@ both_owner_and_minter_can_set_test() ->
     Base = generate_base_state(),
     Req1 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"name">> => <<"Owner Updated">>}},
+        #{ <<"name">> => <<"Owner Updated">> },
         #{from => ?OWNER}
     ),
     {ok, State1} = dev_token:compute(Base, Req1, #{}),
     ?assertEqual(<<"Owner Updated">>, hb_ao:get(<<"name">>, State1, #{})),
     Req2 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"ticker">> => <<"MINT">>}},
+        #{ <<"ticker">> => <<"MINT">> },
         #{from => ?MINTER}
     ),
     {ok, State2} = dev_token:compute(State1, Req2, #{}),
@@ -1527,14 +1549,14 @@ owner_change_revokes_old_owner_test() ->
     NewOwner = <<"new-owner-id">>,
     Req1 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"owner">> => NewOwner}},
+        #{ <<"owner">> => NewOwner },
         #{from => ?OWNER}
     ),
     {ok, State1} = dev_token:compute(Base, Req1, #{}),
     ?assertEqual(NewOwner, hb_ao:get(<<"owner">>, State1, #{})),
     Req2 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"name">> => <<"Old Owner Try">>}},
+        #{ <<"name">> => <<"Old Owner Try">> },
         #{from => ?OWNER}
     ),
     ?assertMatch(
@@ -1543,7 +1565,7 @@ owner_change_revokes_old_owner_test() ->
     ),
     Req3 = make_request(
         <<"set">>,
-        #{<<"updates">> => #{<<"name">> => <<"New Owner Success">>}},
+        #{ <<"name">> => <<"New Owner Success">> },
         #{from => NewOwner}
     ),
     {ok, State2} = dev_token:compute(State1, Req3, #{}),
@@ -2020,50 +2042,214 @@ mint_batch_mixed_valid_invalid_quantities_test() ->
     % Total supply should be only valid mints
     ?assertEqual(3000, hb_ao:get(<<"total-supply">>, State, #{})).
 
+simple_process_test() ->
+    hb:init(),
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [hb_test_utils:test_store()]
+        },
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = hb_util:human_id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = hb_util:human_id(BobWallet),
+    Base =
+        generate_process_state(
+            #{
+                initial_balances =>
+                    #{ AliceAddr => 1_000_000_000 }
+            },
+            Opts
+        ),
+    ?event({base_state, Base}),
+    SchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceAddr,
+                <<"recipient">> => BobAddr,
+                <<"quantity">> => 1
+            },
+            AliceWallet,
+            Opts
+        ),
+    {ok, State} =
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"path">> => <<"compute">>,
+                <<"slot">> =>
+                    hb_maps:get(
+                        <<"slot">>,
+                        SchedRes,
+                        none,
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    ?assertEqual(999_999_999, get_balance(State, AliceAddr)),
+    ?assertEqual(1, get_balance(State, BobAddr)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, #{})).
+
 %%% Benchmark Tests
+
 benchmark_transfers_test() ->
     hb:init(),
-    % Setup: Alice has 1 billion tokens
+    % Benchmark N transfers
+    Transfers = 100,
+    Accounts = 1_000,
+    % Setup: Alice has 1 billion tokens, the rest have 1 billion tokens each
     Base = generate_base_state(#{
-        initial_balances => #{?ALICE => 1_000_000_000}
+        initial_balances =>
+            hb_maps:from_list(
+                [
+                    {?ALICE, 1_000_000_000}
+                ] ++
+                [
+                        {
+                            hb_util:human_id(crypto:strong_rand_bytes(32)),
+                            1_000_000_000
+                        }
+                    ||
+                        _ <- lists:seq(1, Accounts - 1)
+                ]
+            )
     }),
-    % Benchmark 100 transfers
-    N = 100,
-    StartTime = erlang:monotonic_time(microsecond),
-    FinalState = lists:foldl(
-        fun(_I, State) ->
-            Req = make_request(
+    Reqs =
+        [
+            make_request(
                 <<"transfer">>,
                 #{
                     <<"from">> => ?ALICE,
                     <<"recipient">> => ?BOB,
-                    <<"quantity">> => 1
+                    <<"quantity">> => 1,
+                    <<"transfer-number">> => I
                 },
-                #{from => ?ALICE}
-            ),
-            {ok, NewState} = dev_token:compute(State, Req, #{}),
-            NewState
-        end,
-        Base,
-        lists:seq(1, N)
+                #{ from => ?ALICE }
+            )
+            ||
+                I <- lists:seq(1, Transfers)
+        ],
+    AOCoreStartTime = erlang:monotonic_time(millisecond),
+    AOCoreInvokedState =
+        lists:foldl(
+            fun(Req, State) ->
+                {ok, NewState} = hb_ao:resolve(State, Req, #{}),
+                NewState#{ <<"results">> => #{} }
+            end,
+            Base,
+            Reqs
+        ),
+    AOCoreEndTime = erlang:monotonic_time(millisecond),
+    hb_test_utils:benchmark_print(
+        <<"AOCore invoked transfers">>,
+        <<"transfers">>,
+        Transfers,
+        (AOCoreEndTime - AOCoreStartTime) / 1000
     ),
-    EndTime = erlang:monotonic_time(microsecond),
-    ElapsedMs = (EndTime - StartTime) / 1000,
-    TxPerSec = (N / ElapsedMs) * 1000,
-    ?event(benchmark, 
-        {benchmark_transfers,
-            {count, N},
-            {elapsed_ms, ElapsedMs},
-            {tx_per_sec, TxPerSec}
-        }
+    DirectStartTime = erlang:monotonic_time(millisecond),
+    DirectlyInvokedState =
+        lists:foldl(
+            fun(Req, State) ->
+                {ok, NewState} = dev_token:compute(State, Req, #{}),
+                NewState#{ <<"results">> => #{} }
+            end,
+            Base,
+            Reqs
+        ),
+    DirectEndTime = erlang:monotonic_time(millisecond),
+    hb_test_utils:benchmark_print(
+        <<"Directly invoked transfers">>,
+        <<"transfers">>,
+        Transfers,
+        (DirectEndTime - DirectStartTime) / 1000
     ),
     % Verify correctness
-    ?assertEqual(1_000_000_000 - N, get_balance(FinalState, ?ALICE)),
-    ?assertEqual(N, get_balance(FinalState, ?BOB)).
+    ?assertEqual(
+        1_000_000_000 - Transfers,
+        get_balance(DirectlyInvokedState, ?ALICE)
+    ),
+    ?assertEqual(
+        Transfers,
+        get_balance(DirectlyInvokedState, ?BOB)
+    ),
+    ?assert(hb_message:match(DirectlyInvokedState, AOCoreInvokedState, strict, #{})).
+
+benchmark_process_transfers_test_() ->
+    {timeout, 180, fun benchmark_process_transfers_test/0}.
+benchmark_process_transfers_test() ->
+    hb:init(),
+    % Benchmark N transfers
+    Transfers = 1_000,
+    Accounts = 300_000,
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [hb_test_utils:test_store()]
+        },
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = hb_util:human_id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = hb_util:human_id(BobWallet),
+    % Setup: Alice has 1 billion tokens, the rest have 1 billion tokens each
+    Base =
+        generate_process_state(
+            #{
+                initial_balances =>
+                    hb_maps:from_list(
+                        [
+                            {AliceAddr, 1_000_000_000}
+                        ] ++
+                        [
+                            {
+                                hb_util:human_id(crypto:strong_rand_bytes(32)),
+                                1_000_000_000
+                            }
+                            ||
+                                _ <- lists:seq(1, Accounts - 1)
+                        ]
+                    )
+            },
+            Opts
+        ),
+    lists:foreach(
+        fun(I) ->
+            schedule_request(
+                Base,
+                <<"transfer">>,
+                #{
+                    <<"from">> => AliceAddr,
+                    <<"recipient">> => BobAddr,
+                    <<"quantity">> => 1,
+                    <<"transfer-number">> => I
+                },
+                AliceWallet,
+                Opts
+            )
+        end,
+        lists:seq(1, Transfers)
+    ),
+    NowStartTime = erlang:monotonic_time(millisecond),
+    {ok, State} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    NowEndTime = erlang:monotonic_time(millisecond),
+    hb_test_utils:benchmark_print(
+        <<"Process transfers">>,
+        <<"transfers">>,
+        Transfers,
+        (NowEndTime - NowStartTime) / 1000
+    ),
+    ?assertEqual(1_000_000_000 - Transfers, get_balance(State, AliceAddr)),
+    ?assertEqual(Transfers, get_balance(State, BobAddr)),
+    ?assertEqual(
+        1_000_000_000 * Accounts,
+        hb_ao:get(<<"total-supply">>, State, #{})
+    ).
 
 benchmark_batch_mint_test() ->
     hb:init(),
-    NumRecipients = 10000,  
+    NumRecipients = 10_000,  
     Base = generate_base_state(),
     % Create batch with NumRecipients recipients
     Recipients = [
@@ -2080,16 +2266,14 @@ benchmark_batch_mint_test() ->
         #{from => ?MINTER}
     ),
     % Benchmark batch mint
-    StartTime = erlang:monotonic_time(microsecond),
+    StartTime = erlang:monotonic_time(millisecond),
     {ok, NewState} = dev_token:compute(Base, Req, #{}),
-    EndTime = erlang:monotonic_time(microsecond),
-    ElapsedMs = (EndTime - StartTime) / 1000,
-    ?event(benchmark, 
-        {benchmark_batch_mint,
-            {recipients, NumRecipients},
-            {elapsed_ms, ElapsedMs},
-            {ms_per_recipient, ElapsedMs / NumRecipients}
-        }
+    EndTime = erlang:monotonic_time(millisecond),
+    hb_test_utils:benchmark_print(
+        <<"Token Batch Mint">>,
+        <<"recipients">>,
+        NumRecipients,
+        (EndTime - StartTime) / 1000
     ),
     ?assertEqual(
         NumRecipients * 1000, 
