@@ -1,17 +1,28 @@
 %%% @doc A fast, simple implementation of AO token specification.
 %%% Specification: https://cookbook_ao.arweave.net/references/api/token.html
 -module(dev_token).
--export([compute/3]).
+-export([compute/3, init/3, normalize/3, snapshot/3]).
 -include_lib("include/hb.hrl").
+
+%% @doc No-op on process initialization.
+init(Base, _Req, _Opts) ->
+    {ok, Base}.
+
+%% @doc No-op on normalization.
+normalize(Base, _Req, _Opts) ->
+    {ok, Base}.
+
+%% @doc No special processing for the creation of snapshots.
+snapshot(Base, _Req, _Opts) ->
+    {ok, Base}.
 
 %% @doc Entrypoint for computations on token processes. Expects the `action'
 %% key to hold the function to call.
 compute(Base, Req, Opts) ->
-    case enforce_security(Base, Req, Opts) of
-        {ok, SecureBase} ->
-            route(SecureBase, Req, Opts);
-        {error, Reason} ->
-            {error, Reason}
+    maybe
+        {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
+        {ok, MintNormBase} ?= normalize_mint(SecureBase, Req, Opts),
+        route(MintNormBase, Req, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
@@ -21,14 +32,14 @@ enforce_security(Base, _Req, _Opts) ->
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
 route(Base, Req, Opts) ->
-    ActionBin = hb_ao:get(<<"action">>, Req, Opts),
-    case ActionBin of
+    ActionBin = hb_ao:get(<<"body/action">>, Req, Opts),
+    case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"mint">> -> mint(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
         _ ->
-            ?event(warning, {unsupported_token_action, ActionBin}),
-            {error, <<"Unsupported token action: `", ActionBin/binary, "'.">>}
+            ?event(error, {unsupported_token_action, ActionBin}),
+            {ok, Base}
     end.
 
 transfer(Base, Assignment, Opts) ->
@@ -38,6 +49,8 @@ transfer(Base, Assignment, Opts) ->
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
+        % Normalize the base's minting state for the sender.
+        {ok, NormBase} ?= normalize_mint(Base, #{ <<"subject">> => From }, Opts),
         ?event({req, Req, from, From}),
         true ?= validate_address(Recipient),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
@@ -45,14 +58,14 @@ transfer(Base, Assignment, Opts) ->
         % Handle self-transfer: skip balance updates
         case From =:= Recipient of
             true ->
-                send(
+                dev_process_lib:send(
                     transfer_notices(From, Recipient, Quantity, Req, Opts),
-                    Base, 
+                    NormBase, 
                     Opts
                 );
             false ->
                 transfer_between_accounts(
-                    Base, 
+                    NormBase, 
                     From, 
                     Recipient, 
                     Quantity, 
@@ -102,7 +115,7 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
             ),
         % Update the base state and send notices.
         NewBase = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
-        send(
+        dev_process_lib:send(
             transfer_notices(From, Recipient, Quantity, Req, Opts), 
             NewBase, 
             Opts
@@ -110,8 +123,8 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
-    % Extract forwarded tags (X- prefixed fields from request)
-    ForwardedTags = extract_forwarded_tags(Req, Opts),
+    % Extract forwarded keys (X- prefixed fields from request)
+    ForwardedKeys = dev_process_lib:forwarded_keys(Req, Opts),
     DebitNotice = maps:merge(
         #{
             <<"action">> => <<"Debit-Notice">>,
@@ -119,7 +132,7 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
             <<"quantity">> => Quantity,
             <<"target">> => From              
         },
-        ForwardedTags
+        ForwardedKeys
     ),
     CreditNotice = maps:merge(
         #{
@@ -128,14 +141,40 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
             <<"sender">> => From,             
             <<"quantity">> => Quantity
         },
-        ForwardedTags
+        ForwardedKeys
     ),
     [DebitNotice, CreditNotice].
 
 mint(Base, Assignment, Opts) ->
+    case has_mint_device(Base, Opts) of
+        false -> default_mint(Base, Assignment, Opts);
+        true ->
+            dev_process_lib:run_as(
+                <<"mint">>,
+                Base,
+                Assignment,
+                Opts
+            )
+    end.
+
+normalize_mint(Base, Assignment, Opts) ->
+    case has_mint_device(Base, Opts) of
+        false -> {ok, Base};
+        true ->
+            Req = hb_ao:get(Assignment, <<"body">>, #{}, Opts),
+            MaybeSubject = hb_maps:with([<<"subject">>], Req, Opts),
+            dev_process_lib:run_as(
+                <<"mint">>,
+                Base,
+                MaybeSubject#{ <<"path">> => <<"drip">> },
+                Opts
+            )
+    end.
+
+default_mint(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
-        {ok, Base} ?= enforce_mint_authority(Base, Req, Opts),
+        true ?= enforce_mint_authority(Base, Req, Opts),
         case hb_ao:get(<<"mode">>, Req, <<"single">>, Opts) of
             <<"single">> -> mint_single(Base, Req, Opts);
             <<"batch">> -> mint_batch(Base, Req, Opts);
@@ -143,11 +182,17 @@ mint(Base, Assignment, Opts) ->
         end
     end.
 
+has_mint_device(Base, Opts) ->
+    case hb_ao:get(<<"mint-device">>, Base, Opts) of
+        not_found -> false;
+        _ -> true
+    end.
+
 enforce_mint_authority(Base, Req, Opts) ->
     Minter = hb_ao:get(<<"from">>, Req, Opts),
     case hb_ao:get(<<"mint-authority">>, Base, Opts) of
+        Minter -> true;
         not_found -> {error, <<"Mint authority not found.">>};
-        Minter -> {ok, Base};
         _ -> {error, <<"Mint authority mismatch.">>}
     end.
 
@@ -237,17 +282,16 @@ perform_mint(Base, RawQuantities, Opts) ->
                 end,
                 maps:to_list(Quantities)
             ),
-        send(Notices, NewBaseWithBalAndSupply, Opts)
+        dev_process_lib:send(Notices, NewBaseWithBalAndSupply, Opts)
     end.
 
 secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
-        {ok, Base} ?= enforce_set_authority(Base, Req, Opts),
-        {ok, Updates} ?= hb_ao:resolve(Req, <<"updates">>, Opts),
+        true ?= enforce_set_authority(Base, Req, Opts),
+        %NewKeys = hb_ao:set(Req, <<"path">>, unset, Opts),
         % Apply updates to base state
-        NewBase = hb_maps:merge(Base, Updates, Opts),
-        {ok, NewBase}
+        hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
 
 enforce_set_authority(Base, Req, Opts) ->
@@ -259,24 +303,14 @@ enforce_set_authority(Base, Req, Opts) ->
         {not_found, not_found} ->
             {error, <<"No owner or mint-authority found.">>};
         {Setter, _} ->
-            {ok, Base};
+            true;
         {_, Setter} ->
-            {ok, Base};
+            true;
         _ ->
             {error, <<"Set authority mismatch.">>}
     end.
 
-%%% Process helper functions.
-
-send(Msg, Base, Opts) when not is_list(Msg) ->
-    send([Msg], Base, Opts);
-send(Msgs, Base, Opts) ->
-    CurrentOutbox = hb_ao:get(<<"results/outbox">>, Base, [], Opts),
-    NewOutbox = hb_util:message_to_ordered_list(CurrentOutbox, Opts) ++ Msgs,
-    {
-        ok,
-        hb_ao:set(Base, <<"results/outbox">>, NewOutbox, Opts)
-    }.
+%%% Helper functions.
 
 %% @doc Validate address format for security
 validate_address(Address) when is_binary(Address) ->
@@ -295,28 +329,3 @@ validate_address(Address) when is_binary(Address) ->
     end;
 validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
-
-%% @doc Extract tags with X- prefix for forwarding in notices
-%% Follows AO token spec: tags beginning with "X-" are forwarded
-%% Case-insensitive matching (both "x-" and "X-" are forwarded)
-extract_forwarded_tags(Req, _Opts) ->
-    case is_map(Req) of
-        true ->
-            maps:fold(
-                fun(Key, Value, Acc) when is_binary(Key) ->
-                    case byte_size(Key) >= 2 of
-                        true ->
-                            Prefix = binary:part(Key, 0, 2),
-                            case string:lowercase(Prefix) of
-                                <<"x-">> -> maps:put(Key, Value, Acc);
-                                _ -> Acc
-                            end;
-                        false -> Acc
-                    end;
-                (_Key, _Value, Acc) -> Acc
-                end,
-                #{},
-                Req
-            );
-        false -> #{}
-    end.
