@@ -270,6 +270,8 @@ resolve_path_links(Opts, Path, Depth) ->
 %% Internal helper that accumulates the resolved path
 resolve_path_links_acc(_Opts, [], AccPath, _Depth) ->
     % No more segments to process
+    % TODO: Should this return not_found?
+    % Maybe not, not_found whould only be returned by `type`, `read`, etc.
     {ok, lists:reverse(AccPath)};
 resolve_path_links_acc(_, FullPath = [<<"data">>|_], [], _Depth) ->
     {ok, FullPath};

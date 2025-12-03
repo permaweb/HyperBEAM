@@ -425,7 +425,7 @@ read_all_commitments_by_store(Msg, [Store | ReaminingStores], Opts) ->
                             Store,
                             [CommitmentsPath, CommitmentID]
                         ),
-                    case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
+                    case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts#{store => Store}) of
                         {ok, Commitment} ->
                             {
                                 true,

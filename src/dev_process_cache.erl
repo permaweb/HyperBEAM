@@ -136,9 +136,8 @@ first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
     not_found;
 first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
     RawPath = path(ProcID, Slot, RequiredPath, Opts),
-    ResolvedPath = hb_store:resolve(Store, RawPath),
-    ?event({trying_slot, {slot, Slot}, {path, RawPath}, {resolved_path, ResolvedPath}}),
-    case hb_store:type(Store, ResolvedPath) of
+    ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
+    case hb_store_common:resolved_type(Store, RawPath) of
         not_found ->
             first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
         _ ->

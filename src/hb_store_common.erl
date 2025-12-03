@@ -2,14 +2,13 @@
 %%
 %% Common store access patterns should be defined here.
 %%
-%% TODO: 
-%% - Find other cases where type/resolve/read are used together in the same function.
-%% - Look into type/read cache miss? Jack was working on it, but maybe I can pick it up (at least my understanding from the meeting)
+%% TODO:
+%% - Test list/1
 %% - Make tests for stores more generic, avoid individual tests (there are some in S3 that can be applied to LMDB).
-%%  - But since S3 isn't in edge, this should be another PR.
 
 -module(hb_store_common).
--export([list/2, store_read/3]).
+-export([list/2, resolve/2, store_read/3]).
+-export([resolved_list/2, resolved_type/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -29,6 +28,63 @@ list(Path, [Store | RemainingStores]) ->
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
         _ -> list(Path, RemainingStores)
+    end.
+
+%% NOTE: resolved_read/2 not needed because stores normally implement 
+%% resolve/2 inside read/2.
+
+%% Old version, to be deleted before merge
+resolved_list2(Store, Path) ->
+    ResolvedPath = hb_store:resolve(Store, Path),
+    hb_store:list(Store, ResolvedPath).
+
+resolved_list(Stores, Path) when is_list(Stores) ->
+    do_resolved_list(Stores, Path);
+resolved_list(Store, Path) -> 
+    do_resolved_list([Store], Path).
+
+do_resolved_list([], _Path) ->
+    not_found;
+do_resolved_list([Store|RemainingStores], Path) ->
+    ResolvedPath = hb_store:resolve(Store, Path),
+    erlang:display([{path, Path}, {resolved_path, ResolvedPath}]),
+    ?event({resolved_list, {path, Path}, {resolved_path, ResolvedPath}}),
+    case hb_store:list(Store, ResolvedPath) of 
+        {ok, _} = Result -> Result;
+        not_found -> do_resolved_list(RemainingStores, Path)
+    end.
+
+%% Old version, to be deleted before merge
+resolved_type2(Store, Path) -> 
+    ResolvedPath = hb_store:resolve(Store, Path),
+    ?event({resolved_type, {path, Path}, {resolved_path, ResolvedPath}}),
+    hb_store:type(Store, ResolvedPath).
+
+resolved_type(Stores, Path) when is_list(Stores) ->
+    do_resolved_type(Stores, Path);
+resolved_type(Store, Path) -> 
+    do_resolved_type([Store], Path).
+
+do_resolved_type([], _Path) -> not_found;
+do_resolved_type([Store|RemainingStores], Path) -> 
+    ResolvedPath = hb_store:resolve(Store, Path),
+    ?event({resolved_type, {path, Path}, {resolved_path, ResolvedPath}}),
+    case hb_store:type(Store, ResolvedPath) of 
+        Result when Result =/= not_found -> Result;
+        _ -> do_resolved_type(RemainingStores, Path)
+    end.
+
+%% TODO: This should replace the retry logic in the `hb_store:resolve` 
+resolve(Store, Opts) when not is_list(Store) ->
+    resolve([Store], Opts);
+resolve(Stores, Path) -> 
+    do_resolve(Stores, Path).
+
+do_resolve([], _Path) -> false;
+do_resolve([Store|RemainingStores], Path) ->
+    case hb_store:type(Store, Path) of
+        not_found -> false;
+        _ -> {true, hb_store:resolve(RemainingStores, Path)}
     end.
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
@@ -259,22 +315,9 @@ types_to_implicit(Types) ->
 
 %% Tests
 
-%% @doc Initialize multiple stores
-get_multiple_stores() -> 
-    Store1 = hb_test_utils:test_store(hb_store_lmdb, <<"store1">>),
-    Store2 = hb_test_utils:test_store(hb_store_lmdb, <<"store2">>),
-    [Store1, Store2].
-
-%% @doc Shutdown multiple stores
-shutdown_stores([]) -> ok;
-shutdown_stores([Store | RemainingStores]) -> 
-    hb_store:reset(Store),
-    hb_store:stop(Store),
-    shutdown_stores(RemainingStores).
-
 %% @doc Read value from Store1 and Store2 when is only available in Store2
 multiple_stores_store_read_test() ->
-    [Store1, Store2] = Stores = get_multiple_stores(),
+    [_Store1, Store2] = Stores = get_multiple_stores(),
     %% Write test data
     hb_store:make_group(Store2, <<"group1">>),
     hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
@@ -283,6 +326,65 @@ multiple_stores_store_read_test() ->
     %% Check result
     Opts = #{},
     Path = <<"random_id">>,
-    Content = store_read(Path, [Store1, Store2], Opts),
-    ?assertMatch({ok, #{<<"data">> := _}}, Content),
-    shutdown_stores(Stores).
+    Content = store_read(Path, Stores, Opts),
+    try 
+        ?assertMatch({ok, #{<<"data">> := _}}, Content)
+    after
+        shutdown_stores(Stores)
+    end.
+
+%% @doc Test that resolve and type must be made in the same store, 
+%% when multiple stores are provided.
+resolved_type_test() -> 
+    [_Store1, Store2] = Stores = get_multiple_stores(),
+    %% Write test data
+    hb_store:make_group(Store2, <<"group1">>),
+    hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
+    hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
+    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
+    %% Check result
+    RawPath = <<"random_id/data">>,
+    Result = resolved_type(Stores, RawPath),
+    try
+        ?assertEqual(simple, Result)
+    after
+        shutdown_stores(Stores)
+    end.
+
+%% @doc Test that resolve and list must be made in the same store, 
+%% when multiple stores are provided.
+resolved_list_test() -> 
+    [_Store1, Store2] = Stores = get_multiple_stores(),
+    %% Write test data
+    hb_store:make_group(Store2, <<"group1">>),
+    hb_store:make_group(Store2, <<"group1/group12">>),
+    hb_store:write(Store2, <<"data/final_id2">>, <<"7890">>),
+    %% Link 
+    %% TODO: Not sure if this structure is possible in HB
+    hb_store:make_link(Store2, <<"data/final_id2">>, <<"group1/group12/data">>),
+    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
+    %% Check result
+    RawPath = <<"random_id/group12">>,
+    Result = resolved_list(Stores, RawPath),
+    try
+        ?assertEqual({ok, [<<"data">>]}, Result)
+    after
+        shutdown_stores(Stores)
+    end.
+
+%% Test utilities
+
+%% @doc Initialize multiple stores
+get_multiple_stores() -> 
+    get_multiple_stores(hb_store_lmdb).
+get_multiple_stores(StoreModule) -> 
+    Store1 = hb_test_utils:test_store(StoreModule, <<"store1">>),
+    Store2 = hb_test_utils:test_store(StoreModule, <<"store2">>),
+    [Store1, Store2].
+
+%% @doc Shutdown multiple stores
+shutdown_stores([]) -> ok;
+shutdown_stores([Store | RemainingStores]) -> 
+    hb_store:reset(Store),
+    hb_store:stop(Store),
+    shutdown_stores(RemainingStores).
