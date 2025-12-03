@@ -17,6 +17,9 @@
 %% @doc Start a scheduling server for a given computation.
 start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
+    NotifyPID = self(),
+    Ref = make_ref(),
+    PID =
     spawn_link(
         fun() ->
             % Before we start, register the scheduler name.
@@ -53,6 +56,7 @@ start(ProcID, Proc, Opts) ->
                     {base_state_hashpath, BaseStateHashpath}
                 }
             ),
+            NotifyPID ! {server_started, Ref},
             server(
                 #{
                     id => ProcID,
@@ -71,7 +75,8 @@ start(ProcID, Proc, Opts) ->
                 }
             )
         end
-    ).
+    ),
+    receive {server_started, Ref} -> PID end.
 
 %% @doc Determine the appropriate list of keys to use to commit assignments for
 %% a process.
