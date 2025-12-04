@@ -21,8 +21,8 @@ snapshot(Base, _Req, _Opts) ->
 compute(Base, Req, Opts) ->
     maybe
         {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
-        {ok, MintNormBase} ?= normalize_mint(SecureBase, Req, Opts),
-        route(MintNormBase, Req, Opts)
+        % {ok, MintNormBase} ?= normalize_mint(SecureBase, Req, Opts),
+        route(SecureBase, Req, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
@@ -161,8 +161,9 @@ normalize_mint(Base, Assignment, Opts) ->
     case has_mint_device(Base, Opts) of
         false -> {ok, Base};
         true ->
-            Req = hb_ao:get(Assignment, <<"body">>, #{}, Opts),
-            MaybeSubject = hb_maps:with([<<"subject">>], Req, Opts),
+            ?event({minting, Assignment}),
+            % Req = hb_ao:get(Assignment, <<"body">>, #{}, Opts),
+            MaybeSubject = hb_maps:with([<<"subject">>], Assignment, Opts),
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,

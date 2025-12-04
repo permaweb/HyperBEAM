@@ -107,6 +107,76 @@ get_balance(State, Account, Opts) ->
     Balances = hb_ao:get(<<"balances">>, State, Opts),
     hb_ao:get(Account, Balances, 0, Opts).
 
+%%% Integration Test Helpers (Token + Pot)
+
+%% @doc Generate pot fields for integration testing
+%% Returns a map of pot state fields that can be merged into token state
+%% Note: Only includes initial fields. Dynamic fields (minted, accumulator,
+%% undistributed-mint) are created by drip_global()
+generate_pot_fields(Params) ->
+    generate_pot_fields(Params, #{}).
+
+generate_pot_fields(Params, Opts) ->
+    MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
+    MintProp = hb_maps:get(mint_prop, Params, {1, 2}, Opts),
+    Resources = hb_maps:get(resources, Params, #{}, Opts),
+    % Calculate total weighted units from resources
+    TWU = hb_maps:fold(
+        fun(_ResourceID, Resource, Acc) ->
+            Weight = hb_maps:get(<<"weight">>, Resource, 0, Opts),
+            TotalDeposits = hb_maps:get(<<"total-deposits">>, Resource, 0, Opts),
+            Acc + (Weight * TotalDeposits)
+        end,
+        0,
+        Resources,
+        Opts
+    ),
+    #{
+        <<"mint-device">> => <<"pot@1.0">>,
+        <<"t">> => hb_maps:get(t, Params, 0, Opts),
+        <<"last-drip">> => hb_maps:get(last_drip, Params, 0, Opts),
+        <<"mint-cap">> => MintCap,
+        <<"mint-prop">> => MintProp,
+        <<"total-weighted-units">> => TWU,
+        <<"resources">> => Resources
+    }.
+
+%% @doc Helper to create a pot resource with deposits
+%% Example: pot_resource(100, [{?ALICE, 10}, {?BOB, 5}])
+pot_resource(Weight, UserDeposits) ->
+    Deposits = hb_maps:from_list([
+        {User, #{
+            <<"quantity">> => Qty,
+            <<"last-resource-accumulator">> => 0
+        }}
+        || {User, Qty} <- UserDeposits
+    ]),
+    TotalDeposits = lists:sum([Qty || {_User, Qty} <- UserDeposits]),
+    #{
+        <<"weight">> => Weight,
+        <<"accumulator">> => 0,
+        <<"last-global-accumulator">> => 0,
+        <<"total-deposits">> => TotalDeposits,
+        <<"deposits">> => Deposits
+    }.
+
+%% @doc Generate integrated token+pot state
+generate_integrated_state(Params) ->
+    generate_integrated_state(Params, #{}).
+
+generate_integrated_state(Params, Opts) ->
+    PotResources = hb_maps:get(pot_resources, Params, #{}, Opts),
+    PotParams = hb_maps:with(
+        [mint_cap, mint_prop, t, last_drip],
+        Params,
+        Opts
+    ),
+    PotFields = generate_pot_fields(PotParams#{resources => PotResources}, Opts),
+    % Generate base token state with pot fields merged in
+    ExistingExtra = hb_maps:get(extra, Params, #{}, Opts),
+    MergedExtra = hb_maps:merge(ExistingExtra, PotFields, Opts),
+    generate_base_state(Params#{extra => MergedExtra}, Opts).
+
 %%% Transfer Tests
 
 transfer_basic_test() ->
@@ -2092,6 +2162,39 @@ simple_process_test() ->
     ?assertEqual(999_999_999, get_balance(State, AliceAddr)),
     ?assertEqual(1, get_balance(State, BobAddr)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, #{})).
+
+%%% Integration Tests (Token + Pot)
+
+%% @doc Basic test to see what happens when transfer is called with mint-device=pot
+transfer_with_pot_mint_device_basic_test() ->
+    hb:init(),
+    ResourceOxygen = <<"oxygen">>,
+    % Create integrated state: Alice has 1000 tokens, resource oxygen
+    Base = generate_integrated_state(#{
+        initial_balances => #{?ALICE => 1000},
+        total_supply => 1000,
+        mint_cap => 10000,
+        mint_prop => {1, 2},  
+        pot_resources => #{
+            ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+        }
+    }),
+    ?event({base_state_created, Base}),
+    % Alice transfers 300 tokens to Bob
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => 300
+        },
+        #{from => ?ALICE}
+    ),
+    ?event({request, Req}),
+    {ok,Result} = dev_token:compute(Base, Req, #{}),
+    ?event({compute_result, Result}),
+    ?assertEqual(700, get_balance(Result, ?ALICE)),
+    ?assertEqual(300, get_balance(Result, ?BOB)),
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, #{})).
 
 %%% Benchmark Tests
 
