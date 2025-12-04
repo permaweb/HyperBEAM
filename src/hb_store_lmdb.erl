@@ -369,9 +369,26 @@ list(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
-        {error, not_found} -> not_found;  % Normalize new error format
-        not_found -> not_found  % Handle both old and new format
+        {error, not_found} -> compatibility_not_found(DBInstance, Path);  % Normalize new error format
+        not_found -> compatibility_not_found(DBInstance, Path)  % Handle both old and new format
     end.
+
+compatibility_not_found(DBInstance, Path) ->
+    case elmdb:get(DBInstance, remove_ending_slash(Path)) of 
+        {ok, <<"group">>} -> {ok, []};
+        _ -> not_found 
+    end.
+
+remove_ending_slash(Path) -> 
+    list_to_binary(
+    string:reverse(
+        do_remove_ending_slash(
+            string:reverse(Path)
+        )
+    )).
+
+do_remove_ending_slash(["/" | Path]) -> Path;
+do_remove_ending_slash(Path) -> Path.
 
 %% @doc Match a series of keys and values against the database. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no

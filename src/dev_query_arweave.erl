@@ -296,10 +296,12 @@ commitment_id_to_base_id(ID, Opts) ->
 %% @doc Find all IDs for a message, by any of its other IDs.
 all_ids(ID, Opts) ->
     Store = hb_opts:get(store, no_store, Opts),
-    case hb_store:list(Store, << ID/binary, "/commitments">>) of
-        {ok, []} -> [ID];
-        {ok, CommitmentIDs} -> CommitmentIDs;
-        _ -> []
+    case hb_store_common:resolved_list(Store, << ID/binary, "/commitments">>) of
+        {ok, CommitmentIDs} -> 
+            CommitmentIDs;
+        not_found -> 
+            %% Add ID to fetch as a message
+            [ID]
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be
@@ -314,7 +316,8 @@ resolve_ids(IDs, Opts) ->
     lists:map(
         fun(ID) ->
             case hb_cache:read(ID, Opts) of
-                {ok, Msg} -> hb_message:id(Msg, uncommitted, Scoped);
+                {ok, Msg} -> 
+                    hb_message:id(Msg, uncommitted, Scoped);
                 not_found -> ID
             end
         end,

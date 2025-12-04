@@ -24,6 +24,7 @@ list(Path, Store) when is_map(Store)->
 list(_Path, []) -> 
     [];
 list(Path, [Store | RemainingStores]) ->
+    ?event({list, Path}),
     ResolvedPath = hb_store:resolve(Store, Path),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
@@ -47,7 +48,6 @@ do_resolved_list([], _Path) ->
     not_found;
 do_resolved_list([Store|RemainingStores], Path) ->
     ResolvedPath = hb_store:resolve(Store, Path),
-    erlang:display([{path, Path}, {resolved_path, ResolvedPath}]),
     ?event({resolved_list, {path, Path}, {resolved_path, ResolvedPath}}),
     case hb_store:list(Store, ResolvedPath) of 
         {ok, _} = Result -> Result;

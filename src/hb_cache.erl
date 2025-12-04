@@ -40,7 +40,7 @@
 -module(hb_cache).
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
--export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([read/2, list/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -174,6 +174,10 @@ ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
     );
 ensure_all_loaded(Ref, Msg, Opts) ->
     ensure_loaded(Ref, Msg, Opts).
+
+%% TODO: Remove before final PR, replace calls to `hb_store_common`
+list(Path, Opts) -> 
+    hb_store_common:list(Path, Opts).
 
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
@@ -827,6 +831,7 @@ test_match_typed_message(Store) ->
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
+        {"store ans104 message", fun test_store_ans104_message/1},
         {"store unsigned empty message",
             fun test_store_unsigned_empty_message/1},
         {"store binary", fun test_store_binary/1},
