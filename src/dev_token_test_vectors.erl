@@ -2196,6 +2196,61 @@ transfer_with_pot_mint_device_basic_test() ->
     ?assertEqual(300, get_balance(Result, ?BOB)),
     ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, #{})).
 
+%% @doc Test that transfer works when balance is insufficient but 
+%% balance + unclaimed_yield is sufficient
+%% This validates that normalize_mint properly claims yields before transfer
+transfer_with_unclaimed_yield_test() ->
+    hb:init(),
+    ResourceOxygen = <<"oxygen">>,
+    % Alice has 500 tokens in balance
+    % Alice has deposits in pot that will yield tokens
+    % Alice wants to transfer 700 tokens
+    % Should succeed because: balance + yield > 700
+    Base = generate_integrated_state(#{
+        initial_balances => #{?ALICE => 500}, 
+        total_supply => 500,
+        mint_cap => 10000,
+        mint_prop => {1, 2}, 
+        t => 0,
+        last_drip => 0,
+        pot_resources => #{
+            ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+        }
+    }),
+    ?event({initial_state, Base}),
+    ?event({alice_initial_balance, get_balance(Base, ?ALICE)}),
+    % Advance time to generate yield
+    % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=1:
+    % ToMint = 10000 * (2^1 - 1^1) / 2^1 = 10000 * 1 / 2 = 5000
+    % GlobalAcc = 0 + (5000 / 1000) = 5 (per weighted unit)
+    % ResourceAcc = 0 + (5 * 100) = 500
+    % Alice's yield = (500 - 0) * 10 = 5000 tokens!
+    BaseWithTime = Base#{<<"t">> => 1},
+    ?event({state_with_advanced_time, BaseWithTime}),
+    % Try to transfer 700 tokens
+    % Should fail without normalize_mint (500 < 700)
+    % Should succeed with normalize_mint (500 + 5000 = 5500 > 700)
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => 700
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, Result} = dev_token:compute(BaseWithTime, Req, #{}),
+    ?event({transfer_result, Result}),
+    AliceBalance = get_balance(Result, ?ALICE),
+    BobBalance = get_balance(Result, ?BOB),
+    ?event({final_balances, {alice, AliceBalance}, {bob, BobBalance}}),
+    % Alice should have: (500 + 5000) - 700 = 4800
+    % Bob should have: 700
+    ?assertEqual(4800, AliceBalance),
+    ?assertEqual(700, BobBalance),
+    % Total supply should be updated
+    % Initial: 500, Minted: 5000, New total: 5500
+    ?assertEqual(5500, hb_ao:get(<<"total-supply">>, Result, #{})).
+
 %%% Benchmark Tests
 
 benchmark_transfers_test() ->
