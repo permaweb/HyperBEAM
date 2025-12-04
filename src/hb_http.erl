@@ -276,12 +276,14 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
             BodyMap,
 			Opts
         ),
-    (hb_message:convert(
-        ConvertFrom,
-        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-        <<"httpsig@1.0">>,
-        Opts
-    ))#{ <<"status">> => hb_util:int(Status) }.
+    Converted = 
+        hb_message:convert(
+            ConvertFrom,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    Converted#{ <<"status">> => hb_util:int(Status) }.
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
