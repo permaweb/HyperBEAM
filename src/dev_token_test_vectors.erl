@@ -2190,7 +2190,15 @@ transfer_with_pot_mint_device_basic_test() ->
         #{from => ?ALICE}
     ),
     ?event({request, Req}),
+    StartTime = erlang:monotonic_time(second),
     {ok,Result} = dev_token:compute(Base, Req, #{}),
+    EndTime = erlang:monotonic_time(second),
+    hb_test_utils:benchmark_print(
+        <<"Token transfer with Mint Device">>,
+        <<"transfers">>,
+        1,
+        (EndTime - StartTime) 
+    ),
     ?event({compute_result, Result}),
     ?assertEqual(700, get_balance(Result, ?ALICE)),
     ?assertEqual(300, get_balance(Result, ?BOB)),
