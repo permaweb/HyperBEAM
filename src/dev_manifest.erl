@@ -1,7 +1,7 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([index/3, info/0]).
+-export([index/3, info/0, manifest/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -58,14 +58,14 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     ?event({manifest_reading_id, ID}),
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
-    ?event({manifest_lookup, Key}),
+    ?event(debug_manifest, {manifest_lookup, Key}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     Res = hb_ao:get(
         <<"paths/", Key/binary>>,
         {as, <<"message@1.0">>, Manifest},
         Opts
     ),
-    {ok, hb_cache:ensure_all_loaded(Res, Opts)}.
+    {ok, Res}.
 
 %% @doc Find and deserialize a manifest from the given base.
 manifest(Base, _Req, Opts) ->
@@ -78,15 +78,14 @@ manifest(Base, _Req, Opts) ->
             Opts
         ),
     ?event({manifest_json, JSON}),
-    Structured = 
-        hb_cache:ensure_all_loaded(
-            hb_message:convert(JSON, <<"structured@1.0">>, <<"json@1.0">>, Opts),
-            Opts
-        ),
-    ?event({manifest_structured, {explicit, Structured}}),
-    Linkified = linkify(Structured, Opts),
-    ?event({manifest_linkified, {explicit, Linkified}}),
-    {ok, Linkified}.
+    FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
+    ?event(debug_manifest, {manifest_dejsonified, {explicit, FlatManifest}}),
+    {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
+    LinkifiedPaths = linkify(DeepPaths, Opts),
+    ?event(debug_manifest, {manifest_linkified_paths, {explicit, LinkifiedPaths}}),
+    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
+    ?event(debug_manifest, {manifest_structured, {explicit, Structured}}),
+    {ok, Structured}.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
