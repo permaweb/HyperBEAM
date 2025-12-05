@@ -6,7 +6,7 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-GENESIS_WASM_BRANCH = feat/hb-unit
+GENESIS_WASM_COMMIT_HASH = 5431d2b3369e50d45ba74c09b20424f821288cab
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
@@ -85,7 +85,9 @@ $(GENESIS_WASM_SERVER_DIR):
 	mkdir -p $(GENESIS_WASM_SERVER_DIR)
 	@echo "Cloning genesis-wasm repository..." && \
         tmp_dir=$$(mktemp -d) && \
-        git clone --depth=1 -b $(GENESIS_WASM_BRANCH) $(GENESIS_WASM_REPO) $$tmp_dir && \
+        git clone --depth=1 $(GENESIS_WASM_REPO) $$tmp_dir && \
+		git -C $$tmp_dir fetch --depth=1 origin $(GENESIS_WASM_COMMIT_HASH) && \
+		git -C $$tmp_dir checkout $(GENESIS_WASM_COMMIT_HASH) && \
         mkdir -p $(GENESIS_WASM_SERVER_DIR) && \
         cp -r $$tmp_dir/servers/cu/* $(GENESIS_WASM_SERVER_DIR) && \
         rm -rf $$tmp_dir && \
