@@ -406,7 +406,6 @@ do_read_commitment(Path, Opts) ->
 
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
-    %% TODO: Confirm tha this should only look into local stores only
     Store = hb_store:scope(hb_opts:get(store, no_viable_store, Opts), local),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     FoundCommitments = read_all_commitments_by_store(Msg, Store, Opts),
