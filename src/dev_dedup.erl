@@ -67,14 +67,8 @@ handle(Key, M1, M2, Opts) ->
         end,
     % Is this the first pass, if we are executing in a stack?
     FirstPass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts) == 1,
-    % Get the trie of already seen subjects.
-    DedupTrie =
-        hb_ao:get(
-            <<"dedup">>,
-            {as, <<"message@1.0">>, M1},
-            #{ <<"device">> => <<"trie@1.0">> },
-            Opts
-        ),
+    % Get the list of already seen subjects.
+    DedupList = hb_ao:get(<<"dedup">>, {as, <<"message@1.0">>, M1}, [], Opts),
     ?event({dedup_handle,
         {key, Key},
         {base, M1},
@@ -94,40 +88,22 @@ handle(Key, M1, M2, Opts) ->
         {true, _} ->
             % If this is the first pass, we need to check if the subject has
             % already been seen.
-            SubjectID = hb_message:id(Subject, signed, Opts),
-            ?event({dedup_checking, DedupTrie}),
-            case hb_ao:get(SubjectID, DedupTrie, Opts) of
-                not_found ->
+            SubjectID = hb_message:id(Subject, all),
+            ?event({dedup_checking, {existing, DedupList}}),
+            case lists:member(SubjectID, DedupList) of
+                true ->
+                    ?event({already_seen, SubjectID}),
+                    {skip, M1};
+                false ->
                     ?event({not_seen, SubjectID}),
-                    NewDedupTrie =
-                        hb_ao:set(
-                            DedupTrie,
-                            SubjectID,
-                            hb_maps:get(
-                                <<"slot">>,
-                                M2,
-                                true,
-                                Opts
-                            ),
-                            Opts
-                        ),
-                    ?event({dedup_updated, NewDedupTrie}),
-                    Result =
+                    M3 =
                         hb_ao:set(
                             M1,
-                            <<"dedup">>,
-                            NewDedupTrie,
+                            #{ <<"dedup">> => [SubjectID|DedupList] },
                             Opts
                         ),
-                    {ok, Result};
-                Value ->
-                    ?event(
-                        {already_seen,
-                            {subject, SubjectID},
-                            {dedup_value, Value}
-                        }
-                    ),
-                    {skip, M1}
+                    ?event({dedup_updated, M3}),
+                    {ok, M3}
             end
     end.
 
