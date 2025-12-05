@@ -40,8 +40,8 @@
 -module(hb_cache).
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
--export([read/2, list/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
--export([match/2, list_numbered/2]).
+-export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -175,14 +175,24 @@ ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
 ensure_all_loaded(Ref, Msg, Opts) ->
     ensure_loaded(Ref, Msg, Opts).
 
-%% TODO: Remove before final PR, replace calls to `hb_store_common`
-list(Path, Opts) -> 
-    hb_store_common:list(Path, Opts).
-
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
-    [ hb_util:int(Name) || Name <- hb_store_common:list(SlotDir, Opts) ].
+    [ hb_util:int(Name) || Name <- list(SlotDir, Opts) ].
+
+%% @doc List all items under a given path.
+list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
+    case hb_opts:get(store, no_viable_store, Opts) of
+        not_found -> [];
+        Store ->
+            list(Path, Store)
+    end;
+list(Path, Store) ->
+    case hb_store_common:resolved_list(Store, Path) of
+        {ok, Names} -> Names;
+        {error, _} -> [];
+        not_found -> []
+    end.
 
 %% @doc Match a template message against the cache, returning a list of IDs
 %% that match the template. We match on the binary representation of values,

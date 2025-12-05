@@ -3,36 +3,13 @@
 %% Common store access patterns should be defined here.
 %%
 %% TODO:
-%% - Test list/1
 %% - Make tests for stores more generic, avoid individual tests (there are some in S3 that can be applied to LMDB).
 
 -module(hb_store_common).
--export([list/2, resolve/2, store_read/3]).
+-export([resolve/2, store_read/3]).
 -export([resolved_list/2, resolved_type/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
-%% @doc List all items under a given path.
-list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
-    case hb_opts:get(store, no_viable_store, Opts) of
-        not_found -> [];
-        Store ->
-            list(Path, Store)
-    end;
-list(Path, Store) when is_map(Store)->
-    list(Path, [Store]);
-list(_Path, []) -> 
-    [];
-list(Path, [Store | RemainingStores]) ->
-    ?event({list, Path}),
-    ResolvedPath = hb_store:resolve(Store, Path),
-    case hb_store:list(Store, ResolvedPath) of
-        {ok, Names} -> Names;
-        _ -> list(Path, RemainingStores)
-    end.
-
-%% NOTE: resolved_read/2 not needed because stores normally implement 
-%% resolve/2 inside read/2.
 
 %% Old version, to be deleted before merge
 resolved_list2(Store, Path) ->
