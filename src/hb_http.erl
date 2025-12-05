@@ -467,12 +467,12 @@ reply(Req, TABMReq, Message, Opts) ->
     reply(Req, TABMReq, Status, Message, Opts).
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
-reply(InitReq, TABMReq, Status, RawMessage, Opts) ->
+reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
     {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
-    {ok, HeadersBeforeCors, EncodedBody} =
+    {Status, HeadersBeforeCors, EncodedBody} =
         encode_reply(
-            Status,
+            RawStatus,
             TABMReq,
             Message,
             Opts
@@ -618,7 +618,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             ),
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_error(Message, Opts),
-            {ok,
+            {Status,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
@@ -628,7 +628,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     <<"hyperbuddy@1.0">>,
                     <<"404.html">>
                 ),
-            {ok,
+            {Status,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
@@ -659,7 +659,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Opts
                 ),
             {
-                ok,
+                Status,
                 hb_maps:without([<<"body">>], EncMessage, Opts),
                 hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
             };
@@ -667,7 +667,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             % The `ans104@1.0' codec is a binary format, so we must serialize
             % the message to a binary before sending it.
             {
-                ok,
+                Status,
                 BaseHdrs,
                 ar_bundles:serialize(
                     hb_message:convert(
@@ -693,6 +693,20 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     )
                 )
             };
+        {_, <<"manifest@1.0">>, _} ->
+            {ok, CachedID} = hb_cache:write(Message, Opts),
+            {
+                307,
+                #{
+                    <<"location">> =>
+                        <<
+                            "/",
+                            CachedID/binary,
+                            "~manifest@1.0/index"
+                        >>
+                },
+                <<"Manifesting your data...">>
+            };
         _ ->
             % Other codecs are already in binary format, so we can just convert
             % the message to the codec. We also include all of the top-level 
@@ -715,7 +729,8 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     fun(_K, V) -> hb_util:bin(V) end,
                     ExtraHdrs
                 ),
-            {ok,
+            {
+                Status,
                 hb_maps:merge(EncodedExtraHdrs, BaseHdrs, Opts),
                 hb_message:convert(
                     Message,
@@ -741,7 +756,19 @@ accept_to_codec(OriginalReq, Opts) ->
     accept_to_codec(OriginalReq, undefined, Opts).
 accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
     mime_to_codec(RequiredCodec, Opts);
-accept_to_codec(_OriginalReq, #{ <<"content-type">> := _ }, _Opts) ->
+accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when ?IS_LINK(Link) ->
+    accept_to_codec(
+        OriginalReq,
+        Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
+        Opts
+    );
+accept_to_codec(
+        _,
+        #{ <<"content-type">> := <<"application/x.arweave-manifest", _/binary>> },
+        _Opts
+    ) ->
+    <<"manifest@1.0">>;
+accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
     Accept = hb_maps:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),

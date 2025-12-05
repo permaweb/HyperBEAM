@@ -54,6 +54,9 @@ route(<<"index">>, M1, M2, Opts) ->
             ?event(manifest_not_parsed),
             {error, not_found}
     end;
+route(ID, _, _, Opts) when ?IS_ID(ID) ->
+    ?event({manifest_reading_id, ID}),
+    hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
     ?event({manifest_lookup, Key}),
     {ok, Manifest} = manifest(M1, M2, Opts),
