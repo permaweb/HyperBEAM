@@ -142,7 +142,7 @@ store_read(Target, Path, [Store | RemainingStores], Opts) ->
                         }
                     ),
                     {ok, Msg};
-                _ ->
+                not_found ->
                     ?event({empty_composite_message, ResolvedFullPath}),
                     {ok, #{}}
             end
