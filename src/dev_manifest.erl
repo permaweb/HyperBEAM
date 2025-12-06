@@ -15,7 +15,7 @@ info() ->
 
 %% @doc Return the fallback index page when the manifest itself is requested.
 index(M1, M2, Opts) ->
-    ?event({manifest_index_request, M1, M2}),
+    ?event(debug_manifest, {index_request, {m1, M1}, {m2, M2}}),
     case route(<<"index">>, M1, M2, Opts) of
         {ok, Index} ->
             ?event({manifest_index_returned, Index}),
@@ -28,20 +28,24 @@ index(M1, M2, Opts) ->
 route(<<"index">>, M1, M2, Opts) ->
     ?event({manifest_index, M1, M2}),
     case manifest(M1, M2, Opts) of
-        {ok, JSONStruct} ->
-            ?event({manifest_json_struct, JSONStruct}),
+        {ok, Manifest} ->
             % Get the path to the index page from the manifest. We make
             % sure to use `hb_maps:get/4' to ensure that we do not recurse
             % on the `index' key with an `ao' resolve.
             Index =
                 hb_maps:get(
                     <<"index">>,
-                    JSONStruct,
+                    Manifest,
                     #{},
                     Opts
                 ),
-            ?event({manifest_index_found, Index}),
-            Path = hb_maps:get(<<"path">>, Index, Opts),
+            ?event(debug_manifest,
+                {manifest_index_found,
+                    {index, Index},
+                    {manifest, Manifest}
+                }
+            ),
+            Path = hb_maps:get(<<"path">>, Index, not_found, Opts),
             case Path of
                 not_found ->
                     ?event({manifest_path_not_found, <<"index/path">>}),
@@ -58,7 +62,7 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     ?event({manifest_reading_id, ID}),
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
-    ?event(debug_manifest, {manifest_lookup, Key}),
+    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     Res = hb_ao:get(
         <<"paths/", Key/binary>>,
@@ -124,7 +128,7 @@ resolve_test() ->
         },
         <<"index">> => #{ <<"path">> => <<"page1">> }
     },
-    JSON = hb_message:convert(Manifest, <<"json@1.0">>, <<"structured@1.0">>, Opts),
+    JSON = hb_json:encode(Manifest),
     ManifestMsg =
         #{
             <<"device">> => <<"manifest@1.0">>,
