@@ -1,7 +1,7 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([index/3, info/0, manifest/3]).
+-export([index/3, info/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -67,7 +67,8 @@ route(Key, M1, M2, Opts) ->
     ),
     {ok, Res}.
 
-%% @doc Find and deserialize a manifest from the given base.
+%% @doc Find and deserialize a manifest from the given base, returning a 
+%% message with the `~manifest@1.0' device.
 manifest(Base, _Req, Opts) ->
     JSON =
         hb_ao:get_first(
@@ -77,15 +78,11 @@ manifest(Base, _Req, Opts) ->
             ],
             Opts
         ),
-    ?event({manifest_json, JSON}),
     FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    ?event(debug_manifest, {manifest_dejsonified, {explicit, FlatManifest}}),
     {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
     LinkifiedPaths = linkify(DeepPaths, Opts),
-    ?event(debug_manifest, {manifest_linkified_paths, {explicit, LinkifiedPaths}}),
     Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
-    ?event(debug_manifest, {manifest_structured, {explicit, Structured}}),
-    {ok, Structured}.
+    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
