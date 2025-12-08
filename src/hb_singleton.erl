@@ -382,7 +382,8 @@ parse_part_mods(<<$=, InlinedMsgBin/binary>>, M = #{ <<"path">> := Path }, Opts)
     parse_part_mods(<< "&", Path/binary, "=", InlinedMsgBin/binary >>, M, Opts);
 parse_part_mods(<<$+, InlinedMsgBin/binary>>, M = #{ <<"path">> := Path }, Opts)
         when map_size(M) =:= 1, is_binary(InlinedMsgBin) ->
-    parse_part_mods(<< "&", Path/binary, "+", InlinedMsgBin/binary >>, M, Opts).
+    parse_part_mods(<< "&", Path/binary, "+", InlinedMsgBin/binary >>, M, Opts);
+parse_part_mods(_, Msg, _Opts) -> Msg.
 
 %% @doc Extrapolate the inlined key-value pair from a path segment. If the
 %% key has a value, it may provide a type (as with typical keys), but if a
@@ -867,3 +868,6 @@ path_parts_test() ->
         path_parts($/, <<"/a/(x/y/z)/c">>)
     ),
     ok.
+
+path_messages_space_edge_case_test() ->
+    path_messages(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA~manifest@1.0/[object Object]">>, #{}).
