@@ -367,13 +367,19 @@ default_message() ->
         genesis_wasm_import_authorities =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
-            ]
+            ],
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+        % Define the behaviour when accessing a file inside a manifest that 
+        % doesn't exists.
+        % Options:
+        % - fallback (to the index page)
+        % - error: 404 Not Found
+        manifest_404 => fallback
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a

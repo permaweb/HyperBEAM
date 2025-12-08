@@ -69,7 +69,19 @@ route(Key, M1, M2, Opts) ->
         {as, <<"message@1.0">>, Manifest},
         Opts
     ),
-    {ok, Res}.
+    case Res of
+        not_found ->
+            %% Support materialized view in some JavaScript frameworks
+            case hb_opts:get(manifest_404, fallback, Opts) of
+                error ->
+                    not_found;
+                fallback ->
+                    ?event({manifest_fallback, {key, Key}}),
+                    route(<<"index">>, M1, M2, Opts)
+            end;
+        _ ->
+            {ok, Res}
+    end.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
@@ -145,3 +157,48 @@ resolve_test() ->
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
         hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
+
+manifest_default_fallback_test() ->
+    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
+    {ok, ManifestID} = create_generic_manifest(Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 1">> }},
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+    ),
+    ok.
+
+manifest_404_error_test() ->
+    Opts = #{
+        store => hb_opts:get(store, no_viable_store, #{}),
+        manifest_404 => error
+    },
+    {ok, ManifestID} = create_generic_manifest(Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {error, not_found},
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+    ),
+    ok.
+
+create_generic_manifest(Opts) ->
+    IndexPage = #{
+        <<"content-type">> => <<"text/html">>,
+        <<"body">> => <<"Page 1">>
+    },
+    {ok, IndexID} = hb_cache:write(IndexPage, Opts),
+    Manifest = #{
+        <<"paths">> => #{
+            <<"page1">> => #{ <<"id">> => IndexID }
+        },
+        <<"index">> => #{ <<"path">> => <<"page1">> }
+    },
+    JSON = hb_json:encode(Manifest),
+    ManifestMsg =
+        #{
+            <<"device">> => <<"manifest@1.0">>,
+            <<"body">> => JSON
+        },
+    hb_cache:write(ManifestMsg, Opts).
