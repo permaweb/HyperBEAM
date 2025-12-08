@@ -876,6 +876,10 @@ maybe_force_message({Status, Res}, Opts) ->
 maybe_force_message(Res, Opts) ->
     maybe_force_message({ok, Res}, Opts).
 
+%% @doc Force a resolution result into a message, suitable for transmission
+%% via HTTP.
+force_message({Status, ResLink}, Opts) when ?IS_LINK(ResLink) ->
+    force_message({Status, hb_cache:ensure_loaded(ResLink, Opts)}, Opts);
 force_message({Status, Res}, Opts) when is_list(Res) ->
     force_message({Status, normalize_keys(Res, Opts)}, Opts);
 force_message({Status, Subres = {resolve, _}}, _Opts) ->

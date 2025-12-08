@@ -42,8 +42,12 @@ compute(Msg, Req, Opts) ->
                     },
                     Opts
                 ),
+            ?event({genesis_wasm_patched_message, Msg4}),
             % Return the patched message.
             {ok, Msg4};
+        {skip, Res} ->
+            ?event({genesis_wasm_skipping_duplicate, {req, Req}, {res, Res}, {msg, Msg}}),
+            {ok, Msg};
         {error, Error} ->
             % Return the error.
             {error, Error}
@@ -72,32 +76,89 @@ delegate_request(Msg, Req, Opts) ->
 
 
 %% @doc Handle normal compute execution with state persistence (GET method).
-do_compute(Msg, Req, Opts) ->
-    % Resolve the `delegated-compute@1.0' device.
-    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
-        {ok, Res} ->
-            PatchResult = 
-                hb_ao:resolve(
-                    Res,
-                    {
-                        as,
-                        <<"patch@1.0">>,
-                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
+do_compute(State, Req, Opts) ->
+    ?event(debug_test, {do_compute, {state, State}, {req, Req}}),
+    maybe
+        {ok, State2} ?=
+            hb_ao:resolve(
+                State,
+                {as, <<"dedup@1.0">>, Req},
+                Opts
+            ),
+        ?event(dedup_short,
+            {continue,
+                {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
+                {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
+                {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)},
+                {input, hb_ao:get(<<"body/data">>, Req, no_input, Opts)}
+            }
+        ),
+        {ok, State3} ?=
+            hb_ao:resolve(
+                State2,
+                {as, <<"delegated-compute@1.0">>, Req},
+                Opts
+            ),
+        {ok, State4} ?=
+            hb_ao:resolve(
+                State3,
+                {
+                    as,
+                    <<"patch@1.0">>,
+                    Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                },
+                Opts
+            ),
+        ?event(dedup_short,
+            {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
+        ),
+        ?event(debug_test, {do_compute, patched_message}),
+        {ok, State4}
+    else
+        {error, Error} ->
+            % Issue an event and return the error.
+            ?event({genesis_wasm_compute_error, Error}),
+            {error, Error};
+        {skip, DoubleSkip = #{ <<"skip">> := true }} ->
+            ?event(dedup_short,
+                {dedup_error,
+                    {cause, double_skip},
+                    {skip_request, DoubleSkip}
+                }
+            ),
+            {error, State};
+        {skip, ExitState} ->
+            ReqWithoutCommitments =
+                hb_message:remove_all_commitments(Req, Opts),
+            Req2 =
+                hb_message:commit(
+                    ReqWithoutCommitments#{
+                        <<"path">> => 
+                            hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
+                        <<"slot">> =>
+                            hb_maps:get(<<"slot">>, Req, -1, Opts),
+                        <<"skip">> => true,
+                        <<"body">> => 
+                            hb_message:commit(
+                                #{
+                                    <<"timestamp">> => 
+                                        os:system_time(millisecond)
+                                },
+                                Opts
+                            )
                     },
                     Opts
                 ),
-            % Resolve the `patch@1.0' device.
-            case PatchResult of 
-                {ok, Msg4} ->
-                    % Return the patched message.
-                    {ok, Msg4};
-                {error, Error} ->
-                    % Return the error.
-                    {error, Error}
-            end;
-        {error, Error} ->
-            % Return the error.
-            {error, Error}
+            ?event(dedup_short,
+                {skip,
+                    {cause, dedup},
+                    {action, run_no_op},
+                    {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
+                    {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
+                    {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)}
+                }
+            ),
+            do_compute(ExitState, Req2, Opts)
     end.
 
 %% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
@@ -302,7 +363,7 @@ import(Base, Req, Opts) ->
                 not_found -> {error, not_found}
             end;
         error ->
-            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
+            ProcID = dev_process_lib:process_id(ProcMsg, #{}, Opts),
             case latest_checkpoint(ProcID, Opts) of
                 {ok, CheckpointMessage} ->
                     do_import(ProcMsg, CheckpointMessage, Opts);
@@ -377,13 +438,13 @@ do_import(Proc, CheckpointMessage, Opts) ->
             ) orelse untrusted,
         true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
         CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
-        ProcID = dev_process:process_id(Proc, #{}, Opts),
+        ProcID = dev_process_lib:process_id(Proc, #{}, Opts),
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
         % Normalize the checkpoint message into a process state message with 
         % a state snapshot.
         {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, CheckpointMessage, Opts),
         Slot = hb_util:int(SlotBin),
-        InitializedProc = dev_process:ensure_process_key(Proc, Opts),
+        InitializedProc = dev_process_lib:ensure_process_key(Proc, Opts),
         WithSnapshot =
             InitializedProc#{
                 <<"at-slot">> => Slot,
@@ -696,6 +757,92 @@ schedule_aos_call(Base, Code, Action, Opts) ->
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req).
 
+dedup_test() ->
+    application:ensure_all_started(hb),
+    Opts = #{
+        priv_wallet => hb:wallet(),
+        cache_control => <<"always">>,
+        store => hb_opts:get(store)
+    },
+    Base = test_genesis_wasm_process(),
+    hb_cache:write(Base, Opts),
+    ProcID = hb_message:id(Base, all),
+    {ok, _SchedInit} =
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            Opts
+        ),
+    schedule_aos_call(Base, <<"Number = 1">>),
+    % Manually triple schedule the same message base
+    MsgBase = 
+        hb_message:commit(
+            #{
+                <<"action">> => <<"Eval">>,
+                <<"data">> => <<"Number = Number + 1; return Number">>,
+                <<"target">> => ProcID,
+                <<"timestamp">> => os:system_time(millisecond)
+            },
+            Opts
+        ),
+    UncommittedBase = hb_message:uncommitted(MsgBase),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        UncommittedBase#{
+                            <<"type">> => <<"Message">>,
+                            <<"test-label">> => <<"TEST MSG">>
+                        },
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    % Schedule the message thrice
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
+    {ok, _} = hb_ao:resolve(Base, Req, Opts),
+    % Ensure the message is scheduled twice
+    {ok, SchedulerRes} =
+        hb_ao:resolve(
+            Base, 
+            <<"schedule">>,
+            Opts
+        ),
+    ?event(debug_test, {dedup_test, {scheduler_res, SchedulerRes}}),
+    % Assert successful double schedule
+    ?assertEqual(
+        hb_private:reset(
+            hb_ao:get(<<"assignments/2/body/commitments">>, SchedulerRes)
+        ),
+        hb_private:reset(
+            hb_ao:get(<<"assignments/3/body/commitments">>, SchedulerRes)
+        )
+    ),
+    ?assertEqual(
+        hb_private:reset(
+            hb_ao:get(<<"assignments/3/body/commitments">>, SchedulerRes)
+        ),
+        hb_private:reset(
+            hb_ao:get(<<"assignments/4/body/commitments">>, SchedulerRes)
+        )
+    ),
+    % Schedule twice to avoid nonce warning
+    schedule_aos_call(Base, <<"return Number">>),
+    schedule_aos_call(Base, <<"return Number">>),
+    % Compute with dedup - initialize number to 1, then two increments,
+    % but the second increment should be skipped for dedup - expected result is 2
+    {ok, Result} = hb_ao:resolve(Base, <<"now">>, Opts),
+    Data = hb_ao:get(<<"results/data">>, Result),
+    ?assertEqual(<<"2">>, Data).
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
 spawn_and_execute_slot() ->
@@ -816,17 +963,17 @@ send_message_between_genesis_wasm_processes() ->
     % Create receiver process with handler
     MsgReceiver = test_genesis_wasm_process(),
     hb_cache:write(MsgReceiver, Opts),
-    ProcId = dev_process:process_id(MsgReceiver, #{}, #{}),
+    ProcId = dev_process_lib:process_id(MsgReceiver, #{}, #{}),
     {ok, _SchedInitReceiver} =
         hb_ao:resolve(
             MsgReceiver,
-        #{
-            <<"method">> => <<"POST">>,
-            <<"path">> => <<"schedule">>,
-            <<"body">> => MsgReceiver
-        },
-        Opts
-    ),
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => MsgReceiver
+            },
+            Opts
+        ),
     schedule_aos_call(MsgReceiver, <<"Number = 10">>),
     schedule_aos_call(MsgReceiver, <<"
     Handlers.add('foo', function(msg)
@@ -908,7 +1055,7 @@ dryrun_genesis_wasm() ->
             },
             Opts
         ),
-    ProcReceiverId = dev_process:process_id(ProcReceiver, #{}, #{}),
+    ProcReceiverId = dev_process_lib:process_id(ProcReceiver, #{}, #{}),
     % Initialize increment handler
     {ok, _} = schedule_aos_call(ProcReceiver, <<"
     Number = Number or 5
