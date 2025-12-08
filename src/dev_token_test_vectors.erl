@@ -2169,40 +2169,37 @@ simple_process_test() ->
 transfer_with_pot_mint_device_basic_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
+    Opts = #{ store => [hb_test_utils:test_store()] },
     % Create integrated state: Alice has 1000 tokens, resource oxygen
-    Base = generate_integrated_state(#{
-        initial_balances => #{?ALICE => 1000},
-        total_supply => 1000,
-        mint_cap => 10000,
-        mint_prop => {1, 2},  
-        pot_resources => #{
-            ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
-        }
-    }),
+    Base =
+        generate_integrated_state(
+            #{
+                initial_balances => #{?ALICE => 1000},
+                total_supply => 1000,
+                mint_cap => 10000,
+                mint_prop => {1, 2},
+                pot_resources => #{
+                    ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+                }
+            },
+            Opts
+        ),
     ?event({base_state_created, Base}),
     % Alice transfers 300 tokens to Bob
-    Req = make_request(
-        <<"transfer">>,
-        #{
-            <<"recipient">> => ?BOB,
-            <<"quantity">> => 300
-        },
-        #{from => ?ALICE}
-    ),
+    Req =
+        make_request(
+            <<"transfer">>,
+            #{
+                <<"recipient">> => ?BOB,
+                <<"quantity">> => 300
+            },
+            Opts#{from => ?ALICE}
+        ),
     ?event({request, Req}),
-    StartTime = erlang:monotonic_time(second),
-    {ok,Result} = dev_token:compute(Base, Req, #{}),
-    EndTime = erlang:monotonic_time(second),
-    hb_test_utils:benchmark_print(
-        <<"Token transfer with Mint Device">>,
-        <<"transfers">>,
-        1,
-        (EndTime - StartTime) 
-    ),
-    ?event({compute_result, Result}),
+    {ok,Result} = dev_token:compute(Base, Req, Opts),
     ?assertEqual(700, get_balance(Result, ?ALICE)),
     ?assertEqual(300, get_balance(Result, ?BOB)),
-    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, #{})).
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, Opts)).
 
 %% @doc Test that transfer works when balance is insufficient but 
 %% balance + unclaimed_yield is sufficient
@@ -2210,21 +2207,26 @@ transfer_with_pot_mint_device_basic_test() ->
 transfer_with_unclaimed_yield_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
+    Opts = #{ store => [hb_test_utils:test_store()] },
     % Alice has 500 tokens in balance
     % Alice has deposits in pot that will yield tokens
     % Alice wants to transfer 700 tokens
     % Should succeed because: balance + yield > 700
-    Base = generate_integrated_state(#{
-        initial_balances => #{?ALICE => 500}, 
-        total_supply => 500,
-        mint_cap => 10000,
-        mint_prop => {1, 2}, 
-        t => 0,
-        last_drip => 0,
-        pot_resources => #{
-            ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
-        }
-    }),
+    Base =
+        generate_integrated_state(
+            #{
+                initial_balances => #{?ALICE => 500}, 
+                total_supply => 500,
+                mint_cap => 10000,
+                mint_prop => {1, 2}, 
+                t => 0,
+                last_drip => 0,
+                pot_resources => #{
+                    ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+                }
+            },
+            Opts
+        ),
     ?event({initial_state, Base}),
     ?event({alice_initial_balance, get_balance(Base, ?ALICE)}),
     % Advance time to generate yield
@@ -2244,9 +2246,9 @@ transfer_with_unclaimed_yield_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 700
         },
-        #{from => ?ALICE}
+        Opts#{from => ?ALICE}
     ),
-    {ok, Result} = dev_token:compute(BaseWithTime, Req, #{}),
+    {ok, Result} = dev_token:compute(BaseWithTime, Req, Opts),
     ?event({transfer_result, Result}),
     AliceBalance = get_balance(Result, ?ALICE),
     BobBalance = get_balance(Result, ?BOB),
@@ -2465,13 +2467,13 @@ benchmark_transfers_test() ->
     ),
     ?assert(hb_message:match(DirectlyInvokedState, AOCoreInvokedState, strict, #{})).
 
-% benchmark_process_transfers_test_() ->
-%     {timeout, 180, fun benchmark_process_transfers_test_disabled/0}.
-benchmark_process_transfers_test_disabled() ->
+benchmark_process_transfers_test_() ->
+    {timeout, 180, fun benchmark_process_transfers/0}.
+benchmark_process_transfers() ->
     hb:init(),
     % Benchmark N transfers
-    Transfers = 1_000,
-    Accounts = 300_000,
+    Transfers = 100,
+    Accounts = 3_000,
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
