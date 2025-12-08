@@ -181,7 +181,8 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     Yield.
 
 %% @doc Claim yield from a specific resource for an address.
-%% Updates balance with the yield, resets checkpoint, and updates total-supply.
+%% Updates balance with the yield, resets last-resource-accumulator, and updates
+%% total-supply.
 claim_yield(Addr, ResourceID, Base, Opts) ->
     GlobalDrippedS = drip_global(Base, Opts),
     DrippedS = #{
@@ -195,7 +196,7 @@ claim_yield(Addr, ResourceID, Base, Opts) ->
         _ ->
             BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
             CurrentSupply = hb_ao:get(<<"total-supply">>, DrippedS, 0, Opts),
-            % Reset checkpoint only (don't touch deposit quantity)
+            % Reset last-resource-accumulator only (don't touch deposit quantity)
             NewResources = hb_ao:set(
                 Resources,
                 <<
@@ -484,19 +485,20 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
         Opts
     ).
 
-%% @doc Add a new `delegation-notice` to the outbox of the state.
+%% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
+%% been modified.
 send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
-    Outbox = hb_ao:get(<<"results/outbox">>, S, [], Opts),
-    DelegationNotice = #{
-        <<"target">> => Addr,
-        <<"action">> => <<"delegation-notice">>,
-        <<"quantity">> => Amount,
-        <<"resource">> => ResourceID
-    },
-    hb_ao:set(
+    dev_process_lib:send(
+        #{
+            <<"target">> => Addr,
+            <<"action">> =>
+                if Amount > 0 -> <<"Deposit">>;
+                true -> <<"Withdraw">>
+                end,
+            <<"quantity">> => Amount,
+            <<"resource">> => ResourceID
+        },
         S,
-        <<"results/outbox">>,
-        [DelegationNotice|Outbox],
         Opts
     ).
 
