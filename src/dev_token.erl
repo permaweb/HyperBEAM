@@ -167,7 +167,7 @@ normalize_mint(Base, Assignment, Opts) ->
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                MaybeSubject#{ <<"path">> => <<"drip">> },
+                MaybeSubject#{ <<"path">> => <<"claim_yield">> },
                 Opts
             )
     end.
