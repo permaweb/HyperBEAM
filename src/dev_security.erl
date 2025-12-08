@@ -108,45 +108,36 @@ validate_assignment(Base, Assignment, Opts) ->
 
 %% @doc Validate that a request has proper authority.
 validate_authority(Base, Request, Opts) ->
-    Assess = hb_ao:get(<<"assess/authority">>, Base, not_found, Opts),
-    Authority = hb_ao:get(<<"authority">>, Base, [], Opts),
-    Required = hb_ao:get(<<"authority-required">>, Base, [], Opts),
-    Match = hb_ao:get(<<"authority-match">>, Base, length(Authority), Opts),
-
-    satisfies_constraints_or_assess(
-        Request,
-        Assess,
-        Authority,
-        Required,
-        Match,
-        Opts
-    ).
-
-%% @doc Check constraints or run assessment message.
-%% If assess message exists, run it. Otherwise check list constraints.
-satisfies_constraints_or_assess(Subject, Assess, All, Required, Match, Opts) ->
-    case Assess of
-        not_found ->
+    case hb_ao:get(<<"assess/authority">>, Base, undefined, Opts) of
+        undefined ->
             % No assessment message, use constraint checking
-            Committers = dev_message:committers(Subject, Opts),
-            satisfies_constraints(Committers, All, Required, Match, Opts);
+            Signers = hb_message:signers(Request, Opts),
+            Authority = hb_ao:get(<<"authority">>, Base, [], Opts),
+            Required = hb_ao:get(<<"authority-required">>, Base, [], Opts),
+            Match = hb_ao:get(<<"authority-match">>, Base, length(Authority), Opts),
+            satisfies_constraints(Signers, Authority, Required, Match, Opts);
         AssessMsg ->
             % Run the assessment message
-            ?event({running_assessment, AssessMsg, Subject}),
-            case hb_ao:resolve(AssessMsg, Subject, Opts) of
-                {ok, true} ->
-                    ?event({assessment_passed}),
-                    true;
-                {ok, false} ->
-                    ?event({assessment_failed}),
-                    false;
-                {ok, Other} ->
-                    ?event({assessment_returned_non_boolean, Other}),
-                    false;
-                {error, Reason} ->
-                    ?event({assessment_error, Reason}),
-                    false
-            end
+            eval_assessment_message(Request, AssessMsg, Opts)
+    end.
+
+%% @doc Evaluate an assessment message.
+eval_assessment_message(Subject, AssessMsg, Opts) ->
+    % Run the assessment message
+    ?event({running_assessment, AssessMsg, Subject}),
+    case hb_ao:resolve(AssessMsg, Subject, Opts) of
+        {ok, true} ->
+            ?event({assessment_passed}),
+            true;
+        {ok, false} ->
+            ?event({assessment_failed, {message, AssessMsg}, {subject, Subject}}),
+            false;
+        {ok, Other} ->
+            ?event({assessment_returned_non_boolean, Other}),
+            false;
+        {error, Reason} ->
+            ?event({assessment_error, Reason}),
+            false
     end.
 
 %% @doc Check if subject satisfies list constraints.
