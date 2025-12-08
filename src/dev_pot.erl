@@ -230,7 +230,7 @@ claim_yield(Base, Assignment, Opts) ->
             claim_yield(Addr, ResourceID, AccState, Opts)
         end,
         Base,
-        hb_maps:without([<<"priv">>],Resources),
+        hb_private:reset(Resources),
         Opts
     ).
 
