@@ -68,6 +68,11 @@ generate_process_state(Params, Opts) ->
         ),
     hb_message:commit(Base, Opts).
 
+%% @doc Return a signed token process with a `pot@1.0` mint device.
+generate_pot_process_state(Params, Opts) ->
+    Extra = generate_pot_fields(Params, Opts),
+    generate_process_state(Params#{ extra => Extra }, Opts).
+
 %% @doc Create a request message.
 make_request(Action, Body) ->
     make_request(Action, Body, #{}).
@@ -104,8 +109,25 @@ schedule_request(State, Action, Body, Wallet, Opts) ->
 get_balance(State, Account) ->
     get_balance(State, Account, #{}).
 get_balance(State, Account, Opts) ->
-    Balances = hb_ao:get(<<"balances">>, State, Opts),
-    hb_ao:get(Account, Balances, 0, Opts).
+    Res =
+        hb_ao:resolve_many(
+            [
+                State,
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                #{
+                    <<"path">> => <<"balance">>,
+                    <<"balance">> => Account
+                }
+            ],
+            Opts
+        ),
+    case Res of
+        {ok, B} -> B;
+        {error, not_found} -> 0
+    end.
 
 %%% Integration Test Helpers (Token + Pot)
 
@@ -133,8 +155,6 @@ generate_pot_fields(Params, Opts) ->
     ),
     #{
         <<"mint-device">> => <<"pot@1.0">>,
-        <<"t">> => hb_maps:get(t, Params, 0, Opts),
-        <<"last-drip">> => hb_maps:get(last_drip, Params, 0, Opts),
         <<"mint-cap">> => MintCap,
         <<"mint-prop">> => MintProp,
         <<"total-weighted-units">> => TWU,
@@ -2285,7 +2305,7 @@ claim_yield_single_resource_test() ->
     % Alice's yield = 500 * 10 = 5000
     BaseWithTime = Base#{<<"t">> => 1},
     % Call claim_yield directly
-    ResultAfterClaim = dev_pot:claim_yield(
+    ResultAfterClaim = dev_pot:claim(
         ?ALICE,
         ResourceOxygen,
         BaseWithTime,
@@ -2295,7 +2315,7 @@ claim_yield_single_resource_test() ->
     AliceBalanceAfterClaim = get_balance(ResultAfterClaim, ?ALICE),
     ?assertEqual(6000, AliceBalanceAfterClaim),
     ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, #{})),
-    ResultSecondClaim = dev_pot:claim_yield(
+    ResultSecondClaim = dev_pot:claim(
         ?ALICE,
         ResourceOxygen,
         ResultAfterClaim,
@@ -2336,7 +2356,7 @@ claim_yield_multiple_resources_test() ->
     % Total yield = 5000
     BaseWithTime = Base#{<<"t">> => 1},
     % Claim all yields at once using claim_yield/3
-    ResultAfterClaimAll = dev_pot:claim_yield(
+    ResultAfterClaimAll = dev_pot:claim(
         BaseWithTime,
         #{<<"subject">> => ?ALICE},
         #{}
@@ -2365,7 +2385,7 @@ claim_yield_no_deposits_test() ->
     }),
     BaseWithTime = Base#{<<"t">> => 1},
     % Charlie tries to claim yield 
-    ResultAfterClaim = dev_pot:claim_yield(
+    ResultAfterClaim = dev_pot:claim(
         ?CHARLIE,
         ResourceOxygen,
         BaseWithTime,
@@ -2375,7 +2395,7 @@ claim_yield_no_deposits_test() ->
     ?assertEqual(100, get_balance(ResultAfterClaim, ?CHARLIE)),
     % Total supply should be unchanged (no new minting for Charlie)
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, #{})),
-    ResultAfterClaimAll = dev_pot:claim_yield(
+    ResultAfterClaimAll = dev_pot:claim(
         BaseWithTime,
         #{<<"subject">> => ?CHARLIE},
         #{}
@@ -2569,3 +2589,68 @@ benchmark_batch_mint_test() ->
         NumRecipients * 1000, 
         hb_ao:get(<<"total-supply">>, NewState, #{})
     ).
+
+
+simple_pot_process_test() ->
+    hb:init(),
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [hb_test_utils:test_store()]
+        },
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = hb_util:human_id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = hb_util:human_id(BobWallet),
+    ResourceOxygen = <<"oxygen">>,
+    Base =
+        generate_pot_process_state(
+            #{
+                initial_balances => #{ AliceAddr => 1_000_000_000 },
+                total_supply => 1_000_000_000,
+                mint_cap => 2_000_000_000,
+                mint_prop => {1, 2},
+                pot_resources => #{
+                    ResourceOxygen => pot_resource(100, [{AliceAddr, 10}])
+                }
+            },
+            Opts
+        ),
+    ?event({base_state, Base}),
+    MintSchedRes =
+        schedule_request(
+            Base,
+            <<"mint">>,
+            #{
+                <<"from">> => AliceAddr
+            },
+            AliceWallet,
+            Opts
+        ),
+    ?event({mint_sched_res, MintSchedRes}),
+    TransferSchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceAddr,
+                <<"recipient">> => BobAddr,
+                <<"quantity">> => 1
+            },
+            AliceWallet,
+            Opts
+        ),
+    ?event({transfer_sched_res, TransferSchedRes}),
+    {ok, State} =
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"path">> => <<"compute">>,
+                <<"slot">> => 1
+            },
+            Opts
+        ),
+    ?event(debug_test, {state, State}, Opts),
+    ?assertEqual(1, get_balance(State, BobAddr, Opts)),
+    ?assertEqual(999_999_999, get_balance(State, AliceAddr, Opts)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, Opts)).

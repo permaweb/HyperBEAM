@@ -32,11 +32,11 @@
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
 -export([drip/3]).
+-export([claim/3, claim/4]).
 %%% `~pot@1.0` Private Utilities.
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/2, balances/1, get_deposit/3, get_deposits/1, get_deposits/2]).
--export([claim_yield/3, claim_yield/4]).
 
 %%% Pot Model Functions.
 
@@ -180,10 +180,51 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     {Yield, _} = calculate_yield(Addr, ResourceID, DrippedS, Opts),
     Yield.
 
+%% @doc Claim yield from all resources for an address.
+%% Calls claim_yield/4 for each resource sequentially.
+claim(RawBase, Assignment, Opts) ->
+    Base = ensure_initialized(RawBase, Assignment, Opts),
+    Addr = hb_ao:get(<<"subject">>, Assignment, #{}, Opts),
+    Resources = hb_ao:get(<<"resources">>, Base, #{}, Opts),
+    ?event({claiming_all, {resources, Resources}, {address, Addr}}),
+    hb_maps:fold(
+        fun(ResourceID, _Resource, AccState) ->
+            claim(Addr, ResourceID, AccState, Opts)
+        end,
+        Base,
+        hb_private:reset(Resources),
+        Opts
+    ).
+
+%% @doc Ensure the base state is initialized, setting `t` and `last-drip` to the
+%% assignment timestamp.
+ensure_initialized(Base, Assignment, Opts) ->
+    case hb_ao:get(<<"t">>, Base, not_found, Opts) of
+        not_found ->
+            Timestamp = hb_ao:get(<<"timestamp">>, Assignment, 0, Opts),
+            ?event(
+                debug_pot,
+                {initializing_base,
+                    {base, Base},
+                    {assignment, Assignment},
+                    {timestamp, Timestamp}
+                }
+            ),
+            hb_ao:set(
+                Base,
+                #{
+                    <<"t">> => Timestamp,
+                    <<"last-drip">> => Timestamp
+                },
+                Opts
+            );
+        _ -> Base
+    end.
+
 %% @doc Claim yield from a specific resource for an address.
 %% Updates balance with the yield, resets last-resource-accumulator, and updates
 %% total-supply.
-claim_yield(Addr, ResourceID, Base, Opts) ->
+claim(Addr, ResourceID, Base, Opts) ->
     GlobalDrippedS = drip_global(Base, Opts),
     DrippedS = #{
         <<"balances">> := Balances,
@@ -219,21 +260,6 @@ claim_yield(Addr, ResourceID, Base, Opts) ->
                 <<"total-supply">> => CurrentSupply + Yield
             }
     end.
-
-%% @doc Claim yield from all resources for an address.
-%% Calls claim_yield/4 for each resource sequentially.
-claim_yield(Base, Assignment, Opts) ->
-    Addr = hb_ao:get(<<"subject">>, Assignment, #{}, Opts),
-    Resources = hb_ao:get(<<"resources">>, Base, #{}, Opts),
-    ?event({claiming_all, {resources, Resources}, {address, Addr}}),
-    hb_maps:fold(
-        fun(ResourceID, _Resource, AccState) ->
-            claim_yield(Addr, ResourceID, AccState, Opts)
-        end,
-        Base,
-        hb_private:reset(Resources),
-        Opts
-    ).
 
 %% @doc Deposit a quantity of a resource for a given address.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
@@ -488,17 +514,20 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 %% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
 %% been modified.
 send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
-    dev_process_lib:send(
-        #{
-            <<"target">> => Addr,
-            <<"action">> =>
-                if Amount > 0 -> <<"Deposit">>;
-                true -> <<"Withdraw">>
-                end,
-            <<"quantity">> => Amount,
-            <<"resource">> => ResourceID
-        },
-        S,
+    hb_util:ok(
+        dev_process_lib:send(
+            #{
+                <<"target">> => Addr,
+                <<"action">> =>
+                    if Amount > 0 -> <<"Deposit">>;
+                    true -> <<"Withdraw">>
+                    end,
+                <<"quantity">> => Amount,
+                <<"resource">> => ResourceID
+            },
+            S,
+            Opts
+        ),
         Opts
     ).
 

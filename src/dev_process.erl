@@ -584,7 +584,6 @@ ensure_loaded(Base, Req, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
     ProcID = dev_process_lib:process_id(Base, #{}, Opts),
-    ?event({ensure_loaded, {base, Base}, {req, Req}}),
     case hb_ao:get(<<"initialized">>, Base, Opts) of
         <<"true">> ->
             ?event(already_initialized),

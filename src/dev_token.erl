@@ -1,7 +1,7 @@
 %%% @doc A fast, simple implementation of AO token specification.
 %%% Specification: https://cookbook_ao.arweave.net/references/api/token.html
 -module(dev_token).
--export([compute/3, init/3, normalize/3, snapshot/3]).
+-export([compute/3, init/3, normalize/3, snapshot/3, balance/3]).
 -include_lib("include/hb.hrl").
 
 %% @doc No-op on process initialization.
@@ -21,7 +21,6 @@ snapshot(Base, _Req, _Opts) ->
 compute(Base, Req, Opts) ->
     maybe
         {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
-        % {ok, MintNormBase} ?= normalize_mint(SecureBase, Req, Opts),
         route(SecureBase, Req, Opts)
     end.
 
@@ -42,6 +41,22 @@ route(Base, Req, Opts) ->
             {ok, Base}
     end.
 
+%% @doc Get the balance for an account. Normalize the minting state for that
+%% account before returning.
+balance(Base, Req, Opts) ->
+    {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
+    ?event(debug_token, {balance, {base, Base}, {req, Req}, {account, Account}}, Opts),
+    {ok, NormBase} = normalize_mint(Base, #{ <<"subject">> => Account }, Opts),
+    ?event(debug_token, {norm_base, NormBase}, Opts),
+    hb_ao:resolve_many(
+        [
+            NormBase,
+            <<"balances">>,
+            Account
+        ],
+        Opts
+    ).
+
 transfer(Base, Assignment, Opts) ->
     maybe
         % Gather transfer data from the request.
@@ -50,7 +65,12 @@ transfer(Base, Assignment, Opts) ->
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         % Normalize the base's minting state for the sender.
-        {ok, NormBase} ?= normalize_mint(Base, #{ <<"subject">> => From }, Opts),
+        {ok, NormBase} ?=
+            normalize_mint(
+                Base,
+                Assignment#{ <<"subject">> => From },
+                Opts
+            ),
         ?event({req, Req, from, From}),
         true ?= validate_address(Recipient),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
@@ -146,13 +166,19 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
     [DebitNotice, CreditNotice].
 
 mint(Base, Assignment, Opts) ->
+    ?event(debug_mint,
+        {running_mint,
+            {base, Base},
+            {assignment, Assignment}
+        }
+    ),
     case has_mint_device(Base, Opts) of
         false -> default_mint(Base, Assignment, Opts);
         true ->
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                Assignment,
+                Assignment#{ <<"path">> => <<"claim">> },
                 Opts
             )
     end.
@@ -161,13 +187,17 @@ normalize_mint(Base, Assignment, Opts) ->
     case has_mint_device(Base, Opts) of
         false -> {ok, Base};
         true ->
-            ?event({minting, Assignment}),
-            % Req = hb_ao:get(Assignment, <<"body">>, #{}, Opts),
-            MaybeSubject = hb_maps:with([<<"subject">>], Assignment, Opts),
+            AssignmentWithPath = Assignment#{ <<"path">> => <<"claim">> },
+            ?event(debug_mint,
+                {running_mint,
+                    {base, Base},
+                    {assignment, Assignment}
+                }
+            ),
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                MaybeSubject#{ <<"path">> => <<"claim_yield">> },
+                AssignmentWithPath,
                 Opts
             )
     end.
