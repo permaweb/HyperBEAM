@@ -2622,7 +2622,7 @@ simple_pot_process_test() ->
                 total_supply => 1_000_000_000,
                 mint_cap => 2_000_000_000,
                 mint_prop => {1, 2},
-                pot_resources => #{
+                resources => #{
                     ResourceOxygen => pot_resource(100, [{AliceAddr, 10}])
                 }
             },
