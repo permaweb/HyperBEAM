@@ -45,8 +45,33 @@ route(Base, Req, Opts) ->
 %% account before returning.
 balance(Base, Req, Opts) ->
     {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
-    ?event(debug_token, {balance, {base, Base}, {req, Req}, {account, Account}}, Opts),
-    {ok, NormBase} = normalize_mint(Base, #{ <<"subject">> => Account }, Opts),
+    {TimestampSource, Timestamp} =
+        case hb_ao:get(<<"timestamp">>, Req, Opts) of
+            not_found ->
+                ?event(warning, {balance_request_without_timestamp, Req}, Opts),
+                {<<"system">>, os:system_time(millisecond)};
+            TS ->
+                {<<"request">>, TS}
+        end,
+    ?event(
+        debug_token,
+        {balance_request,
+            {account, Account},
+            {timestamp_source, TimestampSource},
+            {timestamp, Timestamp},
+            {base, Base}
+        },
+        Opts
+    ),
+    {ok, NormBase} =
+        normalize_mint(
+            Base,
+            #{
+                <<"subject">> => Account,
+                <<"timestamp">> => Timestamp
+            },
+            Opts
+        ),
     ?event(debug_token, {norm_base, NormBase}, Opts),
     hb_ao:resolve_many(
         [
