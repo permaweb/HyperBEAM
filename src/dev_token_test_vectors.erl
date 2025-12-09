@@ -110,20 +110,32 @@ get_balance(State, Account) ->
     get_balance(State, Account, #{}).
 get_balance(State, Account, Opts) ->
     Res =
-        hb_ao:resolve_many(
-            [
-                State,
-                #{
-                    <<"path">> => <<"as">>,
-                    <<"as">> => <<"execution">>
-                },
-                #{
-                    <<"path">> => <<"balance">>,
-                    <<"balance">> => Account
-                }
-            ],
-            Opts
-        ),
+        case hb_maps:get(<<"device">>, State, <<"token@1.0">>, #{}) of
+            <<"token@1.0">> ->
+                hb_ao:resolve(
+                    State,
+                    #{
+                        <<"path">> => <<"balance">>,
+                        <<"balance">> => Account
+                    },
+                    Opts
+                );
+            _ ->
+                hb_ao:resolve_many(
+                    [
+                        State,
+                        #{
+                            <<"path">> => <<"as">>,
+                            <<"as">> => <<"execution">>
+                        },
+                        #{
+                            <<"path">> => <<"balance">>,
+                            <<"balance">> => Account
+                        }
+                    ],
+                    Opts
+                )
+        end,
     case Res of
         {ok, B} -> B;
         {error, not_found} -> 0
