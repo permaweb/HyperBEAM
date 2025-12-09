@@ -83,7 +83,7 @@ call(M1, RawM2, Opts) ->
             ],
             Opts
         ),
-    Commit =
+    CommitRaw =
         hb_ao:get_first(
             [
                 {{as, <<"message@1.0">>, BaseTarget}, <<"commit-request">>},
@@ -95,6 +95,14 @@ call(M1, RawM2, Opts) ->
             false,
             Opts
         ),
+    Commit =
+        case CommitRaw of
+            <<"true">> -> true;
+            <<"false">> -> false;
+            true -> true;
+            false -> false;
+            _ -> false
+        end,
     TargetMod1 =
         if RelayBody == not_found -> BaseTarget;
         true -> BaseTarget#{<<"body">> => RelayBody}
