@@ -36,7 +36,8 @@
 %%% `~pot@1.0` Private Utilities.
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
--export([user/3, balance/2, balances/1, get_deposit/3, get_deposits/1, get_deposits/2]).
+-export([user/3, balance/3, balances/1, balances/2]).
+-export([get_deposit/4, get_deposits/2, get_deposits/3]).
 
 %%% Pot Model Functions.
 
@@ -255,7 +256,7 @@ deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    ExistingDeposit = get_deposit(Addr, ResourceID, S0),
+    ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
     modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
 
@@ -323,7 +324,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             },
             Opts
         ),
-    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S),
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S, Opts),
     S1 =
         hb_ao:set(
             S0,
@@ -365,7 +366,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation + Amount,
             Opts
         ),
-    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2, Opts),
     S3 =
         hb_ao:set(
             S2,
@@ -383,7 +384,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
-    RecipientDeposit = get_deposit(ToAddr, ResourceID, S),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
     Liquidated = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
     GlobalDrippedS = drip_global(Liquidated, Opts),
     DrippedS = #{
@@ -407,7 +408,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             },
             Opts
         ),
-    NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S0),
+    NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S0, Opts),
     S1 =
         hb_ao:set(
             S0,
@@ -421,7 +422,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             NewRecipientDeposit - Amount,
             Opts
         ),
-    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1),
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1, Opts),
     S2 =
         hb_ao:set(
             S1,
@@ -550,7 +551,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS),
+    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     ResourceAcc =
@@ -607,35 +608,44 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     update_deposit_index(
         Addr,
         ResourceID,
-        get_deposit(Addr, ResourceID, UpdatedDepositS),
+        get_deposit(Addr, ResourceID, UpdatedDepositS, Opts),
         UpdatedDepositS,
         Opts
     ).
 
 %% @doc Get the deposit quantity for a specific address in a specific resource.
-get_deposit(Addr, ResourceID, S) ->
+get_deposit(Addr, ResourceID, S, Opts) ->
     hb_ao:get(
         <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
         S,
         0,
-        #{}
+        Opts
     ).
 
 %% @doc Get the balances submessage from the state.
-balances(S = #{ <<"balances">> := Bs }) ->
-    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, hb_private:reset(Bs)).
+balances(S) -> balances(S, #{}).
+balances(S = #{ <<"balances">> := Bs }, Opts) ->
+    hb_maps:map(fun(Addr, _) -> balance(Addr, S, Opts) end, hb_private:reset(Bs)).
 
 %% @doc Return only the deposits submessage for all resources in the state.
-get_deposits(S = #{ <<"resources">> := Resources }) ->
-    hb_maps:map(fun(ResourceID, _) -> get_deposits(ResourceID, S) end, Resources).
-get_deposits(ResourceID, S) ->
+get_deposits(S = #{ <<"resources">> := Resources }, Opts) ->
+    hb_maps:map(
+        fun(ResourceID, _) -> get_deposits(ResourceID, S, Opts) end,
+        Resources,
+        Opts
+    ).
+get_deposits(ResourceID, S, Opts) ->
     Ds = hb_ao:get(
         <<"/resources/", ResourceID/binary, "/deposits">>,
         S,
         #{},
-        #{}
+        Opts
     ),
-    hb_maps:map(fun(Addr, _) -> get_deposit(Addr, ResourceID, S) end, Ds).
+    hb_maps:map(
+        fun(Addr, _) -> get_deposit(Addr, ResourceID, S, Opts) end,
+        Ds,
+        Opts
+    ).
 
 %% @doc Return the contents of the inverted index for a specific address.
 user(Addr, S, Opts) ->
