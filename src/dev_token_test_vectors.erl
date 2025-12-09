@@ -14,7 +14,8 @@
 generate_base_state() ->
     generate_base_state(#{}).
 generate_base_state(Overrides) ->
-    generate_base_state(Overrides, #{}).
+    Opts = #{ store => [hb_test_utils:test_store()] },
+    generate_base_state(Overrides, Opts).
 
 generate_base_state(Params, Opts) ->
     ?event({generate_base_state, {params, Params}}),
@@ -46,7 +47,7 @@ generate_base_state(Params, Opts) ->
     },
     FinalState = maps:merge(DefaultState, maps:get(extra, Params, #{})),
     ?event({final_state_generated, {balances_size, map_size(Balances)}}),
-    FinalState.
+    { FinalState, Opts }.
 
 generate_process_state(Params, Opts) ->
     Addr = hb_util:human_id(hb_opts:get(priv_wallet, no_wallet, Opts)),
@@ -61,7 +62,7 @@ generate_process_state(Params, Opts) ->
             <<"scheduler">> => Addr,
             <<"authority">> => Addr
         },
-    Base =
+    { Base, _ }=
         generate_base_state(
             Params#{ extra => ExtraWithProcBase },
             Opts
@@ -74,11 +75,7 @@ generate_pot_process_state(Params, Opts) ->
     generate_process_state(Params#{ extra => Extra }, Opts).
 
 %% @doc Create a request message.
-make_request(Action, Body) ->
-    make_request(Action, Body, #{}).
-
-make_request(Action, Body, Opts) ->
-    From = maps:get(from, Opts, ?OWNER),
+make_request(Action, Body, From) ->
     Req = #{
         <<"path">> => <<"compute">>,
         <<"body">> => Body#{ <<"from">> => From, <<"action">> => Action }
@@ -147,9 +144,6 @@ get_balance(State, Account, Opts) ->
 %% Returns a map of pot state fields that can be merged into token state
 %% Note: Only includes initial fields. Dynamic fields (minted, accumulator,
 %% undistributed-mint) are created by drip_global()
-generate_pot_fields(Params) ->
-    generate_pot_fields(Params, #{}).
-
 generate_pot_fields(Params, Opts) ->
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
     MintProp = hb_maps:get(mint_prop, Params, {1, 2}, Opts),
@@ -194,7 +188,8 @@ pot_resource(Weight, UserDeposits) ->
 
 %% @doc Generate integrated token+pot state
 generate_integrated_state(Params) ->
-    generate_integrated_state(Params, #{}).
+    Opts = #{ store => [hb_test_utils:test_store()] },
+    generate_integrated_state(Params, Opts).
 
 generate_integrated_state(Params, Opts) ->
     PotResources = hb_maps:get(pot_resources, Params, #{}, Opts),
@@ -212,15 +207,11 @@ generate_integrated_state(Params, Opts) ->
 %%% Transfer Tests
 
 transfer_basic_test() ->
-    ?event({starting_test, transfer_basic_test}),
     hb:init(),
-    % Setup: Alice has 1000 tokens
-    ?event({generating_base_state}),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => 1000,
         initial_balances => #{?ALICE => 1000}
     }),
-    ?event({base_state_ready}),
     % Transfer 300 from Alice to Bob
     Req = make_request(
         <<"transfer">>,
@@ -228,28 +219,25 @@ transfer_basic_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 300
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    ?event({calling_compute}),
     ?event({base_state_balances, 
         hb_ao:get(<<"balances">>, Base, #{}), 
         Base, 
         Req
     }),
-    ComputeResult = dev_token:compute(Base, Req, #{}),
+    ComputeResult = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?event({compute_result, ComputeResult}),
     {ok, NewState} = ComputeResult,
     % Verify balances
-    ?event({verifying_balances}),
     ?assertEqual(700, get_balance(NewState, ?ALICE)),
     ?assertEqual(300, get_balance(NewState, ?BOB)),
     % Verify total supply unchanged
-    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, NewState, #{})),
-    ?event({test_complete, transfer_basic_test}).
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, NewState, #{})).
 
 transfer_insufficient_balance_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100}
     }),
     Req = make_request(
@@ -258,33 +246,32 @@ transfer_insufficient_balance_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 200
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    Result = dev_token:compute(Base, Req, #{}),
+    Result = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertMatch({error, <<"Insufficient balance.">>}, Result).
 
 transfer_to_self_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
         <<"transfer">>,
         #{
-            <<"from">> => ?ALICE,
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1000, get_balance(NewState, ?ALICE)).
 
 %%% Mint Tests
 
 mint_single_authorized_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -292,15 +279,15 @@ mint_single_authorized_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 1000
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1000, get_balance(NewState, ?ALICE)),
     ?assertEqual(1000, hb_ao:get(<<"total-supply">>, NewState, #{})).
 
 mint_batch_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => 100,
         initial_balances => #{?ALICE => 100}
     }),
@@ -315,10 +302,10 @@ mint_batch_test() ->
             <<"quantities">> => Quantities,
             <<"mode">> => <<"batch">>
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
     ?event({base, Base, req, Req}),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(500, get_balance(NewState, ?ALICE)),
     ?assertEqual(300, get_balance(NewState, ?BOB)),
     ?assertEqual(200, get_balance(NewState, ?CHARLIE)),
@@ -326,7 +313,7 @@ mint_batch_test() ->
 
 mint_to_existing_balance_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => 1000,
         initial_balances => #{?ALICE => 1000}
     }),
@@ -337,9 +324,9 @@ mint_to_existing_balance_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1500, get_balance(NewState, ?ALICE)),
     ?assertEqual(1500, hb_ao:get(<<"total-supply">>, NewState, #{})).
 
@@ -347,30 +334,30 @@ mint_to_existing_balance_test() ->
 
 secure_set_by_owner_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"set">>,
         #{
             <<"name">> => <<"New Token Name">>,
             <<"ticker">> => <<"NEW">>
         },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(<<"New Token Name">>, hb_ao:get(<<"name">>, NewState, #{})),
     ?assertEqual(<<"NEW">>, hb_ao:get(<<"ticker">>, NewState, #{})).
 
 secure_set_by_minter_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"set">>,
         #{
             <<"description">> => <<"Token description">>
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(
         <<"Token description">>,
         hb_ao:get(<<"description">>, NewState, #{})
@@ -378,22 +365,22 @@ secure_set_by_minter_test() ->
 
 secure_set_unauthorized_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"set">>,
         #{
             <<"name">> => <<"Hacked Name">>
         },
-        #{from => ?BOB}  % Bob is neither owner nor minter
+        ?BOB  % Bob is neither owner nor minter
     ),
-    Result = dev_token:compute(Base, Req, #{}),
+    Result = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertMatch({error, <<"Set authority mismatch.">>}, Result).
 
 %%% Edge Cases and Error Handling
 
 transfer_zero_amount_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
@@ -402,15 +389,15 @@ transfer_zero_amount_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 0
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1000, get_balance(NewState, ?ALICE)),
     ?assertEqual(0, get_balance(NewState, ?BOB)).
 
 mint_zero_amount_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -418,27 +405,27 @@ mint_zero_amount_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 0
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(0, get_balance(NewState, ?ALICE)),
     ?assertEqual(0, hb_ao:get(<<"total-supply">>, NewState, #{})).
 
 unsupported_action_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"burn">>,  % Unsupported action
         #{<<"quantity">> => 100},
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    Result = dev_token:compute(Base, Req, #{}),
+    Result = dev_token:compute(Base, Req, Opts),
     ?assertMatch({ok, Base}, Result).
 
 %%% Additional Edge Cases - Transfer Boundaries
 transfer_to_new_account_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
@@ -447,15 +434,15 @@ transfer_to_new_account_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 250
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(750, get_balance(NewState, ?ALICE)),
     ?assertEqual(250, get_balance(NewState, ?CHARLIE)).
 
 transfer_exact_balance_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 500}
     }),
     Req = make_request(
@@ -464,15 +451,15 @@ transfer_exact_balance_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 500
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(0, get_balance(NewState, ?ALICE)),
     ?assertEqual(500, get_balance(NewState, ?BOB)).
 
 transfer_exceeds_by_one_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100}
     }),
     Req = make_request(
@@ -482,14 +469,14 @@ transfer_exceeds_by_one_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 101
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    Result = dev_token:compute(Base, Req, #{}),
+    Result = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertMatch({error, <<"Insufficient balance.">>}, Result).
 
 transfer_one_token_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100}
     }),
     Req = make_request(
@@ -499,16 +486,16 @@ transfer_one_token_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 1
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(99, get_balance(NewState, ?ALICE)),
     ?assertEqual(1, get_balance(NewState, ?BOB)).
 
 transfer_large_amount_test() ->
     hb:init(),
     LargeAmount = 1_000_000_000_000,
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => LargeAmount}
     }),
     Req = make_request(
@@ -518,16 +505,16 @@ transfer_large_amount_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => LargeAmount div 2
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(LargeAmount div 2, get_balance(NewState, ?ALICE)),
     ?assertEqual(LargeAmount div 2, get_balance(NewState, ?BOB)).
 
 %%% Sequential Transfer Operations
 transfer_multiple_sequential_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     % Transfer 1: Alice → Bob
@@ -538,9 +525,9 @@ transfer_multiple_sequential_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 300
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(700, get_balance(State1, ?ALICE)),
     ?assertEqual(300, get_balance(State1, ?BOB)),
     % Transfer 2: Alice → Charlie
@@ -551,9 +538,9 @@ transfer_multiple_sequential_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 200
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     ?assertEqual(500, get_balance(State2, ?ALICE)),
     ?assertEqual(300, get_balance(State2, ?BOB)),
     ?assertEqual(200, get_balance(State2, ?CHARLIE)),
@@ -565,16 +552,16 @@ transfer_multiple_sequential_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 100
         },
-        #{from => ?BOB}
+        ?BOB
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
     ?assertEqual(500, get_balance(State3, ?ALICE)),
     ?assertEqual(200, get_balance(State3, ?BOB)),
     ?assertEqual(300, get_balance(State3, ?CHARLIE)).
 
 transfer_all_then_fail_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100}
     }),
     % Transfer all balance
@@ -585,9 +572,9 @@ transfer_all_then_fail_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 100
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(0, get_balance(State1, ?ALICE)),
     ?assertEqual(100, get_balance(State1, ?BOB)),
     % Try to transfer again - should fail
@@ -598,14 +585,14 @@ transfer_all_then_fail_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 1
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    Result = dev_token:compute(State1, Req2, #{}),
+    Result = hb_ao:resolve(State1, Req2, Opts),
     ?assertMatch({error, <<"Insufficient balance.">>}, Result).
 
 transfer_circular_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{
             ?ALICE => 300,
             ?BOB => 300,
@@ -620,9 +607,9 @@ transfer_circular_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 100
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     % Bob → Charlie
     Req2 = make_request(
         <<"transfer">>,
@@ -631,9 +618,9 @@ transfer_circular_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 100
         },
-        #{from => ?BOB}
+        ?BOB
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     % Charlie → Alice (completing circle)
     Req3 = make_request(
         <<"transfer">>,
@@ -642,9 +629,9 @@ transfer_circular_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 100
         },
-        #{from => ?CHARLIE}
+        ?CHARLIE
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
     % All should be back to 300
     ?assertEqual(300, get_balance(State3, ?ALICE)),
     ?assertEqual(300, get_balance(State3, ?BOB)),
@@ -653,7 +640,7 @@ transfer_circular_test() ->
 %% @doc  Mint Edge Cases
 mint_to_new_account_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -661,15 +648,15 @@ mint_to_new_account_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(500, get_balance(NewState, ?CHARLIE)),
-    ?assertEqual(500, hb_ao:get(<<"total-supply">>, NewState, #{})).
+    ?assertEqual(500, hb_ao:get(<<"total-supply">>, NewState, Opts)).
 
 mint_one_token_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -677,15 +664,15 @@ mint_one_token_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 1
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1, get_balance(NewState, ?ALICE)),
-    ?assertEqual(1, hb_ao:get(<<"total-supply">>, NewState, #{})).
+    ?assertEqual(1, hb_ao:get(<<"total-supply">>, NewState, Opts)).
 
 mint_large_quantity_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     LargeQuantity = 1_000_000_000_000_000,
     Req = make_request(
         <<"mint">>,
@@ -694,15 +681,15 @@ mint_large_quantity_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => LargeQuantity
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(LargeQuantity, get_balance(NewState, ?ALICE)),
-    ?assertEqual(LargeQuantity, hb_ao:get(<<"total-supply">>, NewState, #{})).
+    ?assertEqual(LargeQuantity, hb_ao:get(<<"total-supply">>, NewState, Opts)).
 
 mint_multiple_to_same_account_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     % First mint
     Req1 = make_request(
         <<"mint">>,
@@ -711,11 +698,11 @@ mint_multiple_to_same_account_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(500, get_balance(State1, ?ALICE)),
-    ?assertEqual(500, hb_ao:get(<<"total-supply">>, State1, #{})),
+    ?assertEqual(500, hb_ao:get(<<"total-supply">>, State1, Opts)),
     % Second mint
     Req2 = make_request(
         <<"mint">>,
@@ -724,11 +711,11 @@ mint_multiple_to_same_account_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 300
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     ?assertEqual(800, get_balance(State2, ?ALICE)),
-    ?assertEqual(800, hb_ao:get(<<"total-supply">>, State2, #{})),
+    ?assertEqual(800, hb_ao:get(<<"total-supply">>, State2, Opts)),
     % Third mint
     Req3 = make_request(
         <<"mint">>,
@@ -737,31 +724,31 @@ mint_multiple_to_same_account_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 200
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
     ?assertEqual(1000, get_balance(State3, ?ALICE)),
-    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State3, #{})).
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State3, Opts)).
 
 mint_batch_single_recipient_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
             <<"mode">> => <<"batch">>,
             <<"quantities">> => #{?ALICE => 1000}
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1000, get_balance(NewState, ?ALICE)),
-    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, NewState, #{})).
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, NewState, Opts)).
 
 %%% Combined Operations
 mint_then_transfer_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     % Mint to Alice
     MintReq = make_request(
         <<"mint">>,
@@ -770,9 +757,9 @@ mint_then_transfer_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 1000
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State1} = dev_token:compute(Base, MintReq, #{}),
+    {ok, State1} = hb_ao:resolve(Base, MintReq, Opts),
     ?assertEqual(1000, get_balance(State1, ?ALICE)),
     % Transfer from Alice to Bob
     TransferReq = make_request(
@@ -782,16 +769,16 @@ mint_then_transfer_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 400
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State2} = dev_token:compute(State1, TransferReq, #{}),
+    {ok, State2} = hb_ao:resolve(State1, TransferReq, Opts),
     ?assertEqual(600, get_balance(State2, ?ALICE)),
     ?assertEqual(400, get_balance(State2, ?BOB)),
-    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State2, #{})).
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State2, Opts)).
 
 transfer_then_mint_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => 1000,
         initial_balances => #{?ALICE => 1000}
     }),
@@ -803,9 +790,9 @@ transfer_then_mint_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 300
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, TransferReq, #{}),
+    {ok, State1} = hb_ao:resolve(Base, TransferReq, Opts),
     ?assertEqual(700, get_balance(State1, ?ALICE)),
     ?assertEqual(300, get_balance(State1, ?BOB)),
     % Mint to Alice
@@ -816,16 +803,16 @@ transfer_then_mint_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, MintReq, #{}),
+    {ok, State2} = hb_ao:resolve(State1, MintReq, Opts),
     ?assertEqual(1200, get_balance(State2, ?ALICE)),
     ?assertEqual(300, get_balance(State2, ?BOB)),
-    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State2, #{})).
+    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State2, Opts)).
 
 account_lifecycle_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     % Start: Account has 0
     ?assertEqual(0, get_balance(Base, ?ALICE)),
     % Mint to account
@@ -836,9 +823,9 @@ account_lifecycle_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 1000
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(1000, get_balance(State1, ?ALICE)),
     % Transfer out all
     Req2 = make_request(
@@ -848,9 +835,9 @@ account_lifecycle_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 1000
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     ?assertEqual(0, get_balance(State2, ?ALICE)),
     % Mint again
     Req3 = make_request(
@@ -860,16 +847,16 @@ account_lifecycle_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
     ?assertEqual(500, get_balance(State3, ?ALICE)),
-    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State3, #{})).
+    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State3, Opts)).
 
 %% @doc  Secure Set Edge Cases
 secure_set_multiple_fields_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"set">>,
         #{
@@ -878,18 +865,18 @@ secure_set_multiple_fields_test() ->
             <<"denomination">> => 18,
             <<"description">> => <<"A comprehensive test token">>
         },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
-    ?assertEqual(<<"Updated Token">>, hb_ao:get(<<"name">>, NewState, #{})),
-    ?assertEqual(<<"UPD">>, hb_ao:get(<<"ticker">>, NewState, #{})),
-    ?assertEqual(18, hb_ao:get(<<"denomination">>, NewState, #{})),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    ?assertEqual(<<"Updated Token">>, hb_ao:get(<<"name">>, NewState, Opts)),
+    ?assertEqual(<<"UPD">>, hb_ao:get(<<"ticker">>, NewState, Opts)),
+    ?assertEqual(18, hb_ao:get(<<"denomination">>, NewState, Opts)),
     ?assertEqual(<<"A comprehensive test token">>,
-                 hb_ao:get(<<"description">>, NewState, #{})).
+                 hb_ao:get(<<"description">>, NewState, Opts)).
 
 secure_set_custom_fields_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"set">>,
         #{
@@ -897,45 +884,45 @@ secure_set_custom_fields_test() ->
             <<"website">> => <<"https://example.com">>,
             <<"social-twitter">> => <<"@testtoken">>
         },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(<<"https://example.com/logo.png">>,
-                 hb_ao:get(<<"logo">>, NewState, #{})),
+                 hb_ao:get(<<"logo">>, NewState, Opts)),
     ?assertEqual(<<"https://example.com">>,
-                 hb_ao:get(<<"website">>, NewState, #{})),
+                 hb_ao:get(<<"website">>, NewState, Opts)),
     ?assertEqual(<<"@testtoken">>,
-                 hb_ao:get(<<"social-twitter">>, NewState, #{})).
+                 hb_ao:get(<<"social-twitter">>, NewState, Opts)).
 
 secure_set_sequential_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     % First update
     Req1 = make_request(
         <<"set">>,
         #{
             <<"name">> => <<"First Name">>
         },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(<<"First Name">>, hb_ao:get(<<"name">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(<<"First Name">>, hb_ao:get(<<"name">>, State1, Opts)),
     % Second update
     Req2 = make_request(
         <<"set">>,
         #{
             <<"name">> => <<"Second Name">>
         },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
-    ?assertEqual(<<"Second Name">>, hb_ao:get(<<"name">>, State2, #{})).
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
+    ?assertEqual(<<"Second Name">>, hb_ao:get(<<"name">>, State2, Opts)).
 
 %% @doc  State Consistency Tests
 total_supply_consistency_test() ->
     hb:init(),
     InitialSupply = 10000,
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => InitialSupply,
         initial_balances => #{
             ?ALICE => 5000,
@@ -951,10 +938,10 @@ total_supply_consistency_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 1000
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State1, Opts)),
     Req2 = make_request(
         <<"transfer">>,
         #{
@@ -962,10 +949,10 @@ total_supply_consistency_test() ->
             <<"recipient">> => ?ALICE,
             <<"quantity">> => 500
         },
-        #{from => ?CHARLIE}
+        ?CHARLIE
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
-    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State2, #{})),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
+    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State2, Opts)),
     Req3 = make_request(
         <<"transfer">>,
         #{
@@ -973,14 +960,14 @@ total_supply_consistency_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 2000
         },
-        #{from => ?BOB}
+        ?BOB
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
-    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State3, #{})).
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
+    ?assertEqual(InitialSupply, hb_ao:get(<<"total-supply">>, State3, Opts)).
 
 total_supply_increases_with_mint_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         total_supply => 1000,
         initial_balances => #{?ALICE => 1000}
     }),
@@ -992,10 +979,10 @@ total_supply_increases_with_mint_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(1500, hb_ao:get(<<"total-supply">>, State1, Opts)),
     % Second mint
     Req2 = make_request(
         <<"mint">>,
@@ -1004,10 +991,10 @@ total_supply_increases_with_mint_test() ->
             <<"recipient">> => ?CHARLIE,
             <<"quantity">> => 300
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
-    ?assertEqual(1800, hb_ao:get(<<"total-supply">>, State2, #{})),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
+    ?assertEqual(1800, hb_ao:get(<<"total-supply">>, State2, Opts)),
     % Batch mint
     Req3 = make_request(
         <<"mint">>,
@@ -1018,15 +1005,15 @@ total_supply_increases_with_mint_test() ->
                 ?BOB => 100
             }
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
-    ?assertEqual(2000, hb_ao:get(<<"total-supply">>, State3, #{})).
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
+    ?assertEqual(2000, hb_ao:get(<<"total-supply">>, State3, Opts)).
 
 %% @doc Sum of all balances must equal minted supply at all times
 sum_of_balances_equals_minted_supply_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000, ?BOB => 500},
         total_supply => 2000
     }),
@@ -1037,15 +1024,15 @@ sum_of_balances_equals_minted_supply_test() ->
             <<"recipient">> => ?CHARLIE, 
             <<"quantity">> => 300
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     Sum1 = 
         get_balance(State1, ?ALICE) + 
         get_balance(State1, ?BOB) + 
         get_balance(State1, ?CHARLIE),
     ?assertEqual(1500, Sum1),
-    ?assertEqual(2000, hb_ao:get(<<"total-supply">>, State1, #{})),
+    ?assertEqual(2000, hb_ao:get(<<"total-supply">>, State1, Opts)),
     Req2 = make_request(
         <<"mint">>,
         #{
@@ -1053,22 +1040,22 @@ sum_of_balances_equals_minted_supply_test() ->
             <<"recipient">> => <<"dave-id">>, 
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     Sum2 = 
         get_balance(State2, ?ALICE) + 
         get_balance(State2, ?BOB) + 
         get_balance(State2, ?CHARLIE) + 
         get_balance(State2, <<"dave-id">>),
     ?assertEqual(2000, Sum2),
-    ?assertEqual(2500, hb_ao:get(<<"total-supply">>, State2, #{})).
+    ?assertEqual(2500, hb_ao:get(<<"total-supply">>, State2, Opts)).
 
 %% @doc Operations with very large numbers maintain exact precision
 no_precision_loss_large_numbers_test() ->
     hb:init(),
     LargeAmount = 1_000_000_000_000_000,
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => LargeAmount},
         total_supply => LargeAmount
     }),
@@ -1080,21 +1067,21 @@ no_precision_loss_large_numbers_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => TransferAmount
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ?assertEqual(1, get_balance(State, ?ALICE)),
     ?assertEqual(TransferAmount, get_balance(State, ?BOB)),
-    ?assertEqual(LargeAmount, hb_ao:get(<<"total-supply">>, State, #{})).
+    ?assertEqual(LargeAmount, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %% @doc Failed operations never leak or create tokens
 failed_operations_preserve_supply_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100},
         total_supply => 100
     }),
-    TotalSupplyBefore = hb_ao:get(<<"total-supply">>, Base, #{}),
+    TotalSupplyBefore = hb_ao:get(<<"total-supply">>, Base, Opts),
     AliceBalanceBefore = get_balance(Base, ?ALICE),
     Req1 = make_request(
         <<"transfer">>,
@@ -1103,9 +1090,9 @@ failed_operations_preserve_supply_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 200
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {error, _} = dev_token:compute(Base, Req1, #{}),
+    {error, _} = hb_ao:resolve(Base, Req1, Opts),
     Req2 = make_request(
         <<"mint">>,
         #{
@@ -1113,10 +1100,10 @@ failed_operations_preserve_supply_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 500
         },
-        #{from => ?BOB}
+        ?BOB
     ),
-    {error, _} = dev_token:compute(Base, Req2, #{}),
-    ?assertEqual(TotalSupplyBefore, hb_ao:get(<<"total-supply">>, Base, #{})),
+    {error, _} = hb_ao:resolve(Base, Req2, Opts),
+    ?assertEqual(TotalSupplyBefore, hb_ao:get(<<"total-supply">>, Base, Opts)),
     ?assertEqual(AliceBalanceBefore, get_balance(Base, ?ALICE)),
     ?assertEqual(0, get_balance(Base, ?BOB)).
 
@@ -1124,7 +1111,7 @@ failed_operations_preserve_supply_test() ->
 overflow_protection_test() ->
     hb:init(),
     MaxSafe = 9_007_199_254_740_991,
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => MaxSafe},
         total_supply => MaxSafe
     }),
@@ -1135,17 +1122,17 @@ overflow_protection_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => MaxSafe
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     ExpectedBalance = MaxSafe + MaxSafe,
     ?assertEqual(ExpectedBalance, get_balance(State, ?ALICE)),
-    ?assertEqual(ExpectedBalance, hb_ao:get(<<"total-supply">>, State, #{})).
+    ?assertEqual(ExpectedBalance, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %% @doc Only the designated minter can mint tokens
 only_minter_can_mint_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req1 = make_request(
         <<"mint">>,
         #{
@@ -1153,11 +1140,11 @@ only_minter_can_mint_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 1000
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
     ?assertMatch(
         {error, <<"Mint authority mismatch.">>}, 
-        dev_token:compute(Base, Req1, #{})
+        hb_ao:resolve(Base, Req1, Opts)
     ),
     Req2 = make_request(
         <<"mint">>,
@@ -1166,11 +1153,11 @@ only_minter_can_mint_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 1000
         },
-        #{from => ?BOB}
+        ?BOB
     ),
     ?assertMatch(
         {error, <<"Mint authority mismatch.">>}, 
-        dev_token:compute(Base, Req2, #{})
+        hb_ao:resolve(Base, Req2, Opts)
     ),
     Req3 = make_request(
         <<"mint">>,
@@ -1179,33 +1166,33 @@ only_minter_can_mint_test() ->
             <<"recipient">> => ?CHARLIE, 
             <<"quantity">> => 1000
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    ?assertMatch({ok, _}, dev_token:compute(Base, Req3, #{})).
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req3, Opts)).
 
 %% @doc Authority changes are enforced immediately
 authority_change_enforced_immediately_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     NewMinter = <<"new-minter-id">>,
     Req1 = make_request(
         <<"set">>,
         #{ <<"mint-authority">> => NewMinter },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(NewMinter, hb_ao:get(<<"mint-authority">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(NewMinter, hb_ao:get(<<"mint-authority">>, State1, Opts)),
     Req2 = make_request(
         <<"mint">>,
         #{
             <<"mode">> => <<"single">>, 
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 100},
-        #{from => ?MINTER}
+        ?MINTER
     ),
     ?assertMatch(
         {error, <<"Mint authority mismatch.">>}, 
-        dev_token:compute(State1, Req2, #{})
+        hb_ao:resolve(State1, Req2, Opts)
     ),
     Req3 = make_request(
         <<"mint">>,
@@ -1214,19 +1201,19 @@ authority_change_enforced_immediately_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 100
         },
-        #{from => NewMinter}
+        NewMinter
     ),
-    ?assertMatch({ok, _}, dev_token:compute(State1, Req3, #{})).
+    ?assertMatch({ok, _}, hb_ao:resolve(State1, Req3, Opts)).
 
 %% @doc State remains unchanged after operation failure
 state_unchanged_on_failure_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 100}
     }),
-    BaseSupply = hb_ao:get(<<"total-supply">>, Base, #{}),
+    BaseSupply = hb_ao:get(<<"total-supply">>, Base, Opts),
     BaseBalance = get_balance(Base, ?ALICE),
-    BaseName = hb_ao:get(<<"name">>, Base, #{}),
+    BaseName = hb_ao:get(<<"name">>, Base, Opts),
     Req = make_request(
         <<"transfer">>,
         #{
@@ -1234,18 +1221,18 @@ state_unchanged_on_failure_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 200
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {error, _} = dev_token:compute(Base, Req, #{}),
-    ?assertEqual(BaseSupply, hb_ao:get(<<"total-supply">>, Base, #{})),
+    {error, _} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    ?assertEqual(BaseSupply, hb_ao:get(<<"total-supply">>, Base, Opts)),
     ?assertEqual(BaseBalance, get_balance(Base, ?ALICE)),
     ?assertEqual(0, get_balance(Base, ?BOB)),
-    ?assertEqual(BaseName, hb_ao:get(<<"name">>, Base, #{})).
+    ?assertEqual(BaseName, hb_ao:get(<<"name">>, Base, Opts)).
 
 %% @doc Trie balances persist correctly across operations
 trie_balances_persist_correctly_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req1 = make_request(
         <<"mint">>,
         #{
@@ -1253,9 +1240,9 @@ trie_balances_persist_correctly_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 500
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(500, get_balance(State1, ?ALICE)),
     Req2 = make_request(
         <<"mint">>,
@@ -1264,9 +1251,9 @@ trie_balances_persist_correctly_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 300
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
     ?assertEqual(500, get_balance(State2, ?ALICE)),
     ?assertEqual(300, get_balance(State2, ?BOB)),
     Req3 = make_request(
@@ -1276,9 +1263,9 @@ trie_balances_persist_correctly_test() ->
             <<"recipient">> => ?CHARLIE, 
             <<"quantity">> => 100
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State3} = dev_token:compute(State2, Req3, #{}),
+    {ok, State3} = hb_ao:resolve(State2, Req3, Opts),
     ?assertEqual(400, get_balance(State3, ?ALICE)),
     ?assertEqual(300, get_balance(State3, ?BOB)),
     ?assertEqual(100, get_balance(State3, ?CHARLIE)).
@@ -1286,7 +1273,7 @@ trie_balances_persist_correctly_test() ->
 %% @doc Notices match actual state changes
 notices_match_actual_state_changes_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
@@ -1295,29 +1282,29 @@ notices_match_actual_state_changes_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 300
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
-    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, Opts),
     ?assertEqual(2, length(Outbox)),
     % Notice order: [DebitNotice, CreditNotice]
     [DebitNotice, CreditNotice] = Outbox,
     % Validate Debit-Notice structure
     ?assertEqual(
         <<"Debit-Notice">>,
-        hb_ao:get(<<"action">>, DebitNotice, #{})
+        hb_ao:get(<<"action">>, DebitNotice, Opts)
     ),
-    ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, DebitNotice, #{})),
-    ?assertEqual(300, hb_ao:get(<<"quantity">>, DebitNotice, #{})),
-    ?assertEqual(?ALICE, hb_ao:get(<<"target">>, DebitNotice, #{})), 
+    ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, DebitNotice, Opts)),
+    ?assertEqual(300, hb_ao:get(<<"quantity">>, DebitNotice, Opts)),
+    ?assertEqual(?ALICE, hb_ao:get(<<"target">>, DebitNotice, Opts)), 
     % Validate Credit-Notice structure
     ?assertEqual(
         <<"Credit-Notice">>,
-        hb_ao:get(<<"action">>, CreditNotice, #{})
+        hb_ao:get(<<"action">>, CreditNotice, Opts)
     ),
-    ?assertEqual(?ALICE, hb_ao:get(<<"sender">>, CreditNotice, #{})),
-    ?assertEqual(300, hb_ao:get(<<"quantity">>, CreditNotice, #{})),
-    ?assertEqual(?BOB, hb_ao:get(<<"target">>, CreditNotice, #{})),   
+    ?assertEqual(?ALICE, hb_ao:get(<<"sender">>, CreditNotice, Opts)),
+    ?assertEqual(300, hb_ao:get(<<"quantity">>, CreditNotice, Opts)),
+    ?assertEqual(?BOB, hb_ao:get(<<"target">>, CreditNotice, Opts)),   
     % Validate balances updated correctly
     ?assertEqual(700, get_balance(State, ?ALICE)),
     ?assertEqual(300, get_balance(State, ?BOB)).
@@ -1325,7 +1312,7 @@ notices_match_actual_state_changes_test() ->
 %% @doc X- prefixed tags are forwarded to transfer notices
 transfer_forwards_x_tags_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
@@ -1339,57 +1326,57 @@ transfer_forwards_x_tags_test() ->
             <<"regular-tag">> => <<"should-not-forward">>,
             <<"Y-Tag">> => <<"also-not-forwarded">>
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
-    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, Opts),
     ?assertEqual(2, length(Outbox)),
     [DebitNotice, CreditNotice] = Outbox,
     ?assertEqual(
         <<"abc123">>, 
-        hb_ao:get(<<"X-Correlation-ID">>, DebitNotice, #{})
+        hb_ao:get(<<"X-Correlation-ID">>, DebitNotice, Opts)
     ),
     ?assertEqual(
         <<"req-456">>, 
-        hb_ao:get(<<"x-request-id">>, DebitNotice, #{})
+        hb_ao:get(<<"x-request-id">>, DebitNotice, Opts)
     ),
     ?assertEqual(
         <<"custom-value">>, 
-        hb_ao:get(<<"X-Custom-Tag">>, DebitNotice, #{})
+        hb_ao:get(<<"X-Custom-Tag">>, DebitNotice, Opts)
     ),
     ?assertEqual(
         <<"abc123">>, 
-        hb_ao:get(<<"X-Correlation-ID">>, CreditNotice, #{})
+        hb_ao:get(<<"X-Correlation-ID">>, CreditNotice, Opts)
     ),
     ?assertEqual(
         <<"req-456">>, 
-        hb_ao:get(<<"x-request-id">>, CreditNotice, #{})
+        hb_ao:get(<<"x-request-id">>, CreditNotice, Opts)
     ),
     ?assertEqual(
         <<"custom-value">>, 
-        hb_ao:get(<<"X-Custom-Tag">>, CreditNotice, #{})
+        hb_ao:get(<<"X-Custom-Tag">>, CreditNotice, Opts)
     ),
     ?assertEqual(
         not_found, 
-        hb_ao:get(<<"regular-tag">>, DebitNotice, #{})
+        hb_ao:get(<<"regular-tag">>, DebitNotice, Opts)
     ),
     ?assertEqual(
         not_found, 
-        hb_ao:get(<<"Y-Tag">>, DebitNotice, #{})
+        hb_ao:get(<<"Y-Tag">>, DebitNotice, Opts)
     ),
     ?assertEqual(
         not_found, 
-        hb_ao:get(<<"regular-tag">>, CreditNotice, #{})
+        hb_ao:get(<<"regular-tag">>, CreditNotice, Opts)
     ),
     ?assertEqual(
         not_found, 
-        hb_ao:get(<<"Y-Tag">>, CreditNotice, #{})
+        hb_ao:get(<<"Y-Tag">>, CreditNotice, Opts)
     ).
 
 %% @doc Edge cases for X- tag forwarding
 transfer_x_tags_edge_cases_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req = make_request(
@@ -1403,26 +1390,26 @@ transfer_x_tags_edge_cases_test() ->
             <<"X-123">> => <<"numeric">>,   
             <<"X-With-Dashes">> => <<"val">> 
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
-    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, Opts),
     [DebitNotice, CreditNotice] = Outbox,
-    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, DebitNotice, #{})),
-    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, CreditNotice, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"X">>, DebitNotice, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"X">>, CreditNotice, #{})),
-    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, DebitNotice, #{})),
-    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, CreditNotice, #{})),
-    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, DebitNotice, #{})),
-    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, CreditNotice, #{})),
-    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, DebitNotice, #{})),
-    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, CreditNotice, #{})).
+    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, DebitNotice, Opts)),
+    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, CreditNotice, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"X">>, DebitNotice, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"X">>, CreditNotice, Opts)),
+    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, DebitNotice, Opts)),
+    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, CreditNotice, Opts)),
+    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, DebitNotice, Opts)),
+    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, CreditNotice, Opts)),
+    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, DebitNotice, Opts)),
+    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, CreditNotice, Opts)).
 
 %% @doc Batch mint generates one notice per recipient
 batch_mint_notice_count_matches_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -1433,16 +1420,16 @@ batch_mint_notice_count_matches_test() ->
                 ?CHARLIE => 300
             }
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
-    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, Opts),
     ?assertEqual(3, length(Outbox)),
     lists:foreach(
         fun(Notice) ->
             ?assertEqual(
                 <<"Mint-Notice">>, 
-                hb_ao:get(<<"action">>, Notice, #{})
+                hb_ao:get(<<"action">>, Notice, Opts)
             )
         end,
         Outbox
@@ -1451,7 +1438,7 @@ batch_mint_notice_count_matches_test() ->
 % @doc Missing required fields cause clear errors
 missing_fields_validated_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 1000}
     }),
     Req1 = make_request(
@@ -1459,20 +1446,20 @@ missing_fields_validated_test() ->
         #{
             <<"quantity">> => 100
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    ?assertMatch({error, _}, dev_token:compute(Base, Req1, #{})),
+    ?assertMatch({error, _}, hb_ao:resolve(Base, Req1, Opts)),
     Req2 = make_request(
         <<"mint">>,
         #{<<"mode">> => <<"single">>, <<"quantity">> => 100},
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    ?assertMatch({error, _}, dev_token:compute(Base, Req2, #{})).
+    ?assertMatch({error, _}, hb_ao:resolve(Base, Req2, Opts)).
 
 %% @doc Consolidated address validation test
 address_validation_test() ->
     hb:init(),
-    Base =
+    { Base, Opts }=
         generate_base_state(#{
             initial_balances => #{?ALICE => 1000},
             total_supply => 1000
@@ -1496,9 +1483,12 @@ address_validation_test() ->
             Req = make_request(
                 <<"transfer">>,
                 #{<<"recipient">> => InvalidAddr, <<"quantity">> => 100},
-                #{from => ?ALICE}
+                ?ALICE
             ),
-            ?assertMatch({error, ExpectedError}, dev_token:compute(Base, Req, #{}))
+            ?assertMatch(
+                {error, ExpectedError}, 
+                hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts)
+            )
         end,
         InvalidCases
     ),
@@ -1515,9 +1505,12 @@ address_validation_test() ->
             Req = make_request(
                 <<"transfer">>,
                 #{<<"recipient">> => ValidAddr, <<"quantity">> => 1},
-                #{from => ?ALICE}
+                ?ALICE
             ),
-            ?assertMatch({ok, _}, dev_token:compute(Base, Req, #{}))
+            ?assertMatch(
+                {ok, _}, 
+                hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts)
+            )
         end,
         ValidAddresses
     ).
@@ -1525,7 +1518,7 @@ address_validation_test() ->
 %% @doc Consolidated quantity type validation test - validates all quantity types
 quantity_type_validation_test() ->
     hb:init(),
-    Base =
+    { Base, Opts }=
         generate_base_state(#{
             initial_balances => #{?ALICE => 1000},
             total_supply => 1000
@@ -1545,9 +1538,12 @@ quantity_type_validation_test() ->
             Req = make_request(
                 <<"transfer">>,
                 #{<<"recipient">> => ?BOB, <<"quantity">> => InvalidQty},
-                #{from => ?ALICE}
+                ?ALICE
             ),
-            ?assertMatch({error, _}, dev_token:compute(Base, Req, #{}))
+            ?assertMatch(
+                {error, _}, 
+                hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts)
+            )
         end,
         InvalidQuantities
     ),
@@ -1558,9 +1554,12 @@ quantity_type_validation_test() ->
             Req = make_request(
                 <<"transfer">>,
                 #{<<"recipient">> => ?BOB, <<"quantity">> => ValidQty},
-                #{from => ?ALICE}
+                ?ALICE
             ),
-            ?assertMatch({ok, _}, dev_token:compute(Base, Req, #{}))
+            ?assertMatch(
+                {ok, _}, 
+                hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts)
+            )
         end,
         ValidQuantities
     ).
@@ -1568,7 +1567,7 @@ quantity_type_validation_test() ->
 %% @doc Consolidated duplicate fields validation test
 duplicate_fields_validation_test() ->
     hb:init(),
-    Base =
+    { Base, Opts }=
         generate_base_state(#{
             initial_balances => #{?ALICE => 1000},
             total_supply => 1000
@@ -1580,9 +1579,9 @@ duplicate_fields_validation_test() ->
             <<"recipient">> => ?CHARLIE, 
             <<"quantity">> => 100
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, Result1} = dev_token:compute(Base, Req1, #{}),
+    {ok, Result1} = hb_ao:resolve(Base, Req1, Opts),
     ?assertEqual(100, get_balance(Result1, ?CHARLIE)),
     ?assertEqual(0, get_balance(Result1, ?BOB)),
     Req2 = make_request(
@@ -1592,15 +1591,15 @@ duplicate_fields_validation_test() ->
             <<"quantity">> => 50,
             <<"quantity">> => 200 
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, Result2} = dev_token:compute(Base, Req2, #{}),
+    {ok, Result2} = hb_ao:resolve(Base, Req2, Opts),
     ?assertEqual(200, get_balance(Result2, ?BOB)).
 
 %% @doc Operations on zero balance accounts handled correctly
 zero_balance_account_operations_test() ->
     hb:init(),
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances => #{?ALICE => 0}
     }),
     ?assertEqual(0, get_balance(Base, ?ALICE)),
@@ -1611,11 +1610,11 @@ zero_balance_account_operations_test() ->
             <<"recipient">> => ?BOB, 
             <<"quantity">> => 1
         },
-        #{from => ?ALICE}
+        ?ALICE
     ),
     ?assertMatch(
         {error, <<"Insufficient balance.">>}, 
-        dev_token:compute(Base, Req1, #{})
+        hb_ao:resolve(Base, Req1, Opts)
     ),
     Req2 = make_request(
         <<"mint">>,
@@ -1624,32 +1623,32 @@ zero_balance_account_operations_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 100
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State} = dev_token:compute(Base, Req2, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req2, Opts),
     ?assertEqual(100, get_balance(State, ?ALICE)).
 
 %% @doc Empty batch mint is handled gracefully
 empty_batch_mint_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
             <<"mode">> => <<"batch">>, 
             <<"quantities">> => #{}
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
-    ?assertEqual(0, hb_ao:get(<<"total-supply">>, State, #{})),
-    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, State, Opts)),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, Opts),
     ?assertEqual(0, length(Outbox)).
 
 %% @doc Invalid mint mode is rejected
 invalid_mint_mode_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -1657,66 +1656,66 @@ invalid_mint_mode_test() ->
             <<"recipient">> => ?ALICE, 
             <<"quantity">> => 100
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
     ?assertMatch(
         {error, <<"Invalid mint mode.">>},
-        dev_token:compute(Base, Req, #{})
+        hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts)
     ).
 
 %% @doc Both owner and minter can successfully use secure_set
 both_owner_and_minter_can_set_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req1 = make_request(
         <<"set">>,
         #{ <<"name">> => <<"Owner Updated">> },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(<<"Owner Updated">>, hb_ao:get(<<"name">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(<<"Owner Updated">>, hb_ao:get(<<"name">>, State1, Opts)),
     Req2 = make_request(
         <<"set">>,
         #{ <<"ticker">> => <<"MINT">> },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State2} = dev_token:compute(State1, Req2, #{}),
-    ?assertEqual(<<"MINT">>, hb_ao:get(<<"ticker">>, State2, #{})),
-    ?assertEqual(<<"Owner Updated">>, hb_ao:get(<<"name">>, State2, #{})).
+    {ok, State2} = hb_ao:resolve(State1, Req2, Opts),
+    ?assertEqual(<<"MINT">>, hb_ao:get(<<"ticker">>, State2, Opts)),
+    ?assertEqual(<<"Owner Updated">>, hb_ao:get(<<"name">>, State2, Opts)).
 
 %% @doc Owner change revokes old owner's set permissions
 owner_change_revokes_old_owner_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     NewOwner = <<"new-owner-id">>,
     Req1 = make_request(
         <<"set">>,
         #{ <<"owner">> => NewOwner },
-        #{from => ?OWNER}
+        ?OWNER
     ),
-    {ok, State1} = dev_token:compute(Base, Req1, #{}),
-    ?assertEqual(NewOwner, hb_ao:get(<<"owner">>, State1, #{})),
+    {ok, State1} = hb_ao:resolve(Base, Req1, Opts),
+    ?assertEqual(NewOwner, hb_ao:get(<<"owner">>, State1, Opts)),
     Req2 = make_request(
         <<"set">>,
         #{ <<"name">> => <<"Old Owner Try">> },
-        #{from => ?OWNER}
+        ?OWNER
     ),
     ?assertMatch(
         {error, <<"Set authority mismatch.">>}, 
-        dev_token:compute(State1, Req2, #{})
+        hb_ao:resolve(State1, Req2, Opts)
     ),
     Req3 = make_request(
         <<"set">>,
         #{ <<"name">> => <<"New Owner Success">> },
-        #{from => NewOwner}
+        NewOwner
     ),
-    {ok, State2} = dev_token:compute(State1, Req3, #{}),
-    ?assertEqual(<<"New Owner Success">>, hb_ao:get(<<"name">>, State2, #{})).
+    {ok, State2} = hb_ao:resolve(State1, Req3, Opts),
+    ?assertEqual(<<"New Owner Success">>, hb_ao:get(<<"name">>, State2, Opts)).
 
 %% @doc Batch mint with mixed valid and invalid quantities
 mint_batch_mixed_valid_invalid_quantities_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     Req = make_request(
         <<"mint">>,
         #{
@@ -1729,9 +1728,9 @@ mint_batch_mixed_valid_invalid_quantities_test() ->
                 <<"path">> => <<"bar">>    
             }
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
-    {ok, State} = dev_token:compute(Base, Req, #{}),
+    {ok, State} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     % Should mint only to valid integer quantities
     ?assertEqual(1000, get_balance(State, ?ALICE)),
     ?assertEqual(0, get_balance(State, ?BOB)),
@@ -1788,7 +1787,7 @@ simple_process_test() ->
         ),
     ?assertEqual(999_999_999, get_balance(State, AliceAddr)),
     ?assertEqual(1, get_balance(State, BobAddr)),
-    ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, #{})).
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %%% Integration Tests (Token + Pot)
 
@@ -1796,21 +1795,17 @@ simple_process_test() ->
 transfer_with_pot_mint_device_basic_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
-    Opts = #{ store => [hb_test_utils:test_store()] },
     % Create integrated state: Alice has 1000 tokens, resource oxygen
-    Base =
-        generate_integrated_state(
-            #{
-                initial_balances => #{?ALICE => 1000},
-                total_supply => 1000,
-                mint_cap => 10000,
-                mint_prop => {1, 2},
-                pot_resources => #{
-                    ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
-                }
-            },
-            Opts
-        ),
+    { Base, Opts } =
+        generate_integrated_state(#{
+            initial_balances => #{?ALICE => 1000},
+            total_supply => 1000,
+            mint_cap => 10000,
+            mint_prop => {1, 2},
+            pot_resources => #{
+                ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+            }
+        }),
     ?event({base_state_created, Base}),
     % Alice transfers 300 tokens to Bob
     Req =
@@ -1820,10 +1815,10 @@ transfer_with_pot_mint_device_basic_test() ->
                 <<"recipient">> => ?BOB,
                 <<"quantity">> => 300
             },
-            Opts#{from => ?ALICE}
+            ?ALICE
         ),
     ?event({request, Req}),
-    {ok, Result} = dev_token:compute(Base, Req, Opts),
+    {ok,Result} = hb_ao:resolve(Base, Req, Opts),
     ?assertEqual(700, get_balance(Result, ?ALICE)),
     ?assertEqual(300, get_balance(Result, ?BOB)),
     ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, Opts)).
@@ -1834,26 +1829,22 @@ transfer_with_pot_mint_device_basic_test() ->
 transfer_with_unclaimed_yield_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
-    Opts = #{ store => [hb_test_utils:test_store()] },
     % Alice has 500 tokens in balance
     % Alice has deposits in pot that will yield tokens
     % Alice wants to transfer 700 tokens
     % Should succeed because: balance + yield > 700
-    Base =
-        generate_integrated_state(
-            #{
-                initial_balances => #{?ALICE => 500}, 
-                total_supply => 500,
-                mint_cap => 10000,
-                mint_prop => {1, 2}, 
-                t => 0,
-                last_drip => 0,
-                pot_resources => #{
-                    ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
-                }
-            },
-            Opts
-        ),
+    { Base, Opts } =
+        generate_integrated_state(#{
+            initial_balances => #{?ALICE => 500}, 
+            total_supply => 500,
+            mint_cap => 10000,
+            mint_prop => {1, 2}, 
+            t => 0,
+            last_drip => 0,
+            pot_resources => #{
+                ResourceOxygen => pot_resource(100, [{?ALICE, 10}])
+            }
+        }),
     ?event({initial_state, Base}),
     ?event({alice_initial_balance, get_balance(Base, ?ALICE)}),
     % Advance time to generate yield
@@ -1873,9 +1864,9 @@ transfer_with_unclaimed_yield_test() ->
             <<"recipient">> => ?BOB,
             <<"quantity">> => 700
         },
-        Opts#{from => ?ALICE}
+        ?ALICE
     ),
-    {ok, Result} = dev_token:compute(BaseWithTime, Req, Opts),
+    {ok, Result} = hb_ao:resolve(BaseWithTime, Req, Opts),
     ?event({transfer_result, Result}),
     AliceBalance = get_balance(Result, ?ALICE),
     BobBalance = get_balance(Result, ?BOB),
@@ -1893,7 +1884,7 @@ claim_yield_single_resource_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
     % Alice has deposits in pot but hasn't claimed yet
-    Base = generate_integrated_state(#{
+    { Base, Opts }= generate_integrated_state(#{
         initial_balances => #{?ALICE => 1000},
         total_supply => 1000,
         mint_cap => 10000,
@@ -1916,17 +1907,17 @@ claim_yield_single_resource_test() ->
         ?ALICE,
         ResourceOxygen,
         BaseWithTime,
-        #{}
+        Opts
     ),
     ?event({after_claim, ResultAfterClaim}),
     AliceBalanceAfterClaim = get_balance(ResultAfterClaim, ?ALICE),
     ?assertEqual(6000, AliceBalanceAfterClaim),
-    ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, #{})),
+    ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
     ResultSecondClaim = dev_pot:claim(
         ?ALICE,
         ResourceOxygen,
         ResultAfterClaim,
-        #{}
+        Opts
     ),
     ?assertEqual(6000, get_balance(ResultSecondClaim, ?ALICE)).
 
@@ -1936,7 +1927,7 @@ claim_yield_multiple_resources_test() ->
     ResourceOxygen = <<"oxygen">>,
     ResourceHydrogen = <<"hydrogen">>,
     % Alice has deposits in two different resources
-    Base = generate_integrated_state(#{
+    { Base, Opts }= generate_integrated_state(#{
         initial_balances => #{?ALICE => 500},
         total_supply => 500,
         mint_cap => 10000,
@@ -1966,20 +1957,20 @@ claim_yield_multiple_resources_test() ->
     ResultAfterClaimAll = dev_pot:claim(
         BaseWithTime,
         #{<<"subject">> => ?ALICE},
-        #{}
+        Opts
     ),
     AliceBalance = get_balance(ResultAfterClaimAll, ?ALICE),
     % Alice should have: 500 + 5000 = 5500
     ?assertEqual(5500, AliceBalance),
     % Total supply should be updated
-    ?assertEqual(5500, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, #{})).
+    ?assertEqual(5500, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
     hb:init(),
     ResourceOxygen = <<"oxygen">>,
     % Charlie has no deposits, only balance
-    Base = generate_integrated_state(#{
+    { Base, Opts }= generate_integrated_state(#{
         initial_balances => #{?CHARLIE => 100},
         total_supply => 100,
         mint_cap => 10000,
@@ -1996,29 +1987,28 @@ claim_yield_no_deposits_test() ->
         ?CHARLIE,
         ResourceOxygen,
         BaseWithTime,
-        #{}
+        Opts
     ),
     % Charlie's balance should be unchanged (still 100)
     ?assertEqual(100, get_balance(ResultAfterClaim, ?CHARLIE)),
     % Total supply should be unchanged (no new minting for Charlie)
-    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, #{})),
+    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
     ResultAfterClaimAll = dev_pot:claim(
         BaseWithTime,
         #{<<"subject">> => ?CHARLIE},
-        #{}
+        Opts
     ),
     ?assertEqual(100, get_balance(ResultAfterClaimAll, ?CHARLIE)),
-    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, #{})).
+    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, Opts)).
 
 %%% Benchmark Tests
-
 benchmark_transfers_test() ->
     hb:init(),
     % Benchmark N transfers
     Transfers = 100,
     Accounts = 1_000,
     % Setup: Alice has 1 billion tokens, the rest have 1 billion tokens each
-    Base = generate_base_state(#{
+    { Base, Opts } = generate_base_state(#{
         initial_balances =>
             hb_maps:from_list(
                 [
@@ -2044,7 +2034,7 @@ benchmark_transfers_test() ->
                     <<"quantity">> => 1,
                     <<"transfer-number">> => I
                 },
-                #{ from => ?ALICE }
+                ?ALICE
             )
             ||
                 I <- lists:seq(1, Transfers)
@@ -2053,7 +2043,7 @@ benchmark_transfers_test() ->
     AOCoreInvokedState =
         lists:foldl(
             fun(Req, State) ->
-                {ok, NewState} = hb_ao:resolve(State, Req, #{}),
+                {ok, NewState} = hb_ao:resolve(State, Req, Opts),
                 NewState#{ <<"results">> => #{} }
             end,
             Base,
@@ -2070,7 +2060,7 @@ benchmark_transfers_test() ->
     DirectlyInvokedState =
         lists:foldl(
             fun(Req, State) ->
-                {ok, NewState} = dev_token:compute(State, Req, #{}),
+                {ok, NewState} = hb_ao:resolve(State, Req, Opts),
                 NewState#{ <<"results">> => #{} }
             end,
             Base,
@@ -2167,7 +2157,7 @@ benchmark_process_transfers() ->
 benchmark_batch_mint_test() ->
     hb:init(),
     NumRecipients = 10_000,  
-    Base = generate_base_state(),
+    { Base, Opts } = generate_base_state(),
     % Create batch with NumRecipients recipients
     Recipients = [
         list_to_binary("recipient-" ++ integer_to_list(I))
@@ -2180,11 +2170,11 @@ benchmark_batch_mint_test() ->
             <<"quantities">> => Quantities,
             <<"mode">> => <<"batch">>
         },
-        #{from => ?MINTER}
+        ?MINTER
     ),
     % Benchmark batch mint
     StartTime = erlang:monotonic_time(millisecond),
-    {ok, NewState} = dev_token:compute(Base, Req, #{}),
+    {ok, NewState} = hb_ao:resolve(Base, Req#{ <<"path">> => <<"compute">>}, Opts),
     EndTime = erlang:monotonic_time(millisecond),
     hb_test_utils:benchmark_print(
         <<"Token Batch Mint">>,
