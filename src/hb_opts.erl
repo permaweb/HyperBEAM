@@ -377,8 +377,8 @@ default_message() ->
         % Define the behaviour when accessing a file inside a manifest that 
         % doesn't exists.
         % Options:
-        % - fallback (to the index page)
-        % - error: 404 Not Found
+        % - fallback: Fallback to the index page
+        % - error: Return 404 Not Found
         manifest_404 => fallback
     }.
 
