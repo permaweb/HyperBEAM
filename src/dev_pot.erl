@@ -32,7 +32,7 @@
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
 -export([drip/3]).
--export([claim/3, claim/4]).
+-export([claim/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
@@ -40,11 +40,20 @@
 
 %%% Pot Model Functions.
 
+%% @doc Normalizes the state of the pot for either the global scope or a
+%% specific user ID.
+claim(RawState, Req, Opts) ->
+    State = ensure_initialized(RawState, Req, Opts),
+    GloballyDripped = drip_global(State, Req, Opts),
+    case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
+        <<"global">> -> {ok, GloballyDripped};
+        Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
+    end.
+
 %% @doc Update the state of the pot to reflect the passage of time from the
 %% last drip to the present moment. Only drips the global state, deferring
 %% per-resource to be executed at resource modification or user drip.
 drip(State, Req, Opts) ->
-    ?event({ called, State, Req}),
     StateWithNewTime =
         case is_map(Req) andalso hb_maps:find(<<"t">>, Req) of
             {ok, TReq} -> State#{ <<"t">> => TReq };
@@ -53,7 +62,20 @@ drip(State, Req, Opts) ->
     drip_global(StateWithNewTime, Opts).
 
 %% @doc Drip the global state of the pot if necessary, returning the state
-%% unchanged if no time has passed since the last drip.
+%% unchanged if no time has passed since the last drip. If `Req/timestamp` is
+%% provided it will be used as the new `t` for the pot before dripping.
+drip_global(State, Req, Opts) ->
+    UpdatedState =
+        case hb_maps:get(<<"timestamp">>, Req, undefined, Opts) of
+            undefined -> State;
+            NewTime ->
+                hb_ao:set(
+                    State,
+                    #{ <<"t">> => NewTime, <<"last-drip">> => NewTime },
+                    Opts
+                )
+        end,
+    drip_global(UpdatedState, Opts).
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
 drip_global(S = #{
         <<"t">> := T,
@@ -75,7 +97,11 @@ drip_global(S = #{
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
     {NewGlobalAcc, NewUndistributedMint} =
-        dev_pot_math:drip_global(GlobalAcc, ToMint + UndistributedMint, TotalWeightedUnits),
+        dev_pot_math:drip_global(
+            GlobalAcc,
+            ToMint + UndistributedMint,
+            TotalWeightedUnits
+        ),
     ?event(
         {minting,
             {to_mint, ToMint},
@@ -90,7 +116,8 @@ drip_global(S = #{
         <<"undistributed-mint">> => NewUndistributedMint
     }.
 
-%% @doc Drip the state of a specific resource in the pot.
+%% @doc Drip the state of a specific resource in the pot. Does not drip the
+%% global state before doing so.
 drip_resource(ResourceID, S, Opts) ->
     % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
@@ -130,14 +157,10 @@ drip_resource(ResourceID, S, Opts) ->
         Opts
     ).
 
-%% @doc Get the balance of a specific address in the pot by combining the base
-%% balance with the unclaimed yield.
-balance(Addr, S) ->
-    hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0)
-        + unclaimed_yield(Addr, S, #{}).
-
-%% @doc Return the unclaimed yield across all resources for a specific address.
-unclaimed_yield(Addr, S, Opts) ->
+%% @doc Drip all resources for user, add the unclaimed yield to their explicit
+%% balance, and reset their unclaimed yield to 0. Does not drip the global state
+%% before doing so.
+drip_user(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
             hb_private:reset(
@@ -145,55 +168,18 @@ unclaimed_yield(Addr, S, Opts) ->
             ),
             Opts
         ),
-    lists:sum(
-        lists:map(
-            fun(ResID) ->
-                unclaimed_yield(Addr, ResID, S, Opts)
-            end,
-            ResourceIDs
-        )
-    ).
-
-%% @doc Calculate yield from already-dripped state (helper function).
-%% Returns {Yield, ResourceAccumulator} tuple to avoid double-reads.
-%% Assumes the state has been dripped for the given resource.
-calculate_yield(Addr, ResourceID, DrippedS, Opts) ->
-    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, DrippedS, #{}, Opts),
-    ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
-    Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
-    Yield =
-        case hb_maps:find(Addr, Deposits) of
-            error -> 0;
-            {ok, #{
-                    <<"quantity">> := Qty,
-                    <<"last-resource-accumulator">> := LastResourceAcc
-                }} ->
-                ?no_prod("Remove all floating point arithmetic."),
-                dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
+    lists:foldl(
+        fun(ResID, StateAcc) ->
+            modify_deposit_state(
+                Addr,
+                ResID,
+                0,
+                StateAcc,
+                Opts
+            )
         end,
-    {Yield, ResourceAcc}.
-
-%% @doc Return the unclaimed yield for a specific address in a specific resource.
-unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
-    GlobalDrippedS = drip_global(UndrippedS, Opts),
-    DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    {Yield, _} = calculate_yield(Addr, ResourceID, DrippedS, Opts),
-    Yield.
-
-%% @doc Claim yield from all resources for an address.
-%% Calls claim_yield/4 for each resource sequentially.
-claim(RawBase, Assignment, Opts) ->
-    Base = ensure_initialized(RawBase, Assignment, Opts),
-    Addr = hb_ao:get(<<"subject">>, Assignment, #{}, Opts),
-    Resources = hb_ao:get(<<"resources">>, Base, #{}, Opts),
-    ?event({claiming_all, {resources, Resources}, {address, Addr}}),
-    hb_maps:fold(
-        fun(ResourceID, _Resource, AccState) ->
-            claim(Addr, ResourceID, AccState, Opts)
-        end,
-        Base,
-        hb_private:reset(Resources),
-        Opts
+        ResourceIDs,
+        S
     ).
 
 %% @doc Ensure the base state is initialized, setting `t` and `last-drip` to the
@@ -221,52 +207,45 @@ ensure_initialized(Base, Assignment, Opts) ->
         _ -> Base
     end.
 
-%% @doc Claim yield from a specific resource for an address.
-%% Updates balance with the yield, resets last-resource-accumulator, and updates
-%% total-supply.
-claim(Addr, ResourceID, Base, Opts) ->
-    GlobalDrippedS = drip_global(Base, Opts),
-    DrippedS = #{
-        <<"balances">> := Balances,
-        <<"resources">> := Resources
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    { Yield, ResourceAcc } = calculate_yield(Addr, ResourceID, DrippedS, Opts),
-    ?event({claiming_yield, {yield, Yield}, {resource, ResourceID}}),
-    case Yield of
-        0 -> Base;
-        _ ->
-            BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-            CurrentSupply = hb_ao:get(<<"total-supply">>, DrippedS, 0, Opts),
-            % Reset last-resource-accumulator only (don't touch deposit quantity)
-            NewResources = hb_ao:set(
-                Resources,
-                <<
-                    ResourceID/binary, 
-                    "/deposits/", 
-                    Addr/binary, 
-                    "/last-resource-accumulator"
-                >>,
-                ResourceAcc,
-                Opts
+%% @doc Get the balance of a specific address in the pot by combining the base
+%% balance with the unclaimed yield.
+balance(Addr, S, Opts) ->
+    hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}, Opts), 0, Opts)
+        + unclaimed_yield(Addr, S, Opts).
+
+%% @doc Return the unclaimed yield across all resources for a specific address.
+unclaimed_yield(Addr, S, Opts) ->
+    ResourceIDs =
+        hb_maps:keys(
+            hb_private:reset(
+                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
             ),
-            ?event({ 
-                updated_states,
-                { balance, BaseBalance +Yield},
-                { supply, CurrentSupply + Yield}
-            }),
-            UpdateValues = 
-                #{
-                    <<"resources">> => NewResources,
-                    <<"balances">> => Balances#{ Addr => BaseBalance + Yield },
-                    <<"total-supply">> => CurrentSupply + Yield
-                },
-            hb_util:ok(
-                hb_ao:resolve(
-                    DrippedS,
-                    UpdateValues#{ <<"path">> => <<"set">> },
-                    Opts
-                )
-            )
+            Opts
+        ),
+    lists:sum(
+        lists:map(
+            fun(ResID) ->
+                unclaimed_yield(Addr, ResID, S, Opts)
+            end,
+            ResourceIDs
+        )
+    ).
+
+%% @doc Return the unclaimed yield for a specific address in a specific resource.
+unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
+    GlobalDrippedS = drip_global(UndrippedS, Opts),
+    S = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
+    ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
+    Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
+    case hb_maps:find(Addr, Deposits) of
+        error -> 0;
+        {ok, #{
+                <<"quantity">> := Qty,
+                <<"last-resource-accumulator">> := LastResourceAcc
+            }} ->
+            ?no_prod("Remove all floating point arithmetic."),
+            dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
