@@ -111,13 +111,13 @@ single_resource_test() ->
     S1 = dev_pot:deposit(Addr1, ResourceID, 10, S0, Opts),
     S2 = dev_pot:deposit(Addr2, ResourceID, 10, S1, Opts),
     report(S2, Opts),
-    S3 = dev_pot:drip(S2, #{ <<"t">> => 1 }, Opts),
+    S3 = dev_pot:test_drip(S2, #{ <<"t">> => 1 }, Opts),
     report(S3, Opts),
     % At t=1, there are 20 pot units and 50 minted to distribute, 50 div 20 = 2,
     % so it's 20 to each address with 10 undistributed
     ?assertEqual(20, dev_pot:balance(Addr1, S3, Opts)),
     ?assertEqual(20, dev_pot:balance(Addr2, S3, Opts)),
-    S4 = dev_pot:drip(S3, #{ <<"t">> => 2 }, Opts),
+    S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
     % At t=2, there are 20 pot units and 25 + 10 minted to distribute, 35 div 20 = 1,
     % so it's 10 to each address with 15 undistributed
@@ -130,7 +130,7 @@ single_resource_test() ->
     % 15 undistributed, and there are 40 total pot units. 27 div 40 = 0, and
     % we advance 27 undistributed.
     NewExpectedB1 = 30,
-    S6 = dev_pot:drip(S5, #{ <<"t">> => 3 }, Opts),
+    S6 = dev_pot:test_drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
     % Set both to be equal again.
@@ -138,7 +138,7 @@ single_resource_test() ->
     report(S7, Opts),
     Addr1BalPreFinal = dev_pot:balance(Addr1, S7, Opts),
     Addr2BalPreFinal = dev_pot:balance(Addr2, S7, Opts),
-    S8 = dev_pot:drip(S7, #{ <<"t">> => 4 }, Opts),
+    S8 = dev_pot:test_drip(S7, #{ <<"t">> => 4 }, Opts),
     % Ensure that they were again minted equal quantities.
     Addr1Diff = dev_pot:balance(Addr1, S8, Opts) - Addr1BalPreFinal,
     Addr2Diff = dev_pot:balance(Addr2, S8, Opts) - Addr2BalPreFinal,
@@ -169,12 +169,12 @@ multiple_resources_test() ->
     S1b = dev_pot:deposit(Addr2, Resource1, 1, S1, Opts),
     S2 = dev_pot:deposit(Addr1, Resource2, 1, S1b, Opts),
     S2b = dev_pot:deposit(Addr2, Resource2, 1, S2, Opts),
-    {ok, S3} = hb_ao:resolve(S2b, <<"drip">>, Opts),
+    S3 = dev_pot:test_drip(S2b, #{ <<"t">> => 1 }, Opts),
     report(S3, Opts),
     % 20 pot units, 500 minted. 500 div 20 = 25. Each user: 10 units * 25 = 250
     ?assertEqual(250, dev_pot:balance(Addr1, S3, Opts)),
     ?assertEqual(250, dev_pot:balance(Addr2, S3, Opts)),
-    S4 = dev_pot:drip(S3, #{<<"t">> => 2}, Opts),
+    S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
     % 20 pot units, 250 minted. 250 div 20 = 12. Each user: +120 yield
     ?assertEqual(370, dev_pot:balance(Addr1, S4, Opts)),
@@ -183,7 +183,7 @@ multiple_resources_test() ->
     S5a = dev_pot:withdraw(Addr1, Resource2, 1, S4, Opts),
     S5b = dev_pot:withdraw(Addr2, Resource1, 1, S5a, Opts),
     NewExpectedB1 = 13 + 370,  % 135 div 10 = 13, Addr1 has 1 unit
-    S6 = dev_pot:drip(S5b, #{<<"t">> => 3}, Opts),
+    S6 = dev_pot:test_drip(S5b, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
     % Make both equal again
@@ -192,7 +192,7 @@ multiple_resources_test() ->
     report(S7b, Opts),
     Addr1BalPreFinal = dev_pot:balance(Addr1, S7b, Opts),
     Addr2BalPreFinal = dev_pot:balance(Addr2, S7b, Opts),
-    S8 = dev_pot:drip(S7b, #{<<"t">> => 4}, Opts),
+    S8 = dev_pot:test_drip(S7b, #{ <<"t">> => 4 }, Opts),
     % Both should mint equal quantities
     Addr1Diff = dev_pot:balance(Addr1, S8, Opts) - Addr1BalPreFinal,
     Addr2Diff = dev_pot:balance(Addr2, S8, Opts) - Addr2BalPreFinal,
@@ -205,11 +205,11 @@ single_resource_modified_weight_test() ->
     S0 = pot_state_empty([ResourceOxygen]),
     S1 = dev_pot:deposit(Alice, <<"oxygen">>, 1, S0, Opts),
     % There's 1 pot unit and 50 minted, alice accumulates 50.
-    {ok, S3} = hb_ao:resolve(S1, <<"drip">>, Opts),
+    S3 = dev_pot:test_drip(S1, #{}, Opts),
     S4 = dev_pot:set_weight(<<"oxygen">>, 10, S3, Opts),
     report(S4, Opts),
     % There's 10 pot units and 25 minted, alice accumulates 20.
-    {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
+    S5 = dev_pot:test_drip(S4, #{}, Opts),
     report(S5, Opts),
     ?assertEqual(70, dev_pot:balance(Alice, S5, Opts)),
     ok.
@@ -231,12 +231,12 @@ multiresource_modified_weight_test() ->
         ),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 1, S0Updated, Opts),
     S2 = dev_pot:deposit(Bob, ResourceHydrogen, 1, S1, Opts),
-    {ok, S3} = hb_ao:resolve(S2, <<"drip">>, Opts),
+    S3 = dev_pot:test_drip(S2, #{}, Opts),
     ?assertEqual(50, dev_pot:balance(Alice, S3, Opts)),
     ?assertEqual(0, dev_pot:balance(Bob, S3, Opts)),
     S4 = dev_pot:set_weight(ResourceHydrogen, 1, S3, Opts),
     % 25 minted, 2 pot units. 25 div 2 = 12
-    {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
+    S5 = dev_pot:test_drip(S4, #{}, Opts),
     ?assertEqual(62, dev_pot:balance(Alice, S5, Opts)),
     ?assertEqual(12, dev_pot:balance(Bob, S5, Opts)),
     ok.
@@ -594,7 +594,7 @@ drip_with_zero_total_weighted_units_test() ->
     Opts =#{},
     % Test that dripping with TWU = 0 doesn't crash with division by zero
     S0 = pot_state_empty([ResourceOxygen]),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     ?assertEqual(0, hb_maps:get(<<"total-weighted-units">>, S1, 0)).
 
 drip_resource_with_zero_weight_test() ->
@@ -603,7 +603,7 @@ drip_resource_with_zero_weight_test() ->
     Opts = #{},
     % Test that a resource with weight = 0 doesn't accumulate yield
     S0 = pot_state(Alice, ResourceOxygen, 10, 0, 100, {1, 2}),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     ?assertEqual(0, dev_pot:balance(Alice, S1, Opts)).
 
 drip_user_with_zero_quantity_test() ->
@@ -613,7 +613,7 @@ drip_user_with_zero_quantity_test() ->
     Opts = #{},
     % Test that a user with 0 deposits gets 0 yield
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing a deposit
     S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
     ?assertEqual(0, dev_pot:balance(Bob, S1_claim, Opts)),
@@ -806,7 +806,7 @@ mint_cap_never_exceeded_test() ->
     % Even with many drips, minted should never exceed cap
     S0 = pot_state(Alice, ResourceOxygen, 10),
     SFinal = lists:foldl(
-        fun(T, S) -> dev_pot:drip(S, #{<<"t">> => T}, Opts) end,
+        fun(T, S) -> dev_pot:test_drip(S, #{<<"t">> => T}, Opts) end,
         S0,
         lists:seq(1, 100)
     ),
@@ -943,14 +943,14 @@ change_weight_with_deposits_test() ->
     % Changing weight should affect future yield distribution
     % Use larger mint cap to ensure enough tokens are minted
     S0 = pot_state(Alice, ResourceOxygen, 10, 1, 1000, {1, 2}),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing a deposit
     S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
     BalanceT1 = dev_pot:balance(Alice, S1_claim, Opts),
     % Change weight from 1 to 10
     S2 = dev_pot:set_weight(ResourceOxygen, 10, S1_claim, Opts),
     ?assertEqual(110, hb_maps:get(<<"total-weighted-units">>, S2, 0)),
-    S3 = dev_pot:drip(S2, #{<<"t">> => 2}, Opts),
+    S3 = dev_pot:test_drip(S2, #{<<"t">> => 2}, Opts),
     % Claim yield by performing another deposit
     S3_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S3, Opts),
     BalanceT2 = dev_pot:balance(Alice, S3_claim, Opts),
@@ -979,7 +979,7 @@ drip_with_large_time_jump_test() ->
     % Large time jump should still work correctly
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % Jump 10000 time periods
-    S1 = dev_pot:drip(S0, #{<<"t">> => 10000}, Opts),
+    S1 = dev_pot:test_drip(S0, #{ <<"t">> => 10000 }, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
     TotalMinted = Minted + UndistributedMint,
@@ -992,9 +992,9 @@ drip_same_timestamp_idempotent_test() ->
     Opts = #{},
     % Dripping at same timestamp multiple times should be idempotent
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     Minted1 = hb_maps:get(<<"minted">>, S1, 0, Opts),
-    S2 = dev_pot:drip(S1, #{<<"t">> => 1}, Opts),
+    S2 = dev_pot:test_drip(S1, #{<<"t">> => 1}, Opts),
     Minted2 = hb_maps:get(<<"minted">>, S2, 0, Opts),
     % Should not mint additional tokens
     ?assertEqual(Minted1, Minted2).
@@ -1008,7 +1008,7 @@ accumulator_over_many_periods_test() ->
     % Test accumulator precision over 1000 time steps
     S0 = pot_state(Alice, ResourceOxygen, 100, 1, 1000, {1, 100}),
     SFinal = lists:foldl(
-        fun(T, S) -> dev_pot:drip(S, #{<<"t">> => T}, Opts) end,
+        fun(T, S) -> dev_pot:test_drip(S, #{<<"t">> => T}, Opts) end,
         S0,
         lists:seq(1, 1000)
     ),
@@ -1033,7 +1033,7 @@ very_small_deposit_yield_test() ->
             100000, 
             {1, 2}
         ),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing minimal deposits
     S1AliceClaim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
     S1BobClaim = dev_pot:deposit(Bob, ResourceOxygen, 1, S1AliceClaim, Opts),
@@ -1202,7 +1202,7 @@ zero_mint_cap_test() ->
     Opts = #{},
     % Mint-cap = 0 should mint nothing
     S0 = pot_state(Alice, ResourceOxygen, 10, 1, 0, {1, 2}),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     ?assertEqual(0, Minted),
     ?assertEqual(0, dev_pot:balance(Alice, S1, Opts)).
@@ -1224,7 +1224,7 @@ resource_with_no_deposits_test() ->
     % Manually set weight to 5 for testing
     S0Updated = hb_ao:set(S0, <<"/resources/oxygen/weight">>, 5, Opts),
     % Should not crash when dripping
-    S1 = dev_pot:drip(S0Updated, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0Updated, #{<<"t">> => 1}, Opts),
     ?assertEqual(0, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)).
 
 %%% Multi-Resource Coordination Tests
@@ -1274,7 +1274,7 @@ weighted_distribution_across_resources_test() ->
     % Set hydrogen weight to 3
     S3 = dev_pot:set_weight(ResourceHydrogen, 3, S2, Opts),
     % Drip at t=1
-    S4 = dev_pot:drip(S3, #{<<"t">> => 1}, Opts),
+    S4 = dev_pot:test_drip(S3, #{<<"t">> => 1}, Opts),
     AliceBalance = dev_pot:balance(Alice, S4, Opts),
     BobBalance = dev_pot:balance(Bob, S4, Opts),
     % Bob should get 3x Alice's yield (3x weight)
@@ -1301,7 +1301,7 @@ very_large_minted_amount_test() ->
     % Very large mint cap
     LargeMintCap = 999999999999999, % ~10^15
     S0 = pot_state(Alice, ResourceOxygen, 100, 1, LargeMintCap, {1, 2}),
-    S1 = dev_pot:drip(S0, #{<<"t">> => 1}, Opts),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     % Should mint large amount without overflow
     ?assert(Minted > 1000000000000),
@@ -1321,7 +1321,7 @@ missing_accumulator_field_test() ->
     % Remove accumulator field to test missing field handling
     S0NoAcc = maps:remove(<<"accumulator">>, S0),
     % Should handle gracefully (default to 0)
-    S1 = dev_pot:drip(S0NoAcc, #{ <<"t">> => 1 }, Opts),
+    S1 = dev_pot:test_drip(S0NoAcc, #{ <<"t">> => 1 }, Opts),
     ?assert(is_map(S1)).
 
 missing_total_weighted_units_test() ->
@@ -1332,7 +1332,7 @@ missing_total_weighted_units_test() ->
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % Remove TWU field to test missing field handling
     S0NoTWU = maps:remove(<<"total-weighted-units">>, S0),
-    S1 = dev_pot:drip(S0NoTWU, #{ <<"t">> => 1 }, Opts),
+    S1 = dev_pot:test_drip(S0NoTWU, #{ <<"t">> => 1 }, Opts),
     % All minted tokens should go to undistributed-mint (since TWU=0)
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
@@ -1355,7 +1355,7 @@ mint_distribution_test() ->
     Opts = #{},
     S0 = pot_state(Alice, ResourceOxygen, 20),
     % Tick 0: mint = 50, pot units = 20, accumulate 2 with an undistributed mint of 10
-    S1 = dev_pot:drip(S0, #{ <<"t">> => 1 }, Opts),
+    S1 = dev_pot:test_drip(S0, #{ <<"t">> => 1 }, Opts),
     ?assertEqual(
         50,
         hb_maps:get(<<"minted">>, S1, not_found, Opts)
@@ -1369,7 +1369,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"accumulator">>, S1, not_found, Opts)
     ),
     % Tick 1: mint = 25 + 10, pot units = 20, accumulate 1 with an undistributed mint of 15
-    S2 = dev_pot:drip(S1, #{ <<"t">> => 2 }, Opts),
+    S2 = dev_pot:test_drip(S1, #{ <<"t">> => 2 }, Opts),
     ?assertEqual(
         75,
         hb_maps:get(<<"minted">>, S2, not_found, Opts)
@@ -1383,7 +1383,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"accumulator">>, S2, not_found, Opts)
     ),
     % Tick 3: mint = 12 + 15, pot units = 20, accumulate 1 with an undistributed mint of 7
-    S3 = dev_pot:drip(S2, #{ <<"t">> => 3 }, Opts),
+    S3 = dev_pot:test_drip(S2, #{ <<"t">> => 3 }, Opts),
     ?assertEqual(
         87,
         hb_maps:get(<<"minted">>, S3, not_found, Opts)
@@ -1397,7 +1397,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"accumulator">>, S3, not_found, Opts)
     ),
     % Tick 4: mint = 6 + 7, pot units = 20, accumulate 0 with an undistributed mint of 13
-    S4 = dev_pot:drip(S3, #{ <<"t">> => 4 }, Opts),
+    S4 = dev_pot:test_drip(S3, #{ <<"t">> => 4 }, Opts),
     ?assertEqual(
         93,
         hb_maps:get(<<"minted">>, S4, not_found, Opts)
@@ -1411,7 +1411,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"accumulator">>, S4, not_found, Opts)
     ),
     % Tick 5: mint = 3 + 13, pot units = 20, accumulate 0 with an undistributed mint of 16
-    S5 = dev_pot:drip(S4, #{ <<"t">> => 5 }, Opts),
+    S5 = dev_pot:test_drip(S4, #{ <<"t">> => 5 }, Opts),
     ?assertEqual(
         96,
         hb_maps:get(<<"minted">>, S5, not_found, Opts)
@@ -1426,7 +1426,7 @@ mint_distribution_test() ->
     ),
     S6 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S5, Opts),
     % Tick 6: mint 2 + 16, pot units = 10, accumulate 1 with an undistributed mint of 8
-    S7 = dev_pot:drip(S6, #{ <<"t">> => 6 }, Opts),
+    S7 = dev_pot:test_drip(S6, #{ <<"t">> => 6 }, Opts),
     ?assertEqual(
         98,
         hb_maps:get(<<"minted">>, S7, not_found, Opts)
