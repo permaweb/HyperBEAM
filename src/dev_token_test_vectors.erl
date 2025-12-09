@@ -1903,20 +1903,20 @@ claim_yield_single_resource_test() ->
     % Alice's yield = 500 * 10 = 5000
     BaseWithTime = Base#{<<"t">> => 1},
     % Call claim_yield directly
-    ResultAfterClaim = dev_pot:claim(
-        ?ALICE,
-        ResourceOxygen,
-        BaseWithTime,
+    ResultAfterClaim = 
+        dev_pot:claim(
+            BaseWithTime,
+            #{ <<"subject">> => ?ALICE },
         Opts
     ),
     ?event({after_claim, ResultAfterClaim}),
-    AliceBalanceAfterClaim = get_balance(ResultAfterClaim, ?ALICE),
+    AliceBalanceAfterClaim = get_balance(ResultAfterClaim, ?ALICE, #{}),
     ?assertEqual(6000, AliceBalanceAfterClaim),
-    ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
-    ResultSecondClaim = dev_pot:claim(
-        ?ALICE,
-        ResourceOxygen,
-        ResultAfterClaim,
+    ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, #{})),
+    ResultSecondClaim =
+        dev_pot:claim(
+            ResultAfterClaim,
+            #{ <<"subject">> => ?ALICE },
         Opts
     ),
     ?assertEqual(6000, get_balance(ResultSecondClaim, ?ALICE)).
@@ -1971,7 +1971,7 @@ claim_yield_no_deposits_test() ->
     ResourceOxygen = <<"oxygen">>,
     % Charlie has no deposits, only balance
     { Base, Opts }= generate_integrated_state(#{
-        initial_balances => #{?CHARLIE => 100},
+        initial_balances => #{ ?CHARLIE => 100 },
         total_supply => 100,
         mint_cap => 10000,
         mint_prop => {1, 2},
@@ -1983,21 +1983,22 @@ claim_yield_no_deposits_test() ->
     }),
     BaseWithTime = Base#{<<"t">> => 1},
     % Charlie tries to claim yield 
-    ResultAfterClaim = dev_pot:claim(
-        ?CHARLIE,
-        ResourceOxygen,
-        BaseWithTime,
+    ResultAfterClaim =
+        dev_pot:claim(
+            BaseWithTime,
+            #{ <<"subject">> => ?CHARLIE },
         Opts
     ),
     % Charlie's balance should be unchanged (still 100)
     ?assertEqual(100, get_balance(ResultAfterClaim, ?CHARLIE)),
     % Total supply should be unchanged (no new minting for Charlie)
-    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
-    ResultAfterClaimAll = dev_pot:claim(
-        BaseWithTime,
-        #{<<"subject">> => ?CHARLIE},
+    ResultAfterClaimAll =
+        dev_pot:claim(
+            BaseWithTime,
+            #{ <<"subject">> => ?CHARLIE },
         Opts
     ),
+    ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
     ?assertEqual(100, get_balance(ResultAfterClaimAll, ?CHARLIE)),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, Opts)).
 

@@ -68,6 +68,7 @@ run_as(Key, Base, Req, Opts) ->
             Req,
             Opts
         ),
+    ?event(debug_pot, {resolve, {status, Status}, {base_result, BaseResult}}, Opts),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of

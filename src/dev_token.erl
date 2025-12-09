@@ -1,7 +1,7 @@
 %%% @doc A fast, simple implementation of AO token specification.
 %%% Specification: https://cookbook_ao.arweave.net/references/api/token.html
 -module(dev_token).
--export([compute/3, init/3, normalize/3, snapshot/3, balance/3]).
+-export([compute/3, init/3, normalize/3, snapshot/3, balance/3, mint/3]).
 -include_lib("include/hb.hrl").
 
 %% @doc No-op on process initialization.
@@ -72,7 +72,7 @@ balance(Base, Req, Opts) ->
             },
             Opts
         ),
-    ?event(debug_token, {norm_base, NormBase}, Opts),
+    ?event(debug_token, {after_mint_normalization, NormBase}, Opts),
     hb_ao:resolve_many(
         [
             NormBase,
@@ -84,6 +84,12 @@ balance(Base, Req, Opts) ->
 
 transfer(Base, Assignment, Opts) ->
     maybe
+        {ok, _Timestamp} ?=
+            hb_maps:find(
+                <<"timestamp">>,
+                Assignment,
+                Opts
+            ),
         % Gather transfer data from the request.
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
@@ -118,6 +124,9 @@ transfer(Base, Assignment, Opts) ->
                     Opts
                 )
         end
+    else
+        error ->
+            {error, <<"Timestamp is required.">>}
     end.
 
 transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
@@ -203,26 +212,26 @@ mint(Base, Assignment, Opts) ->
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                Assignment#{ <<"path">> => <<"claim">> },
+                Assignment#{ <<"path">> => <<"mint">> },
                 Opts
             )
     end.
 
-normalize_mint(Base, Assignment, Opts) ->
+normalize_mint(Base, Req, Opts) ->
     case has_mint_device(Base, Opts) of
         false -> {ok, Base};
         true ->
-            AssignmentWithPath = Assignment#{ <<"path">> => <<"claim">> },
+            ReqWithPath = Req#{ <<"path">> => <<"mint">> },
             ?event(debug_mint,
                 {running_mint,
                     {base, Base},
-                    {assignment, Assignment}
+                    {req, Req}
                 }
             ),
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                AssignmentWithPath,
+                ReqWithPath,
                 Opts
             )
     end.

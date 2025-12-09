@@ -31,9 +31,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([drip/3]).
--export([claim/3]).
+-export([info/1, mint/3]).
 %%% `~pot@1.0` Private Utilities.
+-export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
@@ -41,24 +41,33 @@
 
 %%% Pot Model Functions.
 
+%% @doc Only export the `mint` key from the device, defaulting to `~message@1.0`
+%% for all other keys.
+info(_S) ->
+    #{ exports => [<<"mint">>] }.
+
 %% @doc Normalizes the state of the pot for either the global scope or a
 %% specific user ID.
-claim(RawState, Req, Opts) ->
+mint(RawState, Req, Opts) ->
     State = ensure_initialized(RawState, Req, Opts),
+    ?event(debug_mint, {after_ensure_initialized, State}, Opts),
     GloballyDripped = drip_global(State, Req, Opts),
-    case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
-        <<"global">> -> {ok, GloballyDripped};
-        Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
-    end.
+    ?event(debug_mint, {after_drip_global, GloballyDripped}, Opts),
+    Res =
+        case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
+            <<"global">> -> {ok, GloballyDripped};
+            Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
+        end,
+    ?event(debug_mint, {mint_result, Res}, Opts),
+    Res.
 
-%% @doc Update the state of the pot to reflect the passage of time from the
-%% last drip to the present moment. Only drips the global state, deferring
-%% per-resource to be executed at resource modification or user drip.
-drip(State, Req, Opts) ->
+%% @doc Force the `t` of the pot to increase -- either by 1 or the new given `t`
+%% value -- and drip globally. Used only for testing purposes.
+test_drip(State, Req, Opts) ->
     StateWithNewTime =
         case is_map(Req) andalso hb_maps:find(<<"t">>, Req) of
             {ok, TReq} -> State#{ <<"t">> => TReq };
-            _ -> State#{ <<"t">> => hb_maps:get(<<"t">>, State, 0) + 1 }
+            _ -> State#{ <<"t">> => hb_maps:get(<<"t">>, State, 0, Opts) + 1 }
         end,
     drip_global(StateWithNewTime, Opts).
 
@@ -77,7 +86,7 @@ drip_global(State, Req, Opts) ->
                 )
         end,
     drip_global(UpdatedState, Opts).
-drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
+drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
 drip_global(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
@@ -110,12 +119,16 @@ drip_global(S = #{
             {old_global_accumulator, GlobalAcc},
             {new_global_accumulator, NewGlobalAcc}
         }),
-    S#{
-        <<"accumulator">> => NewGlobalAcc,
-        <<"last-drip">> => T,
-        <<"minted">> => AlreadyMinted + ToMint,
-        <<"undistributed-mint">> => NewUndistributedMint
-    }.
+    hb_ao:set(
+        S,
+        #{
+            <<"accumulator">> => NewGlobalAcc,
+            <<"last-drip">> => T,
+            <<"minted">> => AlreadyMinted + ToMint,
+            <<"undistributed-mint">> => NewUndistributedMint
+        },
+        Opts
+    ).
 
 %% @doc Drip the state of a specific resource in the pot. Does not drip the
 %% global state before doing so.
@@ -179,34 +192,42 @@ drip_user(Addr, S, Opts) ->
                 Opts
             )
         end,
-        ResourceIDs,
-        S
+        S,
+        ResourceIDs
     ).
 
-%% @doc Ensure the base state is initialized, setting `t` and `last-drip` to the
-%% assignment timestamp.
-ensure_initialized(Base, Assignment, Opts) ->
-    case hb_ao:get(<<"t">>, Base, not_found, Opts) of
-        not_found ->
-            Timestamp = hb_ao:get(<<"timestamp">>, Assignment, 0, Opts),
-            ?event(
-                debug_pot,
-                {initializing_base,
-                    {base, Base},
-                    {assignment, Assignment},
-                    {timestamp, Timestamp}
-                }
-            ),
-            hb_ao:set(
-                Base,
-                #{
-                    <<"t">> => Timestamp,
-                    <<"last-drip">> => Timestamp
-                },
-                Opts
-            );
-        _ -> Base
-    end.
+%% @doc Ensure the base state is initialized, with `t` set to either the new
+%% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
+%% be initialized to the same value as `t` if not already set.
+ensure_initialized(Base, Req, Opts) ->
+    WithT =
+        hb_ao:set(
+            Base,
+            #{
+                <<"t">> =>
+                    NewT =
+                        hb_maps:get(
+                            <<"timestamp">>,
+                            Req,
+                            hb_maps:get(<<"t">>, Base, 0, Opts),
+                            Opts
+                        )
+            },
+            Opts
+        ),
+    hb_ao:set(
+        WithT,
+        #{
+            <<"last-drip">> =>
+                hb_ao:get(
+                    <<"last-drip">>,
+                    WithT,
+                    NewT,
+                    Opts
+                )
+        },
+        Opts
+    ).
 
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
@@ -225,9 +246,7 @@ unclaimed_yield(Addr, S, Opts) ->
         ),
     lists:sum(
         lists:map(
-            fun(ResID) ->
-                unclaimed_yield(Addr, ResID, S, Opts)
-            end,
+            fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
             ResourceIDs
         )
     ).
@@ -262,7 +281,7 @@ withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
-liquidate(Addr, ResourceID, Amount, S, Opts) when Amount =< 0 -> S;
+liquidate(_Addr, _ResourceID, Amount, S, _Opts) when Amount =< 0 -> S;
 liquidate(Addr, ResourceID, Amount, S, Opts) ->
     ExistingDelegations =
         hb_ao:get(
