@@ -2228,7 +2228,7 @@ transfer_with_pot_mint_device_basic_test() ->
             Opts#{from => ?ALICE}
         ),
     ?event({request, Req}),
-    {ok,Result} = dev_token:compute(Base, Req, Opts),
+    {ok, Result} = dev_token:compute(Base, Req, Opts),
     ?assertEqual(700, get_balance(Result, ?ALICE)),
     ?assertEqual(300, get_balance(Result, ?BOB)),
     ?assertEqual(1000, hb_ao:get(<<"total-supply">>, Result, Opts)).
