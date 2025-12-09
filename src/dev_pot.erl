@@ -254,11 +254,19 @@ claim(Addr, ResourceID, Base, Opts) ->
                 { balance, BaseBalance +Yield},
                 { supply, CurrentSupply + Yield}
             }),
-            DrippedS#{
-                <<"resources">> => NewResources,
-                <<"balances">> => Balances#{ Addr => BaseBalance + Yield },
-                <<"total-supply">> => CurrentSupply + Yield
-            }
+            UpdateValues = 
+                #{
+                    <<"resources">> => NewResources,
+                    <<"balances">> => Balances#{ Addr => BaseBalance + Yield },
+                    <<"total-supply">> => CurrentSupply + Yield
+                },
+            hb_util:ok(
+                hb_ao:resolve(
+                    DrippedS,
+                    UpdateValues#{ <<"path">> => <<"set">> },
+                    Opts
+                )
+            )
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
@@ -320,12 +328,22 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
     DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
     RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
-    S0 = DrippedS#{
-      <<"balances">> => Balances#{
-          FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
-          ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
-      }
-    },
+    DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
+    RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
+    NewBalances = 
+        Balances#{
+            FromAddr => DelegatorBalance + DelegatorYield,
+            ToAddr => RecipientBalance + RecipientYield
+        },
+    {ok, S0} = 
+        hb_ao:resolve(
+            DrippedS,
+            #{
+                <<"path">> => <<"set">>,
+                <<"balances">> => NewBalances
+            },
+            Opts
+        ),
     DelegatorDeposit = get_deposit(FromAddr, ResourceID, S),
     S1 =
         hb_ao:set(
@@ -394,12 +412,22 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
     DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
     RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
-    S0 = DrippedS#{
-      <<"balances">> => Balances#{
-          FromAddr => DelegatorBalance + unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
-          ToAddr => RecipientBalance + unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts)
-      }
-    },
+    DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
+    RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
+    NewBalances =
+        Balances#{
+            FromAddr => DelegatorBalance + DelegatorYield,
+            ToAddr => RecipientBalance + RecipientYield
+        },
+    {ok, S0} =
+        hb_ao:resolve(
+            DrippedS,
+            #{
+                <<"path">> => <<"set">>,
+                <<"balances">> => NewBalances
+            },
+            Opts
+        ),
     NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S0),
     S1 =
         hb_ao:set(
@@ -583,12 +611,20 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     ?event({resources_after_modify_deposit, NewResources}),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
-    UpdatedDepositS =
-        DrippedS#{
+    NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
+    NewBalances = Balances#{ Addr => NewBalance },
+    UpdateValues = 
+        #{
             <<"resources">> => NewResources,
-            <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
-            <<"balances">> => Balances#{ Addr => NewBalance }
+            <<"total-weighted-units">> => NewTotalWeightedUnits,
+            <<"balances">> => NewBalances
         },
+    {ok, UpdatedDepositS} =
+        hb_ao:resolve(
+            DrippedS,
+            UpdateValues#{ <<"path">> => <<"set">> },
+            Opts
+        ),
     update_deposit_index(
         Addr,
         ResourceID,
@@ -608,7 +644,7 @@ get_deposit(Addr, ResourceID, S) ->
 
 %% @doc Get the balances submessage from the state.
 balances(S = #{ <<"balances">> := Bs }) ->
-    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
+    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, hb_private:reset(Bs)).
 
 %% @doc Return only the deposits submessage for all resources in the state.
 get_deposits(S = #{ <<"resources">> := Resources }) ->
