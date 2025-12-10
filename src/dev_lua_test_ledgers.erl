@@ -30,15 +30,15 @@
 ledger(Script, Opts) ->
     ledger(Script, #{}, Opts).
 ledger(Script, Extra, Opts) ->
-    % If the `balance' key is set in the `Extra' map, ensure that any wallets
+    % If the `balances' key is set in the `Extra' map, ensure that any wallets
     % given as keys in the message are converted to human-readable addresses.
     HostWallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     ModExtra =
-        case maps:get(<<"balance">>, Extra, undefined) of
+        case maps:get(<<"balances">>, Extra, undefined) of
             undefined -> Extra;
             RawBalance ->
                 Extra#{
-                    <<"balance">> =>
+                    <<"balances">> =>
                         maps:from_list(
                             lists:map(
                                 fun({ID, Amount}) when ?IS_ID(ID) ->
@@ -102,7 +102,7 @@ subledger(Root, Opts) ->
 subledger(Root, Extra, Opts) ->
     BareRoot =
         maps:without(
-            [<<"token">>, <<"balance">>],
+            [<<"token">>, <<"balances">>],
             hb_message:uncommitted(Root, Opts)
         ),
     Proc = 
@@ -138,7 +138,8 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
             <<"body">> =>
                 hb_message:commit(MaybeRoute#{
                         <<"action">> => <<"Transfer">>,
-                        <<"target">> => hb_message:id(ProcMsg, all),
+                        <<"target">> =>
+                            dev_process_lib:process_id(ProcMsg, #{}, Opts),
                         <<"recipient">> => hb_util:human_id(Recipient),
                         <<"quantity">> => Quantity
                     },
@@ -187,7 +188,7 @@ register(ProcMsg, PeerID, RawOpts) ->
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
     balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
 balance(ProcMsg, ID, Opts) ->
-    hb_ao:get(<<"now/balance/", ID/binary>>, ProcMsg, 0, Opts).
+    hb_ao:get(<<"now/balances/", ID/binary>>, ProcMsg, 0, Opts).
 
 %% @doc Get the total balance for an ID across all ledgers in a set.
 balance_total(Procs, ID, Opts) ->
@@ -206,7 +207,7 @@ balances(initial, ProcMsg, Opts) ->
 balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
-    Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
+    Balances = hb_ao:get(<<Prefix/binary, "/balances">>, ProcMsg, #{}, Opts),
     hb_private:reset(
         hb_message:uncommitted(
             hb_cache:ensure_all_loaded(Balances, Opts),
@@ -326,8 +327,8 @@ do_apply_names(Item, Names, _Opts) ->
 %%% For every timestep `t_n`, the following invariants must hold:
 %%% 1. The root ledger supply at `t_0` must match the current supply.
 %%% 2. For every sub-ledger `l`, each expected balance held in `l/now/ledgers`
-%%%    must equal the balance found at `peer/now/balance/l`.
-%%% 3. The sum of all values in `/now/balance` across all sub-ledgers must
+%%%    must equal the balance found at `peer/now/balances/l`.
+%%% 3. The sum of all values in `/now/balances` across all sub-ledgers must
 %%%    equal the root ledger's supply.
 
 %% @doc Execute all invariant checks for a pair of root ledger and sub-ledgers.
@@ -429,7 +430,7 @@ transfer() ->
     Proc =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     ?assertEqual(100, supply(Proc, Opts)),
@@ -453,7 +454,7 @@ transfer_unauthorized() ->
     Proc =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     % 1. Transferring a token when the sender has no tokens.
@@ -482,7 +483,7 @@ subledger_deposit() ->
     Proc =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedger = subledger(Proc, Opts),
@@ -509,7 +510,7 @@ subledger_transfer() ->
     RootLedger =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedger = subledger(RootLedger, Opts),
@@ -566,7 +567,7 @@ subledger_registration_test_disabled() ->
     RootLedger =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedger1 = subledger(RootLedger, Opts),
@@ -604,7 +605,7 @@ single_subledger_to_subledger() ->
     RootLedger =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedger1 = subledger(RootLedger, Opts),
@@ -647,7 +648,7 @@ subledger_to_subledger() ->
     RootLedger =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedger1 = subledger(RootLedger, Opts),
@@ -695,7 +696,7 @@ unregistered_peer_transfer() ->
     RootLedger =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            #{ <<"balance">> => #{ Alice => 100 } },
+            #{ <<"balances">> => #{ Alice => 100 } },
             Opts
         ),
     SubLedgers = [ subledger(RootLedger, Opts) || _ <- lists:seq(1, 3) ],
@@ -775,7 +776,7 @@ multischeduler() ->
             <<"scripts/hyper-token.lua">>,
             ProcExtra = 
                 #{
-                    <<"balance">> => #{ Alice => 100 },
+                    <<"balances">> => #{ Alice => 100 },
                     <<"scheduler">> =>
                         [
                             hb_util:human_id(NodeWallet),
@@ -936,7 +937,7 @@ comma_separated_scheduler_list_test() ->
             <<"scripts/hyper-token.lua">>,
             ProcExtra = 
                 #{
-                    <<"balance">> => #{ Alice => 100 },
+                    <<"balances">> => #{ Alice => 100 },
                     <<"scheduler">> =>
                         iolist_to_binary(
                             [
