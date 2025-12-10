@@ -74,7 +74,7 @@ route(Key, M1, M2, Opts) ->
             %% Support materialized view in some JavaScript frameworks
             case hb_opts:get(manifest_404, fallback, Opts) of
                 error ->
-                    not_found;
+                    {error, not_found};
                 fallback ->
                     ?event({manifest_fallback, {key, Key}}),
                     route(<<"index">>, M1, M2, Opts)
