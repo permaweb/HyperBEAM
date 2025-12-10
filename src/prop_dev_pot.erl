@@ -67,9 +67,8 @@ initial_state() ->
             <<"t">> => 0,
             <<"last-drip">> => 0,
             <<"mint-cap">> => MintCap,
-            <<"mint-prop">> => {PropN, PropD},
-            <<"accumulator">> => 1, % TODO: randomize this?
-            <<"total-weighted-units">> => StartWeight * StartQty,
+            <<"mint-prop-numerator">> => PropN,
+            <<"mint-prop-denominator">> => PropD,
             <<"resources">> => #{
                 StartResource => #{
                     <<"accumulator">> => 1, % TODO: randomize this?

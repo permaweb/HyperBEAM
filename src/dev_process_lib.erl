@@ -71,6 +71,7 @@ run_as(Key, Base, Req, Opts) ->
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
+    ?event(debug_run_as, {before_resolve, {prepared_msg, PreparedMsg}, {req, Req}}, Opts),
     % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
@@ -78,6 +79,7 @@ run_as(Key, Base, Req, Opts) ->
             Req,
             Opts
         ),
+    ?event(debug_run_as, {after_resolve, {status, Status}, {base_result, BaseResult}}, Opts),
     ?event(debug_pot, {resolve, {status, Status}, {base_result, BaseResult}}, Opts),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.

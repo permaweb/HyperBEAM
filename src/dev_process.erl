@@ -367,6 +367,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Ensure that the next slot is the slot that we are expecting, just
     % in case there is a scheduler device error.
     NextSlot = hb_util:int(hb_ao:get(<<"slot">>, RawInputMsg, Opts)),
+    ?event(compute, {next_slot, NextSlot}),
     % If the input message does not have a path, set it to `compute'.
     InputMsg =
         case hb_path:from_message(request, RawInputMsg, Opts) of
@@ -377,7 +378,9 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
+    ?event(compute_slot_run_as, {before, {unset_results, UnsetResults}, {input_msg, InputMsg}}, Opts),
     Res = dev_process_lib:run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
+    ?event(compute_slot_run_as, {after_run_as, {res, Res}}, Opts),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.

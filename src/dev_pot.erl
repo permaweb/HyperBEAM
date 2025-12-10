@@ -107,13 +107,14 @@ drip_global(S = #{
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    ?event(debug_test, {drip_global, {t, T}, {last_drip, LastT}, {minted, AlreadyMinted}, {undistributed_mint, UndistributedMint}, {total_weighted_units, TotalWeightedUnits}, {global_accumulator, GlobalAcc}, {to_mint, ToMint}}, Opts),
     {NewGlobalAcc, NewUndistributedMint} =
         dev_pot_math:drip_global(
             GlobalAcc,
             ToMint + UndistributedMint,
             TotalWeightedUnits
         ),
-    ?event(
+    ?event(debug_test,
         {minting,
             {to_mint, ToMint},
             {total_weighted_units, TotalWeightedUnits},
@@ -571,6 +572,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    ?event(debug_test_state, {modify_deposit_state, {dripped_s, DrippedS}}, Opts),
     ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
