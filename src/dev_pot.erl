@@ -90,7 +90,8 @@ drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last ->
 drip_global(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
-        <<"mint-prop">> := {PropN, PropD}
+        <<"mint-prop-numerator">> := PropN,
+        <<"mint-prop-denominator">> := PropD
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
