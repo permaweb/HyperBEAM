@@ -645,7 +645,7 @@ set(Base, NewValuesMsg, Opts) ->
             KeysToSet
         )
     ),
-    % Caclulate if the keys to be set conflict with any committed keys.
+    % Calculate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
             Base,
