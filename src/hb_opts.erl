@@ -226,6 +226,7 @@ default_message() ->
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
+        debug_print_truncate => 20,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
