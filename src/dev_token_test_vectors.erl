@@ -58,7 +58,7 @@ generate_base_state(Params, Opts) ->
     },
     FinalState = maps:merge(DefaultState, maps:get(extra, Params, #{})),
     ?event({final_state_generated, {balances_size, map_size(Balances)}}),
-    FinalState.
+    {FinalState, Opts}.
 
 generate_process(Params, Opts) ->
     Addr = hb_util:human_id(hb_opts:get(priv_wallet, no_wallet, Opts)),
@@ -122,7 +122,7 @@ schedule_request(State, Action, Body, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     schedule_request(State, Action, Body, Wallet, Opts).
 schedule_request(State, Action, Body, Wallet, Opts) ->
-    From = id(Wallet),
+    From = hb_util:human_id(Wallet),
     ?event({scheduling_request, {action, Action}, {from, From}}),
     Signed =
         hb_message:commit(
@@ -229,14 +229,11 @@ pot_resource(Weight, RawDeposits) when is_map(RawDeposits) ->
             [ Qty || _ := #{ <<"quantity">> := Qty } <- Deposits ]
         ),
     #{
-        <<"mint-device">> => <<"pot@1.0">>,
-        <<"mint-cap">> => MintCap,
-        <<"mint-prop-numerator">> => MintPropN,
-        <<"mint-prop-denominator">> => MintPropD,
-        <<"total-weighted-units">> => 0,
-        <<"resources">> => #{},
-        <<"t">> => T,
-        <<"last-drip">> => LastDrip
+        <<"weight">> => Weight,
+        <<"accumulator">> => 0,
+        <<"last-global-accumulator">> => 0,
+        <<"total-deposits">> => TotalDeposits,
+        <<"deposits">> => Deposits
     }.
 
 give_instruction(<<"deposit">>, State, Req, Opts) -> 
