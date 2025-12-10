@@ -20,13 +20,17 @@ snapshot(Base, _Req, _Opts) ->
 %% key to hold the function to call.
 compute(Base, Req, Opts) ->
     maybe
-        {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
-        route(SecureBase, Req, Opts)
+        {ok, SecureReq} ?= enforce_security(Base, Req, Opts),
+        route(Base, SecureReq, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(Base, _Req, _Opts) ->
-    {ok, Base}.
+enforce_security(_Base, Req, Opts) ->
+    Msg = hb_ao:get(<<"body">>, Req, Opts),
+    [Signer] = hb_message:signers(Msg, Opts),
+    ModifiedReq = Req#{ <<"body">> => Msg#{ <<"from">> => Signer } },
+    ?event(debug_token, {modified_req, ModifiedReq}),
+    {ok, ModifiedReq}.
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
@@ -84,6 +88,8 @@ balance(Base, Req, Opts) ->
 
 transfer(Base, Assignment, Opts) ->
     maybe
+        % Ensure that the request has a timestamp, such that balance can be
+        % calculated after the mint state has been normalized.
         {ok, _Timestamp} ?=
             hb_maps:find(
                 <<"timestamp">>,
@@ -102,49 +108,23 @@ transfer(Base, Assignment, Opts) ->
                 Assignment#{ <<"subject">> => From },
                 Opts
             ),
-        ?event({req, Req, from, From}),
-        true ?= validate_address(Recipient),
-        true ?= (is_integer(Quantity) and (Quantity >= 0))
-            orelse {error, <<"Quantity must be a non-negative integer.">>},
-        % Handle self-transfer: skip balance updates
-        case From =:= Recipient of
-            true ->
-                dev_process_lib:send(
-                    transfer_notices(From, Recipient, Quantity, Req, Opts),
-                    NormBase, 
-                    Opts
-                );
-            false ->
-                transfer_between_accounts(
-                    NormBase, 
-                    From, 
-                    Recipient, 
-                    Quantity, 
-                    Req, 
-                    Opts
-                )
-        end
-    else
-        error ->
-            {error, <<"Timestamp is required.">>}
-    end.
-
-transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
-    maybe
         % Retrieve balances from the base state.
         Balances = 
             hb_ao:get(
                 <<"balances">>, 
-                Base, 
+                NormBase, 
                 #{ <<"device">> => <<"trie@1.0">> }, 
                 Opts
             ),
-        ?event({balances_structure, Balances}),
+        ?event(debug_token, {balances_before_transfer, Balances}),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
         ?event(
-            {transfer_balances, 
+            token_short,
+            {transferring, 
                 {from, From}, 
+                {to, Recipient},
+                {quantity, Quantity},
                 {sender_balance, SenderBalance},
                 {recipient_balance, RecipientBalance}
             }
@@ -156,6 +136,9 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
+        true ?= (From =/= Recipient)
+            orelse {error, <<"Sender and recipient cannot be the same.">>},
+        true ?= validate_address(Recipient),
         % Update the balances.
         {ok, NewBalances} ?=
             hb_ao:resolve(
@@ -167,13 +150,26 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
                 },
                 Opts
             ),
-        % Update the base state and send notices.
-        NewBase = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
+        % Update the balances in the base state.
+        NewBaseWithBalances = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
+        % Send transfer notices.
         dev_process_lib:send(
             transfer_notices(From, Recipient, Quantity, Req, Opts), 
-            NewBase, 
+            NewBaseWithBalances,
             Opts
         )
+    else
+        error -> {error, <<"Timestamp is required.">>};
+        {error, Reason} ->
+            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            ?event(debug_token,
+                {errored_transfer,
+                    {reason, Reason},
+                    {returning_base, Base}
+                }
+            ),
+            {ok, Base};
+        Other -> Other
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
