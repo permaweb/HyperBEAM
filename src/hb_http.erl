@@ -694,14 +694,14 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 )
             };
         {_, <<"manifest@1.0">>, _} ->
-            {ok, CachedID} = hb_cache:write(Message, Opts),
+            MessageID = hb_message:id(Message, signed, Opts),
             {
                 307,
                 #{
                     <<"location">> =>
                         <<
                             "/",
-                            CachedID/binary,
+                            MessageID/binary,
                             "~manifest@1.0/index"
                         >>
                 },
