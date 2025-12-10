@@ -162,11 +162,12 @@ enforce_property(
         }) ->
     try Property(Old1, Old2, Req, New1, New2, Opts) of
         true -> ok;
-        false -> {error, Property};
-        skip -> skip
+        false -> {error, property_returned_false};
+        Else -> Else
     catch
         error:{badarity, _} -> downgrade;
-        error:function_clause -> skip
+        error:function_clause -> skip;
+        error:Reason -> {error, Reason}
     end;
 enforce_property(
         Property,
@@ -178,11 +179,13 @@ enforce_property(
         }) ->
     try Property(Old, Req, New, Opts) of
         true -> ok;
-        false -> {error, Property};
-        skip -> skip
+        false -> {error, property_returned_false};
+        {error, Reason} -> {error, Reason};
+        Else -> Else
     catch
         error:{badarity, _} -> skip;
-        error:function_clause -> skip
+        error:function_clause -> skip;
+        error:Reason -> {error, Reason}
     end.
 
 apply_next(Spec = #{ next := undefined, model_state := undefined }, _, {ok, NewState}) ->
