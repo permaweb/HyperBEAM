@@ -939,7 +939,7 @@ set_ignore_undefined_test() ->
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },
-    Signed = hb_message:commit(Unsigned, hb:wallet()),
+    Signed = hb_message:commit(Unsigned, #{ priv_wallet => hb:wallet() }),
     ?event({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
     ?event({bad_signed, BadSigned}),

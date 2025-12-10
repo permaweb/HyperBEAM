@@ -779,9 +779,9 @@ test_unsigned(Data) ->
     }.
 
 %% Helper function to create signed #tx items.
-test_signed(Data) -> test_signed(Data, ar_wallet:new()).
-test_signed(Data, Wallet) ->
-    hb_message:commit(test_unsigned(Data), Wallet).
+test_signed(Data) -> test_signed(Data, #{ priv_wallet => ar_wallet:new() }).
+test_signed(Data, Opts) ->
+    hb_message:commit(test_unsigned(Data), Opts).
 
 test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,
@@ -845,7 +845,7 @@ test_store_ans104_message(Store) ->
     hb_store:reset(Store),
     Opts = #{ store => Store },
     Item = #{ <<"type">> => <<"ANS104">>, <<"content">> => <<"Hello, world!">> },
-    Committed = hb_message:commit(Item, hb:wallet()),
+    Committed = hb_message:commit(Item, #{ priv_wallet => hb:wallet() }),
     {ok, _Path} = write(Committed, Opts),
     CommittedID = hb_util:human_id(hb_message:id(Committed, all)),
     UncommittedID = hb_util:human_id(hb_message:id(Committed, none)),
@@ -863,7 +863,7 @@ test_store_simple_signed_message(Store) ->
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Item = test_signed(<<"Simple signed data item">>, Wallet),
+    Item = test_signed(<<"Simple signed data item">>, #{ priv_wallet => Wallet }),
     ?event({writing_test_message, Item}),
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
@@ -895,7 +895,7 @@ test_deeply_nested_complex_message(Store) ->
     Wallet = ar_wallet:new(),
     Opts = #{ store => Store, priv_wallet => Wallet },
     %% Create nested data
-    Level3SignedSubmessage = test_signed([1,2,3], Opts#{priv_wallet => Wallet}),
+    Level3SignedSubmessage = test_signed([1,2,3], Opts),
     Outer =
         hb_message:commit(
             #{
