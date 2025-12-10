@@ -267,19 +267,26 @@ add_attestation({ok, Res}, Req, Opts) ->
     },
     NonceHex = hb_util:to_hex(hb_crypto:sha256(hb_json:encode(MergedData))),
     
-    AttestationToken = case dev_sev_gpu:generate(#{}, #{nonce => NonceHex}, Opts) of
-        {ok, Token} -> Token;
-        _ -> null
+    %% Generate attestation - result contains evidences, claims, eat, verified
+    AttestationResult = case dev_sev_gpu:generate(#{}, #{nonce => NonceHex}, Opts) of
+        {ok, ResultJSON} -> 
+            case hb_json:decode(ResultJSON) of
+                Map when is_map(Map) -> Map;
+                _ -> #{}
+            end;
+        _ -> #{}
     end,
+    
+    %% Merge attestation result with raw and nonce at same level
+    AttestationData = maps:merge(AttestationResult, #{
+        <<"raw">> => hb_json:encode(MergedData),
+        <<"nonce">> => NonceHex
+    }),
     
     ResponseBody = hb_ao:get(<<"body">>, Res, Opts),
     DecodedBody = hb_json:decode(ResponseBody),
     EnhancedBody = hb_json:encode(DecodedBody#{
-        <<"attestation">> => #{
-            <<"raw">> => hb_json:encode(MergedData),
-            <<"nonce">> => NonceHex,
-            <<"token">> => AttestationToken
-        },
+        <<"attestation">> => AttestationData,
         <<"resolved_model">> => hb_opts:get(inference_opts, #{}, Opts)
     }),
     
