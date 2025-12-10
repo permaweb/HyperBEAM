@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <unistd.h>
 
 /* SDK initialization state */
 static int sdk_initialized = 0;

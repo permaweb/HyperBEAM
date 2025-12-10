@@ -481,7 +481,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             HeadersWithCors = add_cors_headers(Headers, ReqHdr, Opts),
             EncodedHeaders = hb_private:reset(HeadersWithCors),
             ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
-            PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
+            PostStreamReq = cowboy_req:stream_reply(RawStatus, #{}, ReqBeforeStream),
             Sender = fun(Data) ->
                 cowboy_req:stream_body(Data, nofin, PostStreamReq)
             end,
