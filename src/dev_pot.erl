@@ -611,7 +611,15 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
     NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
-    NewBalances = Balances#{ Addr => NewBalance },
+    {ok, NewBalances} =
+        hb_ao:resolve(
+            Balances,
+            #{
+                <<"path">> => <<"set">>,
+                Addr => NewBalance
+            },
+            Opts
+        ),
     UpdateValues = 
         #{
             <<"resources">> => NewResources,
