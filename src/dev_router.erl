@@ -410,6 +410,13 @@ match_routes(ToMatch, Routes, Opts) ->
         Keys,
         Opts
     ).
+match_routes(Req = #{ <<"route-path">> := Path }, Routes, Keys, Opts) ->
+    match_routes(
+        (maps:without([<<"route-path">>], Req))#{ <<"path">> => Path },
+        Routes,
+        Keys,
+        Opts
+    );
 match_routes(#{ <<"path">> := Explicit = <<"http://", _/binary>> }, _, _, _) ->
     % If the route is an explicit HTTP URL, we can match it directly.
     #{ <<"node">> => Explicit, <<"reference">> => <<"explicit">> };
@@ -1514,7 +1521,7 @@ add_route_test() ->
                     <<"node">> => <<"new">>,
                     <<"priority">> => 15
                 },
-                Owner
+                #{ priv_wallet => Owner }
             ),
             #{}
         ),
