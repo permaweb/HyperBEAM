@@ -1,40 +1,26 @@
--module(dev_trie_prop).
+-module(dev_trie_props).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 model_test() ->
-    Res =
-        hb_prop:state_machine(
-            #{
-                state => #{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1 },
-                model_state => #{ <<"device">> => <<"message@1.0">>, <<"a">> => 1 },
-                request_gen => requests(),
-                properties => properties(),
-                next => fun next/4,
-                runs => 10,
-                seq_len => 10,
-                opts => #{}
-            }
-        ),
-    case Res of
-        {failure, InitialState, ResSequence} ->
-            ?event(
-                properties,
-                {failure,
-                    {initial_state, InitialState},
-                    {sequence, ResSequence}
-                },
-                #{ debug_print_truncate => infinity }
-            ),
-            error(failure);
-        ok -> ok
-    end.
+    ok = hb_prop:state_machine(
+        #{
+            states => [#{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1 }],
+            models => [#{ <<"device">> => <<"message@1.0">>, <<"a">> => 1 }],
+            requests => requests(),
+            properties => properties(),
+            next => fun next/4,
+            runs => 10,
+            length => 100,
+            opts => #{}
+        }
+    ).
 
 requests() ->
     [
         fun(S, Opts) -> request(Action, S, Opts) end
     ||
-        Action <- [set, get]
+        Action <- [get, set, reset]
     ].
 request(set, _S, _Opts) ->
     #{
@@ -42,8 +28,15 @@ request(set, _S, _Opts) ->
         hb_prop:key() => hb_prop:any()
     };
 request(get, S, Opts) ->
+    ?event({generating_request, {get, S}}),
     #{
         <<"path">> => hb_prop:pick(hb_ao:keys(S, Opts) -- [<<"device">>])
+    };
+request(reset, S, Opts) ->
+    ResetKey = hb_prop:pick(hb_ao:keys(S, Opts) -- [<<"device">>]),
+    #{
+        <<"path">> => <<"set">>,
+        ResetKey => hb_prop:any()
     }.
 
 properties() ->

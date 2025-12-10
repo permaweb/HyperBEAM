@@ -1,4 +1,4 @@
--module(dev_token_prop).
+-module(dev_token_props).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
