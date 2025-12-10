@@ -72,7 +72,7 @@ handle(Key, M1, M2, Opts) ->
         hb_ao:get(
             <<"dedup">>,
             {as, <<"message@1.0">>, M1},
-            #{ <<"device">> => <<"trie@1.0">> },
+            #{ <<"device">> => <<"message@1.0">> },
             Opts
         ),
     ?event({dedup_handle,
@@ -120,12 +120,10 @@ handle(Key, M1, M2, Opts) ->
                             Opts
                         ),
                     {ok, Result};
-                Value ->
+                _Value ->
                     ?event(
-                        {already_seen,
-                            {subject, SubjectID},
-                            {dedup_value, Value}
-                        }
+                        dedup_short,
+                        {already_seen, {subject, SubjectID}}
                     ),
                     {skip, M1}
             end
