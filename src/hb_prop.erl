@@ -31,12 +31,14 @@ state_machine(_Spec) ->
 run_state_machines(#{ runs := 0 }) ->
     ok;
 run_state_machines(Spec = #{ runs := Runs }) ->
+    Opts = generate_opts(Spec),
     InitialState = generate_initial_state(Spec),
     ?event({generated_initial_state, InitialState}),
     InitialModelState = generate_initial_model_state(Spec),
     ResSequence =
         state_machine_loop(
             Spec#{
+                opts => Opts,
                 state => InitialState,
                 model_state => InitialModelState
             }
@@ -72,6 +74,9 @@ state_machine_loop(Spec = #{ length := SeqLen }) ->
                     [Req, {error, Type, Reason}]
             end
     end.
+
+generate_opts(Spec = #{ opts := Opts }) ->
+    execute_generator(Opts, [Spec]).
 
 generate_initial_state(#{ states := Gen, opts := Opts }) ->
     execute_generator(Gen, [Opts]).
