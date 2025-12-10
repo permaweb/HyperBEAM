@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.11)
-project(dev_sev_gpu_nif VERSION 0.1.0)
+project(dev_sev_gpu_nif VERSION 0.1.0 LANGUAGES CXX)
 
 # Debug logging option (default: OFF for quiet operation)
 option(NVAT_DEBUG_LOG "Enable verbose debug logging from nvat SDK" OFF)
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find Erlang NIF headers
 find_path(ERL_NIF_INCLUDE_DIR erl_nif.h
@@ -25,13 +26,24 @@ if(NOT NVAT_SDK_DIR OR NOT NVAT_BUILD_DIR)
     message(FATAL_ERROR "NVAT_SDK_DIR and NVAT_BUILD_DIR must be specified")
 endif()
 
+# Find nlohmann/json from nvat build (it's fetched by nvat's CMake)
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
+    HINTS ${NVAT_BUILD_DIR}/_deps/json-src/include
+          ${NVAT_BUILD_DIR}/_deps/json-src/single_include
+)
+
+if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+    message(FATAL_ERROR "Could not find nlohmann/json.hpp. Make sure nvat SDK was built first.")
+endif()
+
 add_library(dev_sev_gpu_nif SHARED
-    dev_sev_gpu_nif.c
+    dev_sev_gpu_nif.cpp
 )
 
 target_include_directories(dev_sev_gpu_nif PRIVATE
     ${ERL_NIF_INCLUDE_DIR}
     ${NVAT_BUILD_DIR}/include
+    ${NLOHMANN_JSON_INCLUDE_DIR}
 )
 
 target_link_directories(dev_sev_gpu_nif PRIVATE
