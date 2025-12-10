@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.11)
 project(dev_sev_gpu_nif VERSION 0.1.0)
 
+# Debug logging option (default: OFF for quiet operation)
+option(NVAT_DEBUG_LOG "Enable verbose debug logging from nvat SDK" OFF)
+
 set(CMAKE_C_STANDARD 11)
 
 # Find Erlang NIF headers
@@ -38,6 +41,11 @@ target_link_directories(dev_sev_gpu_nif PRIVATE
 target_link_libraries(dev_sev_gpu_nif PRIVATE
     nvat
 )
+
+# Add debug log definition if enabled
+if(NVAT_DEBUG_LOG)
+    target_compile_definitions(dev_sev_gpu_nif PRIVATE NVAT_DEBUG_LOG)
+endif()
 
 # Set output properties to match Erlang NIF expectations
 set_target_properties(dev_sev_gpu_nif PROPERTIES
