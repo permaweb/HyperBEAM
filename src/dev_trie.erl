@@ -73,6 +73,47 @@ get(TrieNode, Req, Opts) ->
         {ok, Key} -> retrieve(TrieNode, Key, Opts)
     end.
 
+%% @doc Convert a `~trie@1.0` into a flat message containing every key-value
+%% pair in the trie.
+from(Trie, Req, Opts) ->
+    {ok, from(<<>>, Trie, Req, Opts)}.
+from(Prefix, Trie, Req, Opts) when is_map(Trie) ->
+    hb_maps:fold(
+        fun(<<"node-value">>, Val, Acc) ->
+            Acc#{ Prefix => Val };
+        (Key, Inner, Acc) when is_map(Inner) ->
+            case hb_maps:get(<<"device">>, Inner, Opts) of
+                <<"trie@1.0">> ->
+                    hb_maps:merge(
+                        Acc,
+                        from(
+                            <<Prefix/bitstring, Key/bitstring>>,
+                            Inner,
+                            Req,
+                            Opts
+                        ),
+                        Opts
+                    );
+                _ ->
+                    Acc#{ <<Prefix/bitstring, Key/bitstring>> => Inner }
+            end;
+        (Key, Val, Acc) ->
+            Acc#{ <<Prefix/bitstring, Key/bitstring>> => Val }
+        end,
+        #{},
+        hb_maps:without(
+            [<<"device">>],
+            hb_message:uncommitted(hb_private:reset(Trie)),
+            Opts
+        ),
+        Opts
+    ).
+
+%% @doc Convert a flat message into a `~trie@1.0` message. Proxies to a `set`
+%% call.
+to(FlatMsg, _Req, Opts) ->
+    set(#{<<"device">> => <<"trie@1.0">>}, FlatMsg, Opts).
+
 %% @doc Set keys and their values in the trie.
 set(Trie, Req, Opts) ->
     Insertable = hb_maps:without([<<"path">>], Req, Opts),
@@ -104,9 +145,15 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffix) > 0 of
                 true ->
                     % Implicit leaf node creation!
-                    TrieNode#{KeySuffix => Val};
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        KeySuffix => Val
+                    };
                 false ->
-                    TrieNode#{<<"node-value">> => Val}
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        <<"node-value">> => Val
+                    }
             end;
         % FULL MATCH: There is a child of this node with an edge label that
         % completely matches *some portion* of what remains to be matched in our
@@ -126,7 +173,10 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                 false ->
                     if
                         bit_size(KeySuffix) =:= bit_size(EdgeLabel) ->
-                            TrieNode#{EdgeLabel => Val};
+                            TrieNode#{
+                                <<"device">> => <<"trie@1.0">>,
+                                EdgeLabel => Val
+                            };
                         true ->
                             <<
                                 _KeySuffixPrefix:MatchSize/bitstring,
@@ -135,6 +185,7 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                             TrieNode#{
                                 EdgeLabel =>
                                     #{
+                                        <<"device">> => <<"trie@1.0">>,
                                         <<"node-value">> => SubTrie,
                                         KeySuffixSuffix => Val
                                     }
@@ -149,7 +200,10 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                             Opts,
                             bit_size(EdgeLabel) + KeyPrefixSizeAcc
                         ),
-                    TrieNode#{EdgeLabel => NewSubTrie}
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        EdgeLabel => NewSubTrie
+                    }
             end;
         % PARTIAL MATCH: There is a child of this node with an edge label that
         % partially matches *some portion* of what remains to be matched in our
@@ -171,7 +225,9 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffixSuffix) > 0 of
                 true ->
                     NewTrie#{
+                        <<"device">> => <<"trie@1.0">>,
                         EdgeLabelPrefix => #{
+                            <<"device">> => <<"trie@1.0">>,
                             EdgeLabelSuffix => SubTrie,
                             % Implicit leaf node!
                             KeySuffixSuffix => Val
@@ -179,7 +235,9 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                     };
                 false ->
                     NewTrie#{
+                        <<"device">> => <<"trie@1.0">>,
                         EdgeLabelPrefix => #{
+                            <<"device">> => <<"trie@1.0">>,
                             EdgeLabelSuffix => SubTrie,
                             <<"node-value">> => Val
                         }
@@ -232,7 +290,7 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
     end.
 
 %% @doc Get a list of edge labels for a given trie node.
-edges(TrieNode, Opts) when not is_map(TrieNode) -> [];
+edges(TrieNode, _Opts) when not is_map(TrieNode) -> [];
 edges(TrieNode, Opts) ->
     Filtered = hb_maps:without(
         [
@@ -404,7 +462,7 @@ basic_topology_backwards_test() ->
 basic_retrievability_test() ->
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
-        #{
+        FlatMsg = #{
             <<"car">> => 31337,
             <<"card">> => 90210,
             <<"cardano">> => 666,
@@ -880,3 +938,67 @@ bulk_update_cases_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, #{})).
+
+%% @doc Test to observe commitment accumulation with sequential trie updates
+%% Simulates the pattern seen in token transfers: repeated updates to same keys
+commitment_accumulation_test() ->
+    hb:init(),
+    InitialState = #{
+        <<"device">> => <<"token@1.0">>,
+        <<"balances">> => #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"alice-id">> => 1000000000
+        }
+    },
+    CountCommitments = 
+        fun(S) ->
+            BalTrie = hb_ao:get(<<"balances">>, S, #{}),
+            case hb_ao:get(<<"commitments">>, BalTrie, #{}) of
+                not_found -> 0;
+                M when is_map(M) -> maps:size(M)
+            end
+        end,
+    FinalState = lists:foldl(
+        fun(N, State) ->
+            Balances = 
+                hb_ao:get(
+                    <<"balances">>, 
+                    State, 
+                    #{ <<"device">> => <<"trie@1.0">> }, 
+                    #{}
+                ),
+            {ok, NewBalances} = hb_ao:resolve(
+                Balances,
+                #{
+                    <<"path">> => <<"set">>, 
+                    <<"alice-id">> => 1000000000 - N, 
+                    <<"bob-id">> => N
+                },
+                #{}
+            ),
+            NewState = hb_maps:put(<<"balances">>, NewBalances, State, #{}),
+            case N of
+                10 -> 
+                    ?event({
+                        after_transfer_10, 
+                        {commitment_count, CountCommitments(NewState)}
+                    });
+                100 -> 
+                    ?event({
+                        after_transfer_100, 
+                        {commitment_count, CountCommitments(NewState)}
+                    });
+                _ -> ok
+            end,
+            NewState
+        end,
+        InitialState,
+        lists:seq(1, 100)
+    ),
+    FinalBalances = hb_ao:get(<<"balances">>, FinalState, #{}),
+    AliceBalance = hb_ao:get(<<"alice-id">>, FinalBalances, #{}, #{}),
+    BobBalance = hb_ao:get(<<"bob-id">>, FinalBalances, #{}, #{}),
+    ?event({final_analysis, {commitment_count, CountCommitments(FinalState)},
+            {alice_balance, AliceBalance}, {bob_balance, BobBalance}}),
+    ?assertEqual(999999900, AliceBalance),
+    ?assertEqual(100, BobBalance).

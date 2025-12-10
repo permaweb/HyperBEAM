@@ -138,7 +138,8 @@ default_device(Base, Key, Opts) ->
     end.
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
-default_device_index(<<"push">>) -> <<"push@1.0">>.
+default_device_index(<<"push">>) -> <<"push@1.0">>;
+default_device_index(_) -> not_found.
 
 %% @doc Wraps functions in the Scheduler device.
 schedule(Base, Req, Opts) ->
@@ -366,6 +367,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Ensure that the next slot is the slot that we are expecting, just
     % in case there is a scheduler device error.
     NextSlot = hb_util:int(hb_ao:get(<<"slot">>, RawInputMsg, Opts)),
+    ?event(compute, {next_slot, NextSlot}),
     % If the input message does not have a path, set it to `compute'.
     InputMsg =
         case hb_path:from_message(request, RawInputMsg, Opts) of
@@ -376,7 +378,9 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
+    ?event(compute_slot_run_as, {before, {unset_results, UnsetResults}, {input_msg, InputMsg}}, Opts),
     Res = dev_process_lib:run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
+    ?event(compute_slot_run_as, {after_run_as, {res, Res}}, Opts),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
@@ -589,7 +593,6 @@ ensure_loaded(Base, Req, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
     ProcID = dev_process_lib:process_id(Base, #{}, Opts),
-    ?event({ensure_loaded, {base, Base}, {req, Req}}),
     case hb_ao:get(<<"initialized">>, Base, Opts) of
         <<"true">> ->
             ?event(already_initialized),

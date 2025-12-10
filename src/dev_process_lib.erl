@@ -3,6 +3,7 @@
 -module(dev_process_lib).
 -include("include/hb.hrl").
 -export([as_process/2, run_as/4, process_id/3, set_results/3, ensure_process_key/2]).
+-export([send/3, forwarded_keys/2]).
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Req, Opts) ->
@@ -70,6 +71,7 @@ run_as(Key, Base, Req, Opts) ->
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
+    ?event(debug_run_as, {before_resolve, {prepared_msg, PreparedMsg}, {req, Req}}, Opts),
     % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
@@ -77,6 +79,8 @@ run_as(Key, Base, Req, Opts) ->
             Req,
             Opts
         ),
+    ?event(debug_run_as, {after_resolve, {status, Status}, {base_result, BaseResult}}, Opts),
+    ?event(debug_pot, {resolve, {status, Status}, {base_result, BaseResult}}, Opts),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of
@@ -130,3 +134,39 @@ ensure_process_key(Base, Opts) ->
             Res;
         _ -> Base
     end.
+
+%% @doc Extract keys with X- prefix for forwarding in notices
+%% Follows AO token pattern: keys beginning with "X-" are forwarded.
+forwarded_keys(Req, Opts) ->
+    case hb_maps:is_map(Req, Opts) of
+        true ->
+            hb_maps:fold(
+                fun(Key, Value, Acc) when is_binary(Key) ->
+                    case byte_size(Key) >= 2 of
+                        true ->
+                            Prefix = binary:part(Key, 0, 2),
+                            case string:lowercase(Prefix) of
+                                <<"x-">> -> hb_maps:put(Key, Value, Acc, Opts);
+                                _ -> Acc
+                            end;
+                        false -> Acc
+                    end;
+                (_Key, _Value, Acc) -> Acc
+                end,
+                #{},
+                Req,
+                Opts
+            );
+        false -> #{}
+    end.
+
+%% @doc Add a message or list of messages to the process's outbox.
+send(Msg, Base, Opts) when not is_list(Msg) ->
+    send([Msg], Base, Opts);
+send(Msgs, Base, Opts) ->
+    CurrentOutbox = hb_ao:get(<<"results/outbox">>, Base, [], Opts),
+    NewOutbox = hb_util:message_to_ordered_list(CurrentOutbox, Opts) ++ Msgs,
+    {
+        ok,
+        hb_ao:set(Base, <<"results/outbox">>, NewOutbox, Opts)
+    }.

@@ -17,6 +17,9 @@
 %% @doc Start a scheduling server for a given computation.
 start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
+    NotifyPID = self(),
+    Ref = make_ref(),
+    PID =
     spawn_link(
         fun() ->
             % Before we start, register the scheduler name.
@@ -53,6 +56,7 @@ start(ProcID, Proc, Opts) ->
                     {base_state_hashpath, BaseStateHashpath}
                 }
             ),
+            NotifyPID ! {server_started, Ref},
             server(
                 #{
                     id => ProcID,
@@ -71,7 +75,8 @@ start(ProcID, Proc, Opts) ->
                 }
             )
         end
-    ).
+    ),
+    receive {server_started, Ref} -> PID end.
 
 %% @doc Determine the appropriate list of keys to use to commit assignments for
 %% a process.
@@ -126,7 +131,26 @@ schedule(ErlangProcID, Message) ->
         {scheduled, Message, Assignment} ->
             Assignment
     after ?DEFAULT_TIMEOUT ->
-        throw({scheduler_timeout, {proc_id, ErlangProcID}, {message, Message}})
+        ?event(error,
+            {scheduler_timeout,
+                {proc_id, ErlangProcID},
+                {message, Message},
+                {server_stack,
+                    {trace,
+                        element(
+                            2,
+                            erlang:process_info(ErlangProcID, current_stacktrace)
+                        )
+                    }
+                }
+            }
+        ),
+        throw(
+            {scheduler_timeout,
+                {proc_id, ErlangProcID},
+                {message, Message}
+            }
+        )
     end.
 
 %% @doc Get the current slot from the scheduling server.
@@ -144,7 +168,16 @@ stop(ProcID) ->
 server(State) ->
     receive
         {schedule, Message, Reply, AbortTime} ->
-            case SchedTime = scheduler_time() > AbortTime of
+            CurrentTime = scheduler_time(),
+            ?event(
+                {received_schedule_request,
+                    {message, Message},
+                    {reply_to, Reply},
+                    {abort_time, AbortTime},
+                    {current_time, CurrentTime}
+                }
+            ),
+            case CurrentTime > AbortTime of
                 true ->
                     % Ignore scheduling requests if they are too old. The
                     % `abort-time' signals to us that the client has already
@@ -153,12 +186,15 @@ server(State) ->
                     ?event(error,
                         {received_old_schedule_request,
                             {abort_time, AbortTime},
-                            {sched_time, SchedTime}
+                            {current_time, CurrentTime}
                         }
                     ),
                     server(State);
                 false ->
-                    server(assign(State, Message, Reply))
+                    ?event({valid_time, assigning_message}),
+                    AssignedState = assign(State, Message, Reply),
+                    ?event({assigned_message, {assigned_state, AssignedState}}),
+                    server(AssignedState)
             end;
         {info, Reply} ->
             Reply ! {info, State},
@@ -174,7 +210,7 @@ assign(State, Message, ReplyPID) ->
         do_assign(State, Message, ReplyPID)
     catch
         _Class:Reason:Stack ->
-            ?event({error_scheduling, {reason, Reason}, {trace, Stack}}),
+            ?event(error, {error_scheduling, {reason, Reason}, {trace, Stack}}),
             State
     end.
 
