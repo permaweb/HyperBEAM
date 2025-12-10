@@ -291,7 +291,15 @@ check_lookahead_and_local_cache(Base, ProcID, TargetSlot, Opts) when is_map(Base
         not_found ->
             check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts);
         LookaheadWorker ->
-            check_lookahead_and_local_cache(LookaheadWorker, ProcID, TargetSlot, Opts)
+            check_lookahead_and_local_cache(
+                case erlang:is_process_alive(LookaheadWorker) of
+                    true -> LookaheadWorker;
+                    false -> undefined
+                end,
+                ProcID,
+                TargetSlot,
+                Opts
+            )
     end;
 check_lookahead_and_local_cache(Worker, ProcID, TargetSlot, Opts) when is_pid(Worker) ->
     receive
