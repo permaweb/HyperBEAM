@@ -463,7 +463,6 @@ transfer_unauthorized() ->
     %    being transferred.
     transfer(Proc, Alice, Bob, 101, Opts),
     ?event({unauthorized_transfer, {result, Result}}),
-    receive after 1000 -> ok end,
     ?event({env, map([Proc], #{ Alice => alice, Bob => bob }, Opts)}),
     ?assertEqual(100, balance(Proc, Alice, Opts)),
     ?assertEqual(0, balance(Proc, Bob, Opts)),
