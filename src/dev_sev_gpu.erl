@@ -67,8 +67,7 @@ generate(_M1, M2, Opts) ->
 %% @doc Verify GPU attestation evidence.
 %%
 %% Verifies previously collected GPU evidence locally.
-%% Unlike the old EAT-based verification, this accepts the raw evidence JSON
-%% from the generate/3 function's "evidences" field.
+%% The evidence JSON already contains the nonce from when it was collected.
 %%
 %% Input message M2 should contain:
 %% - body: The evidences JSON from a previous generate call
@@ -78,7 +77,7 @@ generate(_M1, M2, Opts) ->
 %% - {ok, <<"false">>} if verification fails
 %% - {error, Reason} on error
 -spec verify(map(), map(), map()) -> {ok, binary()} | {error, term()}.
-verify(_M1, M2, _NodeOpts) ->
+verify(_M1, M2, _Opts) ->
     EvidenceJSON = maps:get(<<"body">>, M2, <<>>),
     case verify_evidence_nif(EvidenceJSON) of
         {ok, ResultJSON} ->
@@ -125,6 +124,7 @@ verify_test() ->
             %% Extract evidences from the generate result
             case hb_json:decode(ResultJSON) of
                 #{<<"evidences">> := Evidences} ->
+                    %% Evidence JSON contains the nonce from generation
                     VerifyMsg = #{<<"body">> => hb_json:encode(Evidences)},
                     case verify(#{}, VerifyMsg, #{}) of
                         {ok, _} -> ?assert(true);

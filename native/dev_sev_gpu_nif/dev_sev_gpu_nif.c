@@ -270,10 +270,12 @@ static ERL_NIF_TERM collect_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF
  * verify_evidence_nif/1
  * 
  * Verify GPU attestation evidence from JSON.
+ * The evidence JSON already contains the nonce from when it was collected.
+ * Uses nvat_attestation_ctx with nvat_attest_device for proper verification.
  * 
  * Input: Evidence JSON (binary)
  * Output: {ok, JSON} | {error, Reason}
- *         JSON contains: valid (boolean), claims
+ *         JSON contains: valid (boolean), claims, eat
  */
 static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     /* Ensure SDK is initialized */
@@ -297,72 +299,57 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
     write(fd, evidence_bin.data, evidence_bin.size);
     close(fd);
     
-    /* Create evidence source from JSON file */
-    nvat_gpu_evidence_source_t source = NULL;
-    err = nvat_gpu_evidence_source_from_json_file(&source, temp_path);
+    /* Create attestation context */
+    nvat_attestation_ctx_t ctx = NULL;
+    err = nvat_attestation_ctx_create(&ctx);
+    if (err != NVAT_RC_OK) {
+        unlink(temp_path);
+        return make_error(env, nvat_rc_to_string(err));
+    }
+    
+    /* Set device type to GPU */
+    err = nvat_attestation_ctx_set_device_type(ctx, NVAT_DEVICE_GPU);
+    if (err != NVAT_RC_OK) {
+        nvat_attestation_ctx_free(&ctx);
+        unlink(temp_path);
+        return make_error(env, nvat_rc_to_string(err));
+    }
+    
+    /* Set evidence source from JSON file (nonce is embedded in the evidence) */
+    err = nvat_attestation_ctx_set_gpu_evidence_source_json_file(ctx, temp_path);
     unlink(temp_path);  /* Remove temp file */
-    
     if (err != NVAT_RC_OK) {
+        nvat_attestation_ctx_free(&ctx);
         return make_error(env, nvat_rc_to_string(err));
     }
     
-    /* Collect evidence (this reads from the file-based source) */
-    nvat_gpu_evidence_t* evidence_array = NULL;
-    size_t num_evidences = 0;
-    err = nvat_gpu_evidence_collect(source, NULL, &evidence_array, &num_evidences);
-    if (err != NVAT_RC_OK) {
-        nvat_gpu_evidence_source_free(&source);
-        return make_error(env, nvat_rc_to_string(err));
-    }
-    
-    /* Create RIM store and OCSP client */
-    nvat_rim_store_t rim_store = NULL;
-    err = nvat_rim_store_create_remote(&rim_store, NULL, NULL, NULL);
-    if (err != NVAT_RC_OK) {
-        nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-        nvat_gpu_evidence_source_free(&source);
-        return make_error(env, nvat_rc_to_string(err));
-    }
-    
-    nvat_ocsp_client_t ocsp_client = NULL;
-    err = nvat_ocsp_client_create_default(&ocsp_client, NULL, NULL, NULL);
-    if (err != NVAT_RC_OK) {
-        nvat_rim_store_free(&rim_store);
-        nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-        nvat_gpu_evidence_source_free(&source);
-        return make_error(env, nvat_rc_to_string(err));
-    }
-    
-    /* Create local verifier */
-    nvat_gpu_local_verifier_t local_verifier = NULL;
-    err = nvat_gpu_local_verifier_create(&local_verifier, rim_store, ocsp_client, NULL);
-    if (err != NVAT_RC_OK) {
-        nvat_ocsp_client_free(&ocsp_client);
-        nvat_rim_store_free(&rim_store);
-        nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-        nvat_gpu_evidence_source_free(&source);
-        return make_error(env, nvat_rc_to_string(err));
-    }
-    
-    nvat_gpu_verifier_t verifier = nvat_gpu_local_verifier_upcast(local_verifier);
-    
-    /* Create evidence policy */
+    /* Create and set evidence policy */
     nvat_evidence_policy_t policy = NULL;
     err = nvat_evidence_policy_create_default(&policy);
     if (err != NVAT_RC_OK) {
-        nvat_gpu_verifier_free(&verifier);
-        nvat_ocsp_client_free(&ocsp_client);
-        nvat_rim_store_free(&rim_store);
-        nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-        nvat_gpu_evidence_source_free(&source);
+        nvat_attestation_ctx_free(&ctx);
+        return make_error(env, nvat_rc_to_string(err));
+    }
+    err = nvat_attestation_ctx_set_evidence_policy(ctx, &policy);
+    if (err != NVAT_RC_OK) {
+        nvat_evidence_policy_free(&policy);
+        nvat_attestation_ctx_free(&ctx);
         return make_error(env, nvat_rc_to_string(err));
     }
     
-    /* Verify evidence */
+    /* Set local verification */
+    err = nvat_attestation_ctx_set_verifier_type(ctx, NVAT_VERIFY_LOCAL);
+    if (err != NVAT_RC_OK) {
+        nvat_attestation_ctx_free(&ctx);
+        return make_error(env, nvat_rc_to_string(err));
+    }
+    
+    /* Perform attestation verification (nonce=NULL means use nonce from evidence) */
     nvat_str_t detached_eat = NULL;
     nvat_claims_collection_t claims = NULL;
-    err = nvat_verify_gpu_evidence(verifier, evidence_array, num_evidences, policy, &detached_eat, &claims);
+    err = nvat_attest_device(ctx, NULL, &detached_eat, &claims);
     
+    /* Check if verification succeeded */
     int verification_success = (err == NVAT_RC_OK);
     
     /* Serialize claims */
@@ -374,26 +361,28 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
         }
     }
     
+    /* Get EAT data */
+    char* eat_data = "{}";
+    if (detached_eat != NULL) {
+        nvat_str_get_data(detached_eat, &eat_data);
+    }
+    
     /* Build result JSON */
-    size_t result_len = strlen(claims_data) + 100;
+    size_t result_len = strlen(claims_data) + strlen(eat_data) + 100;
     char* result_json = (char*)malloc(result_len);
     if (!result_json) {
         if (serialized_claims) nvat_str_free(&serialized_claims);
         if (detached_eat) nvat_str_free(&detached_eat);
         if (claims) nvat_claims_collection_free(&claims);
-        nvat_evidence_policy_free(&policy);
-        nvat_gpu_verifier_free(&verifier);
-        nvat_ocsp_client_free(&ocsp_client);
-        nvat_rim_store_free(&rim_store);
-        nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-        nvat_gpu_evidence_source_free(&source);
+        nvat_attestation_ctx_free(&ctx);
         return make_error(env, "memory allocation failed");
     }
     
     snprintf(result_json, result_len,
-        "{\"valid\":%s,\"claims\":%s}",
+        "{\"valid\":%s,\"claims\":%s,\"eat\":%s}",
         verification_success ? "true" : "false",
-        claims_data
+        claims_data,
+        eat_data
     );
     
     ERL_NIF_TERM result = make_binary(env, result_json);
@@ -403,12 +392,7 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
     if (serialized_claims) nvat_str_free(&serialized_claims);
     if (detached_eat) nvat_str_free(&detached_eat);
     if (claims) nvat_claims_collection_free(&claims);
-    nvat_evidence_policy_free(&policy);
-    nvat_gpu_verifier_free(&verifier);
-    nvat_ocsp_client_free(&ocsp_client);
-    nvat_rim_store_free(&rim_store);
-    nvat_gpu_evidence_array_free(&evidence_array, num_evidences);
-    nvat_gpu_evidence_source_free(&source);
+    nvat_attestation_ctx_free(&ctx);
     
     return make_ok(env, result);
 }

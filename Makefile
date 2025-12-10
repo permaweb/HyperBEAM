@@ -190,7 +190,7 @@ $(DEV_SEV_GPU_NIF_DIR)/dev_sev_gpu_nif.so: $(NVAT_BUILD_DIR)/libnvat.so
 		-DCMAKE_BUILD_TYPE=Release \
 		-DNVAT_SDK_DIR=$(CURDIR)/$(NVAT_SDK_DIR)/nv-attestation-sdk-cpp \
 		-DNVAT_BUILD_DIR=$(CURDIR)/$(NVAT_BUILD_DIR) \
-		-DNAVT_DEBUG_LOG=OFF && \
+		-DNVAT_DEBUG_LOG=OFF && \
 	cmake --build $(DEV_SEV_GPU_NIF_DIR) && \
 	mkdir -p priv && \
 	cp $(DEV_SEV_GPU_NIF_DIR)/dev_sev_gpu_nif.so priv/ && \
