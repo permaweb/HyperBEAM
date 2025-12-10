@@ -422,4 +422,4 @@ static void unload(ErlNifEnv* env, void* priv_data) {
     pthread_mutex_unlock(&sdk_mutex);
 }
 
-ERL_NIF_INIT(dev_sev_gpu_nif, nif_funcs, load, NULL, NULL, unload)
+ERL_NIF_INIT(dev_sev_gpu, nif_funcs, load, NULL, NULL, unload)
