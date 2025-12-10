@@ -267,6 +267,49 @@ static ERL_NIF_TERM collect_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF
 }
 
 /*
+ * Extract nonce hex string from evidence JSON.
+ * The JSON structure contains a "nonce" field at the top level.
+ * Returns allocated string that must be freed, or NULL on failure.
+ */
+static char* extract_nonce_from_json(const char* json, size_t json_len) {
+    /* Simple JSON parsing - look for "nonce":"<value>" */
+    const char* nonce_key = "\"nonce\"";
+    const char* pos = json;
+    const char* end = json + json_len;
+    
+    while (pos < end) {
+        pos = (const char*)memmem(pos, end - pos, nonce_key, strlen(nonce_key));
+        if (!pos) return NULL;
+        
+        pos += strlen(nonce_key);
+        
+        /* Skip whitespace and colon */
+        while (pos < end && (*pos == ' ' || *pos == ':' || *pos == '\t' || *pos == '\n')) pos++;
+        
+        /* Expect opening quote */
+        if (pos >= end || *pos != '"') continue;
+        pos++;
+        
+        /* Find closing quote */
+        const char* value_start = pos;
+        while (pos < end && *pos != '"') pos++;
+        if (pos >= end) return NULL;
+        
+        size_t value_len = pos - value_start;
+        
+        /* Allocate and copy the nonce value */
+        char* nonce = (char*)malloc(value_len + 1);
+        if (!nonce) return NULL;
+        memcpy(nonce, value_start, value_len);
+        nonce[value_len] = '\0';
+        
+        return nonce;
+    }
+    
+    return NULL;
+}
+
+/*
  * verify_evidence_nif/1
  * 
  * Verify GPU attestation evidence from JSON.
@@ -344,10 +387,25 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
         return make_error(env, nvat_rc_to_string(err));
     }
     
-    /* Perform attestation verification (nonce=NULL means use nonce from evidence) */
+    /* Extract nonce from evidence JSON */
+    char* nonce_hex = extract_nonce_from_json((const char*)evidence_bin.data, evidence_bin.size);
+    nvat_nonce_t nonce = NULL;
+    if (nonce_hex != NULL) {
+        err = nvat_nonce_from_hex(&nonce, nonce_hex);
+        free(nonce_hex);
+        if (err != NVAT_RC_OK) {
+            nvat_attestation_ctx_free(&ctx);
+            return make_error(env, "failed to parse nonce from evidence");
+        }
+    }
+    
+    /* Perform attestation verification with extracted nonce */
     nvat_str_t detached_eat = NULL;
     nvat_claims_collection_t claims = NULL;
-    err = nvat_attest_device(ctx, NULL, &detached_eat, &claims);
+    err = nvat_attest_device(ctx, nonce, &detached_eat, &claims);
+    
+    /* Free nonce after use */
+    if (nonce) nvat_nonce_free(&nonce);
     
     /* Check if verification succeeded */
     int verification_success = (err == NVAT_RC_OK);
