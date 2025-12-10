@@ -694,7 +694,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 )
             };
         {_, <<"manifest@1.0">>, _} ->
-            MessageID = hb_message:id(Message, signed),
+            MessageID = hb_message:id(Message, signed, Opts),
             {
                 307,
                 #{
