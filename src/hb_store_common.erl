@@ -1,21 +1,14 @@
 %% @doc Store standard library
 %%
-%% Common store access patterns should be defined here.
-%%
-%% TODO:
-%% - Make tests for stores more generic, avoid individual tests (there are some in S3 that can be applied to LMDB).
+%% Common patterns to access Stores (File System, LMDB, etc).
 
 -module(hb_store_common).
--export([resolve/2, store_read/3]).
+-export([store_read/3]).
 -export([resolved_list/2, resolved_type/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% Old version, to be deleted before merge
-resolved_list2(Store, Path) ->
-    ResolvedPath = hb_store:resolve(Store, Path),
-    hb_store:list(Store, ResolvedPath).
-
+%% @doc Unify resolve and list functions into one call.
 resolved_list(Stores, Path) when is_list(Stores) ->
     do_resolved_list(Stores, Path);
 resolved_list(Store, Path) -> 
@@ -31,12 +24,7 @@ do_resolved_list([Store|RemainingStores], Path) ->
         not_found -> do_resolved_list(RemainingStores, Path)
     end.
 
-%% Old version, to be deleted before merge
-resolved_type2(Store, Path) -> 
-    ResolvedPath = hb_store:resolve(Store, Path),
-    ?event({resolved_type, {path, Path}, {resolved_path, ResolvedPath}}),
-    hb_store:type(Store, ResolvedPath).
-
+%% @doc Unify resolve and type functions into one call.
 resolved_type(Stores, Path) when is_list(Stores) ->
     do_resolved_type(Stores, Path);
 resolved_type(Store, Path) -> 
@@ -49,19 +37,6 @@ do_resolved_type([Store|RemainingStores], Path) ->
     case hb_store:type(Store, ResolvedPath) of 
         Result when Result =/= not_found -> Result;
         _ -> do_resolved_type(RemainingStores, Path)
-    end.
-
-%% TODO: This should replace the retry logic in the `hb_store:resolve` 
-resolve(Store, Opts) when not is_list(Store) ->
-    resolve([Store], Opts);
-resolve(Stores, Path) -> 
-    do_resolve(Stores, Path).
-
-do_resolve([], _Path) -> false;
-do_resolve([Store|RemainingStores], Path) ->
-    case hb_store:type(Store, Path) of
-        not_found -> false;
-        _ -> {true, hb_store:resolve(RemainingStores, Path)}
     end.
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
