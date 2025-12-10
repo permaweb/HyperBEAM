@@ -284,7 +284,6 @@ static ERL_NIF_TERM collect_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF
     
     /* Build result JSON */
     json result;
-    result["nonce"] = nonce_str;
     result["verified"] = verified;
     
     try {
@@ -317,7 +316,7 @@ static ERL_NIF_TERM collect_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF
  * The evidence JSON already contains the nonce used during collection.
  * Input: Evidence JSON (binary)
  * Output: {ok, JSON} | {error, Reason}
- *         JSON contains: valid, claims, eat
+ *         JSON contains: verified, claims, eat
  * ============================================================================ */
 static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     nvat_rc_t err = ensure_sdk_initialized();
@@ -417,7 +416,7 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
     nvat_claims_collection_t raw_claims = nullptr;
     err = nvat_attest_device(*ctx.get(), *nonce.get(), &raw_eat, &raw_claims);
     
-    bool valid = (err == NVAT_RC_OK);
+    bool verified = (err == NVAT_RC_OK);
     nvat_ptr<nvat_str_t> eat(&raw_eat);
     nvat_ptr<nvat_claims_collection_t> claims(&raw_claims);
     
@@ -445,7 +444,7 @@ static ERL_NIF_TERM verify_evidence_nif(ErlNifEnv* env, int argc, const ERL_NIF_
     
     /* Build result JSON */
     json result;
-    result["valid"] = valid;
+    result["verified"] = verified;
     
     try {
         result["claims"] = json::parse(claims_json);

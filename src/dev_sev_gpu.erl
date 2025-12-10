@@ -101,45 +101,37 @@ generate_test() ->
         {ok, ResultJSON} ->
             ?assert(is_binary(ResultJSON)),
             ?assert(byte_size(ResultJSON) > 0),
-            %% Verify it's valid JSON with expected structure
             case hb_json:decode(ResultJSON) of
-                #{<<"evidences">> := _, <<"verified">> := _} ->
+                #{<<"evidences">> := _, <<"verified">> := true} ->
                     ?assert(true);
                 _ ->
-                    ?assert(true)  %% Accept any valid JSON
+                    ?assert(false)
             end;
-        {error, nif_not_loaded} ->
-            %% NIF not available (development without GPU)
-            ?assert(true);
-        {error, {nvat_error, _}} ->
+        {error, _} ->
             %% GPU not available or attestation not supported
-            ?assert(true);
-        Other ->
-            ?assertEqual({ok, result}, Other)
+            ?assert(false)
     end.
 
 verify_test() ->
     case generate(#{}, #{nonce => ?TEST_MOCK_NONCE}, #{}) of
         {ok, ResultJSON} ->
-            %% Extract evidences from the generate result
             case hb_json:decode(ResultJSON) of
                 #{<<"evidences">> := Evidences} ->
-                    %% Evidence JSON contains the nonce from generation
                     VerifyMsg = #{<<"body">> => hb_json:encode(Evidences)},
                     case verify(#{}, VerifyMsg, #{}) of
-                        {ok, _} -> ?assert(true);
-                        {error, _} -> ?assert(true)
+                        {ok, VerifyResultJSON} ->
+                            case hb_json:decode(VerifyResultJSON) of
+                                #{<<"verified">> := true} ->
+                                    ?assert(true);
+                                _ ->
+                                    ?assert(false)
+                            end;
+                        {error, _} ->
+                            ?assert(false)
                     end;
                 _ ->
-                    %% If no evidences field, try verifying the whole result
-                    VerifyMsg = #{<<"body">> => ResultJSON},
-                    case verify(#{}, VerifyMsg, #{}) of
-                        {ok, _} -> ?assert(true);
-                        {error, _} -> ?assert(true)
-                    end
+                    ?assert(false)
             end;
-        {error, nif_not_loaded} ->
-            ?assert(true);
-        {error, {nvat_error, _}} ->
-            ?assert(true)
+        {error, _} ->
+            ?assert(false)
     end.
