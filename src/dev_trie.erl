@@ -29,8 +29,6 @@ info() ->
         default => fun get/4
      }.
 
-keys(Trie) ->
-    keys(Trie, #{}).
 keys(Trie, Opts) ->
     collect_keys(Trie, <<>>, Opts, []).
 
@@ -46,7 +44,7 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
     IsTerminal = IsLeafTerminal orelse IsInteriorTerminal,
     NewAcc =
         case IsTerminal of
-            true -> [Prefix | Acc];
+            true -> [Prefix|Acc];
             false -> Acc
         end,
     lists:foldl(
