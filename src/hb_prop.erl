@@ -30,6 +30,7 @@ run_state_machines(#{ runs := 0 }) ->
 run_state_machines(Spec = #{ runs := Runs }) ->
     InitialState = generate_initial_state(Spec),
     ResSequence = state_machine_loop(Spec#{ state => InitialState }),
+    ?event({run_result, ResSequence}),
     case lists:last(ResSequence) of
         {error, _Type, _Reason} ->
             {failure, InitialState, ResSequence};
@@ -40,13 +41,12 @@ run_state_machines(Spec = #{ runs := Runs }) ->
             run_state_machines(Spec#{ runs => Runs - 1 })
     end.
 
-state_machine_loop(#{ seq_len := 0 }) -> ok;
-state_machine_loop(Spec) ->
+state_machine_loop(#{ seq_len := 0 }) -> [ok];
+state_machine_loop(Spec = #{ seq_len := SeqLen }) ->
     Req = generate_request(Spec),
     ?event(
         {evaluating_request,
-            {request, Req},
-            {specification, Spec}
+            {request, Req}
         }
     ),
     case execute_request(Spec, Req) of
@@ -55,11 +55,8 @@ state_machine_loop(Spec) ->
         Result ->
             case enforce_properties(Spec, Req, Result) of
                 ok ->
-                    [
-                        Req
-                    |
-                        state_machine_loop(apply_result(Spec, Req, Result))
-                    ];
+                    NextSpec = apply_next(Spec, Req, Result),
+                    [Req|state_machine_loop(NextSpec#{ seq_len => SeqLen - 1 })];
                 {error, Type, Reason} ->
                     [Req, {error, Type, Reason}]
             end
@@ -96,11 +93,7 @@ enforce_properties([Property | Properties], Req, Result, Spec) ->
     case {enforce_property(Property, Req, Result, Spec), Result} of
         {downgrade, {ok, NewState, _NewModelState}} ->
             ?event(
-                {falling_back_to_primary_state_enforcement,
-                    {property, Property},
-                    {request, Req},
-                    {new_state, NewState}
-                }
+                {falling_back_to_primary_state_enforcement, Property}
             ),
             case enforce_property(Property, Req, {ok, NewState}, Spec) of
                 X when X =:= ok orelse X =:= skip ->
@@ -158,11 +151,11 @@ enforce_property(
         error:function_clause -> skip
     end.
 
-apply_result(Spec = #{ next := undefined, model_state := undefined }, _, {ok, NewState}) ->
+apply_next(Spec = #{ next := undefined, model_state := undefined }, _, {ok, NewState}) ->
     Spec#{ state => NewState };
-apply_result(Spec = #{ next := undefined }, _, {ok, NewState, NewModelState}) ->
+apply_next(Spec = #{ next := undefined }, _, {ok, NewState, NewModelState}) ->
     Spec#{ model_state => NewModelState, state => NewState };
-apply_result(
+apply_next(
         Spec = #{
             next := Next,
             state := OldState,
@@ -175,7 +168,7 @@ apply_result(
         state => Next(OldState, Req, NewState, Opts),
         model_state => Next(OldModelState, Req, NewModelState, Opts)
     };
-apply_result(
+apply_next(
         Spec = #{
             next := Next,
             state := OldState,
@@ -228,7 +221,7 @@ float(big) -> rand:uniform_real() * (2 * ?BIG_INT_MAX);
 float(Max) -> rand:uniform_real() * (2 * Max).
 
 string() -> string(?STRING_MAX_LENGTH).
-string(MaxLen) -> string(MaxLen, 65, 90, [$/]).
+string(MaxLen) -> string(MaxLen, 97, 122, [$/]).
 string(MaxLen, MinChar, MaxChar, Forbidden) ->
     <<
         <<(pick(MinChar, MaxChar, Forbidden)):8>>

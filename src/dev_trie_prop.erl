@@ -54,33 +54,18 @@ properties() ->
     ].
 
 verify_set(_O1, _O2, Req = #{ <<"path">> := <<"set">> }, New1, New2, Opts) ->
-    ?event(
-        {retrievability,
-            {request, Req},
-            {new_state, New1},
-            {new_model_state, New2}
-        }
-    ),
+    ?event({verify, retrievability}),
     [Key] = hb_maps:keys(Req, Opts) -- [<<"path">>],
     hb_ao:resolve(New1, Key, Opts) == hb_ao:resolve(New2, Key, Opts).
 
 verify_size(Old, #{ <<"path">> := <<"set">> }, New, Opts) ->
-    ?event(
-        {size,
-            {old_state, Old},
-            {new_state, New}
-        }
-    ),
     NumNewKeys = length(hb_ao:keys(New, Opts)),
     NumOldKeys = length(hb_ao:keys(Old, Opts)),
+    ?event({verify, size, {new_count, NumNewKeys}, {old_count, NumOldKeys}}),
     (NumNewKeys == NumOldKeys) orelse (NumNewKeys == NumOldKeys + 1).
 
 verify_commitments(_, #{ <<"path">> := <<"set">> }, New, Opts) ->
-    ?event(
-        {commitments,
-            {new_state, New}
-        }
-    ),
+    ?event({verify, commitments}),
     hb_message:verify(New, all, Opts).
 
 next(_OldS, #{ <<"path">> := <<"set">> }, NewS, _Opts) -> NewS;
