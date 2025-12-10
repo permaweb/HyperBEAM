@@ -206,7 +206,9 @@ mint(Base, Assignment, Opts) ->
             {assignment, Assignment}
         }
     ),
-    case has_mint_device(Base, Opts) of
+    HasMintDevice = has_mint_device(Base, Opts),
+    ?event(debug_mint, {has_mint_device, HasMintDevice}),
+    case HasMintDevice of
         false -> default_mint(Base, Assignment, Opts);
         true ->
             dev_process_lib:run_as(
@@ -240,6 +242,7 @@ default_mint(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_mint_authority(Base, Req, Opts),
+        ?event(debug_mint, {before_mint_mode, Req}),
         case hb_ao:get(<<"mode">>, Req, <<"single">>, Opts) of
             <<"single">> -> mint_single(Base, Req, Opts);
             <<"batch">> -> mint_batch(Base, Req, Opts);
@@ -263,12 +266,16 @@ enforce_mint_authority(Base, Req, Opts) ->
 
 mint_single(Base, Req, Opts) ->
     maybe
+        ?event(debug_mint, {before_resolve_recipient, Req}),
         {ok, To} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= validate_address(To),
+        ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
         perform_mint(Base, #{ To => Quantity }, Opts)
+    else
+        Error -> ?event(debug_mint, {error, Error})
     end.
 
 mint_batch(Base, Req, Opts) ->

@@ -90,7 +90,8 @@ drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last ->
 drip_global(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
-        <<"mint-prop">> := {PropN, PropD}
+        <<"mint-prop-numerator">> := PropN,
+        <<"mint-prop-denominator">> := PropD
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
@@ -106,13 +107,14 @@ drip_global(S = #{
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    ?event(debug_test, {drip_global, {t, T}, {last_drip, LastT}, {minted, AlreadyMinted}, {undistributed_mint, UndistributedMint}, {total_weighted_units, TotalWeightedUnits}, {global_accumulator, GlobalAcc}, {to_mint, ToMint}}, Opts),
     {NewGlobalAcc, NewUndistributedMint} =
         dev_pot_math:drip_global(
             GlobalAcc,
             ToMint + UndistributedMint,
             TotalWeightedUnits
         ),
-    ?event(
+    ?event(debug_test,
         {minting,
             {to_mint, ToMint},
             {total_weighted_units, TotalWeightedUnits},
@@ -570,6 +572,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    ?event(debug_test_state, {modify_deposit_state, {dripped_s, DrippedS}}, Opts),
     ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
@@ -611,7 +614,8 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
     NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
-    NewBalances = Balances#{ Addr => NewBalance },
+    ?event(debug_test_state, {modify_deposit_state, {balances, Balances}, {addr, Addr}, {resource_id, ResourceID}, {amount, Amount}, {new_total_weighted_units, NewTotalWeightedUnits}, {new_balance, NewBalance}}, Opts),
+    NewBalances = hb_maps:merge(Balances, #{ Addr => NewBalance }, Opts),
     UpdateValues = 
         #{
             <<"resources">> => NewResources,

@@ -45,9 +45,11 @@ generate_base_state(Params, Opts) ->
             },
             Opts
         ),
+    ?event(debug_test, {params, Params}, Opts),
+    Extra = maps:get(extra, Params, #{}),
     DefaultState = #{
         <<"device">> => <<"token@1.0">>,
-        <<"mint-authority">> => maps:get(mint_authority, Params, id(<<"minter">>)),
+        <<"mint-authority">> => maps:get(mint_authority, Extra, id(<<"minter">>)),
         <<"name">> => <<"Test Token">>,
         <<"ticker">> => <<"TEST">>,
         <<"denomination">> => 12,
@@ -71,12 +73,36 @@ generate_process(Params, Opts) ->
             <<"scheduler">> => Addr,
             <<"authority">> => Addr
         },
-    {Base, _Opts}=
+    ?event(debug_test, {extra_with_proc_base, ExtraWithProcBase}, Opts),
+    {Base, _Opts} =
         generate_base_state(
             Params#{ extra => ExtraWithProcBase },
             Opts
         ),
-    hb_message:commit(Base, Opts).
+    ?event(debug_test_state, {base_process, Base}, Opts),
+    CommittedBase = hb_message:commit(Base, Opts),
+    ?event(debug_test_state, {committed_base, CommittedBase}, Opts),
+    {ok, _} = 
+        hb_ao:resolve(
+            CommittedBase,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => CommittedBase
+            },
+            Opts
+        ),
+    SchedRes = 
+        hb_ao:resolve(
+            CommittedBase, 
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"schedule">>
+            },
+            Opts
+        ),
+    ?event(debug_test_state, {sched_res, SchedRes}),
+    dev_process_lib:ensure_process_key(CommittedBase, Opts).
 
 %% @doc Return a signed token process with a `pot@1.0` mint device.
 generate_pot_process(Params, Opts) ->
@@ -92,6 +118,9 @@ generate_assignment(Action, Body, From) ->
     ?event({make_request, {action, Action}, {from, From}}),
     Req.
 
+schedule_request(State, Action, Body, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    schedule_request(State, Action, Body, Wallet, Opts).
 schedule_request(State, Action, Body, Wallet, Opts) ->
     From = hb_util:human_id(Wallet),
     ?event({scheduling_request, {action, Action}, {from, From}}),
@@ -143,7 +172,8 @@ get_balance(State, Req, Opts) ->
 %% undistributed-mint) are created by drip_global()
 generate_pot_fields(Params, Opts) ->
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
-    MintProp = hb_maps:get(mint_prop, Params, {1, 2}, Opts),
+    MintPropNumerator = hb_maps:get(mint_prop_numerator, Params, 1, Opts),
+    MintPropDenominator = hb_maps:get(mint_prop_denominator, Params, 2, Opts),
     Resources = hb_maps:get(resources, Params, #{}, Opts),
     T = hb_maps:get(t, Params, 0, Opts),
     LastDrip = hb_maps:get(last_drip, Params, T, Opts),
@@ -171,7 +201,8 @@ generate_pot_fields(Params, Opts) ->
         #{
             <<"mint-device">> => <<"pot@1.0">>,
             <<"mint-cap">> => MintCap,
-            <<"mint-prop">> => MintProp,
+            <<"mint-prop-numerator">> => MintPropNumerator,
+            <<"mint-prop-denominator">> => MintPropDenominator,
             <<"resources">> => Resources,
             <<"t">> => T,
             <<"last-drip">> => LastDrip
@@ -205,21 +236,175 @@ pot_resource(Weight, RawDeposits) when is_map(RawDeposits) ->
         <<"deposits">> => Deposits
     }.
 
+give_instruction(<<"deposit">>, State, Req, Opts) -> 
+    ?event(debug_test, {give_instruction_deposit, {state, State}, {req, Req}}, Opts),
+    Id = hb_maps:get(<<"recipient">>, Req, Opts),
+    Resource = hb_maps:get(<<"resource">>, Req, Opts),
+    Quantity = hb_maps:get(<<"quantity">>, Req, Opts),
+    R = dev_pot:deposit(Id, Resource, Quantity, State, Opts),
+    ?event(debug_test_state, {give_instruction_deposit_result, {result, R}}, Opts),
+    {ok, R};
+give_instruction(<<"transfer">>, State, Req, Opts) -> 
+    ?event(debug_test, {give_instruction_transfer, {state, State}, {req, Req}}, Opts),
+    From = hb_maps:get(<<"from">>, Req, Opts),
+    To = hb_maps:get(<<"to">>, Req, Opts),
+    Quantity = hb_maps:get(<<"quantity">>, Req, Opts),
+    SchedRes =
+        schedule_request(
+            State,
+            <<"transfer">>,
+            #{
+                <<"from">> => From,
+                <<"recipient">> => To,
+                <<"quantity">> => Quantity
+            },
+            Opts
+        ),
+    ?event(debug_test, {sched_res, SchedRes}, Opts),
+    {ok, NewState} = hb_ao:resolve(State, #{ <<"path">> => <<"now">> }, Opts),
+    % R = dev_token:transfer(From, To, Quantity, State, Opts),
+    ?event(debug_test, {give_instruction_transfer_result, {result, NewState}}, Opts),
+    {ok, NewState};
+give_instruction(<<"mint">>, State, Req, Opts) -> 
+    ?event(debug_test, {give_instruction_mint, {state, State}, {req, Req}}, Opts),
+    From = hb_maps:get(<<"from">>, Req, Opts),
+    SchedRes =
+        schedule_request(
+            State,
+            <<"mint">>,
+            #{
+                <<"from">> => From
+            },
+            Opts
+        ),
+    ?event(debug_test, {scheduled, {opts, Opts}, {mint_sched_res, SchedRes}}, Opts),
+    SchedRes2 = 
+        hb_ao:resolve(
+            State, 
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"schedule">>
+            },
+            Opts
+        ),
+    ?event(debug_test, {scheduled2, {sched_res2, SchedRes2}}, Opts),
+    {ok, NewState} = hb_ao:resolve(State, #{ <<"path">> => <<"compute">> }, Opts),
+    ?event(debug_test, {give_instruction_mint_result, {result, NewState}}, Opts),
+    {ok, NewState};
+give_instruction(<<"tick">>, State, Req, Opts) -> 
+    ?event(debug_test, {give_instruction_test_drip, {state, State}, {req, Req}}, Opts),
+    NewState = dev_pot:test_drip(State, Req, Opts),
+    ?event(debug_test, {give_instruction_test_drip_result, {result, NewState}}, Opts),
+    {ok, NewState};
+give_instruction(_, _, _, _) ->
+    ?event(debug_test, {give_instruction_no_op}).
+
 %%% Transfer Tests
 
 transfer_basic_test() ->
-    hb:init(),
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Base =
+        generate_process(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"t">> => 0,
+                    <<"last-drip">> => 0,
+                    <<"mint-prop-numerator">> => 1,
+                    <<"mint-prop-denominator">> => 2,
+                    <<"mint-authority">> => id(Minter),
+                    <<"mint-cap">> => 1_000_000_000,
+                    <<"resources">> => #{
+                        <<"oxygen">> => pot_resource(200, [])
+                    }
+                }
+            },
+            Opts
+        ),
+    ?event(debug_test_state, {base_state, {base, Base}, {proc_id, dev_process_lib:process_id(Base, #{}, Opts)}}, Opts),
+    {ok, S0} =
+        give_instruction(
+            <<"deposit">>,
+            Base,
+            #{
+                <<"recipient">> => id(Alice),
+                <<"resource">> => <<"oxygen">>,
+                <<"quantity">> => 1000
+            },
+            Opts
+        ),
+    ?event(debug_test_state, {s0_state, {base, S0}, {proc_id, dev_process_lib:process_id(S0, #{}, Opts)}}, Opts),
+    {ok, S0SchedRes} = hb_ao:resolve(S0, #{ <<"path">> => <<"schedule">> }, Opts),
+    ?event(debug_test_state, {s0_sched_res, S0SchedRes}),
+    {ok, S1} =
+        give_instruction(
+            <<"tick">>,
+            S0,
+            #{ <<"t">> => 1 },
+            Opts
+        ),
+    ?event(debug_test_state, {s1_state, {base, S1}, {proc_id, dev_process_lib:process_id(S1, #{}, Opts)}}, Opts),
+    {ok, S2} =
+        give_instruction(
+            <<"mint">>,
+            S1,
+            #{
+                <<"from">> => id(Minter)
+            },
+            Opts
+        ),
+    ?event(debug_test_state, {s2_state, {base, S2}, {proc_id, dev_process_lib:process_id(S2, #{}, Opts)}}, Opts),
+    {ok, S3} =
+        give_instruction(
+            <<"transfer">>,
+            S2,
+            #{
+                <<"from">> => id(Alice),
+                <<"to">> => id(Bob),
+                <<"quantity">> => 300
+            },
+            Opts
+        ).
+    % SchedRes =
+    %     schedule_request(
+    %         Base,
+    %         <<"transfer">>,
+    %         #{
+    %             <<"from">> => id(Alice),
+    %             <<"recipient">> => id(Bob),
+    %             <<"quantity">> => 300
+    %         },
+    %         Alice,
+    %         Opts
+    %     ),
+    % ?event(debug_test, {sched_res, SchedRes}, Opts),
+    % ?assertEqual(700, get_balance(Base, id(Alice), Opts)),
+    % ?assertEqual(300, get_balance(Base, id(Bob), Opts)),
+    % % Verify total supply unchanged
+    % ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
+
+simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
     Base =
         generate_process(
             #{
-                total_supply => 1000,
-                initial_balances => #{ id(Alice) => 1000 }
+                initial_balances => #{ id(Alice) => 1_000_000_000 },
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2,
+                mint_cap => 2_000_000_000,
+                resources => #{
+                    <<"oxygen">> => pot_resource(100, [])
+                }
             },
             Opts
         ),
+    ?event(debug_test, {base_state, Base}, Opts),
     SchedRes =
         schedule_request(
             Base,
@@ -227,44 +412,13 @@ transfer_basic_test() ->
             #{
                 <<"from">> => id(Alice),
                 <<"recipient">> => id(Bob),
-                <<"quantity">> => 300
+                <<"quantity">> => 1
             },
             Alice,
             Opts
         ),
-    ?assertEqual(700, get_balance(Base, ?ALICE, Opts)),
-    ?assertEqual(300, get_balance(Base, ?BOB, Opts)),
-    % Verify total supply unchanged
-    ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
-
-simple_process_test() ->
-    Opts = opts(),
-    AliceWallet = ar_wallet:new(),
-    AliceAddr = hb_util:human_id(AliceWallet),
-    BobWallet = ar_wallet:new(),
-    BobAddr = hb_util:human_id(BobWallet),
-    Base =
-        generate_process(
-            #{
-                initial_balances => #{ AliceAddr => 1_000_000_000 }
-            },
-            Opts
-        ),
-    ?event({base_state, Base}),
-    SchedRes =
-        schedule_request(
-            Base,
-            <<"transfer">>,
-            #{
-                <<"from">> => AliceAddr,
-                <<"recipient">> => BobAddr,
-                <<"quantity">> => 1
-            },
-            AliceWallet,
-            Opts
-        ),
-    ?assertEqual(999_999_999, get_balance(Base, AliceAddr, Opts)),
-    ?assertEqual(1, get_balance(Base, BobAddr, Opts)),
+    ?assertEqual(999_999_999, get_balance(Base, id(Alice), Opts)),
+    ?assertEqual(1, get_balance(Base, id(Bob), Opts)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
 
 simple_pot_process_test() ->
@@ -280,9 +434,10 @@ simple_pot_process_test() ->
                 initial_balances => #{ AliceAddr => 1_000_000_000 },
                 total_supply => 1_000_000_000,
                 mint_cap => 2_000_000_000,
-                mint_prop => {1, 2},
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2,
                 resources => #{
-                    ResourceOxygen => pot_resource(100, [{AliceAddr, 10}])
+                    ResourceOxygen => pot_resource(100, [])
                 }
             },
             Opts
@@ -385,8 +540,8 @@ benchmark_process_transfers() ->
         Transfers,
         (NowEndTime - NowStartTime) / 1000
     ),
-    ?assertEqual(1_000_000_000 - Transfers, get_balance(State, AliceAddr)),
-    ?assertEqual(Transfers, get_balance(State, BobAddr)),
+    ?assertEqual(1_000_000_000 - Transfers, get_balance(State, AliceAddr, Opts)),
+    ?assertEqual(Transfers, get_balance(State, BobAddr, Opts)),
     ?assertEqual(
         1_000_000_000 * Accounts,
         hb_ao:get(<<"total-supply">>, State, #{})

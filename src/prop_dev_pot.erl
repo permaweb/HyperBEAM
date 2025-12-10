@@ -66,7 +66,8 @@ initial_state() ->
             <<"t">> => 0,
             <<"last-drip">> => 0,
             <<"mint-cap">> => MintCap,
-            <<"mint-prop">> => {PropN, PropD},
+            <<"mint-prop-numerator">> => PropN,
+            <<"mint-prop-denominator">> => PropD,
             <<"resources">> => #{
                 StartResource => #{
                     <<"weight">> => StartWeight,
