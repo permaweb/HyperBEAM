@@ -390,7 +390,6 @@ claim_yield_single_resource_test() ->
     AliceWallet = ar_wallet:new(),
     AliceAddr = id(AliceWallet),
     ResourceOxygen = <<"oxygen">>,
-    % Alice has deposits in pot but hasn't claimed yet
     PotFields = #{
         mint_cap => 10000,
         mint_prop_numerator => 1,
@@ -410,12 +409,6 @@ claim_yield_single_resource_test() ->
             Opts
         ),
     ?event({new_base, NewBase}),
-    % Advance time to generate yield
-    % ToMint = 10000 * (2^1 - 1) / 2 = 5000
-    % GlobalAcc = 5000 / 1000 = 5
-    % ResourceAcc = 5 * 100 = 500
-    % Alice's yield = 500 * 10 = 5000
-    % Call claim_yield directly
     schedule_request(
         NewBase,
         <<"mint">>,
@@ -489,19 +482,6 @@ claim_yield_multiple_resources_test() ->
             Base, 
             Opts
         ),
-    % Advance time to t=1
-    % ToMint = 5000
-    % GlobalAcc = 5000 / 1500 = 3.333... (TWU = 100*10 + 50*5 = 1250)
-    % Wait, TWU should be weight * total-deposits
-    % Oxygen: weight=100, deposits=10, weighted=1000
-    % Hydrogen: weight=50, deposits=5, weighted=250
-    % TWU = 1250
-    % GlobalAcc = 5000 / 1250 = 4
-    % OxygenAcc = 4 * 100 = 400
-    % HydrogenAcc = 4 * 50 = 200
-    % Alice oxygen yield = 400 * 10 = 4000
-    % Alice hydrogen yield = 200 * 5 = 1000
-    % Total yield = 5000
     schedule_request(
         NewBase,
         <<"mint">>,
@@ -522,9 +502,7 @@ claim_yield_multiple_resources_test() ->
             Opts
         ),
     AliceBalance = get_balance(ResultAfterClaimAll, AliceAddr),
-    % Alice should have: 500 + 5000 = 5500
     ?assertEqual(5500, AliceBalance),
-    % Total supply should be updated
     ?assertEqual(5500, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)

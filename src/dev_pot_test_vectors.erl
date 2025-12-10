@@ -8,9 +8,9 @@
 %% @doc Create a pot state with one user
 %% Example: pot_state(Alice, ResourceOxygen, 10)
 pot_state(User, Resource, Quantity) ->
-    pot_state(User, Resource, Quantity, 1, 100, {1, 2}).
+    pot_state(User, Resource, Quantity, 1, 100, 1, 2).
 
-pot_state(User, Resource, Quantity, Weight, MintCap, MintProp) ->
+pot_state(User, Resource, Quantity, Weight, MintCap, MintPropN, MintPropD) ->
     Deposits = #{
         User => #{
             <<"quantity">> => Quantity,
@@ -30,7 +30,8 @@ pot_state(User, Resource, Quantity, Weight, MintCap, MintProp) ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => MintCap,
-        <<"mint-prop">> => MintProp,
+        <<"mint-prop-numerator">> => MintPropN,
+        <<"mint-prop-denominator">> => MintPropD,
         <<"resources">> => Resources,
         <<"balances">> => #{},
         <<"total-weighted-units">> => TWU
@@ -39,9 +40,9 @@ pot_state(User, Resource, Quantity, Weight, MintCap, MintProp) ->
 %% @doc Create a pot state with multiple users on same resource
 %% Example: pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 5}])
 pot_state_multi(Resource, UserQuantities) ->
-    pot_state_multi(Resource, UserQuantities, 1, 100, {1, 2}).
+    pot_state_multi(Resource, UserQuantities, 1, 100, 1, 2).
 
-pot_state_multi(Resource, UserQuantities, Weight, MintCap, MintProp) ->
+pot_state_multi(Resource, UserQuantities, Weight, MintCap, MintPropN, MintPropD) ->
     Deposits = maps:from_list([
         {User, #{
             <<"quantity">> => Qty,
@@ -63,7 +64,8 @@ pot_state_multi(Resource, UserQuantities, Weight, MintCap, MintProp) ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => MintCap,
-        <<"mint-prop">> => MintProp,
+        <<"mint-prop-numerator">> => MintPropN,
+        <<"mint-prop-denominator">> => MintPropD,
         <<"resources">> => Resources,
         <<"balances">> => #{},
         <<"total-weighted-units">> => TWU
@@ -72,9 +74,9 @@ pot_state_multi(Resource, UserQuantities, Weight, MintCap, MintProp) ->
 %% @doc Create an empty pot state (no users, optionally with empty resources)
 %% Example: pot_state_empty() or pot_state_empty([ResourceOxygen])
 pot_state_empty(EmptyResources) ->
-    pot_state_empty(EmptyResources, 100, {1, 2}).
+    pot_state_empty(EmptyResources, 100, 1, 2).
 
-pot_state_empty(EmptyResources, MintCap, MintProp) ->
+pot_state_empty(EmptyResources, MintCap, MintPropN, MintPropD) ->
     Resources = maps:from_list([
         {R, #{
             <<"weight">> => 1,
@@ -88,7 +90,8 @@ pot_state_empty(EmptyResources, MintCap, MintProp) ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => MintCap,
-        <<"mint-prop">> => MintProp,
+        <<"mint-prop-numerator">> => MintPropN,
+        <<"mint-prop-denominator">> => MintPropD,
         <<"resources">> => Resources,
         <<"balances">> => #{}
     }.
@@ -155,7 +158,8 @@ multiple_resources_test() ->
         pot_state_empty(
             [Resource1, Resource2],
             1000,
-            {1, 2}
+            1, 
+            2
         ),
     % Set resource2 weight to 9
     S0Updated = 
@@ -253,7 +257,8 @@ simple_delegation_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"mint-cap">> => 100,
-        <<"mint-prop">> => {1, 2},
+        <<"mint-prop-numerator">> => 1,
+        <<"mint-prop-denominator">> => 2,
         <<"resources">> => #{
             ResourceHydrogen => #{
                 <<"weight">> => 1,
@@ -602,7 +607,7 @@ drip_resource_with_zero_weight_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     % Test that a resource with weight = 0 doesn't accumulate yield
-    S0 = pot_state(Alice, ResourceOxygen, 10, 0, 100, {1, 2}),
+    S0 = pot_state(Alice, ResourceOxygen, 10, 0, 100, 1, 2),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     ?assertEqual(0, dev_pot:balance(Alice, S1, Opts)).
 
@@ -942,7 +947,7 @@ change_weight_with_deposits_test() ->
     Opts = #{},
     % Changing weight should affect future yield distribution
     % Use larger mint cap to ensure enough tokens are minted
-    S0 = pot_state(Alice, ResourceOxygen, 10, 1, 1000, {1, 2}),
+    S0 = pot_state(Alice, ResourceOxygen, 10, 1, 1000, 1, 2),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing a deposit
     S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
@@ -1006,7 +1011,7 @@ accumulator_over_many_periods_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts =#{},
     % Test accumulator precision over 1000 time steps
-    S0 = pot_state(Alice, ResourceOxygen, 100, 1, 1000, {1, 100}),
+    S0 = pot_state(Alice, ResourceOxygen, 100, 1, 1000, 1, 100),
     SFinal = lists:foldl(
         fun(T, S) -> dev_pot:test_drip(S, #{<<"t">> => T}, Opts) end,
         S0,
@@ -1031,7 +1036,7 @@ very_small_deposit_yield_test() ->
             [{Alice, 1}, {Bob, 999}], 
             1, 
             100000, 
-            {1, 2}
+            1, 2
         ),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing minimal deposits
@@ -1201,7 +1206,7 @@ zero_mint_cap_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     % Mint-cap = 0 should mint nothing
-    S0 = pot_state(Alice, ResourceOxygen, 10, 1, 0, {1, 2}),
+    S0 = pot_state(Alice, ResourceOxygen, 10, 1, 0, 1, 2),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     ?assertEqual(0, Minted),
@@ -1212,7 +1217,7 @@ deposit_with_zero_mint_cap_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     % Can still deposit even with zero mint cap
-    S0 = pot_state_empty([ResourceOxygen], 0, {1, 2}),
+    S0 = pot_state_empty([ResourceOxygen], 0, 1, 2),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
     ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)).
 
@@ -1300,7 +1305,7 @@ very_large_minted_amount_test() ->
     Opts =#{},
     % Very large mint cap
     LargeMintCap = 999999999999999, % ~10^15
-    S0 = pot_state(Alice, ResourceOxygen, 100, 1, LargeMintCap, {1, 2}),
+    S0 = pot_state(Alice, ResourceOxygen, 100, 1, LargeMintCap, 1, 2),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     Minted = hb_maps:get(<<"minted">>, S1, 0, Opts),
     % Should mint large amount without overflow
