@@ -219,9 +219,14 @@ any(Types) -> (pick([ fun ?MODULE:Type/0 || Type <- Types ]))().
 
 pick(Int) when is_integer(Int) ->
     rand:uniform(Int);
-pick([]) -> error(cannot_pick_from_empty_list);
+pick([]) ->
+    error(cannot_pick_from_empty_list);
 pick(List) when is_list(List) ->
-    lists:nth(int(length(List)), List).
+    lists:nth(int(length(List)), List);
+pick(Map) when is_map(Map) andalso map_size(Map) == 0 ->
+    error(cannot_pick_from_empty_map);
+pick(Map) when is_map(Map) ->
+    pick(maps:values(Map)).
 pick(Min, Max, Forbidden) when is_list(Forbidden) ->
     case lists:member(X = int(Min, Max), Forbidden) of
       true -> pick(Min, Max, Forbidden);
