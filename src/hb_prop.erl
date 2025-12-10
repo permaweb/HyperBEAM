@@ -1,5 +1,5 @@
 -module(hb_prop).
--export([state_machine/1]).
+-export([forall/1, state_machine/1]).
 -export([any/0, any/1, pick/1]).
 -export([int/0, int/1, int/2, float/0, float/1]).
 -export([string/0, string/1, string/4, key/0, key/1]).
@@ -7,18 +7,21 @@
 
 %%% Test workflows.
 
--define(DEFAULT_PROPERTY_RUNS, 10).
--define(DEFAULT_PROPERTY_SEQ_LEN, 10).
+-define(DEFAULT_RUNS, 10).
+-define(DEFAULT_LENGTH, 10).
 
-state_machine(Spec = #{ request_gen := _ }) ->
+forall(Spec) ->
+    state_machine(Spec#{ length => hb_opts:get(length, 1, Spec) }).
+
+state_machine(Spec = #{ requests := _ }) ->
     run_state_machines(
         Spec#{
-            state => hb_opts:get(state, #{}, Spec),
-            model_state => hb_opts:get(model_state, undefined, Spec),
-            runs => hb_opts:get(property_runs, ?DEFAULT_PROPERTY_RUNS, Spec),
-            seq_len => hb_opts:get(property_seq_len, ?DEFAULT_PROPERTY_SEQ_LEN, Spec),
+            states => hb_opts:get(states, undefined, Spec),
+            models => hb_opts:get(models, undefined, Spec),
             properties => hb_opts:get(properties, [], Spec),
             next => hb_opts:get(next, undefined, Spec),
+            runs => hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
+            length => hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
             opts => hb_opts:get(opts, #{}, Spec)
         }
     );
@@ -29,7 +32,15 @@ run_state_machines(#{ runs := 0 }) ->
     ok;
 run_state_machines(Spec = #{ runs := Runs }) ->
     InitialState = generate_initial_state(Spec),
-    ResSequence = state_machine_loop(Spec#{ state => InitialState }),
+    ?event({generated_initial_state, InitialState}),
+    InitialModelState = generate_initial_model_state(Spec),
+    ResSequence =
+        state_machine_loop(
+            Spec#{
+                state => InitialState,
+                model_state => InitialModelState
+            }
+        ),
     ?event({run_result, ResSequence}),
     case lists:last(ResSequence) of
         {error, _Type, _Reason} ->
@@ -41,8 +52,8 @@ run_state_machines(Spec = #{ runs := Runs }) ->
             run_state_machines(Spec#{ runs => Runs - 1 })
     end.
 
-state_machine_loop(#{ seq_len := 0 }) -> [ok];
-state_machine_loop(Spec = #{ seq_len := SeqLen }) ->
+state_machine_loop(#{ length := 0 }) -> [ok];
+state_machine_loop(Spec = #{ length := SeqLen }) ->
     Req = generate_request(Spec),
     ?event(
         {evaluating_request,
@@ -56,28 +67,34 @@ state_machine_loop(Spec = #{ seq_len := SeqLen }) ->
             case enforce_properties(Spec, Req, Result) of
                 ok ->
                     NextSpec = apply_next(Spec, Req, Result),
-                    [Req|state_machine_loop(NextSpec#{ seq_len => SeqLen - 1 })];
+                    [Req|state_machine_loop(NextSpec#{ length => SeqLen - 1 })];
                 {error, Type, Reason} ->
                     [Req, {error, Type, Reason}]
             end
     end.
 
-generate_initial_state(#{ state := Gen, opts := Opts }) when is_function(Gen) ->
-    Gen(Opts);
-generate_initial_state(#{ state := InitialState }) ->
-    InitialState.
+generate_initial_state(#{ states := Gen, opts := Opts }) ->
+    execute_generator(Gen, [Opts]).
 
-generate_request(#{ request_gen := RequestGen, state := State, opts := Opts }) ->
-    generate_request(State, RequestGen, Opts).
-generate_request(State, RequestGen, Opts) when is_list(RequestGen) ->
-    generate_request(State, pick(RequestGen), Opts);
-generate_request(State, RequestGen, Opts) when is_function(RequestGen) ->
-    RequestGen(State, Opts).
+generate_initial_model_state(#{ models := undefined }) ->
+    undefined;
+generate_initial_model_state(#{ models := Gen, opts := Opts }) ->
+    execute_generator(Gen, [Opts]).
+
+generate_request(#{ requests := Gen, state := State, opts := Opts }) ->
+    execute_generator(Gen, [State, Opts]).
+
+execute_generator(Generators, Args) when is_list(Generators) ->
+    execute_generator(pick(Generators), Args);
+execute_generator(Generator, Args) when is_function(Generator) ->
+    apply(Generator, Args);
+execute_generator(ExplicitResult, _) ->
+    ExplicitResult.
 
 execute_request(#{ model_state := undefined, state := State, opts := Opts }, Req) ->
-    hb_ao:resolve(State, Req, Opts);
+    do_request(State, Req, Opts);
 execute_request(#{ model_state := ModelState, state := State, opts := Opts }, Req) ->
-    case {hb_ao:resolve(State, Req, Opts), hb_ao:resolve(ModelState, Req, Opts)} of
+    case {do_request(State, Req, Opts), do_request(ModelState, Req, Opts)} of
         {{ok, NewState}, {ok, NewModelState}} ->
             {ok, NewState, NewModelState};
         {{error, Reason}, _} ->
@@ -85,6 +102,13 @@ execute_request(#{ model_state := ModelState, state := State, opts := Opts }, Re
       {_, {error, Reason}} ->
             {error, model_request_error, Reason}
     end.
+
+do_request(State, Req, Opts) when is_function(Req) ->
+    Req(State, Opts);
+do_request(State, Req, Opts) when is_map(Req) ->
+    hb_ao:resolve(State, Req, Opts);
+do_request(_, DirectResult, _Opts) ->
+    DirectResult.
 
 enforce_properties(Spec = #{ properties := Properties }, Req, Result) ->
     enforce_properties(Properties, Req, Result, Spec).
@@ -114,7 +138,7 @@ enforce_properties([Property | Properties], Req, Result, Spec) ->
                 }
             ),
             enforce_properties(Properties, Req, Result, Spec);
-        {error, Reason} -> {error, {property_error, Property}, Reason}
+        {{error, Reason}, _} -> {error, {property_error, Property}, Reason}
     end.
 
 enforce_property(
