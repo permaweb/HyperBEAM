@@ -958,3 +958,109 @@ comma_separated_scheduler_list_test() ->
     % Alice has tokens on the root ledger. She moves them to Bob.
     transfer(Ledger, Alice, Bob, 100, Opts),
     ?assertEqual(100, balance(Ledger, Bob, Opts)).
+
+%%% Simulations and properties.
+
+-define(USERS, 5).
+-define(MAX_INITIAL_BALANCE, 1_000_000_000_000_000_000).
+-define(MAX_TRANSFER_AMOUNT, 1_000_000_000_000_000_000 div 5).
+
+simulation_test() ->
+    ok = hb_prop:state_machine(
+        #{
+            opts => fun generate_sim_opts/1,
+            states => fun generate_lua_sim_env/1,
+            requests => fun generate_sim_request/2,
+            properties =>
+                [
+                    fun verify_net_balance_unchanged/4,
+                    fun verify_no_negative_balances/4,
+                    fun verify_slot_increment/4
+                ],
+            runs => 3,
+            length => 4,
+            users => ?USERS
+        }
+    ).
+
+generate_sim_opts(#{ users := Users }) ->
+    BaseOpts = test_opts(),
+    NodeWallet = ar_wallet:new(),
+    BaseOpts#{
+        priv_wallet => NodeWallet,
+        identities =>
+            lists:foldl(
+                fun(_, IDs) ->
+                    UserWallet = ar_wallet:new(),
+                    ID = hb_util:human_id(UserWallet),
+                    IDs#{ ID => #{ priv_wallet => UserWallet } }
+                end,
+                #{},
+                lists:seq(1, Users)
+            )
+    }.
+
+user_wallets(Opts = #{ priv_wallet := NodeWallet }) ->
+    maps:filtermap(
+        fun(_, #{ priv_wallet := Wallet }) when Wallet == NodeWallet -> false;
+           (_, #{ priv_wallet := Wallet }) -> {true, Wallet}
+        end,
+        hb_opts:identities(Opts)
+    ).
+
+%% @doc Return a Lua Hyper-Token ledger process.
+generate_lua_sim_env(Opts) ->
+    ledger(
+        <<"scripts/hyper-token.lua">>,
+        #{ <<"balances">> => generate_initial_balances(Opts) },
+        Opts
+    ).
+
+generate_initial_balances(Opts) ->
+    hb_maps:map(
+        fun(_, _) -> hb_prop:int(?MAX_INITIAL_BALANCE) end,
+        user_wallets(Opts),
+        Opts
+    ).
+
+generate_sim_request(State, Opts) ->
+    transfer(
+        State,
+        SenderWallet = hb_prop:pick(user_wallets(Opts)),
+        RecipientWallet = hb_prop:pick(user_wallets(Opts)),
+        Amount = hb_prop:int(?MAX_TRANSFER_AMOUNT),
+        Opts
+    ),
+    #{
+        <<"path">> => <<"now">>,
+        <<"intent">> =>
+            #{
+                <<"action">> => <<"transfer">>,
+                <<"sender">> => hb_util:human_id(SenderWallet),
+                <<"recipient">> => hb_util:human_id(RecipientWallet),
+                <<"amount">> => Amount
+            }
+    }.
+
+verify_net_balance_unchanged(OldState, _Req, NewState, Opts) ->
+    supply(initial, OldState, Opts) =:= supply(initial, NewState, Opts).
+
+verify_no_negative_balances(_OldState, _Req, NewState, Opts) ->
+    lists:all(
+        fun(Wallet) ->
+            ID = hb_util:human_id(Wallet),
+            case hb_ao:get(<<"balances/", ID/binary>>, NewState, Opts) of
+                not_found -> true;
+                Balance -> Balance >= 0
+            end
+        end,
+        hb_maps:keys(user_wallets(Opts), Opts)
+    ).
+
+verify_slot_increment(OldState, _Req, NewState, Opts) ->
+    OldSlot = hb_ao:get(<<"at-slot">>, OldState, Opts),
+    NewSlot = hb_ao:get(<<"at-slot">>, NewState, Opts),
+    case OldSlot of
+        not_found -> true;
+        _ -> NewSlot > OldSlot
+    end.
