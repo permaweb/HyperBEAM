@@ -56,9 +56,9 @@ static nvat_rc_t ensure_sdk_initialized(void) {
         /* Create logger with configurable log level */
         nvat_logger_t logger = NULL;
 #ifdef NVAT_DEBUG_LOG
-        err = nvat_logger_spdlog_create(&logger, NVAT_LOG_LEVEL_DEBUG, NULL);
+        err = nvat_logger_spdlog_create(&logger, "dev_sev_gpu_nif", NVAT_LOG_LEVEL_DEBUG);
 #else
-        err = nvat_logger_spdlog_create(&logger, NVAT_LOG_LEVEL_ERROR, NULL);
+        err = nvat_logger_spdlog_create(&logger, "dev_sev_gpu_nif", NVAT_LOG_LEVEL_ERROR);
 #endif
         if (err == NVAT_RC_OK && logger != NULL) {
             nvat_sdk_opts_set_logger(opts, logger);
