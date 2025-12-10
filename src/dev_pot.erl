@@ -81,7 +81,7 @@ drip_global(State, Req, Opts) ->
             NewTime ->
                 hb_ao:set(
                     State,
-                    #{ <<"t">> => NewTime, <<"last-drip">> => NewTime },
+                    #{ <<"t">> => NewTime },
                     Opts
                 )
         end,
