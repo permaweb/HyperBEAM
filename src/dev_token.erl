@@ -136,26 +136,28 @@ transfer(Base, Assignment, Opts) ->
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
-        true ?= (From =/= Recipient)
-            orelse {error, <<"Sender and recipient cannot be the same.">>},
         true ?= validate_address(Recipient),
-        % Update the balances.
-        {ok, NewBalances} ?=
-            hb_ao:resolve(
-                Balances,
-                #{
-                    <<"path">> => <<"set">>,
-                    From => SenderBalance - Quantity,
-                    Recipient => RecipientBalance + Quantity
-                },
-                Opts
-            ),
-        % Update the balances in the base state.
-        NewBaseWithBalances = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
+        % Handle self-transfer: skip balance updates
+        NewBaseAfterTransfer =
+            case From =:= Recipient of
+                true -> NormBase;
+                false ->
+                    {ok, NewBalances} =
+                        hb_ao:resolve(
+                            Balances,
+                            #{
+                                <<"path">> => <<"set">>,
+                                From => SenderBalance - Quantity,
+                                Recipient => RecipientBalance + Quantity
+                            },
+                            Opts
+                        ),
+                    hb_maps:put(<<"balances">>, NewBalances, NormBase, Opts)
+            end,
         % Send transfer notices.
         dev_process_lib:send(
-            transfer_notices(From, Recipient, Quantity, Req, Opts), 
-            NewBaseWithBalances,
+            transfer_notices(From, Recipient, Quantity, Req, Opts),
+            NewBaseAfterTransfer,
             Opts
         )
     else
@@ -168,8 +170,19 @@ transfer(Base, Assignment, Opts) ->
                     {returning_base, Base}
                 }
             ),
-            {ok, Base};
-        Other -> Other
+            ReturnValue = {ok, Base},
+            ?event(debug_token, {transfer_returning, ReturnValue}),
+            dev_process_lib:send(
+                #{
+                    <<"target">> => hb_ao:get(<<"body/from">>, Assignment, Opts),       
+                    <<"message">> => Reason
+                },
+                Base,
+                Opts
+            );
+        Other ->
+            ?event(debug_token, {transfer_returning_other, Other}),
+            Other
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
