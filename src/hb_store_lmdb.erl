@@ -385,13 +385,7 @@ compatibility_not_found(DBInstance, Path) ->
     end.
 
 remove_ending_slash(Path) -> 
-    list_to_binary(
-        string:reverse(
-            do_remove_ending_slash(
-                string:reverse(Path)))).
-
-do_remove_ending_slash(["/" | Path]) -> Path;
-do_remove_ending_slash(Path) -> Path.
+    list_to_binary(string:replace(Path, <<"/">>, <<"">>, trailing)).
 
 %% @doc Match a series of keys and values against the database. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
