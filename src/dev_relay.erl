@@ -83,18 +83,6 @@ call(M1, RawM2, Opts) ->
             ],
             Opts
         ),
-    Commit =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, BaseTarget}, <<"commit-request">>},
-                {RawM2, <<"relay-commit-request">>},
-                {M1, <<"relay-commit-request">>},
-                {RawM2, <<"commit-request">>},
-                {M1, <<"commit-request">>}
-            ],
-            false,
-            Opts
-        ),
     TargetMod1 =
         if RelayBody == not_found -> BaseTarget;
         true -> BaseTarget#{<<"body">> => RelayBody}
@@ -115,8 +103,20 @@ call(M1, RawM2, Opts) ->
             TargetMod3,
             Opts
         ),
+    Commit =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, BaseTarget}, <<"commit-request">>},
+                {RawM2, <<"relay-commit-request">>},
+                {M1, <<"relay-commit-request">>},
+                {RawM2, <<"commit-request">>},
+                {M1, <<"commit-request">>}
+            ],
+            false,
+            Opts
+        ),
     TargetMod5 =
-        case Commit of
+        case hb_util:atom(Commit) of
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
@@ -133,7 +133,6 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {without_http_params, TargetMod4}}),
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
-
     ?event(debug_relay, {relay_call, {verified, true}}),
     Client =
         case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
