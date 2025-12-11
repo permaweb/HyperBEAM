@@ -40,6 +40,17 @@ type(StoreOpts, Key) ->
             end
     end.
 
+%% @doc Extract a value from a message, handling sub-paths.
+extract_path_value(Message, Rest, StoreOpts) ->
+    case Rest of
+        [] -> {ok, Message};
+        _ ->
+            case hb_util:deep_get(Rest, Message, StoreOpts) of
+                not_found -> not_found;
+                Value -> {ok, Value}
+            end
+    end.
+
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
 read(BaseStoreOpts, Key) ->
@@ -55,26 +66,11 @@ read(BaseStoreOpts, Key) ->
                             not_found;
                         {ok, Message} ->
                             ?event({read_found, {key, ID}}),
-                            try hb_store_remote_node:maybe_cache(StoreOpts, Message)
-                            catch _:_ -> ignored end,
-                            case Rest of
-                                [] -> {ok, Message};
-                                _ ->
-                                    case hb_util:deep_get(Rest, Message, StoreOpts) of
-                                        not_found -> not_found;
-                                        Value -> {ok, Value}
-                                    end
-                             end
+                            hb_store_remote_node:maybe_cache(StoreOpts, Message),
+                            extract_path_value(Message, Rest, StoreOpts)
                     end;
                 {ok, CachedMessage} ->
-                    case Rest of
-                        [] -> {ok, CachedMessage};
-                        _ ->
-                            case hb_util:deep_get(Rest, CachedMessage, StoreOpts) of
-                                not_found -> not_found;
-                                Value -> {ok, Value}
-                            end
-                    end
+                    extract_path_value(CachedMessage, Rest, StoreOpts)
             end;
         _ ->
             ?event({ignoring_non_id, Key}),
