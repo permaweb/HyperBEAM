@@ -346,7 +346,13 @@ push_downstream(TargetID, NextSlotOnProc, Origin, Opts) ->
 %% @doc Push a downstream message on a remote node if a route can be found to
 %% perform the action. If no route is found, we execute the action locally.
 push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
-    Path = <<TargetID/binary, "/push&slot=", (hb_util:bin(NextSlotOnProc))/binary>>,
+    Path =
+        <<
+            "/",
+            TargetID/binary,
+            "/push&slot=",
+            (hb_util:bin(NextSlotOnProc))/binary
+        >>,
     RouteReq =
         #{
             <<"path">> => <<"route">>,
