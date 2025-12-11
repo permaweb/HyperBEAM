@@ -66,8 +66,15 @@ read(BaseStoreOpts, Key) ->
                                     end
                              end
                     end;
-                {ok, Value} ->
-                    {ok, Value}
+                {ok, CachedMessage} ->
+                    case Rest of
+                        [] -> {ok, CachedMessage};
+                        _ ->
+                            case hb_util:deep_get(Rest, CachedMessage, StoreOpts) of
+                                not_found -> not_found;
+                                Value -> {ok, Value}
+                            end
+                    end
             end;
         _ ->
             ?event({ignoring_non_id, Key}),
