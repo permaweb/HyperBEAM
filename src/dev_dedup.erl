@@ -112,14 +112,11 @@ handle(Key, M1, M2, Opts) ->
                             Opts
                         ),
                     ?event({dedup_updated, NewDedupTrie}),
-                    Result =
-                        hb_ao:set(
-                            M1,
-                            <<"dedup">>,
-                            NewDedupTrie,
-                            Opts
-                        ),
-                    {ok, Result};
+                    hb_ao:resolve(
+                        M1,
+                        #{ <<"path">> => <<"set">>, <<"dedup">> => NewDedupTrie },
+                        Opts
+                    );
                 Value ->
                     ?event(
                         {already_seen,
