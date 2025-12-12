@@ -689,10 +689,23 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
     }
     
     // Check if this is the footer table GUID
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: checking footer GUID: ");
+    for (int i = 0; i < 16; i++) {
+        fprintf(stderr, "%02x", footer_entry[2 + i]);
+    }
+    fprintf(stderr, "\n[SNP_DEBUG] parse_ovmf_footer_table_entry: expected footer GUID: ");
+    for (int i = 0; i < 16; i++) {
+        fprintf(stderr, "%02x", OVMF_TABLE_FOOTER_GUID[i]);
+    }
+    fprintf(stderr, "\n");
+    
     if (memcmp(footer_entry + 2, OVMF_TABLE_FOOTER_GUID, 16) != 0) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: footer GUID mismatch - not an OVMF footer table\n");
         fclose(f);
         return -1;
     }
+    
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: footer GUID matches, reading table\n");
     
     // Get footer size (first 2 bytes, little-endian)
     uint16_t footer_size = footer_entry[0] | (footer_entry[1] << 8);
