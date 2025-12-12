@@ -759,15 +759,21 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                                           const unsigned char *initrd_hash,
                                           const unsigned char *append_hash) {
     if (!gctx || !ovmf_path) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: invalid args\n");
         return -1;
     }
+    
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: trying path=%s\n", ovmf_path);
     
     // Get SEV hashes table GPA from footer table (needed for page offset calculation)
     uint64_t sev_hashes_table_gpa = 0;
     if (kernel_hash && initrd_hash && append_hash) {
         // Only need this if we have kernel hashes
         if (parse_ovmf_sev_hashes_gpa(ovmf_path, &sev_hashes_table_gpa) != 0) {
+            fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: SEV hashes GPA not found, will use section descriptor GPA\n");
             sev_hashes_table_gpa = 0;  // Not found, will use section descriptor GPA
+        } else {
+            fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: SEV hashes table GPA=0x%016llx\n", (unsigned long long)sev_hashes_table_gpa);
         }
     }
     
@@ -776,8 +782,11 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
     size_t meta_entry_len = 0;
     if (parse_ovmf_footer_table_entry(ovmf_path, OVMF_SEV_META_DATA_GUID, 
                                       &meta_entry_data, &meta_entry_len) != 0) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: metadata entry not found in footer table\n");
         return -1;  // Metadata entry not found
     }
+    
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: found metadata entry, len=%zu\n", meta_entry_len);
     
     if (meta_entry_len < 4) {
         free(meta_entry_data);
@@ -856,9 +865,11 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
     fclose(f);
     
     // Process each metadata section
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: processing %u sections\n", num_items);
     for (uint32_t i = 0; i < num_items; i++) {
         size_t offset = i * sizeof(ovmf_metadata_section_desc_t);
         if (offset + sizeof(ovmf_metadata_section_desc_t) > items_size) {
+            fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: section %u offset out of bounds\n", i);
             break;
         }
         
@@ -866,6 +877,9 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
         uint32_t gpa = desc->gpa & 0xFFFFFFFF;
         uint32_t size = desc->size & 0xFFFFFFFF;
         uint8_t section_type = desc->section_type;
+        
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: section %u: type=%u, gpa=0x%08x, size=%u\n", 
+                i, section_type, gpa, size);
         
         // Update GCTX based on section type
         switch (section_type) {
@@ -916,6 +930,9 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                     uint64_t update_gpa = (uint64_t)gpa;
                     uint64_t page_aligned_gpa = update_gpa & ~0xFFFULL;
                     
+                    fprintf(stderr, "[SNP_DEBUG] SNP_KERNEL_HASHES: offset_gpa=0x%016llx, page_offset=%zu, update_gpa=0x%016llx, page_aligned_gpa=0x%016llx\n",
+                            (unsigned long long)offset_gpa, page_offset, (unsigned long long)update_gpa, (unsigned long long)page_aligned_gpa);
+                    
                     unsigned char *sev_hashes_page = malloc(PAGE_SIZE);
                     if (!sev_hashes_page) {
                         free(items_data);
@@ -924,15 +941,20 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                     
                     if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, 
                                                   page_offset, sev_hashes_page) == 0) {
+                        fprintf(stderr, "[SNP_DEBUG] SNP_KERNEL_HASHES: constructed page, updating GCTX\n");
                         if (gctx_update_page(gctx, PAGE_TYPE_NORMAL, page_aligned_gpa, 
                                             sev_hashes_page, PAGE_SIZE) != 0) {
+                            fprintf(stderr, "[SNP_DEBUG] SNP_KERNEL_HASHES: gctx_update_page failed\n");
                             free(sev_hashes_page);
                             free(items_data);
                             return -1;
                         }
+                    } else {
+                        fprintf(stderr, "[SNP_DEBUG] SNP_KERNEL_HASHES: construct_sev_hashes_page failed\n");
                     }
                     free(sev_hashes_page);
                 } else {
+                    fprintf(stderr, "[SNP_DEBUG] SNP_KERNEL_HASHES: no hashes provided, treating as zero page\n");
                     // No hashes provided, treat as zero page
                     if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
                         free(items_data);
@@ -1030,15 +1052,24 @@ int compute_launch_digest(
     
     int metadata_updated = 0;
     for (int i = 0; ovmf_paths[i] != NULL; i++) {
+        fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: trying OVMF path %d: %s\n", i, ovmf_paths[i]);
         if (parse_and_update_ovmf_metadata(&gctx, ovmf_paths[i], vmm_type,
                                           kernel_hash, initrd_hash, append_hash) == 0) {
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: OVMF metadata updated successfully from %s\n", ovmf_paths[i]);
             metadata_updated = 1;
             break;
+        } else {
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: OVMF metadata update failed from %s\n", ovmf_paths[i]);
         }
+    }
+    
+    if (!metadata_updated) {
+        fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: OVMF metadata parsing failed for all paths\n");
     }
     
     // If OVMF parsing failed but we have SEV hashes GPA, try to update just the hashes table
     if (!metadata_updated && kernel_hash && initrd_hash && append_hash && sev_hashes_gpa != 0) {
+        fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: fallback to SEV hashes GPA=0x%016llx\n", (unsigned long long)sev_hashes_gpa);
         unsigned char *sev_hashes_page = (unsigned char *)malloc(PAGE_SIZE);
         if (sev_hashes_page) {
             size_t page_offset = (size_t)(sev_hashes_gpa & 0xFFF);
@@ -1072,8 +1103,10 @@ int compute_launch_digest(
     // Update with VMSA page for each VCPU
     // Each VCPU gets its own page, even though they may have the same EIP
     // This matches the Rust implementation which calls vmsa.pages(vcpus) to generate separate pages
+    fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: updating GCTX with %u VMSA pages\n", vcpus);
     for (uint32_t i = 0; i < vcpus; i++) {
         if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page, PAGE_SIZE) != 0) {
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: gctx_update_page failed for VCPU %u\n", i);
             free(vmsa_page);
             return -1;
         }
@@ -1083,6 +1116,12 @@ int compute_launch_digest(
     
     // Return the final launch digest
     memcpy(output_digest, gctx.ld, LD_BYTES);
+    
+    fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: final digest computed (first 16 bytes): ");
+    for (int i = 0; i < 16 && i < LD_BYTES; i++) {
+        fprintf(stderr, "%02x", output_digest[i]);
+    }
+    fprintf(stderr, "\n");
     
     return 0;
 }

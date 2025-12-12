@@ -421,9 +421,14 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     ?event({args, { explicit, Args}}),
     % Try to read OVMF file and extract SEV hashes table GPA
     ArgsWithGpa = case read_ovmf_gpa() of
-        {ok, Gpa} -> Args#{sev_hashes_gpa => Gpa};
-        {error, _Reason} -> Args  % Continue without GPA if file not found
+        {ok, Gpa} -> 
+            ?event({ovmf_gpa_found, Gpa}),
+            Args#{sev_hashes_gpa => Gpa};
+        {error, GpaReason} -> 
+            ?event({ovmf_gpa_not_found, GpaReason}),
+            Args  % Continue without GPA if file not found
     end,
+    ?event({compute_launch_digest_args, {explicit, ArgsWithGpa}}),
     {ok, ExpectedBin} = dev_snp_nif:compute_launch_digest(ArgsWithGpa),
     ?event({expected_measurement, {explicit, ExpectedBin}}),
     Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
