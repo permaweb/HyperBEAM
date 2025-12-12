@@ -35,19 +35,20 @@ compute_launch_digest(_Args) ->
 %% This is a simple byte comparison, so it's done in Erlang.
 %% @param ReportJSON Binary containing the JSON attestation report
 %% @param ExpectedMeasurement Binary containing the expected measurement (48 bytes)
-%% @returns {ok, true} if measurements match, {error, false} if they don't
+%% @returns {ok, true} if measurements match, {ok, false} if they don't match,
+%%          {error, Reason} if JSON parsing fails or measurement field is missing
 verify_measurement(ReportJSON, ExpectedMeasurement) ->
     case hb_json:decode(ReportJSON) of
         #{<<"measurement">> := ActualMeasurement} when is_list(ActualMeasurement) ->
             ActualBin = list_to_binary(ActualMeasurement),
             case ActualBin =:= ExpectedMeasurement of
                 true -> {ok, true};
-                false -> {error, false}
+                false -> {ok, false}  % Measurement mismatch, not an error
             end;
         #{<<"measurement">> := ActualMeasurement} when is_binary(ActualMeasurement) ->
             case ActualMeasurement =:= ExpectedMeasurement of
                 true -> {ok, true};
-                false -> {error, false}
+                false -> {ok, false}  % Measurement mismatch, not an error
             end;
         _ ->
             {error, <<"Invalid report format: measurement field not found">>}

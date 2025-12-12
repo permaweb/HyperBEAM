@@ -287,9 +287,90 @@ static int create_vmsa_page(
     // Set key registers based on Rust VMSA implementation
     // These values match the Rust build_save_area function
     
-    // Segment registers are at offsets 0x00-0x5F (already zero from memset)
-    // GDTR, IDTR, LDTR, TR are at offsets 0x60-0x9F (already zero)
+    // Determine segment register values based on VMM type
+    uint16_t cs_flags, ss_flags, tr_flags;
+    if (vmm_type == 2) {  // EC2
+        if (eip == 0xfffffff0) {
+            cs_flags = 0x9a;
+            ss_flags = 0x92;
+            tr_flags = 0x83;
+        } else {
+            cs_flags = 0x9b;
+            ss_flags = 0x92;
+            tr_flags = 0x83;
+        }
+    } else if (vmm_type == 3) {  // KRUN
+        cs_flags = 0x9a;
+        ss_flags = 0x92;
+        tr_flags = 0x83;
+    } else {  // QEMU (vmm_type == 1) or default
+        cs_flags = 0x9b;
+        ss_flags = 0x93;
+        tr_flags = 0x8b;
+    }
     
+    // Write segment registers (each VmcbSeg is 16 bytes: selector:u16, attrib:u16, limit:u32, base:u64)
+    // ES at offset 0x00: selector=0, attrib=0x93, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x00, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x02, 0x93) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x04, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x08, 0) != 0) return -1;
+    
+    // CS at offset 0x10: selector=0xf000, attrib=cs_flags, limit=0xffff, base=(eip & 0xffff0000)
+    if (vmsa_write_u16(vmsa_page, 0x10, 0xf000) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x12, cs_flags) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x14, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x18, eip & 0xffff0000ULL) != 0) return -1;
+    
+    // SS at offset 0x20: selector=0, attrib=ss_flags, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x20, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x22, ss_flags) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x24, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x28, 0) != 0) return -1;
+    
+    // DS at offset 0x30: selector=0, attrib=0x93, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x30, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x32, 0x93) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x34, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x38, 0) != 0) return -1;
+    
+    // FS at offset 0x40: selector=0, attrib=0x93, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x40, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x42, 0x93) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x44, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x48, 0) != 0) return -1;
+    
+    // GS at offset 0x50: selector=0, attrib=0x93, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x50, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x52, 0x93) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x54, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x58, 0) != 0) return -1;
+    
+    // GDTR at offset 0x60: selector=0, attrib=0, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x60, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x62, 0) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x64, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x68, 0) != 0) return -1;
+    
+    // IDTR at offset 0x70: selector=0, attrib=0, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x70, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x72, 0) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x74, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x78, 0) != 0) return -1;
+    
+    // LDTR at offset 0x80: selector=0, attrib=0x82, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x80, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x82, 0x82) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x84, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x88, 0) != 0) return -1;
+    
+    // TR at offset 0x90: selector=0, attrib=tr_flags, limit=0xffff, base=0
+    if (vmsa_write_u16(vmsa_page, 0x90, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x92, tr_flags) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x94, 0xffff) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x98, 0) != 0) return -1;
+    
+    // VMPL0_SSP through U_CET at offsets 0xA0-0xC8 (all zero from memset)
     // CPL at offset 0xAB
     if (vmsa_write_u8(vmsa_page, 0xAB, 0) != 0) return -1;
     

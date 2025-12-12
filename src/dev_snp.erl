@@ -88,11 +88,18 @@ verify(M1, M2, NodeOpts) ->
             ),
         ?event({final_validation_result, Valid}),
         % Return boolean value (not binary) for consistency with dev_message:verify expectations
+        % dev_message:verify_commitment expects {ok, boolean()}, so we must return {ok, false}
+        % for verification failures, not {error, ...}
         {ok, Valid}
     else
-        % Convert errors to {ok, false} since dev_message:verify expects {ok, boolean()}
-        {error, _Reason} -> 
-            ?event({snp_verification_failed, _Reason}),
+        % dev_message:verify_commitment pattern matches {ok, Res}, so we must return {ok, false}
+        % for verification failures to avoid crashing the caller
+        % However, we log the actual error reason for debugging
+        {error, Reason} -> 
+            ?event({snp_verification_failed, Reason}),
+            {ok, false};
+        Error -> 
+            ?event({snp_verification_failed, Error}),
             {ok, false}
     end.
 
@@ -395,12 +402,14 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
     ?event({measurement, {explicit,Measurement}}),
     % verify_measurement is now implemented in Erlang
+    % Returns {ok, true} on match, {ok, false} on mismatch, {error, Reason} on parse errors
     case dev_snp_nif:verify_measurement(ReportJSON, ExpectedBin) of
         {ok, true} -> {ok, true};
-        {error, false} -> {error, measurement_invalid};
+        {ok, false} -> {error, measurement_invalid};
         {error, Reason} -> 
+            % JSON parsing or other errors - distinguish from measurement mismatch
             ?event({measurement_verification_error, Reason}),
-            {error, measurement_invalid}
+            {error, {measurement_verification_failed, Reason}}
     end.
 
 %% @doc Extract measurement arguments from the SNP message.
