@@ -478,18 +478,10 @@ read_ovmf_gpa() ->
     % First, try relative to current working directory
     % Then try relative to code path (for releases)
     % Then try absolute paths
-    CodePath = case code:priv_dir(hb) of
-        {error, _} -> 
-            % Not in a release, try relative paths
-            {ok, Cwd} = file:get_cwd(),
-            Cwd;
-        {ok, PrivDir} ->
-            % In a release, try relative to priv dir
-            PrivDir
-    end,
+    {ok, Cwd} = file:get_cwd(),
     OvmfPaths = [
         % Relative to code/priv directory (for releases)
-        filename:join([CodePath, "..", "test", "OVMF-1.55.fd"]),
+        filename:join([Cwd, "test", "OVMF-1.55.fd"]),
         "/root/hb-release/test/OVMF-1.55.fd"
     ],
     ?event({ovmf_search_paths, OvmfPaths}),
