@@ -41,11 +41,19 @@ verify_measurement(ReportJSON, ExpectedMeasurement) ->
     case hb_json:decode(ReportJSON) of
         #{<<"measurement">> := ActualMeasurement} when is_list(ActualMeasurement) ->
             ActualBin = list_to_binary(ActualMeasurement),
+            ExpectedHex = << <<(hex_digit((B bsr 4) band 15)), (hex_digit(B band 15))>> || <<B>> <= ExpectedMeasurement >>,
+            ActualHex = << <<(hex_digit((B bsr 4) band 15)), (hex_digit(B band 15))>> || <<B>> <= ActualBin >>,
+            io:format(standard_error, "[SNP_DEBUG] verify_measurement: expected (hex): ~s~n", [ExpectedHex]),
+            io:format(standard_error, "[SNP_DEBUG] verify_measurement: actual (hex): ~s~n", [ActualHex]),
             case ActualBin =:= ExpectedMeasurement of
                 true -> {ok, true};
                 false -> {ok, false}  % Measurement mismatch, not an error
             end;
         #{<<"measurement">> := ActualMeasurement} when is_binary(ActualMeasurement) ->
+            ExpectedHex = << <<(hex_digit((B bsr 4) band 15)), (hex_digit(B band 15))>> || <<B>> <= ExpectedMeasurement >>,
+            ActualHex = << <<(hex_digit((B bsr 4) band 15)), (hex_digit(B band 15))>> || <<B>> <= ActualMeasurement >>,
+            io:format(standard_error, "[SNP_DEBUG] verify_measurement: expected (hex): ~s~n", [ExpectedHex]),
+            io:format(standard_error, "[SNP_DEBUG] verify_measurement: actual (hex): ~s~n", [ActualHex]),
             case ActualMeasurement =:= ExpectedMeasurement of
                 true -> {ok, true};
                 false -> {ok, false}  % Measurement mismatch, not an error
