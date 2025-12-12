@@ -103,8 +103,13 @@ static int gctx_update_page(gctx_t *gctx, uint8_t page_type, uint64_t gpa,
     
     // Copy page contents (or hash if it's a full page)
     // For PAGE_TYPE_NORMAL and PAGE_TYPE_VMSA, hash the full page first
+    // For PAGE_TYPE_ZERO, use 48 bytes of zeros (hash of zero page)
     // For other types, use the contents directly (should be small)
-    if (contents && contents_len > 0) {
+    if (page_type == PAGE_TYPE_ZERO) {
+        // Zero pages: use 48 bytes of zeros (hash of a zero page)
+        memset(page_info + pos, 0, SHA384_DIGEST_LENGTH);
+        pos += SHA384_DIGEST_LENGTH;
+    } else if (contents && contents_len > 0) {
         if (contents_len == PAGE_SIZE && 
             (page_type == PAGE_TYPE_NORMAL || page_type == PAGE_TYPE_VMSA)) {
             // Hash the page contents using EVP API
@@ -129,7 +134,7 @@ static int gctx_update_page(gctx_t *gctx, uint8_t page_type, uint64_t gpa,
             }
             EVP_MD_CTX_free(md_ctx);
         } else {
-            // For non-page-sized contents (e.g., zero pages), copy directly
+            // For non-page-sized contents, copy directly
             // But ensure it fits in page_info buffer
             if (pos + contents_len > page_info_len) {
                 return -1;  // Would overflow page_info buffer
