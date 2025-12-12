@@ -762,6 +762,15 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
         return -1;
     }
     
+    // Get SEV hashes table GPA from footer table (needed for page offset calculation)
+    uint64_t sev_hashes_table_gpa = 0;
+    if (kernel_hash && initrd_hash && append_hash) {
+        // Only need this if we have kernel hashes
+        if (parse_ovmf_sev_hashes_gpa(ovmf_path, &sev_hashes_table_gpa) != 0) {
+            sev_hashes_table_gpa = 0;  // Not found, will use section descriptor GPA
+        }
+    }
+    
     // Find OVMF_SEV_META_DATA_GUID entry in footer table
     unsigned char *meta_entry_data = NULL;
     size_t meta_entry_len = 0;
@@ -896,10 +905,16 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                 
             case SECTION_TYPE_SNP_KERNEL_HASHES:
                 // SEV hashes table - handled separately if kernel_hash is provided
+                // Rust uses sev_hashes_table_gpa from footer table for page offset,
+                // but section descriptor gpa for the actual update
                 if (kernel_hash && initrd_hash && append_hash) {
-                    // Extract page offset from GPA
-                    size_t page_offset = (size_t)(gpa & 0xFFF);
-                    uint64_t page_aligned_gpa = (uint64_t)(gpa & ~0xFFF);
+                    // Use SEV hashes table GPA from footer table for page offset (if available)
+                    // Otherwise fall back to section descriptor GPA
+                    uint64_t offset_gpa = (sev_hashes_table_gpa != 0) ? sev_hashes_table_gpa : (uint64_t)gpa;
+                    size_t page_offset = (size_t)(offset_gpa & 0xFFF);
+                    // Use section descriptor GPA for the actual update (matches Rust)
+                    uint64_t update_gpa = (uint64_t)gpa;
+                    uint64_t page_aligned_gpa = update_gpa & ~0xFFFULL;
                     
                     unsigned char *sev_hashes_page = malloc(PAGE_SIZE);
                     if (!sev_hashes_page) {
