@@ -19,6 +19,7 @@ snapshot(Base, _Req, _Opts) ->
 %% @doc Entrypoint for computations on token processes. Expects the `action'
 %% key to hold the function to call.
 compute(Base, Req, Opts) ->
+    ?event({token_call, {request, Req}}),
     maybe
         {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
         route(SecureBase, Req, Opts)
@@ -45,6 +46,7 @@ route(Base, Req, Opts) ->
 %% account before returning.
 balance(Base, Req, Opts) ->
     {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
+    ?event({ balance_call, {req, Req}}),
     {TimestampSource, Timestamp} =
         case hb_ao:get(<<"timestamp">>, Req, Opts) of
             not_found ->
@@ -84,12 +86,14 @@ balance(Base, Req, Opts) ->
 
 transfer(Base, Assignment, Opts) ->
     maybe
-        {ok, _Timestamp} ?=
-            hb_maps:find(
-                <<"timestamp">>,
+        ?event({from_transfer, {assignment, Assignment}}),
+        Timestamp ?=
+            hb_ao:get(
+                <<"body/timestamp">>,
                 Assignment,
                 Opts
             ),
+        ?event({from_transfer, {ts, Timestamp}}),
         % Gather transfer data from the request.
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
@@ -99,7 +103,7 @@ transfer(Base, Assignment, Opts) ->
         {ok, NormBase} ?=
             normalize_mint(
                 Base,
-                Assignment#{ <<"subject">> => From },
+                Assignment#{ <<"subject">> => From, <<"timestamp">> => Timestamp },
                 Opts
             ),
         ?event({req, Req, from, From}),
@@ -136,7 +140,7 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
             hb_ao:get(
                 <<"balances">>, 
                 Base, 
-                #{ <<"device">> => <<"trie@1.0">> }, 
+                % #{ <<"device">> => <<"trie@1.0">> }, 
                 Opts
             ),
         ?event({balances_structure, Balances}),
@@ -206,13 +210,19 @@ mint(Base, Assignment, Opts) ->
             {assignment, Assignment}
         }
     ),
+    Timestamp =
+        hb_ao:get(
+            <<"body/timestamp">>,
+            Assignment,
+            Opts
+        ),
     case has_mint_device(Base, Opts) of
         false -> default_mint(Base, Assignment, Opts);
         true ->
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                Assignment#{ <<"path">> => <<"mint">> },
+                Assignment#{ <<"path">> => <<"mint">>, <<"timestamp">> => Timestamp },
                 Opts
             )
     end.
@@ -291,12 +301,12 @@ perform_mint(Base, RawQuantities, Opts) ->
                 maps:values(Quantities)
             )
             orelse {error, <<"Mint quantities must be non-negative integers.">>},
-        % Get current balances trie
+        % Get current balances 
         Balances =
             hb_ao:get(
                 <<"balances">>,
                 Base,
-                #{ <<"device">> => <<"trie@1.0">> },
+                % #{ <<"device">> => <<"trie@1.0">> },
                 Opts
             ),
         % Calculate new balances for all recipients

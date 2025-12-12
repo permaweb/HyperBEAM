@@ -75,6 +75,7 @@ test_drip(State, Req, Opts) ->
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
 drip_global(State, Req, Opts) ->
+    ?event({drip_global, {req, Req}}),
     UpdatedState =
         case hb_maps:get(<<"timestamp">>, Req, undefined, Opts) of
             undefined -> State;
@@ -85,6 +86,7 @@ drip_global(State, Req, Opts) ->
                     Opts
                 )
         end,
+    ?event({drip_global, { updated, UpdatedState}, {req, Req}}),
     drip_global(UpdatedState, Opts).
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
 drip_global(S = #{
@@ -93,6 +95,8 @@ drip_global(S = #{
         <<"mint-prop-numerator">> := PropN,
         <<"mint-prop-denominator">> := PropD
     }, Opts) ->
+    ?event({drip_global, { timestamp, T}}),
+    % throw("timestamp very big"),
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
@@ -573,7 +577,9 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
     ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-    NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+    CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
+    Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+    NewBalance = BaseBalance + Yield,
     ResourceAcc =
         hb_ao:get(
             <<ResourceID/binary, "/accumulator">>,
@@ -625,7 +631,8 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         #{
             <<"resources">> => NewResources,
             <<"total-weighted-units">> => NewTotalWeightedUnits,
-            <<"balances">> => NewBalances
+            <<"balances">> => NewBalances,
+            <<"total-supply">> => CurrentSupply + Yield
         },
     {ok, UpdatedDepositS} =
         hb_ao:resolve(
