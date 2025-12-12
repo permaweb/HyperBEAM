@@ -201,6 +201,14 @@ static int gctx_update_page(gctx_t *gctx, uint8_t page_type, uint64_t gpa,
     
     EVP_MD_CTX_free(md_ctx);
     
+    // Debug: print launch digest after update (first 16 bytes)
+    fprintf(stderr, "[SNP_DEBUG] gctx_update_page: page_type=%u, gpa=0x%016llx, new_ld (first 16 bytes): ", 
+            page_type, (unsigned long long)gpa);
+    for (int i = 0; i < 16 && i < LD_BYTES; i++) {
+        fprintf(stderr, "%02x", gctx->ld[i]);
+    }
+    fprintf(stderr, "\n");
+    
     return 0;
 }
 
