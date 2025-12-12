@@ -33,6 +33,11 @@ static const unsigned char SEV_HASH_TABLE_RV_GUID[16] = {
 static const unsigned char OVMF_SEV_META_DATA_GUID[16] = {
     0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf, 0x67, 0xcc
 };
+// SEV_ES_RESET_BLOCK_GUID: 00f771de-1a7e-4fcb-890e-68c77e2fb44e
+// Converted to little-endian bytes
+static const unsigned char SEV_ES_RESET_BLOCK_GUID[16] = {
+    0xde, 0x71, 0xf7, 0x00, 0x7e, 0x1a, 0xcb, 0x4f, 0x89, 0x0e, 0x68, 0xc7, 0x7e, 0x2f, 0xb4, 0x4e
+};
 
 // Page types
 #define PAGE_TYPE_NORMAL 0x01
@@ -806,6 +811,35 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
     return found ? 0 : -1;
 }
 
+// Extract reset EIP from OVMF footer table
+// Returns 0 on success with EIP in *eip_out, -1 on failure
+static int parse_ovmf_reset_eip(const char *ovmf_path, uint32_t *eip_out) {
+    if (!ovmf_path || !eip_out) {
+        return -1;
+    }
+    
+    unsigned char *entry_data = NULL;
+    size_t entry_len = 0;
+    if (parse_ovmf_footer_table_entry(ovmf_path, SEV_ES_RESET_BLOCK_GUID, 
+                                      &entry_data, &entry_len) != 0) {
+        return -1;  // Entry not found
+    }
+    
+    if (entry_len < 4) {
+        free(entry_data);
+        return -1;
+    }
+    
+    // First 4 bytes are the EIP (little-endian u32)
+    *eip_out = (uint32_t)entry_data[0] |
+              ((uint32_t)entry_data[1] << 8) |
+              ((uint32_t)entry_data[2] << 16) |
+              ((uint32_t)entry_data[3] << 24);
+    
+    free(entry_data);
+    return 0;
+}
+
 // Parse OVMF SEV metadata and update GCTX with all metadata sections
 // Returns 0 on success, -1 on failure
 static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path, 
@@ -1146,7 +1180,6 @@ int compute_launch_digest(
     // Note: These paths are relative to the current working directory
     // In a release deployment, the working directory may be different
     const char *ovmf_paths[] = {
-
         "/root/hb-release/test/OVMF-1.55.fd",
         NULL
     };
@@ -1185,35 +1218,68 @@ int compute_launch_digest(
     }
     
     // Create and update VMSA pages
-    // For SEV-SNP, all VCPUs use the same EIP value (BSP_EIP)
-    // When OVMF is available, we could extract the reset EIP, but for now we use the default
-    // Each VCPU needs its own VMSA page, even if they have the same EIP
-    
-    // Create VMSA page with BSP EIP (used for all VCPUs when OVMF reset EIP is not available)
-    // Use dynamic allocation to avoid stack overflow
-    unsigned char *vmsa_page = (unsigned char *)malloc(PAGE_SIZE);
-    if (!vmsa_page) {
-        return -1;  // Memory allocation failed
+    // VCPU 0 uses BSP_EIP, VCPUs 1+ use reset EIP from OVMF (if available)
+    // Try to extract reset EIP from OVMF
+    uint32_t reset_eip = 0;
+    if (metadata_updated) {
+        // Try to find OVMF file to extract reset EIP
+        for (int i = 0; ovmf_paths[i] != NULL; i++) {
+            if (parse_ovmf_reset_eip(ovmf_paths[i], &reset_eip) == 0) {
+                fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: extracted reset EIP=0x%08x from OVMF\n", reset_eip);
+                break;
+            }
+        }
     }
     
-    if (create_vmsa_page(BSP_EIP, vcpu_type, vmm_type, guest_features, vmsa_page) != 0) {
-        free(vmsa_page);
+    // Create BSP VMSA page (VCPU 0)
+    unsigned char *bsp_vmsa_page = (unsigned char *)malloc(PAGE_SIZE);
+    if (!bsp_vmsa_page) {
         return -1;
     }
     
-    // Update with VMSA page for each VCPU
-    // Each VCPU gets its own page, even though they may have the same EIP
-    // This matches the Rust implementation which calls vmsa.pages(vcpus) to generate separate pages
-    fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: updating GCTX with %u VMSA pages\n", vcpus);
-    for (uint32_t i = 0; i < vcpus; i++) {
-        if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page, PAGE_SIZE) != 0) {
-            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: gctx_update_page failed for VCPU %u\n", i);
-            free(vmsa_page);
+    if (create_vmsa_page(BSP_EIP, vcpu_type, vmm_type, guest_features, bsp_vmsa_page) != 0) {
+        free(bsp_vmsa_page);
+        return -1;
+    }
+    
+    // Create AP VMSA page (VCPUs 1+) if reset EIP is available
+    unsigned char *ap_vmsa_page = NULL;
+    if (reset_eip > 0) {
+        ap_vmsa_page = (unsigned char *)malloc(PAGE_SIZE);
+        if (!ap_vmsa_page) {
+            free(bsp_vmsa_page);
+            return -1;
+        }
+        if (create_vmsa_page((uint64_t)reset_eip, vcpu_type, vmm_type, guest_features, ap_vmsa_page) != 0) {
+            free(bsp_vmsa_page);
+            free(ap_vmsa_page);
             return -1;
         }
     }
     
-    free(vmsa_page);
+    // Update with VMSA pages for each VCPU
+    // VCPU 0 gets BSP page, VCPUs 1+ get AP page (if available) or BSP page (if not)
+    fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: updating GCTX with %u VMSA pages\n", vcpus);
+    for (uint32_t i = 0; i < vcpus; i++) {
+        unsigned char *vmsa_page_to_use;
+        if (i == 0) {
+            vmsa_page_to_use = bsp_vmsa_page;
+        } else if (ap_vmsa_page) {
+            vmsa_page_to_use = ap_vmsa_page;
+        } else {
+            vmsa_page_to_use = bsp_vmsa_page;  // Fallback to BSP if no AP
+        }
+        
+        if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page_to_use, PAGE_SIZE) != 0) {
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: gctx_update_page failed for VCPU %u\n", i);
+            free(bsp_vmsa_page);
+            if (ap_vmsa_page) free(ap_vmsa_page);
+            return -1;
+        }
+    }
+    
+    free(bsp_vmsa_page);
+    if (ap_vmsa_page) free(ap_vmsa_page);
     
     // Return the final launch digest
     memcpy(output_digest, gctx.ld, LD_BYTES);
@@ -1226,4 +1292,5 @@ int compute_launch_digest(
     
     return 0;
 }
+
 
