@@ -24,6 +24,9 @@ static const unsigned char OVMF_TABLE_FOOTER_GUID[16] = {
 static const unsigned char SEV_HASH_TABLE_RV_GUID[16] = {
     0x54, 0xa8, 0xda, 0x1f, 0x6b, 0x04, 0x4b, 0x3b, 0x7b, 0x92, 0x04, 0x4b, 0x3b, 0x3a, 0x35, 0x72
 };
+static const unsigned char OVMF_SEV_META_DATA_GUID[16] = {
+    0xcc, 0x67, 0xbf, 0xa7, 0x85, 0x55, 0x5e, 0xa7, 0x98, 0x4a, 0x98, 0x66, 0x88, 0xdc, 0x00, 0x00
+};
 
 // Page types
 #define PAGE_TYPE_NORMAL 0x01
@@ -32,6 +35,28 @@ static const unsigned char SEV_HASH_TABLE_RV_GUID[16] = {
 #define PAGE_TYPE_UNMEASURED 0x04
 #define PAGE_TYPE_SECRETS 0x05
 #define PAGE_TYPE_CPUID 0x06
+
+// OVMF Section types
+#define SECTION_TYPE_SNP_SEC_MEMORY 1
+#define SECTION_TYPE_SNP_SECRETS 2
+#define SECTION_TYPE_CPUID 3
+#define SECTION_TYPE_SVSM_CAA 4
+#define SECTION_TYPE_SNP_KERNEL_HASHES 0x10
+
+// OVMF Metadata structures
+typedef struct {
+    uint32_t gpa;        // Guest Physical Address (little-endian)
+    uint32_t size;       // Size (little-endian)
+    uint8_t section_type;  // Section type
+    uint8_t _padding[3];   // Padding to align to 4 bytes
+} __attribute__((packed)) ovmf_metadata_section_desc_t;
+
+typedef struct {
+    unsigned char signature[4];  // "ASEV"
+    uint32_t size;              // Total size (little-endian)
+    uint32_t version;           // Version (little-endian, should be 1)
+    uint32_t num_items;         // Number of items (little-endian)
+} __attribute__((packed)) ovmf_metadata_header_t;
 
 // Guest Context structure
 typedef struct {
@@ -618,6 +643,318 @@ static int parse_ovmf_sev_hashes_gpa(const char *ovmf_path, uint64_t *gpa_out) {
     return found ? 0 : -1;
 }
 
+// Parse OVMF footer table to find a GUID entry
+// Returns 0 on success with entry data in *entry_data_out, -1 on failure
+static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned char *target_guid, 
+                                         unsigned char **entry_data_out, size_t *entry_data_len) {
+    if (!ovmf_path || !target_guid || !entry_data_out || !entry_data_len) {
+        return -1;
+    }
+    
+    FILE *f = fopen(ovmf_path, "rb");
+    if (!f) {
+        return -1;
+    }
+    
+    // Get file size
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    if (file_size < 0 || file_size < 50) {
+        fclose(f);
+        return -1;
+    }
+    fseek(f, 0, SEEK_SET);
+    
+    const size_t ENTRY_HEADER_SIZE = 18;  // 2 bytes size + 16 bytes GUID
+    long footer_entry_offset = file_size - 32 - ENTRY_HEADER_SIZE;
+    if (footer_entry_offset < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    fseek(f, footer_entry_offset, SEEK_SET);
+    unsigned char footer_entry[ENTRY_HEADER_SIZE];
+    if (fread(footer_entry, 1, ENTRY_HEADER_SIZE, f) != ENTRY_HEADER_SIZE) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Check if this is the footer table GUID
+    if (memcmp(footer_entry + 2, OVMF_TABLE_FOOTER_GUID, 16) != 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Get footer size (first 2 bytes, little-endian)
+    uint16_t footer_size = footer_entry[0] | (footer_entry[1] << 8);
+    if (footer_size < ENTRY_HEADER_SIZE) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Calculate table size and start
+    size_t table_size = footer_size - ENTRY_HEADER_SIZE;
+    long table_start = footer_entry_offset - table_size;
+    if (table_start < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Read the table
+    unsigned char *table_data = malloc(table_size);
+    if (!table_data) {
+        fclose(f);
+        return -1;
+    }
+    
+    fseek(f, table_start, SEEK_SET);
+    if (fread(table_data, 1, table_size, f) != table_size) {
+        free(table_data);
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    
+    // Parse entries backwards to find target GUID
+    size_t offset = table_size;
+    int found = 0;
+    while (offset >= ENTRY_HEADER_SIZE) {
+        unsigned char *entry_ptr = table_data + offset - ENTRY_HEADER_SIZE;
+        uint16_t entry_size = entry_ptr[0] | (entry_ptr[1] << 8);
+        
+        if (entry_size < ENTRY_HEADER_SIZE || offset < entry_size) {
+            break;
+        }
+        
+        // Check if this is the target GUID entry
+        if (memcmp(entry_ptr + 2, target_guid, 16) == 0) {
+            // Entry data is before the header
+            size_t data_offset = offset - entry_size;
+            size_t data_len = entry_size - ENTRY_HEADER_SIZE;
+            if (data_offset + data_len <= table_size) {
+                *entry_data_out = malloc(data_len);
+                if (!*entry_data_out) {
+                    free(table_data);
+                    return -1;
+                }
+                memcpy(*entry_data_out, table_data + data_offset, data_len);
+                *entry_data_len = data_len;
+                found = 1;
+            }
+            break;
+        }
+        
+        offset -= entry_size;
+    }
+    
+    free(table_data);
+    return found ? 0 : -1;
+}
+
+// Parse OVMF SEV metadata and update GCTX with all metadata sections
+// Returns 0 on success, -1 on failure
+static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path, 
+                                          uint8_t vmm_type,
+                                          const unsigned char *kernel_hash,
+                                          const unsigned char *initrd_hash,
+                                          const unsigned char *append_hash) {
+    if (!gctx || !ovmf_path) {
+        return -1;
+    }
+    
+    // Find OVMF_SEV_META_DATA_GUID entry in footer table
+    unsigned char *meta_entry_data = NULL;
+    size_t meta_entry_len = 0;
+    if (parse_ovmf_footer_table_entry(ovmf_path, OVMF_SEV_META_DATA_GUID, 
+                                      &meta_entry_data, &meta_entry_len) != 0) {
+        return -1;  // Metadata entry not found
+    }
+    
+    if (meta_entry_len < 4) {
+        free(meta_entry_data);
+        return -1;
+    }
+    
+    // First 4 bytes are offset_from_end (i32, little-endian)
+    int32_t offset_from_end = (int32_t)(meta_entry_data[0] |
+                                       ((int32_t)meta_entry_data[1] << 8) |
+                                       ((int32_t)meta_entry_data[2] << 16) |
+                                       ((int32_t)meta_entry_data[3] << 24));
+    
+    free(meta_entry_data);
+    
+    // Read OVMF file to get metadata header
+    FILE *f = fopen(ovmf_path, "rb");
+    if (!f) {
+        return -1;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    if (file_size < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    long header_start = file_size - (long)offset_from_end;
+    if (header_start < 0 || header_start >= file_size) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Read metadata header
+    ovmf_metadata_header_t header;
+    fseek(f, header_start, SEEK_SET);
+    if (fread(&header, 1, sizeof(header), f) != sizeof(header)) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Verify header signature "ASEV"
+    if (memcmp(header.signature, "ASEV", 4) != 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Verify version is 1
+    uint32_t version = header.version & 0xFFFFFFFF;
+    if (version != 1) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Read metadata items
+    uint32_t num_items = header.num_items & 0xFFFFFFFF;
+    uint32_t header_size = header.size & 0xFFFFFFFF;
+    size_t items_size = header_size - sizeof(ovmf_metadata_header_t);
+    
+    if (items_size < num_items * sizeof(ovmf_metadata_section_desc_t)) {
+        fclose(f);
+        return -1;
+    }
+    
+    unsigned char *items_data = malloc(items_size);
+    if (!items_data) {
+        fclose(f);
+        return -1;
+    }
+    
+    if (fread(items_data, 1, items_size, f) != items_size) {
+        free(items_data);
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    
+    // Process each metadata section
+    for (uint32_t i = 0; i < num_items; i++) {
+        size_t offset = i * sizeof(ovmf_metadata_section_desc_t);
+        if (offset + sizeof(ovmf_metadata_section_desc_t) > items_size) {
+            break;
+        }
+        
+        ovmf_metadata_section_desc_t *desc = (ovmf_metadata_section_desc_t *)(items_data + offset);
+        uint32_t gpa = desc->gpa & 0xFFFFFFFF;
+        uint32_t size = desc->size & 0xFFFFFFFF;
+        uint8_t section_type = desc->section_type;
+        
+        // Update GCTX based on section type
+        switch (section_type) {
+            case SECTION_TYPE_SNP_SEC_MEMORY:
+                // Zero pages
+                if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
+                    free(items_data);
+                    return -1;
+                }
+                break;
+                
+            case SECTION_TYPE_SNP_SECRETS:
+                // Secrets page
+                if (gctx_update_page(gctx, PAGE_TYPE_SECRETS, (uint64_t)gpa, NULL, 0) != 0) {
+                    free(items_data);
+                    return -1;
+                }
+                break;
+                
+            case SECTION_TYPE_CPUID:
+                // CPUID page (only for non-EC2 VMM types, or special handling for EC2)
+                if (vmm_type != 2) {  // Not EC2
+                    if (gctx_update_page(gctx, PAGE_TYPE_CPUID, (uint64_t)gpa, NULL, 0) != 0) {
+                        free(items_data);
+                        return -1;
+                    }
+                }
+                break;
+                
+            case SECTION_TYPE_SVSM_CAA:
+                // Zero pages
+                if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
+                    free(items_data);
+                    return -1;
+                }
+                break;
+                
+            case SECTION_TYPE_SNP_KERNEL_HASHES:
+                // SEV hashes table - handled separately if kernel_hash is provided
+                if (kernel_hash && initrd_hash && append_hash) {
+                    // Extract page offset from GPA
+                    size_t page_offset = (size_t)(gpa & 0xFFF);
+                    uint64_t page_aligned_gpa = (uint64_t)(gpa & ~0xFFF);
+                    
+                    unsigned char *sev_hashes_page = malloc(PAGE_SIZE);
+                    if (!sev_hashes_page) {
+                        free(items_data);
+                        return -1;
+                    }
+                    
+                    if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, 
+                                                  page_offset, sev_hashes_page) == 0) {
+                        if (gctx_update_page(gctx, PAGE_TYPE_NORMAL, page_aligned_gpa, 
+                                            sev_hashes_page, PAGE_SIZE) != 0) {
+                            free(sev_hashes_page);
+                            free(items_data);
+                            return -1;
+                        }
+                    }
+                    free(sev_hashes_page);
+                } else {
+                    // No hashes provided, treat as zero page
+                    if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
+                        free(items_data);
+                        return -1;
+                    }
+                }
+                break;
+                
+            default:
+                // Unknown section type - skip
+                break;
+        }
+    }
+    
+    // For EC2 VMM type, process CPUID sections again (special handling)
+    if (vmm_type == 2) {  // EC2
+        for (uint32_t i = 0; i < num_items; i++) {
+            size_t offset = i * sizeof(ovmf_metadata_section_desc_t);
+            if (offset + sizeof(ovmf_metadata_section_desc_t) > items_size) {
+                break;
+            }
+            
+            ovmf_metadata_section_desc_t *desc = (ovmf_metadata_section_desc_t *)(items_data + offset);
+            if (desc->section_type == SECTION_TYPE_CPUID) {
+                uint32_t gpa = desc->gpa & 0xFFFFFFFF;
+                if (gctx_update_page(gctx, PAGE_TYPE_CPUID, (uint64_t)gpa, NULL, 0) != 0) {
+                    free(items_data);
+                    return -1;
+                }
+            }
+        }
+    }
+    
+    free(items_data);
+    return 0;
+}
+
 // Compute launch digest - full implementation
 int compute_launch_digest(
     uint32_t vcpus,
@@ -661,26 +998,43 @@ int compute_launch_digest(
         gctx_init(&gctx);
     }
     
-    // Update with SEV hashes table if kernel hash is provided and GPA is available
-    // Use dynamic allocation to avoid stack overflow with large buffers
-    unsigned char *sev_hashes_page = NULL;
-    if (kernel_hash && initrd_hash && append_hash && sev_hashes_gpa != 0) {
-        sev_hashes_page = (unsigned char *)malloc(PAGE_SIZE);
-        if (!sev_hashes_page) {
-            return -1;  // Memory allocation failed
+    // Update with all OVMF metadata pages
+    // This parses the OVMF file and updates GCTX with all metadata sections:
+    // - SnpSecMemory (zero pages)
+    // - SnpSecrets (secrets page)
+    // - Cpuid (CPUID page)
+    // - SnpKernelHashes (SEV hashes table)
+    // - SvsmCaa (zero pages)
+    // Try to find OVMF file in common locations
+    const char *ovmf_paths[] = {
+        "test/OVMF-1.55.fd",
+        "../test/OVMF-1.55.fd",
+        "../../test/OVMF-1.55.fd",
+        NULL
+    };
+    
+    int metadata_updated = 0;
+    for (int i = 0; ovmf_paths[i] != NULL; i++) {
+        if (parse_and_update_ovmf_metadata(&gctx, ovmf_paths[i], vmm_type,
+                                          kernel_hash, initrd_hash, append_hash) == 0) {
+            metadata_updated = 1;
+            break;
         }
-        // Extract page offset from GPA (lower 12 bits)
-        size_t page_offset = (size_t)(sev_hashes_gpa & 0xFFF);
-        // Align GPA to page boundary for the update
-        uint64_t page_aligned_gpa = sev_hashes_gpa & ~0xFFFULL;
-        if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, page_offset, sev_hashes_page) == 0) {
-            if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, page_aligned_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
-                free(sev_hashes_page);
-                return -1;
+    }
+    
+    // If OVMF parsing failed but we have SEV hashes GPA, try to update just the hashes table
+    if (!metadata_updated && kernel_hash && initrd_hash && append_hash && sev_hashes_gpa != 0) {
+        unsigned char *sev_hashes_page = (unsigned char *)malloc(PAGE_SIZE);
+        if (sev_hashes_page) {
+            size_t page_offset = (size_t)(sev_hashes_gpa & 0xFFF);
+            uint64_t page_aligned_gpa = sev_hashes_gpa & ~0xFFFULL;
+            if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, 
+                                          page_offset, sev_hashes_page) == 0) {
+                gctx_update_page(&gctx, PAGE_TYPE_NORMAL, page_aligned_gpa, 
+                               sev_hashes_page, PAGE_SIZE);
             }
+            free(sev_hashes_page);
         }
-        free(sev_hashes_page);
-        sev_hashes_page = NULL;
     }
     
     // Create and update VMSA pages
