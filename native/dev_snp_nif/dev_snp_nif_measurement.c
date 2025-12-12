@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #define LD_BYTES 48  // Launch digest size (SHA-384 = 48 bytes)
 #define PAGE_SIZE 4096
@@ -24,6 +25,7 @@ static const unsigned char OVMF_TABLE_FOOTER_GUID[16] = {
 static const unsigned char SEV_HASH_TABLE_RV_GUID[16] = {
     0x54, 0xa8, 0xda, 0x1f, 0x6b, 0x04, 0x4b, 0x3b, 0x7b, 0x92, 0x04, 0x4b, 0x3b, 0x3a, 0x35, 0x72
 };
+// OVMF_SEV_META_DATA_GUID: dc886566-984a-4798-a75e-5585a7bf67cc (little-endian bytes)
 static const unsigned char OVMF_SEV_META_DATA_GUID[16] = {
     0x66, 0x65, 0x88, 0xdc, 0x4a, 0x98, 0x98, 0x47, 0xa7, 0x5e, 0x55, 0x85, 0xa7, 0xbf, 0x67, 0xcc
 };
@@ -653,28 +655,35 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
     
     FILE *f = fopen(ovmf_path, "rb");
     if (!f) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: failed to open file %s (errno=%d)\n", ovmf_path, errno);
         return -1;
     }
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: successfully opened file %s\n", ovmf_path);
     
     // Get file size
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
     if (file_size < 0 || file_size < 50) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: file too small (%ld bytes)\n", file_size);
         fclose(f);
         return -1;
     }
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: file size=%ld\n", file_size);
     fseek(f, 0, SEEK_SET);
     
     const size_t ENTRY_HEADER_SIZE = 18;  // 2 bytes size + 16 bytes GUID
     long footer_entry_offset = file_size - 32 - ENTRY_HEADER_SIZE;
     if (footer_entry_offset < 0) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: footer offset negative\n");
         fclose(f);
         return -1;
     }
     
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: reading footer entry at offset %ld\n", footer_entry_offset);
     fseek(f, footer_entry_offset, SEEK_SET);
     unsigned char footer_entry[ENTRY_HEADER_SIZE];
     if (fread(footer_entry, 1, ENTRY_HEADER_SIZE, f) != ENTRY_HEADER_SIZE) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: failed to read footer entry\n");
         fclose(f);
         return -1;
     }
@@ -718,19 +727,36 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
     // Parse entries backwards to find target GUID
     size_t offset = table_size;
     int found = 0;
+    int entry_count = 0;
+    fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: searching table (size=%zu) for target GUID: ", table_size);
+    for (int i = 0; i < 16; i++) {
+        fprintf(stderr, "%02x", target_guid[i]);
+    }
+    fprintf(stderr, "\n");
+    
     while (offset >= ENTRY_HEADER_SIZE) {
         unsigned char *entry_ptr = table_data + offset - ENTRY_HEADER_SIZE;
         uint16_t entry_size = entry_ptr[0] | (entry_ptr[1] << 8);
         
         if (entry_size < ENTRY_HEADER_SIZE || offset < entry_size) {
+            fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: invalid entry size %u at offset %zu\n", entry_size, offset);
             break;
         }
         
+        entry_count++;
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: entry %d: size=%u, offset=%zu, GUID: ", entry_count, entry_size, offset);
+        for (int i = 0; i < 16; i++) {
+            fprintf(stderr, "%02x", entry_ptr[2 + i]);
+        }
+        fprintf(stderr, "\n");
+        
         // Check if this is the target GUID entry
         if (memcmp(entry_ptr + 2, target_guid, 16) == 0) {
+            fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: found target GUID!\n");
             // Entry data is before the header
             size_t data_offset = offset - entry_size;
             size_t data_len = entry_size - ENTRY_HEADER_SIZE;
+            fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: data_offset=%zu, data_len=%zu\n", data_offset, data_len);
             if (data_offset + data_len <= table_size) {
                 *entry_data_out = malloc(data_len);
                 if (!*entry_data_out) {
@@ -740,6 +766,8 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
                 memcpy(*entry_data_out, table_data + data_offset, data_len);
                 *entry_data_len = data_len;
                 found = 1;
+            } else {
+                fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: data out of bounds\n");
             }
             break;
         }
@@ -747,6 +775,9 @@ static int parse_ovmf_footer_table_entry(const char *ovmf_path, const unsigned c
         offset -= entry_size;
     }
     
+    if (!found) {
+        fprintf(stderr, "[SNP_DEBUG] parse_ovmf_footer_table_entry: searched %d entries, target GUID not found\n", entry_count);
+    }
     free(table_data);
     return found ? 0 : -1;
 }

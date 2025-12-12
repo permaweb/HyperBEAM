@@ -554,6 +554,10 @@ verify_signature_test() ->
 parse_ovmf_sev_hashes_gpa(OvmfPath) when is_binary(OvmfPath) ->
     parse_ovmf_sev_hashes_gpa(binary_to_list(OvmfPath));
 parse_ovmf_sev_hashes_gpa(OvmfPath) when is_list(OvmfPath) ->
+    % Print current working directory for debugging
+    {ok, Cwd} = file:get_cwd(),
+    io:format("[SNP_DEBUG] Current working directory: ~s~n", [Cwd]),
+    io:format("[SNP_DEBUG] Attempting to read OVMF file: ~s~n", [OvmfPath]),
     case file:read_file(OvmfPath) of
         {ok, OvmfData} ->
             parse_ovmf_footer_table(OvmfData);
