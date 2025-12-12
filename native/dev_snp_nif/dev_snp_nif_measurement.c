@@ -975,8 +975,11 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                 break;
                 
             case SECTION_TYPE_SNP_SECRETS:
-                // Secrets page
-                if (gctx_update_page(gctx, PAGE_TYPE_SECRETS, (uint64_t)gpa, NULL, 0) != 0) {
+                // Secrets page - uses 48 bytes of zeros (same as zero page)
+                fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: updating SNP_SECRETS at GPA=0x%016llx\n", 
+                        (unsigned long long)gpa);
+                if (gctx_update_page(gctx, PAGE_TYPE_SECRETS, gpa, NULL, 0) != 0) {
+                    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: gctx_update_page failed for SNP_SECRETS\n");
                     free(items_data);
                     return -1;
                 }
@@ -984,11 +987,17 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                 
             case SECTION_TYPE_CPUID:
                 // CPUID page (only for non-EC2 VMM types, or special handling for EC2)
+                // Uses 48 bytes of zeros (same as zero page)
                 if (vmm_type != 2) {  // Not EC2
-                    if (gctx_update_page(gctx, PAGE_TYPE_CPUID, (uint64_t)gpa, NULL, 0) != 0) {
+                    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: updating CPUID at GPA=0x%016llx\n", 
+                            (unsigned long long)gpa);
+                    if (gctx_update_page(gctx, PAGE_TYPE_CPUID, gpa, NULL, 0) != 0) {
+                        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: gctx_update_page failed for CPUID\n");
                         free(items_data);
                         return -1;
                     }
+                } else {
+                    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: skipping CPUID for EC2 VMM type\n");
                 }
                 break;
                 
