@@ -228,9 +228,15 @@ compute(Base, Req, Opts) ->
         ),
     case TargetSlot of
         not_found ->
-            % The slot is not set, so we need to serve the latest known state.
+            % The slot is not set, so we need to serve the latest known state
+            % unless the `init' key is set to a value aside from `now'.
             % We do this by setting the `process_now_from_cache' option to `true'.
-            now(Base, Req, Opts#{ process_now_from_cache => true });
+            case hb_maps:get(<<"init">>, Req, <<"now">>, Opts) of
+                <<"now">> ->
+                    now(Base, Req, Opts#{ process_now_from_cache => true });
+                _ ->
+                    {error, not_found}
+            end;
         RawSlot ->
             Slot = hb_util:int(RawSlot),
             case dev_process_cache:read(ProcID, Slot, Opts) of
@@ -361,6 +367,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Ensure that the next slot is the slot that we are expecting, just
     % in case there is a scheduler device error.
     NextSlot = hb_util:int(hb_ao:get(<<"slot">>, RawInputMsg, Opts)),
+    ?event(compute, {next_slot, NextSlot}),
     % If the input message does not have a path, set it to `compute'.
     InputMsg =
         case hb_path:from_message(request, RawInputMsg, Opts) of
@@ -371,7 +378,9 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
+    ?event(compute_slot_run_as, {before, {unset_results, UnsetResults}, {input_msg, InputMsg}}, Opts),
     Res = dev_process_lib:run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
+    ?event(compute_slot_run_as, {after_run_as, {res, Res}}, Opts),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.

@@ -158,7 +158,7 @@ multiple_resources_test() ->
         pot_state_empty(
             [Resource1, Resource2],
             1000,
-            1, 
+            1,
             2
         ),
     % Set resource2 weight to 9
@@ -1036,7 +1036,8 @@ very_small_deposit_yield_test() ->
             [{Alice, 1}, {Bob, 999}], 
             1, 
             100000, 
-            1, 2
+            1,
+            2
         ),
     S1 = dev_pot:test_drip(S0, #{<<"t">> => 1}, Opts),
     % Claim yield by performing minimal deposits

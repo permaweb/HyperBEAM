@@ -226,6 +226,7 @@ default_message() ->
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
+        debug_print_truncate => 20,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
@@ -370,13 +371,19 @@ default_message() ->
         genesis_wasm_import_authorities =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
-            ]
+            ],
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+        % Define the behaviour when accessing a file inside a manifest that 
+        % doesn't exists.
+        % Options:
+        % - fallback: Fallback to the index page
+        % - error: Return 404 Not Found
+        manifest_404 => fallback
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a

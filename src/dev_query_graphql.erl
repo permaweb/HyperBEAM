@@ -4,7 +4,7 @@
 %%% AO-Core API:
 -export([handle/3]).
 %%% GraphQL Callbacks:
--export([execute/4]).
+-export([execute/4, input/2]).
 %%% Submodule helpers:
 -export([keys_to_template/1, test_query/3, test_query/4]).
 -include_lib("eunit/include/eunit.hrl").
@@ -159,6 +159,9 @@ execute(#{opts := Opts}, Obj, Field, Args) ->
         true -> message_query(Obj, Field, Args, Opts);
         false -> dev_query_arweave:query(Obj, Field, Args, Opts)
     end.
+
+%% @doc No-op on input validation.
+input(_TypeID, Val) -> {ok, Val}.
 
 %% @doc Handle a HyperBEAM `message' query.
 message_query(Obj, <<"message">>, #{<<"keys">> := Keys}, Opts) ->

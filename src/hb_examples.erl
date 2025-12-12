@@ -40,7 +40,7 @@ relay_with_payments() ->
     ClientBase =
         hb_message:commit(
             #{<<"path">> => <<"/~relay@1.0/call?relay-path=https://www.google.com">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
     % Relay the message.
     Res = hb_http:get(HostNode, ClientBase, #{}),
@@ -54,7 +54,7 @@ relay_with_payments() ->
                 <<"recipient">> => ClientAddress,
                 <<"amount">> => 100
             },
-            HostWallet
+            #{ priv_wallet => HostWallet }
         ),
     ?assertMatch({ok, _}, hb_http:get(HostNode, TopupMessage, #{})),
     % Relay the message again.
@@ -121,7 +121,7 @@ paid_wasm() ->
     ClientRequest =
         hb_message:commit(
             #{<<"path">> => <<"/~p4@1.0/balance">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
     {ok, Res2} = hb_http:get(HostNode, ClientRequest, Opts),
     ?assertMatch(60, Res2).
@@ -172,7 +172,7 @@ create_schedule_aos2_test_disabled() ->
         <<"scheduler-location">> => hb_util:human_id(hb:address())
     },
     Wallet = hb:wallet(),
-    SignedProc = hb_message:commit(ProcMsg, Wallet),
+    SignedProc = hb_message:commit(ProcMsg, #{ priv_wallet => Wallet }),
     IDNone = hb_message:id(SignedProc, none),
     IDAll = hb_message:id(SignedProc, all),
     {ok, Res} = schedule(SignedProc, IDNone, Wallet, Node),
@@ -198,7 +198,7 @@ schedule(ProcMsg, Target, Wallet, Node) ->
                 <<"target">> => Target,
                 <<"body">> => ProcMsg
             },
-            Wallet
+            #{ priv_wallet => Wallet }
         ),
     ?event({signed_req, SignedReq}),
     hb_http:post(Node, SignedReq, #{}).

@@ -5,7 +5,7 @@
 --- executed with the `~lua@5.3` device. This script supports both the base token
 --- blueprint's 'active' keys, as well as the mainnet sub-ledger API.
 --- 
---- Data access actions (e.g. `balance', `info', `total-supply') are not
+--- Data access actions (e.g. `balances', `info', `total-supply') are not
 --- implemented due to their redundancy. Instead, the full state of the process
 --- is available via the AO-Core HTTP API, including all metadata and individual
 --- account balances.
@@ -18,12 +18,12 @@
 --- ## Design and Implementation
 --- 
 --- If running as a `root' token (indicated by the absence of a `token' field),
---- the `balance' field should be initialized to a table of balances for the
+--- the `balances' field should be initialized to a table of balances for the
 --- token during spawning. The `ledgers' field holds the state of a sub-ledger's
 --- own balances with other ledgers. This field is always initialized to a message
 --- of zero balances during the evaluation of the first assignment of the process.
 --- When the token receives a `credit-notice' message, it will interpret it as a
---- deposit from the sending ledger and update its record of its own balance with
+--- deposit from the sending ledger and update its record of its own balances with
 --- the sending ledger.
 --- 
 --- Atop the standard token transfer messages, the sub-ledger API allows for
@@ -39,7 +39,7 @@
 --- and quantity to transfer forwarded along with the message.
 --- 
 --- There are three security checks performed on incoming messages, above the
---- standard balance transfer checks:
+--- standard balances transfer checks:
 --- 
 --- 1. Assignments are evaluated against the `assess/assignment' message, if
 ---    present. If not, the assignment is evaluated against the process's own
@@ -429,7 +429,7 @@ local function ensure_initialized(base, assignment)
     if assignment.slot ~= 0 then
         return "ok", base
     end
-    base.balance = base.balance or {}
+    base.balances = base.balances or {}
 
     -- Ensure that the `ledgers' map is initialized: present and empty.
     base.ledgers = base.ledgers or {}
@@ -552,14 +552,14 @@ end
 
 -- Ensure that the source has the required funds, then debit the source. Takes
 -- an origin, which can be used to identify the reason for the debit in logging.
--- Returns error if the source balance is not viable, or `ok` and the updated
+-- Returns error if the source balances is not viable, or `ok` and the updated
 -- base state if the debit is successful. Does not credit any funds.
 local function debit_balance(base, request)
     local source = request.from
 
     ao.event({ "Attempting to deduct balance.", {
         request = request,
-        balances = base.balance or {}
+        balances = base.balances or {}
     }})
 
     -- Ensure that the `source' and `quantity' fields are present in the request.
@@ -582,8 +582,8 @@ local function debit_balance(base, request)
     end
 
     -- Ensure that the source has the required funds.
-    -- Check 1: The source balance is present in the ledger.
-    local source_balance = base.balance[source]
+    -- Check 1: The source balances is present in the ledger.
+    local source_balance = base.balances[source]
 
     if not source_balance then
         return "error", log_result(base, "error", {
@@ -594,11 +594,11 @@ local function debit_balance(base, request)
         })
     end
 
-    -- Check 2: The source balance is a valid number.
+    -- Check 2: The source balances is a valid number.
     if type(source_balance) ~= "number" then
         return "error", log_result(base, "error", {
             message = "Source balance is not a number.",
-            balance = source_balance
+            balances = source_balance
         })
     end
 
@@ -616,14 +616,14 @@ local function debit_balance(base, request)
             message = "Insufficient funds.",
             from = source,
             quantity = request.quantity,
-            balance = source_balance
+            balances = source_balance
         })
     end
 
     ao.event({ "Deducting funds:", { request = request } })
-    base.balance[source] = source_balance - request.quantity
+    base.balances[source] = source_balance - request.quantity
     ao.event({ "Balances after deduction:",
-        { balances = base.balance, ledgers = base.ledgers } }
+        { balances = base.balances, ledgers = base.ledgers } }
     )
     return "ok", base
 end
@@ -632,7 +632,7 @@ end
 -- optionally routing to a different sub-ledger if necessary.
 -- There are four differing types of transfer requests. They have the following
 -- semantics:
--- Balance == owed to X. Credit == Owed to subject by X.
+-- balance == owed to X. Credit == Owed to subject by X.
 
 -- User on root -> User on sub-ledger:
 -- Xfer in: Root = Dec User balance, Inc Sub-ledger balance
@@ -691,8 +691,8 @@ function transfer(base, assignment)
         -- another user. We credit the recipient's balance, or the sub-ledger's
         -- balance if the request has a `route' key.
         local direct_recipient = request.route or request.recipient
-        base.balance[direct_recipient] =
-            (base.balance[direct_recipient] or 0) + quantity
+        base.balances[direct_recipient] =
+            (base.balances[direct_recipient] or 0) + quantity
         base = send(base, {
             action = "Credit-Notice",
             target = direct_recipient,
@@ -792,8 +792,8 @@ _G["credit-notice"] = function (base, assignment)
     end
 
     -- Credit the recipient's balance.
-    base.balance[request.recipient] =
-        (base.balance[request.recipient] or 0) + quantity
+    base.balances[request.recipient] =
+        (base.balances[request.recipient] or 0) + quantity
     
     return "ok", log_result(base, "ok", {
         message = "Credit-Notice processed successfully.",
@@ -801,7 +801,7 @@ _G["credit-notice"] = function (base, assignment)
         to_ledger = request.sender,
         to_user = request.recipient,
         quantity = quantity,
-        balance = base.balance[request.recipient]
+        balances = base.balances[request.recipient]
     })
 end
 
@@ -871,7 +871,7 @@ function compute(base, assignment)
         {
             "compute called",
             {
-                balance = base.balance,
+                balances = base.balances,
                 ledgers = base.ledgers,
                 action = action
             }

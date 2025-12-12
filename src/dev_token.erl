@@ -21,13 +21,17 @@ snapshot(Base, _Req, _Opts) ->
 compute(Base, Req, Opts) ->
     ?event({token_call, {request, Req}}),
     maybe
-        {ok, SecureBase} ?= enforce_security(Base, Req, Opts),
-        route(SecureBase, Req, Opts)
+        {ok, SecureReq} ?= enforce_security(Base, Req, Opts),
+        route(Base, SecureReq, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(Base, _Req, _Opts) ->
-    {ok, Base}.
+enforce_security(_Base, Req, Opts) ->
+    Msg = hb_ao:get(<<"body">>, Req, Opts),
+    [Signer] = hb_message:signers(Msg, Opts),
+    ModifiedReq = Req#{ <<"body">> => Msg#{ <<"from">> => Signer } },
+    ?event(debug_token, {modified_req, ModifiedReq}),
+    {ok, ModifiedReq}.
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
@@ -106,35 +110,6 @@ transfer(Base, Assignment, Opts) ->
                 Assignment#{ <<"subject">> => From, <<"timestamp">> => Timestamp },
                 Opts
             ),
-        ?event({req, Req, from, From}),
-        true ?= validate_address(Recipient),
-        true ?= (is_integer(Quantity) and (Quantity >= 0))
-            orelse {error, <<"Quantity must be a non-negative integer.">>},
-        % Handle self-transfer: skip balance updates
-        case From =:= Recipient of
-            true ->
-                dev_process_lib:send(
-                    transfer_notices(From, Recipient, Quantity, Req, Opts),
-                    NormBase, 
-                    Opts
-                );
-            false ->
-                transfer_between_accounts(
-                    NormBase, 
-                    From, 
-                    Recipient, 
-                    Quantity, 
-                    Req, 
-                    Opts
-                )
-        end
-    else
-        error ->
-            {error, <<"Timestamp is required.">>}
-    end.
-
-transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
-    maybe
         % Retrieve balances from the base state.
         Balances = 
             hb_ao:get(
@@ -143,12 +118,14 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
                 % #{ <<"device">> => <<"trie@1.0">> }, 
                 Opts
             ),
-        ?event({balances_structure, Balances}),
+        ?event(debug_token, {balances_before_transfer, Balances}),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
         ?event(
             {transfer_balances, 
                 {from, From}, 
+                {to, Recipient},
+                {quantity, Quantity},
                 {sender_balance, SenderBalance},
                 {recipient_balance, RecipientBalance}
             }
@@ -160,24 +137,53 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
-        % Update the balances.
-        {ok, NewBalances} ?=
-            hb_ao:resolve(
-                Balances,
-                #{
-                    <<"path">> => <<"set">>,
-                    From => SenderBalance - Quantity,
-                    Recipient => RecipientBalance + Quantity
-                },
-                Opts
-            ),
-        % Update the base state and send notices.
-        NewBase = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
+        true ?= validate_address(Recipient),
+        % Handle self-transfer: skip balance updates
+        NewBaseAfterTransfer =
+            case From =:= Recipient of
+                true -> NormBase;
+                false ->
+                    {ok, NewBalances} =
+                        hb_ao:resolve(
+                            Balances,
+                            #{
+                                <<"path">> => <<"set">>,
+                                From => SenderBalance - Quantity,
+                                Recipient => RecipientBalance + Quantity
+                            },
+                            Opts
+                        ),
+                    hb_maps:put(<<"balances">>, NewBalances, NormBase, Opts)
+            end,
+        % Send transfer notices.
         dev_process_lib:send(
-            transfer_notices(From, Recipient, Quantity, Req, Opts), 
-            NewBase, 
+            transfer_notices(From, Recipient, Quantity, Req, Opts),
+            NewBaseAfterTransfer,
             Opts
         )
+    else
+        error -> {error, <<"Timestamp is required.">>};
+        {error, Reason} ->
+            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            ?event(debug_token,
+                {errored_transfer,
+                    {reason, Reason},
+                    {returning_base, Base}
+                }
+            ),
+            ReturnValue = {ok, Base},
+            ?event(debug_token, {transfer_returning, ReturnValue}),
+            dev_process_lib:send(
+                #{
+                    <<"target">> => hb_ao:get(<<"body/from">>, Assignment, Opts),       
+                    <<"message">> => Reason
+                },
+                Base,
+                Opts
+            );
+        Other ->
+            ?event(debug_token, {transfer_returning_other, Other}),
+            Other
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
@@ -250,6 +256,7 @@ default_mint(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_mint_authority(Base, Req, Opts),
+        ?event(debug_mint, {before_mint_mode, Req}),
         case hb_ao:get(<<"mode">>, Req, <<"single">>, Opts) of
             <<"single">> -> mint_single(Base, Req, Opts);
             <<"batch">> -> mint_batch(Base, Req, Opts);
@@ -273,12 +280,16 @@ enforce_mint_authority(Base, Req, Opts) ->
 
 mint_single(Base, Req, Opts) ->
     maybe
+        ?event(debug_mint, {before_resolve_recipient, Req}),
         {ok, To} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= validate_address(To),
+        ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
         perform_mint(Base, #{ To => Quantity }, Opts)
+    else
+        Error -> ?event(debug_mint, {error, Error})
     end.
 
 mint_batch(Base, Req, Opts) ->

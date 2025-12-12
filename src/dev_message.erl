@@ -645,7 +645,7 @@ set(Base, NewValuesMsg, Opts) ->
             KeysToSet
         )
     ),
-    % Caclulate if the keys to be set conflict with any committed keys.
+    % Calculate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
             Base,
@@ -691,7 +691,7 @@ set(Base, NewValuesMsg, Opts) ->
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, Opts) of
+            case hb_message:match(Merged, Base, strict, Opts) of
                 true ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
@@ -939,7 +939,7 @@ set_ignore_undefined_test() ->
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },
-    Signed = hb_message:commit(Unsigned, hb:wallet()),
+    Signed = hb_message:commit(Unsigned, #{ priv_wallet => hb:wallet() }),
     ?event({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
     ?event({bad_signed, BadSigned}),

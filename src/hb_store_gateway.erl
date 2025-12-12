@@ -46,23 +46,28 @@ read(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
-            ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-            case hb_gateway_client:read(ID, StoreOpts) of
-                {error, _} ->
-                    ?event({read_not_found, {key, ID}}),
-                    not_found;
-                {ok, Message} ->
-                    ?event({read_found, {key, ID}}),
-                    try hb_store_remote_node:maybe_cache(StoreOpts, Message)
-                    catch _:_ -> ignored end,
-                    case Rest of
-                        [] -> {ok, Message};
-                        _ ->
-                            case hb_util:deep_get(Rest, Message, StoreOpts) of
-                                not_found -> not_found;
-                                Value -> {ok, Value}
-                            end
-                    end
+            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+                not_found ->
+                    ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+                    case hb_gateway_client:read(ID, StoreOpts) of
+                        {error, _} ->
+                            ?event({read_not_found, {key, ID}}),
+                            not_found;
+                        {ok, Message} ->
+                            ?event({read_found, {key, ID}}),
+                            try hb_store_remote_node:maybe_cache(StoreOpts, Message)
+                            catch _:_ -> ignored end,
+                            case Rest of
+                                [] -> {ok, Message};
+                                _ ->
+                                    case hb_util:deep_get(Rest, Message, StoreOpts) of
+                                        not_found -> not_found;
+                                        Value -> {ok, Value}
+                                    end
+                             end
+                    end;
+                {ok, Value} ->
+                    {ok, Value}
             end;
         _ ->
             ?event({ignoring_non_id, Key}),
@@ -207,6 +212,69 @@ cache_read_message_test() ->
             #{ store => [Local] }
         ),
     ?assert(hb_message:match(Read, Written)).
+
+avoid_double_read_test() ->
+    hb_http_server:start_node(#{}),
+    %% Setup local node
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    Data = <<"123">>,
+    DefaultResponse = {200, Data},
+    Endpoints = [{<<"/raw/", ID/binary>>, raw, DefaultResponse}],
+    %% Start MockServer
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    %% Setup local store
+    Local = #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"cache-TEST/avoid_double_read_test">>
+    },
+    hb_store:reset(Local),
+    WriteOpts = #{
+        store =>
+            [
+                #{ <<"store-module">> => hb_store_gateway,
+                    <<"local-store">> => [Local],
+                    %% To be replaced with `<<"routes">>` after PR 563
+                    routes => custom_raw_routes(MockServer)
+                }
+            ]
+    },
+    {ok, Written} = hb_cache:read(ID, WriteOpts),
+    {ok, Read} = hb_cache:read(ID, #{ store => [Local] }),
+    try
+        ?assert(hb_message:match(Read, Written)),
+        %% Check number of requests make to raw
+        TXs = hb_mock_server:get_requests(raw, 1, ServerHandle),
+        ?assert(length(TXs) == 1)
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+custom_raw_routes(MockServer) ->
+    [
+        #{
+            <<"template">> => <<"/graphql">>,
+            <<"nodes">> => [
+                #{
+                    <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                    <<"opts">> => #{
+                        <<"http_client">> => httpc,
+                        <<"protocol">> => http2
+                    }
+                }
+            ]
+        },
+        #{
+            <<"template">> => <<"/raw">>,
+            <<"node">> =>
+                #{
+                    <<"prefix">> => MockServer,
+                    <<"opts">> => #{
+                        <<"http_client">> => gun,
+                        <<"protocol">> => http2
+                    }
+                }
+        }
+    ].
 
 %% @doc Routes can be specified in the options, overriding the default routes.
 %% We test this by inversion: If the above cache read test works, then we know 

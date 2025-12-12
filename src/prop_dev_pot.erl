@@ -38,24 +38,25 @@ addr_gen() ->
     base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 
 weight_gen() ->
-    rand:uniform(10_000).
+    1 + rand:uniform(10_000).
 
 resource_gen() ->
     base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 
 qty_gen() ->
-    rand:uniform(1_000_000).
+    1 + rand:uniform(1_000_000).
+
+t_gen(LastT) ->
+    LastT + rand:uniform(100_000).
 
 initial_state() ->
     StartResource = resource_gen(),
     StartAddr = addr_gen(),
     StartQty = qty_gen(),
     StartWeight = weight_gen(),
-    % TODO: these next 3 variables are incoherent: MintCap needs a reasonable floor,
-    % PropN must be > 0, and PropD must be > PropN
-    MintCap = rand:uniform(1_000_000_000_000_000),
-    PropN = rand:uniform(1_000),
-    PropD = rand:uniform(10_000),
+    MintCap = 100 + rand:uniform(1_000_000_000_000_000),
+    PropN = 1 + rand:uniform(1_000),
+    PropD = PropN + rand:uniform(10_000),
     #state{
         resources = [StartResource],
         addrs = [StartAddr],
@@ -66,20 +67,30 @@ initial_state() ->
             <<"t">> => 0,
             <<"last-drip">> => 0,
             <<"mint-cap">> => MintCap,
-            <<"mint-prop">> => {PropN, PropD},
+            <<"mint-prop-numerator">> => PropN,
+            <<"mint-prop-denominator">> => PropD,
             <<"resources">> => #{
                 StartResource => #{
+                    <<"accumulator">> => 1, % TODO: randomize this?
+                    <<"last-global-accumulator">> => 1,
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
                         StartAddr => #{
                             <<"quantity">> => StartQty,
-                            <<"last-resource-accumulator">> => 0
+                            <<"last-resource-accumulator">> => 1 % TODO: randomize this?
                         }
                     }
                 }
             },
-            <<"balances">> => #{ }
+            <<"balances">> => #{ },
+            <<"users">> => #{
+                StartAddr => #{
+                    <<"deposits">> => #{
+                        StartResource => StartQty
+                    }
+                }
+            }
         }
     }.
 
@@ -92,7 +103,7 @@ command(
         s = S
     }
 ) ->
-    % TODO: must we transform args to binary while generating the calls?
+    NextT = t_gen(maps:get(<<"last-drip">>, S)),
     ExistingResourceGen = elements(Resources),
     % TODO: the resource ID generated here can collide with existing resources, do we care?
     NewResourceGen = resource_gen(),
@@ -111,7 +122,7 @@ command(
                     [
                         ResourceID,
                         Weight,
-                        S,
+                        S#{ <<"t">> => NextT },
                         #{}
                     ]
                 }
@@ -120,7 +131,7 @@ command(
     NewAddrGen = addr_gen(),
     % Call balance() for an existing address
     BalanceGen =
-        ?LET(Addr, ExistingAddrGen, {call, dev_pot, balance, [Addr, S]}),
+        ?LET(Addr, ExistingAddrGen, {call, dev_pot, balance, [Addr, S#{ <<"t">> => NextT }]}),
     % Call deposit() for an existing resource, an existing or new address, and a random qty
     DepositGen =
         ?LET(
@@ -180,7 +191,7 @@ command(
     % TODO: tweak these weights
     frequency([
         {3, SetWeightGen},
-        {0, BalanceGen},
+        {3, BalanceGen},
         {0, DepositGen},
         {0, WithdrawGen}
     ]);
@@ -262,7 +273,7 @@ precondition(_State, _Call) -> true.
 
 % TODO: deeply verify the whole output state, not just specifically chosen keys?
 postcondition(
-    _State, 
+    _State,
     {call, _Mod, set_weight, [ResourceID, Weight, _S, _Opts]},
     ResultS
 ) ->
@@ -272,5 +283,35 @@ postcondition(
         0,
         #{}
     );
+postcondition(
+    _State,
+    {
+        call,
+        _Mod,
+        balance,
+        [
+            Addr,
+            S = #{
+                <<"t">> := T,
+                <<"last-drip">> := Last,
+                <<"balances">> := Balances,
+                <<"resources">> := Resources
+           }
+        ]
+    },
+    ResultBalance
+) ->
+    % TODO: can we improve upon this property?
+    ResIDs = maps:keys(Resources),
+    AddrDeposits = lists:map(fun(Res) -> dev_pot:get_deposit(Addr, Res, S) end, ResIDs),
+    HasPositiveDeposit = lists:any(fun(Dep) -> Dep > 0 end, AddrDeposits),
+    StartBalance = hb_maps:get(Addr, Balances, 0, #{}),
+    DeltaT = T - Last,
+    case DeltaT of
+        DT when DT =:= 0 ->
+            ResultBalance =:= StartBalance;
+        DT when DT > 0 andalso HasPositiveDeposit ->
+            ResultBalance > StartBalance
+    end;
 postcondition(_State, _Command, _ResultS) ->
     true.
