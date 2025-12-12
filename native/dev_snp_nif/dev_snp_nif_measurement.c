@@ -953,10 +953,17 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
         // Update GCTX based on section type
         switch (section_type) {
             case SECTION_TYPE_SNP_SEC_MEMORY:
-                // Zero pages
-                if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
-                    free(items_data);
-                    return -1;
+                // Zero pages - process page by page (each 4KB)
+                fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: updating SNP_SEC_MEMORY at GPA=0x%016llx, size=%u\n", 
+                        (unsigned long long)gpa, size);
+                for (uint32_t page_offset = 0; page_offset < size; page_offset += PAGE_SIZE) {
+                    uint64_t page_gpa = gpa + page_offset;
+                    if (gctx_update_page(gctx, PAGE_TYPE_ZERO, page_gpa, NULL, 0) != 0) {
+                        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: gctx_update_page failed for SNP_SEC_MEMORY at GPA=0x%016llx\n", 
+                                (unsigned long long)page_gpa);
+                        free(items_data);
+                        return -1;
+                    }
                 }
                 break;
                 
@@ -979,10 +986,18 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                 break;
                 
             case SECTION_TYPE_SVSM_CAA:
-                // Zero pages
-                if (gctx_update_page(gctx, PAGE_TYPE_ZERO, (uint64_t)gpa, NULL, (size_t)size) != 0) {
-                    free(items_data);
-                    return -1;
+                // Zero pages - process page by page
+                fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: updating SVSM_CAA at GPA=0x%016llx, size=%u\n", 
+                        (unsigned long long)gpa, size);
+                // Process each page individually
+                for (uint32_t page_offset = 0; page_offset < size; page_offset += PAGE_SIZE) {
+                    uint64_t page_gpa = gpa + page_offset;
+                    if (gctx_update_page(gctx, PAGE_TYPE_ZERO, page_gpa, NULL, 0) != 0) {
+                        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: gctx_update_page failed for SVSM_CAA at GPA=0x%016llx\n", 
+                                (unsigned long long)page_gpa);
+                        free(items_data);
+                        return -1;
+                    }
                 }
                 break;
                 
