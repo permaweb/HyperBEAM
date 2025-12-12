@@ -314,11 +314,17 @@ static ERL_NIF_TERM nif_compute_launch_digest(ErlNifEnv *env, int argc, const ER
     const char *ovmf_hash_hex = NULL;
     char ovmf_hash_hex_buf[97];  // 96 chars + null terminator
     if (get_map_binary(env, map, "firmware", &firmware_bin)) {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: firmware binary size=%zu\n", firmware_bin.size);
         if (firmware_bin.size == 96) {  // 48 bytes * 2 hex chars
             memcpy(ovmf_hash_hex_buf, firmware_bin.data, 96);
             ovmf_hash_hex_buf[96] = '\0';
             ovmf_hash_hex = ovmf_hash_hex_buf;
+            fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: OVMF hash hex (first 32 chars): %.32s\n", ovmf_hash_hex);
+        } else {
+            fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: firmware binary size mismatch (expected 96, got %zu)\n", firmware_bin.size);
         }
+    } else {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: firmware key not found in map\n");
     }
     
     // Extract kernel, initrd, append hashes (SHA-256, 32 bytes each)
@@ -331,39 +337,76 @@ static ERL_NIF_TERM nif_compute_launch_digest(ErlNifEnv *env, int argc, const ER
     const unsigned char *append_hash_ptr = NULL;
     
     if (get_map_binary(env, map, "kernel", &kernel_bin)) {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel binary size=%zu\n", kernel_bin.size);
         if (kernel_bin.size == 64) {  // 32 bytes * 2 hex chars
             if (hex_binary_to_raw(&kernel_bin, kernel_hash, 32)) {
                 kernel_hash_ptr = kernel_hash;
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel hash decoded (first 8 bytes): ");
+                for (int i = 0; i < 8; i++) {
+                    fprintf(stderr, "%02x", kernel_hash[i]);
+                }
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel hash hex decode failed\n");
             }
         } else if (kernel_bin.size == 32) {
             // Already raw binary
             memcpy(kernel_hash, kernel_bin.data, 32);
             kernel_hash_ptr = kernel_hash;
+            fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel hash raw binary (first 8 bytes): ");
+            for (int i = 0; i < 8; i++) {
+                fprintf(stderr, "%02x", kernel_hash[i]);
+            }
+            fprintf(stderr, "\n");
+        } else {
+            fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel binary size mismatch (expected 64 or 32, got %zu)\n", kernel_bin.size);
         }
+    } else {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: kernel key not found in map\n");
     }
     
     if (get_map_binary(env, map, "initrd", &initrd_bin)) {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: initrd binary size=%zu\n", initrd_bin.size);
         if (initrd_bin.size == 64) {  // 32 bytes * 2 hex chars
             if (hex_binary_to_raw(&initrd_bin, initrd_hash, 32)) {
                 initrd_hash_ptr = initrd_hash;
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: initrd hash decoded (first 8 bytes): ");
+                for (int i = 0; i < 8; i++) {
+                    fprintf(stderr, "%02x", initrd_hash[i]);
+                }
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: initrd hash hex decode failed\n");
             }
         } else if (initrd_bin.size == 32) {
             // Already raw binary
             memcpy(initrd_hash, initrd_bin.data, 32);
             initrd_hash_ptr = initrd_hash;
         }
+    } else {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: initrd key not found in map\n");
     }
     
     if (get_map_binary(env, map, "append", &append_bin)) {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: append binary size=%zu\n", append_bin.size);
         if (append_bin.size == 64) {  // 32 bytes * 2 hex chars
             if (hex_binary_to_raw(&append_bin, append_hash, 32)) {
                 append_hash_ptr = append_hash;
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: append hash decoded (first 8 bytes): ");
+                for (int i = 0; i < 8; i++) {
+                    fprintf(stderr, "%02x", append_hash[i]);
+                }
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: append hash hex decode failed\n");
             }
         } else if (append_bin.size == 32) {
             // Already raw binary
             memcpy(append_hash, append_bin.data, 32);
             append_hash_ptr = append_hash;
         }
+    } else {
+        fprintf(stderr, "[SNP_DEBUG] nif_compute_launch_digest: append key not found in map\n");
     }
     
     // Extract sev_hashes_gpa from map if provided (optional)

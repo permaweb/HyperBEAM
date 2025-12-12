@@ -1170,12 +1170,25 @@ int compute_launch_digest(
             if (gctx_init_with_seed(&gctx, ovmf_hash, LD_BYTES) != 0) {
                 return -1;
             }
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: initialized with OVMF hash (first 16 bytes): ");
+            for (int i = 0; i < 16 && i < LD_BYTES; i++) {
+                fprintf(stderr, "%02x", gctx.ld[i]);
+            }
+            fprintf(stderr, "\n");
         } else {
+            fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: OVMF hash hex length invalid (%zu), initializing with zeros\n", hex_len);
             gctx_init(&gctx);
         }
     } else {
+        fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: no OVMF hash provided, initializing with zeros\n");
         gctx_init(&gctx);
     }
+    
+    fprintf(stderr, "[SNP_DEBUG] compute_launch_digest: after GCTX init (first 16 bytes): ");
+    for (int i = 0; i < 16 && i < LD_BYTES; i++) {
+        fprintf(stderr, "%02x", gctx.ld[i]);
+    }
+    fprintf(stderr, "\n");
     
     // Update with all OVMF metadata pages
     // This parses the OVMF file and updates GCTX with all metadata sections:
