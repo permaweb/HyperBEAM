@@ -14,6 +14,7 @@
 #include <openssl/ec.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
+#include <openssl/err.h>
 
 // SEV ioctl definitions (from Linux kernel headers)
 // If linux/sev-guest.h is not available, define structures manually
@@ -226,26 +227,168 @@ static int hex_to_binary(const char *hex, unsigned char *bin, size_t bin_len) {
     return 0;
 }
 
+// Helper to get a binary value from Erlang map by atom key
+static int get_map_binary(ErlNifEnv *env, ERL_NIF_TERM map, const char *key_atom, ErlNifBinary *bin) {
+    ERL_NIF_TERM key = enif_make_atom(env, key_atom);
+    ERL_NIF_TERM value;
+    if (!enif_get_map_value(env, map, key, &value)) {
+        return 0;
+    }
+    if (!enif_inspect_binary(env, value, bin)) {
+        return 0;
+    }
+    return 1;
+}
+
+// Helper to get an integer value from Erlang map by atom key
+static int get_map_uint(ErlNifEnv *env, ERL_NIF_TERM map, const char *key_atom, unsigned int *val) {
+    ERL_NIF_TERM key = enif_make_atom(env, key_atom);
+    ERL_NIF_TERM value;
+    if (!enif_get_map_value(env, map, key, &value)) {
+        return 0;
+    }
+    if (!enif_get_uint(env, value, val)) {
+        return 0;
+    }
+    return 1;
+}
+
+// Helper to convert hex string binary to raw binary
+static int hex_binary_to_raw(const ErlNifBinary *hex_bin, unsigned char *raw, size_t raw_len) {
+    if (hex_bin->size != raw_len * 2) {
+        return 0;
+    }
+    for (size_t i = 0; i < raw_len; i++) {
+        char hex_byte[3] = {hex_bin->data[i*2], hex_bin->data[i*2+1], 0};
+        char *endptr;
+        unsigned long val = strtoul(hex_byte, &endptr, 16);
+        if (*endptr != '\0' || val > 255) {
+            return 0;
+        }
+        raw[i] = (unsigned char)val;
+    }
+    return 1;
+}
+
 // NIF: compute_launch_digest
 static ERL_NIF_TERM nif_compute_launch_digest(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    // Parse input map from Erlang
-    // The map contains: vcpus, vcpu_type, vmm_type, guest_features,
-    // firmware, kernel, initrd, append
+    ERL_NIF_TERM map;
+    uint32_t vcpus;
+    uint8_t vcpu_type;
+    uint8_t vmm_type;
+    uint64_t guest_features;
     
-    // For now, return error indicating this needs to be fully implemented
-    // The algorithm is complex and requires:
-    // 1. OVMF parsing
-    // 2. VMSA structure creation  
-    // 3. Complex page update logic
-    // 4. Metadata page handling
+    // Parse input map
+    if (argc != 1 || !enif_is_map(env, argv[0])) {
+        return make_error(env, SNP_ERR_INVALID_INPUT, "Expected a map as argument");
+    }
+    map = argv[0];
     
-    // TODO: Extract values from Erlang map
-    // TODO: Call compute_launch_digest function
-    // TODO: Return binary digest
+    // Extract required parameters
+    unsigned int vcpus_uint, vcpu_type_uint, vmm_type_uint;
+    if (!get_map_uint(env, map, "vcpus", &vcpus_uint)) {
+        return make_error(env, SNP_ERR_INVALID_INPUT, "Missing or invalid vcpus");
+    }
+    vcpus = (uint32_t)vcpus_uint;
     
-    return enif_make_tuple2(env,
-        enif_make_atom(env, "error"),
-        enif_make_string(env, "compute_launch_digest requires full port of SEV measurement algorithm. This is a complex ~500 line algorithm involving OVMF parsing, VMSA creation, and SHA-384 page updates. Consider keeping this in Rust or implementing incrementally.", ERL_NIF_LATIN1));
+    if (!get_map_uint(env, map, "vcpu_type", &vcpu_type_uint) || vcpu_type_uint > 255) {
+        return make_error(env, SNP_ERR_INVALID_INPUT, "Missing or invalid vcpu_type");
+    }
+    vcpu_type = (uint8_t)vcpu_type_uint;
+    
+    if (!get_map_uint(env, map, "vmm_type", &vmm_type_uint) || vmm_type_uint > 255) {
+        return make_error(env, SNP_ERR_INVALID_INPUT, "Missing or invalid vmm_type");
+    }
+    vmm_type = (uint8_t)vmm_type_uint;
+    
+    unsigned int guest_features_uint;
+    if (!get_map_uint(env, map, "guest_features", &guest_features_uint)) {
+        guest_features = 0;  // Default to 0 if not provided
+    } else {
+        guest_features = (uint64_t)guest_features_uint;
+    }
+    
+    // Extract firmware hash (OVMF hash) - hex string
+    ErlNifBinary firmware_bin;
+    const char *ovmf_hash_hex = NULL;
+    char ovmf_hash_hex_buf[97];  // 96 chars + null terminator
+    if (get_map_binary(env, map, "firmware", &firmware_bin)) {
+        if (firmware_bin.size == 96) {  // 48 bytes * 2 hex chars
+            memcpy(ovmf_hash_hex_buf, firmware_bin.data, 96);
+            ovmf_hash_hex_buf[96] = '\0';
+            ovmf_hash_hex = ovmf_hash_hex_buf;
+        }
+    }
+    
+    // Extract kernel, initrd, append hashes (SHA-256, 32 bytes each)
+    ErlNifBinary kernel_bin, initrd_bin, append_bin;
+    unsigned char kernel_hash[32] = {0};
+    unsigned char initrd_hash[32] = {0};
+    unsigned char append_hash[32] = {0};
+    const unsigned char *kernel_hash_ptr = NULL;
+    const unsigned char *initrd_hash_ptr = NULL;
+    const unsigned char *append_hash_ptr = NULL;
+    
+    if (get_map_binary(env, map, "kernel", &kernel_bin)) {
+        if (kernel_bin.size == 64) {  // 32 bytes * 2 hex chars
+            if (hex_binary_to_raw(&kernel_bin, kernel_hash, 32)) {
+                kernel_hash_ptr = kernel_hash;
+            }
+        } else if (kernel_bin.size == 32) {
+            // Already raw binary
+            memcpy(kernel_hash, kernel_bin.data, 32);
+            kernel_hash_ptr = kernel_hash;
+        }
+    }
+    
+    if (get_map_binary(env, map, "initrd", &initrd_bin)) {
+        if (initrd_bin.size == 64) {  // 32 bytes * 2 hex chars
+            if (hex_binary_to_raw(&initrd_bin, initrd_hash, 32)) {
+                initrd_hash_ptr = initrd_hash;
+            }
+        } else if (initrd_bin.size == 32) {
+            // Already raw binary
+            memcpy(initrd_hash, initrd_bin.data, 32);
+            initrd_hash_ptr = initrd_hash;
+        }
+    }
+    
+    if (get_map_binary(env, map, "append", &append_bin)) {
+        if (append_bin.size == 64) {  // 32 bytes * 2 hex chars
+            if (hex_binary_to_raw(&append_bin, append_hash, 32)) {
+                append_hash_ptr = append_hash;
+            }
+        } else if (append_bin.size == 32) {
+            // Already raw binary
+            memcpy(append_hash, append_bin.data, 32);
+            append_hash_ptr = append_hash;
+        }
+    }
+    
+    // Compute launch digest
+    unsigned char output_digest[48];
+    int ret = compute_launch_digest(
+        vcpus,
+        vcpu_type,
+        vmm_type,
+        guest_features,
+        ovmf_hash_hex,
+        kernel_hash_ptr,
+        initrd_hash_ptr,
+        append_hash_ptr,
+        output_digest
+    );
+    
+    if (ret != 0) {
+        return make_error(env, SNP_ERR_MEMORY_ERROR, "Failed to compute launch digest");
+    }
+    
+    // Return digest as binary
+    ERL_NIF_TERM result_bin;
+    unsigned char *dest = enif_make_new_binary(env, 48, &result_bin);
+    memcpy(dest, output_digest, 48);
+    
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), result_bin);
 }
 
 // NIF: verify_signature

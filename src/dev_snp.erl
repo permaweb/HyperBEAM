@@ -89,7 +89,10 @@ verify(M1, M2, NodeOpts) ->
         ?event({final_validation_result, Valid}),
         {ok, hb_util:bin(Valid)}
     else
-        {error, Reason} -> {error, Reason}
+        % Convert errors to {ok, false} since dev_message:verify expects {ok, boolean()}
+        {error, _Reason} -> 
+            ?event({snp_verification_failed, _Reason}),
+            {ok, <<"false">>}
     end.
 
 %% @doc Generate an AMD SEV-SNP commitment report and emit it as a message.
@@ -371,9 +374,8 @@ verify_trusted_software(M1, Msg, NodeOpts) ->
 verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Args = extract_measurement_args(Msg, NodeOpts),
     ?event({args, { explicit, Args}}),
-    {ok, Expected} = dev_snp_nif:compute_launch_digest(Args),
-    ExpectedBin = list_to_binary(Expected),
-    ?event({expected_measurement, {explicit, Expected}}),
+    {ok, ExpectedBin} = dev_snp_nif:compute_launch_digest(Args),
+    ?event({expected_measurement, {explicit, ExpectedBin}}),
     Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
     ?event({measurement, {explicit,Measurement}}),
     % verify_measurement is now implemented in Erlang
