@@ -116,7 +116,9 @@ execute_request(#{ model_state := ModelState, state := State, opts := Opts }, Re
 do_request(State, Req, Opts) when is_function(Req) ->
     Req(State, Opts);
 do_request(State, Req, Opts) when is_map(Req) ->
-    hb_ao:resolve(State, Req, Opts);
+    Res = hb_ao:resolve(State, Req, Opts),
+    io:format("DA RES: ~p~n", [Res]),
+    Res;
 do_request(_, DirectResult, _Opts) ->
     DirectResult.
 
