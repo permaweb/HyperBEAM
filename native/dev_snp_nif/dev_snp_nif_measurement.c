@@ -193,15 +193,20 @@ typedef struct {
 
 // Construct SEV hashes table page
 // Returns 0 on success, -1 on failure
-// Note: This must match Rust's PaddedSevHashTable serialization exactly
+// Note: This must match Rust's construct_page() which places the table at the page offset
 static int construct_sev_hashes_page(
     const unsigned char *kernel_hash,
     const unsigned char *initrd_hash,
     const unsigned char *append_hash,
+    size_t page_offset,  // Offset within page (from GPA & PAGE_MASK)
     unsigned char *page_output  // Must be PAGE_SIZE bytes
 ) {
     if (!kernel_hash || !initrd_hash || !append_hash || !page_output) {
         return -1;
+    }
+    
+    if (page_offset >= PAGE_SIZE) {
+        return -1;  // Invalid offset
     }
     
     memset(page_output, 0, PAGE_SIZE);
@@ -232,15 +237,16 @@ static int construct_sev_hashes_page(
     // Calculate padding size to match Rust: ((size + 15) & !15) - size
     size_t table_size = sizeof(sev_hash_table_t);
     size_t padded_size = ((table_size + 15) & ~15);  // Round up to 16-byte boundary
-    size_t padding_size = padded_size - table_size;
     
-    // Serialize table to page (offset 0)
-    // Copy the table, then add padding to match PaddedSevHashTable
-    if (table_size > PAGE_SIZE) {
-        return -1;  // Safety check
+    // Check that table fits in page at the given offset
+    if (page_offset + padded_size > PAGE_SIZE) {
+        return -1;  // Table would overflow page
     }
-    memcpy(page_output, &table, table_size);
-    // Padding is already zero from memset above
+    
+    // Serialize table to page at the specified offset (matching Rust construct_page)
+    // The padded table is placed starting at page_offset
+    memcpy(page_output + page_offset, &table, table_size);
+    // Padding bytes are already zero from memset above
     
     return 0;
 }
@@ -663,8 +669,12 @@ int compute_launch_digest(
         if (!sev_hashes_page) {
             return -1;  // Memory allocation failed
         }
-        if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
-            if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
+        // Extract page offset from GPA (lower 12 bits)
+        size_t page_offset = (size_t)(sev_hashes_gpa & 0xFFF);
+        // Align GPA to page boundary for the update
+        uint64_t page_aligned_gpa = sev_hashes_gpa & ~0xFFFULL;
+        if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, page_offset, sev_hashes_page) == 0) {
+            if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, page_aligned_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
                 free(sev_hashes_page);
                 return -1;
             }
