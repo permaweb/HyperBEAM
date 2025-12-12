@@ -31,18 +31,27 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([info/1, mint/3, balance/3]).
+-export([info/1, mint/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
 -export([update_deposit_index/5]).
--export([user/3, balances/1, balances/2]).
+-export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
 
 %%% Pot Model Functions.
 
 info(_S) ->
-    #{ exports => [<<"mint">>, <<"balance">>] }.
+    #{ exports =>
+        [
+            <<"mint">>,
+            <<"deposit">>,
+            <<"withdraw">>,
+            <<"delegate">>,
+            <<"undelegate">>,
+            <<"set_weight">>
+        ]
+    }.
 
 %% @doc Normalizes the state of the pot for either the global scope or a
 %% specific user ID.
@@ -231,16 +240,7 @@ ensure_initialized(Base, Req, Opts) ->
 
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
-balance(Addr, State, Opts) when not is_map(Addr) ->
-    do_balance(Addr, State, Opts);
-balance(State, Req, Opts) ->
-    case hb_maps:find(<<"address">>, Req, Opts) of
-        error -> {error, <<"'address' parameter is required for balance lookup">>};
-        % TODO: wrap this in an {ok } tuple?
-        {ok, Address} -> do_balance(Address, State, Opts)
-    end.
-
-do_balance(Addr, S, Opts) ->
+balance(Addr, S, Opts) ->
     hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}, Opts), 0, Opts)
         + unclaimed_yield(Addr, S, Opts).
 
