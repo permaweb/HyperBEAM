@@ -492,7 +492,17 @@ calculate_base_id(GivenProcess, Opts) ->
 %% If the remote scheduler does not support the given codec, it will be
 %% downgraded and re-signed.
 schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
-    schedule_result(TargetProcess, MsgToPush, <<"httpsig@1.0">>, Origin, Opts).
+    schedule_result(
+        TargetProcess,
+        MsgToPush,
+        hb_opts:get(
+            scheduler_default_commitment_spec,
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+        Origin,
+        Opts
+    ).
 schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     Target = hb_ao:get(<<"target">>, MsgToPush, Opts),
     ?event(push,

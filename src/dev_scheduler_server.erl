@@ -244,7 +244,6 @@ do_assign(State, Message, ReplyPID) ->
             ?event(writes_complete),
             ?event(uploading_message),
             hb_client:upload(Message, Opts),
-            ?event(uploading_assignment),
             hb_client:upload(Assignment, Opts),
             ?event(uploads_complete),
             maybe_inform_recipient(
