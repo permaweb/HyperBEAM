@@ -412,12 +412,53 @@ static int create_vmsa_page(
     if (vmsa_write_u64(vmsa_page, 0x158, rip) != 0) return -1;
     
     // RDX at offset 0x1E8 (8 bytes)
+    // For EC2: rdx = 0 (always)
+    // For QEMU: rdx = vcpu_type.sig() (CPU signature)
+    // For KRUN: rdx = 0
     uint64_t rdx = 0;
-    if (vmm_type == 2) {  // EC2
-        rdx = 0x80000001;  // EC2 specific value
-    } else {
-        rdx = (uint64_t)vcpu_type;  // QEMU uses vcpu_type signature
+    if (vmm_type == 1) {  // QEMU
+        // Calculate CPU signature from vcpu_type
+        // This matches Rust's cpu_sig function and CpuType::sig()
+        int32_t cpu_sig = 0;
+        switch (vcpu_type) {
+            case 0:  // Epyc
+            case 1:  // EpycV1
+            case 3:  // EpycIBPB
+            case 4:  // EpycV3
+            case 5:  // EpycV4
+                // cpu_sig(23, 1, 2) = (0 << 20) | (0 << 16) | (23 << 8) | (1 << 4) | 2
+                // = 0x00001712
+                cpu_sig = 0x00001712;
+                break;
+            case 6:  // EpycRome
+            case 7:  // EpycRomeV1
+            case 8:  // EpycRomeV2
+            case 9:  // EpycRomeV3
+                // cpu_sig(23, 49, 0) = (0 << 20) | (3 << 16) | (23 << 8) | (1 << 4) | 0
+                // = 0x00031710
+                cpu_sig = 0x00031710;
+                break;
+            case 10: // EpycMilan
+            case 11: // EpycMilanV1
+            case 12: // EpycMilanV2
+                // cpu_sig(25, 1, 1) = (0 << 20) | (0 << 16) | (25 << 8) | (1 << 4) | 1
+                // = 0x00001911
+                cpu_sig = 0x00001911;
+                break;
+            case 13: // EpycGenoa
+            case 14: // EpycGenoaV1
+                // cpu_sig(25, 17, 0) = (0 << 20) | (1 << 16) | (25 << 8) | (1 << 4) | 0
+                // = 0x00011910
+                cpu_sig = 0x00011910;
+                break;
+            default:
+                // Default to EpycV4 signature
+                cpu_sig = 0x00001712;
+                break;
+        }
+        rdx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
     }
+    // For EC2 (vmm_type == 2) and KRUN (vmm_type == 3), rdx remains 0
     if (vmsa_write_u64(vmsa_page, 0x1E8, rdx) != 0) return -1;
     
     // G_PAT at offset 0x240 (8 bytes)
@@ -599,13 +640,21 @@ int compute_launch_digest(
     }
     
     // Update with SEV hashes table if kernel hash is provided and GPA is available
+    // Use dynamic allocation to avoid stack overflow with large buffers
+    unsigned char *sev_hashes_page = NULL;
     if (kernel_hash && initrd_hash && append_hash && sev_hashes_gpa != 0) {
-        unsigned char sev_hashes_page[PAGE_SIZE];
+        sev_hashes_page = (unsigned char *)malloc(PAGE_SIZE);
+        if (!sev_hashes_page) {
+            return -1;  // Memory allocation failed
+        }
         if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
             if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
+                free(sev_hashes_page);
                 return -1;
             }
         }
+        free(sev_hashes_page);
+        sev_hashes_page = NULL;
     }
     
     // Create and update VMSA pages
@@ -614,8 +663,14 @@ int compute_launch_digest(
     // Each VCPU needs its own VMSA page, even if they have the same EIP
     
     // Create VMSA page with BSP EIP (used for all VCPUs when OVMF reset EIP is not available)
-    unsigned char vmsa_page[PAGE_SIZE];
+    // Use dynamic allocation to avoid stack overflow
+    unsigned char *vmsa_page = (unsigned char *)malloc(PAGE_SIZE);
+    if (!vmsa_page) {
+        return -1;  // Memory allocation failed
+    }
+    
     if (create_vmsa_page(BSP_EIP, vcpu_type, vmm_type, guest_features, vmsa_page) != 0) {
+        free(vmsa_page);
         return -1;
     }
     
@@ -624,9 +679,12 @@ int compute_launch_digest(
     // This matches the Rust implementation which calls vmsa.pages(vcpus) to generate separate pages
     for (uint32_t i = 0; i < vcpus; i++) {
         if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page, PAGE_SIZE) != 0) {
+            free(vmsa_page);
             return -1;
         }
     }
+    
+    free(vmsa_page);
     
     // Return the final launch digest
     memcpy(output_digest, gctx.ld, LD_BYTES);
