@@ -202,3 +202,56 @@ create_generic_manifest(Opts) ->
             <<"body">> => JSON
         },
     hb_cache:write(ManifestMsg, Opts).
+
+bug_test() ->
+    ID = <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
+    %% Setup stores
+    LmdbStoreOpts = #{    
+        <<"name">> => <<"cache-mainnet/lmdb">>,
+        <<"store-module">> => hb_store_lmdb
+    },
+    %S3StoreOpts = #{    
+    %    <<"name">> => <<"cache-mainnet/lmdb2">>,
+    %    <<"store-module">> => hb_store_lmdb
+    %},
+    Stores = 
+        [
+            LmdbStoreOpts,
+            %S3StoreOpts,
+            #{
+                <<"store-module">> => hb_store_gateway,
+                <<"local-store">> => [LmdbStoreOpts]
+            }
+        ],
+
+    %hb_store:start(S3StoreOpts),
+    %hb_store:reset(S3StoreOpts),
+    hb_store:start(LmdbStoreOpts),
+    hb_store:reset(LmdbStoreOpts),
+    %% Confirm they are empty
+    LmdbKeys = hb_store:list(LmdbStoreOpts, hb_store:resolve(LmdbStoreOpts, ID)),
+    %S3Keys = hb_store:list(S3StoreOpts, hb_store:resolve(S3StoreOpts, ID)),
+    %?assertEqual(LmdbKeys, S3Keys),
+    ?assert(LmdbKeys =:= {ok, []}),
+    %% Launch node with stores
+    Node = hb_http_server:start_node(#{store => Stores, ans104_trust_gql => false}),
+    %% Make sure it follow redirection
+    Opts = #{http_client => httpc, ans104_trust_gql => false},
+
+    %% Request ID/data to be cached
+    erlang:display("==== FIRST REQUEST ===="),
+    hb_http:get(Node, <<"/", ID/binary, "/data">>, Opts),
+    %% Confirm we have access to the saved path
+    ResolvedPath = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-type">>),
+    ?assertEqual(<<"data/miyPVkjgmg2n4sXpAb9OsqyfM9oh80_EzfhWhjN6ZIg">>, ResolvedPath),
+
+    %% Request manifest
+    erlang:display("==== SECOND REQUEST ===="),
+    hb_http:get(Node, <<"/", ID/binary, "~manifest@1.0/index">>, Opts),
+    %?assertMatch({ok, #{<<"location">> := <<"/", ID:43/binary, "~manifest@1.0/index">>}}, Response2),
+
+    %% Confirm we still have access to the content-type
+    ResolvedPath2 = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-type">>),
+    erlang:display(ResolvedPath2),
+    ?assertEqual(<<"data/miyPVkjgmg2n4sXpAb9OsqyfM9oh80_EzfhWhjN6ZIg">>, ResolvedPath2),
+    ok.
