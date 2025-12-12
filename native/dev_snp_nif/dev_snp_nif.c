@@ -208,6 +208,7 @@ extern int compute_launch_digest(uint32_t vcpus, uint8_t vcpu_type, uint8_t vmm_
                                  const unsigned char *kernel_hash,
                                  const unsigned char *initrd_hash,
                                  const unsigned char *append_hash,
+                                 uint64_t sev_hashes_gpa,
                                  unsigned char *output_digest);
 
 // Helper to decode hex string to binary
@@ -365,6 +366,13 @@ static ERL_NIF_TERM nif_compute_launch_digest(ErlNifEnv *env, int argc, const ER
         }
     }
     
+    // Extract sev_hashes_gpa from map if provided (optional)
+    uint64_t sev_hashes_gpa = 0;
+    unsigned int gpa_uint;
+    if (get_map_uint(env, map, "sev_hashes_gpa", &gpa_uint)) {
+        sev_hashes_gpa = (uint64_t)gpa_uint;
+    }
+    
     // Compute launch digest
     unsigned char output_digest[48];
     int ret = compute_launch_digest(
@@ -376,6 +384,7 @@ static ERL_NIF_TERM nif_compute_launch_digest(ErlNifEnv *env, int argc, const ER
         kernel_hash_ptr,
         initrd_hash_ptr,
         append_hash_ptr,
+        sev_hashes_gpa,
         output_digest
     );
     
@@ -533,7 +542,7 @@ static ErlNifFunc nif_funcs[] = {
     {"check_snp_support", 0, nif_check_snp_support},
     {"generate_attestation_report", 2, nif_generate_attestation_report},
     {"compute_launch_digest", 1, nif_compute_launch_digest},
-    {"verify_signature", 3, nif_verify_signature}
+    {"verify_signature_nif", 3, nif_verify_signature}
 };
 
 ERL_NIF_INIT(dev_snp_nif, nif_funcs, NULL, NULL, NULL, NULL)

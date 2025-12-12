@@ -87,12 +87,13 @@ verify(M1, M2, NodeOpts) ->
                 ]
             ),
         ?event({final_validation_result, Valid}),
-        {ok, hb_util:bin(Valid)}
+        % Return boolean value (not binary) for consistency with dev_message:verify expectations
+        {ok, Valid}
     else
         % Convert errors to {ok, false} since dev_message:verify expects {ok, boolean()}
         {error, _Reason} -> 
             ?event({snp_verification_failed, _Reason}),
-            {ok, <<"false">>}
+            {ok, false}
     end.
 
 %% @doc Generate an AMD SEV-SNP commitment report and emit it as a message.
@@ -160,7 +161,12 @@ generate(_M1, _M2, Opts) ->
                     true -> {ok, MockResponse};
                     false -> 
                         % Assume it's JSON, convert to binary
-                        {ok, dev_snp_nif:report_json_to_binary(MockResponse)}
+                        % report_json_to_binary returns bare binary on success, {error, ...} on failure
+                        case dev_snp_nif:report_json_to_binary(MockResponse) of
+                            {error, ConvertError} -> {error, ConvertError};
+                            Binary when is_binary(Binary) -> {ok, Binary};
+                            Other -> {error, {unexpected_return_type, Other}}
+                        end
                 end;
             _ ->
                 % Call actual NIF function (returns binary)
@@ -170,7 +176,12 @@ generate(_M1, _M2, Opts) ->
                 )
         end,
         % Convert binary to JSON for storage/transmission
-        ReportMap = dev_snp_nif:report_binary_to_json(ReportBinary),
+        {ok, ReportMap} ?= case dev_snp_nif:report_binary_to_json(ReportBinary) of
+            {ok, Map} -> {ok, Map};
+            {error, ConvertReason} -> {error, {report_conversion_failed, ConvertReason}};
+            Map when is_map(Map) -> {ok, Map};
+            UnexpectedFormat -> {error, {unexpected_report_format, UnexpectedFormat}}
+        end,
         ReportJSON = hb_json:encode(ReportMap),
         ?event({snp_report_json, ReportJSON}),
         ?event({snp_report_generated, {nonce, ReportData}, {report, ReportJSON}}),
@@ -185,8 +196,8 @@ generate(_M1, _M2, Opts) ->
         ?event({snp_report_msg, ReportMsg}),
         {ok, ReportMsg}
     else
-        {error, Reason} -> {error, Reason};
-        Error -> {error, Error}
+        {error, GenerateError} -> {error, GenerateError};
+        GenerateError -> {error, GenerateError}
     end.
 
 %% @doc Extract and normalize the SNP commitment message from the input.
@@ -374,7 +385,12 @@ verify_trusted_software(M1, Msg, NodeOpts) ->
 verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Args = extract_measurement_args(Msg, NodeOpts),
     ?event({args, { explicit, Args}}),
-    {ok, ExpectedBin} = dev_snp_nif:compute_launch_digest(Args),
+    % Try to read OVMF file and extract SEV hashes table GPA
+    ArgsWithGpa = case read_ovmf_gpa() of
+        {ok, Gpa} -> Args#{sev_hashes_gpa => Gpa};
+        {error, _Reason} -> Args  % Continue without GPA if file not found
+    end,
+    {ok, ExpectedBin} = dev_snp_nif:compute_launch_digest(ArgsWithGpa),
     ?event({expected_measurement, {explicit, ExpectedBin}}),
     Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
     ?event({measurement, {explicit,Measurement}}),
@@ -412,6 +428,26 @@ extract_measurement_args(Msg, NodeOpts) ->
         )
     ).
 
+%% @doc Read OVMF file and extract SEV hashes table GPA.
+%% Tries multiple possible paths for the OVMF file.
+%% @returns {ok, GPA} or {error, Reason}
+-spec read_ovmf_gpa() -> {ok, non_neg_integer()} | {error, term()}.
+read_ovmf_gpa() ->
+    OvmfPaths = [
+        "test/OVMF-1.55.fd",
+        "../test/OVMF-1.55.fd",
+        "../../test/OVMF-1.55.fd"
+    ],
+    read_ovmf_gpa(OvmfPaths).
+
+read_ovmf_gpa([]) ->
+    {error, ovmf_file_not_found};
+read_ovmf_gpa([Path | Rest]) ->
+    case dev_snp_nif:parse_ovmf_sev_hashes_gpa(Path) of
+        {ok, Gpa} -> {ok, Gpa};
+        {error, _Reason} -> read_ovmf_gpa(Rest)
+    end.
+
 %% @doc Verify the integrity of the SNP report's digital signature.
 %%
 %% This function validates the cryptographic signature of the SNP report
@@ -433,12 +469,42 @@ verify_report_integrity(ReportJSON) ->
     maybe
         % Parse JSON to extract chip_id, TCB version, and report structure
         Report = hb_json:decode(ReportJSON),
-        ChipId = list_to_binary(hb_ao:get(<<"chip_id">>, Report, [])),
-        CurrentTcb = hb_ao:get(<<"current_tcb">>, Report, #{}),
-        BootloaderSPL = hb_ao:get(<<"bootloader">>, CurrentTcb, 0),
-        TeeSPL = hb_ao:get(<<"tee">>, CurrentTcb, 0),
-        SnpSPL = hb_ao:get(<<"snp">>, CurrentTcb, 0),
-        UcodeSPL = hb_ao:get(<<"microcode">>, CurrentTcb, 0),
+        
+        % Validate required fields exist
+        ChipIdList ?= case hb_ao:get(<<"chip_id">>, Report, undefined) of
+            undefined -> {error, missing_chip_id};
+            [] -> {error, empty_chip_id};
+            List when is_list(List) andalso length(List) =:= 64 -> {ok, List};
+            _ -> {error, invalid_chip_id_format}
+        end,
+        ChipId = list_to_binary(ChipIdList),
+        
+        CurrentTcb ?= case hb_ao:get(<<"current_tcb">>, Report, undefined) of
+            undefined -> {error, missing_current_tcb};
+            TcbMap when is_map(TcbMap) -> {ok, TcbMap};
+            _ -> {error, invalid_current_tcb_format}
+        end,
+        
+        BootloaderSPL ?= case hb_ao:get(<<"bootloader">>, CurrentTcb, undefined) of
+            undefined -> {error, missing_bootloader_spl};
+            BlVal when is_integer(BlVal) -> {ok, BlVal};
+            _ -> {error, invalid_bootloader_spl}
+        end,
+        TeeSPL ?= case hb_ao:get(<<"tee">>, CurrentTcb, undefined) of
+            undefined -> {error, missing_tee_spl};
+            TeeVal when is_integer(TeeVal) -> {ok, TeeVal};
+            _ -> {error, invalid_tee_spl}
+        end,
+        SnpSPL ?= case hb_ao:get(<<"snp">>, CurrentTcb, undefined) of
+            undefined -> {error, missing_snp_spl};
+            SnpVal when is_integer(SnpVal) -> {ok, SnpVal};
+            _ -> {error, invalid_snp_spl}
+        end,
+        UcodeSPL ?= case hb_ao:get(<<"microcode">>, CurrentTcb, undefined) of
+            undefined -> {error, missing_ucode_spl};
+            UcVal when is_integer(UcVal) -> {ok, UcVal};
+            _ -> {error, invalid_ucode_spl}
+        end,
         
         % Fetch certificates from AMD KDS (non-blocking HTTP in Erlang)
         {ok, CertChainPEM} ?= dev_snp_nif:fetch_cert_chain(undefined),

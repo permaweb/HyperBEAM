@@ -235,8 +235,42 @@ static int construct_sev_hashes_page(
 // BSP EIP constant
 #define BSP_EIP 0xfffffff0ULL
 
+// Helper to safely write to VMSA page with bounds checking
+static int vmsa_write_u64(unsigned char *page, size_t offset, uint64_t value) {
+    if (offset + 8 > PAGE_SIZE) {
+        return -1;
+    }
+    memcpy(page + offset, &value, 8);
+    return 0;
+}
+
+static int vmsa_write_u32(unsigned char *page, size_t offset, uint32_t value) {
+    if (offset + 4 > PAGE_SIZE) {
+        return -1;
+    }
+    memcpy(page + offset, &value, 4);
+    return 0;
+}
+
+static int vmsa_write_u16(unsigned char *page, size_t offset, uint16_t value) {
+    if (offset + 2 > PAGE_SIZE) {
+        return -1;
+    }
+    memcpy(page + offset, &value, 2);
+    return 0;
+}
+
+static int vmsa_write_u8(unsigned char *page, size_t offset, uint8_t value) {
+    if (offset >= PAGE_SIZE) {
+        return -1;
+    }
+    page[offset] = value;
+    return 0;
+}
+
 // Create a VMSA page for a single VCPU
 // This is a simplified implementation that creates a valid VMSA structure
+// Based on Rust SevEsSaveArea structure (4096 bytes when serialized)
 static int create_vmsa_page(
     uint64_t eip,
     uint8_t vcpu_type,
@@ -253,83 +287,67 @@ static int create_vmsa_page(
     // Set key registers based on Rust VMSA implementation
     // These values match the Rust build_save_area function
     
-    // Segment registers (VmcbSegment: base, selector, attrib, limit)
-    // ES, CS, SS, DS, FS, GS - all initialized to defaults
-    // Offset 0x00-0x5F: Segment registers (6 * 16 bytes = 96 bytes)
+    // Segment registers are at offsets 0x00-0x5F (already zero from memset)
+    // GDTR, IDTR, LDTR, TR are at offsets 0x60-0x9F (already zero)
     
-    // GDTR, IDTR, LDTR, TR - initialized to defaults
-    // Offset 0x60-0x9F: Descriptor table registers (4 * 16 bytes = 64 bytes)
-    
-    // Reserved (43 bytes) at offset 0xA0
     // CPL at offset 0xAB
-    vmsa_page[0xAB] = 0;
+    if (vmsa_write_u8(vmsa_page, 0xAB, 0) != 0) return -1;
     
-    // Reserved (4 bytes) at offset 0xAC
     // EFER at offset 0xB0 (8 bytes, little-endian)
-    uint64_t efer = 0x1000;
-    memcpy(vmsa_page + 0xB0, &efer, 8);
+    if (vmsa_write_u64(vmsa_page, 0xB0, 0x1000) != 0) return -1;
     
-    // Reserved (104 bytes) at offset 0xB8
-    // XSS at offset 0x120 (8 bytes)
     // CR4 at offset 0x128 (8 bytes)
-    uint64_t cr4 = 0x40;
-    memcpy(vmsa_page + 0x128, &cr4, 8);
+    if (vmsa_write_u64(vmsa_page, 0x128, 0x40) != 0) return -1;
     
-    // CR3 at offset 0x130 (8 bytes) - 0
+    // CR3 at offset 0x130 (8 bytes) - 0 (already zero)
     // CR0 at offset 0x138 (8 bytes)
-    uint64_t cr0 = 0x10;
-    memcpy(vmsa_page + 0x138, &cr0, 8);
+    if (vmsa_write_u64(vmsa_page, 0x138, 0x10) != 0) return -1;
     
     // DR7 at offset 0x140 (8 bytes)
-    uint64_t dr7 = 0x400;
-    memcpy(vmsa_page + 0x140, &dr7, 8);
+    if (vmsa_write_u64(vmsa_page, 0x140, 0x400) != 0) return -1;
     
     // DR6 at offset 0x148 (8 bytes)
-    uint64_t dr6 = 0xffff0ff0;
-    memcpy(vmsa_page + 0x148, &dr6, 8);
+    if (vmsa_write_u64(vmsa_page, 0x148, 0xffff0ff0) != 0) return -1;
     
     // RFLAGS at offset 0x150 (8 bytes)
-    uint64_t rflags = 0x2;
-    memcpy(vmsa_page + 0x150, &rflags, 8);
+    if (vmsa_write_u64(vmsa_page, 0x150, 0x2) != 0) return -1;
     
     // RIP at offset 0x158 (8 bytes, little-endian)
     uint64_t rip = eip & 0xffff;
-    memcpy(vmsa_page + 0x158, &rip, 8);
+    if (vmsa_write_u64(vmsa_page, 0x158, rip) != 0) return -1;
     
-    // Reserved (88 bytes) at offset 0x160
-    // RSP at offset 0x1B8 (8 bytes) - 0
-    // Reserved (24 bytes) at offset 0x1C0
-    
-    // RAX at offset 0x1D8 (8 bytes) - 0
-    // RCX at offset 0x1E0 (8 bytes) - 0
     // RDX at offset 0x1E8 (8 bytes)
     uint64_t rdx = 0;
     if (vmm_type == 2) {  // EC2
         rdx = 0x80000001;  // EC2 specific value
+    } else {
+        rdx = (uint64_t)vcpu_type;  // QEMU uses vcpu_type signature
     }
-    memcpy(vmsa_page + 0x1E8, &rdx, 8);
+    if (vmsa_write_u64(vmsa_page, 0x1E8, rdx) != 0) return -1;
     
-    // RBX, RSP, RBP, RSI, RDI, R8-R15 - all 0
-    // Reserved (16 bytes)
+    // G_PAT at offset 0x240 (8 bytes)
+    if (vmsa_write_u64(vmsa_page, 0x240, 0x7040600070406ULL) != 0) return -1;
     
     // SEV Features at offset 0x3E0 (8 bytes, little-endian)
-    memcpy(vmsa_page + 0x3E0, &guest_features, 8);
+    if (vmsa_write_u64(vmsa_page, 0x3E0, guest_features) != 0) return -1;
     
     // XCR0 at offset 0x3E8 (8 bytes)
-    uint64_t xcr0 = 0x1;
-    memcpy(vmsa_page + 0x3E8, &xcr0, 8);
+    if (vmsa_write_u64(vmsa_page, 0x3E8, 0x1) != 0) return -1;
     
-    // MXCSR at offset 0x3F0 (4 bytes)
-    uint32_t mxcsr = 0x1f80;
-    memcpy(vmsa_page + 0x3F0, &mxcsr, 4);
+    // MXCSR at offset 0x3F0 (4 bytes) - only set for QEMU
+    uint32_t mxcsr = 0;
+    uint16_t fcw = 0;
+    if (vmm_type == 1) {  // QEMU
+        mxcsr = 0x1f80;
+        fcw = 0x37f;
+    }
+    if (vmsa_write_u32(vmsa_page, 0x3F0, mxcsr) != 0) return -1;
     
     // X87 FCW at offset 0x3F4 (2 bytes)
-    uint16_t fcw = 0x37f;
-    memcpy(vmsa_page + 0x3F4, &fcw, 2);
+    if (vmsa_write_u16(vmsa_page, 0x3F4, fcw) != 0) return -1;
     
-    // X87 FSW, FTW, FOP, CS, DS, RIP, DP - all 0 or defaults
-    // FPU registers (X87: 80 bytes, XMM: 256 bytes, YMM: 256 bytes)
-    // Manual padding (2448 bytes)
+    // All other fields remain zero (from memset)
+    // The structure is 4096 bytes total with manual_padding at the end
     
     return 0;
 }
@@ -452,6 +470,7 @@ int compute_launch_digest(
     const unsigned char *kernel_hash,  // 32 bytes (SHA-256)
     const unsigned char *initrd_hash,  // 32 bytes (SHA-256)
     const unsigned char *append_hash,  // 32 bytes (SHA-256)
+    uint64_t sev_hashes_gpa,  // SEV hashes table GPA (0 if not provided)
     unsigned char *output_digest  // 48 bytes output
 ) {
     gctx_t gctx;
@@ -484,73 +503,33 @@ int compute_launch_digest(
         gctx_init(&gctx);
     }
     
-    // Update with SEV hashes table if kernel hash is provided
-    // Try to get the GPA from OVMF file in test directory
-    if (kernel_hash && initrd_hash && append_hash) {
-        uint64_t sev_hashes_gpa = 0;
-        // Try to parse OVMF file to get the GPA
-        // Look for OVMF file in test directory
-        const char *ovmf_paths[] = {
-            "test/OVMF-1.55.fd",
-            "../test/OVMF-1.55.fd",
-            "../../test/OVMF-1.55.fd",
-            NULL
-        };
-        
-        int found_gpa = 0;
-        for (int i = 0; ovmf_paths[i] != NULL; i++) {
-            if (parse_ovmf_sev_hashes_gpa(ovmf_paths[i], &sev_hashes_gpa) == 0) {
-                found_gpa = 1;
-                break;
+    // Update with SEV hashes table if kernel hash is provided and GPA is available
+    if (kernel_hash && initrd_hash && append_hash && sev_hashes_gpa != 0) {
+        unsigned char sev_hashes_page[PAGE_SIZE];
+        if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
+            if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
+                return -1;
             }
         }
-        
-        if (found_gpa && sev_hashes_gpa != 0) {
-            unsigned char sev_hashes_page[PAGE_SIZE];
-            if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
-                if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
-                    return -1;
-                }
-            }
-        }
-        // If we can't find the GPA, skip the update (measurement won't match, but won't crash)
     }
     
     // Create and update VMSA pages
-    // Use default EIP since we don't have OVMF to get reset EIP
-    uint64_t ap_eip = 0x0;
+    // For SEV-SNP, all VCPUs use the same EIP value (BSP_EIP)
+    // When OVMF is available, we could extract the reset EIP, but for now we use the default
+    // Each VCPU needs its own VMSA page, even if they have the same EIP
     
-    // Create BSP VMSA page
-    unsigned char bsp_vmsa_page[PAGE_SIZE];
-    if (create_vmsa_page(BSP_EIP, vcpu_type, vmm_type, guest_features, bsp_vmsa_page) != 0) {
+    // Create VMSA page with BSP EIP (used for all VCPUs when OVMF reset EIP is not available)
+    unsigned char vmsa_page[PAGE_SIZE];
+    if (create_vmsa_page(BSP_EIP, vcpu_type, vmm_type, guest_features, vmsa_page) != 0) {
         return -1;
     }
     
-    // Update with BSP VMSA page
-    if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, bsp_vmsa_page, PAGE_SIZE) != 0) {
-        return -1;
-    }
-    
-    // Create AP VMSA page if EIP > 0 and we have multiple VCPUs
-    if (ap_eip > 0 && vcpus > 1) {
-        unsigned char ap_vmsa_page[PAGE_SIZE];
-        if (create_vmsa_page(ap_eip, vcpu_type, vmm_type, guest_features, ap_vmsa_page) != 0) {
+    // Update with VMSA page for each VCPU
+    // Each VCPU gets its own page, even though they may have the same EIP
+    // This matches the Rust implementation which calls vmsa.pages(vcpus) to generate separate pages
+    for (uint32_t i = 0; i < vcpus; i++) {
+        if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page, PAGE_SIZE) != 0) {
             return -1;
-        }
-        
-        // Update with AP VMSA pages (one per additional VCPU)
-        for (uint32_t i = 1; i < vcpus; i++) {
-            if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, ap_vmsa_page, PAGE_SIZE) != 0) {
-                return -1;
-            }
-        }
-    } else if (vcpus > 1) {
-        // Even if ap_eip is 0, we still need to update for additional VCPUs
-        // Use BSP page for all VCPUs when ap_eip is 0
-        for (uint32_t i = 1; i < vcpus; i++) {
-            if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, bsp_vmsa_page, PAGE_SIZE) != 0) {
-                return -1;
-            }
         }
     }
     

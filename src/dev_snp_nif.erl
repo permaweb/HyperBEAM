@@ -4,6 +4,8 @@
 -export([fetch_cert_chain/1, fetch_vcek/6]).
 -export([report_binary_to_json/1, report_json_to_binary/1]).
 -export([pem_to_der_chain/1, pem_cert_to_der/1]).
+-export([parse_ovmf_sev_hashes_gpa/1]).
+-export([verify_signature_nif/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -90,12 +92,18 @@ verify_signature(ReportBinary, CertChainPEM, VcekDER) ->
         false -> {error, <<"VCEK must be DER-encoded binary">>}
     end,
     case {ReportBin, CertChainDER, VcekDERValid} of
-        {{ok, _RB}, {ok, _CCD}, {ok, _VD}} ->
-            ?NOT_LOADED;
+        {{ok, RB}, {ok, CCD}, {ok, VD}} ->
+            % Call the NIF directly - when loaded, this will be replaced by the actual NIF
+            % For now, this will call not_loaded if NIF isn't loaded
+            verify_signature_nif(RB, CCD, VD);
         {{error, Error1}, _, _} -> {error, Error1};
         {_, {error, Error2}, _} -> {error, Error2};
         {_, _, {error, Error3}} -> {error, Error3}
     end.
+
+% NIF stub - will be replaced when NIF is loaded
+verify_signature_nif(_ReportBinary, _CertChainDER, _VcekDER) ->
+    ?NOT_LOADED.
 
 %% Helper to check if binary is JSON
 is_json_binary(<<"{", _/binary>>) -> true;
@@ -352,7 +360,8 @@ report_json_to_binary(ReportMap) when is_map(ReportMap) ->
             (maps:get(<<"bootloader">>, CommittedTcbMap, 0)):8,
             (maps:get(<<"tee">>, CommittedTcbMap, 0)):8,
             (maps:get(<<"snp">>, CommittedTcbMap, 0)):8,
-            (maps:get(<<"microcode">>, CommittedTcbMap, 0)):8
+            (maps:get(<<"microcode">>, CommittedTcbMap, 0)):8,
+            0:32
         >>,
         CurrentBuild = maps:get(<<"current_build">>, ReportMap, 0),
         CurrentMinor = maps:get(<<"current_minor">>, ReportMap, 0),
@@ -367,7 +376,8 @@ report_json_to_binary(ReportMap) when is_map(ReportMap) ->
             (maps:get(<<"bootloader">>, LaunchTcbMap, 0)):8,
             (maps:get(<<"tee">>, LaunchTcbMap, 0)):8,
             (maps:get(<<"snp">>, LaunchTcbMap, 0)):8,
-            (maps:get(<<"microcode">>, LaunchTcbMap, 0)):8
+            (maps:get(<<"microcode">>, LaunchTcbMap, 0)):8,
+            0:32
         >>,
         SignatureMap = maps:get(<<"signature">>, ReportMap),
         SignatureR = list_to_binary(maps:get(<<"r">>, SignatureMap)),
@@ -534,3 +544,91 @@ verify_signature_test() ->
 	%% This test will need to be updated to use the new signature
 	Result = dev_snp_nif:verify_signature(MockAttestation, <<>>, <<>>),
 	?assertMatch({ok, true}, Result).
+
+%% @doc Parse OVMF file to extract SEV hashes table GPA.
+%% This reads the OVMF footer table and finds the SEV_HASH_TABLE_RV_GUID entry.
+%% @param OvmfPath Path to the OVMF file (e.g., "test/OVMF-1.55.fd")
+%% @returns {ok, GPA} where GPA is a 64-bit integer, or {error, Reason} on failure
+-spec parse_ovmf_sev_hashes_gpa(OvmfPath :: string() | binary()) -> {ok, non_neg_integer()} | {error, term()}.
+parse_ovmf_sev_hashes_gpa(OvmfPath) when is_binary(OvmfPath) ->
+    parse_ovmf_sev_hashes_gpa(binary_to_list(OvmfPath));
+parse_ovmf_sev_hashes_gpa(OvmfPath) when is_list(OvmfPath) ->
+    case file:read_file(OvmfPath) of
+        {ok, OvmfData} ->
+            parse_ovmf_footer_table(OvmfData);
+        {error, Reason} ->
+            {error, {file_read_error, Reason}}
+    end;
+parse_ovmf_sev_hashes_gpa(_) ->
+    {error, invalid_path}.
+
+%% Internal function to parse OVMF footer table
+parse_ovmf_footer_table(OvmfData) ->
+    Size = byte_size(OvmfData),
+    if
+        Size < 50 -> {error, file_too_small};
+        true ->
+            % Footer entry is at offset: Size - 32 - 18 (ENTRY_HEADER_SIZE)
+            ENTRY_HEADER_SIZE = 18,  % 2 bytes size + 16 bytes GUID
+            FooterEntryOffset = Size - 32 - ENTRY_HEADER_SIZE,
+            if
+                FooterEntryOffset < 0 -> {error, invalid_file_format};
+                true ->
+                    % Read footer entry
+                    FooterEntry = binary:part(OvmfData, FooterEntryOffset, ENTRY_HEADER_SIZE),
+                    <<FooterSize:16/little, FooterGuid:16/binary>> = FooterEntry,
+                    
+                    % Check if this is the OVMF_TABLE_FOOTER_GUID
+                    % GUID: 96b582de-1fb2-45f7-baea-a366c55a082d (little-endian)
+                    ExpectedGuid = <<45, 8, 90, 163, 102, 12, 90, 163,
+                                     234, 171, 247, 69, 178, 31, 178, 150>>,
+                    if
+                        FooterGuid =/= ExpectedGuid -> {error, invalid_footer_guid};
+                        FooterSize < ENTRY_HEADER_SIZE -> {error, invalid_footer_size};
+                        true ->
+                            % Calculate table size and start
+                            TableSize = FooterSize - ENTRY_HEADER_SIZE,
+                            TableStart = FooterEntryOffset - TableSize,
+                            if
+                                TableStart < 0 -> {error, invalid_table_offset};
+                                true ->
+                                    % Read the table
+                                    TableData = binary:part(OvmfData, TableStart, TableSize),
+                                    % Parse entries backwards to find SEV_HASH_TABLE_RV_GUID
+                                    % GUID: 7255371f-3a3b-4b04-927b-1da6efa8d454 (little-endian)
+                                    SevHashTableGuid = <<84, 168, 218, 31, 107, 4, 75, 59,
+                                                         123, 146, 4, 75, 59, 58, 53, 114>>,
+                                    find_sev_hashes_gpa(TableData, SevHashTableGuid, TableSize)
+                            end
+                    end
+            end
+    end.
+
+%% Find SEV hashes table GPA in the table data
+find_sev_hashes_gpa(TableData, TargetGuid, TableSize) ->
+    find_sev_hashes_gpa(TableData, TargetGuid, TableSize, TableSize).
+
+find_sev_hashes_gpa(_TableData, _TargetGuid, _TableSize, Offset) when Offset < 18 ->
+    {error, guid_not_found};
+find_sev_hashes_gpa(TableData, TargetGuid, TableSize, Offset) ->
+    ENTRY_HEADER_SIZE = 18,
+    EntryHeaderOffset = Offset - ENTRY_HEADER_SIZE,
+    <<EntrySize:16/little, EntryGuid:16/binary>> = binary:part(TableData, EntryHeaderOffset, ENTRY_HEADER_SIZE),
+    
+    if
+        EntrySize < ENTRY_HEADER_SIZE -> {error, invalid_entry_size};
+        Offset < EntrySize -> {error, invalid_entry_offset};
+        EntryGuid =:= TargetGuid ->
+            % Found it! Entry data is before the header
+            DataOffset = Offset - EntrySize,
+            if
+                DataOffset + 4 > TableSize -> {error, invalid_data_offset};
+                true ->
+                    % First 4 bytes are the GPA (little-endian u32)
+                    <<GpaU32:32/little>> = binary:part(TableData, DataOffset, 4),
+                    {ok, GpaU32}
+            end;
+        true ->
+            % Continue searching backwards
+            find_sev_hashes_gpa(TableData, TargetGuid, TableSize, Offset - EntrySize)
+    end.
