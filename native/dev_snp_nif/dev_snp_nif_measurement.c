@@ -426,34 +426,50 @@ static int create_vmsa_page(
             case 3:  // EpycIBPB
             case 4:  // EpycV3
             case 5:  // EpycV4
-                // cpu_sig(23, 1, 2) = (0 << 20) | (0 << 16) | (23 << 8) | (1 << 4) | 2
-                // = 0x00001712
-                cpu_sig = 0x00001712;
+                // cpu_sig(23, 1, 2):
+                // family=23 > 15: family_low=15, family_high=(23-15)=8
+                // model=1: model_low=1, model_high=0
+                // stepping=2: stepping_low=2
+                // = (8 << 20) | (0 << 16) | (15 << 8) | (1 << 4) | 2
+                // = 0x800f12
+                cpu_sig = 0x800f12;
                 break;
             case 6:  // EpycRome
             case 7:  // EpycRomeV1
             case 8:  // EpycRomeV2
             case 9:  // EpycRomeV3
-                // cpu_sig(23, 49, 0) = (0 << 20) | (3 << 16) | (23 << 8) | (1 << 4) | 0
-                // = 0x00031710
-                cpu_sig = 0x00031710;
+                // cpu_sig(23, 49, 0):
+                // family=23 > 15: family_low=15, family_high=(23-15)=8
+                // model=49: model_low=1, model_high=3
+                // stepping=0: stepping_low=0
+                // = (8 << 20) | (3 << 16) | (15 << 8) | (1 << 4) | 0
+                // = 0x803f10
+                cpu_sig = 0x803f10;
                 break;
             case 10: // EpycMilan
             case 11: // EpycMilanV1
             case 12: // EpycMilanV2
-                // cpu_sig(25, 1, 1) = (0 << 20) | (0 << 16) | (25 << 8) | (1 << 4) | 1
-                // = 0x00001911
-                cpu_sig = 0x00001911;
+                // cpu_sig(25, 1, 1):
+                // family=25 > 15: family_low=15, family_high=(25-15)=10
+                // model=1: model_low=1, model_high=0
+                // stepping=1: stepping_low=1
+                // = (10 << 20) | (0 << 16) | (15 << 8) | (1 << 4) | 1
+                // = 0xa00f11
+                cpu_sig = 0xa00f11;
                 break;
             case 13: // EpycGenoa
             case 14: // EpycGenoaV1
-                // cpu_sig(25, 17, 0) = (0 << 20) | (1 << 16) | (25 << 8) | (1 << 4) | 0
-                // = 0x00011910
-                cpu_sig = 0x00011910;
+                // cpu_sig(25, 17, 0):
+                // family=25 > 15: family_low=15, family_high=(25-15)=10
+                // model=17: model_low=1, model_high=1
+                // stepping=0: stepping_low=0
+                // = (10 << 20) | (1 << 16) | (15 << 8) | (1 << 4) | 0
+                // = 0xa01f10
+                cpu_sig = 0xa01f10;
                 break;
             default:
                 // Default to EpycV4 signature
-                cpu_sig = 0x00001712;
+                cpu_sig = 0x800f12;
                 break;
         }
         rdx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
