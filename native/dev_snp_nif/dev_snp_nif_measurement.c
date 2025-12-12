@@ -847,23 +847,29 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
                                        ((int32_t)meta_entry_data[2] << 16) |
                                        ((int32_t)meta_entry_data[3] << 24));
     
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: offset_from_end=%d\n", offset_from_end);
+    
     free(meta_entry_data);
     
     // Read OVMF file to get metadata header
     FILE *f = fopen(ovmf_path, "rb");
     if (!f) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: failed to open file for header reading\n");
         return -1;
     }
     
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
     if (file_size < 0) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: failed to get file size\n");
         fclose(f);
         return -1;
     }
     
     long header_start = file_size - (long)offset_from_end;
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: file_size=%ld, header_start=%ld\n", file_size, header_start);
     if (header_start < 0 || header_start >= file_size) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: header_start out of bounds\n");
         fclose(f);
         return -1;
     }
@@ -872,45 +878,60 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
     ovmf_metadata_header_t header;
     fseek(f, header_start, SEEK_SET);
     if (fread(&header, 1, sizeof(header), f) != sizeof(header)) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: failed to read header\n");
         fclose(f);
         return -1;
     }
     
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: header signature: %c%c%c%c\n", 
+            header.signature[0], header.signature[1], header.signature[2], header.signature[3]);
+    
     // Verify header signature "ASEV"
     if (memcmp(header.signature, "ASEV", 4) != 0) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: invalid header signature\n");
         fclose(f);
         return -1;
     }
     
     // Verify version is 1
     uint32_t version = header.version & 0xFFFFFFFF;
+    uint32_t header_size = header.size & 0xFFFFFFFF;
+    uint32_t num_items = header.num_items & 0xFFFFFFFF;
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: header version=%u, size=%u, num_items=%u\n", 
+            version, header_size, num_items);
+    
     if (version != 1) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: invalid header version\n");
         fclose(f);
         return -1;
     }
     
     // Read metadata items
-    uint32_t num_items = header.num_items & 0xFFFFFFFF;
-    uint32_t header_size = header.size & 0xFFFFFFFF;
     size_t items_size = header_size - sizeof(ovmf_metadata_header_t);
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: items_size=%zu, expected_min=%zu\n", 
+            items_size, num_items * sizeof(ovmf_metadata_section_desc_t));
     
     if (items_size < num_items * sizeof(ovmf_metadata_section_desc_t)) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: items_size too small\n");
         fclose(f);
         return -1;
     }
     
     unsigned char *items_data = malloc(items_size);
     if (!items_data) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: malloc failed for items_data\n");
         fclose(f);
         return -1;
     }
     
     if (fread(items_data, 1, items_size, f) != items_size) {
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: fread failed for items_data\n");
         free(items_data);
         fclose(f);
         return -1;
     }
     fclose(f);
+    fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: items_data read successfully\n");
     
     // Process each metadata section
     fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: processing %u sections\n", num_items);
@@ -922,12 +943,12 @@ static int parse_and_update_ovmf_metadata(gctx_t *gctx, const char *ovmf_path,
         }
         
         ovmf_metadata_section_desc_t *desc = (ovmf_metadata_section_desc_t *)(items_data + offset);
-        uint32_t gpa = desc->gpa & 0xFFFFFFFF;
+        uint64_t gpa = desc->gpa;
         uint32_t size = desc->size & 0xFFFFFFFF;
         uint8_t section_type = desc->section_type;
         
-        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: section %u: type=%u, gpa=0x%08x, size=%u\n", 
-                i, section_type, gpa, size);
+        fprintf(stderr, "[SNP_DEBUG] parse_and_update_ovmf_metadata: section %u: type=%u, gpa=0x%016llx, size=%u\n", 
+                i, section_type, (unsigned long long)gpa, size);
         
         // Update GCTX based on section type
         switch (section_type) {
@@ -1094,12 +1115,7 @@ int compute_launch_digest(
     // Note: These paths are relative to the current working directory
     // In a release deployment, the working directory may be different
     const char *ovmf_paths[] = {
-        "test/OVMF-1.55.fd",
-        "../test/OVMF-1.55.fd",
-        "../../test/OVMF-1.55.fd",
-        "../../../test/OVMF-1.55.fd",
-        "/opt/hyperbeam/test/OVMF-1.55.fd",
-        "/usr/local/hyperbeam/test/OVMF-1.55.fd",
+
         "/root/hb-release/test/OVMF-1.55.fd",
         NULL
     };
