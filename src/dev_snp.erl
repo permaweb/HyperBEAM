@@ -149,18 +149,26 @@ generate(_M1, _M2, Opts) ->
             end,
         ?event(snp_local_hashes, {explicit, ValidLocalHashes}),
         % Generate the hardware attestation report
-        {ok, ReportJSON} ?= case get(mock_snp_nif_enabled) of
+        {ok, ReportBinary} ?= case get(mock_snp_nif_enabled) of
             true ->
-                % Return mocked response for testing
+                % Return mocked response for testing (convert JSON to binary if needed)
                 MockResponse = get(mock_snp_nif_response),
-                {ok, MockResponse};
+                case is_binary(MockResponse) andalso byte_size(MockResponse) =:= 1184 of
+                    true -> {ok, MockResponse};
+                    false -> 
+                        % Assume it's JSON, convert to binary
+                        {ok, dev_snp_nif:report_json_to_binary(MockResponse)}
+                end;
             _ ->
-                % Call actual NIF function
+                % Call actual NIF function (returns binary)
                 dev_snp_nif:generate_attestation_report(
                     ReportData, 
                     ?REPORT_DATA_VERSION
                 )
         end,
+        % Convert binary to JSON for storage/transmission
+        ReportMap = dev_snp_nif:report_binary_to_json(ReportBinary),
+        ReportJSON = hb_json:encode(ReportMap),
         ?event({snp_report_json, ReportJSON}),
         ?event({snp_report_generated, {nonce, ReportData}, {report, ReportJSON}}),
         % Package the complete report message
@@ -368,16 +376,13 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     ?event({expected_measurement, {explicit, Expected}}),
     Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
     ?event({measurement, {explicit,Measurement}}),
-    {Status, MeasurementIsValid} =
-        dev_snp_nif:verify_measurement(
-            ReportJSON,
-            ExpectedBin
-        ),
-    ?event({status, Status}),
-    ?event({measurement_is_valid, MeasurementIsValid}),
-    case MeasurementIsValid of
-        true -> {ok, true};
-        false -> {error, measurement_invalid}
+    % verify_measurement is now implemented in Erlang
+    case dev_snp_nif:verify_measurement(ReportJSON, ExpectedBin) of
+        {ok, true} -> {ok, true};
+        {error, false} -> {error, measurement_invalid};
+        {error, Reason} -> 
+            ?event({measurement_verification_error, Reason}),
+            {error, measurement_invalid}
     end.
 
 %% @doc Extract measurement arguments from the SNP message.
@@ -411,17 +416,52 @@ extract_measurement_args(Msg, NodeOpts) ->
 %% against the hardware root of trust to ensure the report has not been
 %% tampered with and originates from genuine AMD SEV-SNP hardware.
 %%
+%% The function:
+%% 1. Parses the JSON report to extract chip ID and TCB version
+%% 2. Fetches the certificate chain (ARK + ASK) from AMD KDS
+%% 3. Fetches the VCEK certificate from AMD KDS
+%% 4. Verifies the signature using the Rust NIF
+%%
 %% @param ReportJSON The raw JSON report to verify
 %% @returns `{ok, true}' if the report signature is valid, or
 %% `{error, report_signature_invalid}' on failure
 -spec verify_report_integrity(ReportJSON :: binary()) ->
     {ok, true} | {error, report_signature_invalid}.
 verify_report_integrity(ReportJSON) ->
-    {ok, ReportIsValid} = dev_snp_nif:verify_signature(ReportJSON),
-    ?event({report_is_valid, ReportIsValid}),
-    case ReportIsValid of
-        true -> {ok, true};
-        false -> {error, report_signature_invalid}
+    maybe
+        % Parse JSON to extract chip_id, TCB version, and report structure
+        Report = hb_json:decode(ReportJSON),
+        ChipId = list_to_binary(hb_ao:get(<<"chip_id">>, Report, [])),
+        CurrentTcb = hb_ao:get(<<"current_tcb">>, Report, #{}),
+        BootloaderSPL = hb_ao:get(<<"bootloader">>, CurrentTcb, 0),
+        TeeSPL = hb_ao:get(<<"tee">>, CurrentTcb, 0),
+        SnpSPL = hb_ao:get(<<"snp">>, CurrentTcb, 0),
+        UcodeSPL = hb_ao:get(<<"microcode">>, CurrentTcb, 0),
+        
+        % Fetch certificates from AMD KDS (non-blocking HTTP in Erlang)
+        {ok, CertChainPEM} ?= dev_snp_nif:fetch_cert_chain(undefined),
+        {ok, VcekDER} ?= dev_snp_nif:fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, undefined),
+        
+        % Convert report JSON to binary for signature verification
+        ReportBinary = case dev_snp_nif:report_json_to_binary(ReportJSON) of
+            {error, _} = E -> throw(E);
+            Bin -> Bin
+        end,
+        
+        % Verify signature using C NIF with binary report and DER certificates
+        {ok, ReportIsValid} ?= dev_snp_nif:verify_signature(ReportBinary, CertChainPEM, VcekDER),
+        ?event({report_is_valid, ReportIsValid}),
+        case ReportIsValid of
+            true -> {ok, true};
+            false -> {error, report_signature_invalid}
+        end
+    else
+        {error, Reason} -> 
+            ?event({report_verification_error, Reason}),
+            {error, report_signature_invalid};
+        Error -> 
+            ?event({report_verification_error, Error}),
+            {error, report_signature_invalid}
     end.
 
 %% @doc Check if the node's debug policy is enabled.
