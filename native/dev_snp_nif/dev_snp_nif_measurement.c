@@ -103,10 +103,12 @@ static int gctx_update_page(gctx_t *gctx, uint8_t page_type, uint64_t gpa,
     
     // Copy page contents (or hash if it's a full page)
     // For PAGE_TYPE_NORMAL and PAGE_TYPE_VMSA, hash the full page first
-    // For PAGE_TYPE_ZERO, use 48 bytes of zeros (hash of zero page)
+    // For PAGE_TYPE_ZERO, PAGE_TYPE_SECRETS, and PAGE_TYPE_CPUID, use 48 bytes of zeros
     // For other types, use the contents directly (should be small)
-    if (page_type == PAGE_TYPE_ZERO) {
-        // Zero pages: use 48 bytes of zeros (hash of a zero page)
+    if (page_type == PAGE_TYPE_ZERO || 
+        page_type == PAGE_TYPE_SECRETS || 
+        page_type == PAGE_TYPE_CPUID) {
+        // Zero pages, secrets, and CPUID pages: use 48 bytes of zeros (hash of a zero page)
         memset(page_info + pos, 0, SHA384_DIGEST_LENGTH);
         pos += SHA384_DIGEST_LENGTH;
     } else if (contents && contents_len > 0) {
