@@ -92,15 +92,42 @@ verify(M1, M2, NodeOpts) ->
         % for verification failures, not {error, ...}
         {ok, Valid}
     else
-        % dev_message:verify_commitment pattern matches {ok, Res}, so we must return {ok, false}
-        % for verification failures to avoid crashing the caller
-        % However, we log the actual error reason for debugging
-        {error, Reason} -> 
-            ?event({snp_verification_failed, Reason}),
-            {ok, false};
-        Error -> 
-            ?event({snp_verification_failed, Error}),
-            {ok, false}
+        % Distinguish between verification failures and system errors
+        % Verification failures (report is invalid) should return {ok, false}
+        % System errors (missing config, network failures, etc.) should return {error, Reason}
+        % even if it crashes dev_message:verify_commitment, because these indicate
+        % exceptional conditions that need to be handled differently
+        {error, Reason} = ErrorTuple ->
+            case is_verification_failure(Reason) of
+                true ->
+                    % Verification failure: report is invalid
+                    ?event({snp_verification_failed, Reason}),
+                    {ok, false};
+                false ->
+                    % System error: propagate to caller
+                    ?event({snp_system_error, Reason}),
+                    ErrorTuple
+            end;
+        Error ->
+            % Unexpected error (exception, etc.) - treat as system error
+            ?event({snp_system_error, Error}),
+            {error, Error}
+    end.
+
+%% @doc Determine if an error is a verification failure (report is invalid)
+%% vs a system error (missing config, network failure, etc.)
+%% Verification failures should return {ok, false}, system errors should propagate
+-spec is_verification_failure(Reason :: term()) -> boolean().
+is_verification_failure(Reason) ->
+    case Reason of
+        nonce_mismatch -> true;
+        signature_or_address_invalid -> true;
+        debug_enabled -> true;
+        untrusted_software -> true;
+        measurement_invalid -> true;
+        report_signature_invalid -> true;
+        {measurement_verification_failed, _} -> true;  % Measurement parse error treated as verification failure
+        _ -> false  % All other errors are system errors
     end.
 
 %% @doc Generate an AMD SEV-SNP commitment report and emit it as a message.
