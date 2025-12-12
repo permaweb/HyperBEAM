@@ -1074,10 +1074,16 @@ int compute_launch_digest(
     // - SnpKernelHashes (SEV hashes table)
     // - SvsmCaa (zero pages)
     // Try to find OVMF file in common locations
+    // Note: These paths are relative to the current working directory
+    // In a release deployment, the working directory may be different
     const char *ovmf_paths[] = {
         "test/OVMF-1.55.fd",
         "../test/OVMF-1.55.fd",
         "../../test/OVMF-1.55.fd",
+        "../../../test/OVMF-1.55.fd",
+        "/opt/hyperbeam/test/OVMF-1.55.fd",
+        "/usr/local/hyperbeam/test/OVMF-1.55.fd",
+        "/root/hb-release/test/OVMF-1.55.fd",
         NULL
     };
     

@@ -474,11 +474,25 @@ extract_measurement_args(Msg, NodeOpts) ->
 %% @returns {ok, GPA} or {error, Reason}
 -spec read_ovmf_gpa() -> {ok, non_neg_integer()} | {error, term()}.
 read_ovmf_gpa() ->
+    % Try to find OVMF file in various locations
+    % First, try relative to current working directory
+    % Then try relative to code path (for releases)
+    % Then try absolute paths
+    CodePath = case code:priv_dir(hb) of
+        {error, _} -> 
+            % Not in a release, try relative paths
+            {ok, Cwd} = file:get_cwd(),
+            Cwd;
+        {ok, PrivDir} ->
+            % In a release, try relative to priv dir
+            PrivDir
+    end,
     OvmfPaths = [
-        "test/OVMF-1.55.fd",
-        "../test/OVMF-1.55.fd",
-        "../../test/OVMF-1.55.fd"
+        % Relative to code/priv directory (for releases)
+        filename:join([CodePath, "..", "test", "OVMF-1.55.fd"]),
+        "/root/hb-release/test/OVMF-1.55.fd"
     ],
+    ?event({ovmf_search_paths, OvmfPaths}),
     read_ovmf_gpa(OvmfPaths).
 
 read_ovmf_gpa([]) ->
