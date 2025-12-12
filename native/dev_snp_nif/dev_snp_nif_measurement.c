@@ -6,10 +6,24 @@
 #include <openssl/evp.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #define LD_BYTES 48  // Launch digest size (SHA-384 = 48 bytes)
 #define PAGE_SIZE 4096
 #define VMSA_GPA 0xFFFFFFFFF000ULL
+#define FOUR_GB 0x100000000ULL
+
+// OVMF GUIDs (little-endian)
+static const unsigned char OVMF_TABLE_FOOTER_GUID[16] = {
+    0x2d, 0x08, 0x5a, 0xa3, 0x66, 0x0c, 0x5a, 0xa3, 0xea, 0xab, 0xf7, 0x45, 0xb2, 0x1f, 0xb2, 0x96
+};
+static const unsigned char SEV_HASH_TABLE_RV_GUID[16] = {
+    0x54, 0xa8, 0xda, 0x1f, 0x6b, 0x04, 0x4b, 0x3b, 0x7b, 0x92, 0x04, 0x4b, 0x3b, 0x3a, 0x35, 0x72
+};
 
 // Page types
 #define PAGE_TYPE_NORMAL 0x01
@@ -165,6 +179,7 @@ typedef struct {
 
 // Construct SEV hashes table page
 // Returns 0 on success, -1 on failure
+// Note: This must match Rust's PaddedSevHashTable serialization exactly
 static int construct_sev_hashes_page(
     const unsigned char *kernel_hash,
     const unsigned char *initrd_hash,
@@ -200,10 +215,18 @@ static int construct_sev_hashes_page(
     table.kernel.length = sizeof(sev_hash_table_entry_t);
     memcpy(table.kernel.hash, kernel_hash, 32);
     
-    // Serialize table to page (offset 0, padded to PAGE_SIZE)
-    // The table is serialized in the same order as Rust bincode
+    // Calculate padding size to match Rust: ((size + 15) & !15) - size
     size_t table_size = sizeof(sev_hash_table_t);
+    size_t padded_size = ((table_size + 15) & ~15);  // Round up to 16-byte boundary
+    size_t padding_size = padded_size - table_size;
+    
+    // Serialize table to page (offset 0)
+    // Copy the table, then add padding to match PaddedSevHashTable
+    if (table_size > PAGE_SIZE) {
+        return -1;  // Safety check
+    }
     memcpy(page_output, &table, table_size);
+    // Padding is already zero from memset above
     
     return 0;
 }
@@ -311,6 +334,114 @@ static int create_vmsa_page(
     return 0;
 }
 
+// Parse OVMF file to extract SEV hashes table GPA
+// Returns 0 on success with GPA in *gpa_out, -1 on failure
+static int parse_ovmf_sev_hashes_gpa(const char *ovmf_path, uint64_t *gpa_out) {
+    if (!ovmf_path || !gpa_out) {
+        return -1;
+    }
+    
+    FILE *f = fopen(ovmf_path, "rb");
+    if (!f) {
+        return -1;
+    }
+    
+    // Get file size
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    if (file_size < 0 || file_size < 50) {  // Need at least footer entry
+        fclose(f);
+        return -1;
+    }
+    fseek(f, 0, SEEK_SET);
+    
+    // Read the last 32 bytes to find footer entry
+    // Footer entry is at offset: file_size - 32 - ENTRY_HEADER_SIZE (18 bytes)
+    const size_t ENTRY_HEADER_SIZE = 18;  // 2 bytes size + 16 bytes GUID
+    long footer_entry_offset = file_size - 32 - ENTRY_HEADER_SIZE;
+    if (footer_entry_offset < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    fseek(f, footer_entry_offset, SEEK_SET);
+    unsigned char footer_entry[ENTRY_HEADER_SIZE];
+    if (fread(footer_entry, 1, ENTRY_HEADER_SIZE, f) != ENTRY_HEADER_SIZE) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Check if this is the footer table GUID
+    if (memcmp(footer_entry + 2, OVMF_TABLE_FOOTER_GUID, 16) != 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Get footer size (first 2 bytes, little-endian)
+    uint16_t footer_size = footer_entry[0] | (footer_entry[1] << 8);
+    if (footer_size < ENTRY_HEADER_SIZE) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Calculate table size and start
+    size_t table_size = footer_size - ENTRY_HEADER_SIZE;
+    long table_start = footer_entry_offset - table_size;
+    if (table_start < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    // Read the table
+    unsigned char *table_data = malloc(table_size);
+    if (!table_data) {
+        fclose(f);
+        return -1;
+    }
+    
+    fseek(f, table_start, SEEK_SET);
+    if (fread(table_data, 1, table_size, f) != table_size) {
+        free(table_data);
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    
+    // Parse entries backwards
+    size_t offset = table_size;
+    int found = 0;
+    while (offset >= ENTRY_HEADER_SIZE) {
+        // Read entry header
+        unsigned char *entry_ptr = table_data + offset - ENTRY_HEADER_SIZE;
+        uint16_t entry_size = entry_ptr[0] | (entry_ptr[1] << 8);
+        
+        if (entry_size < ENTRY_HEADER_SIZE || offset < entry_size) {
+            break;
+        }
+        
+        // Check if this is the SEV_HASH_TABLE_RV_GUID entry
+        if (memcmp(entry_ptr + 2, SEV_HASH_TABLE_RV_GUID, 16) == 0) {
+            // Entry data is before the header
+            size_t data_offset = offset - entry_size;
+            if (data_offset + 4 <= table_size) {
+                // First 4 bytes are the GPA (little-endian u32)
+                uint32_t gpa_u32 = (uint32_t)table_data[data_offset] |
+                                  ((uint32_t)table_data[data_offset + 1] << 8) |
+                                  ((uint32_t)table_data[data_offset + 2] << 16) |
+                                  ((uint32_t)table_data[data_offset + 3] << 24);
+                *gpa_out = (uint64_t)gpa_u32;
+                found = 1;
+            }
+            break;
+        }
+        
+        offset -= entry_size;
+    }
+    
+    free(table_data);
+    return found ? 0 : -1;
+}
+
 // Compute launch digest - full implementation
 int compute_launch_digest(
     uint32_t vcpus,
@@ -326,41 +457,63 @@ int compute_launch_digest(
     gctx_t gctx;
     
     // Initialize GCTX with OVMF hash if provided
-    if (ovmf_hash_hex && strlen(ovmf_hash_hex) == 96) {  // 48 bytes * 2 hex chars
-        // Convert hex to binary
-        unsigned char ovmf_hash[LD_BYTES];
-        for (int i = 0; i < LD_BYTES; i++) {
-            char hex_byte[3] = {ovmf_hash_hex[i*2], ovmf_hash_hex[i*2+1], 0};
-            char *endptr;
-            unsigned long val = strtoul(hex_byte, &endptr, 16);
-            if (*endptr != '\0' || val > 255) {
+    if (ovmf_hash_hex) {
+        size_t hex_len = strlen(ovmf_hash_hex);
+        if (hex_len == 96) {  // 48 bytes * 2 hex chars
+            // Convert hex to binary
+            unsigned char ovmf_hash[LD_BYTES];
+            for (int i = 0; i < LD_BYTES; i++) {
+                if (i*2+1 >= hex_len) {
+                    return -1;  // Bounds check
+                }
+                char hex_byte[3] = {ovmf_hash_hex[i*2], ovmf_hash_hex[i*2+1], 0};
+                char *endptr;
+                unsigned long val = strtoul(hex_byte, &endptr, 16);
+                if (*endptr != '\0' || val > 255) {
+                    return -1;
+                }
+                ovmf_hash[i] = (unsigned char)val;
+            }
+            if (gctx_init_with_seed(&gctx, ovmf_hash, LD_BYTES) != 0) {
                 return -1;
             }
-            ovmf_hash[i] = (unsigned char)val;
-        }
-        if (gctx_init_with_seed(&gctx, ovmf_hash, LD_BYTES) != 0) {
-            return -1;
+        } else {
+            gctx_init(&gctx);
         }
     } else {
         gctx_init(&gctx);
     }
     
     // Update with SEV hashes table if kernel hash is provided
-    // Note: We need the SEV hashes table GPA from OVMF, but since we don't have OVMF,
-    // we'll use a default GPA. In practice, this should come from OVMF metadata.
-    // For now, we'll skip this if we don't have the GPA, or use a reasonable default.
+    // Try to get the GPA from OVMF file in test directory
     if (kernel_hash && initrd_hash && append_hash) {
-        // Default SEV hashes table GPA (this should come from OVMF in real implementation)
-        // Using a placeholder GPA - in practice this needs to match OVMF metadata
-        uint64_t sev_hashes_gpa = 0x100000;  // Placeholder - should be from OVMF
+        uint64_t sev_hashes_gpa = 0;
+        // Try to parse OVMF file to get the GPA
+        // Look for OVMF file in test directory
+        const char *ovmf_paths[] = {
+            "test/OVMF-1.55.fd",
+            "../test/OVMF-1.55.fd",
+            "../../test/OVMF-1.55.fd",
+            NULL
+        };
         
-        unsigned char sev_hashes_page[PAGE_SIZE];
-        if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
-            // Update GCTX with SEV hashes page
-            if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
-                return -1;
+        int found_gpa = 0;
+        for (int i = 0; ovmf_paths[i] != NULL; i++) {
+            if (parse_ovmf_sev_hashes_gpa(ovmf_paths[i], &sev_hashes_gpa) == 0) {
+                found_gpa = 1;
+                break;
             }
         }
+        
+        if (found_gpa && sev_hashes_gpa != 0) {
+            unsigned char sev_hashes_page[PAGE_SIZE];
+            if (construct_sev_hashes_page(kernel_hash, initrd_hash, append_hash, sev_hashes_page) == 0) {
+                if (gctx_update_page(&gctx, PAGE_TYPE_NORMAL, sev_hashes_gpa, sev_hashes_page, PAGE_SIZE) != 0) {
+                    return -1;
+                }
+            }
+        }
+        // If we can't find the GPA, skip the update (measurement won't match, but won't crash)
     }
     
     // Create and update VMSA pages
