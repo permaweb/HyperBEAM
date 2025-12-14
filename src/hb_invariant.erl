@@ -1,4 +1,4 @@
--module(hb_prop).
+-module(hb_invariant).
 -export([forall/1, state_machine/1]).
 -export([any/0, any/1, pick/1]).
 -export([int/0, int/1, int/2, float/0, float/1]).

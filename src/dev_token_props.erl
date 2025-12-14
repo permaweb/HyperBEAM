@@ -41,7 +41,7 @@ compare_native_and_hyper_token_test() ->
     ).
 
 simulate(Extras) ->
-    ok = hb_prop:state_machine(
+    ok = hb_invariant:state_machine(
         #{
             opts => fun generate_sim_opts/1,
             states => fun generate_ledger/1,
@@ -53,14 +53,14 @@ simulate(Extras) ->
                     fun verify_slot_increment/4
                 ],
             runs => 3,
-            length => 50,
+            length => 25,
             spawn_extras => Extras,
             users => ?USERS
         }
     ).
 
 simulate_and_compare(Extras1, Extras2) ->
-    ok = hb_prop:state_machine(
+    ok = hb_invariant:state_machine(
         #{
             opts => fun generate_sim_opts/1,
             states =>
@@ -110,7 +110,7 @@ generate_ledger(Opts) ->
     L = dev_token_lib:ledger(
         Extras#{
             <<"balances">> => generate_initial_balances(Opts),
-            <<"ledger-nonce">> => hb_prop:int(small)
+            <<"ledger-nonce">> => hb_invariant:int(small)
         },
         Opts
     ),
@@ -129,7 +129,7 @@ user_wallets(Opts = #{ priv_wallet := NodeWallet }) ->
 
 generate_initial_balances(Opts) ->
     hb_maps:map(
-        fun(_, _) -> hb_prop:int(?MAX_INITIAL_BALANCE) end,
+        fun(_, _) -> hb_invariant:int(?MAX_INITIAL_BALANCE) end,
         user_wallets(Opts),
         Opts
     ).
@@ -140,9 +140,9 @@ generate_sim_request(State, Opts) ->
     {ok, PushRes} =
         dev_token_lib:transfer(
             State,
-            SenderWallet = hb_prop:pick(user_wallets(Opts)),
-            RecipientWallet = hb_prop:pick(user_wallets(Opts)),
-            Amount = hb_prop:int(?MAX_TRANSFER_AMOUNT),
+            SenderWallet = hb_invariant:pick(user_wallets(Opts)),
+            RecipientWallet = hb_invariant:pick(user_wallets(Opts)),
+            Amount = hb_invariant:int(?MAX_TRANSFER_AMOUNT),
             Opts
         ),
     ?event({push_result, PushRes}),

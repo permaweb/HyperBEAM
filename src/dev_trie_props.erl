@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 model_test() ->
-    ok = hb_prop:state_machine(
+    ok = hb_invariant:state_machine(
         #{
             states => [#{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1 }],
             models => [#{ <<"device">> => <<"message@1.0">>, <<"a">> => 1 }],
@@ -25,18 +25,18 @@ requests() ->
 request(set, _S, _Opts) ->
     #{
         <<"path">> => <<"set">>,
-        hb_prop:key() => hb_prop:any()
+        hb_invariant:key() => hb_invariant:any()
     };
 request(get, S, Opts) ->
     ?event({generating_request, {get, S}}),
     #{
-        <<"path">> => hb_prop:pick(hb_ao:keys(S, Opts) -- [<<"device">>])
+        <<"path">> => hb_invariant:pick(hb_ao:keys(S, Opts) -- [<<"device">>])
     };
 request(reset, S, Opts) ->
-    ResetKey = hb_prop:pick(hb_ao:keys(S, Opts) -- [<<"device">>]),
+    ResetKey = hb_invariant:pick(hb_ao:keys(S, Opts) -- [<<"device">>]),
     #{
         <<"path">> => <<"set">>,
-        ResetKey => hb_prop:any()
+        ResetKey => hb_invariant:any()
     }.
 
 properties() ->

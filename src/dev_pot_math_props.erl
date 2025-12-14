@@ -5,10 +5,10 @@
 -define(DEFAULT_RUNS, 100).
 
 exponentiation_test() ->
-    ok = hb_prop:forall(
+    ok = hb_invariant:forall(
         #{
             runs => ?DEFAULT_RUNS,
-            states => fun(_) -> {hb_prop:int(tiny), hb_prop:int(8)} end,
+            states => fun(_) -> {hb_invariant:int(tiny), hb_invariant:int(8)} end,
             requests =>
                 fun({X, Y}, _Opts) ->
                     {ok, dev_pot_math:bignum_exp(X, Y)}
@@ -23,10 +23,10 @@ exponentiation_test() ->
     ).
 
 large_exponentiation_test() ->
-    ok = hb_prop:forall(
+    ok = hb_invariant:forall(
         #{
             runs => ?DEFAULT_RUNS,
-            states => fun(_) -> {hb_prop:int(200), hb_prop:int(200)} end,
+            states => fun(_) -> {hb_invariant:int(200), hb_invariant:int(200)} end,
             requests =>
                 fun({X, Y}, _Opts) ->
                     {ok, dev_pot_math:bignum_exp(X, Y)}
