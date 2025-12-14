@@ -543,6 +543,7 @@ float(Max) -> rand:uniform_real() * (2 * Max).
 %% @doc Generate a random string.
 string() -> string(?STRING_MAX_LENGTH).
 %% @doc Generate a random lowercase ASCII string of a given length.
+string(id) -> hb_util:human_id(rand:bytes(32));
 string(MaxLen) -> string(MaxLen, 97, 122, [$/]).
 %% @doc Generate a random lowercase ASCII string of a given length, with a given
 %% minimum and maximum character value, and a list of forbidden characters.

@@ -4,6 +4,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -export([opts/0]).
+%%% Public helpers.
+-export([generate_identities/1, generate_initial_balances/1]).
 
 %%% Public utilities
 
@@ -90,18 +92,20 @@ generate_sim_opts(Spec = #{ users := Users }) ->
     NodeWallet = ar_wallet:new(),
     BaseOpts#{
         priv_wallet => NodeWallet,
-        identities =>
-            lists:foldl(
-                fun(_, IDs) ->
-                    UserWallet = ar_wallet:new(),
-                    ID = hb_util:human_id(UserWallet),
-                    IDs#{ ID => #{ priv_wallet => UserWallet } }
-                end,
-                #{},
-                lists:seq(1, Users)
-            ),
+        identities => generate_identities(Users),
         spawn_extras => hb_opts:get(spawn_extras, #{}, Spec)
     }.
+
+generate_identities(Users) ->
+    lists:foldl(
+        fun(_, IDs) ->
+            UserWallet = ar_wallet:new(),
+            ID = hb_util:human_id(UserWallet),
+            IDs#{ ID => #{ priv_wallet => UserWallet } }
+        end,
+        #{},
+        lists:seq(1, Users)
+    ).
 
 %% @doc Generate a ledger process, including any extra properties specified in
 %% the `spawn_extras' option.

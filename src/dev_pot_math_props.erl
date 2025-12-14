@@ -1,6 +1,5 @@
 -module(dev_pot_math_props).
 -include_lib("eunit/include/eunit.hrl").
--include("include/hb.hrl").
 
 -define(DEFAULT_RUNS, 100).
 
