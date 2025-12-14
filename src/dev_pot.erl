@@ -31,7 +31,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3, set_weight/3]).
+-export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3]).
+-export([set_weight/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
@@ -82,9 +83,10 @@ test_drip(State, Req, Opts) ->
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
 drip_global(State, Req, Opts) ->
+    TimeSource = hb_maps:get(<<"t-source">>, State, <<"timestamp">>, Opts),
     ?event({drip_global, {req, Req}}),
     UpdatedState =
-        case hb_maps:get(<<"timestamp">>, Req, undefined, Opts) of
+        case hb_maps:get(TimeSource, Req, undefined, Opts) of
             undefined -> State;
             NewTime ->
                 hb_ao:set(
@@ -222,6 +224,7 @@ drip_user(Addr, S, Opts) ->
 %% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
 %% be initialized to the same value as `t` if not already set.
 ensure_initialized(Base, Req, Opts) ->
+    TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
     WithT =
         hb_ao:set(
             Base,
@@ -229,7 +232,7 @@ ensure_initialized(Base, Req, Opts) ->
                 <<"t">> =>
                     NewT =
                         hb_maps:get(
-                            <<"timestamp">>,
+                            TimeSource,
                             Req,
                             hb_maps:get(<<"t">>, Base, 0, Opts),
                             Opts

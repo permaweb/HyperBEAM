@@ -45,6 +45,7 @@ generate_token_base_state(Params, Opts) ->
     Owner = hb_maps:get(priv_wallet, Opts, <<"owner">>, Opts),
     DefaultState = #{
         <<"device">> => <<"token@1.0">>,
+        <<"t-source">> => <<"slot">>,
         <<"owner">> => maps:get(owner, Params, Owner),
         <<"mint-authority">> => maps:get(mint_authority, Params, Owner),
         <<"name">> => <<"Test Token">>,
