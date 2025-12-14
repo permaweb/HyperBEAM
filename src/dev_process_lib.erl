@@ -39,39 +39,12 @@ run_as(Key, Base, Req, Opts) ->
     ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
-    PreparedMsg =
-        hb_util:deep_merge(
-            ensure_process_key(Base, Opts),
-            #{
-                <<"device">> =>
-                    DeviceSet =
-                        hb_maps:get(
-                            << Key/binary, "-device">>,
-                            Base,
-                            dev_process:default_device(Base, Key, Opts),
-                            Opts
-                        ),
-                % Configure input prefix for proper message routing within the device
-                <<"input-prefix">> =>
-                    case hb_maps:get(<<"input-prefix">>, Base, not_found, Opts) of
-                        not_found -> <<"process">>;
-                        Prefix -> Prefix
-                    end,
-                % Configure output prefixes for result organization
-                <<"output-prefixes">> =>
-                    hb_maps:get(
-                        <<Key/binary, "-output-prefixes">>,
-                        Base,
-                        undefined, % Undefined in set will be ignored.
-                        Opts
-                    )
-            },
-            Opts
-        ),
-    ?event(debug_prefix,
-        {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
-    }),
-    ?event(debug_run_as, {before_resolve, {prepared_msg, PreparedMsg}, {req, Req}}, Opts),
+    {ok, PreparedMsg} = dev_process:as(Base, Key, Opts),
+    ?event(
+        debug_run_as,
+        {before_resolve, {prepared_msg, PreparedMsg}, {req, Req}},
+        Opts
+    ),
     % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
@@ -79,8 +52,11 @@ run_as(Key, Base, Req, Opts) ->
             Req,
             Opts
         ),
-    ?event(debug_run_as, {after_resolve, {status, Status}, {base_result, BaseResult}}, Opts),
-    ?event(debug_pot, {resolve, {status, Status}, {base_result, BaseResult}}, Opts),
+    ?event(
+        debug_run_as,
+        {after_resolve, {status, Status}, {base_result, BaseResult}},
+        Opts
+    ),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of

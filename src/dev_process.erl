@@ -83,17 +83,7 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
-as(RawBase, Req, Opts) ->
-    {ok, Base} = ensure_loaded(RawBase, Req, Opts),
-    Key = 
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"as">>},
-                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
-            ],
-            <<"execution">>,
-            Opts
-        ),
+as(Base, Key, Opts) when is_binary(Key) ->
     {ok,
         hb_util:deep_merge(
             dev_process_lib:ensure_process_key(Base, Opts),
@@ -123,7 +113,19 @@ as(RawBase, Req, Opts) ->
             },
             Opts
         )
-    }.
+    };
+as(RawBase, Req, Opts) ->
+    {ok, Base} = ensure_loaded(RawBase, Req, Opts),
+    Key = 
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Req}, <<"as">>},
+                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
+            ],
+            <<"execution">>,
+            Opts
+        ),
+    as(Base, Key, Opts).
 
 %% @doc Returns the default device for a given piece of functionality. Expects
 %% the `process/variant' key to be set in the message. The `execution-device'
