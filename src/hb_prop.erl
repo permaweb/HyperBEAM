@@ -18,6 +18,12 @@ state_machine(Spec = #{ requests := _ }) ->
     Length = hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
     run_state_machines(
         Spec#{
+            seed =>
+                hb_opts:get(
+                    seed,
+                    crypto:bytes_to_integer(crypto:strong_rand_bytes(4)),
+                    Spec
+                ),
             states => hb_opts:get(states, undefined, Spec),
             models => hb_opts:get(models, undefined, Spec),
             properties => hb_opts:get(properties, [], Spec),
@@ -104,19 +110,61 @@ state_machine_loop(Spec = #{ requests_remaining := RequestsRemaining }) ->
             end
     end.
 
+normalize_rand(#{ seed := undefined }) ->
+    ok;
+normalize_rand(
+        #{
+            seed := Seed,
+            runs_remaining := Runs,
+            requests_remaining := Reqs,
+            stage := Stage
+        }
+    ) ->
+    rand:seed(exsplus, Seed + Runs + Reqs + stage_to_int(Stage)).
+
+stage_to_int(init) -> 0;
+stage_to_int({generate, opts}) -> 1;
+stage_to_int({generate, state}) -> 2;
+stage_to_int({generate, request}) -> 3;
+stage_to_int({execute, request}) -> 4.
+
 generate_opts(Spec = #{ opts := Opts }) ->
+    normalize_rand(Spec#{ stage => {generate, opts} }),
     execute_generator(Opts, [Spec]).
 
-generate_initial_state(#{ states := Gen, opts := Opts }) ->
+generate_initial_state(Spec = #{ states := Gen, opts := Opts }) ->
+    normalize_rand(Spec#{ stage => {generate, state} }),
     execute_generator(Gen, [Opts]).
 
 generate_initial_model_state(#{ models := undefined }) ->
     undefined;
-generate_initial_model_state(#{ models := Gen, opts := Opts }) ->
+generate_initial_model_state(Spec = #{ models := Gen, opts := Opts }) ->
+    normalize_rand(Spec#{ stage => {generate, state} }),
     execute_generator(Gen, [Opts]).
 
-generate_request(#{ requests := Gen, state := State, opts := Opts }) ->
-    execute_generator(Gen, [State, Opts]).
+generate_request(
+        Spec = #{
+            requests := Gen,
+            state := State,
+            model_state := undefined,
+            opts := Opts
+        }
+) ->
+    normalize_rand(Spec#{ stage => {generate, request} }),
+    execute_generator(Gen, [State, Opts]);
+generate_request(
+        Spec = #{
+            requests := Gen,
+            state := State,
+            model_state := ModelState,
+            opts := Opts
+        }
+) ->
+    normalize_rand(Spec#{ stage => {generate, request} }),
+    StateReq = execute_generator(Gen, [State, Opts]),
+    normalize_rand(Spec#{ stage => {generate, request} }),
+    ModelReq = execute_generator(Gen, [ModelState, Opts]),
+    {StateReq, ModelReq}.
 
 execute_generator(Generators, Args) when is_list(Generators) ->
     execute_generator(pick(Generators), Args);
@@ -125,10 +173,21 @@ execute_generator(Generator, Args) when is_function(Generator) ->
 execute_generator(ExplicitResult, _) ->
     ExplicitResult.
 
-execute_request(#{ model_state := undefined, state := State, opts := Opts }, Req) ->
+execute_request(
+        Spec = #{ model_state := undefined, state := State, opts := Opts },
+        Req
+    ) ->
+    normalize_rand(Spec#{ stage => {execute, request} }),
     do_request(State, Req, Opts);
-execute_request(#{ model_state := ModelState, state := State, opts := Opts }, Req) ->
-    case {do_request(State, Req, Opts), do_request(ModelState, Req, Opts)} of
+execute_request(
+        Spec = #{ model_state := ModelState, state := State, opts := Opts },
+        {Req, ModelReq}
+    ) ->
+    normalize_rand(Spec#{ stage => {execute, request} }),
+    StateRes = do_request(State, Req, Opts),
+    normalize_rand(Spec#{ stage => {execute, request} }),
+    ModelRes = do_request(ModelState, ModelReq, Opts),
+    case {StateRes, ModelRes} of
         {{ok, NewState}, {ok, NewModelState}} ->
             {ok, NewState, NewModelState};
         {{error, Reason}, _} ->
