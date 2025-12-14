@@ -84,7 +84,7 @@ test_drip(State, Req, Opts) ->
 %% provided it will be used as the new `t` for the pot before dripping.
 drip_global(State, Req, Opts) ->
     TimeSource = hb_maps:get(<<"t-source">>, State, <<"timestamp">>, Opts),
-    ?event({drip_global, {req, Req}}),
+    ?event({drip_global, {req, Req}, {time_source, TimeSource}}),
     UpdatedState =
         case hb_maps:get(TimeSource, Req, undefined, Opts) of
             undefined -> State;
@@ -294,7 +294,8 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
-deposit(State, Req, Opts) ->
+deposit(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
@@ -302,7 +303,7 @@ deposit(State, Req, Opts) ->
         true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
     else
-        Reason -> Reason
+        Reason -> {error, Reason}
     end.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
@@ -322,7 +323,8 @@ verify_resource_auth(State, ResourceID, Req, Opts) ->
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
-withdraw(State, Req, Opts) ->
+withdraw(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
@@ -368,7 +370,8 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
     liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts).
 
 %% @doc Delegate some quantity of a resource from one address to another.
-delegate(State, Req, Opts) ->
+delegate(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
         {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
@@ -466,7 +469,8 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     send_delegation_notice(ToAddr, ResourceID, Amount, S3, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
-undelegate(State, Req, Opts) ->
+undelegate(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
         {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
@@ -560,7 +564,9 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     send_delegation_notice(ToAddr, ResourceID, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
-set_weight(State, Req, Opts) ->
+set_weight(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    ?event(set_weigh,{ set_weigh_req, Req}, Opts),
     maybe
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
         {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
