@@ -41,11 +41,30 @@ route(Base, Req, Opts) ->
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"mint">> -> mint(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
-        _ ->
-            ?event(error, {unsupported_token_action, ActionBin}),
+        Action -> dispatch_mint_action(Action, Base, Req, Opts)
+    end.
+
+dispatch_mint_action(Action, Base, Req, Opts) ->
+    case is_supported_mint_action(Action) of
+        true ->
+            handle_mint_action(Action, Base, Req, Opts);
+        false ->
+            ?event(error, {unsupported_token_action, Action}),
             {ok, Base}
     end.
 
+% TODO: Can we replace the list with the info() exports of dev_pot??
+is_supported_mint_action(Action) ->
+    lists:member(
+        Action,
+        [
+            <<"deposit">>,
+            <<"withdraw">>,
+            <<"delegate">>,
+            <<"undelegate">>,
+            <<"set_weight">>
+        ]
+    ).
 %% @doc Get the balance for an account. Normalize the minting state for that
 %% account before returning.
 balance(Base, Req, Opts) ->
@@ -233,17 +252,27 @@ mint(Base, Assignment, Opts) ->
             )
     end.
 
+% TODO: Maybe we can merge the abive and this too
+handle_mint_action(Action, Base, Req, Opts) ->
+    case has_mint_device(Base, Opts) of
+        false ->
+            {ok, Base};
+        true ->
+            ReqWithPath = Req#{ <<"path">> => Action },
+            dev_process_lib:run_as(
+                <<"mint">>,
+                Base,
+                ReqWithPath,
+                Opts
+            )
+    end.
+
+% TODO: Mint and normalize_mint() is doing the same thing
 normalize_mint(Base, Req, Opts) ->
     case has_mint_device(Base, Opts) of
         false -> {ok, Base};
         true ->
             ReqWithPath = Req#{ <<"path">> => <<"mint">> },
-            ?event(debug_mint,
-                {running_mint,
-                    {base, Base},
-                    {req, Req}
-                }
-            ),
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
@@ -317,7 +346,7 @@ perform_mint(Base, RawQuantities, Opts) ->
             hb_ao:get(
                 <<"balances">>,
                 Base,
-                % #{ <<"device">> => <<"trie@1.0">> },
+                #{ <<"device">> => <<"trie@1.0">> },
                 Opts
             ),
         % Calculate new balances for all recipients
