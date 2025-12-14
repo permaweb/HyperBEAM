@@ -161,6 +161,7 @@ default_message() ->
             #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
             #{<<"name">> => <<"mint@1.0">>, <<"module">> => dev_mint},
+            #{<<"name">> => <<"mint-authority@1.0">>, <<"module">> => dev_mint_authority},
             #{<<"name">> => <<"pot@1.0">>, <<"module">> => dev_pot},
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
             #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
