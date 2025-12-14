@@ -23,6 +23,10 @@ compute(Base, Req, Opts) ->
     maybe
         {ok, SecureReq} ?= enforce_security(Base, Req, Opts),
         route(Base, SecureReq, Opts)
+    else
+        {error, Reason} ->
+            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            send_error(Base, Req, Reason, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
@@ -69,21 +73,10 @@ is_supported_mint_action(Action) ->
 %% account before returning.
 balance(Base, Req, Opts) ->
     {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
-    ?event({ balance_call, {req, Req}}),
-    {TimestampSource, Timestamp} =
-        case hb_ao:get(<<"timestamp">>, Req, Opts) of
-            not_found ->
-                ?event(warning, {balance_request_without_timestamp, Req}, Opts),
-                {<<"system">>, os:system_time(millisecond)};
-            TS ->
-                {<<"request">>, TS}
-        end,
     ?event(
         debug_token,
         {balance_request,
             {account, Account},
-            {timestamp_source, TimestampSource},
-            {timestamp, Timestamp},
             {base, Base}
         },
         Opts
@@ -91,10 +84,7 @@ balance(Base, Req, Opts) ->
     {ok, NormBase} =
         normalize_mint(
             Base,
-            #{
-                <<"subject">> => Account,
-                <<"timestamp">> => Timestamp
-            },
+            #{ <<"subject">> => Account },
             Opts
         ),
     ?event(debug_token, {after_mint_normalization, NormBase}, Opts),
@@ -109,14 +99,6 @@ balance(Base, Req, Opts) ->
 
 transfer(Base, Assignment, Opts) ->
     maybe
-        ?event({from_transfer, {assignment, Assignment}}),
-        Timestamp ?=
-            hb_ao:get(
-                <<"body/timestamp">>,
-                Assignment,
-                Opts
-            ),
-        ?event({from_transfer, {ts, Timestamp}}),
         % Gather transfer data from the request.
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
@@ -126,21 +108,15 @@ transfer(Base, Assignment, Opts) ->
         {ok, NormBase} ?=
             normalize_mint(
                 Base,
-                Assignment#{ <<"subject">> => From, <<"timestamp">> => Timestamp },
+                Assignment#{ <<"subject">> => From},
                 Opts
             ),
         % Retrieve balances from the base state.
-        Balances = 
-            hb_ao:get(
-                <<"balances">>, 
-                Base, 
-                % #{ <<"device">> => <<"trie@1.0">> }, 
-                Opts
-            ),
+        Balances = hb_ao:get(<<"balances">>, NormBase, Opts),
         ?event(debug_token, {balances_before_transfer, Balances}),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
-        ?event(
+        ?event(debug_token,
             {transfer_balances, 
                 {from, From}, 
                 {to, Recipient},
@@ -181,7 +157,6 @@ transfer(Base, Assignment, Opts) ->
             Opts
         )
     else
-        error -> {error, <<"Timestamp is required.">>};
         {error, Reason} ->
             ?event(token_short, {ignoring_errored_transfer, Reason}),
             ?event(debug_token,
@@ -190,19 +165,7 @@ transfer(Base, Assignment, Opts) ->
                     {returning_base, Base}
                 }
             ),
-            ReturnValue = {ok, Base},
-            ?event(debug_token, {transfer_returning, ReturnValue}),
-            dev_process_lib:send(
-                #{
-                    <<"target">> => hb_ao:get(<<"body/from">>, Assignment, Opts),       
-                    <<"message">> => Reason
-                },
-                Base,
-                Opts
-            );
-        Other ->
-            ?event(debug_token, {transfer_returning_other, Other}),
-            Other
+            send_error(Base, Assignment, Reason, Opts)
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
@@ -235,34 +198,34 @@ mint(Base, Assignment, Opts) ->
             {assignment, Assignment}
         }
     ),
-    Timestamp =
-        hb_ao:get(
-            <<"body/timestamp">>,
-            Assignment,
-            Opts
-        ),
     case has_mint_device(Base, Opts) of
         false -> default_mint(Base, Assignment, Opts);
         true ->
+
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                Assignment#{ <<"path">> => <<"mint">>, <<"timestamp">> => Timestamp },
+                Assignment#{ <<"path">> => <<"mint">> },
                 Opts
             )
     end.
 
-% TODO: Maybe we can merge the abive and this too
-handle_mint_action(Action, Base, Req, Opts) ->
+% TODO: Maybe we can merge the above and this too
+handle_mint_action(Action, Base, Assignment, Opts) ->
     case has_mint_device(Base, Opts) of
         false ->
             {ok, Base};
         true ->
-            ReqWithPath = Req#{ <<"path">> => Action },
+            ?event(debug_mint_action,
+                {running_action,
+                    {base, Base},
+                    {assignment, Assignment}
+                }
+            ),
             dev_process_lib:run_as(
                 <<"mint">>,
                 Base,
-                ReqWithPath,
+                Assignment#{ <<"path">> => Action },
                 Opts
             )
     end.
@@ -291,6 +254,9 @@ default_mint(Base, Assignment, Opts) ->
             <<"batch">> -> mint_batch(Base, Req, Opts);
             _ -> {error, <<"Invalid mint mode.">>}
         end
+    else
+      Reason ->
+        send_error(Base, Assignment, Reason, Opts)
     end.
 
 has_mint_device(Base, Opts) ->
@@ -317,8 +283,6 @@ mint_single(Base, Req, Opts) ->
         true ?= validate_address(To),
         ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
         perform_mint(Base, #{ To => Quantity }, Opts)
-    else
-        Error -> ?event(debug_mint, {error, Error})
     end.
 
 mint_batch(Base, Req, Opts) ->
@@ -346,7 +310,6 @@ perform_mint(Base, RawQuantities, Opts) ->
             hb_ao:get(
                 <<"balances">>,
                 Base,
-                #{ <<"device">> => <<"trie@1.0">> },
                 Opts
             ),
         % Calculate new balances for all recipients
@@ -358,7 +321,6 @@ perform_mint(Base, RawQuantities, Opts) ->
                 end,
                 Quantities
             ),
-        % Update balances in the trie
         {ok, NewBalances} ?=
             hb_ao:resolve(
                 Balances,
@@ -444,3 +406,14 @@ validate_address(Address) when is_binary(Address) ->
     end;
 validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
+
+send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
+    {ok, Target} = hb_ao:resolve(<<"body/from">>, Assignment, Opts),
+    dev_process_lib:send(
+        #{
+            <<"target">> => Target,       
+            <<"message">> => Reason
+        },
+        Base,
+        Opts
+    ).
