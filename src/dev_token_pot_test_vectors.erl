@@ -21,6 +21,8 @@ id(Bin) when is_binary(Bin) ->
     << Bin/binary, Suffix/binary >>;
 id(Other) -> hb_util:human_id(Other).
 
+slot(SchedRes, Opts) -> hb_maps:get(<<"slot">>, SchedRes, none, Opts).
+
 %% @doc Generate a base token state with default configuration.
 generate_token_base_state(Opts) ->
     generate_token_base_state(#{}, Opts).
@@ -42,7 +44,7 @@ generate_token_base_state(Params, Opts) ->
             },
             Opts
         ),
-    Owner = hb_maps:get(priv_wallet, Opts, <<"owner">>, Opts),
+    Owner = id(hb_maps:get(priv_wallet, Opts, <<"owner">>, Opts)),
     DefaultState = #{
         <<"device">> => <<"token@1.0">>,
         <<"t-source">> => <<"slot">>,
@@ -60,7 +62,6 @@ generate_token_base_state(Params, Opts) ->
 
 generate_process_state(BaseState, Opts) ->
     Addr = id(hb_opts:get(priv_wallet, no_wallet, Opts)),
-    ?event({process_state, {base, hb_message:commit(BaseState, Opts)}}),
     Base =
         BaseState#{
             <<"device">> => <<"process@1.0">>,
@@ -93,12 +94,11 @@ generate_assignment(Action, Body, From) ->
     ?event({make_request, {action, Action}, {from, From}}),
     Req.
 
-schedule_request(State, Action, Body, Wallet, Opts) ->
-    From = id(Wallet),
-    ?event({scheduling_request, {action, Action}, {from, From}}),
+schedule_request(State, Body, Wallet, Opts) ->
+    ?event({scheduling_request, {body, Body}}),
     Signed =
         hb_message:commit(
-            Body#{ <<"from">> => From, <<"action">> => Action },
+            Body,
             Opts#{ priv_wallet => Wallet }
         ),
     ?event({signed_request, Signed}),
@@ -178,13 +178,36 @@ pot_deposit_resource(UserDeposits, Base, Opts) when is_list(UserDeposits) ->
         UserDeposits
     );
 pot_deposit_resource({Resource, Weight, UserDeposits}, Base, Opts) ->
-    PotWeightSet = dev_pot:set_weight(Resource, Weight, Base, Opts),
-    ?event({weight_set, PotWeightSet}),
+    ?event(i_am_here),
+    #{ priv_wallet := Wallet } = Opts,
+    BaseWithWeight = 
+        schedule_request(
+            Base,
+            #{
+                <<"path">> => <<"mint">>,
+                <<"resource">> => Resource,
+                <<"weight">> => Weight
+            },
+            Wallet,
+            Opts
+        ),
+    ?event({weight_set, BaseWithWeight}),
     lists:foldl(
-        fun({Addr, Qty}, PotAcc) ->
-            dev_pot:deposit(Addr, Resource, Qty, PotAcc, Opts)
+        fun({UserWallet, Qty}, _PotAcc) ->
+            Addr = id(UserWallet),
+            schedule_request(
+                Base,
+                #{
+                    <<"path">> => <<"deposit">>,
+                    <<"address">> => Addr,
+                    <<"resource">> => Resource,
+                    <<"amount">> => Qty
+                },
+                UserWallet,
+                Opts
+            )
         end,
-        PotWeightSet,
+        Base,
         UserDeposits
     ).
 
@@ -210,8 +233,9 @@ simple_process_test() ->
     SchedRes =
         schedule_request(
             Base,
-            <<"transfer">>,
             #{
+                <<"action">> => <<"transfer">>,
+                <<"from">> => AliceAddr,
                 <<"recipient">> => BobAddr,
                 <<"quantity">> => 1
             },
@@ -256,39 +280,42 @@ simple_pot_process_test() ->
     },
     Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
     ?event({base_state, Base}),
-    NewBase = 
-        pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceAddr, 10}]}, 
-            Base, 
-            Opts
-        ),
-    MintSchedRes =
-        schedule_request(
-            NewBase,
-            <<"mint">>,
-            #{
-                <<"timestamp">> => 1 
-            },
-            AliceWallet,
-            Opts
-        ),
-    ?event({mint_sched_res, MintSchedRes}),
-    TransferSchedRes =
-        schedule_request(
-            NewBase,
-            <<"transfer">>,
-            #{
-                <<"recipient">> => BobAddr,
-                <<"quantity">> => 1,
-                <<"timestamp">> => 1
-            },
-            AliceWallet,
-            Opts
-        ),
-    ?event({transfer_sched_res, TransferSchedRes}),
+    ModifiedBase =
+        % hb_message:commit(
+            pot_deposit_resource(
+                {ResourceOxygen, 100, [{AliceWallet, 10}]},
+                Base,
+                Opts
+            ), 
+            % Opts
+        % ),
+    ?event({simple_pot, {modified, ModifiedBase}}),
+    throw("eof"),
+    ?event({simple_pot, {modfied, ModifiedBase}}),
+    schedule_request(
+        ModifiedBase,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"from">> => AliceAddr,
+            <<"timestamp">> => 1 
+        },
+        AliceWallet,
+        Opts
+    ),
+    schedule_request(
+        ModifiedBase,
+        #{
+            <<"recipient">> => BobAddr,
+            <<"action">> => <<"transfer">>,
+            <<"quantity">> => 1,
+            <<"timestamp">> => 1
+        },
+        AliceWallet,
+        Opts
+    ),
     {ok, State} =
         hb_ao:resolve(
-            NewBase,
+            ModifiedBase,
             #{
                 <<"path">> => <<"compute">>,
                 <<"slot">> => 1
@@ -342,7 +369,7 @@ transfer_with_unclaimed_yield_test() ->
     Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
     NewBase = 
         pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceAddr, 10}]}, 
+            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
             Base, 
             Opts
         ),
@@ -364,19 +391,18 @@ transfer_with_unclaimed_yield_test() ->
     % % Try to transfer 700 tokens
     % % Should fail without normalize_mint (500 < 700)
     % % Should succeed with normalize_mint (500 + 5000 = 5500 > 700)
-    TransferSchedRes =
-        schedule_request(
-            NewBase,
-            <<"transfer">>,
-            #{
-                <<"timestamp">> => 1,
-                <<"recipient">> => BobAddr,
-                <<"quantity">> => 700
-            },
-            AliceWallet,
-            Opts
-        ),
-    ?event({transfer_sched_res, TransferSchedRes}),
+    schedule_request(
+        NewBase,
+        #{
+            <<"action">> => <<"transfer">>,
+            <<"from">> => AliceAddr,
+            <<"timestamp">> => 1,
+            <<"recipient">> => BobAddr,
+            <<"quantity">> => 700
+        },
+        AliceWallet,
+        Opts
+    ),
     {ok, Result} =
         hb_ao:resolve(
             NewBase,
@@ -428,15 +454,16 @@ claim_yield_single_resource_test() ->
     Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
     NewBase = 
         pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceAddr, 10}]}, 
+            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
             Base, 
             Opts
         ),
     ?event({new_base, NewBase}),
     schedule_request(
         NewBase,
-        <<"mint">>,
         #{
+            <<"action">> => <<"mint">>,
+            <<"from">> => AliceAddr,
             <<"timestamp">> => 1
         },
         AliceWallet,
@@ -462,8 +489,9 @@ claim_yield_single_resource_test() ->
     % ?assertEqual(6000, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)),
     schedule_request(
         NewBase,
-        <<"mint">>,
         #{
+            <<"action">> => <<"mint">>,
+            <<"from">> => AliceAddr,
             <<"timestamp">> => 2
         },
         AliceWallet,
@@ -510,16 +538,17 @@ claim_yield_multiple_resources_test_disabled() ->
     NewBase = 
         pot_deposit_resource(
             [
-                {ResourceOxygen, 100, [{AliceAddr, 10}]},
-                {ResourceHydrogen, 50, [{AliceAddr, 5}]}
+                {ResourceOxygen, 100, [{AliceWallet, 10}]},
+                {ResourceHydrogen, 50, [{AliceWallet, 5}]}
             ], 
             Base, 
             Opts
         ),
     schedule_request(
         NewBase,
-        <<"mint">>,
         #{
+            <<"action">> => <<"mint">>,
+            <<"from">> => AliceAddr,
             <<"timestamp">> => 1
         },
         AliceWallet,
@@ -555,14 +584,23 @@ claim_yield_no_deposits_test() ->
         total_supply => 100
     },
     Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
-    ResultAfterClaim =
-        schedule_request(
+    schedule_request(
+        Base,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"from">> => AliceAddr,
+            <<"timestamp">> => 1
+        },
+        AliceWallet,
+        Opts
+    ),
+    {ok, ResultAfterClaim} =
+        hb_ao:resolve(
             Base,
-            <<"mint">>,
             #{
-                <<"timestamp">> => 1
+                <<"path">> => <<"compute">>,
+                <<"slot">> => 0
             },
-            AliceWallet,
             Opts
         ),
     % Charlie's balance should be unchanged (still 100)
@@ -699,8 +737,8 @@ benchmark_process_transfers() ->
         fun(I) ->
             schedule_request(
                 Base,
-                <<"transfer">>,
                 #{
+                    <<"action">> => <<"mint">>,
                     <<"from">> => AliceAddr,
                     <<"recipient">> => BobAddr,
                     <<"quantity">> => 1,
