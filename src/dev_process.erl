@@ -322,7 +322,8 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                     ),
                     {error, Res#{
                         <<"phase">> => <<"get-schedule">>,
-                        <<"attempted-slot">> => NextSlot
+                        <<"attempted-slot">> => NextSlot,
+                        <<"process-id">> => ProcID
                     }};
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
                     % Compute the next single state transition.

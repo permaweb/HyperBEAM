@@ -31,7 +31,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3, set_weight/3]).
+-export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3]).
+-export([set_weight/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
@@ -82,9 +83,10 @@ test_drip(State, Req, Opts) ->
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
 drip_global(State, Req, Opts) ->
+    TimeSource = hb_maps:get(<<"t-source">>, State, <<"timestamp">>, Opts),
     ?event({drip_global, {req, Req}}),
     UpdatedState =
-        case hb_maps:get(<<"timestamp">>, Req, undefined, Opts) of
+        case hb_maps:get(TimeSource, Req, undefined, Opts) of
             undefined -> State;
             NewTime ->
                 hb_ao:set(
@@ -222,6 +224,7 @@ drip_user(Addr, S, Opts) ->
 %% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
 %% be initialized to the same value as `t` if not already set.
 ensure_initialized(Base, Req, Opts) ->
+    TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
     WithT =
         hb_ao:set(
             Base,
@@ -229,7 +232,7 @@ ensure_initialized(Base, Req, Opts) ->
                 <<"t">> =>
                     NewT =
                         hb_maps:get(
-                            <<"timestamp">>,
+                            TimeSource,
                             Req,
                             hb_maps:get(<<"t">>, Base, 0, Opts),
                             Opts
@@ -296,12 +299,26 @@ deposit(State, Req, Opts) ->
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
     else
         Reason -> Reason
     end.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
+
+%% @doc Verify that a signer of the request is authorized to deposit to the 
+%% given resource.
+verify_resource_auth(State, ResourceID, Req, Opts) ->
+    maybe
+        {ok, Authority} ?=
+            hb_ao:resolve(
+                State,
+                <<"resources/", ResourceID/binary, "/authority">>,
+                Opts
+            ),
+        lists:member(Authority, hb_message:signers(Req, Opts))
+    end.
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
@@ -310,9 +327,8 @@ withdraw(State, Req, Opts) ->
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         withdraw(Address, ResourceID, Amount, State, Opts)
-    else
-        Reason -> Reason
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
@@ -359,8 +375,6 @@ delegate(State, Req, Opts) ->
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
         delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
-    else
-        Reason -> Reason
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
