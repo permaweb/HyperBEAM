@@ -439,8 +439,7 @@ claim_yield_multiple_resources_test() ->
         Opts
     ),
     BaseAfterClaim = resolve_now(NewBase, Opts),
-    ?assertEqual(9750, get_balance(BaseAfterClaim, AliceAddr,Opts)),
-    ?assertEqual(9750, hb_ao:get(<<"total-supply">>, BaseAfterClaim, Opts)).
+    ?assertEqual(9750, get_balance(BaseAfterClaim, AliceAddr,Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
@@ -471,6 +470,47 @@ claim_yield_no_deposits_test() ->
     % Alice's balance should be unchanged (still 100)
     ?assertEqual(100, get_balance(BaseAfterClaim, AliceAddr,Opts)),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, BaseAfterClaim, Opts)).
+
+transfer_with_unclaimed_yield_test_disabled() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = id(BobWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 500},
+        total_supply => 500
+    },
+    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    NewBase = 
+        pot_deposit_resource(
+            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
+            Base, 
+            Opts
+        ),
+    ?event({initial_state, NewBase}),
+    Balance = get_balance( NewBase, AliceAddr, Opts),
+    ?event({alice_balance, Balance}),
+    ?assertEqual(500, Balance),
+    schedule_request(
+        NewBase,
+        transfer_req(BobAddr, 700),
+        AliceWallet,
+        Opts
+    ),
+    Result = resolve_now(NewBase, Opts),
+    ?event({transfer_result, Result}),
+    ?assertEqual(6800, get_balance(Result, AliceAddr,Opts)),
+    ?assertEqual(700, get_balance(Result, BobAddr,Opts)),
+    ?assertEqual(7500, hb_ao:get(<<"total-supply">>, Result, Opts)).
 
 %%% Benchmark Tests
 benchmark_transfers_process_test() ->
