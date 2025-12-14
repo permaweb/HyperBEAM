@@ -4,6 +4,7 @@
 -include("include/hb.hrl").
 
 %%% Test Utilities
+
 %% @doc Generate generic isolated node messages for testing.
 test_opts() ->
     hb:init(),
@@ -14,16 +15,13 @@ test_opts() ->
 
 %% @doc Generate a random ID, or an 'ID' value of the correct length starting
 %% with the given binary and padded with zeros.
-id() -> hb_util:human_id(crypto:strong_rand_bytes(32)).
 id(Bin) when is_binary(Bin) ->
     BitSize = byte_size(Bin) * 8,
     Suffix = << 0:(256 - BitSize) >>,
     << Bin/binary, Suffix/binary >>;
 id(Other) -> hb_util:human_id(Other).
 
-slot(SchedRes, Opts) -> hb_maps:get(<<"slot">>, SchedRes, none, Opts).
-
-resolve_now(Base, Opts) ->
+now(Base, Opts) ->
     {ok, NewBase} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
     ?event(post_resolve,
         {now,
@@ -35,7 +33,7 @@ resolve_now(Base, Opts) ->
 
 set_weight_req(Resource, Weight) ->
     #{
-        <<"action">> => <<"set_weight">>,
+        <<"action">> => <<"set-weight">>,
         <<"resource-id">> => Resource,
         <<"weight">> => Weight
     }.
@@ -56,6 +54,7 @@ transfer_req(Addr, Qty, Params) ->
         <<"recipient">> => Addr,
         <<"quantity">> => Qty
     }.
+
 %% @doc Generate a base token state with default configuration.
 generate_token_base_state(Params, Opts) ->
     ?event({generate_token_base_state, {params, Params}}),
@@ -70,17 +69,13 @@ generate_token_base_state(Params, Opts) ->
     {ok, Balances} =
         hb_ao:resolve(
             DefaultBalances,
-            InitialBalances#{
-                <<"path">> => <<"set">>
-            },
+            InitialBalances#{ <<"path">> => <<"set">> },
             Opts
         ),
-    Owner = id(hb_maps:get(priv_wallet, Opts, <<"owner">>, Opts)),
     DefaultState = #{
         <<"device">> => <<"token@1.0">>,
+        <<"set-authority">> => id(hb_opts:get(priv_wallet, no_wallet, Opts)),
         <<"t-source">> => <<"slot">>,
-        <<"owner">> => maps:get(owner, Params, Owner),
-        <<"mint-authority">> => maps:get(mint_authority, Params, Owner),
         <<"name">> => <<"Test Token">>,
         <<"ticker">> => <<"TEST">>,
         <<"denomination">> => 12,
@@ -91,7 +86,7 @@ generate_token_base_state(Params, Opts) ->
     ?event({final_state_generated, {balances_size, map_size(Balances)}}),
     FinalState.
 
-generate_process_state(BaseState, Opts) ->
+generate_base_process_state(BaseState, Opts) ->
     Addr = id(hb_opts:get(priv_wallet, no_wallet, Opts)),
     Base =
         BaseState#{
@@ -106,25 +101,28 @@ generate_process_state(BaseState, Opts) ->
     hb_message:commit(Base, Opts).
 
 %% @doc Return a signed token process with a `pot@1.0` mint device.
-generate_integrated_process_state(PotFields, TokenFields, Opts) ->
-    PotBase = generate_pot_fields(PotFields, Opts),
+generate_process_state(PotFields, Opts) ->
+    generate_process_state(PotFields, #{}, Opts).
+generate_process_state(PotFields, TokenFields, Opts) ->
+    PotBase = generate_pot_state(PotFields, Opts),
     TokenBase = 
         generate_token_base_state(
             TokenFields#{
-                extra => PotBase},
+                extra => PotBase
+            },
             Opts
         ),
-    generate_process_state(TokenBase, Opts).
+    generate_base_process_state(TokenBase, Opts).
 
 %% @doc Create a request message.
 schedule_request(State, Body, Wallet, Opts) ->
-    ?event({scheduling_request, {body, Body}}),
+    ?event(debug_test, {scheduling_request, {body, Body}}, Opts),
     Signed =
         hb_message:commit(
             Body,
             Opts#{ priv_wallet => Wallet }
         ),
-    ?event({signed_request, Signed}),
+    ?event(debug_test, {signed_request, Signed}, Opts),
     Req =
         Signed#{
             <<"method">> => <<"POST">>,
@@ -138,15 +136,13 @@ schedule_request(State, Body, Wallet, Opts) ->
         Opts
     ),
     {ok, Res} = hb_ao:resolve(State, Req, Opts),
-    ?event({schedule_result, Res}),
+    ?event(debug_test, {schedule_result, Res}, Opts),
     Res.
 
 %% @doc Get balance for an account.
-get_balance(State, Account) ->
-    get_balance(State, Account, #{}).
-get_balance(State, Account, Opts) when is_binary(Account) ->
-    get_balance(State, #{ <<"balance">> => Account }, Opts);
-get_balance(State, Req, Opts) ->
+balance(State, Account, Opts) when is_binary(Account) ->
+    balance(State, #{ <<"balance">> => Account }, Opts);
+balance(State, Req, Opts) ->
     Res =
         case hb_maps:get(<<"device">>, State, <<"token@1.0">>, #{}) of
             <<"token@1.0">> ->
@@ -173,8 +169,8 @@ get_balance(State, Req, Opts) ->
         {error, not_found} -> 0
     end.
 
-%% @doc Generate pot fields for integration testing
-generate_pot_fields(Params, Opts) ->
+%% @doc Generate pot state for integration testing
+generate_pot_state(Params, Opts) ->
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
     MintPropN = hb_maps:get(mint_prop_numerator, Params, 1, Opts),
     MintPropD = hb_maps:get(mint_prop_denominator, Params, 2, Opts),
@@ -192,17 +188,28 @@ generate_pot_fields(Params, Opts) ->
         <<"last-drip">> => LastDrip
     }.
 
+schedule_set_weight(Resource, Weight, Base, Opts) ->
+    schedule_request(
+        Base,
+        set_weight_req(Resource, Weight),
+        hb_opts:get(priv_wallet, no_wallet, Opts),
+        Opts
+    ),
+    now(Base, Opts).
+
 %% @doc Helper to create a pot resource with deposits
-schedule_resource({Resource, Weight, UserDeposits}, Base, Opts) ->
-    #{ priv_wallet := Wallet } = Opts,
+schedule_modify_resource(Resource, Weight, UserDeposits, Base, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, no_wallet, Opts),
     schedule_request(
         Base,
         set_weight_req(Resource, Weight),
         Wallet,
         Opts
     ),
-    lists:foreach(
-        fun({UserWallet, Qty}) ->
+    schedule_modify_resource(Resource, UserDeposits, Base, Opts).
+schedule_modify_resource(Resource, UserDeposits, Base, Opts) ->
+    hb_maps:map(
+        fun(UserWallet, Qty) ->
             Addr = id(UserWallet),
             schedule_request(
                 Base,
@@ -212,18 +219,38 @@ schedule_resource({Resource, Weight, UserDeposits}, Base, Opts) ->
             )
         end,
         UserDeposits
-    ).
-pot_deposit_resource(Resources, Base, Opts) when is_list(Resources) ->
+    ),
+    now(Base, Opts).
+
+schedule_modify_resources(Resources, Base, Opts) ->
     lists:foreach(
-        fun(Resource) ->
-            schedule_resource(Resource, Base, Opts)
+        fun({Resource, Weight, UserDeposits}) ->
+            schedule_modify_resource(Resource, Weight, UserDeposits, Base, Opts);
+        ({Resource, UserDeposits}) ->
+            schedule_modify_resource(Resource, UserDeposits, Base, Opts)
         end,
         Resources
     ),
-    resolve_now(Base, Opts);
-pot_deposit_resource(Resource, Base, Opts) ->
-    schedule_resource(Resource, Base, Opts),
-    resolve_now(Base, Opts).
+    now(Base, Opts).
+
+schedule_deposit(Resource, UserWallet, Qty, Base, Opts) ->
+    schedule_modify_resource(Resource, #{ UserWallet => Qty }, Base, Opts);
+schedule_deposit(Resource, Weight, UserDeposits, Base, Opts) ->
+    schedule_modify_resource(Resource, Weight, UserDeposits, Base, Opts).
+
+schedule_deposits(Resource, UserDeposits, Base, Opts) ->
+    schedule_modify_resource(Resource, UserDeposits, Base, Opts).
+
+schedule_delegate(Wallet, ToAddr, Resource, Qty, Base, Opts) ->
+    schedule_request(
+        Base,
+        delegate_req(Resource, ToAddr, Qty),
+        Wallet,
+        Opts
+    ),
+    now(Base, Opts).
+
+%%% Test Cases.
 
 simple_process_test() ->
     hb:init(),
@@ -233,11 +260,10 @@ simple_process_test() ->
     BobWallet = ar_wallet:new(),
     BobAddr = id(BobWallet),
     Base =
-        generate_process_state(
+        generate_base_process_state(
             generate_token_base_state(
                 #{
-                    initial_balances =>
-                        #{ AliceAddr => 1_000_000_000 }
+                    initial_balances => #{ AliceAddr => 1_000_000_000 }
                 },
                 Opts
             ),
@@ -250,9 +276,9 @@ simple_process_test() ->
         AliceWallet,
         Opts
     ),
-    State = resolve_now(Base, Opts),
-    ?assertEqual(999_999_999, get_balance(State, AliceAddr, Opts)),
-    ?assertEqual(1, get_balance(State, BobAddr, Opts)),
+    State = now(Base, Opts),
+    ?assertEqual(999_999_999, balance(State, AliceAddr, Opts)),
+    ?assertEqual(1, balance(State, BobAddr, Opts)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %% @doc Basic test to see what happens when transfer is called with mint-device=pot
@@ -272,11 +298,14 @@ simple_pot_process_test() ->
         initial_balances => #{ AliceAddr => 1000 },
         total_supply => 1000
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
+    schedule_set_weight(ResourceOxygen, 100, Base, Opts),
     ?event({base_state, Base}),
     ModifiedBase =
-        pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceWallet, 10}]},
+        schedule_deposit(
+            ResourceOxygen,
+            AliceWallet,
+            10,
             Base,
             Opts
         ), 
@@ -284,9 +313,7 @@ simple_pot_process_test() ->
     ?event({simple_pot, {modfied, ModifiedBase}}),
     schedule_request(
         ModifiedBase,
-        #{
-            <<"action">> => <<"mint">>
-        },
+        #{ <<"action">> => <<"mint">> },
         AliceWallet,
         Opts
     ),
@@ -296,10 +323,10 @@ simple_pot_process_test() ->
         AliceWallet,
         Opts
     ),
-    State = resolve_now(ModifiedBase, Opts),
+    State = now(ModifiedBase, Opts),
     ?event(debug_test, {state, State}, Opts),
-    ?assertEqual(1, get_balance(State, BobAddr,Opts)),
-    ?assertEqual(8999, get_balance(State, AliceAddr,Opts)),
+    ?assertEqual(1, balance(State, BobAddr,Opts)),
+    ?assertEqual(8999, balance(State, AliceAddr,Opts)),
     ?assertEqual(9000, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %% @doc Test that transfer works when balance is insufficient but 
@@ -327,10 +354,13 @@ transfer_with_unclaimed_yield_test() ->
         initial_balances => #{AliceAddr => 500},
         total_supply => 500
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
+    schedule_set_weight(ResourceOxygen, 100, Base, Opts),
     NewBase = 
-        pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
+        schedule_deposit(
+            ResourceOxygen,
+            AliceWallet,
+            10,
             Base, 
             Opts
         ),
@@ -341,7 +371,7 @@ transfer_with_unclaimed_yield_test() ->
     % GlobalAcc = 0 + (5000 / 1000) = 5 (per weighted unit)
     % ResourceAcc = 0 + (5 * 100) = 500
     % Alice's yield = (500 - 0) * 10 = 5000 tokens!
-    Balance = get_balance( NewBase, AliceAddr, Opts),
+    Balance = balance( NewBase, AliceAddr, Opts),
     ?event({alice_balance, Balance}),
     ?assertEqual(500, Balance),
     % % Try to transfer 700 tokens
@@ -353,12 +383,12 @@ transfer_with_unclaimed_yield_test() ->
         AliceWallet,
         Opts
     ),
-    Result = resolve_now(NewBase, Opts),
+    Result = now(NewBase, Opts),
     ?event({transfer_result, Result}),
     % Alice should have: (500 + 5000) - 700 = 4800
     % Bob should have: 700
-    ?assertEqual(6800, get_balance(Result, AliceAddr,Opts)),
-    ?assertEqual(700, get_balance(Result, BobAddr,Opts)),
+    ?assertEqual(6800, balance(Result, AliceAddr,Opts)),
+    ?assertEqual(700, balance(Result, BobAddr,Opts)),
     % Total supply should be updated
     % Initial: 500, Minted: 5000, New total: 5500
     ?assertEqual(7500, hb_ao:get(<<"total-supply">>, Result, Opts)).
@@ -380,10 +410,13 @@ claim_yield_single_resource_test() ->
         initial_balances => #{AliceAddr => 1000},
         total_supply => 1000
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
+    schedule_set_weight(ResourceOxygen, 100, Base, Opts),
     NewBase = 
-        pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
+        schedule_deposit(
+            ResourceOxygen,
+            AliceWallet,
+            10,
             Base, 
             Opts
         ),
@@ -396,9 +429,9 @@ claim_yield_single_resource_test() ->
         AliceWallet,
         Opts
     ),
-    BaseAfterClaim = resolve_now(NewBase, Opts),
+    BaseAfterClaim = now(NewBase, Opts),
     ?event({after_claim, BaseAfterClaim}),
-    ?assertEqual(8000, get_balance(BaseAfterClaim, AliceAddr,Opts)).
+    ?assertEqual(8000, balance(BaseAfterClaim, AliceAddr,Opts)).
 
 %% @doc Test claim_yield across multiple resources
 claim_yield_multiple_resources_test() ->
@@ -419,12 +452,12 @@ claim_yield_multiple_resources_test() ->
         initial_balances => #{AliceAddr => 1000},
         total_supply => 1000
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
     NewBase = 
-        pot_deposit_resource(
+        schedule_modify_resources(
             [
-                {ResourceOxygen, 100, [{AliceWallet, 10}]},
-                {ResourceHydrogen, 50, [{AliceWallet, 5}]}
+                {ResourceOxygen, 100, #{ AliceWallet => 10 }},
+                {ResourceHydrogen, 50, #{ AliceWallet => 5 }}
             ], 
             Base, 
             Opts
@@ -438,8 +471,8 @@ claim_yield_multiple_resources_test() ->
         AliceWallet,
         Opts
     ),
-    BaseAfterClaim = resolve_now(NewBase, Opts),
-    ?assertEqual(9750, get_balance(BaseAfterClaim, AliceAddr,Opts)).
+    BaseAfterClaim = now(NewBase, Opts),
+    ?assertEqual(9750, balance(BaseAfterClaim, AliceAddr,Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
@@ -457,7 +490,7 @@ claim_yield_no_deposits_test() ->
         initial_balances => #{AliceAddr => 100},
         total_supply => 100
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
     schedule_request(
         Base,
         #{
@@ -466,9 +499,9 @@ claim_yield_no_deposits_test() ->
         AliceWallet,
         Opts
     ),
-    BaseAfterClaim = resolve_now(Base, Opts),
+    BaseAfterClaim = now(Base, Opts),
     % Alice's balance should be unchanged (still 100)
-    ?assertEqual(100, get_balance(BaseAfterClaim, AliceAddr,Opts)),
+    ?assertEqual(100, balance(BaseAfterClaim, AliceAddr,Opts)),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, BaseAfterClaim, Opts)).
 
 transfer_with_unclaimed_yield_test_disabled() ->
@@ -489,15 +522,17 @@ transfer_with_unclaimed_yield_test_disabled() ->
         initial_balances => #{AliceAddr => 500},
         total_supply => 500
     },
-    Base = generate_integrated_process_state(PotFields, TokenFields, Opts),
+    Base = generate_process_state(PotFields, TokenFields, Opts),
     NewBase = 
-        pot_deposit_resource(
-            {ResourceOxygen, 100, [{AliceWallet, 10}]}, 
+        schedule_deposit(
+            ResourceOxygen,
+            AliceWallet,
+            10,
             Base, 
             Opts
         ),
     ?event({initial_state, NewBase}),
-    Balance = get_balance( NewBase, AliceAddr, Opts),
+    Balance = balance( NewBase, AliceAddr, Opts),
     ?event({alice_balance, Balance}),
     ?assertEqual(500, Balance),
     schedule_request(
@@ -506,13 +541,14 @@ transfer_with_unclaimed_yield_test_disabled() ->
         AliceWallet,
         Opts
     ),
-    Result = resolve_now(NewBase, Opts),
+    Result = now(NewBase, Opts),
     ?event({transfer_result, Result}),
-    ?assertEqual(6800, get_balance(Result, AliceAddr,Opts)),
-    ?assertEqual(700, get_balance(Result, BobAddr,Opts)),
+    ?assertEqual(6800, balance(Result, AliceAddr,Opts)),
+    ?assertEqual(700, balance(Result, BobAddr,Opts)),
     ?assertEqual(7500, hb_ao:get(<<"total-supply">>, Result, Opts)).
 
 %%% Benchmark Tests
+
 benchmark_transfers_process_test() ->
     Opts = test_opts(),
     AliceWallet = ar_wallet:new(),
@@ -523,7 +559,7 @@ benchmark_transfers_process_test() ->
     Transfers = 100,
     Accounts = 1_000,
     % Setup: Alice has 1 billion tokens, the rest have 1 billion tokens each
-    Base = generate_process_state(
+    Base = generate_base_process_state(
         generate_token_base_state(
             #{
             initial_balances =>
@@ -576,11 +612,11 @@ benchmark_transfers_process_test() ->
     % Verify correctness
     ?assertEqual(
         1_000_000_000 - Transfers,
-        get_balance(AOCoreInvokedState, AliceAddr, Opts)
+        balance(AOCoreInvokedState, AliceAddr, Opts)
     ),
     ?assertEqual(
         Transfers,
-        get_balance(AOCoreInvokedState, BobAddr, Opts)
+        balance(AOCoreInvokedState, BobAddr, Opts)
     ).
 
 benchmark_process_transfers_test_() ->
@@ -601,7 +637,7 @@ benchmark_process_transfers() ->
     BobAddr = hb_util:human_id(BobWallet),
     % Setup: Alice has 1 billion tokens, the rest have 1 billion tokens each
     Base =
-        generate_process_state(
+        generate_base_process_state(
             generate_token_base_state(
                 #{
                     initial_balances =>
@@ -635,7 +671,7 @@ benchmark_process_transfers() ->
         lists:seq(1, Transfers)
     ),
     NowStartTime = erlang:monotonic_time(millisecond),
-    State = resolve_now(Base, Opts),
+    State = now(Base, Opts),
     NowEndTime = erlang:monotonic_time(millisecond),
     hb_test_utils:benchmark_print(
         <<"Process transfers">>,
@@ -643,8 +679,8 @@ benchmark_process_transfers() ->
         Transfers,
         (NowEndTime - NowStartTime) / 1000
     ),
-    ?assertEqual(Transfers, get_balance(State, BobAddr, Opts)),
-    ?assertEqual(1_000_000_000 - Transfers, get_balance(State, AliceAddr, Opts)),
+    ?assertEqual(Transfers, balance(State, BobAddr, Opts)),
+    ?assertEqual(1_000_000_000 - Transfers, balance(State, AliceAddr, Opts)),
     ?assertEqual(
         1_000_000_000 * Accounts,
         hb_ao:get(<<"total-supply">>, State, Opts)

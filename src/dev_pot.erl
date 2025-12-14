@@ -43,15 +43,16 @@
 %%% Pot Model Functions.
 
 info(_S) ->
-    #{ exports =>
-        [
-            <<"mint">>,
-            <<"deposit">>,
-            <<"withdraw">>,
-            <<"delegate">>,
-            <<"undelegate">>,
-            <<"set_weight">>
-        ]
+    #{
+        exports =>
+            [
+                <<"mint">>,
+                <<"deposit">>,
+                <<"withdraw">>,
+                <<"delegate">>,
+                <<"undelegate">>,
+                <<"set-weight">>
+            ]
     }.
 
 %% @doc Normalizes the state of the pot for either the global scope or a
@@ -374,9 +375,9 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
-        {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, FromAddr} ?= hb_maps:find(<<"from">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
         delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
     end.
@@ -473,9 +474,9 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
-        {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, FromAddr} ?= hb_maps:find(<<"from">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
         undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
     else
@@ -567,7 +568,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
 %% @doc Set the weight of a specific resource in the pot.
 set_weight(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
-    ?event(set_weigh,{ set_weigh_req, Req}, Opts),
+    ?event(debug, {set_weight, Assignment}, Opts),
     maybe
         {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
         {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
