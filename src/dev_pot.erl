@@ -31,7 +31,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([info/1, mint/3]).
+-export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3, set_weight/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
@@ -41,10 +41,17 @@
 
 %%% Pot Model Functions.
 
-%% @doc Only export the `mint` key from the device, defaulting to `~message@1.0`
-%% for all other keys.
 info(_S) ->
-    #{ exports => [<<"mint">>] }.
+    #{ exports =>
+        [
+            <<"mint">>,
+            <<"deposit">>,
+            <<"withdraw">>,
+            <<"delegate">>,
+            <<"undelegate">>,
+            <<"set_weight">>
+        ]
+    }.
 
 %% @doc Normalizes the state of the pot for either the global scope or a
 %% specific user ID.
@@ -111,7 +118,16 @@ drip_global(S = #{
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
-    ?event(debug_test, {drip_global, {t, T}, {last_drip, LastT}, {minted, AlreadyMinted}, {undistributed_mint, UndistributedMint}, {total_weighted_units, TotalWeightedUnits}, {global_accumulator, GlobalAcc}, {to_mint, ToMint}}, Opts),
+    ?event(debug_test,
+        {drip_global,
+            {t, T},
+            {last_drip, LastT},
+            {minted, AlreadyMinted},
+            {undistributed_mint, UndistributedMint},
+            {total_weighted_units, TotalWeightedUnits},
+            {global_accumulator, GlobalAcc},
+            {to_mint, ToMint}
+        }, Opts),
     {NewGlobalAcc, NewUndistributedMint} =
         dev_pot_math:drip_global(
             GlobalAcc,
@@ -275,11 +291,29 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
+deposit(State, Req, Opts) ->
+    maybe
+        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        deposit(Address, ResourceID, Amount, State, Opts)
+    else
+        Reason -> Reason
+    end.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
+withdraw(State, Req, Opts) ->
+    maybe
+        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        withdraw(Address, ResourceID, Amount, State, Opts)
+    else
+        Reason -> Reason
+    end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
@@ -318,6 +352,16 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
     liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts).
 
 %% @doc Delegate some quantity of a resource from one address to another.
+delegate(State, Req, Opts) ->
+    maybe
+        {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
+    else
+        Reason -> Reason
+    end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
         {delegating,
@@ -408,6 +452,16 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     send_delegation_notice(ToAddr, ResourceID, Amount, S3, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
+undelegate(State, Req, Opts) ->
+    maybe
+        {ok, FromAddr} ?= hb_maps:find(<<"from-address">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"to-address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
+    else
+        Reason -> Reason
+    end.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
     Liquidated = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
@@ -492,6 +546,14 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     send_delegation_notice(ToAddr, ResourceID, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
+set_weight(State, Req, Opts) ->
+    maybe
+        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
+        set_weight(ResourceID, Weight, State, Opts)
+    else
+        Reason -> Reason
+    end.
 set_weight(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
     S0 = drip_global(S, Opts),
