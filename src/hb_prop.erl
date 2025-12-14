@@ -14,23 +14,33 @@ forall(Spec) ->
     state_machine(Spec#{ length => hb_opts:get(length, 1, Spec) }).
 
 state_machine(Spec = #{ requests := _ }) ->
+    Runs = hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
+    Length = hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
     run_state_machines(
         Spec#{
             states => hb_opts:get(states, undefined, Spec),
             models => hb_opts:get(models, undefined, Spec),
             properties => hb_opts:get(properties, [], Spec),
+            opts => hb_opts:get(opts, #{}, Spec),
             next => hb_opts:get(next, undefined, Spec),
-            runs => hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
-            length => hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
-            opts => hb_opts:get(opts, #{}, Spec)
+            runs => Runs,
+            runs_remaining => Runs,
+            length => Length,
+            requests_remaining => Length
         }
     );
 state_machine(_Spec) ->
     throw({invalid_spec, missing_request_generator}).
 
-run_state_machines(#{ runs := 0 }) ->
+run_state_machines(#{ runs_remaining := 0 }) ->
     ok;
-run_state_machines(Spec = #{ runs := Runs }) ->
+run_state_machines(
+    Spec = #{
+        runs_remaining := RunsRemaining,
+        length := Length
+    }
+) ->
+    normalize_rand(Spec#{ stage => init }),
     Opts = generate_opts(Spec),
     SpecWithOpts = Spec#{ opts => Opts },
     InitialState = generate_initial_state(SpecWithOpts),
@@ -39,13 +49,23 @@ run_state_machines(Spec = #{ runs := Runs }) ->
     ResSequence =
         state_machine_loop(
             SpecWithOpts#{
+                requests_remaining => Length,
                 state => InitialState,
                 model_state => InitialModelState
             }
         ),
     ?event({run_result, ResSequence}),
     case lists:last(ResSequence) of
-        {error, _Type, _Reason} ->
+        {error, Type, Reason} ->
+            ?event(
+                error,
+                {state_machine_execution_failure,
+                    {type, Type},
+                    {reason, Reason},
+                    {initial_state, InitialState},
+                    {sequence, ResSequence}
+                }
+            ),
             {failure, InitialState, ResSequence};
         {ok, EndState} ->
             ?event(
@@ -56,17 +76,13 @@ run_state_machines(Spec = #{ runs := Runs }) ->
                 },
                 Opts
             ),
-            run_state_machines(Spec#{ runs => Runs - 1 })
+            run_state_machines(Spec#{ runs_remaining => RunsRemaining - 1 })
     end.
 
-state_machine_loop(#{ length := 0, state := State }) -> [{ok, State}];
-state_machine_loop(Spec = #{ length := SeqLen }) ->
+state_machine_loop(#{ requests_remaining := 0, state := State }) -> [{ok, State}];
+state_machine_loop(Spec = #{ requests_remaining := RequestsRemaining }) ->
     Req = generate_request(Spec),
-    ?event(
-        {evaluating_request,
-            {request, Req}
-        }
-    ),
+    ?event({evaluating_request, {request, Req}}),
     case execute_request(Spec, Req) of
         {error, Type, Reason} ->
             [Req, {error, Type, Reason}];
@@ -74,7 +90,15 @@ state_machine_loop(Spec = #{ length := SeqLen }) ->
             case enforce_properties(Spec, Req, Result) of
                 ok ->
                     NextSpec = apply_next(Spec, Req, Result),
-                    [Req|state_machine_loop(NextSpec#{ length => SeqLen - 1 })];
+                    [
+                        Req
+                    |
+                        state_machine_loop(
+                            NextSpec#{
+                                requests_remaining => RequestsRemaining - 1
+                            }
+                        )
+                    ];
                 {error, Type, Reason} ->
                     [Req, {error, Type, Reason}]
             end
