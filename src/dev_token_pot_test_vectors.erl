@@ -46,6 +46,14 @@ deposit_req(Resource, Addr, Qty) ->
         <<"amount">> => Qty
     }.
 
+delegate_req(Resource, Addr, Qty) ->
+    #{
+        <<"action">> => <<"delegate">>,
+        <<"resource-id">> => Resource,
+        <<"address">> => Addr,
+        <<"quantity">> => Qty
+    }.
+
 transfer_req(Addr, Qty) ->
     transfer_req(Addr, Qty, #{}).
 transfer_req(Addr, Qty, Params) ->
@@ -329,6 +337,38 @@ simple_pot_process_test() ->
     ?assertEqual(8999, balance(State, AliceAddr,Opts)),
     ?assertEqual(9000, hb_ao:get(<<"total-supply">>, State, Opts)).
 
+simple_pot_delegation_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = id(BobWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2
+    },
+    TokenFields = #{
+        initial_balances => #{ AliceAddr => 1000 },
+        total_supply => 1000
+    },
+    Base = generate_process_state(PotFields, TokenFields, Opts),
+    schedule_set_weight(ResourceOxygen, 100, Base, Opts),
+    schedule_deposit(ResourceOxygen, AliceWallet, 10, Base, Opts),
+    schedule_delegate(
+        AliceWallet,
+        BobAddr,
+        ResourceOxygen,
+        10,
+        Base,
+        Opts
+    ),
+    State = now(Base, Opts),
+    ?assertEqual(10, balance(State, BobAddr,Opts)),
+    ?assertEqual(990, balance(State, AliceAddr,Opts)),
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State, Opts)).
+
 %% @doc Test that transfer works when balance is insufficient but 
 %% balance + unclaimed_yield is sufficient
 %% This validates that normalize_mint properly claims yields before transfer
@@ -546,6 +586,61 @@ transfer_with_unclaimed_yield_test_disabled() ->
     ?assertEqual(6800, balance(Result, AliceAddr,Opts)),
     ?assertEqual(700, balance(Result, BobAddr,Opts)),
     ?assertEqual(7500, hb_ao:get(<<"total-supply">>, Result, Opts)).
+
+nested_pot_process_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    BobWallet = ar_wallet:new(),
+    BobAddr = id(BobWallet),
+    % Create the parent mint, which will deliver units to the child mint.
+    ResourceStETH = <<"stETH">>,
+    ParentPotParams = #{
+        mint_cap => 21_000_000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 3,
+        t => 0,
+        last_drip => 0
+    },
+    ParentToken = generate_process_state(ParentPotParams, Opts),
+    ParentMintID = dev_process_lib:process_id(ParentToken, #{}, Opts),
+    ?event(process, {parent_mint, ParentMintID}, Opts),
+    % Create the child mint, which will receive units from the parent mint in
+    % exchange for its own tokens.
+    ChildPotParams = #{
+        mint_cap => 1_000_000_000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    ChildToken = generate_process_state(ChildPotParams, Opts),
+    ChildMintID = dev_process_lib:process_id(ChildToken, #{}, Opts),
+    schedule_modify_resource(
+        ParentMintID,
+        100,
+        #{},
+        ChildToken, 
+        Opts
+    ),
+    % Test user deposits to the parent mint and delegate to the child mint.
+    ?event(process, {child_mint, ChildToken}, Opts),
+    schedule_deposit(
+        ResourceStETH,
+        AliceWallet,
+        10,
+        ParentToken, 
+        Opts
+    ),
+    schedule_delegate(
+        AliceWallet,
+        ChildMintID,
+        ResourceStETH,
+        10,
+        ParentToken,
+        Opts
+    ),
+    ?event(debug, {base, {parent, ParentToken}, {child, ChildToken}}, Opts).
 
 %%% Benchmark Tests
 
