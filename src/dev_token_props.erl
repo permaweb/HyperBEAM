@@ -53,7 +53,7 @@ simulate(Extras) ->
                     fun verify_slot_increment/4
                 ],
             runs => 3,
-            length => 100,
+            length => 50,
             spawn_extras => Extras,
             users => ?USERS
         }
@@ -80,12 +80,12 @@ simulate_and_compare(Extras1, Extras2) ->
                     fun verify_slot_increment/4
                 ],
             runs => 3,
-            length => 4,
+            length => 50,
             users => ?USERS
         }
     ).
 
-generate_sim_opts(#{ users := Users, spawn_extras := Extras }) ->
+generate_sim_opts(Spec = #{ users := Users }) ->
     BaseOpts = dev_token_props:opts(),
     NodeWallet = ar_wallet:new(),
     BaseOpts#{
@@ -100,27 +100,32 @@ generate_sim_opts(#{ users := Users, spawn_extras := Extras }) ->
                 #{},
                 lists:seq(1, Users)
             ),
-        spawn_extras => Extras
+        spawn_extras => hb_opts:get(spawn_extras, #{}, Spec)
     }.
 
 %% @doc Generate a ledger process, including any extra properties specified in
 %% the `spawn_extras' option.
 generate_ledger(Opts) ->
     Extras = hb_opts:get(spawn_extras, #{}, Opts),
-    dev_token_lib:ledger(
+    L = dev_token_lib:ledger(
         Extras#{
-            <<"balances">> => generate_initial_balances(Opts)
+            <<"balances">> => generate_initial_balances(Opts),
+            <<"ledger-nonce">> => hb_prop:int(small)
         },
         Opts
-    ).
+    ),
+    ?event({generated_ledger, {extra_keys, Extras, {full, L}}}),
+    hb_cache:ensure_all_loaded(L, Opts).
 
 user_wallets(Opts = #{ priv_wallet := NodeWallet }) ->
-    maps:filtermap(
+    Ws = maps:filtermap(
         fun(_, #{ priv_wallet := Wallet }) when Wallet == NodeWallet -> false;
            (_, #{ priv_wallet := Wallet }) -> {true, Wallet}
         end,
         hb_opts:identities(Opts)
-    ).
+    ),
+    ?event({user_wallets, hb_maps:keys(Ws, Opts)}),
+    Ws.
 
 generate_initial_balances(Opts) ->
     hb_maps:map(
@@ -130,6 +135,8 @@ generate_initial_balances(Opts) ->
     ).
 
 generate_sim_request(State, Opts) ->
+    ?event({generating_request_for_process, State}),
+    Ledger = dev_process_lib:process_id(State, #{}, Opts),
     {ok, PushRes} =
         dev_token_lib:transfer(
             State,
@@ -138,6 +145,7 @@ generate_sim_request(State, Opts) ->
             Amount = hb_prop:int(?MAX_TRANSFER_AMOUNT),
             Opts
         ),
+    ?event({push_result, PushRes}),
     Slot = hb_ao:get(<<"slot">>, PushRes, Opts),
     #{
         <<"path">> => <<"compute">>,
@@ -145,6 +153,7 @@ generate_sim_request(State, Opts) ->
         <<"intent">> =>
             #{
                 <<"action">> => <<"transfer">>,
+                <<"ledger">> => Ledger,
                 <<"sender">> => hb_util:human_id(SenderWallet),
                 <<"recipient">> => hb_util:human_id(RecipientWallet),
                 <<"amount">> => Amount
