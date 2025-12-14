@@ -516,7 +516,7 @@ claim_yield_single_resource_test() ->
     ).
 
 %% @doc Test claim_yield across multiple resources
-claim_yield_multiple_resources_test_disabled() ->
+claim_yield_multiple_resources_test() ->
     Opts = test_opts(),
     AliceWallet = ar_wallet:new(),
     AliceAddr = id(AliceWallet),
@@ -563,7 +563,12 @@ claim_yield_multiple_resources_test_disabled() ->
             },
             Opts
         ),
-    AliceBalance = get_balance(ResultAfterClaimAll, AliceAddr),
+    AliceBalance = 
+        get_balance(
+            ResultAfterClaimAll, 
+            #{ <<"balance">> => AliceAddr, <<"timestamp">> => 1 },
+            Opts
+        ),
     ?assertEqual(5500, AliceBalance),
     ?assertEqual(5500, hb_ao:get(<<"total-supply">>, ResultAfterClaimAll, Opts)).
 
@@ -603,8 +608,15 @@ claim_yield_no_deposits_test() ->
             },
             Opts
         ),
-    % Charlie's balance should be unchanged (still 100)
-    ?assertEqual(100, get_balance(ResultAfterClaim, AliceAddr)),
+    % Alice's balance should be unchanged (still 100)
+    ?assertEqual(
+        100, 
+        get_balance(
+            ResultAfterClaim, 
+            #{ <<"balance">> => AliceAddr, <<"timestamp">> => 1 },
+            Opts
+        )    
+    ),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, ResultAfterClaim, Opts)).
 
 %%% Benchmark Tests
