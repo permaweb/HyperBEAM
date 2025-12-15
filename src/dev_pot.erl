@@ -80,25 +80,33 @@ test_drip(State, Req, Opts) ->
 %% @doc Drip the global state of the pot if necessary, returning the state
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
-drip_global(State, _Req, Opts) ->
-    drip_global(State, Opts).
+drip_global(State, Req, Opts) ->
+    drip_global(ensure_initialized(State, Req, Opts), Opts).
+drip_global(Link, Opts) when ?IS_LINK(Link) ->
+    drip_global(hb_cache:ensure_loaded(Link, Opts), Opts);
+drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, Opts)
+        when ?IS_LINK(T) orelse ?IS_LINK(Last) ->
+    drip_global(
+        S#{
+            <<"t">> => hb_cache:ensure_loaded(T, Opts),
+            <<"last-drip">> => hb_cache:ensure_loaded(Last, Opts)
+        },
+        Opts
+    );
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
-drip_global(S = #{
-        <<"t">> := T,
-        <<"mint-cap">> := Max,
-        <<"mint-prop-numerator">> := PropN,
-        <<"mint-prop-denominator">> := PropD
-    }, Opts) ->
-    ?event({drip_global, { timestamp, T}}),
-    % throw("timestamp very big"),
+drip_global(S, Opts) ->
+    T = hb_ao:get(<<"t">>, S, 0, Opts),
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
+    MintCap = hb_ao:get(<<"mint-cap">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
+    PropN = hb_ao:get(<<"mint-prop-numerator">>, S, 0, Opts),
+    PropD = hb_ao:get(<<"mint-prop-denominator">>, S, 0, Opts),
     ToMint =
         dev_pot_math:minted_between(
             AlreadyMinted,
-            Max,
+            MintCap,
             PropN,
             PropD,
             LastT,
@@ -232,8 +240,7 @@ ensure_initialized(Base, Req, Opts) ->
         Base,
         #{
             <<"t">> => NewT,
-            <<"last-drip">> =>
-                hb_ao:get(<<"last-drip">>, Base, 0, Opts)
+            <<"last-drip">> => hb_ao:get(<<"last-drip">>, Base, NewT, Opts)
         },
         Opts
     ).
@@ -406,29 +413,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         }
     ),
     GlobalDrippedS = drip_global(S, Opts),
-    S0 = #{
-        <<"balances">> := Balances
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    % DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
-    % RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
-    %DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
-    %RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
-    % NewBalances = 
-    %     Balances#{
-    %         FromAddr => DelegatorBalance + DelegatorYield,
-    %         ToAddr => RecipientBalance + RecipientYield
-    %     },
-    % {ok, S0} = 
-    %     hb_ao:resolve(
-    %         DrippedS,
-    %         #{
-    %             <<"path">> => <<"set">>,
-    %             <<"balances">> => NewBalances
-    %         },
-    %         Opts
-    %     ),
-    % Drip each user's state to ensure any unclaimed yield is included in their
-    % balance.
+    S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
     S1 = drip_user(FromAddr, S0, Opts),
     S2 = drip_user(ToAddr, S1, Opts),
     DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),

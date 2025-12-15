@@ -72,7 +72,7 @@ balance(Base, Req, Opts) ->
     {ok, NormBase} =
         normalize_mint(
             Base,
-            hb_maps:without([<<"balance">>], Req#{ <<"subject">> => Account }),
+            hb_ao:set(Req, <<"subject">>, Account, Opts),
             Opts
         ),
     Balances =
