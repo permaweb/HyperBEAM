@@ -680,19 +680,59 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
         end,
     FilterUndef =
         fun(List) ->
-            lists:filter(fun({_, undefined}) -> false; (_) -> true end, List)
+            lists:filter(
+                fun({_, undefined}) -> false;
+                   (undefined) -> false;
+                   (_) -> true
+                end,
+                List
+            )
         end,
     % Prepare the metadata row for formatting.
+    DevicePathMetadata =
+        case {ValOrUndef(<<"device">>), ValOrUndef(<<"path">>)} of
+            {undefined, undefined} -> [<<"Message ">>];
+            {Device, undefined} ->
+                [<<"~">>, Device, <<" ">>];
+            {undefined, Path} ->
+                [<<"Message < Path: ">>, Path, <<" > ">>];
+            {Device, Path} ->
+                [<<"~">>, Device, <<"/">>, Path, <<" ">>]
+        end,
     % Note: We try to get the IDs _if_ they are *already* in the map. We do not
     % force calculation of the IDs here because that may cause significant
     % overhead unless the `debug_ids' option is set.
+    Comms =
+        hb_maps:without(
+            [<<"commitments">>, <<"priv">>],
+            hb_maps:get(<<"commitments">>, Map, #{}, Opts),
+            Opts
+        ),
+    CommitterMetadata =
+            case hb_opts:get(debug_committers, true, Opts) of
+                false -> [];
+                true ->
+                    case dev_message:committers(Map, #{}, Opts) of
+                        {ok, []} -> [];
+                        {ok, Committers} ->
+                            [
+                                {
+                                    <<"Sigs">>,
+                                    ids(Committers, Opts)
+                                }
+                            ]
+                    end
+            end,
     IDMetadata =
         case hb_opts:get(debug_ids, false, #{}) of
             false ->
+                % Add the count of the commitments to the metadata, but do not 
+                % show the individual IDs.
                 [
                     {<<"#P">>, ValOrUndef(<<"hashpath">>)},
                     {<<"*U">>, ValOrUndef(<<"unsigned_id">>)},
-                    {<<"*S">>, ValOrUndef(<<"id">>)}
+                    {<<"*S">>, ValOrUndef(<<"id">>)},
+                    {<<"#Comms">>, hb_util:bin(hb_maps:size(Comms))}
                 ];
             true ->
                 {ok, UID} = dev_message:id(Map, #{}, Opts),
@@ -700,44 +740,27 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                     dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, Opts),
                 [
                     {<<"#P">>, short_id(ValOrUndef(<<"hashpath">>))},
-                    {<<"*U">>, short_id(UID)}
+                    {<<"*U">>, short_id(UID)},
+                    {
+                        <<"Comms">>,
+                        case hb_maps:size(Comms) of
+                            0 -> undefined;
+                            _ -> ids(hb_maps:keys(Comms, Opts), Opts)
+                        end
+                    }
                 ] ++
                 case ID of
                     UID -> [];
                     _ -> [{<<"*S">>, short_id(ID)}]
                 end
         end,
-    CommitterMetadata =
-        case hb_opts:get(debug_committers, true, Opts) of
-            false -> [];
-            true ->
-                case dev_message:committers(Map, #{}, Opts) of
-                    {ok, []} -> [];
-                    {ok, [Committer]} ->
-                        [{<<"Comm.">>, short_id(Committer)}];
-                    {ok, Committers} ->
-                        [
-                            {
-                                <<"Comms.">>,
-                                string:join(
-                                    lists:map(
-                                        fun(X) ->
-                                            [short_id(X)]
-                                        end,
-                                        Committers
-                                    ),
-                                    ", "
-                                )
-                            }
-                        ]
-                end
-        end,
     % Concatenate the present metadata rows.
-    Metadata = FilterUndef(lists:flatten([IDMetadata, CommitterMetadata])),
+    Metadata = FilterUndef(lists:flatten([CommitterMetadata, IDMetadata])),
     % Format the metadata row.
     Header =
-        indent("Message [~s] {",
+        indent("~s[~s] {",
             [
+                hb_util:bin(FilterUndef(DevicePathMetadata)),
                 string:join(
                     [
                         io_lib:format("~s: ~s", [Lbl, Val])
@@ -754,9 +777,12 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
     % Put the path and device rows into the output at the _top_ of the map.
     PriorityKeys =
         [
-            {<<"device">>, ValOrUndef(<<"device">>)},
-            {<<"path">>, ValOrUndef(<<"path">>)},
-            {<<"commitments">>, ValOrUndef(<<"commitments">>)}
+            case hb_opts:get(debug_metadata, true, Opts) of
+                true ->
+                    {<<"commitments">>, ValOrUndef(<<"metadata">>)};
+                false ->
+                    {<<"commitments">>, <<"...">>}
+            end
         ],
     % Concatenate the path and device rows with the rest of the key values.
     UnsortedGeneralKVs =
@@ -855,6 +881,16 @@ message(Item, Opts, Indent) ->
 
 %%% Utility functions.
 
+%% @doc Return a formatted list of short IDs, given a raw list of IDs.
+ids(IDs, _Opts) ->
+    string:join(
+        lists:map(
+            fun(XID) -> hb_util:list(short_id(XID)) end,
+            IDs
+        ),
+        ", "
+    ).
+
 %% @doc Return a short ID for the different types of IDs used in AO-Core.
 short_id(<<"http://", _/binary>> = Bin) ->
     Bin;
@@ -888,7 +924,7 @@ short_id(_) -> undefined.
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.
 max_keys(Opts) ->
-    case hb_opts:get(debug_print_truncate, 20, Opts) of
+    case hb_opts:get(debug_print_truncate, 30, Opts) of
         Max when is_integer(Max) -> Max;
         infinity -> infinity;
         Term -> hb_util:int(Term)
