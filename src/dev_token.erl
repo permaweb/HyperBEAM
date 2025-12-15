@@ -30,10 +30,11 @@ compute(Base, Assignment, Opts) ->
     maybe
         {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
         {ok, Res} ?= route(Base, SecureReq, Opts),
+        ?event(debug_token, {route_result, Res}),
         {ok, Res}
     else
         {error, Reason} ->
-            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            ?event(token_short, {error_during_token_call, Reason}),
             send_error(Base, Assignment, Reason, Opts)
     end.
 
@@ -281,12 +282,17 @@ validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
 
 send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
-    {ok, Target} = hb_ao:resolve(Assignment, <<"body/from">>, Opts),
-    dev_process_lib:send(
-        #{
-            <<"target">> => Target,       
-            <<"reason">> => Reason
-        },
-        Base,
-        Opts
-    ).
+    case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
+        {error, Error} ->
+            ?event(token_short, {skipping_error_report, Error}),
+            Base;
+        {ok, Target} ->
+            dev_process_lib:send(
+                #{
+                    <<"target">> => Target,       
+                    <<"reason">> => Reason
+                },
+                Base,
+                Opts
+            )
+    end.
