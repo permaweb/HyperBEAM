@@ -54,9 +54,14 @@ route(Base, Req, Opts) ->
     case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
-        <<"subscribe">> -> {ok, dev_process_outbox:subscribe(Base, Req, Opts)};
-        <<"unsubscribe">> -> {ok, dev_process_outbox:unsubscribe(Base, Req, Opts)};
-        MintDevAction -> action_as_mint_device(MintDevAction, Base, Req, Opts)
+        <<"subscribe">> ->
+            Msg = hb_ao:get(<<"body">>, Req, Req, Opts),
+            dev_process_outbox:subscribe(Base, Msg, Opts);
+        <<"unsubscribe">> ->
+            Msg = hb_ao:get(<<"body">>, Req, Req, Opts),
+            dev_process_outbox:unsubscribe(Base, Msg, Opts);
+        MintDevAction ->
+            action_as_mint_device(MintDevAction, Base, Req, Opts)
     end.
 
 %% @doc Get the balance for an account. Normalize the minting state for that

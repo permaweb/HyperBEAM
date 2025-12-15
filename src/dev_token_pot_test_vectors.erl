@@ -179,7 +179,7 @@ generate_pot_state(Params, Opts) ->
     LastDrip = hb_maps:get(last_drip, Params, 0, Opts),
     ?event({generate_pot_fields, {params, Params}}),
     MaybeParent =
-        case hb_maps:get(parent, Params, Opts) of
+        case hb_maps:get(parent, Params, not_found, Opts) of
             not_found -> #{};
             Parent -> #{ <<"parent">> => Parent }
         end,
@@ -601,26 +601,37 @@ pot_subscriptions_test() ->
             },
             Opts
         ),
+    ParentID = dev_process_lib:process_id(ParentProcess, #{}, Opts),
     ChildProcess =
         generate_process(
             #{
                 mint_cap => 10_000,
                 mint_prop_numerator => 1,
                 mint_prop_denominator => 2,
-                parent => dev_process_lib:process_id(ParentProcess, #{}, Opts)
+                parent => ParentID
             },
             Opts
         ),
-    Res = push_request(
-        ChildProcess,
-        #{ <<"action">> => <<"mint">> },
+    ChildID = dev_process_lib:process_id(ChildProcess, #{}, Opts),
+    ?event(
+        debug_test,
+        {test_processes,
+            {parent, ParentID},
+            {child, ChildID}
+        },
         Opts
     ),
-    ?event(debug_test, {res, Res}, Opts),
+    Res =
+        push_request(
+            ChildProcess,
+            #{ <<"action">> => <<"mint">> },
+            Opts
+        ),
+    ?event(debug_test, {push_mint_result, Res}, Opts),
     ChildState = now(ChildProcess, Opts),
     ?assertEqual(
-        [dev_process_lib:process_id(ParentProcess, #{}, Opts)],
-        dev_process_outbox:subscribers(ChildState, <<"set-weight">>, Opts)
+        [dev_process_lib:process_id(ChildProcess, #{}, Opts)],
+        dev_process_outbox:subscribers(ParentProcess, <<"set-weight">>, Opts)
     ),
     schedule_set_weight(ChildProcess, Resource, 100, Opts),
     ?assertEqual(

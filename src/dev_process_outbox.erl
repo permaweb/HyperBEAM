@@ -82,20 +82,45 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 <<"broadcast">>,
                 Opts
             ),
-        [Listener] ?= hb_message:signers(Req, Opts),
-        hb_ao:set(
-            State,
-            #{
-                <<"subscribers">> => #{
-                    Action => #{
-                        Subject => #{
-                            Listener => SubscriptionInfo
-                        }
-                    }
-                }
+        {ok, Listener} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No security-normalized `from' key found in request.">>,
+                Opts
+            ),
+        ProcessID = dev_process_lib:process_id(State, #{}, Opts),
+        ?event(
+            subscriptions_short,
+            {set_subscription_info,
+                {process_id, ProcessID},
+                {action, Action},
+                {subject, Subject},
+                {listener, Listener},
+                {info, SubscriptionInfo}
             },
             Opts
-        )
+        ),
+        NewState =
+            hb_ao:set(
+                State,
+                #{
+                    <<"subscribers">> => #{
+                        Action => #{
+                            Subject => #{
+                                Listener => SubscriptionInfo
+                            }
+                        }
+                    }
+                },
+                Opts
+            ),
+        ?event(
+            debug_test,
+            {new_state, NewState},
+            Opts
+        ),
+        {ok, NewState}
     end.
 
 %% @doc List all subscribers to a given subject and action.
