@@ -2,7 +2,8 @@
 -module(dev_process_outbox).
 -include("include/hb.hrl").
 -export([send/3, forwarded_keys/2, notify/3]).
--export([subscribe/3, unsubscribe/3, subscribers/4]).
+-export([subscribe/3, unsubscribe/3, subscribers/3, subscribers/4]).
+-export([send_subscription_request/4, send_subscription_request/5]).
 
 %% @doc Add a message or list of messages to the process's outbox, notifying
 %% subscribers to the action and target of the message, as appropriate.
@@ -17,8 +18,7 @@ send(Msgs, Base, Req, Opts) ->
         fun(XMsg, AccState) ->
             XMsgWithForwardedKeys = hb_ao:set(XMsg, ForwardedKeys, Opts),
             StateWithInitialSend = raw_send(XMsgWithForwardedKeys, AccState, Opts),
-            {ok, Next} = notify(XMsgWithForwardedKeys, StateWithInitialSend, Opts),
-            Next
+            notify(XMsgWithForwardedKeys, StateWithInitialSend, Opts)
         end,
         Base,
         Msgs
@@ -99,8 +99,34 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
     end.
 
 %% @doc List all subscribers to a given subject and action.
+subscribers(State, Action, Opts) ->
+    subscribers(State, Action, <<"broadcast">>, Opts).
 subscribers(State, Action, Target, Opts) ->
-    hb_ao:get(<<"subscribers/", Action, "/", Target, "/keys">>, State, [], Opts).
+    hb_ao:get(
+        <<
+            "subscribers/",
+            (hb_util:bin(Action))/binary,
+            "/",
+            (hb_util:bin(Target))/binary,
+            "/keys">>,
+        State,
+        [],
+        Opts
+    ).
+
+send_subscription_request(TargetProcess, Action, State, Opts) ->
+    send_subscription_request(TargetProcess, Action, <<"broadcast">>, State, Opts).
+send_subscription_request(TargetProcess, Action, Target, State, Opts) ->
+    send(
+        #{
+            <<"target">> => TargetProcess,
+            <<"action">> => <<"subscribe">>,
+            <<"subscribe-action">> => Action,
+            <<"subscribe-target">> => Target
+        },
+        State,
+        Opts
+    ).
 
 %% @doc Extract keys with X- prefix for forwarding in notices
 %% Follows AO token pattern: keys beginning with "X-" are forwarded.

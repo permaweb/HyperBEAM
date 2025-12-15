@@ -30,11 +30,11 @@ compute(Base, Assignment, Opts) ->
     maybe
         {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
         {ok, Res} ?= route(Base, SecureReq, Opts),
-        ?event(debug_token, {route_result, Res}),
+        ?event(debug_token, {route_result, Res}, Opts),
         {ok, Res}
     else
         {error, Reason} ->
-            ?event(token_short, {error_during_token_call, Reason}),
+            ?event(token_short, {error_during_token_call, Reason}, Opts),
             send_error(Base, Assignment, Reason, Opts)
     end.
 
@@ -43,19 +43,19 @@ enforce_security(_Base, Req, Opts) ->
     Msg = hb_ao:get(<<"body">>, Req, Opts),
     [Signer] = hb_message:signers(Msg, Opts),
     ModifiedReq = Req#{ <<"body">> => Msg#{ <<"from">> => Signer } },
-    ?event(debug_token, {modified_req, ModifiedReq}),
+    ?event(debug_token, {modified_req, ModifiedReq}, Opts),
     {ok, ModifiedReq}.
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
 route(Base, Req, Opts) ->
     ActionBin = hb_ao:get(<<"body/action">>, Req, Opts),
-    ?event(debug_token, {action, ActionBin}),
+    ?event(debug_token, {action, ActionBin}, Opts),
     case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
-        <<"subscribe">> -> dev_process_outbox:subscribe(Base, Req, Opts);
-        <<"unsubscribe">> -> dev_process_outbox:unsubscribe(Base, Req, Opts);
+        <<"subscribe">> -> {ok, dev_process_outbox:subscribe(Base, Req, Opts)};
+        <<"unsubscribe">> -> {ok, dev_process_outbox:unsubscribe(Base, Req, Opts)};
         MintDevAction -> action_as_mint_device(MintDevAction, Base, Req, Opts)
     end.
 
@@ -152,11 +152,12 @@ transfer(Base, Assignment, Opts) ->
                     hb_maps:put(<<"balances">>, NewBalances, NormBase, Opts)
             end,
         % Send transfer notices.
-        dev_process_lib:send(
+        WithNotices = dev_process_outbox:send(
             transfer_notices(From, Recipient, Quantity, Req, Opts),
             NewBaseAfterTransfer,
             Opts
-        )
+        ),
+        {ok, WithNotices}
     else
         {error, Reason} ->
             ?event(token_short, {ignoring_errored_transfer, Reason}, Opts),
@@ -167,12 +168,12 @@ transfer(Base, Assignment, Opts) ->
                 },
                 Opts
             ),
-            send_error(Base, Assignment, Reason, Opts)
+            {ok, send_error(Base, Assignment, Reason, Opts)}
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
     % Extract forwarded keys (X- prefixed fields from request)
-    ForwardedKeys = dev_process_lib:forwarded_keys(Req, Opts),
+    ForwardedKeys = dev_process_outbox:forwarded_keys(Req, Opts),
     DebitNotice =
         ForwardedKeys#{
             <<"action">> => <<"Debit-Notice">>,
@@ -225,7 +226,7 @@ action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
-            ?event(error, {unsupported_token_action, Action}),
+            ?event(error, {unsupported_token_action, Action}, Opts),
             {ok, Base}
     end.
 
@@ -298,10 +299,10 @@ validate_address(_) ->
 send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
     case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
         {error, Error} ->
-            ?event(token_short, {skipping_error_report, Error}),
+            ?event(token_short, {skipping_error_report, Error}, Opts),
             Base;
         {ok, Target} ->
-            dev_process_lib:send(
+            dev_process_outbox:send(
                 #{
                     <<"target">> => Target,       
                     <<"reason">> => Reason

@@ -3,7 +3,6 @@
 -module(dev_process_lib).
 -include("include/hb.hrl").
 -export([as_process/2, run_as/4, process_id/3, set_results/3, ensure_process_key/2]).
--export([send/3, forwarded_keys/2]).
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Req, Opts) ->

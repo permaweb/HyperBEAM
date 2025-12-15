@@ -227,7 +227,8 @@ drip_user(Addr, S, Opts) ->
 %% @doc Ensure the base state is initialized, with `t` set to either the new
 %% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
 %% be initialized to the same value as `t` if not already set.
-ensure_initialized(Base, Req, Opts) ->
+ensure_initialized(RawBase, Req, Opts) ->
+    Base = maybe_initialize_subscriptions(RawBase, Req, Opts),
     TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
     NewT =
         hb_maps:get(
@@ -244,6 +245,28 @@ ensure_initialized(Base, Req, Opts) ->
         },
         Opts
     ).
+
+%% @doc If the process has not yet initialized, do so. In either case, return the
+%% base state with the subscriptions initialized.
+maybe_initialize_subscriptions(Base, Req, Opts) ->
+    case hb_maps:get(<<"subscriptions">>, Base, Opts) of
+        not_found -> initialize_subscriptions(Base, Req, Opts);
+        _ -> Base
+    end.
+
+%% @doc If the process has a `parent' mint set, send a subscription request to
+%% the parent process for all `set-weight' messages.
+initialize_subscriptions(Base, _Req, Opts) ->
+    case hb_maps:get(<<"parent">>, Base, Opts) of
+        not_found -> Base;
+        Parent ->
+            dev_process_outbox:send_subscription_request(
+                Parent,
+                <<"set-weight">>,
+                Base,
+                Opts
+            )
+    end.
 
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
@@ -401,7 +424,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
+        {ok, delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
@@ -502,7 +525,7 @@ undelegate(State, Assignment, Opts) ->
         {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
-        undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
+        {ok, undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
     else
         Reason -> Reason
     end.
@@ -657,21 +680,18 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 %% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
 %% been modified.
 send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
-    hb_util:ok(
-        dev_process_outbox:send(
-            #{
-                <<"target">> => ToAddr,
-                <<"action">> =>
-                    if Amount > 0 -> <<"deposit">>;
-                    true -> <<"withdraw">>
-                    end,
-                <<"address">> => FromAddr,
-                <<"quantity">> => Amount,
-                <<"resource">> => ResourceID
-            },
-            S,
-            Opts
-        ),
+    dev_process_outbox:send(
+        #{
+            <<"target">> => ToAddr,
+            <<"action">> =>
+                if Amount > 0 -> <<"deposit">>;
+                true -> <<"withdraw">>
+                end,
+            <<"address">> => FromAddr,
+            <<"quantity">> => Amount,
+            <<"resource">> => ResourceID
+        },
+        S,
         Opts
     ).
 

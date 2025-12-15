@@ -6,8 +6,11 @@
 -module(dev_token_lib).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
--export([ledger/1, ledger/2, subledger/2, subledger/3]).
--export([transfer/5, transfer/6, register/3]).
+%%% Push wrappers.
+-export([ledger/1, ledger/2, transfer/5, transfer/6]).
+-export([subledger/2, subledger/3]).
+-export([register/3, subscribe/3, unsubscribe/3]).
+%%% Query wrappers.
 -export([balance/3, balance_total/3, balances/2, balances/3, supply/2, supply/3]).
 -export([subledger_supply/3, user_supply/3]).
 -export([ledgers/2, map/2, map/3]).
@@ -97,57 +100,85 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         end
                 }
         end,
-    Xfer =
-        hb_message:commit(#{
-            <<"path">> => <<"push">>,
-            <<"body">> =>
-                hb_message:commit(MaybeRoute#{
-                        <<"action">> => <<"Transfer">>,
-                        <<"target">> =>
-                            dev_process_lib:process_id(ProcMsg, #{}, Opts),
-                        <<"recipient">> => hb_util:human_id(Recipient),
-                        <<"quantity">> => Quantity
-                    },
-                    Opts#{ priv_wallet => Sender }
-                )
-            },
-            Opts#{ priv_wallet => Sender }
-        ),
-    hb_ao:resolve(
+    push(
         ProcMsg,
-        Xfer,
-        Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+        MaybeRoute#{
+            <<"action">> => <<"Transfer">>,
+            <<"target">> => dev_process_lib:process_id(ProcMsg, #{}, Opts),
+            <<"recipient">> => hb_util:human_id(Recipient),
+            <<"quantity">> => Quantity
+        },
+        Sender,
+        Opts
     ).
 
 %% @doc Request that a peer register with a without sub-ledger.
 register(ProcMsg, Peer, Opts) when is_map(Peer) ->
     register(ProcMsg, hb_message:id(Peer, all), Opts);
-register(ProcMsg, PeerID, RawOpts) ->
+register(ProcMsg, PeerID, Opts) ->
+    push(
+        ProcMsg,
+        #{
+            <<"action">> => <<"register-remote">>,
+            <<"peer">> => PeerID
+        },
+        Opts
+    ).
+
+%% @doc Subscribe to receive notifications upon a given `action' and (optionally)
+%% `target' from a given process.
+subscribe(ProcMsg, Action, Opts) ->
+    subscribe(ProcMsg, Action, <<"broadcast">>, Opts).
+subscribe(ProcMsg, Action, Target, Opts) ->
+    push(
+        ProcMsg,
+        #{
+            <<"action">> => <<"subscribe">>,
+            <<"subscribe-action">> => Action,
+            <<"subscribe-target">> => Target
+        },
+        Opts
+    ).
+
+%% @doc Unsubscribe from receiving notifications upon a given `action' and (optionally)
+%% `target' from a given process.
+unsubscribe(ProcMsg, Action, Opts) ->
+    unsubscribe(ProcMsg, Action, <<"broadcast">>, Opts).
+unsubscribe(ProcMsg, Action, Target, Opts) ->
+    push(
+        ProcMsg,
+        #{
+            <<"action">> => Action,
+            <<"subscribe-action">> => Action,
+            <<"subscribe-target">> => Target
+        },
+        Opts
+    ).
+
+%% @doc Helper function to push a message to a process. Signs the message with the
+%% default key in the `Opts'.
+push(Process, Msg, RawOpts) ->
+    push(Process, Msg, hb_opts:get(priv_wallet, hb:wallet(), RawOpts), RawOpts).
+push(Process, Msg, MsgWallet, RawOpts) ->
     Opts =
         RawOpts#{
             priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
         },
-    Reg =
+    Req =
         hb_message:commit(
             #{
                 <<"path">> => <<"push">>,
                 <<"body">> =>
-                    hb_message:commit(
-                        #{
-                            <<"action">> => <<"register-remote">>,
-                            <<"target">> => hb_message:id(ProcMsg, all),
-                            <<"peer">> => PeerID
-                        },
-                        Opts
-                    )
+                    Msg#{
+                        <<"target">> =>
+                            if is_binary(Process) -> Process;
+                            true -> hb_message:id(Process, all, Opts)
+                            end
+                    }
             },
-            Opts
+            Opts#{ priv_wallet => MsgWallet }
         ),
-    hb_ao:resolve(
-        ProcMsg,
-        Reg,
-        Opts
-    ).
+    hb_ao:resolve(Process, Req, Opts).
 
 %% @doc Retreive a single balance from the ledger.
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
