@@ -788,7 +788,8 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
     UnsortedGeneralKVs =
         maps:to_list(
             maps:without(
-                [ PriorityKey || {PriorityKey, _} <- PriorityKeys ],
+                [ PriorityKey || {PriorityKey, _} <- PriorityKeys ] ++
+                    [<<"device">>, <<"path">>, <<"method">>],
                 Map
             )
         ),

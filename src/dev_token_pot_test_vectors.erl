@@ -377,7 +377,7 @@ simple_pot_process_test() ->
         Alice,
         10,
         Opts
-    ), 
+    ),
     schedule_request(
         Process,
         #{ <<"action">> => <<"mint">> },
@@ -448,7 +448,7 @@ transfer_with_unclaimed_yield_test() ->
         last_drip => 0
     },
     TokenFields = #{
-        initial_balances => #{ id(Alice) => 500},
+        initial_balances => #{ id(Alice) => 500 },
         total_supply => 500
     },
     Process = generate_process(PotFields, TokenFields, Opts),
