@@ -80,21 +80,8 @@ test_drip(State, Req, Opts) ->
 %% @doc Drip the global state of the pot if necessary, returning the state
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
-drip_global(State, Req, Opts) ->
-    TimeSource = hb_maps:get(<<"t-source">>, State, <<"timestamp">>, Opts),
-    ?event({drip_global, {req, Req}, {time_source, TimeSource}}),
-    UpdatedState =
-        case hb_maps:get(TimeSource, Req, undefined, Opts) of
-            undefined -> State;
-            NewTime ->
-                hb_ao:set(
-                    State,
-                    #{ <<"t">> => NewTime },
-                    Opts
-                )
-        end,
-    ?event({drip_global, { updated, UpdatedState}, {req, Req}}),
-    drip_global(UpdatedState, Opts).
+drip_global(State, _Req, Opts) ->
+    drip_global(State, Opts).
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
 drip_global(S = #{
         <<"t">> := T,
