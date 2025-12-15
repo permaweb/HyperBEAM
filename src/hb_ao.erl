@@ -993,21 +993,21 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
         ),
     ?event(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
     % Get the next key to set. 
-    case keys(Req, internal_opts(Opts)) of
+    case keys(Req, IntOpts = internal_opts(Opts)) of
         [] -> Base;
         [Key|_] ->
-            % Get the value to set. Use AO-Core by default, but fall back to
-            % getting via `maps' if it is not found.
+            % Get the value to set. Use AO-Core by default, but fallback to
+            % getting via `hb_maps' if it is not found.
             Val =
-                case get(Key, Req, internal_opts(Opts)) of
+                case get(Key, Req, IntOpts) of
                     not_found -> hb_maps:get(Key, Req, undefined, Opts);
                     Body -> Body
                 end,
             ?event({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
             % Next, set the key and recurse, removing the key from the Req.
             set(
-                set(Base, Key, Val, internal_opts(Opts)),
-                remove(Req, Key, internal_opts(Opts)),
+                set(Base, Key, Val, IntOpts),
+                remove(Req, Key, IntOpts),
                 Opts
             )
     end.
@@ -1102,21 +1102,14 @@ device_set(Msg, Key, Value, Mode, Opts) ->
         },
         Opts
     ),
-    Res =
-        hb_util:ok(
-            resolve(
-                Msg,
-                Req,
-                internal_opts(Opts)
-            ),
-            internal_opts(Opts)
-        ),
-    ?event(
-        debug_set,
-        {device_set_result, Res},
-        Opts
-    ),
-    Res.
+    case resolve(Msg, Req, internal_opts(Opts)) of
+        {ok, Res} ->
+            Res;
+        {error, Error} when not is_map(Error) ->
+            throw({set_error, base_invalid, Msg, Req});
+        {error, Error} ->
+            throw({set_error, Error, Msg, Req})
+    end.
 
 %% @doc Remove a key from a message, using its underlying device.
 remove(Msg, Key) -> remove(Msg, Key, #{}).
