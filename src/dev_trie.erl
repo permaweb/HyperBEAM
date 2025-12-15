@@ -90,7 +90,8 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
     <<_KeyPrefix:KeyPrefixSizeAcc/bitstring, KeySuffix/bitstring>> = Key,
     EdgeLabels = edges(TrieNode, Opts),
     ChunkSize = round(math:log2(?RADIX)),
-    case longest_prefix_match(KeySuffix, EdgeLabels, ChunkSize) of
+    LongestPrefixMatch = longest_prefix_match(KeySuffix, EdgeLabels, ChunkSize),
+    case LongestPrefixMatch of
         % NO MATCH: This internal node has no traversible children, because its
         % edge labels do not match any portion of what remains to be matched of
         % our key. If we've matched the entire length of our key on our way here,
