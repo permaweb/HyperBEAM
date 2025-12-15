@@ -507,7 +507,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ResourceAcc,
             Opts
         ),
-    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S6, Opts).
+    send_delegation_notice(FromAddr, ToAddr, Amount, S6, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 undelegate(State, Assignment, Opts) ->
@@ -602,7 +602,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation - Amount,
             Opts
         ),
-    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S3, Opts).
+    send_delegation_notice(FromAddr, ToAddr, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
 set_weight(State, Assignment, Opts) ->
@@ -669,7 +669,7 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 
 %% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
 %% been modified.
-send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+send_delegation_notice(FromAddr, ToAddr, Amount, S, Opts) ->
     hb_util:ok(
         dev_process_lib:send(
             #{
@@ -680,7 +680,7 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
                     end,
                 <<"address">> => FromAddr,
                 <<"quantity">> => Amount,
-                <<"resource">> => ResourceID
+                <<"resource">> => dev_process_lib:process_id(S, #{}, Opts)
             },
             S,
             Opts

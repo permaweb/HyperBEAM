@@ -639,7 +639,7 @@ nested_pot_process_test() ->
     % providing `stETH', and all units in the child are given for providing
     % `Parent'.
     schedule_set_weight(ParentToken, StETH, 1, Opts),
-    schedule_set_weight(ChildToken, StETH, 1, Opts),
+    schedule_set_weight(ChildToken, ParentID, 1, Opts),
     % Deposit units of the resource into the parent mint for Alice.
     schedule_deposit(ParentToken, StETH, Alice, 2, Opts),
     % Delegate half of Alice's units in the parent mint to the child mint.
