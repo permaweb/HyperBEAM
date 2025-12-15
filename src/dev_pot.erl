@@ -234,31 +234,19 @@ drip_user(Addr, S, Opts) ->
 %% be initialized to the same value as `t` if not already set.
 ensure_initialized(Base, Req, Opts) ->
     TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
-    WithT =
-        hb_ao:set(
-            Base,
-            #{
-                <<"t">> =>
-                    NewT =
-                        hb_maps:get(
-                            TimeSource,
-                            Req,
-                            hb_maps:get(<<"t">>, Base, 0, Opts),
-                            Opts
-                        )
-            },
+    NewT =
+        hb_maps:get(
+            TimeSource,
+            Req,
+            hb_maps:get(<<"t">>, Base, 0, Opts),
             Opts
         ),
     hb_ao:set(
-        WithT,
+        Base,
         #{
+            <<"t">> => NewT,
             <<"last-drip">> =>
-                hb_ao:get(
-                    <<"last-drip">>,
-                    WithT,
-                    NewT,
-                    Opts
-                )
+                hb_ao:get(<<"last-drip">>, Base, 0, Opts)
         },
         Opts
     ).

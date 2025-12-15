@@ -85,7 +85,7 @@ balance(Base, Req, Opts) ->
             Opts
         ),
     ?event(
-        debug_test,
+        debug_token,
         {balance_after_mint_normalization,
             {account, Account},
             {balances, Balances}
