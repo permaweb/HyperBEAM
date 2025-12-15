@@ -29,7 +29,8 @@ compute(Base, Assignment, Opts) ->
     ?event({token_call, Assignment}),
     maybe
         {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
-        route(Base, SecureReq, Opts)
+        {ok, Res} ?= route(Base, SecureReq, Opts),
+        {ok, Res}
     else
         {error, Reason} ->
             ?event(token_short, {ignoring_errored_transfer, Reason}),
