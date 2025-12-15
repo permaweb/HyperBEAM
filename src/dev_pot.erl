@@ -198,11 +198,16 @@ drip_resource(ResourceID, S, Opts) ->
 %% balance, and reset their unclaimed yield to 0. Does not drip the global state
 %% before doing so.
 drip_user(Addr, S, Opts) ->
+    % TODO: Add recieved delegations to the `users/` index, such that we can
+    % change the below to only drip resources for which the user is actively
+    % participating. This will change the balances `O` complexity from
+    % `O(all_resources)` to `O(user.active_resources)`.
+    ?no_prod("Only drip resources for which the user has a deposit."),
     ResourceIDs =
         hb_maps:keys(
             hb_private:reset(hb_message:uncommitted(
                 hb_ao:get(
-                    <<"users/", Addr/binary, "/deposits">>,
+                    <<"resources">>,
                     S,
                     #{},
                     Opts
@@ -312,7 +317,7 @@ deposit(State, Assignment, Opts) ->
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        % TODO: DO NOT PUSH IN PROD
+        ?no_prod("Enable resource authorization verification."),
         % true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
     else
@@ -426,31 +431,35 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         }
     ),
     GlobalDrippedS = drip_global(S, Opts),
-    DrippedS = #{
+    S0 = #{
         <<"balances">> := Balances
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
-    RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
-    DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
-    RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
-    NewBalances = 
-        Balances#{
-            FromAddr => DelegatorBalance + DelegatorYield,
-            ToAddr => RecipientBalance + RecipientYield
-        },
-    {ok, S0} = 
-        hb_ao:resolve(
-            DrippedS,
-            #{
-                <<"path">> => <<"set">>,
-                <<"balances">> => NewBalances
-            },
-            Opts
-        ),
-    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S, Opts),
-    S1 =
+    % DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
+    % RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
+    %DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
+    %RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
+    % NewBalances = 
+    %     Balances#{
+    %         FromAddr => DelegatorBalance + DelegatorYield,
+    %         ToAddr => RecipientBalance + RecipientYield
+    %     },
+    % {ok, S0} = 
+    %     hb_ao:resolve(
+    %         DrippedS,
+    %         #{
+    %             <<"path">> => <<"set">>,
+    %             <<"balances">> => NewBalances
+    %         },
+    %         Opts
+    %     ),
+    % Drip each user's state to ensure any unclaimed yield is included in their
+    % balance.
+    S1 = drip_user(FromAddr, S0, Opts),
+    S2 = drip_user(ToAddr, S1, Opts),
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
+    S3 =
         hb_ao:set(
-            S0,
+            S2,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -471,13 +480,13 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                 "/delegations/",
                 ToAddr/binary
             >>,
-            S1,
+            S3,
             0,
             Opts
         ),
-    S2 =
+    S4 =
         hb_ao:set(
-            S1,
+            S3,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -489,10 +498,17 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation + Amount,
             Opts
         ),
-    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2, Opts),
-    S3 =
+    ResourceAcc =
+        hb_ao:get(
+            <<"resources/", ResourceID/binary, "/accumulator">>,
+            S4,
+            0,
+            Opts
+        ),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
+    S5 =
         hb_ao:set(
-            S2,
+            S4,
             <<
                 "/resources/", 
                 ResourceID/binary,
@@ -503,7 +519,20 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             RecipientDeposit + Amount,
             Opts
         ),
-    send_delegation_notice(ToAddr, ResourceID, Amount, S3, Opts).
+    S6 =
+        hb_ao:set(
+            S5,
+            <<
+                "/resources/", 
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/last-resource-accumulator"
+            >>,
+            ResourceAcc,
+            Opts
+        ),
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S6, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 undelegate(State, Assignment, Opts) ->
@@ -598,7 +627,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation - Amount,
             Opts
         ),
-    send_delegation_notice(ToAddr, ResourceID, -Amount, S3, Opts).
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
 set_weight(State, Assignment, Opts) ->
@@ -665,15 +694,16 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 
 %% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
 %% been modified.
-send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
+send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     hb_util:ok(
         dev_process_lib:send(
             #{
-                <<"target">> => Addr,
+                <<"target">> => ToAddr,
                 <<"action">> =>
-                    if Amount > 0 -> <<"Deposit">>;
-                    true -> <<"Withdraw">>
+                    if Amount > 0 -> <<"deposit">>;
+                    true -> <<"withdraw">>
                     end,
+                <<"address">> => FromAddr,
                 <<"quantity">> => Amount,
                 <<"resource">> => ResourceID
             },

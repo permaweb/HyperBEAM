@@ -75,15 +75,24 @@ balance(Base, Req, Opts) ->
             #{ <<"subject">> => Account },
             Opts
         ),
-    ?event(debug_token, {after_mint_normalization, NormBase}, Opts),
-    hb_ao:resolve_many(
-        [
-            NormBase,
-            <<"balances">>,
-            Account
-        ],
+    Balances =
+        hb_ao:resolve_many(
+            [
+                NormBase,
+                <<"balances">>,
+                Account
+            ],
+            Opts
+        ),
+    ?event(
+        debug_test,
+        {balance_after_mint_normalization,
+            {account, Account},
+            {balances, Balances}
+        },
         Opts
-    ).
+    ),
+    {ok, Balances}.
 
 transfer(Base, Assignment, Opts) ->
     maybe
@@ -101,17 +110,19 @@ transfer(Base, Assignment, Opts) ->
             ),
         % Retrieve balances from the base state.
         Balances = hb_ao:get(<<"balances">>, NormBase, Opts),
-        ?event(debug_token, {balances_before_transfer, Balances}),
+        ?event(debug_token, {balances_before_transfer, Balances}, Opts),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
-        ?event(debug_token,
+        ?event(
+            debug_token,
             {transfer_balances, 
                 {from, From}, 
                 {to, Recipient},
                 {quantity, Quantity},
                 {sender_balance, SenderBalance},
                 {recipient_balance, RecipientBalance}
-            }
+            },
+            Opts
         ),
         % Sanity check the transfer request.
         true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
@@ -146,12 +157,13 @@ transfer(Base, Assignment, Opts) ->
         )
     else
         {error, Reason} ->
-            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            ?event(token_short, {ignoring_errored_transfer, Reason}, Opts),
             ?event(debug_token,
                 {errored_transfer,
                     {reason, Reason},
                     {returning_base, Base}
-                }
+                },
+                Opts
             ),
             send_error(Base, Assignment, Reason, Opts)
     end.

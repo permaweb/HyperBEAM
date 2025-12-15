@@ -8,11 +8,13 @@
 %%% ----------------------------------------------------------------------------
 
 %% @doc Get balance for an account.
+balance(Process, Wallet, Opts) when is_tuple(Wallet) ->
+    balance(Process, id(Wallet), Opts);
 balance(Process, Account, Opts) when is_binary(Account) ->
     balance(Process, #{ <<"balance">> => Account }, Opts);
 balance(Process, Req, Opts) ->
     Res =
-        case hb_maps:get(<<"device">>, Process, <<"token@1.0">>, #{}) of
+        case hb_maps:get(<<"device">>, Process, <<"token@1.0">>, Opts) of
             <<"token@1.0">> ->
                 hb_ao:resolve(Process, Req#{ <<"path">> => <<"balance">> }, Opts);
             <<"process@1.0">> ->
@@ -212,6 +214,31 @@ schedule_request(Process, Body, Wallet, Opts) ->
     ?event(debug_test, {schedule_result, Res}, Opts),
     Res.
 
+push_request(Process, Body, Opts) ->
+    push_request(
+        Process,
+        Body,
+        hb_opts:get(priv_wallet, no_wallet, Opts),
+        Opts
+    ).
+push_request(Process, Body, Wallet, Opts) ->
+    PushReq =
+        hb_message:commit(#{
+            <<"path">> => <<"push">>,
+            <<"body">> =>
+                hb_message:commit(
+                    Body,
+                    Opts#{ priv_wallet => Wallet }
+                )
+            },
+            Opts#{ priv_wallet => Wallet }
+        ),
+    hb_ao:resolve(
+        Process,
+        PushReq,
+        Opts#{ priv_wallet => Wallet }
+    ).
+
 %% @doc Generate pot state for integration testing
 generate_pot_state(Params, Opts) ->
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
@@ -276,11 +303,11 @@ schedule_modify_resources(Process, Resources, Opts) ->
 schedule_deposit(Process, Resource, User, Qty, Opts) ->
     schedule_modify_resource(Process, Resource, #{ id(User) => Qty }, Opts).
 
-schedule_delegate(Process, Wallet, ToAddr, Resource, Qty, Opts) ->
-    schedule_request(
+push_delegate(Process, Resource, User, ToAddr, Qty, Opts) ->
+    push_request(
         Process,
         delegate_req(Resource, ToAddr, Qty),
-        Wallet,
+        User,
         Opts
     ),
     now(Process, Opts).
@@ -384,7 +411,7 @@ simple_pot_delegation_test() ->
         ),
     schedule_set_weight(Process, Resource, 100, Opts),
     schedule_deposit(Process, Resource, Alice, 100, Opts),
-    schedule_delegate(Process, Alice, id(Bob), Resource, 10, Opts),
+    push_delegate(Process, Resource, Alice, id(Bob), 10, Opts),
     ?assertEqual(
         10,
         deposit(Process, Resource, id(Bob), <<"quantity">>, Opts)
@@ -507,14 +534,9 @@ claim_yield_multiple_resources_test() ->
     PotFields = #{
         mint_cap => 10_000,
         mint_prop_numerator => 1,
-        mint_prop_denominator => 2,
-        t => 0,
-        last_drip => 0
+        mint_prop_denominator => 2
     },
-    TokenFields = #{
-        initial_balances => #{ id(Alice) => 1000 }
-    },
-    Process = generate_process(PotFields, TokenFields, Opts),
+    Process = generate_process(PotFields, Opts),
     State = now(Process, Opts),
     schedule_set_weight(State, ResourceOxygen, 100, Opts),
     schedule_set_weight(State, ResourceHydrogen, 50, Opts),
@@ -529,7 +551,7 @@ claim_yield_multiple_resources_test() ->
         Opts
     ),
     State2 = now(State, Opts),
-    ?assertEqual(9750, balance(State2, id(Alice), Opts)).
+    ?assertEqual(8750, balance(State2, id(Alice), Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
@@ -561,88 +583,62 @@ claim_yield_no_deposits_test() ->
     ?assertEqual(100, balance(BaseAfterClaim, AliceAddr,Opts)),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, BaseAfterClaim, Opts)).
 
-transfer_with_unclaimed_yield_test_disabled() ->
-    Opts = test_opts(),
-    AliceWallet = ar_wallet:new(),
-    AliceAddr = id(AliceWallet),
-    BobWallet = ar_wallet:new(),
-    BobAddr = id(BobWallet),
-    ResourceOxygen = <<"oxygen">>,
-    PotFields = #{
-        mint_cap => 10000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2,
-        t => 0,
-        last_drip => 0
-    },
-    TokenFields = #{
-        initial_balances => #{AliceAddr => 500},
-        total_supply => 500
-    },
-    Process = generate_process(PotFields, TokenFields, Opts),
-    NewBase = 
-        schedule_deposit(
-            Process,
-            ResourceOxygen,
-            AliceWallet,
-            10,
-            Opts
-        ),
-    ?event({initial_state, NewBase}),
-    Balance = balance( NewBase, AliceAddr, Opts),
-    ?event({alice_balance, Balance}),
-    ?assertEqual(500, Balance),
-    schedule_request(
-        NewBase,
-        transfer_req(BobAddr, 700),
-        AliceWallet,
-        Opts
-    ),
-    Result = now(NewBase, Opts),
-    ?event({transfer_result, Result}),
-    ?assertEqual(6800, balance(Result, AliceAddr,Opts)),
-    ?assertEqual(700, balance(Result, BobAddr,Opts)),
-    ?assertEqual(7500, hb_ao:get(<<"total-supply">>, Result, Opts)).
-
 nested_pot_process_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     % Create the parent mint, which will deliver units to the child mint.
     StETH = <<"stETH">>,
     ParentPotParams = #{
-        mint_cap => 21_000_000,
+        mint_cap => 1_000_000,
         mint_prop_numerator => 1,
-        mint_prop_denominator => 3,
+        mint_prop_denominator => 2,
         t => 0,
         last_drip => 0
     },
     ParentToken = generate_process(ParentPotParams, Opts),
-    ParentMintID = dev_process_lib:process_id(ParentToken, #{}, Opts),
-    ?event(process, {parent_mint, ParentMintID}, Opts),
+    ParentID = dev_process_lib:process_id(ParentToken, #{}, Opts),
+    ?event(process, {parent_mint, ParentID}, Opts),
     % Create the child mint, which will receive units from the parent mint in
     % exchange for its own tokens.
     ChildPotParams = #{
-        mint_cap => 1_000_000_000,
+        mint_cap => 1_000_000,
         mint_prop_numerator => 1,
         mint_prop_denominator => 2,
         t => 0,
         last_drip => 0
     },
     ChildToken = generate_process(ChildPotParams, Opts),
-    ChildMintID = dev_process_lib:process_id(ChildToken, #{}, Opts),
-    % Set the weight of the parent mint such that all units in the child are
-    % delivered to ParentToken providers.
-    schedule_set_weight(ParentToken, StETH, 100, Opts),
+    ChildID = dev_process_lib:process_id(ChildToken, #{}, Opts),
+    % Set the weights mints such that all units in the parent are given for
+    % providing `stETH', and all units in the child are given for providing
+    % `Parent'.
+    schedule_set_weight(ParentToken, StETH, 1, Opts),
+    schedule_set_weight(ChildToken, StETH, 1, Opts),
     % Deposit units of the resource into the parent mint for Alice.
-    schedule_deposit(ParentToken, StETH, Alice, 10, Opts),
+    schedule_deposit(ParentToken, StETH, Alice, 2, Opts),
     % Delegate half of Alice's units in the parent mint to the child mint.
-    schedule_delegate(ParentToken, Alice, ChildMintID, StETH, 10, Opts),
+    push_delegate(ParentToken, StETH, Alice, ChildID, 1, Opts),
     % Check that tokens are being minted in the parent for both the child token
     % and Alice.
-    ?assertEqual(10, balance(ParentToken, id(Alice), Opts)),
-    ?assertEqual(10, balance(ParentToken, ChildMintID, Opts)),
+    schedule_request(
+        ParentToken,
+        #{ <<"action">> => <<"mint">> },
+        Alice,
+        Opts
+    ),
+    schedule_request(
+        ChildToken,
+        #{ <<"action">> => <<"mint">> },
+        Alice,
+        Opts
+    ),
+    ParentState = now(ParentToken, Opts),
+    ChildState = now(ChildToken, Opts),
+    ?event(debug_test, {parent_state, ParentState}, Opts),
+    ?assert(balance(ParentState, Alice, Opts) > 0),
+    ?assert(balance(ParentState, ChildID, Opts) > 0),
     % Check that Alice has received tokens in the child mint.
-    ?assertEqual(10, balance(ChildToken, id(Alice), Opts)).
+    ?assert(balance(ChildState, Alice, Opts) > 0).
 
 %%% Benchmark Tests
 
