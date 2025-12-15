@@ -385,7 +385,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     Res = dev_process_lib:run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
     ?event(compute_slot_run_as, {after_run_as, {res, Res}}, Opts),
     case Res of
-        {ok, NewProcStateMsg} ->
+        {ok, NewProcStateMsg} when is_map(NewProcStateMsg) ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
             NewProcStateMsgWithSlot =
                 hb_ao:set(
