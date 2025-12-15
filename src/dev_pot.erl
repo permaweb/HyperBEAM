@@ -617,16 +617,18 @@ set_weight(ResourceID, Weight, S, Opts) ->
             - (OldWeight * ResourceDeposits)
             + (Weight * ResourceDeposits),
     % Update the resource and the global weighted units counter.
-    hb_ao:set(
-        S1,
-        #{
-            <<"resources">> => #{
-                ResourceID => Resource#{ <<"weight">> => Weight }
+    AfterSet =
+        hb_ao:set(
+            S1,
+            #{
+                <<"resources">> => #{
+                    ResourceID => Resource#{ <<"weight">> => Weight }
+                },
+                <<"total-weighted-units">> => NewTotalWeightedUnits
             },
-            <<"total-weighted-units">> => NewTotalWeightedUnits
-        },
-        Opts
-    ).
+            Opts
+        ),
+    send_weight_notice(ResourceID, Weight, AfterSet, Opts).
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
@@ -656,7 +658,7 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 %% been modified.
 send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     hb_util:ok(
-        dev_process_lib:send(
+        dev_process_outbox:send(
             #{
                 <<"target">> => ToAddr,
                 <<"action">> =>
@@ -670,6 +672,22 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
             S,
             Opts
         ),
+        Opts
+    ).
+
+%% @doc Send a `set-weight' update message to all subscribed listeners. We use
+%% `notify/3' instead of `send/3' to do this as (by default) there is nobody that
+%% will be listening for this message. Clients can call `subscribe' with a
+%% `subscribe-target' of `broadcast' and an `subscribe-action' of `set-weight'
+%% to be notified of these events.
+send_weight_notice(ResourceID, Weight, S, Opts) ->
+    dev_process_outbox:notify(
+        #{
+            <<"action">> => <<"set-weight">>,
+            <<"resource">> => ResourceID,
+            <<"weight">> => Weight
+        },
+        S,
         Opts
     ).
 

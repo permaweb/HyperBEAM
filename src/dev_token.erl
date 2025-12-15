@@ -54,6 +54,8 @@ route(Base, Req, Opts) ->
     case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
+        <<"subscribe">> -> dev_process_outbox:subscribe(Base, Req, Opts);
+        <<"unsubscribe">> -> dev_process_outbox:unsubscribe(Base, Req, Opts);
         MintDevAction -> action_as_mint_device(MintDevAction, Base, Req, Opts)
     end.
 

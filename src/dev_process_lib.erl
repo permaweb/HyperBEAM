@@ -110,39 +110,3 @@ ensure_process_key(Base, Opts) ->
             Res;
         _ -> Base
     end.
-
-%% @doc Extract keys with X- prefix for forwarding in notices
-%% Follows AO token pattern: keys beginning with "X-" are forwarded.
-forwarded_keys(Req, Opts) ->
-    case hb_maps:is_map(Req, Opts) of
-        true ->
-            hb_maps:fold(
-                fun(Key, Value, Acc) when is_binary(Key) ->
-                    case byte_size(Key) >= 2 of
-                        true ->
-                            Prefix = binary:part(Key, 0, 2),
-                            case string:lowercase(Prefix) of
-                                <<"x-">> -> hb_maps:put(Key, Value, Acc, Opts);
-                                _ -> Acc
-                            end;
-                        false -> Acc
-                    end;
-                (_Key, _Value, Acc) -> Acc
-                end,
-                #{},
-                Req,
-                Opts
-            );
-        false -> #{}
-    end.
-
-%% @doc Add a message or list of messages to the process's outbox.
-send(Msg, Base, Opts) when not is_list(Msg) ->
-    send([Msg], Base, Opts);
-send(Msgs, Base, Opts) ->
-    CurrentOutbox = hb_ao:get(<<"results/outbox">>, Base, [], Opts),
-    NewOutbox = hb_util:message_to_ordered_list(CurrentOutbox, Opts) ++ Msgs,
-    {
-        ok,
-        hb_ao:set(Base, <<"results/outbox">>, NewOutbox, Opts)
-    }.
