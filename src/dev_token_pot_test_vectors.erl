@@ -166,7 +166,9 @@ generate_base_process_state(ExtraKeys, Opts) ->
             <<"scheduler">> => Addr,
             <<"authority">> => Addr
         },
-    hb_message:commit(ProcessBase, Opts).
+    Proc = hb_message:commit(ProcessBase, Opts),
+    hb_cache:write(Proc, Opts),
+    Proc.
 
 %% @doc Generate pot state for integration testing
 generate_pot_state(Params, Opts) ->
