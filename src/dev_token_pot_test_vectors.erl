@@ -428,6 +428,32 @@ simple_pot_delegation_test() ->
         )
     ).
 
+balance_without_mint_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000
+    },
+    Process = generate_process(PotFields, Opts),
+    schedule_set_weight(Process, ResourceOxygen, 100, Opts),
+    schedule_deposit(
+        Process,
+        ResourceOxygen,
+        Alice,
+        10,
+        Opts
+    ),
+    ?event(debug_test, 
+        {processes, 
+            {balance, balance(Process, id(Alice), Opts)}, 
+            {post_deposit, now(Process, Opts)}
+        },
+        Opts
+    ),
+    ?assert(balance(Process, Alice, Opts) > 0),
+    ?assert(hb_ao:get(<<"now/total-supply">>, Process, Opts) > 0).
+
 %% @doc Test that transfer works when balance is insufficient but 
 %% balance + unclaimed_yield is sufficient
 %% This validates that normalize_mint properly claims yields before transfer
