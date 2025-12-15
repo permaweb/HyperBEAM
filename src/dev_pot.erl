@@ -249,7 +249,7 @@ ensure_initialized(RawBase, Req, Opts) ->
 %% @doc If the process has not yet initialized, do so. In either case, return the
 %% base state with the subscriptions initialized.
 maybe_initialize_subscriptions(Base, Req, Opts) ->
-    case hb_maps:get(<<"subscriptions">>, Base, Opts) of
+    case hb_maps:get(<<"subscriptions">>, Base, not_found, Opts) of
         not_found -> initialize_subscriptions(Base, Req, Opts);
         _ -> Base
     end.
@@ -257,7 +257,7 @@ maybe_initialize_subscriptions(Base, Req, Opts) ->
 %% @doc If the process has a `parent' mint set, send a subscription request to
 %% the parent process for all `set-weight' messages.
 initialize_subscriptions(Base, _Req, Opts) ->
-    case hb_maps:get(<<"parent">>, Base, Opts) of
+    case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
         not_found -> Base;
         Parent ->
             dev_process_outbox:send_subscription_request(
