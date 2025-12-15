@@ -202,9 +202,14 @@ drip_resource(ResourceID, S, Opts) ->
 drip_user(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
-            hb_private:reset(
-                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
-            ),
+            hb_private:reset(hb_message:uncommitted(
+                hb_ao:get(
+                    <<"users/", Addr/binary, "/deposits">>,
+                    S,
+                    #{},
+                    Opts
+                )
+            )),
             Opts
         ),
     lists:foldl(
