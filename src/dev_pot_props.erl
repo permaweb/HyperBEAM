@@ -2,8 +2,10 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(USERS, 5).
+
 simulation_test() ->
-    ok = hb_prop:state_machine(
+    ok = hb_invariant:state_machine(
         #{
             opts => fun generate_opts/1,
             requests => generate_request(),
@@ -13,12 +15,15 @@ simulation_test() ->
             ],
             runs => 3,
             length => 4,
-            next => fun next/4
+            next => fun next/4,
+            users => ?USERS
         }
     ).
 
 generate_opts(#{ users := Users }) ->
+    NodeWallet = ar_wallet:new(),
     #{
+        priv_wallet => NodeWallet,
         resources =>
             [
                 hb_invariant:string(id)

@@ -5,7 +5,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -export([opts/0]).
 %%% Public helpers.
--export([generate_identities/1, generate_initial_balances/1]).
+-export([generate_identities/1, generate_initial_balances/1, user_wallets/1]).
 
 %%% Public utilities
 
