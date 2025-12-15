@@ -601,7 +601,7 @@ pot_subscriptions_test() ->
             },
             Opts
         ),
-    ParentID = dev_process_lib:process_id(ParentProcess, #{}, Opts),
+    ParentID = dev_process_lib:process_id(ParentProcess, Opts),
     ChildProcess =
         generate_process(
             #{
@@ -612,7 +612,7 @@ pot_subscriptions_test() ->
             },
             Opts
         ),
-    ChildID = dev_process_lib:process_id(ChildProcess, #{}, Opts),
+    ChildID = dev_process_lib:process_id(ChildProcess, Opts),
     ?event(
         debug_test,
         {test_processes,
@@ -630,12 +630,12 @@ pot_subscriptions_test() ->
     ?event(debug_test, {push_mint_result, Res}, Opts),
     ChildState = now(ChildProcess, Opts),
     ?assertEqual(
-        [dev_process_lib:process_id(ChildProcess, #{}, Opts)],
+        [dev_process_lib:process_id(ChildProcess, Opts)],
         dev_process_outbox:subscribers(ParentProcess, <<"set-weight">>, Opts)
     ),
     schedule_set_weight(ChildProcess, Resource, 100, Opts),
     ?assertEqual(
-        [dev_process_lib:process_id(ParentProcess, #{}, Opts)],
+        [dev_process_lib:process_id(ParentProcess, Opts)],
         hb_ao:get(
             <<
                 "now/resources/",
@@ -660,7 +660,7 @@ nested_pot_process_test() ->
         last_drip => 0
     },
     ParentToken = generate_process(ParentPotParams, Opts),
-    ParentID = dev_process_lib:process_id(ParentToken, #{}, Opts),
+    ParentID = dev_process_lib:process_id(ParentToken, Opts),
     ?event(process, {parent_mint, ParentID}, Opts),
     % Create the child mint, which will receive units from the parent mint in
     % exchange for its own tokens.
@@ -672,7 +672,7 @@ nested_pot_process_test() ->
         last_drip => 0
     },
     ChildToken = generate_process(ChildPotParams, Opts),
-    ChildID = dev_process_lib:process_id(ChildToken, #{}, Opts),
+    ChildID = dev_process_lib:process_id(ChildToken, Opts),
     % Set the weights mints such that all units in the parent are given for
     % providing `stETH', and all units in the child are given for providing
     % `Parent'.

@@ -140,7 +140,7 @@ generate_initial_balances(Opts) ->
 
 generate_sim_request(State, Opts) ->
     ?event({generating_request_for_process, State}),
-    Ledger = dev_process_lib:process_id(State, #{}, Opts),
+    Ledger = dev_process_lib:process_id(State, Opts),
     {ok, PushRes} =
         dev_token_lib:transfer(
             State,

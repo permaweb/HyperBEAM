@@ -89,7 +89,7 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 <<"No security-normalized `from' key found in request.">>,
                 Opts
             ),
-        ProcessID = dev_process_lib:process_id(State, #{}, Opts),
+        ProcessID = dev_process_lib:process_id(State, Opts),
         ?event(
             subscriptions_short,
             {set_subscription_info,

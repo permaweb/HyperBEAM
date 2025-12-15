@@ -104,7 +104,7 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
         ProcMsg,
         MaybeRoute#{
             <<"action">> => <<"Transfer">>,
-            <<"target">> => dev_process_lib:process_id(ProcMsg, #{}, Opts),
+            <<"target">> => dev_process_lib:process_id(ProcMsg, Opts),
             <<"recipient">> => hb_util:human_id(Recipient),
             <<"quantity">> => Quantity
         },
