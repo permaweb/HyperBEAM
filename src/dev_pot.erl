@@ -59,16 +59,13 @@ info(_S) ->
 %% specific user ID.
 mint(RawState, Req, Opts) ->
     State = ensure_initialized(RawState, Req, Opts),
-    ?event(debug_mint, {after_ensure_initialized, State}, Opts),
+    ?event(debug_drip, {after_ensure_initialized, State}, Opts),
     GloballyDripped = drip_global(State, Req, Opts),
-    ?event(debug_mint, {after_drip_global, GloballyDripped}, Opts),
-    Res =
-        case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
-            <<"global">> -> {ok, GloballyDripped};
-            Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
-        end,
-    ?event(debug_mint, {mint_result, Res}, Opts),
-    Res.
+    ?event(debug_drip, {after_drip_global, GloballyDripped}, Opts),
+    case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
+        <<"global">> -> {ok, GloballyDripped};
+        Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
+    end.
 
 %% @doc Force the `t` of the pot to increase -- either by 1 or the new given `t`
 %% value -- and drip globally. Used only for testing purposes.
@@ -158,6 +155,7 @@ drip_global(S = #{
 %% @doc Drip the state of a specific resource in the pot. Does not drip the
 %% global state before doing so.
 drip_resource(ResourceID, S, Opts) ->
+    ?event(debug_pot, {drip_resource, {resource_id, ResourceID}, {state, S}}, Opts),
     % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
     % Accumulate the Reward*CurrentWeight since the last global drip.
@@ -285,6 +283,14 @@ unclaimed_yield(Addr, S, Opts) ->
 %% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     GlobalDrippedS = drip_global(UndrippedS, Opts),
+    ?event(debug_pot,
+        {unclaimed_yield,
+            {resource_id, ResourceID},
+            {global_dripped_state, GlobalDrippedS},
+            {undripped_state, UndrippedS}
+        },
+        Opts
+    ),
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
     ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
@@ -689,7 +695,17 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ?event(debug_test_state, {modify_deposit_state, {dripped_s, DrippedS}}, Opts),
+    ?event(
+        debug_drip,
+        {modify_deposit_state,
+            {addr, Addr},
+            {resource_id, ResourceID},
+            {amount, Amount},
+            {resources, Resources},
+            {balances, Balances}
+        },
+        Opts
+    ),
     ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
@@ -729,7 +745,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
             },
             Opts
         ),
-    ?event({resources_after_modify_deposit, NewResources}),
+    ?event(debug_drip, {resources_after_modify_deposit, NewResources}, Opts),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
     NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
