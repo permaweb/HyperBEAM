@@ -304,8 +304,8 @@ deposit(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
         % TODO: DO NOT PUSH IN PROD
         % true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
@@ -334,8 +334,8 @@ withdraw(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
         true ?= verify_resource_auth(State, ResourceID, Req, Opts),
         withdraw(Address, ResourceID, Amount, State, Opts)
     end.
@@ -380,10 +380,34 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, FromAddr} ?= hb_maps:find(<<"from">>, Req, Opts),
-        {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        {ok, FromAddr} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, ToAddr} ?=
+            hb_maps:find(
+                <<"address">>,
+                Req,
+                <<"No recipient `address' to delegate to provided.">>,
+                Opts
+            ),
+        {ok, ResourceID} ?=
+            hb_maps:find(
+                <<"resource">>,
+                Req,
+                <<"No `resource' ID to delegate on provided.">>,
+                Opts
+            ),
+        {ok, Amount} ?=
+            hb_maps:find(
+                <<"quantity">>,
+                Req,
+                <<"No `quantity' to delegate provided.">>,
+                Opts
+            ),
         delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
@@ -575,7 +599,7 @@ set_weight(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     ?event(debug, {set_weight, Assignment}, Opts),
     maybe
-        {ok, ResourceID} ?= hb_maps:find(<<"resource-id">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
         set_weight(ResourceID, Weight, State, Opts)
     else
