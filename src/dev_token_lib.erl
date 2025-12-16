@@ -160,25 +160,26 @@ unsubscribe(ProcMsg, Action, Target, Opts) ->
 push(Process, Msg, RawOpts) ->
     push(Process, Msg, hb_opts:get(priv_wallet, hb:wallet(), RawOpts), RawOpts).
 push(Process, Msg, MsgWallet, RawOpts) ->
-    Opts =
+    UserOpts = RawOpts#{ priv_wallet => MsgWallet },
+    SystemOpts =
         RawOpts#{
             priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
         },
     Req =
-        hb_message:commit(
-            #{
-                <<"path">> => <<"push">>,
-                <<"body">> =>
+        #{
+            <<"path">> => <<"push">>,
+            <<"body">> =>
+                hb_message:commit(
                     Msg#{
                         <<"target">> =>
                             if is_binary(Process) -> Process;
-                            true -> hb_message:id(Process, all, Opts)
+                            true -> hb_message:id(Process, all, SystemOpts)
                             end
-                    }
-            },
-            Opts#{ priv_wallet => MsgWallet }
-        ),
-    hb_ao:resolve(Process, Req, Opts).
+                    },
+                    UserOpts
+                )
+        },
+    hb_ao:resolve(Process, Req, SystemOpts).
 
 %% @doc Retreive a single balance from the ledger.
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
