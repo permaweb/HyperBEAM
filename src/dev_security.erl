@@ -32,7 +32,8 @@ compute(Base, Req, Opts) ->
 
 %% @doc Validate that an assignment is trusted based on scheduler constraints.
 validate_assignment(Base, Assignment, Opts) ->
-    Signers = hb_message:signers(Assignment, Opts),
+    Req = hb_maps:get(<<"body">>, Assignment, Assignment,Opts),
+    Signers = hb_message:signers(Req, Opts),
     Scheduler = as_list(hb_ao:get(<<"scheduler">>, Base, [], Opts), Opts),
     Required = hb_ao:get(<<"scheduler-required">>, Base, [], Opts),
     Match = hb_ao:get(<<"scheduler-match">>, Base, length(Scheduler), Opts),
