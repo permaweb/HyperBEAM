@@ -12,7 +12,7 @@
 -export([term/1, term/2, term/3]).
 -export([print/1, print/3, print/4, print/5, eunit_print/2]).
 -export([message/1, message/2, message/3]).
--export([binary/1, error/2, trace/1, trace_short/0, trace_short/1]).
+-export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
 -export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
 -export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
 %%% Public Utility Functions.
@@ -208,7 +208,7 @@ do_term(MaybePrivMap, Opts, Indent) when is_map(MaybePrivMap) ->
 do_term(Tuple, Opts, Indent) when is_tuple(Tuple) ->
     tuple(Tuple, Opts, Indent);
 do_term(X, Opts, Indent) when is_binary(X) ->
-    indent("~s", [binary(X)], Opts, Indent);
+    indent("~s", [binary(X, Opts)], Opts, Indent);
 do_term(Str = [X | _], Opts, Indent) when is_integer(X) andalso X >= 32 andalso X < 127 ->
     indent("~s", [Str], Opts, Indent);
 do_term(MsgList, Opts, Indent) when is_list(MsgList) ->
@@ -428,29 +428,32 @@ indent_lines(Strings, Indent) when is_list(Strings) ->
     )).
 
 %% @doc Format a binary as a short string suitable for printing.
-binary(Bin) ->
+binary(Bin, Opts) ->
     case short_id(Bin) of
         undefined ->
-            MaxBinPrint = hb_opts:get(debug_print_binary_max),
-            Printable =
+            MaxBinPrint = hb_opts:get(debug_print_binary_max, 60, Opts),
+            Truncated =
                 binary:part(
                     Bin,
                     0,
-                    case byte_size(Bin) of
-                        X when X < MaxBinPrint -> X;
-                        _ -> MaxBinPrint
-                    end
+                    min(
+                        case binary:match(Bin, <<"\n">>) of
+                            {NewlinePos, _} -> NewlinePos;
+                            nomatch -> MaxBinPrint
+                        end,
+                        MaxBinPrint
+                    )
                 ),
             PrintSegment =
-                case hb_util:is_printable_string(Printable) of
-                    true -> Printable;
-                    false -> hb_util:encode(Printable)
+                case hb_util:is_printable_string(Truncated) of
+                    true -> Truncated;
+                    false -> hb_util:encode(Truncated)
                 end,
             lists:flatten(
                 [
                     "\"",
                     [PrintSegment],
-                    case Printable == Bin of
+                    case Truncated == Bin of
                         true -> "\"";
                         false ->
                             io_lib:format(
@@ -463,7 +466,6 @@ binary(Bin) ->
         ShortID ->
             lists:flatten(io_lib:format("~s", [ShortID]))
     end.
-
 
 %% @doc Format a map as either a single line or a multi-line string depending
 %% on the value of the `debug_print_map_line_threshold' runtime option.
@@ -480,7 +482,7 @@ maybe_short(X, Opts, _Indent) ->
     MaxLen = hb_opts:get(debug_print_map_line_threshold, 100, Opts),
     SimpleFmt =
         case is_binary(X) of
-            true -> binary(X);
+            true -> binary(X, Opts);
             false -> io_lib:format("~p", [X])
         end,
     case is_multiline(SimpleFmt) orelse (lists:flatlength(SimpleFmt) > MaxLen) of
@@ -630,7 +632,7 @@ message(Item) -> message(Item, #{}).
 message(Item, Opts) -> message(Item, Opts, 0).
 message(Bin, Opts, Indent) when is_binary(Bin) ->
     indent(
-        binary(Bin),
+        binary(Bin, Opts),
         Opts,
         Indent
     );
@@ -852,7 +854,7 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                         _ when byte_size(Val) == 87 ->
                             io_lib:format("~s [#p]", [short_id(Val)]);
                         Bin when is_binary(Bin) ->
-                            binary(Bin);
+                            binary(Bin, Opts);
                         Link when ?IS_LINK(Link) ->
                             remove_leading_noise(
                                 hb_util:bin(
