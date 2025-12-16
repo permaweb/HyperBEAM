@@ -34,6 +34,9 @@
 %%%             /Results/Outbox
 %%%             /Results/Data</pre>
 -module(dev_json_iface).
+%%% Unidirectional codec API:
+-export([to/3]).
+%%% Process compute API:
 -export([init/3, compute/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
@@ -94,6 +97,16 @@ denormalize_message(Message, Opts) ->
     NormOwnerMsg#{
         <<"id">> => hb_message:id(Message, all, Opts)
     }.
+
+to(Msg, Req, Opts) ->
+    message_to_json_struct(
+        Msg,
+        case hb_maps:get(<<"owner-as-address">>, Req, false, Opts) of
+            true -> [owner_as_address];
+            false -> []
+        end,
+        Opts
+    ).
 
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
@@ -191,6 +204,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             end,
         <<"PublicKey">> => PublicKey
     }.
+
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
 prepare_tags(Msg, Opts) ->
