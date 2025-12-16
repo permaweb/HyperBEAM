@@ -78,6 +78,7 @@ ensure_loaded(Ref,
             true ->
                 do_read_commitment(ID, hb_util:deep_merge(Opts, LkOpts, Opts));
             _ ->
+                %erlang:display({hb_cache_read, ID}),
                 hb_cache:read(ID, hb_util:deep_merge(Opts, LkOpts, Opts))
         end,
     case CacheReadResult of

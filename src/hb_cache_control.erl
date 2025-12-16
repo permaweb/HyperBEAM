@@ -25,6 +25,7 @@ maybe_store(Base, Req, Res, Opts) ->
     case derive_cache_settings([Res, Req], Opts) of
         #{ <<"store">> := true } ->
             ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
+            %erlang:display({dispatch_cache_write, Base}),
             dispatch_cache_write(Base, Req, Res, Opts);
         _ -> 
             not_caching
@@ -132,15 +133,37 @@ async_writer() ->
 
 %% @doc Internal function to write a compute result to the cache.
 perform_cache_write(Base, Req, Res, Opts) ->
-    hb_cache:write(Base, Opts),
+    erlang:display("perform_cache_write Base"),
+    %% TODO: Not writing the base also works
+    %% TODO: Also, why the Base doesn't have the normal signature? 
+    %CommitmentsIDs = maps:get(<<"commitments">>, Base, #{}),
+    %Store = maps:get(store, Opts, []),
+    %AtLeastOneIsCached = lists:any(
+    %    fun (ID) -> hb_store:type(Store, ID) /= not_found end, 
+    %    maps:keys(CommitmentsIDs)
+    %),
+    %case AtLeastOneIsCached of 
+    %    true -> 
+    %        skip_case_caching;
+    %    false ->
+            hb_cache:write(Base, Opts),
+    %end,
+    erlang:display({base, Base}),
+    %erlang:display("perform_cache_write Req"),
     hb_cache:write(Req, Opts),
+    %erlang:display("perform_cache_write Res"),
     case Res of
         <<_/binary>> ->
+            erlang:display({cache_write_hashpath, hb_path:hashpath(Base, Req, Opts)}),
+            %% TODO: Why comment this write_binary make the test work?
+            %% This writes a new entry in the message, that is loaded up in the second request
+            %% modifying the signature hash (?) of the message.
             hb_cache:write_binary(
                 hb_path:hashpath(Base, Req, Opts),
                 Res,
                 Opts
             );
+            %skip_caching;
         Map when is_map(Map) ->
             hb_cache:write(Res, Opts);
         _ ->

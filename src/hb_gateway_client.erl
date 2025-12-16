@@ -34,6 +34,8 @@
 %%   ar: String!
 %% }
 read(ID, Opts) ->
+    ?event(x),
+    %erlang:display({hb_gateway_client, ID}),
     {Query, Variables} = case maps:is_key(<<"subindex">>, Opts) of
       true -> 
         Tags = subindex_to_tags(maps:get(<<"subindex">>, Opts)),

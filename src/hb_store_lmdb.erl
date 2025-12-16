@@ -414,6 +414,7 @@ match(Opts, MatchKVs) ->
 %% @returns Result of the write operation
 -spec make_group(map(), binary()) -> ok | {error, term()}.
 make_group(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
+    erlang:display({make_group, GroupName}),
     write(Opts, GroupName, <<"group">>);
 make_group(_,_) ->
     {error, {badarg, <<"StoreOps must be map and GroupName must be a binary">>}}.

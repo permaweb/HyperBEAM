@@ -363,8 +363,8 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     ListWithoutContentType =
         case maps:get(<<"content-type">>, HTTPEncMsg, undefined) of
             <<"multipart/", _/binary>> ->
-                %hb_util:list_replace(ListWithoutBodyKey, <<"content-type">>, []);
-                ListWithoutBodyKey;
+                hb_util:list_replace(ListWithoutBodyKey, <<"content-type">>, []);
+                %ListWithoutBodyKey;
             _ ->
                 ListWithoutBodyKey
         end,

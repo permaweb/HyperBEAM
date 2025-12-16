@@ -15,6 +15,7 @@ info() ->
 
 %% @doc Return the fallback index page when the manifest itself is requested.
 index(M1, M2, Opts) ->
+    erlang:display("index_request"),
     ?event(debug_manifest, {index_request, {m1, M1}, {m2, M2}}),
     case route(<<"index">>, M1, M2, Opts) of
         {ok, Index} ->
@@ -26,6 +27,7 @@ index(M1, M2, Opts) ->
 
 %% @doc Route a request to the associated data via its manifest.
 route(<<"index">>, M1, M2, Opts) ->
+    erlang:display("manifest_index"),
     ?event({manifest_index, M1, M2}),
     case manifest(M1, M2, Opts) of
         {ok, Manifest} ->
@@ -52,6 +54,7 @@ route(<<"index">>, M1, M2, Opts) ->
                     {error, not_found};
                 _ ->
                     ?event({manifest_path, Path}),
+                    erlang:display({route_from_index, Path}),
                     route(Path, M1, M2, Opts)
             end;
         {error, not_found} ->
@@ -62,6 +65,7 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     ?event({manifest_reading_id, ID}),
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
+    erlang:display({key, Key}),
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     Res = hb_ao:get(
@@ -69,6 +73,9 @@ route(Key, M1, M2, Opts) ->
         {as, <<"message@1.0">>, Manifest},
         Opts
     ),
+    %erlang:display({m1, M1}),
+    %erlang:display({m2, M2}),
+    %erlang:display({res, Res}),
     case Res of
         not_found ->
             %% Support materialized view in some JavaScript frameworks
@@ -76,6 +83,7 @@ route(Key, M1, M2, Opts) ->
                 error ->
                     {error, not_found};
                 fallback ->
+                    erlang:display({fallback_index, Key}),
                     ?event({manifest_fallback, {key, Key}}),
                     route(<<"index">>, M1, M2, Opts)
             end;
@@ -234,24 +242,55 @@ bug_test() ->
     %?assertEqual(LmdbKeys, S3Keys),
     ?assert(LmdbKeys =:= {ok, []}),
     %% Launch node with stores
-    Node = hb_http_server:start_node(#{store => Stores, ans104_trust_gql => false}),
+    Node = hb_http_server:start_node(#{store => Stores}),
     %% Make sure it follow redirection
-    Opts = #{http_client => httpc, ans104_trust_gql => false},
+    Opts = #{http_client => httpc},
 
     %% Request ID/data to be cached
     erlang:display("==== FIRST REQUEST ===="),
-    hb_http:get(Node, <<"/", ID/binary, "/data">>, Opts),
+    {ok, R} = hb_http:get(Node, <<"/", ID/binary, "/data">>, Opts),
+    ?assert(binary:matches(R, <<"manifest">>) /= []),
+    %?assertEqual(200, Status),
     %% Confirm we have access to the saved path
     ResolvedPath = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-type">>),
     ?assertEqual(<<"data/miyPVkjgmg2n4sXpAb9OsqyfM9oh80_EzfhWhjN6ZIg">>, ResolvedPath),
 
+    %% By requesting an invalid file we resolve the path up to the last link.
+    %% This allow to verify the last path is correct.
+    InvalidResolvedPath = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-typex">>),
+    ?assertEqual(<<"gmv8IAS0fiha99-1FowTDpgDt8khuxgZOI757Xs49hw/content-typex">>, InvalidResolvedPath),
+
+    HttpContentTypeResolvedPath = hb_store:resolve(LmdbStoreOpts, <<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM/content-type">>),
+    erlang:display({http_content_type_resolved_path, HttpContentTypeResolvedPath}),
+
     %% Request manifest
     erlang:display("==== SECOND REQUEST ===="),
-    hb_http:get(Node, <<"/", ID/binary, "~manifest@1.0/index">>, Opts),
-    %?assertMatch({ok, #{<<"location">> := <<"/", ID:43/binary, "~manifest@1.0/index">>}}, Response2),
+    {ok, #{<<"status">> := Status1, <<"data">> := Data1}} = hb_http:get(Node, <<"/", ID/binary, "~manifest@1.0/index">>, Opts),
+    ?assertEqual(200, Status1),
+    ?assertEqual(4434, byte_size(Data1)),
+
+    %% TODO: This request above mess up the cache. Why?
 
     %% Confirm we still have access to the content-type
     ResolvedPath2 = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-type">>),
     erlang:display(ResolvedPath2),
     ?assertEqual(<<"data/miyPVkjgmg2n4sXpAb9OsqyfM9oh80_EzfhWhjN6ZIg">>, ResolvedPath2),
+    InvalidResolvedPath2 = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-typex">>),
+    ?assertEqual(<<"gmv8IAS0fiha99-1FowTDpgDt8khuxgZOI757Xs49hw/content-typex">>, InvalidResolvedPath2),
+    
+    erlang:display("==== THIRD REQUEST ===="),
+    %% Request ID and expected to be redirect
+    {ok, #{<<"status">> := Status2}} = R2 =  hb_http:get(Node, <<ID/binary>>, Opts),
+    erlang:display({r2, R2}),
+    %?assertMatch({ok, #{<<"location">> := <<"/", ID:43/binary, "~manifest@1.0/index">>}}, Response2),
+
+    %%
+    ResolvedPath3 = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-type">>),
+    erlang:display(ResolvedPath3),
+        ?assertEqual(307, Status2),
+
+    %?assertEqual(<<"data/miyPVkjgmg2n4sXpAb9OsqyfM9oh80_EzfhWhjN6ZIg">>, ResolvedPath3),
+
+    %InvalidResolvedPath3 = hb_store:resolve(LmdbStoreOpts, <<ID/binary, "/content-typex">>),
+    %?assertEqual(<<"gmv8IAS0fiha99-1FowTDpgDt8khuxgZOI757Xs49hw/content-typex">>, InvalidResolvedPath3),
     ok.

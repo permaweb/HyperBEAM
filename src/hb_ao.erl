@@ -251,6 +251,7 @@ resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_I
     ?event(subresolution, {merged_message, {msg, Basec}}, Opts),
     Based = set(Basec, <<"device">>, DevID, Opts),
     ?event(subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
+    erlang:display([{baseb, Baseb}, {basec, Basec}, {based, Based}]),
     resolve_stage(1, Based, Req, Opts);
 resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
     % Set the device of the message to the specified one and resolve the sub-path.

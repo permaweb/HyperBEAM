@@ -579,7 +579,10 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
+    %erlang:display({message, Message}),
+    %erlang:display({tabmreq, TABMReq}),
     Codec = accept_to_codec(TABMReq, Message, Opts),
+    %erlang:display({codec, Codec}),
     ?event(http, {encoding_reply, {codec, Codec}, {message, Message}}),
     BaseHdrs =
         hb_maps:merge(
@@ -640,6 +643,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     <<"structured@1.0">>,
                     Opts#{ topic => ao_internal }
                 ),
+            %erlang:display("httpsig message, apply dev_codec_httpsig"),
             {ok, EncMessage} =
                 dev_codec_httpsig:to(
                     TABM,
@@ -694,6 +698,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 )
             };
         {_, <<"manifest@1.0">>, _} ->
+            %erlang:display("Using dev_manifest"),
             MessageID = hb_message:id(Message, signed, Opts),
             {
                 307,
@@ -757,6 +762,7 @@ accept_to_codec(OriginalReq, Opts) ->
 accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
     mime_to_codec(RequiredCodec, Opts);
 accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when ?IS_LINK(Link) ->
+    %erlang:display({unlink_content_type, Link}),
     accept_to_codec(
         OriginalReq,
         Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
@@ -769,6 +775,7 @@ accept_to_codec(
     ) ->
     <<"manifest@1.0">>;
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
+    %erlang:display({httpsig, CT}),
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
     Accept = hb_maps:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),
@@ -778,6 +785,7 @@ accept_to_codec(OriginalReq, _, Opts) ->
             {accept, Accept}
         }
     ),
+    %erlang:display({accept, Accept}),
     mime_to_codec(Accept, Opts).
 
 %% @doc Find a codec name from a mime-type.
