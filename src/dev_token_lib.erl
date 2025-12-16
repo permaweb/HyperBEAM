@@ -104,7 +104,6 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
         ProcMsg,
         MaybeRoute#{
             <<"action">> => <<"Transfer">>,
-            <<"target">> => dev_process_lib:process_id(ProcMsg, Opts),
             <<"recipient">> => hb_util:human_id(Recipient),
             <<"quantity">> => Quantity
         },
@@ -166,19 +165,24 @@ push(Process, Msg, MsgWallet, RawOpts) ->
             priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
         },
     Req =
-        #{
-            <<"path">> => <<"push">>,
-            <<"body">> =>
-                hb_message:commit(
-                    Msg#{
-                        <<"target">> =>
-                            if is_binary(Process) -> Process;
-                            true -> hb_message:id(Process, all, SystemOpts)
-                            end
-                    },
-                    UserOpts
-                )
-        },
+        hb_message:commit(
+            #{
+                <<"path">> => <<"push">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        Msg#{
+                            <<"target">> =>
+                                if is_binary(Process) ->
+                                    Process;
+                                true ->
+                                    dev_process_lib:process_id(Process, SystemOpts)
+                                end
+                        },
+                        UserOpts
+                    )
+            },
+            UserOpts
+        ),
     hb_ao:resolve(Process, Req, SystemOpts).
 
 %% @doc Retreive a single balance from the ledger.
