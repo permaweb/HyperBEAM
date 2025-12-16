@@ -141,6 +141,7 @@ default_device(Base, Key, Opts) ->
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>;
+default_device_index(<<"security">>) -> <<"security@1.0">>;
 default_device_index(_) -> not_found.
 
 %% @doc Wraps functions in the Scheduler device.

@@ -38,7 +38,7 @@ run_as(Key, Base, Path, Opts) when not is_map(Path) ->
 run_as(Key, Base, Req, Opts) ->
     % Store the original device so we can restore it after execution
     BaseDevice = hb_maps:get(<<"device">>, Base, not_found, Opts),
-    ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
+    ?event(debug_as, {running_as, {key, Key}, {req, Req}}, Opts),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
     {ok, PreparedMsg} = dev_process:as(Base, Key, Opts),

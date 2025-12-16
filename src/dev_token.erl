@@ -39,12 +39,11 @@ compute(Base, Assignment, Opts) ->
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(_Base, Req, Opts) ->
-    Msg = hb_ao:get(<<"body">>, Req, Opts),
-    [Signer] = hb_message:signers(Msg, Opts),
-    ModifiedReq = Req#{ <<"body">> => Msg#{ <<"from">> => Signer } },
-    ?event(debug_token, {modified_req, ModifiedReq}, Opts),
-    {ok, ModifiedReq}.
+enforce_security(Base, Req, Opts) ->
+    case dev_process_lib:run_as(<<"security">>, Base, Req, Opts) of
+        {ok, SecureReq} -> {ok, SecureReq};
+        {skip, Reason} -> {error, Reason}
+    end.
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.

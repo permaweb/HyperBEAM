@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 simulation_test() ->
-    ok = hb_prop:state_machine(
+    ok = hb_invariant:state_machine(
         #{
             opts => fun generate_opts/1,
             requests => generate_request(),

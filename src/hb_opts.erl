@@ -177,6 +177,7 @@ default_message() ->
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
+            #{<<"name">> => <<"security@1.0">>, <<"module">> => dev_security},
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
