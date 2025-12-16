@@ -234,6 +234,8 @@ default_message() ->
         debug_print_metadata => true,
         debug_print_gen_id => true,
         debug_print_committers => true,
+        debug_print_comm_device => true,
+        debug_print_comm_type => true,
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_show_priv => if_present,

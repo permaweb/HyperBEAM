@@ -732,18 +732,38 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             end,
             CommIDs
         ),
+    PrintCommDevice = hb_opts:get(debug_print_comm_device, true, Opts),
+    PrintCommType = hb_opts:get(debug_print_comm_type, true, Opts),
     IDMetadata =
         format_ids(
             lists:map(
                 fun({ID, Comm}) ->
                     hb_util:bin(io_lib:format(
-                        "~s~s~s",
+                        "~s~s~s~s~s",
                         [
                             case lists:member(ID, InvalidIDs) of
                                 true -> <<"!INVALID! ">>;
                                 false -> <<>>
                             end,
                             short_id(ID),
+                            if PrintCommDevice ->
+                                [
+                                    "~",
+                                    hb_util:bin(
+                                        hb_maps:get(
+                                            <<"commitment-device">>,
+                                            Comm,
+                                            <<"!NO DEVICE!">>,
+                                            Opts
+                                        )
+                                    )
+                                ];
+                               true -> <<>>
+                            end,
+                            case PrintCommType andalso hb_maps:find(<<"type">>, Comm, Opts) of
+                                {ok, Type} -> <<"/", Type/binary>>;
+                               _ -> <<>>
+                            end,
                             case hb_maps:get(<<"committer">>, Comm, undefined, Opts) of
                                 undefined -> <<>>;
                                 Committer ->
@@ -758,7 +778,7 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
         ),
     % Format the metadata row.
     Header =
-        indent("~s[~s~s] {",
+        indent("~s[ ~s~s ] {",
             [
                 hb_util:bin(FilterUndef(DevicePathMetadata)),
                 case ValOrUndef(<<"hashpath">>) of
