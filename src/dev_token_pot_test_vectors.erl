@@ -266,11 +266,26 @@ push_request(Process, Body, Wallet, Opts) ->
     ).
 
 schedule_set_weight(Process, Resource, Weight, Opts) ->
-    schedule_request(
+    Assignment = schedule_request(
         Process,
         set_weight_req(Resource, Weight),
         Opts
     ),
+    ?no_prod("Only to debug no comms in assignment issue"),
+    CachedAssignemnts =  
+        dev_scheduler_cache:read(
+            dev_process_lib:process_id(Process, Opts), 
+            0, 
+            Opts
+        ),
+    ?event(fix, 
+        {
+            weight_req, 
+                {req, Assignment},
+                {signers, hb_message:signers(Assignment, Opts)}, 
+                {cached_assignemnt,CachedAssignemnts},
+                {cached_signers, hb_message:signers(CachedAssignemnts, Opts)} 
+        }, Opts),
     now(Process, Opts).
 
 %% @doc Helper to create a pot resource with deposits
@@ -454,8 +469,7 @@ transfer_with_unclaimed_yield_test() ->
         last_drip => 0
     },
     TokenFields = #{
-        initial_balances => #{ id(Alice) => 500 },
-        total_supply => 500
+        initial_balances => #{ id(Alice) => 500 }
     },
     Process = generate_process(PotFields, TokenFields, Opts),
     schedule_set_weight(Process, ResourceOxygen, 100, Opts),
