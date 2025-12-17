@@ -2,7 +2,10 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(USERS, 10).
+
 simulation_test() ->
+    hb:init(),
     ok = hb_invariant:state_machine(
         #{
             opts => fun generate_opts/1,
@@ -13,7 +16,8 @@ simulation_test() ->
             ],
             runs => 3,
             length => 4,
-            next => fun next/4
+            next => fun next/4,
+            users => ?USERS
         }
     ).
 
@@ -36,36 +40,39 @@ generate_initial_state(Opts) ->
     StartQty = hb_invariant:int(1, 1_000_000),
     StartResource = hb_invariant:string(id),
     StartAddr = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
-    #{
-        <<"device">> => <<"pot@1.0">>,
-        <<"t">> => 0,
-        <<"last-drip">> => 0,
-        <<"mint-cap">> => MintCap,
-        <<"mint-prop-numerator">> => PropN,
-        <<"mint-prop-denominator">> => PropD,
-        <<"resources">> => #{
-            StartResource => #{
-                <<"accumulator">> => 1,
-                <<"last-global-accumulator">> => 1,
-                <<"weight">> => StartWeight,
-                <<"total-deposits">> => StartQty,
-                <<"deposits">> => #{
-                    StartAddr => #{
-                        <<"quantity">> => StartQty,
-                        <<"last-resource-accumulator">> => 1 % TODO: randomize this?
+    dev_token_lib:ledger(
+        #{
+            <<"mint-device">> => <<"pot@1.0">>,
+            <<"t">> => 0,
+            <<"last-drip">> => 0,
+            <<"mint-cap">> => MintCap,
+            <<"mint-prop-numerator">> => PropN,
+            <<"mint-prop-denominator">> => PropD,
+            <<"resources">> => #{
+                StartResource => #{
+                    <<"accumulator">> => 1,
+                    <<"last-global-accumulator">> => 1,
+                    <<"weight">> => StartWeight,
+                    <<"total-deposits">> => StartQty,
+                    <<"deposits">> => #{
+                        hb_util:human_id(StartAddr) => #{
+                            <<"quantity">> => StartQty,
+                            <<"last-resource-accumulator">> => 1 % TODO: randomize this?
+                        }
+                    }
+                }
+            },
+            <<"balances">> => dev_token_props:generate_initial_balances(Opts),
+            <<"users">> => #{
+                hb_util:human_id(StartAddr) => #{
+                    <<"deposits">> => #{
+                        StartResource => StartQty
                     }
                 }
             }
         },
-        <<"balances">> => dev_token_props:generate_initial_balances(Opts),
-        <<"users">> => #{
-            StartAddr => #{
-                <<"deposits">> => #{
-                    StartResource => StartQty
-                }
-            }
-        }
-    }.
+        Opts
+    ).
 
 generate_request() ->
     [
@@ -76,13 +83,19 @@ generate_request() ->
     ].
 
 deposit_generator(_State, Opts) ->
+    Wallet = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
     hb_message:commit(
         #{
             <<"path">> => <<"deposit">>,
-            <<"address">> => hb_invariant:pick(dev_token_props:user_wallets(Opts)),
+            <<"address">> =>
+                hb_util:human_id(
+                    hb_invariant:pick(
+                        dev_token_props:user_wallets(Opts)
+                    )
+                ),
             <<"amount">> => hb_invariant:int(1, 1_000_000)
         },
-        hb_opts:as(hb_invariant:pick(dev_token_props:user_wallets(Opts)), Opts)
+        Opts#{ priv_wallet => Wallet }
     ).
 
 verify_deposit(OldState, _Req, NewState, Opts) ->
