@@ -476,10 +476,16 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_ao:get(<<"wallet">>, Node, Opts),
+                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
                 DistanceScore =
                     field_distance(
-                        hb_util:native_id(Wallet),
+                        case hb_maps:find(<<"salt">>, Node, Opts) of
+                            {ok, Salt} ->
+                                hb_crypto:sha256(
+                                    <<Wallet/binary, "@", Salt/binary>>
+                                );
+                            error -> Wallet
+                        end,
                         BareHashPath
                     ),
                 {Node, DistanceScore}
