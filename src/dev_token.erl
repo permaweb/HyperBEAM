@@ -216,6 +216,7 @@ is_supported_mint_action(Action) ->
             <<"withdraw">>,
             <<"delegate">>,
             <<"undelegate">>,
+            <<"notify">>,
             <<"set-weight">>
         ]
     ).

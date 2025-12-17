@@ -32,7 +32,7 @@
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
 -export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3]).
--export([set_weight/3]).
+-export([set_weight/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
@@ -331,19 +331,6 @@ deposit(State, Assignment, Opts) ->
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
-%% @doc Verify that a signer of the request is authorized to deposit to the 
-%% given resource.
-verify_resource_auth(State, ResourceID, Req, Opts) ->
-    maybe
-        {ok, Authority} ?=
-            hb_ao:resolve(
-                State,
-                <<"resources/", ResourceID/binary, "/authority">>,
-                Opts
-            ),
-        lists:member(Authority, hb_message:signers(Req, Opts))
-    end.
-
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
 withdraw(State, Assignment, Opts) ->
@@ -359,6 +346,24 @@ withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
     modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
+
+%% @doc Interpret `notify' messages as if they were direct deposit/withdrawal
+%% requests, if they are sent `from' our `parent' mint process (if set).
+notify(State, Assignment, Opts) ->
+    wat.
+
+%% @doc Verify that a signer of the request is authorized to deposit to the 
+%% given resource.
+verify_resource_auth(State, ResourceID, Req, Opts) ->
+    maybe
+        {ok, Authority} ?=
+            hb_ao:resolve(
+                State,
+                <<"resources/", ResourceID/binary, "/authority">>,
+                Opts
+            ),
+        lists:member(Authority, hb_message:signers(Req, Opts))
+    end.
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
