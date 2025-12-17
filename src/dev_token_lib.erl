@@ -6,16 +6,20 @@
 -module(dev_token_lib).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-%%% Push wrappers.
+%%% Initialization and Push wrappers.
 -export([ledger/1, ledger/2, transfer/5, transfer/6]).
 -export([subledger/2, subledger/3]).
 -export([register/3, subscribe/3, unsubscribe/3]).
 %%% Query wrappers.
--export([balance/3, balance_total/3, balances/2, balances/3, supply/2, supply/3]).
+-export([now/2, balance/3, balance_total/3, balances/2, balances/3]).
+-export([supply/2, supply/3]).
+-export([subscribers/3, subscribers/4]).
 -export([subledger_supply/3, user_supply/3]).
 -export([ledgers/2, map/2, map/3]).
 -export([verify_net/3, verify_root_supply/2, verify_net_supply/3]).
 -export([verify_net_peer_balances/2]).
+
+%%% Initialization and Push wrappers.
 
 %% @doc Generate a token process definition message.
 ledger(Opts) ->
@@ -31,22 +35,26 @@ ledger(Extra, Opts) ->
                 Extra#{
                     <<"balances">> =>
                         maps:from_list(
-                            lists:map(
+                            lists:filtermap(
                                 fun({ID, Amount}) when ?IS_ID(ID) ->
-                                    {hb_util:human_id(ID), Amount};
+                                    {true, {hb_util:human_id(ID), Amount}};
                                 ({Wallet, Amount}) when is_tuple(Wallet) ->
                                     {
-                                        hb_util:human_id(
-                                            ar_wallet:to_address(Wallet)
-                                        ),
-                                        Amount
-                                    }
+                                        true,
+                                        {
+                                            hb_util:human_id(Wallet),
+                                            Amount
+                                        }
+                                    };
+                                (_Other) ->
+                                    false
                                 end,
                                 maps:to_list(RawBalance)
                             )
                         )
                 }
         end,
+    ?event(debug_test, {mod_extra, ModExtra}),
     Proc =
         hb_message:commit(
             maps:merge(
@@ -154,6 +162,13 @@ unsubscribe(ProcMsg, Action, Target, Opts) ->
         Opts
     ).
 
+%%% Query wrappers.
+
+%% @doc Get the current state of a process.
+now(ProcMsg, Opts) ->
+    {ok, State} = hb_ao:resolve(ProcMsg, #{ <<"path">> => <<"now">> }, Opts),
+    State.
+
 %% @doc Helper function to push a message to a process. Signs the message with the
 %% default key in the `Opts'.
 push(Process, Msg, RawOpts) ->
@@ -250,6 +265,17 @@ ledgers(ProcMsg, Opts) ->
         Msg when is_map(Msg) -> hb_private:reset(Msg);
         [] -> #{}
     end.
+
+%% @doc Get the subscribers of a process for a given action and target.
+subscribers(ProcMsg, Action, Opts) ->
+    subscribers(
+        ProcMsg,
+        Action,
+        <<"broadcast">>,
+        Opts
+    ).
+subscribers(ProcMsg, Action, Target, Opts) ->
+    dev_process_outbox:subscribers(now(ProcMsg, Opts), Action, Target, Opts).
 
 %% @doc Generate a complete overview of the test environment's balances and 
 %% ledgers. Optionally, a map of environment names can be provided to make the

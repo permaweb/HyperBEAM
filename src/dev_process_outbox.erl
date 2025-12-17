@@ -27,27 +27,61 @@ send(Msgs, Base, Req, Opts) ->
 %% @doc Helper function to only add exactly one message to the process's outbox.
 %% Does not notify subscribers.
 raw_send(Msg, State, Opts) ->
-    CurrentOutbox = hb_ao:get(<<"results/outbox">>, State, [], Opts),
-    NewOutbox = hb_util:message_to_ordered_list(CurrentOutbox, Opts) ++ [Msg],
-    hb_ao:set(State, <<"results/outbox">>, NewOutbox, Opts).
+    hb_ao:set(
+        State,
+        <<"results/outbox">>,
+        [
+            Msg
+        |
+            hb_util:message_to_ordered_list(
+                hb_ao:get(<<"results/outbox">>, State, [], Opts),
+                Opts
+            )
+        ],
+        Opts
+    ).
 
 %% @doc Notify all subscribers to the action and target of the message. Does not
 %% send a message to the `target' themselves (if set). If no `target' is provided, 
 %% those that subscribed to the `broadcast' `subscribe-target' are notified.
 notify(Msg, Base, Opts) ->
     maybe
+        ?event(debug_subscriptions,
+            {notifying_subscribers,
+                {msg, Msg},
+                {base, Base}
+            },
+            Opts
+        ),
         {ok, Action} ?= hb_maps:find(<<"action">>, Msg, <<"action">>, Opts),
         Target = hb_maps:get(<<"target">>, Msg, <<"broadcast">>, Opts),
+        Subscribers = subscribers(Base, Action, Target, Opts),
+        ?event(debug_subscriptions,
+            {notifying_subscribers,
+                {action, Action},
+                {target, Target},
+                {subscribers, Subscribers}
+            },
+            Opts
+        ),
         lists:foldl(
             fun(Listener, StateAcc) ->
+                MsgWithNewTarget = hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                ?event(debug_subscriptions,
+                    {notifying_subscriber,
+                        {listener, Listener},
+                        {msg, MsgWithNewTarget}
+                    },
+                    Opts
+                ),
                 raw_send(
-                    hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                    MsgWithNewTarget,
                     StateAcc,
                     Opts
                 )
             end,
             Base,
-            subscribers(Base, Action, Target, Opts)
+            Subscribers
         )
     else
         {error, Missing} ->
@@ -59,33 +93,45 @@ notify(Msg, Base, Opts) ->
 unsubscribe(State, Req, Opts) ->
     manage_subscription(State, Req, unset, Opts).
 
-%% @doc Subscribe to a subject and target from a request.
+%% @doc Subscribe to a subject and target, storing the slot of the request
+%% (if available) or the message ID as the subscription info.
 subscribe(State, Req, Opts) ->
-    manage_subscription(State, Req, hb_message:id(Req, signed, Opts), Opts).
+    manage_subscription(
+        State,
+        Req,
+        hb_ao:get(
+            <<"slot">>,
+            Req,
+            hb_message:id(Req, signed, Opts),
+            Opts
+        ),
+        Opts
+    ).
 
 %% @doc Helper function to manage subscriptions to a subject and target. If no
 %% `subscribe-target' is provided, the `broadcast' target is used. Any message
 %% sent with `notify/3' without a `target' will be sent to such subscribers.
 manage_subscription(State, Req, SubscriptionInfo, Opts) ->
     maybe
+        Msg = hb_ao:get(<<"body">>, Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
                 <<"subscribe-action">>,
-                Req,
-                <<"No `subscribed-action' key to filter upon provided.">>,
+                Msg,
+                <<"No `subscribe-action' key to filter upon provided.">>,
                 Opts
             ),
-        Subject =
-            hb_maps:get(
+        {ok, Subject} ?=
+            hb_maps:find(
                 <<"subscribe-target">>,
-                Req,
+                Msg,
                 <<"broadcast">>,
                 Opts
             ),
         {ok, Listener} ?=
             hb_maps:find(
                 <<"from">>,
-                Req,
+                Msg,
                 <<"No security-normalized `from' key found in request.">>,
                 Opts
             ),
@@ -116,11 +162,32 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
                 Opts
             ),
         ?event(
-            debug_test,
-            {new_state, NewState},
+            debug_subscriptions,
+            {setting_subscription,
+                {process_id, ProcessID},
+                {action, Action},
+                {subject, Subject},
+                {listener, Listener},
+                {info, SubscriptionInfo},
+                {request, Req},
+                {new_state, NewState}
+            },
             Opts
         ),
         {ok, NewState}
+    else
+        {error, Reason} ->
+            ?event(
+                debug_subscriptions,
+                {error_setting_subscription,
+                    {process_id, dev_process_lib:process_id(State, Opts)},
+                    {state, State},
+                    {request, Req},
+                    {reason, Reason}
+                },
+                Opts
+            ),
+            {error, Reason}
     end.
 
 %% @doc List all subscribers to a given subject and action.
