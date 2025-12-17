@@ -99,28 +99,30 @@ handle(Key, M1, M2, Opts) ->
             case hb_ao:get(SubjectID, DedupTrie, Opts) of
                 not_found ->
                     ?event({not_seen, SubjectID}),
-                    NewDedupTrie =
-                        hb_ao:set(
+                    Slot =
+                        hb_maps:get(
+                            <<"slot">>,
+                            M2,
+                            true,
+                            Opts
+                        ),
+                    {ok, NewDedupTrie} =
+                        hb_ao:resolve(
                             DedupTrie,
-                            SubjectID,
-                            hb_maps:get(
-                                <<"slot">>,
-                                M2,
-                                true,
-                                Opts
-                            ),
+                            #{ <<"path">> => <<"set">>, SubjectID => Slot },
                             Opts
                         ),
                     ?event({dedup_updated, NewDedupTrie}),
-                    Result =
-                        hb_ao:set(
-                            M1,
-                            <<"dedup">>,
-                            NewDedupTrie,
-                            Opts
-                        ),
-                    {ok, Result};
-                _Value ->
+                    hb_ao:resolve(
+                        M1,
+                        #{ 
+                            <<"path">> => <<"set">>,
+                            <<"set-mode">> => <<"explicit">>,
+                            <<"dedup">> => NewDedupTrie
+                        },
+                        Opts
+                    );
+                Value ->
                     ?event(
                         dedup_short,
                         {already_seen, {subject, SubjectID}}
