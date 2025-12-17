@@ -678,10 +678,8 @@ nested_pot_process_test() ->
     % Deposit units of the resource into the parent mint for Alice.
     push_deposit(ParentToken, Resource, Alice, 2, Opts),
     % Delegate half of Alice's units in the parent mint to the child mint.
-    ?hr(),
     Res = push_delegate(ParentToken, Resource, Alice, ChildID, 1, Opts),
     ?event(debug_test, {delegate_result, Res}, Opts),
-    ?hr(),
     % Check that tokens are being minted in the parent for both the child token
     % and Alice.
     push_request(
