@@ -58,7 +58,9 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
     % `keyid' in the `signature-input' keys.
     KeyID = maps:get(<<"keyid">>, Commitment, <<>>),
     % Extract the signature from the commitment.
-    Signature = hb_util:decode(maps:get(<<"signature">>, Commitment)),
+    Signature = hb_util:decode(
+                  fix_signature(
+                    maps:get(<<"signature">>, Commitment))),
     % Extract the keys present in the commitment.
     CommittedKeys = to_siginfo_keys(Msg, Commitment, Opts),
     ?event({normalized_for_enc, CommittedKeys, {commitment, Commitment}}),
@@ -112,6 +114,12 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
         }
     ),
     {ok, SigName, SFSig, SFSigInput}.
+
+%% In some cases signature contains spaces, which is invalid.
+%% (A miss representation of +). To decode it, we need to 
+%% replace spaces with +
+fix_signature(Signature) -> 
+    iolist_to_binary(string:replace(Signature, " ", "+", all)).
 
 get_additional_params(Commitment) ->
     AdditionalParams =
@@ -545,3 +553,39 @@ escaped_value_test() ->
     ?event(debug_test, {siginfo, {explicit, SigInfo}}),
     ?event(debug_test, {commitments, {explicit, Commitments}}),
     ?assertEqual(#{ ID => Commitment }, Commitments).
+
+%% @doc Example of an invalid signature inside of transaction 
+%% G47rsX4E-c8K52zGpqXgRtH9fQLoxkoAbNiT90HpN3k.
+%% The + was replaced by spaces, making it invalid.
+%% We correct this when loading the information.
+escaped_invalid_signature_test() ->
+    KeyID = crypto:strong_rand_bytes(32),
+    Committer = hb_util:human_id(ar_wallet:to_address(KeyID)),
+    Signature = hb_util:decode(<<"+lVAFvzP0l2QwcTGEhzmyv9BYdUmonYcFs4iYxMo4IRJmE70IZhhpOf2xId4EiZYGkYM7AuyhyPje+l9OiFVAw==">>),
+    ID = hb_util:human_id(crypto:hash(sha256, Signature)),
+    Commitment = #{
+        <<"committed">> => [],
+        <<"committer">> => Committer,
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"keyid">> => <<"publickey:", (hb_util:encode(KeyID))/binary>>,
+        <<"original-tags">> => #{
+            <<"1">> => #{
+                <<"name">> => <<"Key">>,
+                <<"value">> => <<"value">>
+            },
+            <<"2">> => #{
+                <<"name">> => <<"Quotes">>,
+                <<"value">> => <<"{\"function\":\"mint\"}">>
+            }
+        },
+        %% Represents the invalid signature
+        <<"signature">> => <<" lVAFvzP0l2QwcTGEhzmyv9BYdUmonYcFs4iYxMo4IRJmE70IZhhpOf2xId4EiZYGkYM7AuyhyPje l9OiFVAw==">>,
+        <<"type">> => <<"rsa-pss-sha256">>
+    },
+    SigInfo = commitments_to_siginfo(#{}, #{ ID => Commitment }, #{}),
+    Commitments = siginfo_to_commitments(SigInfo, #{}, #{}),
+    ?event(debug_test, {siginfo, {explicit, SigInfo}}),
+    ?event(debug_test, {commitments, {explicit, Commitments}}),
+    %% Expectes the final map to fix the signature
+    ?assertEqual(#{ ID => Commitment#{<<"signature">> => hb_util:encode(Signature)} }, Commitments).
+
