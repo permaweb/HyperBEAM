@@ -58,7 +58,9 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
     % `keyid' in the `signature-input' keys.
     KeyID = maps:get(<<"keyid">>, Commitment, <<>>),
     % Extract the signature from the commitment.
-    Signature = hb_util:decode(maps:get(<<"signature">>, Commitment)),
+    Signature = hb_util:decode(
+                  clean_signature(
+                    maps:get(<<"signature">>, Commitment))),
     % Extract the keys present in the commitment.
     CommittedKeys = to_siginfo_keys(Msg, Commitment, Opts),
     ?event({normalized_for_enc, CommittedKeys, {commitment, Commitment}}),
@@ -112,6 +114,10 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
         }
     ),
     {ok, SigName, SFSig, SFSigInput}.
+
+%% In some cases signature contains spaces
+clean_signature(Signature) -> 
+    iolist_to_binary(string:replace(Signature, " ", "+", all)).
 
 get_additional_params(Commitment) ->
     AdditionalParams =
