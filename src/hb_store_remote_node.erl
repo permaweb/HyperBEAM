@@ -79,41 +79,45 @@ maybe_cache(StoreOpts, Data) ->
     maybe_cache(StoreOpts, Data, []).
 maybe_cache(StoreOpts, Data, Links) ->
     ?event({maybe_cache, StoreOpts, Data}),
-    % Check if the local store is in our store options.
-    case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
-        false ->
-            skipped;
-        Store ->
-            case hb_cache:write(Data, #{ store => Store }) of
-                {ok, RootPath} ->
-                    % Remove the base path from the links.
-                    LinksWithoutRootPath =
-                        lists:filter(
-                            fun(Link) -> Link /= RootPath end,
-                            Links
+    try
+        % Check if the local store is in our store options.
+        case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
+            false ->
+                skipped;
+            Store ->
+                case hb_cache:write(Data, #{ store => Store }) of
+                    {ok, RootPath} ->
+                        % Remove the base path from the links.
+                        LinksWithoutRootPath =
+                            lists:filter(
+                                fun(Link) -> Link /= RootPath end,
+                                Links
+                            ),
+                        ?event(store_remote_node, cached_received),
+                        LinkResults =
+                            lists:filter(
+                                fun(Link) ->
+                                    hb_store:make_link(Store, RootPath, Link) == false
+                                end,
+                                LinksWithoutRootPath
+                            ),
+                        ?event(store_remote_node,
+                            {linked_cached,
+                                {failed_links, LinkResults}
+                            }
                         ),
-                    ?event(store_remote_node, cached_received),
-                    LinkResults =
-                        lists:filter(
-                            fun(Link) ->
-                                hb_store:make_link(Store, RootPath, Link) == false
-                            end,
-                            LinksWithoutRootPath
-                        ),
-                    ?event(store_remote_node,
-                        {linked_cached,
-                            {failed_links, LinkResults}
-                        }
-                    ),
-                    case LinkResults of
-                        [] -> ok;
-                        _ -> {failed_links, LinkResults}
-                    end;
-                {error, Err} ->
-                    ?event(store_remote_node, error_on_local_cache_write),
-                    ?event(warning, {error_caching_remote_node_data, Err}),
-                    {error, Err}
-            end
+                        case LinkResults of
+                            [] -> ok;
+                            _ -> {failed_links, LinkResults}
+                        end;
+                    {error, Err} ->
+                        ?event(store_remote_node, error_on_local_cache_write),
+                        ?event(warning, {error_caching_remote_node_data, Err}),
+                        {error, Err}
+                end
+        end
+    catch _:_ ->
+        ignored
     end.
 
 %% @doc Read local store cached value.

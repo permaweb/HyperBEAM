@@ -250,7 +250,7 @@ single_handler_test() ->
     % Create a message with a mock handler that adds a key to the request.
     Handler = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler_executed">> => true }}
                 end
@@ -266,7 +266,7 @@ multiple_handlers_test() ->
     % Create mock handlers that modify the request in sequence
     Handler1 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler1">> => true }}
                 end
@@ -274,7 +274,7 @@ multiple_handlers_test() ->
     },
     Handler2 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler2">> => true }}
                 end
@@ -291,7 +291,7 @@ halt_on_error_test() ->
     % Create handlers where the second one returns an error
     Handler1 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler1">> => true }}
                 end
@@ -299,7 +299,7 @@ halt_on_error_test() ->
     },
     Handler2 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, _, _) ->
                     {error, <<"Error in handler2">>}
                 end
@@ -307,7 +307,7 @@ halt_on_error_test() ->
     },
     Handler3 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler3">> => true }}
                 end

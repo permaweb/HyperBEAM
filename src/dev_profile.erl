@@ -169,7 +169,7 @@ default() ->
 eflame_profile(Fun, Req, Opts) ->
     File = temp_file(),
     Res = eflame:apply(normal, File, Fun, []),
-    MergeStacks = hb_maps:get(<<"mode">>, Req, <<"merge">>, Opts),
+    MergeStacks = hb_maps:get(<<"mode">>, Req, <<"time">>, Opts),
     EflameDir = code:lib_dir(eflame),
     % Get the name of the function to profile. If the path in the request is
     % set, attempt to find it. If that is not found, we use the bare path.
@@ -191,7 +191,8 @@ eflame_profile(Fun, Req, Opts) ->
     FlameArg =
         case MergeStacks of
             <<"merge">> -> <<"">>;
-            <<"time">> -> <<"--flamechart">>
+            <<"time">> -> <<"--flamechart">>;
+            Unsupported -> throw({unsupported_mode, Unsupported})
         end,
     PreparedCommand = 
         hb_util:list(

@@ -1521,7 +1521,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 find_target_id(Base, Req, ToSched, Opts) ->
     case hb_ao:get(<<"type">>, ToSched, not_found, Opts) of
         <<"Process">> ->
-            dev_process_lib:process_id(ToSched, #{}, Opts);
+            dev_process_lib:process_id(ToSched, Opts);
         _ ->
             case hb_ao:get(<<"target">>, ToSched, not_found, Opts) of
                 not_found -> find_target_id(Base, Req, Opts);
@@ -1538,20 +1538,20 @@ find_target_id(Base, Req, Opts) ->
             case hb_ao:resolve(Req, <<"type">>, TempOpts) of
                 {ok, <<"Process">>} ->
                     % Req is a Process, so the ID is at Req/id
-                    dev_process_lib:process_id(Req, #{}, Opts);
+                    dev_process_lib:process_id(Req, Opts);
                 _ ->
                     case hb_ao:resolve(Base, <<"process">>, TempOpts) of
                         {ok, _Process} ->
-                            dev_process_lib:process_id(Base, #{}, Opts);
+                            dev_process_lib:process_id(Base, Opts);
                         _ ->
                             % Does the message have a type of process?
                             case hb_ao:get(<<"type">>, Base, TempOpts) of
                                 <<"Process">> ->
                                     % Yes: Base is the process.
-                                    dev_process_lib:process_id(Base, #{}, Opts);
+                                    dev_process_lib:process_id(Base, Opts);
                                 _ ->
                                     % No: Req is the target process.
-                                    dev_process_lib:process_id(Req, #{}, Opts)
+                                    dev_process_lib:process_id(Req, Opts)
                             end
                 end
             end
@@ -1761,7 +1761,8 @@ register_location_on_boot_test() ->
 
 schedule_message_and_get_slot_test() ->
     start(),
-    Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Base = hb_message:commit(test_process(), Opts),
     Req = #{
         <<"path">> => <<"schedule">>,
         <<"method">> => <<"POST">>,
@@ -1769,20 +1770,21 @@ schedule_message_and_get_slot_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"true">>
-            }, #{ priv_wallet => hb:wallet() })
+            }, Opts)
     },
-    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
-    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)),
     Res = #{
         <<"path">> => <<"slot">>,
         <<"method">> => <<"GET">>,
-        <<"process">> => dev_process_lib:process_id(Base, #{}, #{})
+        <<"process">> => dev_process_lib:process_id(Base, Opts)
     },
     ?event({pg, dev_scheduler_registry:get_processes()}),
     ?event({getting_schedule, {msg, Res}}),
     ?assertMatch({ok, #{ <<"current">> := CurrentSlot }}
             when CurrentSlot > 0,
-        hb_ao:resolve(Base, Res, #{})).
+        hb_ao:resolve(Base, Res, Opts)
+    ).
 
 redirect_to_hint_test() ->
     start(),

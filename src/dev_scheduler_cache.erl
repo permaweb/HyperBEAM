@@ -37,12 +37,12 @@ write(RawAssignment, RawOpts) ->
         }
     ),
     case hb_cache:write(Assignment, Opts) of
-        {ok, RootPath} ->
+        {ok, _UnsignedID} ->
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
             hb_store:make_link(
                 Store,
-                RootPath,
+                hb_message:id(Assignment, signed, Opts),
                 hb_store:path(
                     Store,
                     [

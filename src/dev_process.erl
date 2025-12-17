@@ -83,17 +83,7 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
-as(RawBase, Req, Opts) ->
-    {ok, Base} = ensure_loaded(RawBase, Req, Opts),
-    Key = 
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"as">>},
-                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
-            ],
-            <<"execution">>,
-            Opts
-        ),
+as(Base, Key, Opts) when is_binary(Key) ->
     {ok,
         hb_util:deep_merge(
             dev_process_lib:ensure_process_key(Base, Opts),
@@ -123,7 +113,19 @@ as(RawBase, Req, Opts) ->
             },
             Opts
         )
-    }.
+    };
+as(RawBase, Req, Opts) ->
+    {ok, Base} = ensure_loaded(RawBase, Req, Opts),
+    Key = 
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Req}, <<"as">>},
+                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
+            ],
+            <<"execution">>,
+            Opts
+        ),
+    as(Base, Key, Opts).
 
 %% @doc Returns the default device for a given piece of functionality. Expects
 %% the `process/variant' key to be set in the message. The `execution-device'
@@ -139,6 +141,7 @@ default_device(Base, Key, Opts) ->
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>;
+default_device_index(<<"security">>) -> <<"security@1.0">>;
 default_device_index(_) -> not_found.
 
 %% @doc Wraps functions in the Scheduler device.
@@ -270,42 +273,19 @@ compute(Base, Req, Opts) ->
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
-    CurrentSlot = hb_ao:get(<<"at-slot">>, Base, Opts#{ hashpath => ignore }),
-    ?event(compute_short,
-        {starting_compute,
-            {proc_id, ProcID},
-            {current, CurrentSlot},
-            {target, TargetSlot}
-        }
-    ),
-    case CurrentSlot of
-        CurrentSlot when CurrentSlot > TargetSlot ->
-            % The cache should already have the result, so we should never end up
-            % here. Depending on the type of process, 'rewinding' may require
-            % re-computing from a significantly earlier checkpoint, so for now
-            % we throw an error.
-            ?event(compute, {error_already_calculated_slot,  {target, TargetSlot}, {current, CurrentSlot}}),
-            throw(
-                {error,
-                    {already_calculated_slot,
-                        {target, TargetSlot},
-                        {current, CurrentSlot}
-                    }
-                }
-            );
+    case hb_ao:get(<<"at-slot">>, Base, Opts#{ hashpath => ignore }) of
         CurrentSlot when CurrentSlot == TargetSlot ->
             % We reached the target height so we force a snapshot and return.
-            ?event(compute, {reached_target_slot_returning_state, TargetSlot}),
-            store_result(
-                true,
-                ProcID,
-                TargetSlot,
-                Base,
-                Req,
+            ?event(compute_short,
+                {reached_target_slot_returning_state,
+                    {proc_id, ProcID},
+                    {slot, TargetSlot}
+                },
                 Opts
             ),
+            store_result(true, ProcID, TargetSlot, Base, Req, Opts),
             {ok, without_snapshot(dev_process_lib:as_process(Base, Opts), Opts)};
-        CurrentSlot ->
+        CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
             % Get the next input message from the scheduler device.
@@ -313,20 +293,24 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 {error, Res} ->
                     % If the scheduler device cannot provide a next message,
                     % we return its error details, along with the current slot.
-                    ?event(compute,
-                        {error_getting_schedule,
-                            {error, Res},
-                            {phase, <<"get-schedule">>},
-                            {attempted_slot, NextSlot}
+                    ?event(compute_short,
+                        {error_getting_assignment,
+                            {proc_id, ProcID},
+                            {attempted_slot, NextSlot},
+                            {target_slot, TargetSlot},
+                            {error, Res}
                         }
                     ),
-                    {error, Res#{
-                        <<"phase">> => <<"get-schedule">>,
-                        <<"attempted-slot">> => NextSlot
-                    }};
+                    {error,
+                        Res#{
+                            <<"phase">> => <<"get-schedule">>,
+                            <<"attempted-slot">> => NextSlot,
+                            <<"process-id">> => ProcID
+                        }
+                    };
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
                     % Compute the next single state transition.
-                    case compute_slot(ProcID, State, SlotMsg, Req, Opts) of
+                    case compute_slot(ProcID, State, SlotMsg, Req, TargetSlot, Opts) of
                         {ok, NewState} ->
                             % Continue computing to the target slot.
                             compute_to_slot(
@@ -337,79 +321,152 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                                 Opts
                             );
                         {error, Error} ->
-                            % If the compute_slot function returns an error,
-                            % we return the error details, along with the current
-                            % slot.
-                            ErrMsg =
-                                if is_map(Error) ->
-                                    Error;
-                                true -> #{ <<"error">> => Error }
-                                end,
-                            ?event(compute,
-                                {error_computing_slot,
-                                    {error, ErrMsg},
-                                    {phase, <<"compute">>},
-                                    {attempted_slot, NextSlot}
-                                }
-                            ),
-                            {error,
-                                ErrMsg#{
-                                    <<"phase">> => <<"compute">>,
-                                    <<"attempted-slot">> => NextSlot
-                                }
-                            }
+                            % Forward error details back to the caller.
+                            {error, Error}
                     end
-            end
+            end;
+        CurrentSlot when CurrentSlot > TargetSlot ->
+            % The cache should already have the result, so we should never end up
+            % here. Depending on the type of process, 'rewinding' may require
+            % re-computing from a significantly earlier checkpoint, so for now
+            % we throw an error.
+            ?event(
+                compute,
+                {error_already_calculated_slot,
+                    {target, TargetSlot},
+                    {current, CurrentSlot}
+                },
+                Opts
+            ),
+            throw(
+                {error,
+                    {already_calculated_slot,
+                        {target, TargetSlot},
+                        {current, CurrentSlot}
+                    }
+                }
+            )
     end.
 
 %% @doc Compute a single slot for a process, given an initialized state.
-compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
-    % Ensure that the next slot is the slot that we are expecting, just
-    % in case there is a scheduler device error.
-    NextSlot = hb_util:int(hb_ao:get(<<"slot">>, RawInputMsg, Opts)),
-    ?event(compute, {next_slot, NextSlot}),
-    % If the input message does not have a path, set it to `compute'.
-    InputMsg =
-        case hb_path:from_message(request, RawInputMsg, Opts) of
-            undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
-            _ -> RawInputMsg
-        end,
-    ?event(compute, {input_msg, InputMsg}),
-    ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
-    % Unset the previous results.
-    UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
-    ?event(compute_slot_run_as, {before, {unset_results, UnsetResults}, {input_msg, InputMsg}}, Opts),
-    Res = dev_process_lib:run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
-    ?event(compute_slot_run_as, {after_run_as, {res, Res}}, Opts),
+compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
+    {PrepTimeMicroSecs, {ok, Slot, PreparedState, Req}} =
+        timer:tc(
+            fun() ->
+                prepare_next_slot(ProcID, State, RawInputMsg, Opts)
+            end
+        ),
+    ?event(
+        compute,
+        {prepared_slot,
+            {proc_id, ProcID},
+            {slot, Slot},
+            {prep_time_microsecs, PrepTimeMicroSecs}
+        },
+        Opts
+    ),
+    {RuntimeMicroSecs, Res} =
+        timer:tc(
+            fun() ->
+                dev_process_lib:run_as(<<"execution">>, PreparedState, Req, Opts)
+            end
+        ),
+    ?event(
+        compute,
+        {computed_slot,
+            {proc_id, ProcID},
+            {slot, Slot},
+            {runtime_microsecs, RuntimeMicroSecs}
+        },
+        Opts
+    ),
     case Res of
-        {ok, NewProcStateMsg} ->
+        {ok, NewProcStateMsg} when is_map(NewProcStateMsg) ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
             NewProcStateMsgWithSlot =
                 hb_ao:set(
                     NewProcStateMsg,
-                    #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => NextSlot },
+                    #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => Slot },
                     Opts
                 ),
             % Notify any waiters that the result for a slot is now available.
             dev_process_worker:notify_compute(
                 ProcID,
-                NextSlot,
+                Slot,
                 {ok, NewProcStateMsgWithSlot},
                 Opts
             ),
-            ProcStateWithSnapshot =
-                store_result(
-                    false,
-                    ProcID,
-                    NextSlot,
-                    NewProcStateMsgWithSlot,
-                    ReqMsg,
-                    Opts
+            {StoreTimeMicroSecs, ProcStateWithSnapshot} =
+                timer:tc(
+                    fun() ->
+                        store_result(
+                            false,
+                            ProcID,
+                            Slot,
+                            NewProcStateMsgWithSlot,
+                            InitReq,
+                            Opts
+                        )
+                    end
                 ),
+            ?event(compute_short,
+                {computed_slot,
+                    {proc_id, ProcID},
+                    {slot, Slot},
+                    {target_slot, TargetSlot},
+                    {prep_ms, PrepTimeMicroSecs div 1000},
+                    {execution_ms, RuntimeMicroSecs div 1000},
+                    {store_ms, StoreTimeMicroSecs div 1000},
+                    {action,
+                        hb_ao:get(
+                            <<"body/action">>,
+                            Req,
+                            no_action_set,
+                            Opts#{ hashpath => ignore }
+                        )
+                    }
+                }
+            ),
             {ok, ProcStateWithSnapshot};
         {error, Error} ->
-            {error, Error}
+            % An error occurred while computing the slot. Return the details.
+            ErrMsg =
+                if is_map(Error) -> Error;
+                true -> #{ <<"error">> => Error }
+                end,
+            ?event(compute_short,
+                {error_computing_slot,
+                    {proc_id, ProcID},
+                    {attempted_slot, Slot},
+                    {target_slot, TargetSlot},
+                    {prep_ms, PrepTimeMicroSecs div 1000},
+                    {execution_ms, RuntimeMicroSecs div 1000},
+                    {error, ErrMsg}
+                }
+            ),
+            {error,
+                ErrMsg#{
+                    <<"phase">> => <<"compute">>,
+                    <<"attempted-slot">> => Slot
+                }
+            }
     end.
+
+%% @doc Prepare the process state message for computing the next slot.
+prepare_next_slot(ProcID, State, RawReq, Opts) ->
+    Slot = hb_util:int(hb_ao:get(<<"slot">>, RawReq, Opts)),
+    ?event(compute, {next_slot, Slot}),
+    % If the input message does not have a path, set it to `compute'.
+    Req =
+        case hb_path:from_message(request, RawReq, Opts) of
+            undefined -> RawReq#{ <<"path">> => <<"compute">> };
+            _ -> RawReq
+        end,
+    ?event(compute, {input_msg, Req}),
+    ?event(compute, {executing, {proc_id, ProcID}, {slot, Slot}}, Opts),
+    % Unset the previous results.
+    PreparedState = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
+    {ok, Slot, PreparedState, Req}.
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
 %% key.
@@ -473,8 +530,7 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
 %% `process_snapshot_slots' option. If it is set, we check if the slot is
 %% a multiple of the interval. If either are true, we must snapshot.
 should_snapshot(Slot, Res, Opts) ->
-    should_snapshot_slots(Slot, Opts)
-        orelse should_snapshot_time(Res, Opts).
+    should_snapshot_slots(Slot, Opts) orelse should_snapshot_time(Res, Opts).
 
 %% @doc Calculate if we should snapshot based on the number of slots.
 should_snapshot_slots(Slot, Opts) ->
@@ -612,7 +668,8 @@ ensure_loaded(Base, Req, Opts) ->
                     {proc_id, ProcID},
                     {res, LoadRes},
                     {target, TargetSlot}
-                }
+                },
+                Opts
             ),
             case LoadRes of
                 {ok, MaybeLoadedSlot, MaybeLoadedSnapshotMsg} ->
@@ -647,7 +704,13 @@ ensure_loaded(Base, Req, Opts) ->
                             <<"initialized">> => <<"true">>
                         },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotReq}),
+                    ?event(compute,
+                        {found_state_checkpoint,
+                            {proc_id,ProcID, LoadedSnapshotReq},
+                            {loaded_snapshot_req, LoadedSnapshotReq}
+                        },
+                        Opts
+                    ),
                     {ok, Normalized} =
                         dev_process_lib:run_as(
                             <<"execution">>,

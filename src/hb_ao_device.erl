@@ -164,6 +164,11 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 %% If the device is a map, we look for a key in the map. First we try to find
 %% the key using its literal value. If that fails, we cast the key to an atom
 %% and try again.
+find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
+	try hb_util:key_to_atom(Key, false) of
+		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
+	catch _:_ -> not_found
+	end;
 find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
     NormKey = hb_ao:normalize_key(Key),
     NormDev = hb_ao:normalize_keys(Dev, Opts),
@@ -181,11 +186,6 @@ find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
 	end;
 find_exported_function(_Msg, _Mod, _Key, Arity, _Opts) when Arity < 0 ->
     not_found;
-find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
-	try hb_util:key_to_atom(Key, false) of
-		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
-	catch _:_ -> not_found
-	end;
 find_exported_function(Msg, Mod, Key, Arity, Opts) ->
 	case erlang:function_exported(Mod, Key, Arity) of
 		true ->
@@ -211,17 +211,29 @@ is_exported(Msg, Dev, Key, Opts) ->
 	is_exported(info(Dev, Msg, Opts), Key, Opts).
 is_exported(_, info, _Opts) -> true;
 is_exported(Info = #{ excludes := Excludes }, Key, Opts) ->
-    NormKey = hb_ao:normalize_key(Key),
-    case lists:member(NormKey, lists:map(fun hb_ao:normalize_key/1, Excludes)) of
+    NormKey = maybe_normalize_device_key(Key, existing),
+    case lists:member(NormKey, lists:map(fun maybe_normalize_device_key/1, Excludes)) of
         true -> false;
         false -> is_exported(hb_maps:remove(excludes, Info, Opts), Key, Opts)
     end;
 is_exported(#{ exports := Exports }, Key, _Opts) ->
     lists:member(
-        hb_ao:normalize_key(Key),
-        lists:map(fun hb_ao:normalize_key/1, Exports)
+        maybe_normalize_device_key(Key, existing),
+        lists:map(fun maybe_normalize_device_key/1, Exports)
     );
 is_exported(_Info, _Key, _Opts) -> true.
+
+%% @doc Normalize an exported key to its canonical atomized form. By default
+%% new atoms are created if necessary. In practice this is used for keys that
+%% orinate from a device's `info' response, but _not_ for keys that could be
+%% chosen by non-author users. This imparts a requirement that device developers
+%% should not generate too many different exports/excludes -- just as they should
+%% not generate too many atoms.
+maybe_normalize_device_key(Key) -> maybe_normalize_device_key(Key, new_atoms).
+maybe_normalize_device_key(Key, Mode) ->
+    try hb_util:key_to_atom(hb_ao:normalize_key(Key), Mode)
+    catch _:_ -> Key
+    end.
 
 %% @doc Load a device module from its name or a message ID.
 %% Returns {ok, Executable} where Executable is the device module. On error,

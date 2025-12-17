@@ -2,7 +2,11 @@
 %%% Specification: https://cookbook_ao.arweave.net/references/api/token.html
 -module(dev_token).
 -export([compute/3, init/3, normalize/3, snapshot/3, balance/3, mint/3]).
+%%% Public helpers.
+-export([validate_address/1]).
 -include_lib("include/hb.hrl").
+
+%%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
 init(Base, _Req, _Opts) ->
@@ -17,52 +21,52 @@ snapshot(Base, _Req, _Opts) ->
     {ok, Base}.
 
 %% @doc Entrypoint for computations on token processes. Expects the `action'
-%% key to hold the function to call.
-compute(Base, Req, Opts) ->
+%% key to hold the `path' to execute after enforcing the token's security
+%% constraints. Always returns the base state unmodified in the event of 
+%% downstream device errors, such that invalid interactions do not result in
+%% invalid `~process@1.0' states.
+compute(Base, Assignment, Opts) ->
+    ?event({token_call, Assignment}),
     maybe
-        {ok, SecureReq} ?= enforce_security(Base, Req, Opts),
-        route(Base, SecureReq, Opts)
+        {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
+        {ok, Res} ?= route(Base, SecureReq, Opts),
+        ?event(debug_token, {route_result, Res}, Opts),
+        {ok, Res}
+    else
+        {error, Reason} ->
+            ?event(token_short, {error_during_token_call, Reason}, Opts),
+            send_error(Base, Assignment, Reason, Opts)
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(_Base, Req, Opts) ->
-    Msg = hb_ao:get(<<"body">>, Req, Opts),
-    [Signer] = hb_message:signers(Msg, Opts),
-    ModifiedReq = Req#{ <<"body">> => Msg#{ <<"from">> => Signer } },
-    ?event(debug_token, {modified_req, ModifiedReq}),
-    {ok, ModifiedReq}.
+enforce_security(Base, Req, Opts) ->
+    case dev_process_lib:run_as(<<"security">>, Base, Req, Opts) of
+        {ok, SecureReq} -> {ok, SecureReq};
+        {skip, Reason} -> {error, Reason}
+    end.
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
 route(Base, Req, Opts) ->
     ActionBin = hb_ao:get(<<"body/action">>, Req, Opts),
+    ?event(debug_token, {action, ActionBin}, Opts),
     case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
-        <<"mint">> -> mint(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
-        _ ->
-            ?event(error, {unsupported_token_action, ActionBin}),
-            {ok, Base}
+        <<"subscribe">> -> dev_process_outbox:subscribe(Base, Req, Opts);
+        <<"unsubscribe">> -> dev_process_outbox:unsubscribe(Base, Req, Opts);
+        MintDevAction ->
+            action_as_mint_device(MintDevAction, Base, Req, Opts)
     end.
 
 %% @doc Get the balance for an account. Normalize the minting state for that
 %% account before returning.
 balance(Base, Req, Opts) ->
     {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
-    {TimestampSource, Timestamp} =
-        case hb_ao:get(<<"timestamp">>, Req, Opts) of
-            not_found ->
-                ?event(warning, {balance_request_without_timestamp, Req}, Opts),
-                {<<"system">>, os:system_time(millisecond)};
-            TS ->
-                {<<"request">>, TS}
-        end,
     ?event(
         debug_token,
         {balance_request,
             {account, Account},
-            {timestamp_source, TimestampSource},
-            {timestamp, Timestamp},
             {base, Base}
         },
         Opts
@@ -70,32 +74,30 @@ balance(Base, Req, Opts) ->
     {ok, NormBase} =
         normalize_mint(
             Base,
-            #{
-                <<"subject">> => Account,
-                <<"timestamp">> => Timestamp
-            },
+            hb_ao:set(Req, <<"subject">>, Account, Opts),
             Opts
         ),
-    ?event(debug_token, {after_mint_normalization, NormBase}, Opts),
-    hb_ao:resolve_many(
-        [
-            NormBase,
-            <<"balances">>,
-            Account
-        ],
+    Balances =
+        hb_ao:resolve_many(
+            [
+                NormBase,
+                <<"balances">>,
+                Account
+            ],
+            Opts
+        ),
+    ?event(
+        debug_token,
+        {balance_after_mint_normalization,
+            {account, Account},
+            {balances, Balances}
+        },
         Opts
-    ).
+    ),
+    {ok, Balances}.
 
 transfer(Base, Assignment, Opts) ->
     maybe
-        % Ensure that the request has a timestamp, such that balance can be
-        % calculated after the mint state has been normalized.
-        {ok, _Timestamp} ?=
-            hb_maps:find(
-                <<"timestamp">>,
-                Assignment,
-                Opts
-            ),
         % Gather transfer data from the request.
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
@@ -109,25 +111,20 @@ transfer(Base, Assignment, Opts) ->
                 Opts
             ),
         % Retrieve balances from the base state.
-        Balances = 
-            hb_ao:get(
-                <<"balances">>, 
-                NormBase, 
-                #{ <<"device">> => <<"trie@1.0">> }, 
-                Opts
-            ),
-        ?event(debug_token, {balances_before_transfer, Balances}),
+        Balances = hb_ao:get(<<"balances">>, NormBase, Opts),
+        ?event(debug_token, {balances_before_transfer, Balances}, Opts),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
         ?event(
-            token_short,
-            {transferring, 
+            debug_token,
+            {transfer_balances, 
                 {from, From}, 
                 {to, Recipient},
                 {quantity, Quantity},
                 {sender_balance, SenderBalance},
                 {recipient_balance, RecipientBalance}
-            }
+            },
+            Opts
         ),
         % Sanity check the transfer request.
         true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
@@ -155,240 +152,128 @@ transfer(Base, Assignment, Opts) ->
                     hb_maps:put(<<"balances">>, NewBalances, NormBase, Opts)
             end,
         % Send transfer notices.
-        dev_process_lib:send(
+        WithNotices = dev_process_outbox:send(
             transfer_notices(From, Recipient, Quantity, Req, Opts),
             NewBaseAfterTransfer,
             Opts
-        )
+        ),
+        {ok, WithNotices}
     else
-        error -> {error, <<"Timestamp is required.">>};
         {error, Reason} ->
-            ?event(token_short, {ignoring_errored_transfer, Reason}),
+            ?event(token_short, {ignoring_errored_transfer, Reason}, Opts),
             ?event(debug_token,
                 {errored_transfer,
                     {reason, Reason},
                     {returning_base, Base}
-                }
-            ),
-            ReturnValue = {ok, Base},
-            ?event(debug_token, {transfer_returning, ReturnValue}),
-            dev_process_lib:send(
-                #{
-                    <<"target">> => hb_ao:get(<<"body/from">>, Assignment, Opts),       
-                    <<"message">> => Reason
                 },
-                Base,
                 Opts
-            );
-        Other ->
-            ?event(debug_token, {transfer_returning_other, Other}),
-            Other
+            ),
+            {ok, send_error(Base, Assignment, Reason, Opts)}
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
     % Extract forwarded keys (X- prefixed fields from request)
-    ForwardedKeys = dev_process_lib:forwarded_keys(Req, Opts),
-    DebitNotice = maps:merge(
-        #{
+    ForwardedKeys = dev_process_outbox:forwarded_keys(Req, Opts),
+    DebitNotice =
+        ForwardedKeys#{
             <<"action">> => <<"Debit-Notice">>,
             <<"recipient">> => Recipient,    
             <<"quantity">> => Quantity,
             <<"target">> => From              
         },
-        ForwardedKeys
-    ),
-    CreditNotice = maps:merge(
-        #{
+    CreditNotice =
+        ForwardedKeys#{
             <<"target">> => Recipient,       
             <<"action">> => <<"Credit-Notice">>,
             <<"sender">> => From,             
             <<"quantity">> => Quantity
         },
-        ForwardedKeys
-    ),
     [DebitNotice, CreditNotice].
 
+%%% Mint device orchestration.
+
+%% @doc Call the mint device's main entrypoint, allowing it to handle explicit
+%% mint requests, normalize its state (prior to `transfer's, etc), or ignore
+%% the request altogether.
 mint(Base, Assignment, Opts) ->
-    ?event(debug_mint,
-        {running_mint,
-            {base, Base},
-            {assignment, Assignment}
-        }
-    ),
-    HasMintDevice = has_mint_device(Base, Opts),
-    ?event(debug_mint, {has_mint_device, HasMintDevice}),
-    case HasMintDevice of
-        false -> default_mint(Base, Assignment, Opts);
-        true ->
-            dev_process_lib:run_as(
-                <<"mint">>,
-                Base,
-                Assignment#{ <<"path">> => <<"mint">> },
-                Opts
-            )
+    as_mint_device(<<"mint">>, Base, Assignment, Opts).
+
+%% @doc Execute the mint device's main key, but return the state in its 
+%% unmodified form if the execution returns an error.
+normalize_mint(Base, Assignment, Opts) ->
+    case mint(Base, Assignment, Opts) of
+        {ok, NewBase} -> {ok, NewBase};
+        {error, _} -> {ok, Base}
     end.
 
-normalize_mint(Base, Req, Opts) ->
-    case has_mint_device(Base, Opts) of
-        false -> {ok, Base};
-        true ->
-            ReqWithPath = Req#{ <<"path">> => <<"mint">> },
-            ?event(debug_mint,
-                {running_mint,
-                    {base, Base},
-                    {req, Req}
-                }
-            ),
-            dev_process_lib:run_as(
-                <<"mint">>,
-                Base,
-                ReqWithPath,
-                Opts
-            )
+%% @doc Check if the action is supported by the mint device interface.
+is_supported_mint_action(Action) ->
+    lists:member(
+        Action,
+        [
+            <<"mint">>,
+            <<"deposit">>,
+            <<"withdraw">>,
+            <<"delegate">>,
+            <<"undelegate">>,
+            <<"set-weight">>
+        ]
+    ).
+
+%% @doc Verify if the action is a supported path on the mint device interdface,
+%% and if so, switch to the mint device and run it.
+action_as_mint_device(Action, Base, Req, Opts) ->
+    case is_supported_mint_action(Action) of
+        true -> as_mint_device(Action, Base, Req, Opts);
+        false ->
+            ?event(error, {unsupported_token_action, Action}, Opts),
+            {ok, Base}
     end.
 
-default_mint(Base, Assignment, Opts) ->
-    maybe
-        {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
-        true ?= enforce_mint_authority(Base, Req, Opts),
-        ?event(debug_mint, {before_mint_mode, Req}),
-        case hb_ao:get(<<"mode">>, Req, <<"single">>, Opts) of
-            <<"single">> -> mint_single(Base, Req, Opts);
-            <<"batch">> -> mint_batch(Base, Req, Opts);
-            _ -> {error, <<"Invalid mint mode.">>}
-        end
-    end.
+%% @doc Run a given `path' on the mint device.
+as_mint_device(Path, Base, Req, Opts) ->
+    dev_process_lib:run_as(
+        <<"mint">>,
+        ensure_mint_device(Base, Opts),
+        Req#{ <<"path">> => Path },
+        Opts
+    ).
 
-has_mint_device(Base, Opts) ->
-    case hb_ao:get(<<"mint-device">>, Base, Opts) of
-        not_found -> false;
-        _ -> true
-    end.
+%% @doc Add the default mint device if none is present already.
+ensure_mint_device(Base, Opts) ->
+    hb_ao:set(
+        Base,
+        #{
+            <<"mint-device">> =>
+                hb_ao:get(
+                    <<"mint-device">>,
+                    Base,
+                    <<"mint-authority@1.0">>,
+                    Opts
+                )
+        },
+        Opts
+    ).
 
-enforce_mint_authority(Base, Req, Opts) ->
-    Minter = hb_ao:get(<<"from">>, Req, Opts),
-    case hb_ao:get(<<"mint-authority">>, Base, Opts) of
-        Minter -> true;
-        not_found -> {error, <<"Mint authority not found.">>};
-        _ -> {error, <<"Mint authority mismatch.">>}
-    end.
+%%% Secure `set' call orchestration.
 
-mint_single(Base, Req, Opts) ->
-    maybe
-        ?event(debug_mint, {before_resolve_recipient, Req}),
-        {ok, To} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
-        {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
-        true ?= (is_integer(Quantity) and (Quantity >= 0))
-            orelse {error, <<"Quantity must be a non-negative integer.">>},
-        true ?= validate_address(To),
-        ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
-        perform_mint(Base, #{ To => Quantity }, Opts)
-    else
-        Error -> ?event(debug_mint, {error, Error})
-    end.
-
-mint_batch(Base, Req, Opts) ->
-    maybe
-        {ok, Quantities} ?= hb_ao:resolve(Req, <<"quantities">>, Opts),
-        perform_mint(Base, Quantities, Opts)
-    end.
-
-perform_mint(Base, RawQuantities, Opts) ->
-    maybe
-        % Filter to only account-quantity pairs
-        Quantities = maps:filter(
-            fun(K, V) -> is_binary(K) andalso is_integer(V) end,
-            RawQuantities
-        ),
-        ?event({filtered_quantities, Quantities}),
-        true ?=
-            lists:all(
-                fun(Q) -> is_integer(Q) andalso (Q >= 0) end,
-                maps:values(Quantities)
-            )
-            orelse {error, <<"Mint quantities must be non-negative integers.">>},
-        % Get current balances trie
-        Balances =
-            hb_ao:get(
-                <<"balances">>,
-                Base,
-                #{ <<"device">> => <<"trie@1.0">> },
-                Opts
-            ),
-        % Calculate new balances for all recipients
-        NewBalanceMap =
-            hb_maps:map(
-                fun(Recipient, MintQuantity) ->
-                    CurrentBalance = hb_ao:get(Recipient, Balances, 0, Opts),
-                    CurrentBalance + MintQuantity
-                end,
-                Quantities
-            ),
-        % Update balances in the trie
-        {ok, NewBalances} ?=
-            hb_ao:resolve(
-                Balances,
-                NewBalanceMap#{<<"path">> => <<"set">>},
-                Opts
-            ),
-        % Calculate total minted in this operation
-        TotalMinted = lists:sum(hb_maps:values(Quantities)),
-        % Update total supply
-        CurrentSupply = hb_ao:get(<<"total-supply">>, Base, 0, Opts),
-        NewSupply = CurrentSupply + TotalMinted,
-        % Update base state with new balances and supply
-        NewBaseWithBalances = 
-            hb_maps:put(
-                <<"balances">>, 
-                NewBalances, 
-                Base, 
-                Opts
-            ),
-        NewBaseWithBalAndSupply = 
-            hb_maps:put(
-                <<"total-supply">>, 
-                NewSupply, 
-                NewBaseWithBalances, 
-                Opts
-            ),
-        % Send mint notices for each recipient
-        Notices =
-            lists:map(
-                fun({Recipient, Quantity}) ->
-                    #{
-                        <<"action">> => <<"Mint-Notice">>,
-                        <<"recipient">> => Recipient,
-                        <<"quantity">> => Quantity
-                    }
-                end,
-                maps:to_list(Quantities)
-            ),
-        dev_process_lib:send(Notices, NewBaseWithBalAndSupply, Opts)
-    end.
-
+%% @doc Ensure that the caller is the `set' authority, and apply changes to the
+%% base state if so.
 secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_set_authority(Base, Req, Opts),
-        %NewKeys = hb_ao:set(Req, <<"path">>, unset, Opts),
         % Apply updates to base state
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
 
+%% @doc Enforce that the caller is the `set' authority.
 enforce_set_authority(Base, Req, Opts) ->
     Setter = hb_ao:get(<<"from">>, Req, Opts),
-    % Check if setter is the owner (or mint-authority as fallback)
-    Owner = hb_ao:get(<<"owner">>, Base, Opts),
-    MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
-    case {Owner, MintAuthority} of
-        {not_found, not_found} ->
-            {error, <<"No owner or mint-authority found.">>};
-        {Setter, _} ->
-            true;
-        {_, Setter} ->
-            true;
-        _ ->
-            {error, <<"Set authority mismatch.">>}
+    case hb_ao:get(<<"set-authority">>, Base, Opts) of
+        Setter -> true;
+        not_found -> {error, <<"No set-authority found in `Base' state.">>};
+        _ -> {error, <<"Caller is not the `set-authority'.">>}
     end.
 
 %%% Helper functions.
@@ -410,3 +295,19 @@ validate_address(Address) when is_binary(Address) ->
     end;
 validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
+
+send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
+    case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
+        {error, Error} ->
+            ?event(token_short, {skipping_error_report, Error}, Opts),
+            Base;
+        {ok, Target} ->
+            dev_process_outbox:send(
+                #{
+                    <<"target">> => Target,       
+                    <<"reason">> => Reason
+                },
+                Base,
+                Opts
+            )
+    end.

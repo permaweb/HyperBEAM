@@ -17,7 +17,7 @@
 %%% yourself from the inevitable issues that will arise from using this
 %%% module without understanding the full implications. You have been warned.
 -module(hb_maps).
--export([get/2, get/3, get/4, put/3, put/4, find/2, find/3]).
+-export([get/2, get/3, get/4, put/3, put/4, find/2, find/3, find/4]).
 -export([is_key/2, is_key/3, is_map/1, is_map/2]).
 -export([keys/1, keys/2, values/1, values/2]).
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
@@ -59,7 +59,19 @@ find(Key, Map) ->
 
 -spec find(Key :: term(), Map :: map(), Opts :: map()) -> {ok, term()} | error.
 find(Key, Map, Opts) ->
-    hb_cache:ensure_loaded(maps:find(Key, hb_cache:ensure_loaded(Map, Opts)), Opts).
+    hb_cache:ensure_loaded(
+        maps:find(Key, hb_cache:ensure_loaded(Map, Opts)),
+        Opts
+    ).
+%% @doc Deviates from the `maps:find/2' function by allowing you to specify a
+%% 'tag' to return along with the error, in the form `{error, ErrorTag}'.
+-spec find(Key :: term(), Map :: map(), ErrorTerm :: term(), Opts :: map()) ->
+        {ok, term()} | {error, term()}.
+find(Key, Map, ErrorTerm, Opts) ->
+    case find(Key, Map, Opts) of
+        {ok, Value} -> {ok, Value};
+        error -> {error, ErrorTerm}
+    end.
 
 -spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
 put(Key, Value, Map) ->

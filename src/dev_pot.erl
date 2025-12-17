@@ -31,7 +31,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
--export([info/1, mint/3]).
+-export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3]).
+-export([set_weight/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
@@ -41,25 +42,30 @@
 
 %%% Pot Model Functions.
 
-%% @doc Only export the `mint` key from the device, defaulting to `~message@1.0`
-%% for all other keys.
 info(_S) ->
-    #{ exports => [<<"mint">>] }.
+    #{
+        exports =>
+            [
+                <<"mint">>,
+                <<"deposit">>,
+                <<"withdraw">>,
+                <<"delegate">>,
+                <<"undelegate">>,
+                <<"set-weight">>
+            ]
+    }.
 
 %% @doc Normalizes the state of the pot for either the global scope or a
 %% specific user ID.
 mint(RawState, Req, Opts) ->
     State = ensure_initialized(RawState, Req, Opts),
-    ?event(debug_mint, {after_ensure_initialized, State}, Opts),
+    ?event(debug_drip, {after_ensure_initialized, State}, Opts),
     GloballyDripped = drip_global(State, Req, Opts),
-    ?event(debug_mint, {after_drip_global, GloballyDripped}, Opts),
-    Res =
-        case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
-            <<"global">> -> {ok, GloballyDripped};
-            Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
-        end,
-    ?event(debug_mint, {mint_result, Res}, Opts),
-    Res.
+    ?event(debug_drip, {after_drip_global, GloballyDripped}, Opts),
+    case hb_ao:get(<<"subject">>, Req, <<"global">>, Opts) of
+        <<"global">> -> {ok, GloballyDripped};
+        Subject -> {ok, drip_user(Subject, GloballyDripped, Opts)}
+    end.
 
 %% @doc Force the `t` of the pot to increase -- either by 1 or the new given `t`
 %% value -- and drip globally. Used only for testing purposes.
@@ -75,39 +81,48 @@ test_drip(State, Req, Opts) ->
 %% unchanged if no time has passed since the last drip. If `Req/timestamp` is
 %% provided it will be used as the new `t` for the pot before dripping.
 drip_global(State, Req, Opts) ->
-    UpdatedState =
-        case hb_maps:get(<<"timestamp">>, Req, undefined, Opts) of
-            undefined -> State;
-            NewTime ->
-                hb_ao:set(
-                    State,
-                    #{ <<"t">> => NewTime, <<"last-drip">> => NewTime },
-                    Opts
-                )
-        end,
-    drip_global(UpdatedState, Opts).
+    drip_global(ensure_initialized(State, Req, Opts), Opts).
+drip_global(Link, Opts) when ?IS_LINK(Link) ->
+    drip_global(hb_cache:ensure_loaded(Link, Opts), Opts);
+drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, Opts)
+        when ?IS_LINK(T) orelse ?IS_LINK(Last) ->
+    drip_global(
+        S#{
+            <<"t">> => hb_cache:ensure_loaded(T, Opts),
+            <<"last-drip">> => hb_cache:ensure_loaded(Last, Opts)
+        },
+        Opts
+    );
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
-drip_global(S = #{
-        <<"t">> := T,
-        <<"mint-cap">> := Max,
-        <<"mint-prop-numerator">> := PropN,
-        <<"mint-prop-denominator">> := PropD
-    }, Opts) ->
+drip_global(S, Opts) ->
+    T = hb_ao:get(<<"t">>, S, 0, Opts),
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
+    MintCap = hb_ao:get(<<"mint-cap">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
+    PropN = hb_ao:get(<<"mint-prop-numerator">>, S, 0, Opts),
+    PropD = hb_ao:get(<<"mint-prop-denominator">>, S, 0, Opts),
     ToMint =
         dev_pot_math:minted_between(
             AlreadyMinted,
-            Max,
+            MintCap,
             PropN,
             PropD,
             LastT,
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
-    ?event(debug_test, {drip_global, {t, T}, {last_drip, LastT}, {minted, AlreadyMinted}, {undistributed_mint, UndistributedMint}, {total_weighted_units, TotalWeightedUnits}, {global_accumulator, GlobalAcc}, {to_mint, ToMint}}, Opts),
+    ?event(debug_test,
+        {drip_global,
+            {t, T},
+            {last_drip, LastT},
+            {minted, AlreadyMinted},
+            {undistributed_mint, UndistributedMint},
+            {total_weighted_units, TotalWeightedUnits},
+            {global_accumulator, GlobalAcc},
+            {to_mint, ToMint}
+        }, Opts),
     {NewGlobalAcc, NewUndistributedMint} =
         dev_pot_math:drip_global(
             GlobalAcc,
@@ -135,6 +150,7 @@ drip_global(S = #{
 %% @doc Drip the state of a specific resource in the pot. Does not drip the
 %% global state before doing so.
 drip_resource(ResourceID, S, Opts) ->
+    ?event(debug_pot, {drip_resource, {resource_id, ResourceID}, {state, S}}, Opts),
     % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
     % Accumulate the Reward*CurrentWeight since the last global drip.
@@ -177,11 +193,21 @@ drip_resource(ResourceID, S, Opts) ->
 %% balance, and reset their unclaimed yield to 0. Does not drip the global state
 %% before doing so.
 drip_user(Addr, S, Opts) ->
+    % TODO: Add recieved delegations to the `users/` index, such that we can
+    % change the below to only drip resources for which the user is actively
+    % participating. This will change the balances `O` complexity from
+    % `O(all_resources)` to `O(user.active_resources)`.
+    ?no_prod("Only drip resources for which the user has a deposit."),
     ResourceIDs =
         hb_maps:keys(
-            hb_private:reset(
-                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
-            ),
+            hb_private:reset(hb_message:uncommitted(
+                hb_ao:get(
+                    <<"resources">>,
+                    S,
+                    #{},
+                    Opts
+                )
+            )),
             Opts
         ),
     lists:foldl(
@@ -201,35 +227,46 @@ drip_user(Addr, S, Opts) ->
 %% @doc Ensure the base state is initialized, with `t` set to either the new
 %% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
 %% be initialized to the same value as `t` if not already set.
-ensure_initialized(Base, Req, Opts) ->
-    WithT =
-        hb_ao:set(
-            Base,
-            #{
-                <<"t">> =>
-                    NewT =
-                        hb_maps:get(
-                            <<"timestamp">>,
-                            Req,
-                            hb_maps:get(<<"t">>, Base, 0, Opts),
-                            Opts
-                        )
-            },
+ensure_initialized(RawBase, Req, Opts) ->
+    Base = maybe_initialize_subscriptions(RawBase, Req, Opts),
+    TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
+    NewT =
+        hb_maps:get(
+            TimeSource,
+            Req,
+            hb_maps:get(<<"t">>, Base, 0, Opts),
             Opts
         ),
     hb_ao:set(
-        WithT,
+        Base,
         #{
-            <<"last-drip">> =>
-                hb_ao:get(
-                    <<"last-drip">>,
-                    WithT,
-                    NewT,
-                    Opts
-                )
+            <<"t">> => NewT,
+            <<"last-drip">> => hb_ao:get(<<"last-drip">>, Base, NewT, Opts)
         },
         Opts
     ).
+
+%% @doc If the process has not yet initialized, do so. In either case, return the
+%% base state with the subscriptions initialized.
+maybe_initialize_subscriptions(Base, Req, Opts) ->
+    case hb_maps:get(<<"subscriptions">>, Base, not_found, Opts) of
+        not_found -> initialize_subscriptions(Base, Req, Opts);
+        _ -> Base
+    end.
+
+%% @doc If the process has a `parent' mint set, send a subscription request to
+%% the parent process for all `set-weight' messages.
+initialize_subscriptions(Base, _Req, Opts) ->
+    case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
+        not_found -> Base;
+        Parent ->
+            dev_process_outbox:send_subscription_request(
+                Parent,
+                <<"set-weight">>,
+                Base,
+                Opts
+            )
+    end.
 
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
@@ -256,6 +293,14 @@ unclaimed_yield(Addr, S, Opts) ->
 %% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     GlobalDrippedS = drip_global(UndrippedS, Opts),
+    ?event(debug_pot,
+        {unclaimed_yield,
+            {resource_id, ResourceID},
+            {global_dripped_state, GlobalDrippedS},
+            {undripped_state, UndrippedS}
+        },
+        Opts
+    ),
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
     ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
@@ -271,11 +316,45 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
+deposit(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
+        ?no_prod("Enable resource authorization verification."),
+        % true ?= verify_resource_auth(State, ResourceID, Req, Opts),
+        deposit(Address, ResourceID, Amount, State, Opts)
+    else
+        Reason -> {error, Reason}
+    end.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
+%% @doc Verify that a signer of the request is authorized to deposit to the 
+%% given resource.
+verify_resource_auth(State, ResourceID, Req, Opts) ->
+    maybe
+        {ok, Authority} ?=
+            hb_ao:resolve(
+                State,
+                <<"resources/", ResourceID/binary, "/authority">>,
+                Opts
+            ),
+        lists:member(Authority, hb_message:signers(Req, Opts))
+    end.
+
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
+withdraw(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
+        true ?= verify_resource_auth(State, ResourceID, Req, Opts),
+        withdraw(Address, ResourceID, Amount, State, Opts)
+    end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
@@ -314,6 +393,39 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
     liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts).
 
 %% @doc Delegate some quantity of a resource from one address to another.
+delegate(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, FromAddr} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, ToAddr} ?=
+            hb_maps:find(
+                <<"address">>,
+                Req,
+                <<"No recipient `address' to delegate to provided.">>,
+                Opts
+            ),
+        {ok, ResourceID} ?=
+            hb_maps:find(
+                <<"resource">>,
+                Req,
+                <<"No `resource' ID to delegate on provided.">>,
+                Opts
+            ),
+        {ok, Amount} ?=
+            hb_maps:find(
+                <<"quantity">>,
+                Req,
+                <<"No `quantity' to delegate provided.">>,
+                Opts
+            ),
+        {ok, delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
+    end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
         {delegating,
@@ -324,31 +436,13 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         }
     ),
     GlobalDrippedS = drip_global(S, Opts),
-    DrippedS = #{
-        <<"balances">> := Balances
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    DelegatorBalance = hb_ao:get(FromAddr, Balances, 0, Opts),
-    RecipientBalance = hb_ao:get(ToAddr, Balances, 0, Opts),
-    DelegatorYield = unclaimed_yield(FromAddr, ResourceID, DrippedS, Opts),
-    RecipientYield = unclaimed_yield(ToAddr, ResourceID, DrippedS, Opts),
-    NewBalances = 
-        Balances#{
-            FromAddr => DelegatorBalance + DelegatorYield,
-            ToAddr => RecipientBalance + RecipientYield
-        },
-    {ok, S0} = 
-        hb_ao:resolve(
-            DrippedS,
-            #{
-                <<"path">> => <<"set">>,
-                <<"balances">> => NewBalances
-            },
-            Opts
-        ),
-    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S, Opts),
-    S1 =
+    S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    S1 = drip_user(FromAddr, S0, Opts),
+    S2 = drip_user(ToAddr, S1, Opts),
+    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
+    S3 =
         hb_ao:set(
-            S0,
+            S2,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -369,13 +463,13 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                 "/delegations/",
                 ToAddr/binary
             >>,
-            S1,
+            S3,
             0,
             Opts
         ),
-    S2 =
+    S4 =
         hb_ao:set(
-            S1,
+            S3,
             <<
                 "/resources/",
                 ResourceID/binary,
@@ -387,10 +481,17 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation + Amount,
             Opts
         ),
-    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2, Opts),
-    S3 =
+    ResourceAcc =
+        hb_ao:get(
+            <<"resources/", ResourceID/binary, "/accumulator">>,
+            S4,
+            0,
+            Opts
+        ),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
+    S5 =
         hb_ao:set(
-            S2,
+            S4,
             <<
                 "/resources/", 
                 ResourceID/binary,
@@ -401,9 +502,33 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             RecipientDeposit + Amount,
             Opts
         ),
-    send_delegation_notice(ToAddr, ResourceID, Amount, S3, Opts).
+    S6 =
+        hb_ao:set(
+            S5,
+            <<
+                "/resources/", 
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/last-resource-accumulator"
+            >>,
+            ResourceAcc,
+            Opts
+        ),
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S6, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
+undelegate(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, FromAddr} ?= hb_maps:find(<<"from">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        {ok, undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
+    else
+        Reason -> Reason
+    end.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
     Liquidated = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
@@ -485,9 +610,19 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation - Amount,
             Opts
         ),
-    send_delegation_notice(ToAddr, ResourceID, -Amount, S3, Opts).
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S3, Opts).
 
 %% @doc Set the weight of a specific resource in the pot.
+set_weight(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    ?event(debug, {set_weight, Assignment}, Opts),
+    maybe
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
+        set_weight(ResourceID, Weight, State, Opts)
+    else
+        Reason -> Reason
+    end.
 set_weight(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
     S0 = drip_global(S, Opts),
@@ -505,16 +640,18 @@ set_weight(ResourceID, Weight, S, Opts) ->
             - (OldWeight * ResourceDeposits)
             + (Weight * ResourceDeposits),
     % Update the resource and the global weighted units counter.
-    hb_ao:set(
-        S1,
-        #{
-            <<"resources">> => #{
-                ResourceID => Resource#{ <<"weight">> => Weight }
+    AfterSet =
+        hb_ao:set(
+            S1,
+            #{
+                <<"resources">> => #{
+                    ResourceID => Resource#{ <<"weight">> => Weight }
+                },
+                <<"total-weighted-units">> => NewTotalWeightedUnits
             },
-            <<"total-weighted-units">> => NewTotalWeightedUnits
-        },
-        Opts
-    ).
+            Opts
+        ),
+    send_weight_notice(ResourceID, Weight, AfterSet, Opts).
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
@@ -542,21 +679,35 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 
 %% @doc Send a `Action: Deposit | Withdraw` notice to a user whose deposit has
 %% been modified.
-send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
-    hb_util:ok(
-        dev_process_lib:send(
-            #{
-                <<"target">> => Addr,
-                <<"action">> =>
-                    if Amount > 0 -> <<"Deposit">>;
-                    true -> <<"Withdraw">>
-                    end,
-                <<"quantity">> => Amount,
-                <<"resource">> => ResourceID
-            },
-            S,
-            Opts
-        ),
+send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+    dev_process_outbox:send(
+        #{
+            <<"target">> => ToAddr,
+            <<"action">> =>
+                if Amount > 0 -> <<"deposit">>;
+                true -> <<"withdraw">>
+                end,
+            <<"address">> => FromAddr,
+            <<"quantity">> => Amount,
+            <<"resource">> => ResourceID
+        },
+        S,
+        Opts
+    ).
+
+%% @doc Send a `set-weight' update message to all subscribed listeners. We use
+%% `notify/3' instead of `send/3' to do this as (by default) there is nobody that
+%% will be listening for this message. Clients can call `subscribe' with a
+%% `subscribe-target' of `broadcast' and an `subscribe-action' of `set-weight'
+%% to be notified of these events.
+send_weight_notice(ResourceID, Weight, S, Opts) ->
+    dev_process_outbox:notify(
+        #{
+            <<"action">> => <<"set-weight">>,
+            <<"resource">> => ResourceID,
+            <<"weight">> => Weight
+        },
+        S,
         Opts
     ).
 
@@ -572,10 +723,22 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         <<"balances">> := Balances,
         <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ?event(debug_test_state, {modify_deposit_state, {dripped_s, DrippedS}}, Opts),
+    ?event(
+        debug_drip,
+        {modify_deposit_state,
+            {addr, Addr},
+            {resource_id, ResourceID},
+            {amount, Amount},
+            {resources, Resources},
+            {balances, Balances}
+        },
+        Opts
+    ),
     ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-    NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+    CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
+    Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+    NewBalance = BaseBalance + Yield,
     ResourceAcc =
         hb_ao:get(
             <<ResourceID/binary, "/accumulator">>,
@@ -610,7 +773,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
             },
             Opts
         ),
-    ?event({resources_after_modify_deposit, NewResources}),
+    ?event(debug_drip, {resources_after_modify_deposit, NewResources}, Opts),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
     NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
@@ -627,7 +790,8 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         #{
             <<"resources">> => NewResources,
             <<"total-weighted-units">> => NewTotalWeightedUnits,
-            <<"balances">> => NewBalances
+            <<"balances">> => NewBalances,
+            <<"total-supply">> => CurrentSupply + Yield
         },
     {ok, UpdatedDepositS} =
         hb_ao:resolve(

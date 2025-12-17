@@ -802,7 +802,7 @@ keys(Msg, Opts) ->
         ok,
         lists:filter(
             fun(Key) -> not hb_private:is_private(Key) end,
-            hb_maps:keys(Msg, Opts)
+            hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
         )
     }.
 

@@ -1159,7 +1159,7 @@ delegation_notice_message_format_test() ->
         hb_maps:get(<<"target">>, Notice, Opts)
     ),
     ?assertEqual(
-        <<"Deposit">>, 
+        <<"deposit">>, 
         hb_maps:get(<<"action">>, Notice, Opts)
     ),
     ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice, not_found, Opts)),

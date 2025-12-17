@@ -62,6 +62,8 @@ test_suite() ->
             fun device_with_default_handler_function_test/1},
         {basic_get, "basic get",
             fun basic_get_test/1},
+        {get_with_denormalized_key, "get with denormalized key",
+            fun denormalized_key_test/1},
         {recursive_get, "recursive get",
             fun recursive_get_test/1},
         {deep_recursive_get, "deep recursive get",
@@ -82,8 +84,8 @@ test_suite() ->
             fun device_exports_test/1},
         {device_excludes, "device excludes",
             fun device_excludes_test/1},
-        {denormalized_device_key, "denormalized device key",
-            fun denormalized_device_key_test/1},
+        {denormalized_device_name, "denormalized device name",
+            fun denormalized_device_name_test/1},
         {list_transform, "list transform",
             fun list_transform_test/1},
         {step_hook, "step hook",
@@ -149,7 +151,7 @@ test_opts() ->
                 }
             },
             skip => [
-                denormalized_device_key,
+                denormalized_device_name,
                 deep_set_with_device,
                 load_as
             ],
@@ -175,12 +177,13 @@ test_opts() ->
                 as_path,
                 multiple_as_subresolutions,
                 key_from_id_device_with_args,
+                get_with_denormalized_key,
                 set_new_messages,
                 resolve_from_multiple_keys,
                 resolve_path_element,
                 device_with_default_handler_function,
                 device_with_handler_function,
-                denormalized_device_key,
+                denormalized_device_name,
                 get_with_device,
                 get_as_with_device,
                 set_with_device,
@@ -685,7 +688,7 @@ device_exports_test(Opts) ->
         info =>
             fun() ->
                 #{
-                    exports => [test1, <<"test2">>],
+                    exports => [test1, test2],
                     handler =>
                         fun() ->
                             {ok, <<"Handler-Value">>}
@@ -693,7 +696,12 @@ device_exports_test(Opts) ->
                 }
             end
     },
-    Res = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
+    Res =
+        #{
+            <<"device">> => Dev2,
+            <<"test1">> => <<"BAD1">>,
+            <<"test3">> => <<"GOOD3">>
+        },
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
@@ -725,15 +733,43 @@ device_excludes_test(Opts) ->
     ?assertMatch(#{ <<"test-key2">> := <<"2">> },
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
-denormalized_device_key_test(Opts) ->
-	Msg = #{ <<"device">> => dev_test },
-	?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
-	?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
-	?assertEqual({module, dev_test},
-		erlang:fun_info(
+
+denormalized_device_name_test(Opts) ->
+    Msg = #{ <<"device">> => dev_test },
+    ?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
+    ?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
+    ?assertEqual(
+        {module, dev_test},
+        erlang:fun_info(
             element(3, hb_ao_device:message_to_fun(Msg, test_func, Opts)),
             module
         )
+    ).
+
+denormalized_key_test(Opts) ->
+    Msg =
+        #{
+            device =>
+                #{
+                    info =>
+                        fun() ->
+                            #{
+                                exports => [<<"test-key">>]
+                            }
+                        end,
+                    test_key =>
+                        fun(_) ->
+                            {ok, <<"TEST VALUE">>}
+                        end
+                }
+        },
+    ?assertEqual(
+        {ok, <<"TEST VALUE">>},
+        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"TEST VALUE">>},
+        hb_ao:resolve(Msg, <<"test-key">>, Opts)
     ).
 
 list_transform_test(Opts) ->
@@ -953,9 +989,7 @@ benchmark_multistep_test(Opts) ->
                 hb_ao:resolve(
                     #{
                         <<"iteration">> => I,
-                        <<"a">> => #{
-                            <<"b">> => #{ <<"return">> => I }
-                        }
+                        <<"a">> => #{ <<"b">> => #{ <<"return">> => I } }
                     },
                     <<"a/b/return">>,
                     Opts
