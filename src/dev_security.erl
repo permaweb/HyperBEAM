@@ -36,7 +36,7 @@ validate_assignment(Base, Assignment, Opts) ->
     Scheduler = as_list(hb_ao:get(<<"scheduler">>, Base, [], Opts), Opts),
     Required = hb_ao:get(<<"scheduler-required">>, Base, [], Opts),
     Match = hb_ao:get(<<"scheduler-match">>, Base, length(Scheduler), Opts),
-    case satisfies_constraints(Signers, Scheduler, Required, Match, Opts) of
+    case satisfies_constraints(assignment, Signers, Required, Scheduler, Match, Opts) of
         true -> {ok, Assignment};
         false -> {error, <<"Assignment does not satisfy scheduler constraints.">>}
     end.
@@ -47,7 +47,7 @@ validate_assignment(Base, Assignment, Opts) ->
 validate_authority(Base, Assignment, Opts) ->
     Msg = hb_ao:get(<<"body">>, Assignment, undefined, Opts),
     Signers = hb_message:signers(Msg, Opts),
-    case hb_ao:get(<<"from-process">>, Base, undefined, Opts) of
+    case hb_ao:get(<<"from-process">>, Msg, undefined, Opts) of
         undefined ->
             {
                 ok,
@@ -59,14 +59,14 @@ validate_authority(Base, Assignment, Opts) ->
                 )
             };
         Sender ->
-            case do_validate_authority(Base, Msg, Sender, Opts) of
+            case do_validate_authority(Base, Msg, Signers, Opts) of
                 true ->
                     {
                         ok,
                         hb_ao:set(
                             Assignment,
                             <<"body/from">>,
-                            maybe_single(Signers, Opts),
+                            Sender,
                             Opts
                         )
                     };
@@ -83,34 +83,50 @@ validate_authority(Base, Assignment, Opts) ->
 
 %% @doc If a message purporting to be from a process satisfies the compute
 %% authority constraints, return true, otherwise return false.
-do_validate_authority(Base, _Msg, Signers, Opts) ->
+do_validate_authority(Base, Msg, Signers, Opts) ->
     Authority = as_list(hb_ao:get(<<"authority">>, Base, [], Opts), Opts),
     Required = hb_ao:get(<<"authority-required">>, Base, [], Opts),
+    ?event(security_debug,
+        {validate_authority,
+            {intent, compute},
+            {committers, Signers},
+            {authority, Authority},
+            {required, Required},
+            {base, Base},
+            {message, Msg}
+        },
+        Opts
+    ),
     Match = hb_ao:get(<<"authority-match">>, Base, length(Authority), Opts),
-    satisfies_constraints(Signers, Authority, Required, Match, Opts).
+    satisfies_constraints(compute, Signers, Required, Authority, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
 %% 1. At least `Match` elements from `Subject` are in `All`
 %% 2. All elements in `Required` are in Subject
-satisfies_constraints(Subject, All, Required, Match, Opts) ->
+satisfies_constraints(Intent, MsgCommitters, Required, Valid, ValidCount, Opts) ->
     % Normalize inputs to lists
-    SubjectList = as_list(Subject, Opts),
-    AllList = as_list(All, Opts),
+    MsgCommitterList = as_list(MsgCommitters, Opts),
+    ValidList = as_list(Valid, Opts),
     RequiredList = as_list(Required, Opts),
-    CommonCount = count_common(SubjectList, AllList),
-    RequiredCount = count_common(RequiredList, SubjectList),
+    % Are there at least `ValidCount' valid committers present in the message?
+    PresentAcceptableCommitters = count_common(MsgCommitterList, ValidList),
+    SatisfiesAcceptable = PresentAcceptableCommitters >= ValidCount,
+    % Are all required committers present in the message?
+    PresentRequiredCommitters = count_common(MsgCommitterList, RequiredList),
+    SatisfiesRequired = PresentRequiredCommitters == length(RequiredList),
     % Must have at least `Match' common elements AND all `Required' elements
-    Res = (CommonCount >= Match) andalso (RequiredCount == length(RequiredList)),
+    Res = SatisfiesAcceptable andalso SatisfiesRequired,
     ?event(
-        security_debug,
+        security_short,
         {constraint_check,
-            {subject, SubjectList},
-            {all, AllList},
-            {required, RequiredList},
-            {match, Match},
-            {common_count, CommonCount},
-            {required_count, RequiredCount},
+            {intent, Intent},
+            {message_committers, length(MsgCommitterList)},
+            {acceptable_committers, length(ValidList)},
+            {present_acceptable_committers, PresentAcceptableCommitters},
+            {satisfies_acceptable, SatisfiesAcceptable},
+            {required_committers, length(RequiredList)},
+            {all_required_are_present, SatisfiesRequired},
             {result, Res}
         },
         Opts
