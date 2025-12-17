@@ -133,6 +133,7 @@ default_message() ->
         preloaded_devices => [
             #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
+            #{<<"name">> => <<"attestation@1.0">>, <<"module">> => dev_attestation},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
             #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
