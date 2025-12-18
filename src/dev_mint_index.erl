@@ -39,8 +39,8 @@ delegate(Base, Req, Opts) ->
             ),
         true ?= (Parent == From)
             orelse {error, <<"Delegation notification invalid.">>},
-        {ok, }
-    end
+        {ok, Base}
+    end,
     {ok, Base}.
 
 %% @doc Inverts the `delegate' action, such that the index itself lowers its
