@@ -66,7 +66,15 @@ notify(Msg, Base, Opts) ->
         ),
         lists:foldl(
             fun(Listener, StateAcc) ->
-                MsgWithNewTarget = hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                MsgWithNewTarget =
+                    hb_ao:set(
+                        forward_keys(Msg, Opts),
+                        #{
+                            <<"target">> => hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                            <<"action">> => <<"notify">>
+                        },
+                        Opts
+                    ),
                 ?event(debug_subscriptions,
                     {notifying_subscriber,
                         {listener, Listener},
@@ -220,6 +228,16 @@ send_subscription_request(TargetProcess, Action, Target, State, Opts) ->
         Opts
     ).
 
+%% @doc Extract the original keys from a forwarded request and return them
+%% without their `x-' prefixes.
+original_from_forwarded(Req, Opts) ->
+    maps:from_list(
+        lists:map(
+            fun({<<"x-", Key/binary>>, Value}) -> {Key, Value} end,
+            hb_maps:to_list(forwarded_keys(Req, Opts))
+        )
+    ).
+
 %% @doc Extract keys with X- prefix for forwarding in notices
 %% Follows AO token pattern: keys beginning with "X-" are forwarded.
 forwarded_keys(Req, Opts) ->
@@ -231,5 +249,15 @@ forwarded_keys(Req, Opts) ->
             end
         end,
         Req,
+        Opts
+    ).
+
+%% @doc Uncommit a message and transform all keys into their `x-` forwarded form.
+forward_keys(Msg, Opts) ->
+    hb_maps:map(
+        fun(Key, Value) ->
+            {<<"x-", (hb_ao:normalize_key(Key))/binary>>, Value}
+        end,
+        hb_private:reset(hb_message:uncommitted(Msg, Opts)),
         Opts
     ).

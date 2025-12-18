@@ -35,8 +35,12 @@ compute(Base, Req, Opts) ->
 
 %% @doc Validate that an assignment is trusted based on scheduler constraints.
 validate_assignment(Base, Assignment, Opts) ->
-    validate(<<"scheduler">>, Base, Assignment, Opts),
-    {ok, Assignment}.
+    case validate(<<"scheduler">>, Base, Assignment, Opts) of
+        true ->
+            {ok, Assignment};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Validate that a request has proper authority, adding a `from' key to the
 %% assigned message such that downstream callers can refer to a verified sender
@@ -67,14 +71,7 @@ validate_authority(Base, Assignment, Opts) ->
                             Opts
                         )
                     };
-                false ->
-                    {
-                        error,
-                        <<
-                            "Assigned message does not satisfy ",
-                            "compute authority constraints."
-                        >>
-                    }
+                {error, Reason} -> {error, Reason}
             end
     end.
 
@@ -98,7 +95,7 @@ validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
         },
         Opts
     ),
-    satisfies_constraints(compute, From, Required, Valid, Match, Opts).
+    satisfies_constraints(Key, From, Required, Valid, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
@@ -111,10 +108,14 @@ satisfies_constraints(Intent, MsgCommitters, Required, Valid, ValidCount, Opts) 
     RequiredList = as_list(Required, Opts),
     % Are there at least `ValidCount' valid committers present in the message?
     PresentAcceptableCommitters = count_common(MsgCommitterList, ValidList),
-    SatisfiesAcceptable = PresentAcceptableCommitters >= ValidCount,
+    SatisfiesAcceptable =
+        (PresentAcceptableCommitters >= ValidCount) orelse
+            {error, <<"Too few acceptable committers present.">>},
     % Are all required committers present in the message?
     PresentRequiredCommitters = count_common(MsgCommitterList, RequiredList),
-    SatisfiesRequired = PresentRequiredCommitters == length(RequiredList),
+    SatisfiesRequired =
+        (PresentRequiredCommitters == length(RequiredList)) orelse
+            {error, <<"Required committers not present in message.">>},
     % Must have at least `Match' common elements AND all `Required' elements
     Res = SatisfiesAcceptable andalso SatisfiesRequired,
     ?event(

@@ -6,6 +6,19 @@
 -export([validate_address/1]).
 -include_lib("include/hb.hrl").
 
+%% @doc `Action' values that should be handled by the `mint-device'.
+-define(MINT_ACTIONS,
+    [
+        <<"mint">>,
+        <<"deposit">>,
+        <<"withdraw">>,
+        <<"delegate">>,
+        <<"undelegate">>,
+        <<"notify">>,
+        <<"register">>
+    ]
+).
+
 %%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
@@ -208,18 +221,7 @@ normalize_mint(Base, Assignment, Opts) ->
 
 %% @doc Check if the action is supported by the mint device interface.
 is_supported_mint_action(Action) ->
-    lists:member(
-        Action,
-        [
-            <<"mint">>,
-            <<"deposit">>,
-            <<"withdraw">>,
-            <<"delegate">>,
-            <<"undelegate">>,
-            <<"notify">>,
-            <<"set-weight">>
-        ]
-    ).
+    lists:member(Action, ?MINT_ACTIONS).
 
 %% @doc Verify if the action is a supported path on the mint device interdface,
 %% and if so, switch to the mint device and run it.
