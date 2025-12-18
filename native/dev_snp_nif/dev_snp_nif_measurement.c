@@ -1321,10 +1321,46 @@ int compute_launch_digest(
             vmsa_page_to_use = bsp_vmsa_page;  // Fallback to BSP if no AP
         }
         
-        // Debug: print full VMSA page for VCPU 0 (to compare with Rust output)
+        // Debug: print key VMSA fields for VCPU 0 (to compare with Rust output)
         if (i == 0) {
-            fprintf(stderr, "[SNP_DEBUG] VMSA page (BSP, full 4096 bytes): ");
-            for (int j = 0; j < PAGE_SIZE; j++) {
+            fprintf(stderr, "[SNP_DEBUG] VMSA page (BSP) key fields:\n");
+            fprintf(stderr, "  CS base (0x18-0x1F): ");
+            for (int j = 0x18; j <= 0x1F; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  EFER (0xD0-0xD7): ");
+            for (int j = 0xD0; j <= 0xD7; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  CR4 (0x148-0x14F): ");
+            for (int j = 0x148; j <= 0x14F; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  RIP (0x178-0x17F): ");
+            for (int j = 0x178; j <= 0x17F; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  RDX (0x318-0x31F): ");
+            for (int j = 0x318; j <= 0x31F; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  SEV Features (0x3E8-0x3EF): ");
+            for (int j = 0x3E8; j <= 0x3EF; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  MXCSR (0x3FC-0x3FF): ");
+            for (int j = 0x3FC; j <= 0x3FF; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "  X87 FCW (0x402-0x403): ");
+            for (int j = 0x402; j <= 0x403; j++) {
                 fprintf(stderr, "%02x", vmsa_page_to_use[j]);
             }
             fprintf(stderr, "\n");
