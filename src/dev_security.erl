@@ -45,12 +45,11 @@ validate_assignment(Base, Assignment, Opts) ->
 %% @doc Validate that a request is authorized to perform secured actions.
 validate_secure_route(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
-    SecuredAction = hb_ao:get(<<"match-prefix">>, Req, undefined, Opts),
-    case SecuredAction of
-        false ->
+    case hb_ao:get(<<"match-prefix">>, Req, undefined, Opts) of
+        undefined ->
             {ok, Assignment};
 
-        true ->
+        _ ->
             case do_authorize_route(Req, Base, Opts) of
                 ok    -> {ok, Assignment};
                 Error -> Error
