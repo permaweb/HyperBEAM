@@ -11,7 +11,7 @@
 %%% Device API.
 -export([compute/3]).
 %%% Public utility API.
--export([validate/4]).
+-export([validate/4, validate/5]).
 
 %% @doc Compute the security-normalized request.
 compute(Base, Req, Opts) ->
@@ -84,7 +84,7 @@ validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
     From = as_list(RawFrom, Opts),
-    Valid = as_list(hb_ao:get(Key, Base, [], Opts), Opts),
+    Valid = as_list(hb_ao:get(authority_key(Key), Base, [], Opts), Opts),
     Required = hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
     Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
     ?event(security_debug,
@@ -144,3 +144,10 @@ as_list(Value, _Opts) -> [Value].
 %% the list.
 maybe_single([SingleElement], _Opts) -> SingleElement;
 maybe_single(List, _Opts) -> List.
+
+%% @doc Return the `<<"authority">>` single time if we are checking for root
+%% level authority
+authority_key(<<"authority">>) ->
+    <<"authority">>;
+authority_key(Key) ->
+    <<Key/binary, "-authority">>.

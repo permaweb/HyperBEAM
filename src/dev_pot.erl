@@ -622,6 +622,7 @@ set_weight(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     ?event(debug, {set_weight, Assignment}, Opts),
     maybe
+        true ?= dev_security:validate(<<"set-weight">>, State, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
         set_weight(ResourceID, Weight, State, Opts)
