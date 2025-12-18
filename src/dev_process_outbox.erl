@@ -66,7 +66,15 @@ notify(Msg, Base, Opts) ->
         ),
         lists:foldl(
             fun(Listener, StateAcc) ->
-                MsgWithNewTarget = hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                MsgWithNewTarget =
+                    hb_ao:set(
+                        forward_keys(Msg, Opts),
+                        #{
+                            <<"target">> => hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                            <<"action">> => <<"notify">>
+                        },
+                        Opts
+                    ),
                 ?event(debug_subscriptions,
                     {notifying_subscriber,
                         {listener, Listener},
@@ -231,5 +239,15 @@ forwarded_keys(Req, Opts) ->
             end
         end,
         Req,
+        Opts
+    ).
+
+%% @doc Uncommit a message and transform all keys into their `x-` forwarded form.
+forward_keys(Msg, Opts) ->
+    hb_maps:map(
+        fun(Key, Value) ->
+            {<<"x-", (hb_ao:normalize_key(Key))/binary>>, Value}
+        end,
+        hb_private:reset(hb_message:uncommitted(Msg, Opts)),
         Opts
     ).
