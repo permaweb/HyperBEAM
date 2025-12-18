@@ -7,6 +7,22 @@
 -include_lib("include/hb.hrl").
 
 %%% `~process@1.0' interface implementation.
+-define(MINT_ACTIONS, [
+    <<"mint">>,
+    <<"deposit">>,
+    <<"withdraw">>,
+    <<"delegate">>,
+    <<"undelegate">>,
+    <<"notify">>,
+    <<"set-weight">>
+]).
+
+-define(SECURE_ACTIONS, [
+    <<"set">>,
+    <<"set-weight">>,
+    <<"deposit">>,
+    <<"withdraw">>
+]).
 
 %% @doc No-op on process initialization.
 init(Base, _Req, _Opts) ->
@@ -39,9 +55,10 @@ compute(Base, Assignment, Opts) ->
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(Base, Req, Opts) ->
-    case dev_process_lib:run_as(<<"security">>, Base, Req, Opts) of
-        {ok, SecureReq} -> {ok, SecureReq};
+enforce_security(Base, RawReq, Opts) ->
+    {ok, UpdatedReq} = add_match_for_secure_routes(RawReq, Opts),
+    case dev_process_lib:run_as(<<"security">>, Base, UpdatedReq, Opts) of
+        {ok, SecureReq} -> remove_match_for_secure_routes(SecureReq, Opts);
         {skip, Reason} -> {error, Reason}
     end.
 
@@ -208,18 +225,43 @@ normalize_mint(Base, Assignment, Opts) ->
 
 %% @doc Check if the action is supported by the mint device interface.
 is_supported_mint_action(Action) ->
-    lists:member(
-        Action,
-        [
-            <<"mint">>,
-            <<"deposit">>,
-            <<"withdraw">>,
-            <<"delegate">>,
-            <<"undelegate">>,
-            <<"notify">>,
-            <<"set-weight">>
-        ]
-    ).
+    lists:member(Action, ?MINT_ACTIONS).
+
+%% @doc Check if an action requires security authorization.
+is_secure_action(Action) ->
+        lists:member(Action, ?SECURE_ACTIONS).
+
+
+%% @doc Mark secure actions with prefix-match flag for security validation.
+add_match_for_secure_routes(RawReq, Opts) ->
+    Body = hb_ao:get(<<"body">>, RawReq, Opts),
+    case is_secure_action(hb_ao:get(<<"action">>, Body, Opts)) of
+        false -> {ok, RawReq};
+        true -> 
+            {
+                ok,
+                RawReq#{
+                    <<"body">> :=
+                        hb_maps:put(<<"prefix-match">>, true, Body, Opts)
+                }
+            }
+    end.
+
+%% @doc Remove the prefix-match flag after security validation.
+remove_match_for_secure_routes(RawReq, Opts) ->
+    Body = hb_ao:get(<<"body">>, RawReq, Opts),
+    case hb_ao:get(<<"prefix-match">>, RawReq, not_found, Opts) of
+        not_found -> {ok, RawReq};
+        _ ->
+            {
+                ok,
+                RawReq#{
+                    <<"body">> :=
+                        hb_maps:remove(<<"prefix-match">>, Body, Opts)
+                }
+            }
+    end.
+
 
 %% @doc Verify if the action is a supported path on the mint device interdface,
 %% and if so, switch to the mint device and run it.
