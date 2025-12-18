@@ -26,6 +26,7 @@
 -module(dev_router).
 -export([info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
+-export([field_distance/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -476,10 +477,22 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_ao:get(<<"wallet">>, Node, Opts),
+                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
+                Salt =
+                    case hb_maps:find(<<"salt">>, Node, Opts) of
+                        {ok, S} -> <<":", S/binary>>;
+                        error -> <<>>
+                    end,
                 DistanceScore =
                     field_distance(
-                        hb_util:native_id(Wallet),
+                        hb_crypto:sha256(
+                            <<
+                                HashPath/binary,
+                                ":",
+                                Wallet/binary,
+                                Salt/binary
+                            >>
+                        ),
                         BareHashPath
                     ),
                 {Node, DistanceScore}

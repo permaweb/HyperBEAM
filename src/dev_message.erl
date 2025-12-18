@@ -316,7 +316,12 @@ verify(Self, Req, Opts) ->
     % additional keys to the commitment device.
     ReqBase =
         maps:without(
-            [<<"path">>, <<"committers">>, <<"commitments">>],
+            [
+                <<"path">>,
+                <<"committers">>,
+                <<"commitments">>,
+                <<"commitment-ids">>
+            ],
             Req
         ),
     % Verify the commitments. Stop execution if any fail.
