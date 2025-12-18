@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #define LD_BYTES 48  // Launch digest size (SHA-384 = 48 bytes)
+#define SHA384_DIGEST_LENGTH 48  // SHA-384 digest length (same as LD_BYTES)
 #define PAGE_SIZE 4096
 #define VMSA_GPA 0xFFFFFFFFF000ULL
 #define FOUR_GB 0x100000000ULL
