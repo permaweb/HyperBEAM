@@ -6,6 +6,7 @@ use sev::measurement::vmsa::{GuestFeatures, VMMType};
 use crate::logging::log_message;
 use std::path::PathBuf;
 use bincode;
+use hex;
 
 /// Struct to hold launch digest arguments passed from Erlang
 #[derive(Debug)]
@@ -46,7 +47,7 @@ struct LaunchDigestArgs {
 /// ```
 #[rustler::nif]
 pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult<Term<'a>> {
-    //log_message("INFO", file!(), line!(), "Starting launch digest calculation...");
+    log_message("DEBUG", file!(), line!(), "===== Starting launch digest calculation =====");
 
     // Step 1: Validate that the input is a map.
     if !input_map.is_map() {
@@ -93,29 +94,82 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
         }
     }
 
-    //log_message("INFO", file!(), line!(), &format!("Parsed arguments: {:?}", args));
+    // Debug: Log all parsed input arguments
+    log_message("DEBUG", file!(), line!(), "===== Parsed Input Arguments =====");
+    log_message("DEBUG", file!(), line!(), &format!("vcpus: {}", args.vcpus));
+    log_message("DEBUG", file!(), line!(), &format!("vcpu_type (u8): {}", args.vcpu_type));
+    log_message("DEBUG", file!(), line!(), &format!("vmm_type (u8): {}", args.vmm_type));
+    log_message("DEBUG", file!(), line!(), &format!("guest_features (u64): 0x{:016x}", args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("ovmf_hash_str: {}", args.ovmf_hash_str));
+    log_message("DEBUG", file!(), line!(), &format!("kernel_hash: {}", args.kernel_hash));
+    log_message("DEBUG", file!(), line!(), &format!("initrd_hash: {}", args.initrd_hash));
+    log_message("DEBUG", file!(), line!(), &format!("append_hash: {}", args.append_hash));
 
     // Step 4: Prepare SnpMeasurementArgs for digest calculation.
     let ovmf_file = "test/OVMF-1.55.fd".to_owned();
+    
+    // Decode hash strings to bytes for logging
+    let kernel_hash_bytes = hex::decode(&args.kernel_hash).unwrap();
+    let initrd_hash_bytes = hex::decode(&args.initrd_hash).unwrap();
+    let append_hash_bytes = hex::decode(&args.append_hash).unwrap();
+    
+    // Debug: Log decoded hash bytes
+    log_message("DEBUG", file!(), line!(), "===== Decoded Hash Bytes =====");
+    log_message("DEBUG", file!(), line!(), &format!("kernel_hash bytes ({}): {}", kernel_hash_bytes.len(), hex::encode(&kernel_hash_bytes)));
+    log_message("DEBUG", file!(), line!(), &format!("initrd_hash bytes ({}): {}", initrd_hash_bytes.len(), hex::encode(&initrd_hash_bytes)));
+    log_message("DEBUG", file!(), line!(), &format!("append_hash bytes ({}): {}", append_hash_bytes.len(), hex::encode(&append_hash_bytes)));
+    
+    // Convert to fixed-size arrays
+    let kernel_hash_array: [u8; 32] = kernel_hash_bytes.try_into().unwrap();
+    let initrd_hash_array: [u8; 32] = initrd_hash_bytes.try_into().unwrap();
+    let append_hash_array: [u8; 32] = append_hash_bytes.try_into().unwrap();
+    
+    // Convert vcpu_type and vmm_type
+    let vcpu_type_enum = CpuType::try_from(args.vcpu_type).unwrap();
+    let vmm_type_enum = VMMType::try_from(args.vmm_type).unwrap();
+    let guest_features_enum = GuestFeatures(args.guest_features);
+    
+    // Debug: Log enum conversions
+    log_message("DEBUG", file!(), line!(), "===== Enum Conversions =====");
+    log_message("DEBUG", file!(), line!(), &format!("CpuType: {:?}", vcpu_type_enum));
+    log_message("DEBUG", file!(), line!(), &format!("VMMType: {:?}", vmm_type_enum));
+    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures: {:?} (0x{:016x})", guest_features_enum, args.guest_features));
+    
     let measurement_args = SnpMeasurementArgs {
         ovmf_file: Some(PathBuf::from(ovmf_file)),
         kernel_file: None,
         initrd_file: None,
         append: None,
-
-		vcpus: args.vcpus,
-        vcpu_type: CpuType::try_from(args.vcpu_type).unwrap(),
-        vmm_type: Some(VMMType::try_from(args.vmm_type).unwrap()),
-        guest_features: GuestFeatures(args.guest_features),
+        vcpus: args.vcpus,
+        vcpu_type: vcpu_type_enum,
+        vmm_type: Some(vmm_type_enum),
+        guest_features: guest_features_enum,
         ovmf_hash_str: Some(args.ovmf_hash_str.as_str()),
-        kernel_hash: Some(hex::decode(args.kernel_hash).unwrap().try_into().unwrap()),
-        initrd_hash: Some(hex::decode(args.initrd_hash).unwrap().try_into().unwrap()),
-        append_hash: Some(hex::decode(args.append_hash).unwrap().try_into().unwrap()),
+        kernel_hash: Some(kernel_hash_array),
+        initrd_hash: Some(initrd_hash_array),
+        append_hash: Some(append_hash_array),
     };
+    
+    // Debug: Log SnpMeasurementArgs summary
+    log_message("DEBUG", file!(), line!(), "===== SnpMeasurementArgs Summary =====");
+    log_message("DEBUG", file!(), line!(), &format!("vcpus: {}", measurement_args.vcpus));
+    log_message("DEBUG", file!(), line!(), &format!("vcpu_type: {:?}", measurement_args.vcpu_type));
+    log_message("DEBUG", file!(), line!(), &format!("vmm_type: {:?}", measurement_args.vmm_type));
+    log_message("DEBUG", file!(), line!(), &format!("guest_features: {:?}", measurement_args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("ovmf_hash_str: {:?}", measurement_args.ovmf_hash_str));
+    log_message("DEBUG", file!(), line!(), &format!("kernel_hash present: {}", measurement_args.kernel_hash.is_some()));
+    log_message("DEBUG", file!(), line!(), &format!("initrd_hash present: {}", measurement_args.initrd_hash.is_some()));
+    log_message("DEBUG", file!(), line!(), &format!("append_hash present: {}", measurement_args.append_hash.is_some()));
 
     // Step 5: Compute the launch digest.
+    log_message("DEBUG", file!(), line!(), "===== Calling snp_calc_launch_digest =====");
     let digest = match snp_calc_launch_digest(measurement_args) {
-        Ok(digest) => digest,
+        Ok(digest) => {
+            log_message("DEBUG", file!(), line!(), "===== Launch digest computed successfully =====");
+            // Debug: Log the digest structure
+            log_message("DEBUG", file!(), line!(), &format!("Digest struct: {:?}", digest));
+            digest
+        },
         Err(err) => {
             let msg = format!("Failed to compute launch digest: {:?}", err);
             log_message("ERROR", file!(), line!(), &msg);
@@ -124,8 +178,26 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
     };
 
     // Step 6: Serialize the digest.
+    log_message("DEBUG", file!(), line!(), "===== Serializing digest with bincode =====");
     let serialized_digest = match bincode::serialize(&digest) {
-        Ok(serialized) => serialized,
+        Ok(serialized) => {
+            log_message("DEBUG", file!(), line!(), &format!("Serialized digest length: {} bytes", serialized.len()));
+            log_message("DEBUG", file!(), line!(), &format!("Serialized digest (hex): {}", hex::encode(&serialized)));
+            if serialized.len() >= 64 {
+                log_message("DEBUG", file!(), line!(), &format!("Serialized digest (first 64 bytes hex): {}", hex::encode(&serialized[..64])));
+            } else {
+                log_message("DEBUG", file!(), line!(), &format!("Serialized digest (all {} bytes hex): {}", serialized.len(), hex::encode(&serialized)));
+            }
+            
+            // Log bytes in a format that's easy to compare (16 bytes per line)
+            log_message("DEBUG", file!(), line!(), "===== Serialized digest bytes (16 bytes per line) =====");
+            for (i, chunk) in serialized.chunks(16).enumerate() {
+                let hex_str = chunk.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                log_message("DEBUG", file!(), line!(), &format!("Offset 0x{:04x}: {}", i * 16, hex_str));
+            }
+            
+            serialized
+        },
         Err(err) => {
             let msg = format!("Failed to serialize launch digest: {:?}", err);
             log_message("ERROR", file!(), line!(), &msg);
@@ -133,12 +205,7 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
         }
     };
 
-    //log_message(
-    //    "INFO",
-    //    file!(),
-    //    line!(),
-    //    "Launch digest successfully computed and serialized.",
-    //);
+    log_message("DEBUG", file!(), line!(), "===== Launch digest calculation complete =====");
 
     // Step 7: Return the calculated and serialized digest.
     Ok((ok(), serialized_digest).encode(env))
