@@ -1321,10 +1321,10 @@ int compute_launch_digest(
             vmsa_page_to_use = bsp_vmsa_page;  // Fallback to BSP if no AP
         }
         
-        // Debug: print first 64 bytes of VMSA page for VCPU 0
+        // Debug: print first 512 bytes of VMSA page for VCPU 0 (to compare with Rust output)
         if (i == 0) {
-            fprintf(stderr, "[SNP_DEBUG] VMSA page (BSP, first 64 bytes): ");
-            for (int j = 0; j < 64; j++) {
+            fprintf(stderr, "[SNP_DEBUG] VMSA page (BSP, first 512 bytes): ");
+            for (int j = 0; j < 512; j++) {
                 fprintf(stderr, "%02x", vmsa_page_to_use[j]);
             }
             fprintf(stderr, "\n");
