@@ -15,7 +15,8 @@ compute(Base, Req, Opts) ->
     ?event(security_debug, {compute_called, {base, Base}, {req, Req}}, Opts),
     maybe
         {ok, SecureReq1} ?= validate_assignment(Base, Req, Opts),
-        {ok, _SecureReq2} ?= validate_authority(Base, SecureReq1, Opts)
+        {ok, SecureReq2} ?= validate_authority(Base, SecureReq1, Opts),
+        {ok, _SecureReq3} ?= validate_secure_route(Base, SecureReq2, Opts)
     else
         {error, Reason} ->
             ?event(
@@ -39,6 +40,44 @@ validate_assignment(Base, Assignment, Opts) ->
     case satisfies_constraints(assignment, Signers, Required, Scheduler, Match, Opts) of
         true -> {ok, Assignment};
         false -> {error, <<"Assignment does not satisfy scheduler constraints.">>}
+    end.
+
+%% @doc Validate that a request is authorized to perform secured actions.
+validate_secure_route(Base, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    SecuredAction = hb_ao:get(<<"match-prefix">>, Req, undefined, Opts),
+    case SecuredAction of
+        false ->
+            {ok, Assignment};
+
+        true ->
+            case do_authorize_route(Req, Base, Opts) of
+                ok    -> {ok, Assignment};
+                Error -> Error
+            end
+    end.
+
+%% @doc Check if the request satisfies authority constraints for the action.
+do_authorize_route(Req, Base, Opts) ->
+    Action = hb_maps:find(<<"action">>, Req, <<"Request have no Action">>, Opts),
+    ReqBy = hb_maps:find(<<"from">>, Req, <<"Request have no From">>, Opts),
+    Authority =
+        as_list(
+            hb_ao:get(<<Action/binary, "-authority">>, Base, [], Opts),
+            Opts
+        ),
+    Required = hb_ao:get(<<Action/binary, "-required">>, Base, [], Opts),
+    Match = hb_ao:get(<<Action/binary, "-match">>, Base, length(Authority), Opts),
+    case satisfies_constraints(
+            secure_route,
+            ReqBy,
+            Required,
+            Authority,
+            Match,
+            Opts
+         ) of
+        true  -> ok;
+        false -> {error, <<"Route not Authorized.">>}
     end.
 
 %% @doc Validate that a request has proper authority, adding a `from' key to the
