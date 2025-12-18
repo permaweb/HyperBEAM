@@ -442,33 +442,51 @@ static int create_vmsa_page(
     if (vmsa_write_u64(vmsa_page, 0x98, 0) != 0) return -1;
     
     // VMPL0_SSP through U_CET at offsets 0xA0-0xC8 (all zero from memset)
-    // CPL at offset 0xAB
-    if (vmsa_write_u8(vmsa_page, 0xAB, 0) != 0) return -1;
+    // CPL at offset 0xCB (after vmpl at 0xCA)
+    if (vmsa_write_u8(vmsa_page, 0xCB, 0) != 0) return -1;
     
-    // EFER at offset 0xB0 (8 bytes, little-endian)
-    if (vmsa_write_u64(vmsa_page, 0xB0, 0x1000) != 0) return -1;
+    // EFER at offset 0xD0 (8 bytes, little-endian)
+    // After: 10 VmcbSegs (0xA0) + vmpl0_ssp..u_cet (0x28) + reserved_0xc8 (2) + vmpl (1) + cpl (1) + reserved_0xcc (4) = 0xD0
+    if (vmsa_write_u64(vmsa_page, 0xD0, 0x1000) != 0) return -1;
     
-    // CR4 at offset 0x128 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x128, 0x40) != 0) return -1;
+    // Reserved 0xD8 (104 bytes = 0x68) - already zero from memset
     
-    // CR3 at offset 0x130 (8 bytes) - 0 (already zero)
-    // CR0 at offset 0x138 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x138, 0x10) != 0) return -1;
+    // XSS at offset 0x140 (8 bytes) - 0 (already zero)
     
-    // DR7 at offset 0x140 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x140, 0x400) != 0) return -1;
+    // CR4 at offset 0x148 (8 bytes)
+    // After: efer (0xD0) + reserved_0xd8 (0x68) + xss (0x8) = 0x140, then cr4 = 0x148
+    if (vmsa_write_u64(vmsa_page, 0x148, 0x40) != 0) return -1;
     
-    // DR6 at offset 0x148 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x148, 0xffff0ff0) != 0) return -1;
+    // CR3 at offset 0x150 (8 bytes) - 0 (already zero)
     
-    // RFLAGS at offset 0x150 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x150, 0x2) != 0) return -1;
+    // CR0 at offset 0x158 (8 bytes)
+    if (vmsa_write_u64(vmsa_page, 0x158, 0x10) != 0) return -1;
     
-    // RIP at offset 0x158 (8 bytes, little-endian)
+    // DR7 at offset 0x160 (8 bytes)
+    if (vmsa_write_u64(vmsa_page, 0x160, 0x400) != 0) return -1;
+    
+    // DR6 at offset 0x168 (8 bytes)
+    if (vmsa_write_u64(vmsa_page, 0x168, 0xffff0ff0) != 0) return -1;
+    
+    // RFLAGS at offset 0x170 (8 bytes)
+    if (vmsa_write_u64(vmsa_page, 0x170, 0x2) != 0) return -1;
+    
+    // RIP at offset 0x178 (8 bytes, little-endian)
     uint64_t rip = eip & 0xffff;
-    if (vmsa_write_u64(vmsa_page, 0x158, rip) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x178, rip) != 0) return -1;
     
-    // RDX at offset 0x1E8 (8 bytes)
+    // DR0-DR3, DR0_ADDR_MASK-DR3_ADDR_MASK, reserved_0x1c0, rsp, s_cet, ssp, isst_addr, rax, star, lstar, cstar, sfmask, kernel_gs_base, sysenter_cs, sysenter_esp, sysenter_eip, cr2, reserved_0x248
+    // (all zero from memset or not set for QEMU)
+    
+    // G_PAT at offset 0x268 (8 bytes)
+    // After: rip (0x178) + dr0..dr3 (0x20) + dr0_addr_mask..dr3_addr_mask (0x20) + reserved_0x1c0 (0x18) + rsp..cr2 (0x70) + reserved_0x248 (0x20) = 0x268
+    if (vmsa_write_u64(vmsa_page, 0x268, 0x7040600070406ULL) != 0) return -1;
+    
+    // dbgctrl, br_from, br_to, last_excp_from, last_excp_to, reserved_0x298, pkru, tsc_aux, reserved_0x2f0, rcx
+    // (all zero from memset or not set for QEMU)
+    
+    // RDX at offset 0x318 (8 bytes)
+    // After: rcx (0x310) + rdx = 0x318
     // For EC2: rdx = 0 (always)
     // For QEMU: rdx = vcpu_type.sig() (CPU signature)
     // For KRUN: rdx = 0
@@ -532,28 +550,39 @@ static int create_vmsa_page(
         rdx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
     }
     // For EC2 (vmm_type == 2) and KRUN (vmm_type == 3), rdx remains 0
-    if (vmsa_write_u64(vmsa_page, 0x1E8, rdx) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x318, rdx) != 0) return -1;
     
-    // G_PAT at offset 0x240 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x240, 0x7040600070406ULL) != 0) return -1;
+    // rbx, reserved_0x320, rbp, rsi, rdi, r8..r15, reserved_0x380, guest_exit_info_1..event_inj
+    // (all zero from memset or not set for QEMU)
     
-    // SEV Features at offset 0x3E0 (8 bytes, little-endian)
-    if (vmsa_write_u64(vmsa_page, 0x3E0, guest_features) != 0) return -1;
+    // SEV Features at offset 0x3E8 (8 bytes, little-endian)
+    // After: guest_exit_info_1 (0x388) + guest_exit_info_2 (0x390) + guest_exit_int_info (0x398) + guest_nrip (0x3A0) + sev_features = 0x3E8
+    if (vmsa_write_u64(vmsa_page, 0x3E8, guest_features) != 0) return -1;
     
-    // XCR0 at offset 0x3E8 (8 bytes)
-    if (vmsa_write_u64(vmsa_page, 0x3E8, 0x1) != 0) return -1;
+    // vintr_ctrl, guest_exit_code, virtual_tom, tlb_id, pcpu_id, event_inj, reserved_0x3f0
+    // (all zero from memset or not set for QEMU)
     
-    // MXCSR at offset 0x3F0 (4 bytes) - only set for QEMU
+    // XCR0 at offset 0x3F0 (8 bytes)
+    // After: sev_features (0x3E8) + vintr_ctrl..event_inj (0x8) = 0x3F0, then xcr0 = 0x3F0
+    if (vmsa_write_u64(vmsa_page, 0x3F0, 0x1) != 0) return -1;
+    
+    // x87_dp, reserved_0x3f0 (already handled)
+    
+    // MXCSR at offset 0x3FC (4 bytes) - only set for QEMU
+    // After: xcr0 (0x3F0) + reserved_0x3f0 (0x10) + x87_dp (0x3F8) + mxcsr = 0x3FC
     uint32_t mxcsr = 0;
     uint16_t fcw = 0;
     if (vmm_type == 1) {  // QEMU
         mxcsr = 0x1f80;
         fcw = 0x37f;
     }
-    if (vmsa_write_u32(vmsa_page, 0x3F0, mxcsr) != 0) return -1;
+    if (vmsa_write_u32(vmsa_page, 0x3FC, mxcsr) != 0) return -1;
     
-    // X87 FCW at offset 0x3F4 (2 bytes)
-    if (vmsa_write_u16(vmsa_page, 0x3F4, fcw) != 0) return -1;
+    // x87_ftw, x87_fsw (not set for QEMU, remain zero)
+    
+    // X87 FCW at offset 0x402 (2 bytes)
+    // After: mxcsr (0x3FC) + x87_ftw (0x3FE) + x87_fsw (0x400) + x87_fcw = 0x402
+    if (vmsa_write_u16(vmsa_page, 0x402, fcw) != 0) return -1;
     
     // All other fields remain zero (from memset)
     // The structure is 4096 bytes total with manual_padding at the end
@@ -1289,6 +1318,15 @@ int compute_launch_digest(
             vmsa_page_to_use = ap_vmsa_page;
         } else {
             vmsa_page_to_use = bsp_vmsa_page;  // Fallback to BSP if no AP
+        }
+        
+        // Debug: print first 64 bytes of VMSA page for VCPU 0
+        if (i == 0) {
+            fprintf(stderr, "[SNP_DEBUG] VMSA page (BSP, first 64 bytes): ");
+            for (int j = 0; j < 64; j++) {
+                fprintf(stderr, "%02x", vmsa_page_to_use[j]);
+            }
+            fprintf(stderr, "\n");
         }
         
         if (gctx_update_page(&gctx, PAGE_TYPE_VMSA, VMSA_GPA, vmsa_page_to_use, PAGE_SIZE) != 0) {
