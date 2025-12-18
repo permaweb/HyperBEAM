@@ -41,6 +41,7 @@
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
 
 %%% Pot Model Functions.
+-define(SECURE_ROUTES, [<<"set-weight">>, <<"deposit">>, <<"withdraw">>]).
 
 info(_S) ->
     #{
@@ -228,7 +229,9 @@ drip_user(Addr, S, Opts) ->
 %% `timestamp` from the request, the existing `t` value, or 0. `last-drip` will
 %% be initialized to the same value as `t` if not already set.
 ensure_initialized(RawBase, Req, Opts) ->
-    Base = maybe_initialize_subscriptions(RawBase, Req, Opts),
+    Parent = hb_maps:get(<<"parent">>, RawBase, not_found, Opts),
+    NewBase = initialize_secured_routes(RawBase, Parent, Opts),
+    Base = maybe_initialize_subscriptions(NewBase, Parent, Opts),
     TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
     NewT =
         hb_maps:get(
@@ -246,27 +249,45 @@ ensure_initialized(RawBase, Req, Opts) ->
         Opts
     ).
 
+initialize_secured_routes(Base, Parent, Opts) ->
+    Scheduler = hb_maps:get(<<"scheduler">>, Base, Opts),
+    lists:foldl(
+        fun(Key, Acc) ->
+            AuthorityKey = <<Key/binary, "-authority">>,
+            case hb_maps:is_key(AuthorityKey, Acc) of
+                true -> Acc;
+                false ->
+                    Authority =
+                        case Parent of
+                            not_found -> Scheduler;
+                            _ -> Parent
+                        end,
+                    Acc#{ AuthorityKey => Authority }
+            end
+        end,
+        Base,
+        ?SECURE_ROUTES
+    ).
+
 %% @doc If the process has not yet initialized, do so. In either case, return the
 %% base state with the subscriptions initialized.
-maybe_initialize_subscriptions(Base, Req, Opts) ->
-    case hb_maps:get(<<"subscriptions">>, Base, not_found, Opts) of
-        not_found -> initialize_subscriptions(Base, Req, Opts);
-        _ -> Base
+maybe_initialize_subscriptions(Base, Parent, Opts) ->
+    case hb_maps:is_key(<<"subscriptions">>, Base) of
+        true -> Base;
+        false -> initialize_subscriptions(Base, Parent, Opts)
     end.
 
 %% @doc If the process has a `parent' mint set, send a subscription request to
 %% the parent process for all `set-weight' messages.
-initialize_subscriptions(Base, _Req, Opts) ->
-    case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
-        not_found -> Base;
-        Parent ->
-            dev_process_outbox:send_subscription_request(
-                Parent,
-                <<"set-weight">>,
-                Base,
-                Opts
-            )
-    end.
+initialize_subscriptions(Base, not_found, _Opts) ->
+    Base;
+initialize_subscriptions(Base, Parent, Opts) ->
+    dev_process_outbox:send_subscription_request(
+        Parent,
+        <<"set-weight">>,
+        Base,
+        Opts
+    ).
 
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
