@@ -166,7 +166,35 @@ resolve_many([ID], Opts) when ?IS_ID(ID) ->
     %    to use in looking up a cached result.
     ?event(ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
     try {ok, ensure_message_loaded(ID, Opts)}
-    catch _:_:_ -> {error, not_found}
+    catch
+        _:{necessary_message_not_found, _, _}:_StackTrace ->
+            {error, not_found};
+        Class:Reason:Stacktrace ->
+            ?event(error,
+                {store_call_failed_retrying,
+                    {class, Class},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stacktrace}}
+                }
+            ),
+            FailMode = hb_opts:get(debug_print_fail_mode, quiet, Opts),
+            Body = case FailMode of
+                quiet ->
+                    #{
+                        <<"type">> => Class,
+                        <<"details">> => <<"Cannot process the message">>
+                    };
+                long ->
+                    ClassBin = iolist_to_binary(io_lib:format("~p", [Class])),
+                    ReasonBin = iolist_to_binary(io_lib:format("~p", [Reason])),
+                    StacktraceBin = iolist_to_binary(io_lib:format("~p", [Stacktrace])),
+                    #{
+                        <<"type">> => ClassBin,
+                        <<"details">> => ReasonBin,
+                        <<"stacktrace">> => StacktraceBin
+                    }
+            end,
+            {failure, Body#{<<"status">> => 500}}
     end;
 resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
     % We have been given a message rather than a list of messages, so we should

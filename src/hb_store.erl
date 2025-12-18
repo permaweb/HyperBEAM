@@ -362,12 +362,11 @@ do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args) ->
     end;
 do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
     % Attempt to apply the function. If it fails, try the next store.
-    try apply_store_function(Mod, Store, Function, Args) of
+    case apply_store_function(Mod, Store, Function, Args) of
         not_found ->
             do_call_function(Rest, Function, Args);
         Result ->
             Result
-    catch _:_:_ -> do_call_function(Rest, Function, Args)
     end.
 
 %% @doc Apply a store function, checking if the store returns a retry request or
@@ -380,21 +379,9 @@ apply_store_function(_Mod, _Store, _Function, _Args, 0) ->
     % Too many attempts have already failed. Bail.
     not_found;
 apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
-    try apply(Mod, Function, [Store | Args]) of
+    case apply(Mod, Function, [Store | Args]) of
         retry -> retry(Mod, Store, Function, Args, AttemptsRemaining);
         Other -> Other
-    catch Class:Reason:Stacktrace ->
-        ?event(store_error,
-            {store_call_failed_retrying,
-                {store, Store},
-                {function, Function},
-                {args, Args},
-                {class, Class},
-                {reason, Reason},
-                {stacktrace, {trace, Stacktrace}}
-            }
-        ),
-        retry(Mod, Store, Function, Args, AttemptsRemaining)
     end.
 
 %% @doc Stop and start the store, then retry.
