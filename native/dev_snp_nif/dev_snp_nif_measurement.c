@@ -424,15 +424,17 @@ static int create_vmsa_page(
     if (vmsa_write_u32(vmsa_page, 0x64, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x68, 0) != 0) return -1;
     
-    // LDTR at offset 0x70: selector=0, attrib=0x82, limit=0xffff, base=0
+    // IDTR at offset 0x70: selector=0, attrib=0, limit=0xffff, base=0
+    // NOTE: Rust hex dump shows IDTR at 0x70 (swapped with LDTR in serialization)
     if (vmsa_write_u16(vmsa_page, 0x70, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x72, 0x82) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x72, 0) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x74, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x78, 0) != 0) return -1;
     
-    // IDTR at offset 0x80: selector=0, attrib=0, limit=0xffff, base=0
+    // LDTR at offset 0x80: selector=0, attrib=0x82, limit=0xffff, base=0
+    // NOTE: Rust hex dump shows LDTR at 0x80 (swapped with IDTR in serialization)
     if (vmsa_write_u16(vmsa_page, 0x80, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x82, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x82, 0x82) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x84, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x88, 0) != 0) return -1;
     
@@ -488,9 +490,42 @@ static int create_vmsa_page(
     
     // RDX at offset 0x318 (8 bytes)
     // After: rcx (0x310) + rdx = 0x318
-    // NOTE: Rust output shows RDX as zero even for QEMU, so we set it to 0
-    // (The Rust code sets it but bincode serialization shows it as zero - matching Rust output)
-    if (vmsa_write_u64(vmsa_page, 0x318, 0) != 0) return -1;
+    // For QEMU: rdx = vcpu_type.sig() (CPU signature)
+    // Rust hex dump shows: 120f800000000000 (0x800f12 in little-endian)
+    uint64_t rdx = 0;
+    if (vmm_type == 1) {  // QEMU
+        // Calculate CPU signature from vcpu_type
+        int32_t cpu_sig = 0;
+        switch (vcpu_type) {
+            case 0:  // Epyc
+            case 1:  // EpycV1
+            case 3:  // EpycIBPB
+            case 4:  // EpycV3
+            case 5:  // EpycV4
+                cpu_sig = 0x800f12;
+                break;
+            case 6:  // EpycRome
+            case 7:  // EpycRomeV1
+            case 8:  // EpycRomeV2
+            case 9:  // EpycRomeV3
+                cpu_sig = 0x803f10;
+                break;
+            case 10: // EpycMilan
+            case 11: // EpycMilanV1
+            case 12: // EpycMilanV2
+                cpu_sig = 0xa00f11;
+                break;
+            case 13: // EpycGenoa
+            case 14: // EpycGenoaV1
+                cpu_sig = 0xa01f10;
+                break;
+            default:
+                cpu_sig = 0x800f12;
+                break;
+        }
+        rdx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
+    }
+    if (vmsa_write_u64(vmsa_page, 0x318, rdx) != 0) return -1;
     
     // rbx, reserved_0x320, rbp, rsi, rdi, r8..r15, reserved_0x380, guest_exit_info_1..event_inj
     // (all zero from memset or not set for QEMU)
@@ -508,18 +543,23 @@ static int create_vmsa_page(
     
     // x87_dp, reserved_0x3f0 (already handled)
     
-    // MXCSR at offset 0x3FC (4 bytes)
-    // NOTE: Rust output shows MXCSR as zero even for QEMU, so we set it to 0
-    // (The Rust code sets it but bincode serialization shows it as zero - matching Rust output)
-    if (vmsa_write_u32(vmsa_page, 0x3FC, 0) != 0) return -1;
+    // MXCSR at offset 0x3FC (4 bytes) - only set for QEMU
+    // After: xcr0 (0x3F0) + reserved_0x3f0 (0x10) + x87_dp (0x3F8) + mxcsr = 0x3FC
+    // Rust hex dump shows: 801f0000 (0x1f80 in little-endian)
+    uint32_t mxcsr = 0;
+    uint16_t fcw = 0;
+    if (vmm_type == 1) {  // QEMU
+        mxcsr = 0x1f80;
+        fcw = 0x37f;
+    }
+    if (vmsa_write_u32(vmsa_page, 0x3FC, mxcsr) != 0) return -1;
     
-    // x87_ftw, x87_fsw (not set, remain zero)
+    // x87_ftw, x87_fsw (not set for QEMU, remain zero)
     
     // X87 FCW at offset 0x402 (2 bytes)
     // After: mxcsr (0x3FC) + x87_ftw (0x3FE) + x87_fsw (0x400) + x87_fcw = 0x402
-    // NOTE: Rust output shows X87 FCW as zero even for QEMU, so we set it to 0
-    // (The Rust code sets it but bincode serialization shows it as zero - matching Rust output)
-    if (vmsa_write_u16(vmsa_page, 0x402, 0) != 0) return -1;
+    // Rust hex dump shows: 7f03 (0x37f in little-endian)
+    if (vmsa_write_u16(vmsa_page, 0x402, fcw) != 0) return -1;
     
     // All other fields remain zero (from memset)
     // The structure is 4096 bytes total with manual_padding at the end
