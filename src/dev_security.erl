@@ -48,10 +48,9 @@ validate_secure_route(Base, Assignment, Opts) ->
     case hb_ao:get(<<"match-prefix">>, Req, undefined, Opts) of
         undefined ->
             {ok, Assignment};
-
         _ ->
             case do_authorize_route(Req, Base, Opts) of
-                ok    -> {ok, Assignment};
+                ok -> {ok, Assignment};
                 Error -> Error
             end
     end.
