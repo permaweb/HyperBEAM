@@ -37,8 +37,6 @@ balance(Process, Req, Opts) ->
     end.
 
 %% @doc Return the deposit quantity for the given resource and address.
-deposit(Process, Resource, Address, Opts) ->
-    deposit(Process, Resource, Address, <<>>, Opts).
 deposit(Process, Resource, Address, SubPath, Opts) ->
     hb_ao:get(
         <<
@@ -111,6 +109,13 @@ undelegate_req(Resource, Addr, Qty) ->
         <<"resource">> => Resource,
         <<"address">> => Addr,
         <<"quantity">> => Qty
+    }.
+
+mint_req() ->
+    mint_req(#{}).
+mint_req(Params) ->
+    Params#{
+        <<"action">> => <<"mint">>
     }.
 
 transfer_req(Addr, Qty) ->
@@ -273,6 +278,15 @@ push_set_weight(Process, Resource, Weight, Opts) ->
         set_weight_req(Resource, Weight),
         Opts
     ),
+   dev_token_lib:now(Process, Opts).
+
+push_transfer(Process, Sender, Recipient, Qty, Opts) ->
+    push_request(
+        Process,
+        transfer_req(id(Recipient), Qty),
+        Sender,
+        Opts
+    ),
     dev_token_lib:now(Process, Opts).
 
 %% @doc Helper to create a pot resource with deposits
@@ -287,7 +301,7 @@ push_modify_resource(Process, Resource, UserDeposits, Opts) ->
         end,
         UserDeposits
     ),
-    dev_token_lib:now(Process, Opts).
+   dev_token_lib:now(Process, Opts).
 
 push_deposit(Process, Resource, User, Qty, Opts) ->
     push_modify_resource(Process, Resource, #{ id(User) => Qty }, Opts).
@@ -314,30 +328,23 @@ push_undelegate(Process, Wallet, FromAddr, Resource, Qty, Opts) ->
 simple_process_test() ->
     hb:init(),
     Opts = test_opts(),
-    AliceWallet = ar_wallet:new(),
-    AliceAddr = id(AliceWallet),
-    BobWallet = ar_wallet:new(),
-    BobAddr = id(BobWallet),
-    Base =
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Process =
         generate_base_process_state(
             generate_token_state(
                 #{
-                    initial_balances => #{ AliceAddr => 1_000_000_000 }
+                    initial_balances => #{ id(Alice) => 1_000_000_000 }
                 },
                 Opts
             ),
             Opts
         ),
-    ?event({base_state, Base}),
-    push_request(
-        Base,
-        transfer_req(BobAddr, 1),
-        AliceWallet,
-        Opts
-    ),
-    State = dev_token_lib:now(Base, Opts),
-    ?assertEqual(999_999_999, balance(State, AliceAddr, Opts)),
-    ?assertEqual(1, balance(State, BobAddr, Opts)),
+    ?event({base_state, Process}),
+    push_transfer(Process, Alice, Bob, 1, Opts),
+    State = dev_token_lib:now(Process, Opts),
+    ?assertEqual(999_999_999, balance(State, Alice, Opts)),
+    ?assertEqual(1, balance(State, Bob, Opts)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"total-supply">>, State, Opts)).
 
 %% @doc Basic test to see what happens when transfer is called with mint-device=pot
@@ -346,37 +353,16 @@ simple_pot_process_test() ->
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
     ResourceOxygen = <<"oxygen">>,
-    PotFields = #{
-        mint_cap => 10000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2
-    },
-    TokenFields = #{
-        initial_balances => #{ id(Alice) => 1000 },
-        total_supply => 1000
-    },
-    Process = generate_process(PotFields, TokenFields, Opts),
-    ?event({process, Process}),
+    Process = 
+        generate_process(
+            #{ mint_cap => 10_000 }, 
+            #{ initial_balances => #{ id(Alice) => 1000 } }, 
+            Opts
+        ),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
-    push_deposit(
-        Process,
-        ResourceOxygen,
-        Alice,
-        10,
-        Opts
-    ),
-    push_request(
-        Process,
-        #{ <<"action">> => <<"mint">> },
-        Alice,
-        Opts
-    ),
-    push_request(
-        Process,
-        transfer_req(id(Bob), 1),
-        Alice,
-        Opts
-    ),
+    push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
+    push_request(Process, mint_req(), Opts),
+    push_transfer(Process, Alice, Bob, 1, Opts),
     ?event(debug_test, {state, Process}, Opts),
     ?assertEqual(1, balance(Process, id(Bob),Opts)),
     ?assertEqual(8999, balance(Process, id(Alice), Opts)),
@@ -387,15 +373,7 @@ pot_delegation_test() ->
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
     Resource = <<"oxygen">>,
-    Process =
-        generate_process(
-            #{
-                mint_cap => 10000,
-                mint_prop_numerator => 1,
-                mint_prop_denominator => 2
-            },
-            Opts
-        ),
+    Process = generate_process(#{ mint_cap => 10_000 }, Opts),
     push_set_weight(Process, Resource, 100, Opts),
     push_deposit(Process, Resource, Alice, 100, Opts),
     push_delegate(Process, Resource, Alice, id(Bob), 10, Opts),
@@ -419,19 +397,9 @@ balance_without_explicit_mint_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     ResourceOxygen = <<"oxygen">>,
-    PotFields = #{
-        mint_cap => 10000
-    },
-    Process = generate_process(PotFields, Opts),
+    Process = generate_process(#{ mint_cap => 10000 }, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
     push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
-    ?event(debug_test, 
-        {processes, 
-            {balance, balance(Process, id(Alice), Opts)}, 
-            {post_deposit, dev_token_lib:now(Process, Opts)}
-        },
-        Opts
-    ),
     ?assert(balance(Process, Alice, Opts) > 0).
 
 %% @doc Test that transfer works when balance is insufficient but 
@@ -448,87 +416,53 @@ transfer_with_unclaimed_yield_test() ->
     % Should succeed because: balance + yield > 700
     PotFields = #{
         mint_cap => 10000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2,
         t => 0,
         last_drip => 0
     },
     TokenFields = #{
-        initial_balances => #{ id(Alice) => 500 },
-        total_supply => 500
+        initial_balances => #{ id(Alice) => 500 }
     },
     Process = generate_process(PotFields, TokenFields, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
-    push_deposit(
-        Process,
-        ResourceOxygen,
-        Alice,
-        10,
-        Opts
-    ),
+    push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
     % Advance time to generate yield
-    % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=1:
-    % ToMint = 10000 * (2^1 - 1^1) / 2^1 = 10000 * 1 / 2 = 5000
-    % GlobalAcc = 0 + (5000 / 1000) = 5 (per weighted unit)
-    % ResourceAcc = 0 + (5 * 100) = 500
-    % Alice's yield = (500 - 0) * 10 = 5000 tokens!
-    %?assertEqual(500, dev_token_lib:balance(Process, id(Alice), Opts)),
+    % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=2:
+    % ToMint = 10000 * (2^2 - 1^2) / 2^2 = 10000 * 3 / 4 = 7500
+    % GlobalAcc = 0 + (5000 / 1000) = 7.5 (per weighted unit)
+    % ResourceAcc = 0 + (7.5 * 100) = 750
+    % Alice's yield = (750 - 0) * 10 = 7500 tokens!
     % % Try to transfer 700 tokens
     % % Should fail without normalize_mint (500 < 700)
-    % % Should succeed with normalize_mint (500 + 5000 = 5500 > 700)
-    push_request(
-        Process,
-        transfer_req(id(Bob), 700),
-        Alice,
-        Opts
-    ),
-    % Alice should have: (500 + 5000) - 700 = 4800
+    % % Should succeed with normalize_mint (500 + 7500 = 7500 > 700)
+    push_transfer(Process, Alice, Bob, 700, Opts),
+    % Alice should have: (500 + 7500) - 700 = 6800
     % Bob should have: 700
     ?assertEqual(6800, balance(Process, id(Alice), Opts)),
     ?assertEqual(700, balance(Process, id(Bob), Opts)),
     % Total supply should be updated
-    % Initial: 500, Minted: 5000, New total: 5500
-    ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    % Initial: 500, Minted: 7500, New total: 7500
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
     Opts = test_opts(),
-    AliceWallet = ar_wallet:new(),
-    AliceAddr = id(AliceWallet),
+    Alice = ar_wallet:new(),
     ResourceOxygen = <<"oxygen">>,
     PotFields = #{
         mint_cap => 10000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2,
         t => 0,
         last_drip => 0
     },
     TokenFields = #{
-        initial_balances => #{AliceAddr => 1000},
-        total_supply => 1000
+        initial_balances => #{ id(Alice) => 1000 }
     },
     Process = generate_process(PotFields, TokenFields, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
-    NewBase = 
-        push_deposit(
-            Process,
-            ResourceOxygen,
-            AliceWallet,
-            10,
-            Opts
-        ),
-    ?event(pot_claim, {new_pot, NewBase}, Opts),
-    push_request(
-        NewBase,
-        #{
-            <<"action">> => <<"mint">>
-        },
-        AliceWallet,
-        Opts
-    ),
-    BaseAfterClaim = dev_token_lib:now(NewBase, Opts),
+    push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
+    push_request(Process, mint_req(), Opts),
+    BaseAfterClaim = dev_token_lib:now(Process, Opts),
     ?event({after_claim, BaseAfterClaim}),
-    ?assertEqual(8000, balance(BaseAfterClaim, AliceAddr,Opts)).
+    ?assertEqual(8000, balance(BaseAfterClaim, Alice, Opts)).
 
 %% @doc Test claim_yield across multiple resources
 claim_yield_multiple_resources_test() ->
@@ -537,27 +471,15 @@ claim_yield_multiple_resources_test() ->
     ResourceOxygen = <<"oxygen">>,
     ResourceHydrogen = <<"hydrogen">>,
     % Alice has deposits in two different resources
-    PotFields = #{
-        mint_cap => 10_000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2
-    },
-    Process = generate_process(PotFields, Opts),
-    State = dev_token_lib:now(Process, Opts),
-    push_set_weight(State, ResourceOxygen, 100, Opts),
-    push_set_weight(State, ResourceHydrogen, 50, Opts),
-    push_deposit(State, ResourceOxygen, Alice, 10, Opts),
-    push_deposit(State, ResourceHydrogen, Alice, 5, Opts),
-    push_request(
-        State,
-        #{
-            <<"action">> => <<"mint">>
-        },
-        Alice,
-        Opts
-    ),
-    State2 = dev_token_lib:now(State, Opts),
-    ?assertEqual(8750, balance(State2, id(Alice), Opts)).
+    Process = generate_process(#{ mint_cap => 10_000 }, Opts),
+    NewState = dev_token_lib:now(Process, Opts),
+    push_set_weight(NewState, ResourceOxygen, 100, Opts),
+    push_set_weight(NewState, ResourceHydrogen, 50, Opts),
+    push_deposit(NewState, ResourceOxygen, Alice, 10, Opts),
+    push_deposit(NewState, ResourceHydrogen, Alice, 5, Opts),
+    push_request(Process, mint_req(), Opts),
+    FinalState = dev_token_lib:now(NewState, Opts),
+    ?assertEqual(8750, balance(FinalState, id(Alice), Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
@@ -566,25 +488,15 @@ claim_yield_no_deposits_test() ->
     AliceAddr = id(AliceWallet),
     PotFields = #{
         mint_cap => 10000,
-        mint_prop_numerator => 1,
-        mint_prop_denominator => 2,
         t => 0,
         last_drip => 0
     },
     TokenFields = #{
-        initial_balances => #{AliceAddr => 100},
-        total_supply => 100
+        initial_balances => #{AliceAddr => 100}
     },
-    Base = generate_process(PotFields, TokenFields, Opts),
-    push_request(
-        Base,
-        #{
-            <<"action">> => <<"mint">>
-        },
-        AliceWallet,
-        Opts
-    ),
-    BaseAfterClaim = dev_token_lib:now(Base, Opts),
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_request(Process, mint_req(), Opts),
+    BaseAfterClaim = dev_token_lib:now(Process, Opts),
     % Alice's balance should be unchanged (still 100)
     ?assertEqual(100, balance(BaseAfterClaim, AliceAddr,Opts)),
     ?assertEqual(100, hb_ao:get(<<"total-supply">>, BaseAfterClaim, Opts)).
@@ -832,7 +744,7 @@ benchmark_process_transfers() ->
         lists:seq(1, Transfers)
     ),
     NowStartTime = erlang:monotonic_time(millisecond),
-    State = dev_token_lib:now(Base, Opts),
+    State =dev_token_lib:now(Base, Opts),
     NowEndTime = erlang:monotonic_time(millisecond),
     hb_test_utils:benchmark_print(
         <<"Process transfers">>,
