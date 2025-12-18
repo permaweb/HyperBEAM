@@ -317,13 +317,9 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
 
 %% @doc Deposit a quantity of a resource for a given address.
 deposit(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        ?no_prod("Enable resource authorization verification."),
-        % true ?= verify_resource_auth(State, ResourceID, Req, Opts),
+        {ok, {Address, ResourceID, Amount}} ?= 
+            parse_resource_request(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
     else
         Reason -> {error, Reason}
@@ -334,12 +330,9 @@ deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
 withdraw(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        true ?= verify_resource_auth(State, ResourceID, Req, Opts),
+        {ok, {Address, ResourceID, Amount}} ?= 
+            parse_resource_request(State, Assignment, Opts),
         withdraw(Address, ResourceID, Amount, State, Opts)
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
@@ -354,6 +347,7 @@ notify(State, Assignment, Opts) ->
 
 %% @doc Verify that a signer of the request is authorized to deposit to the 
 %% given resource.
+% TODO: MAYBE REMOVE THE FOLLOWING AS IT IS HANDLED IN ~security@1.0
 verify_resource_auth(State, ResourceID, Req, Opts) ->
     maybe
         {ok, Authority} ?=
@@ -363,6 +357,17 @@ verify_resource_auth(State, ResourceID, Req, Opts) ->
                 Opts
             ),
         lists:member(Authority, hb_message:signers(Req, Opts))
+    end.
+
+parse_resource_request(State, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, From} ?= hb_maps:find(<<"from">>, Req, Req),
+        true ?= dev_security:validate(<<"resource">>, State, Req, From, Opts),
+        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
+        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
+        {ok, {Address, ResourceID, Amount}}
     end.
 
 %% @doc For a given address, undelegate their delegations until the specified
