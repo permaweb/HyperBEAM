@@ -8,7 +8,10 @@
 -module(dev_security).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+%%% Device API.
 -export([compute/3]).
+%%% Public utility API.
+-export([validate/4]).
 
 %% @doc Compute the security-normalized request.
 compute(Base, Req, Opts) ->
@@ -32,14 +35,8 @@ compute(Base, Req, Opts) ->
 
 %% @doc Validate that an assignment is trusted based on scheduler constraints.
 validate_assignment(Base, Assignment, Opts) ->
-    Signers = hb_message:signers(Assignment, Opts),
-    Scheduler = as_list(hb_ao:get(<<"scheduler">>, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<"scheduler-required">>, Base, [], Opts),
-    Match = hb_ao:get(<<"scheduler-match">>, Base, length(Scheduler), Opts),
-    case satisfies_constraints(assignment, Signers, Required, Scheduler, Match, Opts) of
-        true -> {ok, Assignment};
-        false -> {error, <<"Assignment does not satisfy scheduler constraints.">>}
-    end.
+    validate(<<"scheduler">>, Base, Assignment, Opts),
+    {ok, Assignment}.
 
 %% @doc Validate that a request has proper authority, adding a `from' key to the
 %% assigned message such that downstream callers can refer to a verified sender
@@ -59,7 +56,7 @@ validate_authority(Base, Assignment, Opts) ->
                 )
             };
         Sender ->
-            case do_validate_authority(Base, Msg, Signers, Opts) of
+            case validate(<<"authority">>, Base, Msg, Opts) of
                 true ->
                     {
                         ok,
@@ -83,22 +80,25 @@ validate_authority(Base, Assignment, Opts) ->
 
 %% @doc If a message purporting to be from a process satisfies the compute
 %% authority constraints, return true, otherwise return false.
-do_validate_authority(Base, Msg, Signers, Opts) ->
-    Authority = as_list(hb_ao:get(<<"authority">>, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<"authority-required">>, Base, [], Opts),
+validate(Key, Base, SubjectMsg, Opts) ->
+    validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
+validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
+    From = as_list(RawFrom, Opts),
+    Valid = as_list(hb_ao:get(Key, Base, [], Opts), Opts),
+    Required = hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+    Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
     ?event(security_debug,
         {validate_authority,
+            {subject_ids, From},
             {intent, compute},
-            {committers, Signers},
-            {authority, Authority},
+            {valid_options, Valid},
             {required, Required},
             {base, Base},
-            {message, Msg}
+            {message, SubjectMsg}
         },
         Opts
     ),
-    Match = hb_ao:get(<<"authority-match">>, Base, length(Authority), Opts),
-    satisfies_constraints(compute, Signers, Required, Authority, Match, Opts).
+    satisfies_constraints(compute, From, Required, Valid, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
