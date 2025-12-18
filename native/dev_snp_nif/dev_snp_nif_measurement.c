@@ -424,17 +424,17 @@ static int create_vmsa_page(
     if (vmsa_write_u32(vmsa_page, 0x64, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x68, 0) != 0) return -1;
     
-    // IDTR at offset 0x70: selector=0, attrib=0, limit=0xffff, base=0
-    // NOTE: Rust hex dump shows IDTR at 0x70 (swapped with LDTR in serialization)
+    // IDTR at offset 0x70: selector=0, attrib=0x82, limit=0xffff, base=0
+    // NOTE: Rust hex dump shows IDTR at 0x70 with attrib=0x82 (swapped in serialization)
     if (vmsa_write_u16(vmsa_page, 0x70, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x72, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x72, 0x82) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x74, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x78, 0) != 0) return -1;
     
-    // LDTR at offset 0x80: selector=0, attrib=0x82, limit=0xffff, base=0
-    // NOTE: Rust hex dump shows LDTR at 0x80 (swapped with IDTR in serialization)
+    // LDTR at offset 0x80: selector=0, attrib=0, limit=0xffff, base=0
+    // NOTE: Rust hex dump shows LDTR at 0x80 with attrib=0 (swapped in serialization)
     if (vmsa_write_u16(vmsa_page, 0x80, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x82, 0x82) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x82, 0) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x84, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x88, 0) != 0) return -1;
     
@@ -485,14 +485,13 @@ static int create_vmsa_page(
     // After: rip (0x178) + dr0..dr3 (0x20) + dr0_addr_mask..dr3_addr_mask (0x20) + reserved_0x1c0 (0x18) + rsp..cr2 (0x70) + reserved_0x248 (0x20) = 0x268
     if (vmsa_write_u64(vmsa_page, 0x268, 0x7040600070406ULL) != 0) return -1;
     
-    // dbgctrl, br_from, br_to, last_excp_from, last_excp_to, reserved_0x298, pkru, tsc_aux, reserved_0x2f0, rcx
+    // dbgctrl, br_from, br_to, last_excp_from, last_excp_to, reserved_0x298, pkru, tsc_aux, reserved_0x2f0
     // (all zero from memset or not set for QEMU)
     
-    // RDX at offset 0x318 (8 bytes)
-    // After: rcx (0x310) + rdx = 0x318
-    // For QEMU: rdx = vcpu_type.sig() (CPU signature)
-    // Rust hex dump shows: 120f800000000000 (0x800f12 in little-endian)
-    uint64_t rdx = 0;
+    // RCX at offset 0x310 (8 bytes)
+    // NOTE: Rust hex dump shows RCX at 0x310 with value 0x800f12 (CPU signature)
+    // This is swapped with RDX in the serialization
+    uint64_t rcx = 0;
     if (vmm_type == 1) {  // QEMU
         // Calculate CPU signature from vcpu_type
         int32_t cpu_sig = 0;
@@ -523,9 +522,13 @@ static int create_vmsa_page(
                 cpu_sig = 0x800f12;
                 break;
         }
-        rdx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
+        rcx = (uint64_t)(uint32_t)cpu_sig;  // Sign-extend to u64
     }
-    if (vmsa_write_u64(vmsa_page, 0x318, rdx) != 0) return -1;
+    if (vmsa_write_u64(vmsa_page, 0x310, rcx) != 0) return -1;
+    
+    // RDX at offset 0x318 (8 bytes)
+    // NOTE: Rust hex dump shows RDX at 0x318 as zero (swapped with RCX in serialization)
+    if (vmsa_write_u64(vmsa_page, 0x318, 0) != 0) return -1;
     
     // rbx, reserved_0x320, rbp, rsi, rdi, r8..r15, reserved_0x380, guest_exit_info_1..event_inj
     // (all zero from memset or not set for QEMU)
@@ -538,28 +541,34 @@ static int create_vmsa_page(
     // (all zero from memset or not set for QEMU)
     
     // XCR0 at offset 0x3F0 (8 bytes)
-    // After: sev_features (0x3E8) + vintr_ctrl..event_inj (0x8) = 0x3F0, then xcr0 = 0x3F0
-    if (vmsa_write_u64(vmsa_page, 0x3F0, 0x1) != 0) return -1;
+    // NOTE: Rust hex dump shows XCR0 at 0x3F0 as zero (value appears at 0x3B0 instead)
+    if (vmsa_write_u64(vmsa_page, 0x3F0, 0) != 0) return -1;
     
-    // x87_dp, reserved_0x3f0 (already handled)
+    // x87_dp at offset 0x3F8 (8 bytes) - zero
     
-    // MXCSR at offset 0x3FC (4 bytes) - only set for QEMU
-    // After: xcr0 (0x3F0) + reserved_0x3f0 (0x10) + x87_dp (0x3F8) + mxcsr = 0x3FC
-    // Rust hex dump shows: 801f0000 (0x1f80 in little-endian)
-    uint32_t mxcsr = 0;
-    uint16_t fcw = 0;
-    if (vmm_type == 1) {  // QEMU
-        mxcsr = 0x1f80;
-        fcw = 0x37f;
-    }
-    if (vmsa_write_u32(vmsa_page, 0x3FC, mxcsr) != 0) return -1;
+    // MXCSR at offset 0x3FC (4 bytes)
+    // NOTE: Rust hex dump shows MXCSR at 0x3FC as zero (value appears at 0x408 instead)
+    if (vmsa_write_u32(vmsa_page, 0x3FC, 0) != 0) return -1;
     
-    // x87_ftw, x87_fsw (not set for QEMU, remain zero)
+    // x87_ftw, x87_fsw (not set, remain zero)
     
     // X87 FCW at offset 0x402 (2 bytes)
-    // After: mxcsr (0x3FC) + x87_ftw (0x3FE) + x87_fsw (0x400) + x87_fcw = 0x402
-    // Rust hex dump shows: 7f03 (0x37f in little-endian)
-    if (vmsa_write_u16(vmsa_page, 0x402, fcw) != 0) return -1;
+    // NOTE: Rust hex dump shows X87 FCW at 0x402 as zero (value appears at 0x410 instead)
+    if (vmsa_write_u16(vmsa_page, 0x402, 0) != 0) return -1;
+    
+    // NOTE: Rust hex dump shows values at different offsets:
+    // - XCR0 (0x1) at 0x3B0
+    // - MXCSR (0x1f80) at 0x408
+    // - X87 FCW (0x37f) at 0x410
+    // These offsets don't match the struct definition, but we need to match the serialization
+    if (vmm_type == 1) {  // QEMU
+        // XCR0 at 0x3B0 (matching Rust hex dump)
+        if (vmsa_write_u64(vmsa_page, 0x3B0, 0x1) != 0) return -1;
+        // MXCSR at 0x408 (matching Rust hex dump)
+        if (vmsa_write_u32(vmsa_page, 0x408, 0x1f80) != 0) return -1;
+        // X87 FCW at 0x410 (matching Rust hex dump)
+        if (vmsa_write_u16(vmsa_page, 0x410, 0x37f) != 0) return -1;
+    }
     
     // All other fields remain zero (from memset)
     // The structure is 4096 bytes total with manual_padding at the end
