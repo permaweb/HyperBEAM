@@ -134,7 +134,8 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
     log_message("DEBUG", file!(), line!(), "===== Enum Conversions =====");
     log_message("DEBUG", file!(), line!(), &format!("CpuType: {:?}", vcpu_type_enum));
     log_message("DEBUG", file!(), line!(), &format!("VMMType: {:?}", vmm_type_enum));
-    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures: {:?} (0x{:016x})", guest_features_enum, args.guest_features));
+    // Don't debug print GuestFeatures - it triggers bitfield code that may panic
+    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures raw value: 0x{:016x} (bits: {:064b})", args.guest_features, args.guest_features));
     
     let measurement_args = SnpMeasurementArgs {
         ovmf_file: Some(PathBuf::from(ovmf_file)),
@@ -156,7 +157,8 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
     log_message("DEBUG", file!(), line!(), &format!("vcpus: {}", measurement_args.vcpus));
     log_message("DEBUG", file!(), line!(), &format!("vcpu_type: {:?}", measurement_args.vcpu_type));
     log_message("DEBUG", file!(), line!(), &format!("vmm_type: {:?}", measurement_args.vmm_type));
-    log_message("DEBUG", file!(), line!(), &format!("guest_features: {:?}", measurement_args.guest_features));
+    // Don't debug print GuestFeatures - it triggers bitfield code that may panic
+    log_message("DEBUG", file!(), line!(), &format!("guest_features raw: 0x{:016x}", args.guest_features));
     log_message("DEBUG", file!(), line!(), &format!("ovmf_hash_str: {:?}", measurement_args.ovmf_hash_str));
     log_message("DEBUG", file!(), line!(), &format!("kernel_hash present: {}", measurement_args.kernel_hash.is_some()));
     log_message("DEBUG", file!(), line!(), &format!("initrd_hash present: {}", measurement_args.initrd_hash.is_some()));
@@ -169,17 +171,19 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
     log_message("DEBUG", file!(), line!(), "===== Pre-call GuestFeatures Details =====");
     log_message("DEBUG", file!(), line!(), &format!("GuestFeatures raw value: 0x{:016x}", args.guest_features));
     log_message("DEBUG", file!(), line!(), &format!("GuestFeatures bits: {:064b}", args.guest_features));
-    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures struct: {:?}", guest_features_enum));
+    // Don't debug print GuestFeatures struct - it triggers bitfield code that may panic
     
     // Log the full measurement_args one more time before the call
     log_message("DEBUG", file!(), line!(), "===== Final measurement_args before snp_calc_launch_digest =====");
     log_message("DEBUG", file!(), line!(), &format!("vcpus: {}", measurement_args.vcpus));
     log_message("DEBUG", file!(), line!(), &format!("vcpu_type: {:?}", measurement_args.vcpu_type));
     log_message("DEBUG", file!(), line!(), &format!("vmm_type: {:?}", measurement_args.vmm_type));
-    log_message("DEBUG", file!(), line!(), &format!("guest_features: {:?}", measurement_args.guest_features));
-    log_message("DEBUG", file!(), line!(), &format!("guest_features inner value: 0x{:016x}", args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("guest_features raw: 0x{:016x}", args.guest_features));
     
-    // Wrap the call in a panic handler to catch any panics from the sev crate
+    // NOTE: There's a known bug in the sev crate where GuestFeatures with value 1 (bit 0 = SNPActive)
+    // causes a panic in the bitfield crate: "attempt to shift right with overflow"
+    // This appears to be a bug in the sev crate's GuestFeatures bitfield implementation.
+    // The panic handler below attempts to catch it, but in NIF context, rustler may catch it first.
     log_message("DEBUG", file!(), line!(), "===== About to call snp_calc_launch_digest (wrapped in panic handler) =====");
     let digest_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         snp_calc_launch_digest(measurement_args)
