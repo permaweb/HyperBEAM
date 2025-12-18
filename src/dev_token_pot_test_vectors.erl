@@ -639,6 +639,28 @@ pot_subscriptions_test() ->
     ?assertEqual(200, weight(ParentProcess, Resource, Opts)),
     ?assertEqual(200, weight(ChildProcess, Resource, Opts)).
 
+pot_secure_authority_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Resource = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{id(Alice) => 1000}
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_request(
+        Process,
+        set_weight_req(Resource, 100),
+        Alice,
+        Opts
+    ),
+    ?event(feat, {base, Process}, Opts),
+    ?assertEqual(100, weight(Process, Resource, Opts)).
+
 nested_pot_process_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
