@@ -7,6 +7,7 @@ use crate::logging::log_message;
 use std::path::PathBuf;
 use bincode;
 use hex;
+use std::panic;
 
 /// Struct to hold launch digest arguments passed from Erlang
 #[derive(Debug)]
@@ -163,17 +164,54 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
 
     // Step 5: Compute the launch digest.
     log_message("DEBUG", file!(), line!(), "===== Calling snp_calc_launch_digest =====");
-    let digest = match snp_calc_launch_digest(measurement_args) {
-        Ok(digest) => {
+    
+    // Log detailed information about GuestFeatures before the call
+    log_message("DEBUG", file!(), line!(), "===== Pre-call GuestFeatures Details =====");
+    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures raw value: 0x{:016x}", args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures bits: {:064b}", args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("GuestFeatures struct: {:?}", guest_features_enum));
+    
+    // Log the full measurement_args one more time before the call
+    log_message("DEBUG", file!(), line!(), "===== Final measurement_args before snp_calc_launch_digest =====");
+    log_message("DEBUG", file!(), line!(), &format!("vcpus: {}", measurement_args.vcpus));
+    log_message("DEBUG", file!(), line!(), &format!("vcpu_type: {:?}", measurement_args.vcpu_type));
+    log_message("DEBUG", file!(), line!(), &format!("vmm_type: {:?}", measurement_args.vmm_type));
+    log_message("DEBUG", file!(), line!(), &format!("guest_features: {:?}", measurement_args.guest_features));
+    log_message("DEBUG", file!(), line!(), &format!("guest_features inner value: 0x{:016x}", args.guest_features));
+    
+    // Wrap the call in a panic handler to catch any panics from the sev crate
+    log_message("DEBUG", file!(), line!(), "===== About to call snp_calc_launch_digest (wrapped in panic handler) =====");
+    let digest_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        snp_calc_launch_digest(measurement_args)
+    }));
+    
+    let digest = match digest_result {
+        Ok(Ok(digest)) => {
             log_message("DEBUG", file!(), line!(), "===== Launch digest computed successfully =====");
             // Debug: Log the digest structure
             log_message("DEBUG", file!(), line!(), &format!("Digest struct: {:?}", digest));
             digest
         },
-        Err(err) => {
+        Ok(Err(err)) => {
             let msg = format!("Failed to compute launch digest: {:?}", err);
             log_message("ERROR", file!(), line!(), &msg);
             return Ok((atom::error(), msg).encode(env));
+        },
+        Err(panic_info) => {
+            let msg = format!("Panic in snp_calc_launch_digest: {:?}", panic_info);
+            log_message("ERROR", file!(), line!(), &msg);
+            
+            // Try to extract panic message if available
+            let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                format!("Panic message: {}", s)
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                format!("Panic message: {}", s)
+            } else {
+                "Unknown panic type".to_string()
+            };
+            log_message("ERROR", file!(), line!(), &panic_msg);
+            
+            return Ok((atom::error(), format!("Panic in launch digest computation: {}", panic_msg)).encode(env));
         }
     };
 
