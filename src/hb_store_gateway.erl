@@ -60,14 +60,24 @@ read(BaseStoreOpts, Key) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    case hb_gateway_client:read(ID, StoreOpts) of
-                        {error, _} ->
+                    try hb_gateway_client:read(ID, StoreOpts) of
+                        {error, no} ->
                             ?event({read_not_found, {key, ID}}),
                             not_found;
                         {ok, Message} ->
                             ?event({read_found, {key, ID}}),
                             hb_store_remote_node:maybe_cache(StoreOpts, Message),
                             extract_path_value(Message, Rest, StoreOpts)
+                    catch Class:Reason:Stacktrace ->
+                        ?event(
+                            gateway,
+                            {read_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {stacktrace, {trace, Stacktrace}}
+                            }
+                        ),
+                        failure
                     end;
                 {ok, CachedMessage} ->
                     extract_path_value(CachedMessage, Rest, StoreOpts)
