@@ -424,15 +424,15 @@ static int create_vmsa_page(
     if (vmsa_write_u32(vmsa_page, 0x64, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x68, 0) != 0) return -1;
     
-    // IDTR at offset 0x70: selector=0, attrib=0, limit=0xffff, base=0
+    // LDTR at offset 0x70: selector=0, attrib=0x82, limit=0xffff, base=0
     if (vmsa_write_u16(vmsa_page, 0x70, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x72, 0) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x72, 0x82) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x74, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x78, 0) != 0) return -1;
     
-    // LDTR at offset 0x80: selector=0, attrib=0x82, limit=0xffff, base=0
+    // IDTR at offset 0x80: selector=0, attrib=0, limit=0xffff, base=0
     if (vmsa_write_u16(vmsa_page, 0x80, 0) != 0) return -1;
-    if (vmsa_write_u16(vmsa_page, 0x82, 0x82) != 0) return -1;
+    if (vmsa_write_u16(vmsa_page, 0x82, 0) != 0) return -1;
     if (vmsa_write_u32(vmsa_page, 0x84, 0xffff) != 0) return -1;
     if (vmsa_write_u64(vmsa_page, 0x88, 0) != 0) return -1;
     
