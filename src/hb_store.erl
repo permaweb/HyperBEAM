@@ -381,7 +381,6 @@ apply_store_function(_Mod, _Store, _Function, _Args, 0) ->
     not_found;
 apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
     try apply(Mod, Function, [Store | Args]) of
-        failure -> failure;
         retry -> retry(Mod, Store, Function, Args, AttemptsRemaining);
         Other -> Other
     catch Class:Reason:Stacktrace ->

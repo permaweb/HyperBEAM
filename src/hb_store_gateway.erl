@@ -13,6 +13,7 @@ list(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
     end.
 
@@ -23,6 +24,7 @@ type(StoreOpts, Key) ->
     ?event(store_gateway, executing_type),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Data} ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
@@ -61,7 +63,7 @@ read(BaseStoreOpts, Key) ->
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
                     try hb_gateway_client:read(ID, StoreOpts) of
-                        {error, no} ->
+                        {error, _} ->
                             ?event({read_not_found, {key, ID}}),
                             not_found;
                         {ok, Message} ->
@@ -472,6 +474,22 @@ verifiability_test() ->
         ),
     ?event({verifying, {structured, Structured}, {original, Message}}),
     ?assert(hb_message:verify(Structured)).
+
+%% @doc Reading an unsupported transaction should fail
+failure_to_process_message_test() ->
+    hb_http_server:start_node(#{}),
+    failure =
+        hb_cache:read(
+            <<"j0_mJMXG2YO4oRcOtjYsNoUJbN2TaKLo4nTtbhKqnEU">>,
+            #{
+                store =>
+                    [
+                        #{
+                            <<"store-module">> => hb_store_gateway
+                        }
+                    ]
+            }
+        ).
 
 %% @doc Test that another HyperBEAM node offering the `~query@1.0' device can
 %% be used as a store.
