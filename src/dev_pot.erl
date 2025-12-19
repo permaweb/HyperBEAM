@@ -384,7 +384,7 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
             ),
         {ok, Resources} =
             hb_maps:find(
-                <<"resource">>,
+                <<"resources">>,
                 Base,
                 <<"No resources found in mint state.">>,
                 Opts
