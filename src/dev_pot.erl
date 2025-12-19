@@ -404,7 +404,7 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=
-            hb_ao:get(
+            hb_maps:find(
                 <<"body">>,
                 Assignment,
                 <<"Notification is not an assignment.">>,
@@ -695,9 +695,9 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
 %% - The `mint-authority' address, if set.
 %% - The `resource-authority' address for the resource.
 register(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     ?event(debug, {register, Assignment}, Opts),
     maybe
+        Req = hb_ao:get(<<"body">>, Assignment,Opts),
         {ok, ResID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, From} ?= hb_maps:find(<<"from">>, Req, Opts),
         true ?=

@@ -306,7 +306,7 @@ send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
     case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
         {error, Error} ->
             ?event(token_short, {skipping_error_report, Error}, Opts),
-            Base;
+            {ok, Base};
         {ok, Target} ->
             dev_process_outbox:send(
                 #{
