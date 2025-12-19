@@ -4,6 +4,7 @@
 -export([send/3, forwarded_keys/2, notify/3]).
 -export([subscribe/3, unsubscribe/3, subscribers/3, subscribers/4]).
 -export([send_subscription_request/4, send_subscription_request/5]).
+-export([original_from_forwarded/2]).
 
 %% @doc Add a message or list of messages to the process's outbox, notifying
 %% subscribers to the action and target of the message, as appropriate.
@@ -234,7 +235,7 @@ original_from_forwarded(Req, Opts) ->
     maps:from_list(
         lists:map(
             fun({<<"x-", Key/binary>>, Value}) -> {Key, Value} end,
-            hb_maps:to_list(forwarded_keys(Req, Opts))
+            hb_maps:to_list(forwarded_keys(Req, Opts), Opts)
         )
     ).
 

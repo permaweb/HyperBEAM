@@ -84,7 +84,7 @@ id(Other) -> hb_util:human_id(Other).
 
 set_weight_req(Resource, Weight) ->
     #{
-        <<"action">> => <<"set-weight">>,
+        <<"action">> => <<"register">>,
         <<"resource">> => Resource,
         <<"weight">> => Weight
     }.

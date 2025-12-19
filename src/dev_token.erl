@@ -2,6 +2,10 @@
 %%% Specification: https://cookbook_ao.arweave.net/references/api/token.html
 -module(dev_token).
 -export([compute/3, init/3, normalize/3, snapshot/3, balance/3, mint/3]).
+%%% Non-public device API functions. Note: Ensure that these are not exported
+%%% as publicly callable device keys, either by having arity >= 3, or explicitly
+%%% excluding in an `info/1` response.
+-export([handle_action/4]).
 %%% Public helpers.
 -export([validate_address/1]).
 -include_lib("include/hb.hrl").
@@ -42,7 +46,8 @@ compute(Base, Assignment, Opts) ->
     ?event({token_call, Assignment}),
     maybe
         {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
-        {ok, Res} ?= route(Base, SecureReq, Opts),
+        {ok, Action} ?= hb_ao:resolve(Assignment, <<"body/action">>, Opts),
+        {ok, Res} ?= handle_action(Action, Base, SecureReq, Opts),
         ?event(debug_token, {route_result, Res}, Opts),
         {ok, Res}
     else
@@ -60,16 +65,14 @@ enforce_security(Base, Req, Opts) ->
 
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
-route(Base, Req, Opts) ->
-    ActionBin = hb_ao:get(<<"body/action">>, Req, Opts),
-    ?event(debug_token, {action, ActionBin}, Opts),
-    case hb_util:to_lower(hb_ao:normalize_key(ActionBin)) of
+handle_action(Action, Base, Req, Opts) ->
+    ?event(debug_token, {action, Action}, Opts),
+    case hb_util:to_lower(hb_ao:normalize_key(Action)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
         <<"subscribe">> -> dev_process_outbox:subscribe(Base, Req, Opts);
         <<"unsubscribe">> -> dev_process_outbox:unsubscribe(Base, Req, Opts);
-        MintDevAction ->
-            action_as_mint_device(MintDevAction, Base, Req, Opts)
+        MintDevAction -> action_as_mint_device(MintDevAction, Base, Req, Opts)
     end.
 
 %% @doc Get the balance for an account. Normalize the minting state for that

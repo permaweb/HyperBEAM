@@ -35,7 +35,7 @@
 -export([register/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
--export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource_weight/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
@@ -51,7 +51,8 @@ info(_S) ->
                 <<"withdraw">>,
                 <<"delegate">>,
                 <<"undelegate">>,
-                <<"register">>
+                <<"register">>,
+                <<"notify">>
             ]
     }.
 
@@ -367,7 +368,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No `quantity' provided.">>,
                 Opts
             ),
-        true ?= verify_resource_authority(Base, ResourceID, Req, Opts),
+        true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
         {ok, {Address, ResourceID, Amount}}
     end.
 
@@ -383,7 +384,7 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
             ),
         {ok, Resources} =
             hb_maps:find(
-                <<"resources">>,
+                <<"resource">>,
                 Base,
                 <<"No resources found in mint state.">>,
                 Opts
@@ -402,22 +403,38 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
 %% requests, if they are sent `from' our `parent' mint process (if set).
 notify(State, Assignment, Opts) ->
     maybe
-        {ok, Req} =
+        {ok, Req} ?=
             hb_ao:get(
                 <<"body">>,
                 Assignment,
                 <<"Notification is not an assignment.">>,
                 Opts
             ),
-        {ok, From} =
-            hb_ao:get(
-                <<"body/from">>,
+        {ok, From} ?=
+            hb_maps:find(
+                <<"from">>,
                 Req,
                 <<"No security-normalized `from' address provided.">>,
                 Opts
             ),
+        {ok, Parent} ?=
+            hb_maps:find(
+                <<"parent">>,
+                State,
+                <<"No `parent' set in pot state message.">>,
+                Opts
+            ),
+        true ?=
+            (From == Parent) orelse
+            {error, <<"Notifications only admissible from parent process.">>},
         OriginalMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
-        dev_token:route(State, OriginalMsg, Opts)
+        {ok, OriginalAction} ?=
+            hb_maps:find(
+                <<"action">>,
+                Req,
+                Opts
+            ),
+        dev_token:handle_action(OriginalAction, State, OriginalMsg, Opts)
     end.
 
 %% @doc For a given address, undelegate their delegations until the specified
@@ -689,7 +706,7 @@ register(State, Assignment, Opts) ->
                 verify_resource_authority(ResID, State, Req, Opts),
         State2 =
             case hb_maps:find(<<"weight">>, Req, Opts) of
-                {ok, Weight} -> register_resource_weight(ResID, Weight, State, Opts);
+                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
                 _ -> State
             end,
         case hb_maps:find(<<"resource-authority">>, Req, Opts) of
@@ -712,7 +729,7 @@ register_resource_authority(ResourceID, Authority, S, Opts) ->
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
-register_resource_weight(ResourceID, Weight, S, Opts) ->
+register_resource(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
     S0 = drip_global(S, Opts),
     S1 = drip_resource(ResourceID, S0, Opts),

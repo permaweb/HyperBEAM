@@ -11,7 +11,7 @@
 %%% Device API.
 -export([compute/3]).
 %%% Public utility API.
--export([validate/4]).
+-export([validate/4, validate/5]).
 
 %% @doc Compute the security-normalized request.
 compute(Base, Req, Opts) ->
