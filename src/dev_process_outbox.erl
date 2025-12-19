@@ -234,20 +234,39 @@ send_subscription_request(TargetProcess, Action, Target, State, Opts) ->
 original_from_forwarded(Req, Opts) ->
     maps:from_list(
         lists:map(
-            fun({<<"x-", Key/binary>>, Value}) -> {Key, Value} end,
-            hb_maps:to_list(forwarded_keys(Req, Opts), Opts)
+            fun
+                ({<<"x-", Key/binary>>, Value}) -> {Key, Value}; 
+                ({Key, Value}) -> {Key, Value}
+            end,
+            hb_maps:to_list(
+                extract_key_from_prefixes(
+                    [<<"x-">>,<<"from">>],
+                    Req, 
+                    Opts
+                ), 
+                Opts
+            )
         )
     ).
 
 %% @doc Extract keys with X- prefix for forwarding in notices
 %% Follows AO token pattern: keys beginning with "X-" are forwarded.
 forwarded_keys(Req, Opts) ->
+    extract_key_from_prefixes([<<"x-">>], Req, Opts).
+extract_key_from_prefixes(Prefixes, Req, Opts) ->
+    PrefixBins = [hb_util:to_lower(hb_util:bin(P)) || P <- Prefixes],
     hb_maps:filter(
         fun(Key, _Value) ->
-            case hb_util:to_lower(hb_util:bin(Key)) of
-                <<"x-", _Rest/binary>> -> true;
-                _ -> false
-            end
+            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
+            lists:any(
+                fun(Prefix) ->
+                    case binary:match(KeyBin, Prefix) of
+                        {0, _Len} -> true;  
+                        nomatch   -> false
+                    end
+                end,
+                PrefixBins
+            )
         end,
         Req,
         Opts
