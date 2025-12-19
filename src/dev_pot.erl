@@ -410,31 +410,25 @@ notify(State, Assignment, Opts) ->
                 <<"Notification is not an assignment.">>,
                 Opts
             ),
-        {ok, From} ?=
-            hb_maps:find(
-                <<"from">>,
-                Req,
-                <<"No security-normalized `from' address provided.">>,
-                Opts
-            ),
-        {ok, Parent} ?=
-            hb_maps:find(
-                <<"parent">>,
-                State,
-                <<"No `parent' set in pot state message.">>,
-                Opts
-            ),
-        true ?=
-            (From == Parent) orelse
-            {error, <<"Notifications only admissible from parent process.">>},
-        OriginalMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
-        {ok, OriginalAction} ?=
+        ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
+        {ok, Action} ?=
             hb_maps:find(
                 <<"action">>,
-                Req,
+                ForwardedMsg,
                 Opts
             ),
-        dev_token:handle_action(OriginalAction, State, OriginalMsg, Opts)
+        dev_token:handle_action(
+            Action, 
+            State, 
+            #{ 
+                <<"body">> => 
+                    hb_maps:merge(
+                        ForwardedMsg, 
+                        hb_maps:filter_by_prefix(from, Req, Opts), 
+                        Opts
+                    ) 
+            }, 
+            Opts)
     end.
 
 %% @doc For a given address, undelegate their delegations until the specified
@@ -695,11 +689,23 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
 %% - The `mint-authority' address, if set.
 %% - The `resource-authority' address for the resource.
 register(State, Assignment, Opts) ->
-    ?event(debug, {register, Assignment}, Opts),
+    ?event(debug_pot, {register, Assignment}, Opts),
     maybe
         Req = hb_ao:get(<<"body">>, Assignment,Opts),
-        {ok, ResID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, From} ?= hb_maps:find(<<"from">>, Req, Opts),
+        {ok, ResID} ?= 
+            hb_maps:find(
+                <<"resource">>, 
+                Req,
+                <<"No `resource' provided to register.">>, 
+                Opts
+            ),
+        {ok, From} ?= 
+            hb_maps:find(
+                <<"from">>, 
+                Req,
+                <<"No `from' address provided.">>, 
+                Opts
+            ),
         true ?=
             (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
             dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
@@ -715,7 +721,9 @@ register(State, Assignment, Opts) ->
             _ -> State2
         end
     else
-        Reason -> Reason
+        Reason -> 
+            ?event(debug_pot, {error, Reason}, Opts),
+            Reason
     end.
 
 %% @doc Update the authority record for a specific resource in the pot.

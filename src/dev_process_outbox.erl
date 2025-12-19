@@ -239,19 +239,11 @@ original_from_forwarded(Req, Opts) ->
         )
     ).
 
+
 %% @doc Extract keys with X- prefix for forwarding in notices
 %% Follows AO token pattern: keys beginning with "X-" are forwarded.
 forwarded_keys(Req, Opts) ->
-    hb_maps:filter(
-        fun(Key, _Value) ->
-            case hb_util:to_lower(hb_util:bin(Key)) of
-                <<"x-", _Rest/binary>> -> true;
-                _ -> false
-            end
-        end,
-        Req,
-        Opts
-    ).
+    hb_maps:filter_by_prefix([<<"x-">>], Req, Opts).
 
 %% @doc Uncommit a message and transform all keys into their `x-` forwarded form.
 forward_keys(Msg, Opts) ->

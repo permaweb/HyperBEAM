@@ -54,7 +54,8 @@ deposit(Process, Resource, Address, SubPath, Opts) ->
     ).
 
 %% @doc Return the weight for a given resource on a `~pot@1.0' process.
-weight(Process, Resource, Opts) ->
+weight(RawProcess, Resource, Opts) ->
+    Process = dev_token_lib:now(RawProcess, Opts),
     hb_ao:get(
         <<"now/resources/", Resource/binary, "/weight">>,
         Process,
