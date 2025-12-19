@@ -71,7 +71,7 @@ notify(Msg, Base, Opts) ->
                     hb_ao:set(
                         forward_keys(Msg, Opts),
                         #{
-                            <<"target">> => hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                            <<"target">> => Listener,
                             <<"action">> => <<"notify">>
                         },
                         Opts
@@ -255,10 +255,16 @@ forwarded_keys(Req, Opts) ->
 
 %% @doc Uncommit a message and transform all keys into their `x-` forwarded form.
 forward_keys(Msg, Opts) ->
-    hb_maps:map(
-        fun(Key, Value) ->
-            {<<"x-", (hb_ao:normalize_key(Key))/binary>>, Value}
-        end,
-        hb_private:reset(hb_message:uncommitted(Msg, Opts)),
-        Opts
+    hb_maps:from_list(
+        [ 
+            {<<"x-", (hb_ao:normalize_key(Key))/binary>>, Value} 
+        || 
+            {Key, Value} <- 
+                hb_maps:to_list(
+                    hb_private:reset(
+                        hb_message:uncommitted(Msg, Opts)
+                    ),
+                    Opts
+                ) 
+        ]
     ).

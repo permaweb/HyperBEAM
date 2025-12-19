@@ -628,7 +628,7 @@ pot_subscriptions_test() ->
     push_request(ChildProcess, #{ <<"action">> => <<"mint">> }, Opts),
     ?assertEqual(
         [dev_process_lib:process_id(ChildProcess, Opts)],
-        dev_token_lib:subscribers(ParentProcess, <<"set-weight">>, Opts)
+        dev_token_lib:subscribers(ParentProcess, <<"register">>, Opts)
     ),
     % Push set-weight actions on the parent mint and verify that the child mint
     % also updates accordingly.

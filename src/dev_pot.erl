@@ -263,7 +263,7 @@ initialize_subscriptions(Base, _Req, Opts) ->
         Parent ->
             dev_process_outbox:send_subscription_request(
                 Parent,
-                <<"set-weight">>,
+                <<"register">>,
                 Base,
                 Opts
             )
@@ -809,7 +809,7 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
 send_weight_notice(ResourceID, Weight, S, Opts) ->
     dev_process_outbox:notify(
         #{
-            <<"action">> => <<"set-weight">>,
+            <<"action">> => <<"register">>,
             <<"resource">> => ResourceID,
             <<"weight">> => Weight
         },
