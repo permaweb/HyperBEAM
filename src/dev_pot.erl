@@ -410,31 +410,25 @@ notify(State, Assignment, Opts) ->
                 <<"Notification is not an assignment.">>,
                 Opts
             ),
-        {ok, From} ?=
-            hb_maps:find(
-                <<"from">>,
-                Req,
-                <<"No security-normalized `from' address provided.">>,
-                Opts
-            ),
-        {ok, Parent} ?=
-            hb_maps:find(
-                <<"parent">>,
-                State,
-                <<"No `parent' set in pot state message.">>,
-                Opts
-            ),
-        true ?=
-            (From == Parent) orelse
-            {error, <<"Notifications only admissible from parent process.">>},
-        Msg = dev_process_outbox:original_from_forwarded(Req, Opts),
+        ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
-                <<"x-action">>,
-                Req,
+                <<"action">>,
+                ForwardedMsg,
                 Opts
             ),
-        dev_token:handle_action(Action, State, #{ <<"body">> => Msg }, Opts)
+        dev_token:handle_action(
+            Action, 
+            State, 
+            #{ 
+                <<"body">> => 
+                    hb_maps:merge(
+                        ForwardedMsg, 
+                        hb_maps:filter_by_prefix(from, Req, Opts), 
+                        Opts
+                    ) 
+            }, 
+            Opts)
     end.
 
 %% @doc For a given address, undelegate their delegations until the specified
