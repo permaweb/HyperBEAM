@@ -6,9 +6,10 @@
 %%% configurer can specify a mechanism for determining whether new processes
 %%% (mints) should be added to the admissible list to track.
 %%% 
-%%% The index itself may mint its own tokens, according to a given `mint-device'.
-%%% This allows rights in the index itself to be tradable, and even mintable
-%%% via the same delegation mechanics as the parent.
+%%% The index itself may mint its own tokens, using a `provider-mint-device',
+%%% implementing the typical specification (see `~pot@1.0', `mint-authority@1.0,
+%%% etc.). This allows rights in the index itself to be tradable, and even
+%%% mintable via the same delegation mechanics as the parent.
 %%% 
 %%% A practical example of this mechanism, although by no means the only viable
 %%% strategy, is the Permaweb Index: A neutral pool that replicates the 
@@ -37,7 +38,10 @@ provider_mint_device(Base, Opts) ->
 %% @doc Relay the `mint' call to the `partner-mint-device' after ensuring that
 %% the index itself has been initialized.
 mint(RawBase, Assignment, Opts) ->
-    Base = ensure_initialized(RawBase, Opts),
+    forward_assignment(ensure_initialized(RawBase, Opts), Assignment, Opts).
+
+%% @doc Send an assignment to the `provider-mint-device'.
+forward_assignment(Base, Assignment, Opts) ->
     % TODO: Should this be an `as'? `as' is the logical choice but causes an
     % infinite loop.
     hb_ao:resolve(
@@ -50,34 +54,34 @@ mint(RawBase, Assignment, Opts) ->
 %% complete.
 ensure_initialized(Base, Opts) ->
     case hb_maps:get(<<"index-ininitialized">>, Base, false, Opts) of
-        true -> 
-            ?event(already_initialized),
-            Base;
+        true -> Base;
         false ->
-            After = hb_ao:set(
-                send_registrations(Base, Opts),
-                <<"index-initialized">>,
-                true,
-                Opts
-            ),
-            ?event(after_set),
-            After
+            ?event(index_short, initializing, Opts),
+            InitializedBase =
+                hb_ao:set(
+                    Base,
+                    <<"index-initialized">>,
+                    true,
+                    Opts
+                ),
+            send_subscription_reqs(InitializedBase, Opts)
     end.
 
 %% @doc Register with the `parent' token to receive notifications about
 %% delegations to all of the `active-mints'.
-send_registrations(Base, Opts) ->
+send_subscription_reqs(Base, Opts) ->
     AllActiveMints = hb_maps:get(<<"indexed-mints">>, Base, [], Opts),
     KnownDeposits =  hb_ao:get(<<"indexed-deposits/keys">>, Base, [], Opts),
     RegistrationNeeded = hb_util:list_without(KnownDeposits, AllActiveMints),
-    send_registrations(Base, RegistrationNeeded, Opts).
-send_registrations(Base, ToRegister, Opts) ->
+    send_subscription_reqs(Base, RegistrationNeeded, Opts).
+send_subscription_reqs(Base, ToRegister, Opts) ->
     Parent = hb_ao:get(<<"parent">>, Base, Opts),
     lists:foldr(
         fun(Addr, PreRegBase) ->
             ?event(
                 index_short,
-                {registering,
+                {subscribing_to,
+                    {actions, [<<"deposit">>, <<"withdraw">>]},
                     {address, Addr},
                     {parent, Parent}
                 }
@@ -103,24 +107,21 @@ send_registrations(Base, ToRegister, Opts) ->
     ).
 
 %% @doc Interpret delegation notifications from the parent mint based on their
-%% original `target' address:
-%% 1. If the `x-target' of the notification matches the local process's ID, we
-%%   forward the notification to the `notify' key on the `default-device'.
+%% original `x-action':
+%% 1. If `x-action: register` we forward the notification to the `notify' key on
+%%    the provider mint device.
 %% 2. Otherwise, we interpret it as a signal that we should use in order to modify
 %%   our own delegation choices.
 notify(RawBase, Assignment, Opts) ->
-    ?event(debug_index, {received_notify, Assignment}, Opts),
     Base = ensure_initialized(RawBase, Opts),
     ProcessID = dev_process_lib:process_id(Base, Opts),
-    case hb_ao:get(<<"body/x-target">>, Assignment, Opts) of
-        ProcessID ->
+    case hb_ao:get(<<"body/x-action">>, Assignment, Opts) of
+        <<"register">> ->
+            ?event(index_short, forwarding_register_notification),
             % We are the target, so resolve with the provider mint device.
-            hb_ao:resolve(
-                {as, provider_mint_device(Base, Opts), Base},
-                Assignment,
-                Opts
-            );
+            forward_assignment(Base, Assignment, Opts);
         _Other ->
+            ?event(index_short, receiving_delegation_notification),
             % We are being notified of a signal that may lead us to change our
             % delegation choices. Extract the relevant information from the 
             % notification, change our model to reflect the new information,
