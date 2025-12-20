@@ -1178,7 +1178,7 @@ undelegate_notice_has_negative_quantity_test() ->
     Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
-    [_, UndelegateNotice] = Outbox,
+    [UndelegateNotice, _] = Outbox,
     Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
     ?assert(Quantity =< 0).
 
@@ -1197,8 +1197,8 @@ multiple_delegations_outbox_order_test() ->
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first: [Charlie (S2), Bob (S1)]
     [Notice1, Notice2] = Outbox,
-    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
-    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
+    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
 
 %%% Empty/Zero State Tests
 
