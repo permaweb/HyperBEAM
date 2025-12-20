@@ -61,7 +61,7 @@ load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
 test_func(_) ->
-	{ok, <<"GOOD_FUNCTION">>}.
+	{ok, <<"GOOD FUNCTION">>}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
@@ -195,7 +195,7 @@ device_with_function_key_module_test() ->
 			<<"device">> => <<"test-device@1.0">>
 		},
 	?assertEqual(
-		{ok, <<"GOOD_FUNCTION">>},
+		{ok, <<"GOOD FUNCTION">>},
 		hb_ao:resolve(Msg, test_func, #{})
 	).
 
