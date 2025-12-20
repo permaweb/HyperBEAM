@@ -84,6 +84,8 @@ test_suite() ->
             fun device_exports_test/1},
         {device_excludes, "device excludes",
             fun device_excludes_test/1},
+        {device_inheritance, "device inheritance",
+            fun device_inheritance_test/1},
         {denormalized_device_name, "denormalized device name",
             fun denormalized_device_name_test/1},
         {list_transform, "list transform",
@@ -189,6 +191,7 @@ test_opts() ->
                 set_with_device,
                 device_exports,
                 device_excludes,
+                device_inheritance,
                 deep_set_with_device,
                 as,
                 as_commitments,
@@ -733,6 +736,28 @@ device_excludes_test(Opts) ->
     ?assertMatch(#{ <<"test-key2">> := <<"2">> },
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
+device_inheritance_test(Opts) ->
+    % Create a device that inherits from another device and ensure that the
+    % precedence order of matching keys is correct:
+    %     The local device > the inherited device > the global default device*
+    % Note that we only fallback to the global device in this case because the
+    % inherited device does not specify a further `default' key in its `info'.
+    Dev = #{
+        info =>
+            fun() ->
+                #{
+                    default => <<"test-device@1.0">>
+                }
+            end,
+        device_key =>
+            fun(_, _, _) ->
+                {ok, <<"DEVICE VALUE">>}
+            end
+    },
+    Msg = #{ <<"device">> => Dev, <<"message-key">> => <<"MESSAGE VALUE">> },
+    ?assertEqual(<<"DEVICE VALUE">>, hb_ao:get(<<"device-key">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test-func">>, Msg, Opts)),
+    ?assertEqual(<<"MESSAGE VALUE">>, hb_ao:get(<<"message-key">>, Msg, Opts)).
 
 denormalized_device_name_test(Opts) ->
     Msg = #{ <<"device">> => dev_test },
@@ -782,7 +807,7 @@ list_transform_test(Opts) ->
 
 start_as_test(Opts) ->
     ?assertEqual(
-        {ok, <<"GOOD_FUNCTION">>},
+        {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
                 {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
@@ -798,7 +823,7 @@ start_as_with_parameters_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
-        {ok, <<"GOOD_FUNCTION">>},
+        {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
@@ -829,12 +854,12 @@ load_as_test(Opts) ->
 
 as_path_test(Opts) ->
     % Create a message with the test device, which implements the test_func
-    % function. It normally returns `GOOD_FUNCTION'.
+    % function. It normally returns `GOOD FUNCTION'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(<<"GOOD_FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
         {ok, #{ <<"test_key">> := <<"MESSAGE">> }},

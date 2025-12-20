@@ -34,13 +34,19 @@ truncate_args(Fun, Args) ->
 %% 1. The message does not specify a device, so we use the default device.
 %% 2. The device has a `handler' key in its `Dev:info()' map, which is a
 %% function that takes a key and returns a function to handle that key. We pass
-%% the key as an additional argument to this function.
+%% the key as an additional argument to this function:
+%%     `Mod:Handler(Key, Base, Req, Opts) -> {Status, Fun}'
 %% 3. The device has a function of the name `Key', which should be called
 %% directly.
-%% 4. The device does not implement the key, but does have a default handler
-%% for us to call. We pass it the key as an additional argument.
-%% 5. The device does not implement the key, and has no default handler. We use
-%% the default device to handle the key.
+%% 4. The device does not implement the key, but does have a default function
+%% for us to call. We pass it the key as an additional argument, as with (2).
+%% `default' differs from `handler' in that it only matches for keys where the
+%% module exports no function of the given name.
+%% 5. The device has a `default' key with a device or module name as its value.
+%% We use this device to handle the key, restarting the process of resolving the
+%% key to a function.
+%% 6. The device does not implement the key and states no defaults. We use the
+%% global default device to handle the key.
 %% Error: If the device is specified, but not loadable, we raise an error.
 %%
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
@@ -83,15 +89,18 @@ message_to_fun(Msg, Key, Opts) ->
 							% Case 4: The device has a default handler.
                             ?event({found_default_handler, {func, DefaultFunc}}),
 							{add_key, Dev, DefaultFunc};
-                        {{ok, DefaultMod}, true} when is_atom(DefaultMod) ->
+                        {{ok, DefaultMod}, true} when is_binary(DefaultMod)
+                                orelse is_atom(DefaultMod) ->
+                            % Case 5: The device gives a specific further device
+                            % to default to.
 							?event({found_default_handler, {mod, DefaultMod}}),
-                            {Status, Func} =
-                                message_to_fun(
-                                    Msg#{ <<"device">> => DefaultMod }, Key, Opts
-                                ),
-                            {Status, Dev, Func};
+                            message_to_fun(
+                                Msg#{ <<"device">> => DefaultMod },
+                                Key,
+                                Opts
+                            );
 						_ ->
-							% Case 5: The device has no default handler.
+							% Case 6: The device has no default handler.
 							% We use the default device to handle the key.
 							case default() of
 								Dev ->
