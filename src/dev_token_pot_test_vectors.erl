@@ -186,8 +186,19 @@ generate_pot_state(Params, Opts) ->
             not_found -> #{};
             Parent -> #{ <<"parent">> => Parent }
         end,
-    MaybeParent#{
-        <<"mint-device">> => <<"pot@1.0">>,
+    MaybeIndexKeys =
+        case hb_maps:get(partner_device, Params, not_found, Opts) of
+            not_found -> #{};
+            Default ->
+                #{
+                    <<"partner-mint-device">> => Default,
+                    <<"indexed-mints">> =>
+                        hb_maps:get(indexed_mints, Params, [], Opts)
+                }
+        end,
+    Merged = maps:merge(MaybeParent, MaybeIndexKeys),
+    Merged#{
+        <<"mint-device">> => hb_maps:get(mint_device, Params, <<"pot@1.0">>, Opts),
         <<"mint-cap">> => MintCap,
         <<"mint-prop-numerator">> => MintPropN,
         <<"mint-prop-denominator">> => MintPropD,
@@ -640,7 +651,7 @@ pot_subscriptions_test() ->
     ?assertEqual(200, weight(ParentProcess, Resource, Opts)),
     ?assertEqual(200, weight(ChildProcess, Resource, Opts)).
 
-nested_pot_process_test() ->
+child_pot_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     % Create the parent mint, which will deliver units to the child mint.
@@ -708,6 +719,67 @@ nested_pot_process_test() ->
         Opts
     ),
     ?assert(balance(ChildState, Alice, Opts) > 0).
+
+%% @doc Test the viability of the `~mint-index@1.0` device, replicating delegation
+%% choices of other users.
+child_pots_with_index_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    BaseParams =
+        #{
+            mint_cap => 1_000_000,
+            mint_prop_numerator => 1,
+            mint_prop_denominator => 2,
+            t => 0,
+            last_drip => 0
+        },
+    Resource = <<"oxygen">>,
+    % Create the parent mint, which will deliver units to the child mint.
+    Parent = generate_process(BaseParams, Opts),
+    ParentID = dev_process_lib:process_id(Parent, Opts),
+    ?event(process, {parent_mint, ParentID}, Opts),
+    % Create two child mints, which will receive units from the parent mint in
+    % exchange for their own tokens.
+    ChildA= generate_process(BaseParams#{ <<"parent">> => ParentID }, Opts),
+    ChildAID = dev_process_lib:process_id(ChildA, Opts),
+    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
+    ChildB = generate_process(BaseParams#{ <<"parent">> => ParentID }, Opts),
+    ChildBID = dev_process_lib:process_id(ChildB, Opts),
+    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
+    % Spawn the mint index, tracking delegations to `ChildAID' and `ChildBID'.
+    IndexParams =
+        BaseParams#{
+            parent => ParentID,
+            mint_device => <<"mint-index@1.0">>,
+            indexed_mints => [ChildAID, ChildBID],
+            partner_device => <<"pot@1.0">>
+        },
+    Index = generate_process(IndexParams, Opts),
+    IndexID = dev_process_lib:process_id(Index, Opts),
+    push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
+    %?hr("DEPOSITING FOR ALICE AND BOB"),
+    % Alice and Bob both deposit 10 of the resource.
+    push_set_weight(Parent, Resource, 100, Opts),
+    push_deposit(Parent, Resource, Alice, 10, Opts),
+    push_deposit(Parent, Resource, Bob, 10, Opts),
+    %?hr("ESTABLISHING DELEGATIONS"),
+    % Let Alice delegate completely to the index, Bob splits equally between
+    % ChildA and ChildB.
+    push_delegate(Parent, Resource, Alice, IndexID, 10, Opts),
+    push_delegate(Parent, Resource, Bob, ChildAID, 10, Opts),
+    push_delegate(Parent, Resource, Bob, ChildBID, 10, Opts),
+    %?hr("MINTING"),
+    % Push a `mint` operation to the parent to force a mint with the new
+    % delegations.
+    push_request(Parent, #{ <<"action">> => <<"mint">> }, Opts),
+    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
+    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
+    push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
+    %?hr("VERIFYING"),
+    % Ensure that the index process minted tokens in both of the child mints.
+    ?assert(balance(ChildAID, IndexID, Opts) > 0),
+    ?assert(balance(ChildBID, IndexID, Opts) > 0).
 
 %%% Benchmark Tests
 
