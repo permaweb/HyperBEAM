@@ -23,9 +23,9 @@
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
 -export([fold/3, fold/4, take/2, take/3, size/1, size/2]).
 -export([merge/2, merge/3, remove/2, remove/3]).
--export([with/2, with/3, without/2, without/3, update_with/3, update_with/4]).
+-export([with/2, with/3, without/2, without/3, with_prefix/3]).
+-export([update_with/3, update_with/4]).
 -export([from_list/1, to_list/1, to_list/2]).
--export([filter_by_prefix/3]).
 -include_lib("eunit/include/eunit.hrl").
 
 -spec get(Key :: term(), Map :: map()) -> term().
@@ -168,6 +168,29 @@ with(Keys, Map) ->
 with(Keys, Map, Opts) ->
     maps:with(Keys, hb_cache:ensure_loaded(Map, Opts)).
 
+-spec with_prefix(
+    binary() | string() | atom() | [binary() | string() | atom()],
+    map(),
+    term()
+) -> map().
+with_prefix(Prefixes, Map, Opts) when is_list(Prefixes) ->
+    PrefixBins = [hb_util:to_lower(hb_util:bin(P)) || P <- Prefixes],
+    filter(
+        fun(Key, _Value) ->
+            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
+            lists:any(
+                fun(Prefix) ->
+                    binary:match(KeyBin, Prefix) =:= {0, byte_size(Prefix)}
+                end,
+                PrefixBins
+            )
+        end,
+        Map,
+        Opts
+    );
+with_prefix(Prefix, Map, Opts) ->
+    with_prefix([Prefix], Map, Opts).
+
 -spec without(Keys :: [term()], Map :: map()) -> map().
 without(Keys, Map) ->
 	without(Keys, Map, #{}).
@@ -274,29 +297,6 @@ to_list(Map) ->
 -spec to_list(Map :: map(), Opts :: map()) -> [{Key :: term(), Value :: term()}].
 to_list(Map, Opts) ->
     maps:to_list(hb_cache:ensure_loaded(Map, Opts)).
-
--spec filter_by_prefix(
-    binary() | string() | atom() | [binary() | string() | atom()],
-    map(),
-    term()
-) -> map().
-filter_by_prefix(Prefixes, Map, Opts) when is_list(Prefixes) ->
-    PrefixBins = [hb_util:to_lower(hb_util:bin(P)) || P <- Prefixes],
-    filter(
-        fun(Key, _Value) ->
-            KeyBin = hb_util:to_lower(hb_util:bin(Key)),
-            lists:any(
-                fun(Prefix) ->
-                    binary:match(KeyBin, Prefix) =:= {0, byte_size(Prefix)}
-                end,
-                PrefixBins
-            )
-        end,
-        Map,
-        Opts
-    );
-filter_by_prefix(Prefix, Map, Opts) ->
-    filter_by_prefix([Prefix], Map, Opts).
 
 %%% Tests
 

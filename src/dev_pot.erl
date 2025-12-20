@@ -410,6 +410,13 @@ notify(State, Assignment, Opts) ->
                 <<"Notification is not an assignment.">>,
                 Opts
             ),
+        {ok, NotifyFrom} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
@@ -417,16 +424,14 @@ notify(State, Assignment, Opts) ->
                 ForwardedMsg,
                 Opts
             ),
+        OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
             Action, 
             State, 
-            #{ 
-                <<"body">> => 
-                    hb_maps:merge(
-                        ForwardedMsg, 
-                        hb_maps:filter_by_prefix(from, Req, Opts), 
-                        Opts
-                    ) 
+            #{
+                <<"type">> => <<"notification">>,
+                <<"original-from">> => OriginalFrom,
+                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom }
             }, 
             Opts)
     end.
