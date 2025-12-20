@@ -192,6 +192,8 @@ generate_pot_state(Params, Opts) ->
             Default ->
                 #{
                     <<"partner-mint-device">> => Default,
+                    <<"update-every">> =>
+                        hb_maps:get(update_every, Params, 1, Opts),
                     <<"indexed-mints">> =>
                         hb_maps:get(indexed_mints, Params, [], Opts)
                 }
@@ -758,25 +760,55 @@ child_pots_with_index_test() ->
     Index = generate_process(IndexParams, Opts),
     IndexID = dev_process_lib:process_id(Index, Opts),
     push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
-    %?hr("DEPOSITING FOR ALICE AND BOB"),
+    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
+    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
+    ?hr(),
+    ?event(
+        {network_map,
+            {parent, ParentID},
+            {child_a, ChildAID},
+            {child_b, ChildBID},
+            {index, IndexID},
+            {alice, id(Alice)},
+            {bob, id(Bob)}
+        }
+    ),
+    ?hr(),
+    ParentState1 = dev_token_lib:now(Parent, Opts),
+    ?event(debug_test, {parent_state_after_index_init, ParentState1}, Opts),
+    ?hr("DEPOSITING FOR ALICE AND BOB"),
     % Alice and Bob both deposit 10 of the resource.
     push_set_weight(Parent, Resource, 100, Opts),
     push_deposit(Parent, Resource, Alice, 10, Opts),
     push_deposit(Parent, Resource, Bob, 10, Opts),
-    %?hr("ESTABLISHING DELEGATIONS"),
+    ?hr("ESTABLISHING DELEGATIONS"),
     % Let Alice delegate completely to the index, Bob splits equally between
     % ChildA and ChildB.
     push_delegate(Parent, Resource, Alice, IndexID, 10, Opts),
-    push_delegate(Parent, Resource, Bob, ChildAID, 10, Opts),
-    push_delegate(Parent, Resource, Bob, ChildBID, 10, Opts),
-    %?hr("MINTING"),
+    push_delegate(Parent, Resource, Bob, ChildAID, 5, Opts),
+    push_delegate(Parent, Resource, Bob, ChildBID, 5, Opts),
+    ?hr("MINTING"),
     % Push a `mint` operation to the parent to force a mint with the new
     % delegations.
     push_request(Parent, #{ <<"action">> => <<"mint">> }, Opts),
     push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
     push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
     push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
-    %?hr("VERIFYING"),
+    ?hr("VERIFYING"),
+    % ParentState2 = dev_token_lib:now(Parent, Opts),
+    % IndexState = dev_token_lib:now(Index, Opts),
+    % ChildAState = dev_token_lib:now(ChildA, Opts),
+    % ChildBState = dev_token_lib:now(ChildB, Opts),
+    % ?event(
+    %     debug_test,
+    %     {
+    %         final_network_state,
+    %         {parent, ParentState2},
+    %         {index, IndexState},
+    %         {child_a, ChildAState},
+    %         {child_b, ChildBState}
+    %     }
+    % ),
     % Ensure that the index process minted tokens in both of the child mints.
     ?assert(balance(ChildAID, IndexID, Opts) > 0),
     ?assert(balance(ChildBID, IndexID, Opts) > 0).

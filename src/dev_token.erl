@@ -66,7 +66,8 @@ enforce_security(Base, Req, Opts) ->
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
 handle_action(Action, Base, Req, Opts) ->
-    ?event(debug_token, {action, Action}, Opts),
+    Self = dev_process_lib:process_id(Base, Opts),
+    ?event(token_short, {token, {id, Self}, {action, Action}}, Opts),
     case hb_util:to_lower(hb_ao:normalize_key(Action)) of
         <<"transfer">> -> transfer(Base, Req, Opts);
         <<"set">> -> secure_set(Base, Req, Opts);
