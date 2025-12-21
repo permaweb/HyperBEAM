@@ -7,6 +7,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
+-define(MAX_MEMORY, 1_000_000_000). % 1GB
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -66,6 +67,9 @@ should_print(Topic, Opts) ->
 increment(Topic, Message, Opts) ->
     increment(Topic, Message, Opts, 1).
 increment(global, _Message, _Opts, _Count) -> ignored;
+increment(linkify, _Message, _Opts, _Count) -> ignored;
+increment(debug_id, _Message, _Opts, _Count) -> ignored;
+increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
 increment(ao_core, _Message, _Opts, _Count) -> ignored;
 increment(ao_internal, _Message, _Opts, _Count) -> ignored;
 increment(ao_devices, _Message, _Opts, _Count) -> ignored;
@@ -184,16 +188,33 @@ handle_events() ->
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
                     % Print a warning, but do so less frequently the more 
                     % overloaded the system is.
+                    {memory, MemorySize} = erlang:process_info(self(), memory),
                     case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
                         1 ->
                             ?debug_print(
                                 {warning,
                                     prometheus_event_queue_overloading,
                                     {queue, Len},
-                                    {current_message, EventName}
+                                    {current_message, EventName},
+                                    {memory_bytes, MemorySize}
                                 }
                             );
                         _ -> ignored
+                    end,
+                    % If the size of this process is too large, exit such that
+                    % we can be restarted by the next caller.
+                    case MemorySize of
+                        MemorySize when MemorySize > ?MAX_MEMORY ->
+                            ?debug_print(
+                                {error,
+                                    prometheus_event_queue_terminating_on_memory_overload,
+                                    {queue, Len},
+                                    {memory_bytes, MemorySize},
+                                    {current_message, EventName}
+                                }
+                            ),
+                            exit(memory_overload);
+                        _ -> no_action
                     end;
                 _ -> ignored
             end,
