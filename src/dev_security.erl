@@ -8,7 +8,10 @@
 -module(dev_security).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+%%% Device API.
 -export([compute/3]).
+%%% Public utility API.
+-export([validate/4, validate/5]).
 
 %% @doc Compute the security-normalized request.
 compute(Base, Req, Opts) ->
@@ -32,13 +35,11 @@ compute(Base, Req, Opts) ->
 
 %% @doc Validate that an assignment is trusted based on scheduler constraints.
 validate_assignment(Base, Assignment, Opts) ->
-    Signers = hb_message:signers(Assignment, Opts),
-    Scheduler = as_list(hb_ao:get(<<"scheduler">>, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<"scheduler-required">>, Base, [], Opts),
-    Match = hb_ao:get(<<"scheduler-match">>, Base, length(Scheduler), Opts),
-    case satisfies_constraints(assignment, Signers, Required, Scheduler, Match, Opts) of
-        true -> {ok, Assignment};
-        false -> {error, <<"Assignment does not satisfy scheduler constraints.">>}
+    case validate(<<"scheduler">>, Base, Assignment, Opts) of
+        true ->
+            {ok, Assignment};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Validate that a request has proper authority, adding a `from' key to the
@@ -59,7 +60,7 @@ validate_authority(Base, Assignment, Opts) ->
                 )
             };
         Sender ->
-            case do_validate_authority(Base, Msg, Signers, Opts) of
+            case validate(<<"authority">>, Base, Msg, Opts) of
                 true ->
                     {
                         ok,
@@ -70,35 +71,31 @@ validate_authority(Base, Assignment, Opts) ->
                             Opts
                         )
                     };
-                false ->
-                    {
-                        error,
-                        <<
-                            "Assigned message does not satisfy ",
-                            "compute authority constraints."
-                        >>
-                    }
+                {error, Reason} -> {error, Reason}
             end
     end.
 
 %% @doc If a message purporting to be from a process satisfies the compute
 %% authority constraints, return true, otherwise return false.
-do_validate_authority(Base, Msg, Signers, Opts) ->
-    Authority = as_list(hb_ao:get(<<"authority">>, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<"authority-required">>, Base, [], Opts),
+validate(Key, Base, SubjectMsg, Opts) ->
+    validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
+validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
+    From = as_list(RawFrom, Opts),
+    Valid = as_list(hb_ao:get(Key, Base, [], Opts), Opts),
+    Required = hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+    Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
     ?event(security_debug,
         {validate_authority,
+            {subject_ids, From},
             {intent, compute},
-            {committers, Signers},
-            {authority, Authority},
+            {valid_options, Valid},
             {required, Required},
             {base, Base},
-            {message, Msg}
+            {message, SubjectMsg}
         },
         Opts
     ),
-    Match = hb_ao:get(<<"authority-match">>, Base, length(Authority), Opts),
-    satisfies_constraints(compute, Signers, Required, Authority, Match, Opts).
+    satisfies_constraints(Key, From, Required, Valid, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
@@ -111,10 +108,14 @@ satisfies_constraints(Intent, MsgCommitters, Required, Valid, ValidCount, Opts) 
     RequiredList = as_list(Required, Opts),
     % Are there at least `ValidCount' valid committers present in the message?
     PresentAcceptableCommitters = count_common(MsgCommitterList, ValidList),
-    SatisfiesAcceptable = PresentAcceptableCommitters >= ValidCount,
+    SatisfiesAcceptable =
+        (PresentAcceptableCommitters >= ValidCount) orelse
+            {error, <<"Too few acceptable committers present.">>},
     % Are all required committers present in the message?
     PresentRequiredCommitters = count_common(MsgCommitterList, RequiredList),
-    SatisfiesRequired = PresentRequiredCommitters == length(RequiredList),
+    SatisfiesRequired =
+        (PresentRequiredCommitters == length(RequiredList)) orelse
+            {error, <<"Required committers not present in message.">>},
     % Must have at least `Match' common elements AND all `Required' elements
     Res = SatisfiesAcceptable andalso SatisfiesRequired,
     ?event(

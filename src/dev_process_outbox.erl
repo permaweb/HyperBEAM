@@ -4,6 +4,7 @@
 -export([send/3, forwarded_keys/2, notify/3]).
 -export([subscribe/3, unsubscribe/3, subscribers/3, subscribers/4]).
 -export([send_subscription_request/4, send_subscription_request/5]).
+-export([original_from_forwarded/2]).
 
 %% @doc Add a message or list of messages to the process's outbox, notifying
 %% subscribers to the action and target of the message, as appropriate.
@@ -66,7 +67,15 @@ notify(Msg, Base, Opts) ->
         ),
         lists:foldl(
             fun(Listener, StateAcc) ->
-                MsgWithNewTarget = hb_ao:set(Msg, <<"target">>, Listener, Opts),
+                MsgWithNewTarget =
+                    hb_ao:set(
+                        forward_keys(Msg, Opts),
+                        #{
+                            <<"target">> => Listener,
+                            <<"action">> => <<"notify">>
+                        },
+                        Opts
+                    ),
                 ?event(debug_subscriptions,
                     {notifying_subscriber,
                         {listener, Listener},
@@ -220,16 +229,32 @@ send_subscription_request(TargetProcess, Action, Target, State, Opts) ->
         Opts
     ).
 
+%% @doc Extract the original keys from a forwarded request and return them
+%% without their `x-' prefixes.
+original_from_forwarded(Req, Opts) ->
+    maps:from_list(
+        lists:map(
+            fun({<<"x-", Key/binary>>, Value}) -> {Key, Value} end,
+            hb_maps:to_list(forwarded_keys(Req, Opts), Opts)
+        )
+    ).
+
 %% @doc Extract keys with X- prefix for forwarding in notices
 %% Follows AO token pattern: keys beginning with "X-" are forwarded.
-forwarded_keys(Req, Opts) ->
-    hb_maps:filter(
-        fun(Key, _Value) ->
-            case hb_util:to_lower(hb_util:bin(Key)) of
-                <<"x-", _Rest/binary>> -> true;
-                _ -> false
-            end
-        end,
-        Req,
-        Opts
+forwarded_keys(Req, Opts) -> hb_maps:with_prefix([<<"x-">>], Req, Opts).
+
+%% @doc Uncommit a message and transform all keys into their `x-` forwarded form.
+forward_keys(Msg, Opts) ->
+    hb_maps:from_list(
+        [ 
+            {<<"x-", (hb_ao:normalize_key(Key))/binary>>, Value} 
+        || 
+            {Key, Value} <- 
+                hb_maps:to_list(
+                    hb_private:reset(
+                        hb_message:uncommitted(Msg, Opts)
+                    ),
+                    Opts
+                ) 
+        ]
     ).

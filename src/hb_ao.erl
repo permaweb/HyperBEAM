@@ -469,10 +469,11 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
                     {opts, Opts}
                 }
             ),
-			{Status, _Mod, Func} = hb_ao_device:message_to_fun(Base, Key, UserOpts),
+			{Status, Device, Func} = hb_ao_device:message_to_fun(Base, Key, UserOpts),
 			?event(
 				{found_func_for_exec,
                     {key, Key},
+                    {device, Device},
 					{func, Func},
 					{base, Base},
 					{req, Req},

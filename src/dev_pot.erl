@@ -32,10 +32,10 @@
 -include_lib("eunit/include/eunit.hrl").
 %%% Public API.
 -export([info/1, mint/3, deposit/3, withdraw/3, delegate/3, undelegate/3]).
--export([set_weight/3]).
+-export([register/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
--export([deposit/5, withdraw/5, delegate/6, undelegate/6, set_weight/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
@@ -51,7 +51,8 @@ info(_S) ->
                 <<"withdraw">>,
                 <<"delegate">>,
                 <<"undelegate">>,
-                <<"set-weight">>
+                <<"register">>,
+                <<"notify">>
             ]
     }.
 
@@ -262,7 +263,7 @@ initialize_subscriptions(Base, _Req, Opts) ->
         Parent ->
             dev_process_outbox:send_subscription_request(
                 Parent,
-                <<"set-weight">>,
+                <<"register">>,
                 Base,
                 Opts
             )
@@ -317,13 +318,9 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
 
 %% @doc Deposit a quantity of a resource for a given address.
 deposit(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
-        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        ?no_prod("Enable resource authorization verification."),
-        % true ?= verify_resource_auth(State, ResourceID, Req, Opts),
+        {ok, {Address, ResourceID, Amount}} ?=
+            parse_deposit_modification(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, State, Opts)
     else
         Reason -> {error, Reason}
@@ -331,34 +328,113 @@ deposit(State, Assignment, Opts) ->
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
-%% @doc Verify that a signer of the request is authorized to deposit to the 
-%% given resource.
-verify_resource_auth(State, ResourceID, Req, Opts) ->
-    maybe
-        {ok, Authority} ?=
-            hb_ao:resolve(
-                State,
-                <<"resources/", ResourceID/binary, "/authority">>,
-                Opts
-            ),
-        lists:member(Authority, hb_message:signers(Req, Opts))
-    end.
-
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
-withdraw(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+withdraw(Base, Req, Opts) ->
     maybe
-        {ok, Address} ?= hb_maps:find(<<"address">>, Req, Opts),
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        true ?= verify_resource_auth(State, ResourceID, Req, Opts),
-        withdraw(Address, ResourceID, Amount, State, Opts)
+        {ok, {Address, ResourceID, Amount}} ?=
+            parse_deposit_modification(Base, Req, Opts),
+        withdraw(Address, ResourceID, Amount, Base, Opts)
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
     modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
+
+%% @doc Parse a request to modify a deposit and verify that it originates from
+%% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
+%% if the request is valid, otherwise returns `{error, Reason}'.
+parse_deposit_modification(Base, Assignment, Opts) ->
+    Req = hb_ao:get(<<"body">>, Assignment, Opts),
+    maybe
+        {ok, Address} ?=
+            hb_maps:find(
+                <<"address">>,
+                Req,
+                <<"No `address' provided.">>,
+                Opts
+            ),
+        {ok, ResourceID} ?=
+            hb_maps:find(
+                <<"resource">>,
+                Req,
+                <<"No resource ID provided.">>,
+                Opts
+            ),
+        {ok, Amount} ?=
+            hb_maps:find(
+                <<"quantity">>,
+                Req,
+                <<"No `quantity' provided.">>,
+                Opts
+            ),
+        true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
+        {ok, {Address, ResourceID, Amount}}
+    end.
+
+%% @doc Verify a request against the authority for a specific resource.
+verify_resource_authority(ResourceID, Base, Req, Opts) ->
+    maybe
+        {ok, From} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, Resources} =
+            hb_maps:find(
+                <<"resources">>,
+                Base,
+                <<"No resources found in mint state.">>,
+                Opts
+            ),
+        {ok, Resource} = 
+            hb_maps:find(
+                ResourceID,
+                Resources,
+                <<"Requested resource not initialized in mint state.">>,
+                Opts
+            ),
+        true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
+    end.
+
+%% @doc Interpret `notify' messages as if they were direct deposit/withdrawal
+%% requests, if they are sent `from' our `parent' mint process (if set).
+notify(State, Assignment, Opts) ->
+    maybe
+        {ok, Req} ?=
+            hb_maps:find(
+                <<"body">>,
+                Assignment,
+                <<"Notification is not an assignment.">>,
+                Opts
+            ),
+        {ok, NotifyFrom} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
+        {ok, Action} ?=
+            hb_maps:find(
+                <<"action">>,
+                ForwardedMsg,
+                Opts
+            ),
+        OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
+        dev_token:handle_action(
+            Action, 
+            State, 
+            #{
+                <<"type">> => <<"notification">>,
+                <<"original-from">> => OriginalFrom,
+                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom }
+            }, 
+            Opts)
+    end.
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
@@ -612,18 +688,61 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         ),
     send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S3, Opts).
 
-%% @doc Set the weight of a specific resource in the pot.
-set_weight(State, Assignment, Opts) ->
-    Req = hb_ao:get(<<"body">>, Assignment, Opts),
-    ?event(debug, {set_weight, Assignment}, Opts),
+%% @doc Set the weight of a specific resource in the pot. Valid requesters to
+%% change resource parameters are:
+%% - The `State/parent' address, if set.
+%% - The `mint-authority' address, if set.
+%% - The `resource-authority' address for the resource.
+register(State, Assignment, Opts) ->
+    ?event(debug_pot, {register, Assignment}, Opts),
     maybe
-        {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Weight} ?= hb_maps:find(<<"weight">>, Req, Opts),
-        set_weight(ResourceID, Weight, State, Opts)
+        Req = hb_ao:get(<<"body">>, Assignment,Opts),
+        {ok, ResID} ?= 
+            hb_maps:find(
+                <<"resource">>, 
+                Req,
+                <<"No `resource' provided to register.">>, 
+                Opts
+            ),
+        {ok, From} ?= 
+            hb_maps:find(
+                <<"from">>, 
+                Req,
+                <<"No `from' address provided.">>, 
+                Opts
+            ),
+        true ?=
+            (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
+            dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
+                verify_resource_authority(ResID, State, Req, Opts),
+        State2 =
+            case hb_maps:find(<<"weight">>, Req, Opts) of
+                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
+                _ -> State
+            end,
+        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
+            {ok, ResAuth} ->
+                register_resource_authority(ResID, ResAuth, State2, Opts);
+            _ -> State2
+        end
     else
-        Reason -> Reason
+        Reason -> 
+            ?event(debug_pot, {error, Reason}, Opts),
+            Reason
     end.
-set_weight(ResourceID, Weight, S, Opts) ->
+
+%% @doc Update the authority record for a specific resource in the pot.
+register_resource_authority(ResourceID, Authority, S, Opts) ->
+    hb_ao:set(
+        S,
+        <<"/resources/", ResourceID/binary, "/authority">>,
+        Authority,
+        Opts
+    ).
+
+%% @doc Set the weight of a specific resource in the pot, updating the pot state
+%% as necessary.
+register_resource(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
     S0 = drip_global(S, Opts),
     S1 = drip_resource(ResourceID, S0, Opts),
@@ -703,7 +822,7 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
 send_weight_notice(ResourceID, Weight, S, Opts) ->
     dev_process_outbox:notify(
         #{
-            <<"action">> => <<"set-weight">>,
+            <<"action">> => <<"register">>,
             <<"resource">> => ResourceID,
             <<"weight">> => Weight
         },

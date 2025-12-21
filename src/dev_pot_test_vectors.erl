@@ -210,7 +210,7 @@ single_resource_modified_weight_test() ->
     S1 = dev_pot:deposit(Alice, <<"oxygen">>, 1, S0, Opts),
     % There's 1 pot unit and 50 minted, alice accumulates 50.
     S3 = dev_pot:test_drip(S1, #{}, Opts),
-    S4 = dev_pot:set_weight(<<"oxygen">>, 10, S3, Opts),
+    S4 = dev_pot:register_resource(<<"oxygen">>, 10, S3, Opts),
     report(S4, Opts),
     % There's 10 pot units and 25 minted, alice accumulates 20.
     S5 = dev_pot:test_drip(S4, #{}, Opts),
@@ -238,7 +238,7 @@ multiresource_modified_weight_test() ->
     S3 = dev_pot:test_drip(S2, #{}, Opts),
     ?assertEqual(50, dev_pot:balance(Alice, S3, Opts)),
     ?assertEqual(0, dev_pot:balance(Bob, S3, Opts)),
-    S4 = dev_pot:set_weight(ResourceHydrogen, 1, S3, Opts),
+    S4 = dev_pot:register_resource(ResourceHydrogen, 1, S3, Opts),
     % 25 minted, 2 pot units. 25 div 2 = 12
     S5 = dev_pot:test_drip(S4, #{}, Opts),
     ?assertEqual(62, dev_pot:balance(Alice, S5, Opts)),
@@ -953,7 +953,7 @@ change_weight_with_deposits_test() ->
     S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
     BalanceT1 = dev_pot:balance(Alice, S1_claim, Opts),
     % Change weight from 1 to 10
-    S2 = dev_pot:set_weight(ResourceOxygen, 10, S1_claim, Opts),
+    S2 = dev_pot:register_resource(ResourceOxygen, 10, S1_claim, Opts),
     ?assertEqual(110, hb_maps:get(<<"total-weighted-units">>, S2, 0)),
     S3 = dev_pot:test_drip(S2, #{<<"t">> => 2}, Opts),
     % Claim yield by performing another deposit
@@ -968,10 +968,10 @@ rapid_weight_changes_test() ->
     Opts = #{},
     % Changing weight multiple times in succession
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    S1 = dev_pot:set_weight(ResourceOxygen, 5, S0, Opts),
-    S2 = dev_pot:set_weight(ResourceOxygen, 10, S1, Opts),
-    S3 = dev_pot:set_weight(ResourceOxygen, 2, S2, Opts),
-    S4 = dev_pot:set_weight(ResourceOxygen, 1, S3, Opts),
+    S1 = dev_pot:register_resource(ResourceOxygen, 5, S0, Opts),
+    S2 = dev_pot:register_resource(ResourceOxygen, 10, S1, Opts),
+    S3 = dev_pot:register_resource(ResourceOxygen, 2, S2, Opts),
+    S4 = dev_pot:register_resource(ResourceOxygen, 1, S3, Opts),
     % Final TWU should be 1 * 10 = 10
     ?assertEqual(10, hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)).
 
@@ -1178,7 +1178,7 @@ undelegate_notice_has_negative_quantity_test() ->
     Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
-    [_, UndelegateNotice] = Outbox,
+    [UndelegateNotice, _] = Outbox,
     Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
     ?assert(Quantity =< 0).
 
@@ -1197,8 +1197,8 @@ multiple_delegations_outbox_order_test() ->
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first: [Charlie (S2), Bob (S1)]
     [Notice1, Notice2] = Outbox,
-    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
-    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
+    ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
 
 %%% Empty/Zero State Tests
 
@@ -1278,7 +1278,7 @@ weighted_distribution_across_resources_test() ->
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:deposit(Bob, ResourceHydrogen, 10, S1, Opts),
     % Set hydrogen weight to 3
-    S3 = dev_pot:set_weight(ResourceHydrogen, 3, S2, Opts),
+    S3 = dev_pot:register_resource(ResourceHydrogen, 3, S2, Opts),
     % Drip at t=1
     S4 = dev_pot:test_drip(S3, #{<<"t">> => 1}, Opts),
     AliceBalance = dev_pot:balance(Alice, S4, Opts),
