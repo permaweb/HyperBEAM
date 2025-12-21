@@ -68,6 +68,7 @@ increment(Topic, Message, Opts) ->
     increment(Topic, Message, Opts, 1).
 increment(global, _Message, _Opts, _Count) -> ignored;
 increment(linkify, _Message, _Opts, _Count) -> ignored;
+increment(debug_linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_id, _Message, _Opts, _Count) -> ignored;
 increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
 increment(ao_core, _Message, _Opts, _Count) -> ignored;
