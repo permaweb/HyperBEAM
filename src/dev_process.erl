@@ -539,19 +539,13 @@ now(RawBase, Req, Opts) ->
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
                     LatestMsg = without_snapshot(RawLatestMsg, Opts),
-                    ?event(compute_short,
+                    ?event(compute_cache,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
                             {slot, LatestSlot}
                         },
                         Opts
                     ),
-                    ?event(
-                        {serving_from_cache,
-                            {proc_id, ProcessID},
-                            {slot, LatestSlot},
-                            {msg, LatestMsg}
-                    }),
                     dev_process_worker:notify_compute(
                         ProcessID,
                         LatestSlot,
