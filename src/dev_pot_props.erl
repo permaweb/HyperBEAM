@@ -29,7 +29,8 @@ generate_opts(#{ users := Users }) ->
             ||
                 _ <- lists:seq(1, 10)
             ],
-        identities => dev_token_props:generate_identities(Users)
+        identities => dev_token_props:generate_identities(Users),
+        priv_wallet => ar_wallet:new()
     }.
 
 generate_initial_state(Opts) ->
@@ -40,9 +41,9 @@ generate_initial_state(Opts) ->
     StartQty = hb_invariant:int(1, 1_000_000),
     StartResource = hb_invariant:string(id),
     StartAddr = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
-    dev_token_lib:ledger(
+    S0 =
         #{
-            <<"mint-device">> => <<"pot@1.0">>,
+            <<"device">> => <<"pot@1.0">>,
             <<"t">> => 0,
             <<"last-drip">> => 0,
             <<"mint-cap">> => MintCap,
@@ -71,8 +72,15 @@ generate_initial_state(Opts) ->
                 }
             }
         },
-        Opts
-    ).
+    Resources = hb_maps:get(resources, Opts),
+    S1 = lists:foldl(
+        fun(Resource, State) ->
+            dev_pot:register_resource(Resource, hb_invariant:int(), State, Opts)
+        end,
+        S0,
+        Resources
+    ),
+    dev_token_lib:ledger(S1, Opts).
 
 generate_request() ->
     [
@@ -87,13 +95,17 @@ deposit_generator(_State, Opts) ->
     hb_message:commit(
         #{
             <<"path">> => <<"deposit">>,
-            <<"address">> =>
-                hb_util:human_id(
-                    hb_invariant:pick(
-                        dev_token_props:user_wallets(Opts)
-                    )
-                ),
-            <<"amount">> => hb_invariant:int(1, 1_000_000)
+            <<"body">> => #{
+                <<"address">> =>
+                    hb_util:human_id(
+                        hb_invariant:pick(
+                            dev_token_props:user_wallets(Opts)
+                        )
+                    ),
+                <<"quantity">> => hb_invariant:int(1, 1_000_000),
+                <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
+                <<"from">> => <<"foo">>
+            }
         },
         Opts#{ priv_wallet => Wallet }
     ).
