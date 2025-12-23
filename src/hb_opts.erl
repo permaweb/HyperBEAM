@@ -383,12 +383,12 @@ default_message() ->
                     %% By default bundle transactions will be unbundled. This can take some
                     %% time depending on the bundle size. To avoid the unbundle, set this
                     %% to false.
-                    <<"unbundle_bundles">> => false
+                    <<"unbundle_bundles">> => true
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
-                    <<"unbundle_bundles">> => false
+                    <<"unbundle_bundles">> => true
                 }
             ],
         match_index => [?DEFAULT_PRIMARY_STORE],
