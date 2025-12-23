@@ -75,7 +75,7 @@ do_from(RawTX, Req, Opts) ->
     % Assert a minimally valid TX record so we can avoid a lot of edge case
     % handling in the rest of the code.
     enforce_valid_tx(RawTX),
-    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
+    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX), Opts),
     ?event({from, {parsed_tx, hb_util:human_id(TX#tx.id)}}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_tx_from:fields(TX, <<>>, Opts),

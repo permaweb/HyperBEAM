@@ -825,7 +825,7 @@ serialize_deserialize_deep_signed_bundle_test() ->
     ?assert(verify_item(Item3)).
 
 %% @doc Deserialize and reserialize a data item produced by the arbundles JS
-%% library. This validates both that we can read an arbundles.js data itme
+%% library. This validates both that we can read an arbundles.js data item
 %% but also that our data item serialization code is compatible with it.
 arbundles_item_roundtrip_test() ->
     {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-item.bundle">>),
@@ -887,6 +887,32 @@ arbundles_list_bundle_roundtrip_test() ->
 
     Reserialized = dev_arweave_common:normalize(Deserialized),
     ?event(debug_test, {reserialized, Reserialized}),
+    ?assert(verify_item(Reserialized)),
+    ?assertEqual(Bin, Reserialized#tx.data),
+    ok.
+
+%% @doc Do not unbundle bundles if store option <<"unbundle_bundles">>
+%% is set to false
+arbundles_list_bundle_not_unbundled_roundtrip_test() ->
+    W = ar_wallet:new(),
+    {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-list-bundle.bundle">>),
+    TX = sign_item(#tx{
+        format = ans104,
+        data = Bin,
+        data_size = byte_size(Bin),
+        tags = ?BUNDLE_TAGS
+    }, W),
+    ?event(debug_test, {tx, {explicit, TX}}),
+    ?assert(verify_item(TX)),
+
+    Opts = #{<<"unbundle_bundles">> => false},
+    Deserialized = deserialize(TX, Opts),
+    ?assert(is_binary(Deserialized#tx.data)),
+    ?assert(binary:match(Deserialized#tx.data, <<"first">>) /= nomatch),
+    ?assert(binary:match(Deserialized#tx.data, <<"second">>) /= nomatch),
+    ?assert(binary:match(Deserialized#tx.data, <<"third">>) /= nomatch),
+
+    Reserialized = dev_arweave_common:normalize(Deserialized),
     ?assert(verify_item(Reserialized)),
     ?assertEqual(Bin, Reserialized#tx.data),
     ok.
