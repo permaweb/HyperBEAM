@@ -98,7 +98,7 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
     end.
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
+    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX), Opts),
     ?event({from, {parsed_tx, TX}}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_ans104_from:fields(TX, <<>>, Opts),

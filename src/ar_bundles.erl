@@ -3,7 +3,7 @@
 -export([id/1, id/2, hd/1, member/2, find/2]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
--export([serialize/1, deserialize/1, serialize_bundle/3]).
+-export([serialize/1, deserialize/2, serialize_bundle/3]).
 -export([data_item_signature_data/1]).
 -export([bundle_header_size/1, decode_bundle_header/1]).
 -include("include/hb.hrl").
@@ -418,13 +418,13 @@ encode_vint(ZigZag, Acc) ->
 %% and *not* a bundle. It may be an item that contains a bundle, though.
 %% When deserializing a #tx it is the #tx.data that is deserialized (after
 %% consulting the #tx.tags to confirm that data format).
-deserialize(not_found) -> throw(not_found);
-deserialize(Item) when is_record(Item, tx) ->
-    maybe_unbundle(Item);
-deserialize(Binary) ->
-    deserialize_item(Binary).
-
-deserialize_item(Binary) ->
+deserialize(Item) -> deserialize(Item, #{}).
+deserialize(not_found, _Opts) -> throw(not_found);
+deserialize(Item, Opts) when is_record(Item, tx) ->
+    maybe_unbundle(Item, Opts);
+deserialize(Binary, Opts) ->
+    deserialize_item(Binary, Opts).
+deserialize_item(Binary, Opts) ->
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
@@ -440,14 +440,24 @@ deserialize_item(Binary) ->
             tags = Tags,
             data = Data,
             data_size = byte_size(Data)
-        })
+        }),
+        Opts
     ).
 
-maybe_unbundle(Item) ->
+maybe_unbundle(Item, Opts) ->
     case dev_arweave_common:type(Item) of
-        list -> unbundle_list(Item);
-        binary -> Item;
-        map -> unbundle_map(Item)
+        list ->
+            UnbundleBundles = hb_opts:get(<<"unbundle_bundles">>, true, Opts),
+            case UnbundleBundles of
+                true -> 
+                    unbundle_list(Item);
+                false ->
+                    Item
+            end;
+        binary ->
+            Item;
+        map ->
+            unbundle_map(Item)
     end.
 
 unbundle_list(Item) ->
@@ -497,7 +507,7 @@ decode_bundle_items([], <<>>) ->
     [];
 decode_bundle_items([{_ID, Size} | RestItems], ItemsBin) ->
     [
-            deserialize_item(binary:part(ItemsBin, 0, Size))
+            deserialize_item(binary:part(ItemsBin, 0, Size), #{})
         |
             decode_bundle_items(
                 RestItems,

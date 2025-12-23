@@ -379,11 +379,16 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
+                    %% By default bundle transactions will be unbundled. This can take some
+                    %% time depending on the bundle size. To avoid the unbundle, set this
+                    %% to false.
+                    <<"unbundle_bundles">> => false
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
+                    <<"unbundle_bundles">> => false
                 }
             ],
         match_index => [?DEFAULT_PRIMARY_STORE],
