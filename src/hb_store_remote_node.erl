@@ -88,29 +88,14 @@ maybe_cache(StoreOpts, Message, Links) ->
                 maybe_cache_by_store(Store, Message, Links);
             Stores when is_list(Stores) ->
                 ?event(debug, {writing_to_multiple_stores, length(Stores)}),
-                %% TODO: Suport parallel writing
+                %% TODO: Suport parallel write
                 Responses = lists:map(
-                    fun (#{<<"store-module">> := StoreModule} = Store) ->
-                        %% TODO: Move inside maybe_cache_by_store
-                        MaxFileSize = maps:get(<<"max-file-size">>, Store, 0),
-                        MessageByteSize = get_message_byte_size(Message),
-                        ShouldWrite = MaxFileSize == 0 orelse MessageByteSize < MaxFileSize,
-                        case ShouldWrite of 
-                            true ->
-                                ?event(debug, {writing_to, StoreModule}),
-                                maybe_cache_by_store(Store, Message, Links);
-                            false ->
-                                ?event(debug, 
-                                    {skip_store_write, 
-                                        {id, hb_message:id(Message, signed, #{})},
-                                        {message_byte_size, MessageByteSize}, 
-                                        {max_file_size, MaxFileSize}}),
-                                ok
-                        end
+                    fun (Store) ->
+                        maybe_cache_by_store(Store, Message, Links)
                     end, 
                     Stores),
                 %% Sucessful response if we can get ok on every response.
-                %% TODO: We might consider sucessful if we have just one write.
+                %% TODO: We might consider successful if we have just one write.
                 lists:foldl(
                     fun
                         (_, Error) when Error /= ok ->
@@ -126,6 +111,35 @@ maybe_cache(StoreOpts, Message, Links) ->
         erlang:display({Class, Reason, Stacktrace}),
         ignored
     end.
+
+should_write(Message, #{<<"store-module">> := StoreModule} = Store) ->
+    %% Max file size parameters is inclusive. If the message size match
+    %% the max file size value, it will be written to disk.
+    MaxFileSize = maps:get(<<"max-file-size">>, Store, 0),
+    %% Min file size is exclusive, if 5_000_000 is defined,
+    %% only value above 5_000_000 will be stored.
+    MinFileSize = maps:get(<<"min-file-size">>, Store, 0),
+    MessageByteSize = get_message_byte_size(Message),
+    ?event(debug,
+        {skip_store_write,
+            {id, hb_message:id(Message, signed, #{})},
+            {message_byte_size, MessageByteSize},
+            {store_module, StoreModule},
+            {max_file_size, MaxFileSize},
+            {min_file_size, MinFileSize}}),
+    case MinFileSize > MaxFileSize of 
+        true ->
+            ?event(warning, 
+                {min_file_size_above_max_file_size,
+                    {min_file_size, MinFileSize},
+                    {max_file_size, MaxFileSize}
+                }
+            );
+        false ->
+            no_op
+    end,
+    (MaxFileSize == 0 orelse MessageByteSize =< MaxFileSize)
+        andalso (MinFileSize == 0 orelse MessageByteSize > MinFileSize).
 
 get_message_byte_size(Message) when is_atom(Message) orelse is_integer(Message) -> 
     0;
@@ -148,38 +162,44 @@ get_message_byte_size(Message) when is_list(Message) ->
         Message
      ).
 
-maybe_cache_by_store(Store, Data, Links) -> 
-    case hb_cache:write(Data, #{ store => Store }) of
-        {ok, RootPath} ->
-            % Remove the base path from the links.
-            LinksWithoutRootPath =
-                lists:filter(
-                    fun(Link) -> Link /= RootPath end,
-                    Links
-                ),
-            ?event(store_remote_node, cached_received),
-            LinkResults =
-                lists:filter(
-                    fun(Link) ->
-                        hb_store:make_link(Store, RootPath, Link) == false
-                    end,
-                    LinksWithoutRootPath
-                ),
-            ?event(store_remote_node,
-                {linked_cached,
-                    {failed_links, LinkResults}
-                }
-            ),
-            case LinkResults of
-                [] -> ok;
-                _ -> {failed_links, LinkResults}
+maybe_cache_by_store(#{<<"store-module">> := StoreModule} = Store, Data, Links) ->
+    case should_write(Data, Store) of
+        true ->
+            case hb_cache:write(Data, #{ store => Store }) of
+                {ok, RootPath} ->
+                    % Remove the base path from the links.
+                    LinksWithoutRootPath =
+                        lists:filter(
+                            fun(Link) -> Link /= RootPath end,
+                            Links
+                        ),
+                    ?event(store_remote_node, cached_received),
+                    LinkResults =
+                        lists:filter(
+                            fun(Link) ->
+                                hb_store:make_link(Store, RootPath, Link) == false
+                            end,
+                            LinksWithoutRootPath
+                        ),
+                    ?event(store_remote_node,
+                        {linked_cached,
+                            {failed_links, LinkResults}
+                        }
+                    ),
+                    case LinkResults of
+                        [] -> ok;
+                        _ -> {failed_links, LinkResults}
+                    end;
+                {error, Err} ->
+                    ?event(store_remote_node, error_on_local_cache_write),
+                    ?event(warning, {error_caching_remote_node_data, Err}),
+                    {error, Err}
             end;
-        {error, Err} ->
-            ?event(store_remote_node, error_on_local_cache_write),
-            ?event(warning, {error_caching_remote_node_data, Err}),
-            {error, Err}
-    end.
 
+        false ->
+            ?event({skipped_store_write, {store_module, StoreModule}}),
+            ok
+    end.
 
 %% @doc Read local store cached value.
 read_local_cache(StoreOpts, ID) ->
@@ -284,3 +304,39 @@ read_test() ->
 	],
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
     ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)).
+
+should_write_test() ->
+    Store = #{
+		<<"store-module">> => hb_store_lmdb,
+		<<"name">> => <<"cache-mainnet/lmdb">>
+	},
+    Value5Bytes = <<1,2,3,4,5>>,
+    ?assert(
+       should_write(Value5Bytes, Store), 
+       "Nothing defined should always write"
+    ),
+    ?assertNot(
+       should_write(Value5Bytes, Store#{<<"max-file-size">> => 3}), 
+       "Max file size set, Message size ABOVE max file size should not be written"
+    ),
+    ?assert(
+       should_write(Value5Bytes, Store#{<<"max-file-size">> => 5}), 
+       "Max file size set, Message size BELLOW OR EQUAL to max file size should be written"
+    ),
+    ?assert(
+       should_write(Value5Bytes, Store#{<<"min-file-size">> => 3}), 
+       "Min file size set, Message size ABOVE min file size should be written"
+    ),
+    ?assertNot(
+       should_write(Value5Bytes, Store#{<<"min-file-size">> => 5}), 
+       "Min file size set, Message size BELLOW OR EQUAL to min file size should not be written"
+    ),
+    ?assert(
+       should_write(Value5Bytes, Store#{<<"min-file-size">> => 3, <<"max-file-size">> => 10}), 
+       "Max and min file size set, Message size between these values"
+    ),
+    ?assertNot(
+       should_write(Value5Bytes, Store#{<<"min-file-size">> => 7, <<"max-file-size">> => 3}), 
+       "Max and min file size set, Message outside these values"
+    ).
+
