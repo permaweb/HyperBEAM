@@ -53,7 +53,7 @@ forward_assignment(Base, Assignment, Opts) ->
 %% @doc Initialize the index process based on its base state, if not already
 %% complete.
 ensure_initialized(Base, Opts) ->
-    case hb_maps:get(<<"index-ininitialized">>, Base, false, Opts) of
+    case hb_maps:get(<<"index-initialized">>, Base, false, Opts) of
         true -> Base;
         false ->
             ?event(index_short, initializing, Opts),
@@ -218,7 +218,7 @@ update_model(Address, Quantity, Base, Opts) ->
         },
         Opts
     ),
-    OldBalance = hb_ao:get(<<"indexed-deposits">>, Base, 0, Opts),
+    OldBalance = hb_ao:get(<<"indexed-deposits", Address/binary>>, Base, 0, Opts),
     ChangesSinceUpdate = hb_ao:get(<<"changes-since-update">>, Base, 0, Opts),
     hb_ao:resolve(
         Base,
@@ -226,7 +226,8 @@ update_model(Address, Quantity, Base, Opts) ->
             <<"path">> => <<"set">>,
             <<"indexed-deposits/", Address/binary>> => Quantity + OldBalance,
             <<"changes-since-update">> => ChangesSinceUpdate + 1
-        }
+        },
+        Opts
     ).
 
 %% @doc Determine if the index's delegations must be updated in the parent mint.

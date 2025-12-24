@@ -159,15 +159,12 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
         NewState =
             hb_ao:set(
                 State,
-                #{
-                    <<"subscribers">> => #{
-                        Action => #{
-                            Subject => #{
-                                Listener => SubscriptionInfo
-                            }
-                        }
-                    }
-                },
+                hb_util:deep_set(
+                    [<<"subscribers">>, Action, Subject, Listener],
+                    SubscriptionInfo,
+                    State,
+                    Opts
+                ),
                 Opts
             ),
         ?event(

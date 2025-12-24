@@ -196,7 +196,7 @@ generate_pot_state(Params, Opts) ->
             not_found -> #{};
             Default ->
                 #{
-                    <<"partner-mint-device">> => Default,
+                    <<"provider-mint-device">> => Default,
                     <<"update-every">> =>
                         hb_maps:get(update_every, Params, 1, Opts),
                     <<"indexed-mints">> =>
