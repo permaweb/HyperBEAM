@@ -14,23 +14,17 @@ balance(Process, Account, Opts) when is_binary(Account) ->
     balance(Process, #{ <<"balance">> => Account }, Opts);
 balance(Process, Req, Opts) ->
     CurrentSlot = hb_ao:get(<<"slot/current">>, Process, Opts),
-    ?event(debug_test, {current_slot, CurrentSlot}, Opts),
-    Res =
-        hb_ao:resolve_many(
-            [
-                Process,
-                #{ <<"path">> => <<"now">> },
-                #{
-                    <<"path">> => <<"as">>,
-                    <<"as">> => <<"execution">>
-                },
-                Req#{
-                    <<"path">> => <<"balance">>,
-                    <<"slot">> => hb_cache:ensure_loaded(CurrentSlot, Opts)
-                }
-            ],
-            Opts
-        ),
+    Query = 
+        [
+            Process,
+            #{ <<"path">> => <<"now">> },
+            #{ <<"path">> => <<"as">>, <<"as">> => <<"execution">> },
+            Req#{
+                <<"path">> => <<"balance">>,
+                <<"slot">> => hb_cache:ensure_loaded(CurrentSlot, Opts)
+            }
+        ],
+    Res = hb_ao:resolve_many(Query, Opts),
     case Res of
         {ok, B} -> B;
         {error, not_found} -> 0
@@ -74,12 +68,7 @@ test_opts() ->
 
 %% @doc Generate a random ID, or an 'ID' value of the correct length starting
 %% with the given binary and padded with zeros.
-id(AlreadyID) when is_binary(AlreadyID) -> AlreadyID;
-id(Bin) when is_binary(Bin) ->
-    BitSize = byte_size(Bin) * 8,
-    Suffix = << 0:(256 - BitSize) >>,
-    << Bin/binary, Suffix/binary >>;
-id(Other) -> hb_util:human_id(Other).
+id(Wallet) -> dev_process_lib:id(Wallet).
 
 set_weight_req(Resource, Weight) ->
     #{
@@ -112,13 +101,6 @@ undelegate_req(Resource, Addr, Qty) ->
         <<"quantity">> => Qty
     }.
 
-mint_req() ->
-    mint_req(#{}).
-mint_req(Params) ->
-    Params#{
-        <<"action">> => <<"mint">>
-    }.
-
 transfer_req(Addr, Qty) ->
     transfer_req(Addr, Qty, #{}).
 transfer_req(Addr, Qty, Params) ->
@@ -146,9 +128,8 @@ generate_token_state(Params, Opts) ->
             Opts
         ),
     DefaultState = #{
-        <<"device">> => <<"token@1.0">>,
+        <<"execution-device">> => <<"token@1.0">>,
         <<"set-authority">> => id(hb_opts:get(priv_wallet, no_wallet, Opts)),
-        <<"t-source">> => <<"slot">>,
         <<"name">> => <<"Test Token">>,
         <<"ticker">> => <<"TEST">>,
         <<"denomination">> => 12,
@@ -163,20 +144,7 @@ generate_token_state(Params, Opts) ->
 %% added. The result is returned committed with the base wallet of the given
 %% `Opts'.
 generate_base_process_state(ExtraKeys, Opts) ->
-    Addr = id(hb_opts:get(priv_wallet, no_wallet, Opts)),
-    ProcessBase =
-        ExtraKeys#{
-            <<"device">> => <<"process@1.0">>,
-            <<"type">> => <<"Process">>,
-            <<"execution-device">> => <<"token@1.0">>,
-            <<"scheduler-device">> => <<"scheduler@1.0">>,
-            <<"push-device">> => <<"push@1.0">>,
-            <<"scheduler">> => Addr,
-            <<"authority">> => Addr
-        },
-    Proc = hb_message:commit(ProcessBase, Opts),
-    hb_cache:write(Proc, Opts),
-    Proc.
+    dev_process_lib:new(ExtraKeys, Opts).
 
 %% @doc Generate pot state for integration testing
 generate_pot_state(Params, Opts) ->
@@ -205,6 +173,7 @@ generate_pot_state(Params, Opts) ->
         end,
     Merged = maps:merge(MaybeParent, MaybeIndexKeys),
     Merged#{
+        <<"t-source">> => <<"slot">>,
         <<"mint-device">> => hb_maps:get(mint_device, Params, <<"pot@1.0">>, Opts),
         <<"mint-cap">> => MintCap,
         <<"mint-prop-numerator">> => MintPropN,
@@ -295,13 +264,7 @@ push_set_weight(Process, Resource, Weight, Opts) ->
    dev_token_lib:now(Process, Opts).
 
 push_transfer(Process, Sender, Recipient, Qty, Opts) ->
-    push_request(
-        Process,
-        transfer_req(id(Recipient), Qty),
-        Sender,
-        Opts
-    ),
-    dev_token_lib:now(Process, Opts).
+    dev_token_lib:transfer(Process, Sender, Recipient, Qty, Opts).
 
 %% @doc Helper to create a pot resource with deposits
 push_modify_resource(Process, Resource, UserDeposits, Opts) ->
@@ -375,7 +338,7 @@ simple_pot_process_test() ->
         ),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
     push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
-    push_request(Process, mint_req(), Opts),
+    dev_token_lib:mint(Process, Opts),
     push_transfer(Process, Alice, Bob, 1, Opts),
     ?event(debug_test, {state, Process}, Opts),
     ?assertEqual(1, balance(Process, id(Bob),Opts)),
@@ -442,20 +405,18 @@ transfer_with_unclaimed_yield_test() ->
     % Advance time to generate yield
     % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=2:
     % ToMint = 10000 * (2^2 - 1^2) / 2^2 = 10000 * 3 / 4 = 7500
-    % GlobalAcc = 0 + (5000 / 1000) = 7.5 (per weighted unit)
-    % ResourceAcc = 0 + (7.5 * 100) = 750
-    % Alice's yield = (750 - 0) * 10 = 7500 tokens!
+    % GlobalAcc = 0 + (5000 / 1000) = 7 (per weighted unit)
+    % ResourceAcc = 0 + (7 * 100) = 700
+    % Alice's yield = (700 - 0) * 10 = 7000 tokens!
     % % Try to transfer 700 tokens
-    % % Should fail without normalize_mint (500 < 700)
-    % % Should succeed with normalize_mint (500 + 7500 = 7500 > 700)
     push_transfer(Process, Alice, Bob, 700, Opts),
-    % Alice should have: (500 + 7500) - 700 = 6800
+    % Alice should have: (500 + 7000) - 700 = 6800
     % Bob should have: 700
     ?assertEqual(6800, balance(Process, id(Alice), Opts)),
     ?assertEqual(700, balance(Process, id(Bob), Opts)),
     % Total supply should be updated
-    % Initial: 500, Minted: 7500, New total: 7500
-    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    % Initial: 500, Minted: 7000, New total: 7500
+    ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
@@ -473,7 +434,7 @@ claim_yield_single_resource_test() ->
     Process = generate_process(PotFields, TokenFields, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
     push_deposit(Process, ResourceOxygen, Alice, 10, Opts),
-    push_request(Process, mint_req(), Opts),
+    dev_token_lib:mint(Process, Opts),
     BaseAfterClaim = dev_token_lib:now(Process, Opts),
     ?event({after_claim, BaseAfterClaim}),
     ?assertEqual(8000, balance(BaseAfterClaim, Alice, Opts)).
@@ -491,7 +452,7 @@ claim_yield_multiple_resources_test() ->
     push_set_weight(NewState, ResourceHydrogen, 50, Opts),
     push_deposit(NewState, ResourceOxygen, Alice, 10, Opts),
     push_deposit(NewState, ResourceHydrogen, Alice, 5, Opts),
-    push_request(Process, mint_req(), Opts),
+    dev_token_lib:mint(Process, Opts),
     FinalState = dev_token_lib:now(NewState, Opts),
     ?assertEqual(8750, balance(FinalState, id(Alice), Opts)).
 
@@ -509,7 +470,7 @@ claim_yield_no_deposits_test() ->
         initial_balances => #{AliceAddr => 100}
     },
     Process = generate_process(PotFields, TokenFields, Opts),
-    push_request(Process, mint_req(), Opts),
+    dev_token_lib:mint(Process, Opts),
     BaseAfterClaim = dev_token_lib:now(Process, Opts),
     % Alice's balance should be unchanged (still 100)
     ?assertEqual(100, balance(BaseAfterClaim, AliceAddr,Opts)),
@@ -551,10 +512,10 @@ pot_subscriptions_test() ->
     ),
     % Push an action on the child mint to initialize it, subsribing to all 
     % messages on the parent mint's set-weight action.
-    push_request(ChildProcess, #{ <<"action">> => <<"mint">> }, Opts),
+    dev_token_lib:mint(ChildProcess, Opts),
     ?assertEqual(
         [dev_process_lib:process_id(ChildProcess, Opts)],
-        dev_token_lib:subscribers(ParentProcess, <<"register">>, Opts)
+        dev_process_lib:subscribers(ParentProcess, <<"register">>, Opts)
     ),
     % Push set-weight actions on the parent mint and verify that the child mint
     % also updates accordingly.
@@ -592,11 +553,7 @@ child_pot_test() ->
     },
     ChildToken = generate_process(ChildPotParams, Opts),
     ChildID = dev_process_lib:process_id(ChildToken, Opts),
-    push_request(
-        ChildToken,
-        #{ <<"action">> => <<"mint">> },
-        Opts
-    ),
+    dev_token_lib:mint(ChildToken, Opts),
     % Set the weights mints such that all units in the parent are given for
     % providing `stETH', and all units in the child are given for providing
     % `Parent'.
@@ -608,18 +565,8 @@ child_pot_test() ->
     ?event(debug_test, {delegate_result, Res}, Opts),
     % Check that tokens are being minted in the parent for both the child token
     % and Alice.
-    push_request(
-        ParentToken,
-        #{ <<"action">> => <<"mint">> },
-        Alice,
-        Opts
-    ),
-    push_request(
-        ChildToken,
-        #{ <<"action">> => <<"mint">> },
-        Alice,
-        Opts
-    ),
+    dev_token_lib:mint(ParentToken, Opts),
+    dev_token_lib:mint(ChildToken, Opts),
     ParentState = dev_token_lib:now(ParentToken, Opts),
     ChildState = dev_token_lib:now(ChildToken, Opts),
     ?assert(balance(ParentState, Alice, Opts) > 0),
@@ -657,10 +604,10 @@ child_pots_with_index_test() ->
     % exchange for their own tokens.
     ChildA= generate_process(BaseParams#{ <<"parent">> => ParentID }, Opts),
     ChildAID = dev_process_lib:process_id(ChildA, Opts),
-    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
+    dev_token_lib:mint(ChildA, Opts),
     ChildB = generate_process(BaseParams#{ <<"parent">> => ParentID }, Opts),
     ChildBID = dev_process_lib:process_id(ChildB, Opts),
-    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
+    dev_token_lib:mint(ChildB, Opts),
     % Spawn the mint index, tracking delegations to `ChildAID' and `ChildBID'.
     IndexParams =
         BaseParams#{
@@ -671,9 +618,9 @@ child_pots_with_index_test() ->
         },
     Index = generate_process(IndexParams, Opts),
     IndexID = dev_process_lib:process_id(Index, Opts),
-    push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
-    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
-    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
+    dev_token_lib:mint(Index, Opts),
+    dev_token_lib:mint(ChildA, Opts),
+    dev_token_lib:mint(ChildB, Opts),
     ?hr(),
     ?event(
         {network_map,
@@ -702,10 +649,10 @@ child_pots_with_index_test() ->
     ?hr("MINTING"),
     % Push a `mint` operation to the parent to force a mint with the new
     % delegations.
-    push_request(Parent, mint_req(), Opts),
-    push_request(ChildA, mint_req(), Opts),
-    push_request(ChildB, mint_req(), Opts),
-    push_request(Index, mint_req(), Opts),
+    dev_token_lib:mint(Parent, Opts),
+    dev_token_lib:mint(ChildA, Opts),
+    dev_token_lib:mint(ChildB, Opts),
+    dev_token_lib:mint(Index, Opts),
     ?hr("VERIFYING"),
     % ParentState2 = dev_token_lib:now(Parent, Opts),
     % IndexState = dev_token_lib:now(Index, Opts),
