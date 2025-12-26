@@ -702,10 +702,10 @@ child_pots_with_index_test() ->
     ?hr("MINTING"),
     % Push a `mint` operation to the parent to force a mint with the new
     % delegations.
-    push_request(Parent, #{ <<"action">> => <<"mint">> }, Opts),
-    push_request(ChildA, #{ <<"action">> => <<"mint">> }, Opts),
-    push_request(ChildB, #{ <<"action">> => <<"mint">> }, Opts),
-    push_request(Index, #{ <<"action">> => <<"mint">> }, Opts),
+    push_request(Parent, mint_req(), Opts),
+    push_request(ChildA, mint_req(), Opts),
+    push_request(ChildB, mint_req(), Opts),
+    push_request(Index, mint_req(), Opts),
     ?hr("VERIFYING"),
     % ParentState2 = dev_token_lib:now(Parent, Opts),
     % IndexState = dev_token_lib:now(Index, Opts),
