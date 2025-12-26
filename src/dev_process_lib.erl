@@ -2,8 +2,33 @@
 %%% the `~process@1.0` meta-device structure.
 -module(dev_process_lib).
 -include("include/hb.hrl").
--export([as_process/2, run_as/4, process_id/2, process_id/3]).
+-export([new/2, as_process/2, run_as/4, process_id/2, process_id/3]).
 -export([set_results/3, ensure_process_key/2]).
+-export([subscribe/3, unsubscribe/3]).
+%%% Query wrappers.
+-export([now/2, id/1, push/3, push/4]).
+-export([subscribers/3, subscribers/4]).
+
+new(ProcMap, Opts) ->
+    HostWallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Proc =
+        hb_message:commit(
+            hb_maps:merge(
+                #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"type">> => <<"Process">>,
+                    <<"scheduler-device">> => <<"scheduler@1.0">>,
+                    <<"push-device">> => <<"push@1.0">>,
+                    <<"scheduler">> => hb_util:human_id(HostWallet),
+                    <<"authority">> => hb_util:human_id(HostWallet)
+                },
+                ProcMap,
+                Opts
+            ),
+            Opts#{ priv_wallet => HostWallet }
+        ),
+    hb_cache:write(Proc, Opts),
+    Proc.
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Opts) ->
@@ -24,7 +49,9 @@ process_id(Base, Req, Opts) ->
                 {true, _} ->
                     hb_message:id(
                         Process,
-                        hb_util:atom(maps:get(<<"commitments">>, Req, <<"signed">>)),
+                        hb_util:atom(
+                            maps:get(<<"commitments">>, Req, <<"signed">>)
+                        ),
                         Opts
                     )
             end
@@ -73,7 +100,8 @@ run_as(Key, Base, Req, Opts) ->
 %% In situations where the key that is `run_as' returns a message with a 
 %% transformed device, this is useful.
 as_process(Base, Opts) ->
-    {ok, Proc} = dev_message:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts),
+    {ok, Proc} = 
+        dev_message:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts),
     Proc.
 
 %% @doc Set the results of the current process.
@@ -112,3 +140,89 @@ ensure_process_key(Base, Opts) ->
             Res;
         _ -> Base
     end.
+
+%% @doc Subscribe to receive notifications upon a given `action' and (optionally)
+%% `target' from a given process.
+subscribe(ProcMsg, Action, Opts) ->
+    subscribe(ProcMsg, Action, <<"broadcast">>, Opts).
+subscribe(ProcMsg, Action, Target, Opts) ->
+    push(
+        ProcMsg,
+        #{
+            <<"action">> => <<"subscribe">>,
+            <<"subscribe-action">> => Action,
+            <<"subscribe-target">> => Target
+        },
+        Opts
+    ).
+
+%% @doc Unsubscribe from receiving notifications upon a given `action' and (optionally)
+%% `target' from a given process.
+unsubscribe(ProcMsg, Action, Opts) ->
+    unsubscribe(ProcMsg, Action, <<"broadcast">>, Opts).
+unsubscribe(ProcMsg, Action, Target, Opts) ->
+    push(
+        ProcMsg,
+        #{
+            <<"action">> => Action,
+            <<"subscribe-action">> => Action,
+            <<"subscribe-target">> => Target
+        },
+        Opts
+    ).
+
+%% @doc Get the current state of a process.
+now(ProcMsg, Opts) ->
+    {ok, State} = hb_ao:resolve(ProcMsg, #{ <<"path">> => <<"now">> }, Opts),
+    State.
+
+%% @doc Helper function to push a message to a process. Signs the message with the
+%% default key in the `Opts'.
+push(Process, Msg, RawOpts) ->
+    push(Process, Msg, hb_opts:get(priv_wallet, hb:wallet(), RawOpts), RawOpts).
+push(Process, Msg, MsgWallet, RawOpts) ->
+    UserOpts = RawOpts#{ priv_wallet => MsgWallet },
+    SystemOpts =
+        RawOpts#{
+            priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
+        },
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"push">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        Msg#{
+                            <<"target">> =>
+                                if is_binary(Process) ->
+                                    Process;
+                                true ->
+                                    dev_process_lib:process_id(Process, SystemOpts)
+                                end
+                        },
+                        UserOpts
+                    )
+            },
+            UserOpts
+        ),
+    hb_ao:resolve(Process, Req, SystemOpts).
+
+%% @doc Generate a random ID, or an 'ID' value of the correct length starting
+%% with the given binary and padded with zeros.
+id(AlreadyID) when is_binary(AlreadyID) -> AlreadyID;
+id(Bin) when is_binary(Bin) ->
+    BitSize = byte_size(Bin) * 8,
+    Suffix = << 0:(256 - BitSize) >>,
+    << Bin/binary, Suffix/binary >>;
+id(Other) -> hb_util:human_id(Other).
+
+%% @doc Get the subscribers of a process for a given action and target.
+subscribers(ProcMsg, Action, Opts) ->
+    subscribers(
+        ProcMsg,
+        Action,
+        <<"broadcast">>,
+        Opts
+    ).
+subscribers(ProcMsg, Action, Target, Opts) ->
+    dev_process_outbox:subscribers(now(ProcMsg, Opts), Action, Target, Opts).
