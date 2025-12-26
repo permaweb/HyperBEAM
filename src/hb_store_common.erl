@@ -68,7 +68,6 @@ resolved_list_test() ->
     hb_store:make_group(Store2, <<"group1/group12">>),
     hb_store:write(Store2, <<"data/final_id2">>, <<"7890">>),
     %% Link 
-    %% TODO: Not sure if this structure is possible in HB
     hb_store:make_link(Store2, <<"data/final_id2">>, <<"group1/group12/data">>),
     hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
     %% Check result
