@@ -94,7 +94,7 @@ balance(Base, Req, Opts) ->
             hb_ao:set(Req, <<"subject">>, Account, Opts),
             Opts
         ),
-    Balances =
+    {ok, Balances} =
         hb_ao:resolve_many(
             [
                 NormBase,
