@@ -9,11 +9,10 @@
 %%% Initialization and Push wrappers.
 -export([ledger/1, ledger/2, transfer/5, transfer/6]).
 -export([subledger/2, subledger/3]).
--export([register/3, subscribe/3, unsubscribe/3]).
+-export([register/3, mint/3, mint/2]).
 %%% Query wrappers.
 -export([now/2, balance/3, balance_total/3, balances/2, balances/3]).
 -export([supply/2, supply/3]).
--export([subscribers/3, subscribers/4]).
 -export([subledger_supply/3, user_supply/3]).
 -export([ledgers/2, map/2, map/3]).
 -export([verify_net/3, verify_root_supply/2, verify_net_supply/3]).
@@ -27,8 +26,7 @@ ledger(Opts) ->
 ledger(Extra, Opts) ->
     % If the `balances' key is set in the `Extra' map, ensure that any wallets
     % given as keys in the message are converted to human-readable addresses.
-    HostWallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    ModExtra =
+    LedgerMap =
         case maps:get(<<"balances">>, Extra, undefined) of
             undefined -> Extra;
             RawBalance ->
@@ -37,15 +35,9 @@ ledger(Extra, Opts) ->
                         maps:from_list(
                             lists:filtermap(
                                 fun({ID, Amount}) when ?IS_ID(ID) ->
-                                    {true, {hb_util:human_id(ID), Amount}};
+                                    {true, {id(ID), Amount}};
                                 ({Wallet, Amount}) when is_tuple(Wallet) ->
-                                    {
-                                        true,
-                                        {
-                                            hb_util:human_id(Wallet),
-                                            Amount
-                                        }
-                                    };
+                                    {true, {id(Wallet), Amount}};
                                 (_Other) ->
                                     false
                                 end,
@@ -54,23 +46,8 @@ ledger(Extra, Opts) ->
                         )
                 }
         end,
-    ?event(debug_test, {mod_extra, ModExtra}),
-    Proc =
-        hb_message:commit(
-            maps:merge(
-                #{
-                    <<"device">> => <<"process@1.0">>,
-                    <<"type">> => <<"Process">>,
-                    <<"scheduler-device">> => <<"scheduler@1.0">>,
-                    <<"scheduler">> => hb_util:human_id(HostWallet),
-                    <<"authority">> => hb_util:human_id(HostWallet)
-                },
-                ModExtra
-            ),
-            Opts#{ priv_wallet => HostWallet }
-        ),
-    hb_cache:write(Proc, Opts),
-    Proc.
+    ?event(debug_test, {mod_extra, LedgerMap}),
+    dev_process_lib:new(LedgerMap, Opts).
 
 %% @doc Generate a test sub-ledger process definition message.
 subledger(Root, Opts) ->
@@ -81,18 +58,14 @@ subledger(Root, Extra, Opts) ->
             [<<"token">>, <<"balances">>],
             hb_message:uncommitted(Root, Opts)
         ),
-    Proc = 
-        hb_message:commit(
-            maps:merge(
-                BareRoot#{
-                    <<"token">> => hb_message:id(Root, all)
-                },
-                Extra
-            ),
-            Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+    SubLedgerMap = 
+        maps:merge(
+            BareRoot#{
+                <<"token">> => hb_message:id(Root, all)
+            },
+            Extra
         ),
-    hb_cache:write(Proc, Opts),
-    Proc.
+    dev_process_lib:new(SubLedgerMap, Opts).
 
 %% @doc Generate a test transfer message.
 transfer(ProcMsg, Sender, Recipient, Quantity, Opts) ->
@@ -108,11 +81,11 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         end
                 }
         end,
-    push(
+    dev_process_lib:push(
         ProcMsg,
         MaybeRoute#{
             <<"action">> => <<"Transfer">>,
-            <<"recipient">> => hb_util:human_id(Recipient),
+            <<"recipient">> => id(Recipient),
             <<"quantity">> => Quantity
         },
         Sender,
@@ -123,7 +96,7 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
 register(ProcMsg, Peer, Opts) when is_map(Peer) ->
     register(ProcMsg, hb_message:id(Peer, all), Opts);
 register(ProcMsg, PeerID, Opts) ->
-    push(
+    dev_process_lib:push(
         ProcMsg,
         #{
             <<"action">> => <<"register-remote">>,
@@ -132,77 +105,23 @@ register(ProcMsg, PeerID, Opts) ->
         Opts
     ).
 
-%% @doc Subscribe to receive notifications upon a given `action' and (optionally)
-%% `target' from a given process.
-subscribe(ProcMsg, Action, Opts) ->
-    subscribe(ProcMsg, Action, <<"broadcast">>, Opts).
-subscribe(ProcMsg, Action, Target, Opts) ->
-    push(
-        ProcMsg,
-        #{
-            <<"action">> => <<"subscribe">>,
-            <<"subscribe-action">> => Action,
-            <<"subscribe-target">> => Target
-        },
-        Opts
-    ).
-
-%% @doc Unsubscribe from receiving notifications upon a given `action' and (optionally)
-%% `target' from a given process.
-unsubscribe(ProcMsg, Action, Opts) ->
-    unsubscribe(ProcMsg, Action, <<"broadcast">>, Opts).
-unsubscribe(ProcMsg, Action, Target, Opts) ->
-    push(
-        ProcMsg,
-        #{
-            <<"action">> => Action,
-            <<"subscribe-action">> => Action,
-            <<"subscribe-target">> => Target
-        },
-        Opts
-    ).
+mint(ProcMsg, Opts) ->
+    mint(ProcMsg, #{}, Opts).
+mint(ProcMsg, Params, Opts) ->
+    dev_process_lib:push(ProcMsg, Params#{ <<"action">> => <<"mint">> }, Opts).
 
 %%% Query wrappers.
 
 %% @doc Get the current state of a process.
 now(ProcMsg, Opts) ->
-    {ok, State} = hb_ao:resolve(ProcMsg, #{ <<"path">> => <<"now">> }, Opts),
-    State.
+    dev_process_lib:now(ProcMsg, Opts).
 
-%% @doc Helper function to push a message to a process. Signs the message with the
-%% default key in the `Opts'.
-push(Process, Msg, RawOpts) ->
-    push(Process, Msg, hb_opts:get(priv_wallet, hb:wallet(), RawOpts), RawOpts).
-push(Process, Msg, MsgWallet, RawOpts) ->
-    UserOpts = RawOpts#{ priv_wallet => MsgWallet },
-    SystemOpts =
-        RawOpts#{
-            priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
-        },
-    Req =
-        hb_message:commit(
-            #{
-                <<"path">> => <<"push">>,
-                <<"body">> =>
-                    hb_message:commit(
-                        Msg#{
-                            <<"target">> =>
-                                if is_binary(Process) ->
-                                    Process;
-                                true ->
-                                    dev_process_lib:process_id(Process, SystemOpts)
-                                end
-                        },
-                        UserOpts
-                    )
-            },
-            UserOpts
-        ),
-    hb_ao:resolve(Process, Req, SystemOpts).
+id(Wallet) ->
+    dev_process_lib:id(Wallet).
 
 %% @doc Retreive a single balance from the ledger.
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
-    balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
+    balance(ProcMsg, id(User), Opts);
 balance(ProcMsg, ID, Opts) ->
     hb_ao:get(<<"now/balances/", ID/binary>>, ProcMsg, 0, Opts).
 
@@ -266,17 +185,6 @@ ledgers(ProcMsg, Opts) ->
         [] -> #{}
     end.
 
-%% @doc Get the subscribers of a process for a given action and target.
-subscribers(ProcMsg, Action, Opts) ->
-    subscribers(
-        ProcMsg,
-        Action,
-        <<"broadcast">>,
-        Opts
-    ).
-subscribers(ProcMsg, Action, Target, Opts) ->
-    dev_process_outbox:subscribers(now(ProcMsg, Opts), Action, Target, Opts).
-
 %% @doc Generate a complete overview of the test environment's balances and 
 %% ledgers. Optionally, a map of environment names can be provided to make the
 %% output more readable.
@@ -308,7 +216,7 @@ apply_names(Map, EnvNames, Opts) ->
         maps:from_list(
             lists:filtermap(
                 fun({Key, V}) ->
-                    try {true, {hb_util:human_id(Key), V}}
+                    try {true, {id(Key), V}}
                     catch _:_ ->
                         try {true, {hb_message:id(Key, all), V}}
                         catch _:_ -> false
@@ -341,7 +249,7 @@ do_apply_names(List, EnvNames, Opts) when is_list(List) ->
 do_apply_names(Item, Names, _Opts) when is_map_key(Item, Names) ->
     maps:get(Item, Names);
 do_apply_names(Item, Names, _Opts) ->
-    try maps:get(hb_util:human_id(Item), Names, Item)
+    try maps:get(id(Item), Names, Item)
     catch _:_ -> Item
     end.
 
@@ -381,7 +289,10 @@ verify_net_supply(RootProc, AllProcs, Opts) ->
     NormProcsWithoutRoot = normalize_without_root(RootProc, AllProcs),
     RootUserSupply = user_supply(RootProc, NormProcsWithoutRoot, Opts),
     SubledgerSupply = subledger_supply(RootProc, AllProcs, Opts),
-    ?event({verify_net_supply, {root, RootUserSupply}, {subledger, SubledgerSupply}}),
+    ?event({
+        verify_net_supply, 
+        {root, RootUserSupply}, {subledger, SubledgerSupply}
+    }),
     ?assert(
         StartingRootSupply ==
         RootUserSupply + SubledgerSupply
