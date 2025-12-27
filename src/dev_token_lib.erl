@@ -23,31 +23,48 @@
 %% @doc Generate a token process definition message.
 ledger(Opts) ->
     ledger(#{ <<"execution-device">> => <<"token@1.0">> }, Opts).
-ledger(Extra, Opts) ->
-    % If the `balances' key is set in the `Extra' map, ensure that any wallets
+ledger(#{ <<"execution-device">> := <<"token@1.0">> } = ProcMsg, Opts) ->
+    DefaultBalances = #{ <<"device">> => <<"trie@1.0">> },
+    {Balances, TotalSupply} = normalize_balances(DefaultBalances, ProcMsg, Opts),
+    DefaultState = #{
+        <<"execution-device">> => <<"token@1.0">>,
+        <<"set-authority">> => id(hb_opts:get(priv_wallet, no_wallet, Opts)),
+        <<"name">> => <<"Test Token">>,
+        <<"ticker">> => <<"TEST">>,
+        <<"denomination">> => 12,
+        <<"total-supply">> => TotalSupply
+    },
+    Process =
+        hb_maps:merge(
+            DefaultState,
+            ProcMsg#{ <<"balances">> => Balances },
+            Opts
+        ),
+    dev_process_lib:new(Process, Opts);
+ledger(#{ <<"execution-device">> := <<"lua@5.3a">> } = ProcMsg, Opts) ->
+    % If the `balances' key is set in the `ProcMsg' map, ensure that any wallets
     % given as keys in the message are converted to human-readable addresses.
-    LedgerMap =
-        case maps:get(<<"balances">>, Extra, undefined) of
-            undefined -> Extra;
-            RawBalance ->
-                Extra#{
-                    <<"balances">> =>
-                        maps:from_list(
-                            lists:filtermap(
-                                fun({ID, Amount}) when ?IS_ID(ID) ->
-                                    {true, {id(ID), Amount}};
-                                ({Wallet, Amount}) when is_tuple(Wallet) ->
-                                    {true, {id(Wallet), Amount}};
-                                (_Other) ->
-                                    false
-                                end,
-                                maps:to_list(RawBalance)
-                            )
-                        )
-                }
-        end,
-    ?event(debug_test, {mod_extra, LedgerMap}),
-    dev_process_lib:new(LedgerMap, Opts).
+    InitialBalances = hb_maps:get(<<"balances">>, ProcMsg, #{},Opts),
+    Balances = set_balance(#{}, InitialBalances, Opts),
+    TotalSupply = total_supply(InitialBalances, ProcMsg, Opts),
+    LedgerMap = 
+        ProcMsg#{
+            <<"balances">> => Balances,
+            <<"total-supply">> => TotalSupply
+        },
+    dev_process_lib:new(LedgerMap, Opts);
+ledger(ProcMsg, Opts) ->
+    {ok, ExecDev} = 
+        hb_maps:find(
+            <<"execution-device">>, 
+            ProcMsg, 
+            <<"No `execution-device` for ledger">>,
+            Opts
+        ),
+    {
+        error, 
+        <<"Execution Device", ExecDev/binary, "is not a valid one for ledger.">>
+    }.
 
 %% @doc Generate a test sub-ledger process definition message.
 subledger(Root, Opts) ->
@@ -346,3 +363,39 @@ normalize_env(Procs) when is_list(Procs) ->
 %% @doc Return the normalized environment without the root ledger.
 normalize_without_root(RootProc, Procs) ->
     maps:without([hb_message:id(RootProc, all)], normalize_env(Procs)).
+
+normalize_balances(DefaultBalances, ProcMsg, Opts) ->
+    InitialBalances = hb_maps:get(<<"balances">>, ProcMsg, #{}, Opts),
+    Balances = set_balance(DefaultBalances, InitialBalances, Opts),
+    TotalSupply = total_supply(InitialBalances, ProcMsg, Opts),
+    {Balances, TotalSupply}.
+set_balance(DefaultBalances, RawBalances, Opts) ->
+    InitialBalances =
+        hb_maps:from_list(
+            lists:filtermap(
+                fun({ID, Amount}) when ?IS_ID(ID) ->
+                    {true, {id(ID), Amount}};
+                ({Wallet, Amount}) when is_tuple(Wallet) ->
+                    {true, {id(Wallet), Amount}};
+                (_Other) ->
+                    false
+                end,
+                hb_maps:to_list(
+                    RawBalances,
+                    Opts
+                )
+            )
+        ),
+    {ok, Balances} =
+        hb_ao:resolve(
+            DefaultBalances,
+            InitialBalances#{ <<"path">> => <<"set">> },
+            Opts
+        ),
+    Balances.
+
+total_supply(InitialBalances, ProcMsg, Opts) ->
+    case hb_maps:find(<<"total-supply">>, ProcMsg, Opts) of
+        {ok, TotalSupply} -> TotalSupply;
+        error -> lists:sum(hb_maps:values(InitialBalances, Opts))
+    end.
