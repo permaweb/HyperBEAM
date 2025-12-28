@@ -1042,25 +1042,29 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
-    WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
-        undefined -> NormalBody;
+    % Extract the client IP address from the request. We honor the
+    % `x-real-ip' header if it is present (e.g., from reverse proxies).
+    ClientIP =
+        case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
+            undefined ->
+                {{A, B, C, D}, _} = cowboy_req:peer(Req),
+                hb_util:bin(
+                    io_lib:format(
+                        "~b.~b.~b.~b",
+                        [A, B, C, D]
+                    )
+                );
+            IP -> IP
+        end,
+    % Add the client IP to the message for use by rate limiting and other
+    % non-deterministic local node policies.
+    WithClientIP = NormalBody#{ <<"client-ip">> => ClientIP },
+    WithPeer = case hb_maps:get(<<"ao-peer-port">>, WithClientIP, undefined, Opts) of
+        undefined -> WithClientIP;
         P2PPort ->
-            % Calculate the peer address from the request. We honor the 
-            % `x-real-ip' header if it is present.
-            RealIP =
-                case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
-                    undefined ->
-                        {{A, B, C, D}, _} = cowboy_req:peer(Req),
-                        hb_util:bin(
-                            io_lib:format(
-                                "~b.~b.~b.~b",
-                                [A, B, C, D]
-                            )
-                        );
-                    IP -> IP
-                end,
-            Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
-            (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
+            % Build the full peer address with port for peer-to-peer communication.
+            Peer = <<ClientIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
+            (hb_message:without_unless_signed(<<"ao-peer-port">>, WithClientIP, Opts))#{
                 <<"ao-peer">> => Peer
             }
     end,
