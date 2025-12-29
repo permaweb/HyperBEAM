@@ -134,7 +134,7 @@ now(ProcMsg, Opts) ->
     dev_process_lib:now(ProcMsg, Opts).
 
 id(Wallet) ->
-    dev_process_lib:id(Wallet).
+    dev_process_lib:wallet_id(Wallet).
 
 %% @doc Retreive a single balance from the ledger.
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->

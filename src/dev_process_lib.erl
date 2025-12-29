@@ -6,7 +6,7 @@
 -export([set_results/3, ensure_process_key/2]).
 -export([subscribe/3, unsubscribe/3]).
 %%% Query wrappers.
--export([now/2, id/1, push/3, push/4]).
+-export([now/2, wallet_id/1, push/3, push/4]).
 -export([subscribers/3, subscribers/4]).
 
 new(ProcMap, Opts) ->
@@ -209,12 +209,12 @@ push(Process, Msg, MsgWallet, RawOpts) ->
 
 %% @doc Generate a random ID, or an 'ID' value of the correct length starting
 %% with the given binary and padded with zeros.
-id(AlreadyID) when is_binary(AlreadyID) -> AlreadyID;
-id(Bin) when is_binary(Bin) ->
+wallet_id(AlreadyID) when is_binary(AlreadyID) -> AlreadyID;
+wallet_id(Bin) when is_binary(Bin) ->
     BitSize = byte_size(Bin) * 8,
     Suffix = << 0:(256 - BitSize) >>,
     << Bin/binary, Suffix/binary >>;
-id(Other) -> hb_util:human_id(Other).
+wallet_id(Other) -> hb_util:human_id(Other).
 
 %% @doc Get the subscribers of a process for a given action and target.
 subscribers(ProcMsg, Action, Opts) ->
