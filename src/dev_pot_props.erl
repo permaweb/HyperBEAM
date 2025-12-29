@@ -103,13 +103,36 @@ deposit_generator(_State, Opts) ->
                     ),
                 <<"quantity">> => hb_invariant:int(1, 1_000_000),
                 <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
-                <<"from">> => <<"foo">>
+                <<"from">> => <<"foo">> % TODO: What should this value be?
             }
         },
         Opts#{ priv_wallet => Wallet }
     ).
 
-verify_deposit(OldState, _Req, NewState, Opts) ->
-  true.
+verify_deposit(OldState, Req, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    Addr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    OldDeposit = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+        OldState,
+        0,
+        Opts
+    ),
+    NewDeposit = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    NewDeposit =:= OldDeposit + Quantity orelse
+    {error,
+        {bad_deposit_math,
+            {old_deposit, OldDeposit},
+            {new_deposit, NewDeposit},
+            {qty, Quantity}
+        }
+    }.
 
 next(OldS, _Req, NewS, Opts) -> OldS.
