@@ -126,11 +126,30 @@ verify_deposit(OldState, Req, NewState, Opts) ->
         0,
         Opts
     ),
+    % Simple verification of new deposit quantity
     NewDeposit =:= OldDeposit + Quantity orelse
     {error,
         {bad_deposit_math,
             {old_deposit, OldDeposit},
             {new_deposit, NewDeposit},
+            {qty, Quantity}
+        }
+    },
+    Weight = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/weight">>,
+        NewState,
+        0,
+        Opts
+    ),
+    OldTWU = hb_maps:get(<<"total-weighted-units">>, OldState),
+    NewTWU = hb_maps:get(<<"total-weighted-units">>, NewState),
+    % Verify new total weighted units
+    NewTWU =:= OldTWU + (Quantity * Weight) orelse
+    {error,
+        {bad_total_weighted_units,
+            {old_twu, OldTWU},
+            {new_twu, NewTWU},
+            {weight, Weight},
             {qty, Quantity}
         }
     }.
