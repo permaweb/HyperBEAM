@@ -4,6 +4,32 @@
 -include("include/hb.hrl").
 
 %%% Test Helper Functions
+test_opts() ->
+    hb:init(),
+    #{
+        priv_wallet => ar_wallet:new(),
+        store => [hb_test_utils:test_store()]
+    }.
+
+id(Wallet) ->
+    dev_process_lib:wallet_id(Wallet).
+
+now(Process, Opts) ->
+    dev_process_lib:now(Process, Opts).
+
+mint(Process, Opts) ->
+    dev_token_lib:mint(Process, Opts).
+push_set_weight(Process, Resource, Weight, Opts) ->
+    dev_pot_lib:register(Process, Resource, Weight, Opts).
+
+push_deposit(Process, Resource, User, Qty, Opts) ->
+    dev_pot_lib:deposit(Process, Resource, User, Qty, Opts).
+
+push_withdraw(Process, Resource, User, Qty, Opts) ->
+    dev_pot_lib:withdraw(Process, Resource, User, Qty, Opts).
+
+balance(Process, User, Opts) ->
+    dev_pot_lib:balance(Process, User, Opts).
 
 %% @doc Create a pot state with one user
 %% Example: pot_state(Alice, ResourceOxygen, 10)
@@ -106,45 +132,51 @@ mint_quantity_test() ->
 
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
-    Addr1 = <<"addr1">>,
-    Addr2 = <<"addr2">>,
-    ResourceID = <<"resource1">>,
-    Opts = #{},
-    S0 = pot_state_empty([ResourceID]),
-    S1 = dev_pot:deposit(Addr1, ResourceID, 10, S0, Opts),
-    S2 = dev_pot:deposit(Addr2, ResourceID, 10, S1, Opts),
-    report(S2, Opts),
-    S3 = dev_pot:test_drip(S2, #{ <<"t">> => 1 }, Opts),
-    report(S3, Opts),
-    % At t=1, there are 20 pot units and 50 minted to distribute, 50 div 20 = 2,
-    % so it's 20 to each address with 10 undistributed
-    ?assertEqual(20, dev_pot:balance(Addr1, S3, Opts)),
-    ?assertEqual(20, dev_pot:balance(Addr2, S3, Opts)),
-    S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
-    report(S4, Opts),
-    % At t=2, there are 20 pot units and 25 + 10 minted to distribute, 35 div 20 = 1,
-    % so it's 10 to each address with 15 undistributed
-    ?assertEqual(30, dev_pot:balance(Addr1, S4, Opts)),
-    ?assertEqual(30, dev_pot:balance(Addr2, S4, Opts)),
-    % Set Addr1 to have 75% of the total deposits.
-    S5 = dev_pot:deposit(Addr1, ResourceID, 20, S4, Opts),
-    report(S5, Opts),
-    % Calculate the expected balance for Addr1. At this step we mint 12 and have
-    % 15 undistributed, and there are 40 total pot units. 27 div 40 = 0, and
-    % we advance 27 undistributed.
-    NewExpectedB1 = 30,
-    S6 = dev_pot:test_drip(S5, #{ <<"t">> => 3 }, Opts),
-    report(S6, Opts),
-    ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
-    % Set both to be equal again.
-    S7 = dev_pot:withdraw(Addr1, ResourceID, 20, S6, Opts),
-    report(S7, Opts),
-    Addr1BalPreFinal = dev_pot:balance(Addr1, S7, Opts),
-    Addr2BalPreFinal = dev_pot:balance(Addr2, S7, Opts),
-    S8 = dev_pot:test_drip(S7, #{ <<"t">> => 4 }, Opts),
-    % Ensure that they were again minted equal quantities.
-    Addr1Diff = dev_pot:balance(Addr1, S8, Opts) - Addr1BalPreFinal,
-    Addr2Diff = dev_pot:balance(Addr2, S8, Opts) - Addr2BalPreFinal,
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    ResourceID = <<"oxygen">>,
+    Opts = test_opts(),
+    Process = dev_pot_lib:pot(Opts),
+    ?event(fix, {
+        alice, Alice,
+        bob, Bob,
+        process_id, dev_process_lib:process_id(Process, Opts)
+    }, Opts),
+    push_set_weight(Process, ResourceID, 1, Opts),
+    push_deposit(Process, ResourceID, Alice, 10, Opts),
+    push_deposit(Process, ResourceID, Bob, 10, Opts),
+    report(Process, Opts),
+    mint(Process, Opts),
+    report(Process, Opts),
+    ?assertEqual(balance(Process, Alice, Opts), balance(Process, Bob, Opts)), 
+    push_deposit(Process, ResourceID, Alice, 20, Opts),
+    ?event(fix, {pot_state, now(Process, Opts)}, Opts),
+    report(Process, Opts),
+    mint(Process, Opts),
+    ?event(fix, {pot_state, now(Process, Opts)}, Opts),
+    ?assert(balance(Process, Alice, Opts) > balance(Process, Bob, Opts)),
+    ?event(fix, {pot_state, now(Process, Opts)}, Opts),
+    push_withdraw(Process, ResourceID, Alice, 20, Opts),
+    report(Process, Opts),
+    Addr1BalPreFinal = balance(Process, Alice, Opts),
+    Addr2BalPreFinal = balance(Process, Bob, Opts),
+    ?event(debug, {
+        before_final_mint, 
+            {alice, Addr1BalPreFinal}, 
+            {bob, Addr2BalPreFinal}
+        }, 
+        Opts
+    ),
+    mint(Process, Opts),
+    Addr1Diff = balance(Process, Alice, Opts) - Addr1BalPreFinal,
+    Addr2Diff = balance(Process, Bob, Opts) - Addr2BalPreFinal,
+    ?event(debug, {
+        final_mint_diff, 
+            {alice_diff, Addr1Diff}, 
+            {bob_diff, Addr2Diff}
+        }, 
+        Opts
+    ),
     ?assertEqual(Addr1Diff, Addr2Diff).
 
 %% @doc Demonstrate minting using the proportional model and multiple resources.
@@ -392,8 +424,8 @@ simple_delegation_test() ->
             Opts
         )
     ),
-    ?assertEqual(46, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)),
-    ?assertEqual(4, dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)).
+    ?assertEqual(46, dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(4, dev_pot_lib:get_deposit(S3, ResourceOxygen, Bob, Opts)).
 
 delegation_liquidation_test() ->
     Alice = <<"alice">>,
@@ -414,9 +446,9 @@ delegation_liquidation_test() ->
     S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 1, S1, Opts),
     report(S2, Opts),
     S3 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
-    ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S3, Opts)).
+    ?assertEqual(1, dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S3, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S3, ResourceOxygen, Charlie, Opts)).
 
 multiple_delegations_liquidation_test() ->
     Alice = <<"alice">>,
@@ -440,13 +472,13 @@ multiple_delegations_liquidation_test() ->
     S3 = dev_pot:delegate(Bob, Denis, ResourceOxygen, 1, S2, Opts),
     S4 = dev_pot:delegate(Denis, Alice, ResourceOxygen, 1, S3, Opts),
     report(S4, Opts),
-    ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
-    ?assertEqual(1, dev_pot:get_deposit(Charlie, ResourceOxygen, S4, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S4, ResourceOxygen, Charlie, Opts)),
     S5 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 2, S4, Opts),
-    ?assertEqual(2, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S5, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Denis, ResourceOxygen, S5, Opts)).
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S5, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S5, ResourceOxygen, Charlie, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S5, ResourceOxygen, Denis, Opts)).
 
 cyclic_delegations_test() ->
     Alice = <<"alice">>,
@@ -465,13 +497,13 @@ cyclic_delegations_test() ->
     S2 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 1, S1, Opts),
     S3 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
     S4 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 1, S3, Opts),
-    ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Bob, Opts)),
     report(S4, Opts),
     S5 = dev_pot:undelegate(Bob, Alice, ResourceOxygen, 1, S4, Opts),
     report(S5, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
-    ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)).
+    ?assertEqual(0, dev_pot_lib:get_deposit(S5, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S5, ResourceOxygen, Bob, Opts)).
 
 deposit_removal_while_delegated_test() ->
     Alice = <<"alice">>,
@@ -493,15 +525,14 @@ deposit_removal_while_delegated_test() ->
     S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 2, S1, Opts),
     S3 = dev_pot:delegate(Charlie, Alice, ResourceOxygen, 1, S2, Opts),
     report(S1, Opts),
-    ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)),
-    ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
-    ?assertEqual(1, dev_pot:get_deposit(Charlie, ResourceOxygen, S3, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S3, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(1, dev_pot_lib:get_deposit(S3, ResourceOxygen, Charlie, Opts)),
     S4 = dev_pot:withdraw(Alice, ResourceOxygen, 3, S3, Opts),
     report(S4, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S4, Opts)).
-
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Charlie, Opts)).
 inverted_index_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
@@ -672,7 +703,7 @@ withdraw_exact_balance_test() ->
     % Withdrawing exact deposit should result in 0
     S0 = pot_state(Alice, ResourceOxygen, 10),
     S1 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S0, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)).
+    ?assertEqual(0, dev_pot_lib:get_deposit(S1, ResourceOxygen, Alice, Opts)).
 
 %%% Delegation Edge Cases
 
@@ -696,7 +727,7 @@ delegate_to_self_test() ->
     S0 = pot_state(Alice, ResourceOxygen, 10),
     S1 = dev_pot:delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
     % After delegating to self, deposit should still be 10 (5 removed, 5 added back)
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(10, dev_pot_lib:get_deposit(S1, ResourceOxygen, Alice, Opts)),
     % Delegation record should show 5 to self
     Delegation = hb_ao:get(
         <<"/resources/",
@@ -719,8 +750,8 @@ delegate_entire_balance_test() ->
     % Delegate 100% of deposits
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
-    ?assertEqual(10, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)).
+    ?assertEqual(0, dev_pot_lib:get_deposit(S1, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(10, dev_pot_lib:get_deposit(S1, ResourceOxygen, Bob, Opts)).
 
 %%% Delegation Chain Tests
 
@@ -745,11 +776,11 @@ deep_delegation_chain_test() ->
     S3 = dev_pot:delegate(Charlie, Denis, ResourceOxygen, 10, S2, Opts),
     S4 = dev_pot:delegate(Denis, Eve, ResourceOxygen, 10, S3, Opts),
     % Final state: Alice:0, Bob:0, Charlie:0, Denis:0, Eve:10
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S4, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Denis, ResourceOxygen, S4, Opts)),
-    ?assertEqual(10, dev_pot:get_deposit(Eve, ResourceOxygen, S4, Opts)).
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Charlie, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Denis, Opts)),
+    ?assertEqual(10, dev_pot_lib:get_deposit(S4, ResourceOxygen, Eve, Opts)).
 
 wide_delegation_tree_test() ->
     Alice = <<"alice">>,
@@ -771,12 +802,12 @@ wide_delegation_tree_test() ->
     S4 = dev_pot:delegate(Alice, Eve, ResourceOxygen, 2, S3, Opts),
     S5 = dev_pot:delegate(Alice, Frank, ResourceOxygen, 2, S4, Opts),
     % Alice should have 0 left, each delegate has 2
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
-    ?assertEqual(2, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)),
-    ?assertEqual(2, dev_pot:get_deposit(Charlie, ResourceOxygen, S5, Opts)),
-    ?assertEqual(2, dev_pot:get_deposit(Denis, ResourceOxygen, S5, Opts)),
-    ?assertEqual(2, dev_pot:get_deposit(Eve, ResourceOxygen, S5, Opts)),
-    ?assertEqual(2, dev_pot:get_deposit(Frank, ResourceOxygen, S5, Opts)).
+    ?assertEqual(0, dev_pot_lib:get_deposit(S5, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Bob, Opts)),
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Charlie, Opts)),
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Denis, Opts)),
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Eve, Opts)),
+    ?assertEqual(2, dev_pot_lib:get_deposit(S5, ResourceOxygen, Frank, Opts)).
 
 %%% Conservation Law Tests
 
@@ -791,18 +822,18 @@ total_deposits_conservation_test() ->
     S2 = dev_pot:deposit(Bob, ResourceOxygen, 20, S1, Opts),
     TotalAfterDeposits = 30,
     ?assertEqual(TotalAfterDeposits,
-        dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts) +
-        dev_pot:get_deposit(Bob, ResourceOxygen, S2, Opts)),
+        dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts) +
+        dev_pot_lib:get_deposit(S2, ResourceOxygen, Bob, Opts)),
     % Delegate
     S3 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S2, Opts),
     ?assertEqual(TotalAfterDeposits,
-        dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts) +
-        dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
+        dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts) +
+        dev_pot_lib:get_deposit(S3, ResourceOxygen, Bob, Opts)),
     % Withdraw
     S4 = dev_pot:withdraw(Bob, ResourceOxygen, 10, S3, Opts),
     ?assertEqual(TotalAfterDeposits - 10,
-        dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts) +
-        dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)).
+        dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts) +
+        dev_pot_lib:get_deposit(S4, ResourceOxygen, Bob, Opts)).
 
 mint_cap_never_exceeded_test() ->
     Alice = <<"alice">>,
@@ -836,8 +867,8 @@ liquidate_partial_delegation_test() ->
     % Alice tries to withdraw 3, but has 0 deposits. Should liquidate 3 from Bob
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 3, S1, Opts),
     report(S2, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts)),
-    ?assertEqual(7, dev_pot:get_deposit(Bob, ResourceOxygen, S2, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(7, dev_pot_lib:get_deposit(S2, ResourceOxygen, Bob, Opts)),
     % Alice should still have 7 delegated to Bob
     ?assertEqual(
         7, 
@@ -865,8 +896,8 @@ liquidate_exact_delegation_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S1, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts)),
-    ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S2, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S2, ResourceOxygen, Bob, Opts)),
     % Delegation should be fully undone
     ?assertEqual(
         0, 
@@ -891,7 +922,7 @@ liquidate_requiring_multiple_delegations_test() ->
     Charlie = <<"charlie">>,
     Denis = <<"denis">>,
     ResourceOxygen = <<"oxygen">>,
-    Opts =#{},
+    Opts = #{},
     % Overdraw requires liquidating all delegations
     S0 = 
         pot_state_multi(
@@ -909,12 +940,12 @@ liquidate_requiring_multiple_delegations_test() ->
     % Alice has 0 deposits, 3 delegations of 5 each. Try to withdraw 12
     S4 = dev_pot:withdraw(Alice, ResourceOxygen, 12, S3, Opts),
     % After withdrawal, alice should have 0 (withdrew everything)
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts)),
     % Total should be 3 (15 - 12 withdrawn)
-    Total = dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts) +
-            dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts) +
-            dev_pot:get_deposit(Charlie, ResourceOxygen, S4, Opts) +
-            dev_pot:get_deposit(Denis, ResourceOxygen, S4, Opts),
+    Total = dev_pot_lib:get_deposit(S4, ResourceOxygen, Alice, Opts) +
+            dev_pot_lib:get_deposit(S4, ResourceOxygen, Bob, Opts) +
+            dev_pot_lib:get_deposit(S4, ResourceOxygen, Charlie, Opts) +
+            dev_pot_lib:get_deposit(S4, ResourceOxygen, Denis, Opts),
     ?assertEqual(3, Total).
 
 liquidate_insufficient_delegations_test() ->
@@ -1061,7 +1092,7 @@ deposit_then_immediate_withdraw_test() ->
     S0 = pot_state_empty([ResourceOxygen]),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S1, Opts),
-    ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts)),
+    ?assertEqual(0, dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts)),
     ?assertEqual(0, dev_pot:balance(Alice, S2, Opts)).
 
 multiple_deposits_same_resource_test() ->
@@ -1073,7 +1104,7 @@ multiple_deposits_same_resource_test() ->
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 5, S0, Opts),
     S2 = dev_pot:deposit(Alice, ResourceOxygen, 3, S1, Opts),
     S3 = dev_pot:deposit(Alice, ResourceOxygen, 2, S2, Opts),
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)).
+    ?assertEqual(10, dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts)).
 
 %%% Input Validation Tests
 
@@ -1138,7 +1169,7 @@ deposit_to_nonexistent_resource_test() ->
     % Deposit to non-existent hydrogen resource
     S1 = dev_pot:deposit(Alice, ResourceHydrogen, 10, S0, Opts),
     % Verify the resource was created and deposit succeeded
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceHydrogen, S1, Opts)).
+    ?assertEqual(10, dev_pot_lib:get_deposit(S1, ResourceHydrogen, Alice, Opts)).
 
 %%% Delegation Notice Tests
 
@@ -1220,7 +1251,7 @@ deposit_with_zero_mint_cap_test() ->
     % Can still deposit even with zero mint cap
     S0 = pot_state_empty([ResourceOxygen], 0, 1, 2),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)).
+    ?assertEqual(10, dev_pot_lib:get_deposit(S1, ResourceOxygen, Alice, Opts)).
 
 resource_with_no_deposits_test() ->
     ResourceOxygen = <<"oxygen">>,
@@ -1244,8 +1275,8 @@ deposit_to_multiple_resources_test() ->
     S0 = pot_state_empty([ResourceOxygen, ResourceHydrogen]),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:deposit(Alice, ResourceHydrogen, 20, S1, Opts),
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts)),
-    ?assertEqual(20, dev_pot:get_deposit(Alice, ResourceHydrogen, S2, Opts)),
+    ?assertEqual(10, dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts)),
+    ?assertEqual(20, dev_pot_lib:get_deposit(S2, ResourceHydrogen, Alice, Opts)),
     ?assertEqual(30, hb_maps:get(<<"total-weighted-units">>, S2, 0, Opts)).
 
 resource_isolation_test() ->
@@ -1258,13 +1289,13 @@ resource_isolation_test() ->
     S0 = pot_state_empty([ResourceOxygen, ResourceHydrogen]),
     S1 = dev_pot:deposit(Alice, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:deposit(Bob, ResourceHydrogen, 10, S1, Opts),
-    InitialOxygenDeposit = dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts),
+    InitialOxygenDeposit = dev_pot_lib:get_deposit(S2, ResourceOxygen, Alice, Opts),
     % Modify hydrogen
     S3 = dev_pot:withdraw(Bob, ResourceHydrogen, 5, S2, Opts),
     % Oxygen deposit should be unchanged
     ?assertEqual(
         InitialOxygenDeposit, 
-        dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)
+        dev_pot_lib:get_deposit(S3, ResourceOxygen, Alice, Opts)
     ).
 
 weighted_distribution_across_resources_test() ->
@@ -1297,7 +1328,7 @@ very_large_deposit_test() ->
     S0 = pot_state_empty([ResourceOxygen]),
     LargeAmount = 999999999999999, % ~10^15
     S1 = dev_pot:deposit(Alice, ResourceOxygen, LargeAmount, S0, Opts),
-    ?assertEqual(LargeAmount, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(LargeAmount, dev_pot_lib:get_deposit(S1, ResourceOxygen, Alice, Opts)),
     ?assertEqual(LargeAmount, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)).
 
 very_large_minted_amount_test() ->
@@ -1451,8 +1482,7 @@ report(S, Opts) ->
         {report,
             {t, hb_maps:get(<<"t">>, S, no_timestamp, Opts)},
             {last_drip, hb_maps:get(<<"last-drip">>, S, undefined, Opts)},
-            {balances, dev_pot:balances(S, Opts)},
-            {deposits, dev_pot:get_deposits(S, Opts)},
+            {deposits, dev_pot_lib:get_deposits(S, Opts)},
             {minted, hb_maps:get(<<"minted">>, S, not_found, Opts)},
             {state, S}
         }
