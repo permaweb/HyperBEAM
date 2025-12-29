@@ -11,6 +11,7 @@
 -export([register/4, deposit/5, withdraw/5, delegate/6, undelegate/6]).
 % %%% Query wrappers.
 -export([get_deposit/4, get_weight/3, get_total_deposit/3]).
+-export([get_deposits/2, get_deposits/3]).
 -export([now/2, balance/3]).
 % -export([ledgers/2, map/2, map/3]).
 
@@ -116,6 +117,26 @@ get_deposit(Process, ResourceID, Addr, Opts) ->
         <<"now", (dev_pot:deposit_qty_path(ResourceID, Addr))/binary>>, 
         Process, 
         0,
+        Opts
+    ).
+
+%% @doc Return only the deposits submessage for all resources in the state.
+get_deposits(S = #{ <<"resources">> := Resources }, Opts) ->
+    hb_maps:map(
+        fun(ResourceID, _) -> get_deposits(S, ResourceID, Opts) end,
+        Resources,
+        Opts
+    ).
+get_deposits(S, ResourceID, Opts) ->
+    Ds = hb_ao:get(
+        <<"now", (dev_pot:resource_path(ResourceID))/binary, "/deposits">>,
+        S,
+        #{},
+        Opts
+    ),
+    hb_maps:map(
+        fun(Addr, _) -> get_deposit(S, ResourceID, Addr, Opts) end,
+        Ds,
         Opts
     ).
 

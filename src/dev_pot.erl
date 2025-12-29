@@ -38,7 +38,6 @@
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
--export([get_deposits/2, get_deposits/3]).
 %%% Public path helpers.
 -export([resource_path/1, resource_acc_path/1, resource_weight_path/1]).
 -export([resource_deposit_path/2, resource_total_deposits_path/1]).
@@ -867,26 +866,4 @@ unclaimed_yield(Addr, S, Opts) ->
             fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
             ResourceIDs
         )
-    ).
-
-%% @doc Return only the deposits submessage for all resources in the state.
-get_deposits(S = #{ <<"resources">> := Resources }, Opts) ->
-    hb_maps:map(
-        fun(ResourceID, _) -> get_deposits(ResourceID, S, Opts) end,
-        Resources,
-        Opts
-    ).
-get_deposits(ResourceID, S, Opts) ->
-    Ds = hb_ao:get(
-        <<"/resources/", ResourceID/binary, "/deposits">>,
-        S,
-        #{},
-        Opts
-    ),
-    hb_maps:map(
-        fun(Addr, _) -> 
-            hb_ao:get(deposit_qty_path(ResourceID, Addr), S, 0, Opts)    
-        end,
-        Ds,
-        Opts
     ).
