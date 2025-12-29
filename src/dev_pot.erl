@@ -38,7 +38,12 @@
 -export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
--export([get_deposit/4, get_deposits/2, get_deposits/3]).
+-export([get_deposits/2, get_deposits/3]).
+%%% Public path helpers.
+-export([resource_path/1, resource_acc_path/1, resource_weight_path/1]).
+-export([resource_deposit_path/2, resource_total_deposits_path/1]).
+-export([delegations_path/2, delegation_qty_path/3]).
+-export([deposit_qty_path/2, last_resource_acc_path/2]).
 
 %%% Pot Model Functions.
 
@@ -115,7 +120,7 @@ withdraw(Base, Req, Opts) ->
         withdraw(Address, ResourceID, Amount, Base, Opts)
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    ExistingDeposit = hb_ao:get(deposit_qty(ResourceID, Addr), S0, 0, Opts),
+    ExistingDeposit = hb_ao:get(deposit_qty_path(ResourceID, Addr), S0, 0, Opts),
     S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
     modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
 
@@ -139,7 +144,7 @@ undelegate(State, Assignment, Opts) ->
         {ok, undelegate(From, To, Resource, Amount, State, Opts)}
     end.
 undelegate(From, To, ResourceID, Amount, S, Opts) when Amount > 0 ->
-    RecipientDeposit = hb_ao:get(deposit_qty(ResourceID, To), S, 0, Opts),
+    RecipientDeposit = hb_ao:get(deposit_qty_path(ResourceID, To), S, 0, Opts),
     LiquidatedS = liquidate(To, ResourceID, Amount - RecipientDeposit, S, Opts),
     DrippedState = drip_all(ResourceID, [From, To], LiquidatedS, Opts),
     UpdatedBalS = settle_yields(From, To, ResourceID, DrippedState, Opts),
@@ -249,7 +254,7 @@ drip_resource(ResourceID, S, Opts) ->
         Opts
     ),
     % Get the resource.
-    Resource = hb_ao:get(resource(ResourceID), S, #{}, Opts),
+    Resource = hb_ao:get(resource_path(ResourceID), S, #{}, Opts),
     % Accumulate the Reward*CurrentWeight since the last global drip.
     OldResAcc = hb_maps:get(<<"accumulator">>, Resource, 0, Opts),
     Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
@@ -387,13 +392,13 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
         },
         Opts
     ),
-    CurrDeposit = hb_ao:get(deposit_qty(ResourceID, Addr), DrippedS, 0, Opts),
+    CurrDeposit = hb_ao:get(deposit_qty_path(ResourceID, Addr), DrippedS, 0, Opts),
     CurrBalance = hb_ao:get(<<"balances/",Addr/binary>>, DrippedS, 0, Opts),
     CurrSupply = hb_ao:get(<<"total-supply">>, DrippedS, 0, Opts),
-    ResourceAcc = hb_ao:get(resource_acc(ResourceID), DrippedS, 0, Opts),
-    Weight = hb_ao:get(resource_weight(ResourceID), DrippedS, 0, Opts),
+    ResourceAcc = hb_ao:get(resource_acc_path(ResourceID), DrippedS, 0, Opts),
+    Weight = hb_ao:get(resource_weight_path(ResourceID), DrippedS, 0, Opts),
     CurrTotalDeposit = 
-        hb_ao:get(resource_total_deposits(ResourceID), DrippedS, 0, Opts),
+        hb_ao:get(resource_total_deposits_path(ResourceID), DrippedS, 0, Opts),
     CurrentTWU = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
     Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     NewBalance = CurrBalance + Yield,
@@ -443,7 +448,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     update_deposit_index(
         Addr,
         ResourceID,
-        hb_ao:get(deposit_qty(ResourceID, Addr), UpdatedDepositS, 0, Opts),
+        hb_ao:get(deposit_qty_path(ResourceID, Addr), UpdatedDepositS, 0, Opts),
         UpdatedDepositS,
         Opts
     ).
@@ -451,7 +456,7 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
     Delegations = 
-        hb_ao:get(delegations(ResourceID, Addr), S, #{}, Opts),
+        hb_ao:get(delegations_path(ResourceID, Addr), S, #{}, Opts),
     hb_ao:set(
         S,
         <<"users/", Addr/binary, "/deposits/", ResourceID/binary>>,
@@ -465,7 +470,7 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
 %% quantity has been reclaimed.
 liquidate(_Addr, _ResourceID, Amount, S, _Opts) when Amount =< 0 -> S;
 liquidate(Addr, ResourceID, Amount, S, Opts) ->
-    Delegations = hb_ao:get(delegations(ResourceID, Addr), S, #{}, Opts),
+    Delegations = hb_ao:get(delegations_path(ResourceID, Addr), S, #{}, Opts),
     LargestDelegation =
         lists:max(
             hb_maps:values(
@@ -546,7 +551,7 @@ register_resource(ResourceID, Weight, S, Opts) ->
     S1 = drip_resource(ResourceID, S0, Opts),
     % Calculate the new total deposited units for the weighted global counter
     % (`/total-weighted-units').
-    Resource = hb_ao:get(resource(ResourceID), S1, #{}, Opts),
+    Resource = hb_ao:get(resource_path(ResourceID), S1, #{}, Opts),
     OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
     ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
     % Update the total weighted units counter. Subtract the deposits at the old
@@ -648,18 +653,18 @@ apply_undelegation(From, To, ResourceID, Amount, S, Opts) ->
 
 %% @doc Update a deposit quantity using path helpers.
 update_deposit(Addr, ResourceID, Delta, S, Opts) ->
-    Qty = hb_ao:get(deposit_qty(ResourceID, Addr), S, 0, Opts),
-    hb_ao:set(S, deposit_qty(ResourceID, Addr), Qty + Delta, Opts).
+    Qty = hb_ao:get(deposit_qty_path(ResourceID, Addr), S, 0, Opts),
+    hb_ao:set(S, deposit_qty_path(ResourceID, Addr), Qty + Delta, Opts).
 
 %% @doc Update a delegation quantity using path helpers.
 update_delegation(From, To, ResourceID, Delta, S, Opts) ->
-    Curr = hb_ao:get(delegation_qty(ResourceID, From, To), S, 0, Opts),
-    hb_ao:set(S, delegation_qty(ResourceID, From, To), Curr + Delta, Opts).
+    Curr = hb_ao:get(delegation_qty_path(ResourceID, From, To), S, 0, Opts),
+    hb_ao:set(S, delegation_qty_path(ResourceID, From, To), Curr + Delta, Opts).
 
 %% @doc Update the last resource accumulator for a user.
 update_last_accumulator(Addr, ResourceID, S, Opts) ->
-    Acc = hb_ao:get(resource_acc(ResourceID), S, 0, Opts),
-    hb_ao:set(S, last_resource_acc(ResourceID, Addr), Acc, Opts).
+    Acc = hb_ao:get(resource_acc_path(ResourceID), S, 0, Opts),
+    hb_ao:set(S, last_resource_acc_path(ResourceID, Addr), Acc, Opts).
 
 %%% Sending Notices.
 
@@ -806,32 +811,32 @@ parse_notification_req(Assignment, Opts) ->
 
 %%% Path Generators.
 
-resource(ResID) ->
+resource_path(ResID) ->
     <<"/resources/", ResID/binary>>.
 
-resource_deposit(ResID, Addr) ->
+resource_deposit_path(ResID, Addr) ->
     <<"/resources/", ResID/binary, "/deposits/", Addr/binary>>.
 
-resource_weight(ResID) ->
+resource_weight_path(ResID) ->
     <<"/resources/", ResID/binary, "/weight">>.
 
-resource_total_deposits(ResID) ->
+resource_total_deposits_path(ResID) ->
     <<"/resources/", ResID/binary, "/total-deposits">>.
 
-resource_acc(ResID) ->
+resource_acc_path(ResID) ->
     <<"/resources/", ResID/binary, "/accumulator">>.
 
-deposit_qty(ResID, Addr) ->
-    <<(resource_deposit(ResID, Addr))/binary, "/quantity">>.
+deposit_qty_path(ResID, Addr) ->
+    <<(resource_deposit_path(ResID, Addr))/binary, "/quantity">>.
 
-last_resource_acc(ResID, Addr) ->
-    <<(resource_deposit(ResID, Addr))/binary, "/last-resource-accumulator">>.
+last_resource_acc_path(ResID, Addr) ->
+    <<(resource_deposit_path(ResID, Addr))/binary, "/last-resource-accumulator">>.
 
-delegations(ResID, Addr) ->
-    <<(resource_deposit(ResID, Addr))/binary, "/delegations">>.
+delegations_path(ResID, Addr) ->
+    <<(resource_deposit_path(ResID, Addr))/binary, "/delegations">>.
 
-delegation_qty(ResID, From, To) ->
-    <<(resource_deposit(ResID, From))/binary, "/delegations/", To/binary>>.
+delegation_qty_path(ResID, From, To) ->
+    <<(resource_deposit_path(ResID, From))/binary, "/delegations/", To/binary>>.
 
 %% @doc Return the contents of the inverted index for a specific address.
 user(Addr, S, Opts) ->
@@ -880,12 +885,8 @@ get_deposits(ResourceID, S, Opts) ->
     ),
     hb_maps:map(
         fun(Addr, _) -> 
-            hb_ao:get(deposit_qty(ResourceID, Addr), S, 0, Opts)    
+            hb_ao:get(deposit_qty_path(ResourceID, Addr), S, 0, Opts)    
         end,
         Ds,
         Opts
     ).
-
-%% @doc Get the deposit quantity for a specific address in a specific resource.
-get_deposit(Addr, ResourceID, S, Opts) ->
-    hb_ao:get(deposit_qty(ResourceID, Addr), S, 0, Opts).
