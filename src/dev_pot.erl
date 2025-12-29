@@ -376,10 +376,10 @@ initialize_subscriptions(Base, _Req, Opts) ->
 modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     % Drip the global state and the resource, then extract necessary components.
     GlobalDrippedS = drip_global(S0, Opts),
-    DrippedS = #{
-        <<"balances">> := Balances,
-        <<"resources">> := Resources
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    Balances = 
+        hb_ao:get(<<"balances">>, DrippedS, #{ <<"device">> => <<"trie">> }, Opts),
+    Resources = hb_ao:get(<<"resources">>, DrippedS, #{}, Opts),
     ?event(
         debug_drip,
         {modify_deposit_state,
