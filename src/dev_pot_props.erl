@@ -73,14 +73,13 @@ generate_initial_state(Opts) ->
             }
         },
     Resources = hb_maps:get(resources, Opts),
-    S1 = lists:foldl(
+    lists:foldl(
         fun(Resource, State) ->
             dev_pot:register_resource(Resource, hb_invariant:int(), State, Opts)
         end,
         S0,
         Resources
-    ),
-    dev_token_lib:ledger(S1, Opts).
+    ).
 
 generate_request() ->
     [
