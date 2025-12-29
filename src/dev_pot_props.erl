@@ -152,6 +152,20 @@ verify_deposit(OldState, Req, NewState, Opts) ->
             {weight, Weight},
             {qty, Quantity}
         }
+    },
+    InvertedQty = hb_ao:get(
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        NewState,
+        0,
+        Opts
+    ),
+    % Simple verification of inverted index
+    InvertedQty =:= NewDeposit orelse
+    {error,
+        {bad_inverted_index,
+            {inverted_deposit, InvertedQty},
+            {new_deposit, NewDeposit}
+        }
     }.
 
 next(OldS, _Req, NewS, Opts) -> OldS.
