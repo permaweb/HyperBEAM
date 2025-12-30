@@ -15,7 +15,8 @@ simulation_test() ->
                 fun verify_deposit_quantity/4,
                 fun verify_withdraw_quantity/4,
                 fun verify_withdraw_liquidation/4,
-                fun verify_twu/4
+                fun verify_twu/4,
+                fun verify_inverted_index/4
             ],
             runs => 3,
             length => 4,
@@ -296,5 +297,36 @@ verify_twu(OldState, Req, NewState, Opts) ->
             {qty, Quantity}
         }
     }.
+
+verify_inverted_index(OldState, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
+    do_verify_inverted_index(OldState, Req, NewState, Opts);
+verify_inverted_index(OldState, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
+    do_verify_inverted_index(OldState, Req, NewState, Opts);
+verify_inverted_index(_OldState, _Req, _NewState, _Opts) ->
+    true.
+
+do_verify_inverted_index(_OldState, Req, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    Addr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    InvertedQty = hb_ao:get(
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        NewState,
+        0,
+        Opts
+    ),
+    DepositQty = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    InvertedQty =:= DepositQty orelse
+    {error,
+        {bad_inverted_index,
+            {inverted_deposit, InvertedQty},
+            {deposit_qty, DepositQty}
+        }
+    }.   
 
 next(OldS, _Req, NewS, Opts) -> OldS.
