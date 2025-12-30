@@ -274,8 +274,14 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     AltIDs = calculate_all_ids(Msg, Opts) -- [UncommittedID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
+    % Skip make_group call for the reamining commitments for the same message.
+    case maps:get(make_group, Opts, true) of
+        true ->
+            hb_store:make_group(Store, UncommittedID);
+        false ->
+            no_op
+    end,
     % Write all of the keys of the message into the store.
-    hb_store:make_group(Store, UncommittedID),
     maps:map(
         fun(Key, Value) ->
             write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
@@ -343,9 +349,12 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
 %% separately, then write each to the store.
 prepare_commitments(RawCommitments, Opts) ->
     Commitments = ensure_all_loaded(RawCommitments, Opts),
+    FirstCommitmentID = hd(maps:keys(Commitments)),
     maps:map(
-        fun(_, StructuredCommitment) ->
-            hb_message:convert(StructuredCommitment, tabm, Opts)
+        fun(CommitmentID, StructuredCommitment) ->
+            AllowMakeGroup = CommitmentID == FirstCommitmentID,
+            % Skip make_group call for the reamining commitments for the same message.
+            hb_message:convert(StructuredCommitment, tabm, Opts#{make_group => AllowMakeGroup})
         end,
         Commitments
     ).
