@@ -1254,3 +1254,56 @@ index_request_test() ->
             #{}
         ),
     ?assertEqual(<<"i like dogs!">>, hb_ao:get(<<"body">>, Res, #{})).
+
+%% Test parallel requests
+parallel_request_test() ->
+    Routes = [
+        #{
+            % Routes for GraphQL requests to use a remote GraphQL API.
+            <<"template">> => <<"/graphql">>,
+            <<"parallel">> => true,
+            <<"nodes">> =>
+                [
+                    #{
+                        <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    },
+                    #{
+                        <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    },
+                    #{
+                        <<"prefix">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                    }
+                ]
+            },
+            #{
+                % Routes for raw data requests to use a remote gateway.
+                <<"template">> => <<"/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                    }
+            }
+    ],
+    Store = [
+        hb_test_utils:test_store(),
+        #{
+          <<"store-module">> => hb_store_gateway,
+          %% Routes need to be defined in the store, otherwise the code
+          %% will fetch the hb_opts:default_message which doesn't have
+          %% parallel property.
+          <<"routes">> => Routes
+         }
+    ],
+    hb_store:reset(Store),
+    Opts = #{store => Store},
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch({ok, #{<<"data">> := <<"1984">>}},
+        hb_http:get(
+            Node,
+            #{<<"path">> => <<"/BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>},
+            Opts
+        )).

@@ -244,7 +244,7 @@ admissible_response(Response, Msg, Opts) ->
 parallel_responses(Res, Procs, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
-    {ok, Res};
+    Res;
 parallel_responses(Res, Procs, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> exit(P, kill) end, Procs),
     empty_inbox(Ref),
@@ -255,7 +255,7 @@ parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Admissible, Statuses, O
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
                     parallel_responses(
-                        [NewRes | Res],
+                        [{Status, NewRes} | Res],
                         lists:delete(Pid, Procs),
                         Ref,
                         Awaiting - 1,
