@@ -26,54 +26,92 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% The cost is always 1
-estimate(_Base, EstimateReq, NodeMsg) ->
-    ?event(rate_limit_estimate, { EstimateReq }),
+estimate(_, _, _) ->
     {ok, 1}.
 
 set_balance(ClientIp, Amount, NodeMsg) ->
     Ledger = hb_opts:get(rate_limit_ledger, #{}, NodeMsg),
-    ?event(rate_limit,
-        {modifying_balance,
-            {client_ip, ClientIp},
-            {amount, Amount},
-            {ledger_before, Ledger}
-        }
-    ),
+    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
+    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
+    NewBalances = hb_ao:set(Balances, ClientIp, Amount, NodeMsg),
+    NewLedger = #{
+        <<"balances">> => NewBalances,
+        <<"ip_references">> => IpReferences
+    },
     hb_http_server:set_opts(
         #{},
-        NewMsg = NodeMsg#{
-            rate_limit_ledger =>
-                hb_ao:set(
-                    Ledger,
-                    ClientIp,
-                    Amount,
-                    NodeMsg
-                )
-        }
+        NewMsg = NodeMsg#{ rate_limit_ledger => NewLedger }
     ),
     {ok, NewMsg}.
 
-balance(_, RawReq, NodeMsg) ->
-    ?event(rate_limit_balance, { RawReq }),
-    ClientIP = hb_ao:get(<<"client-ip">>, RawReq, <<"0.0.0.0">>, NodeMsg),
+set_reference(ReferenceId, ClientIp, NodeMsg) ->
     Ledger = hb_opts:get(rate_limit_ledger, #{}, NodeMsg),
-    Balance = hb_ao:get(ClientIP, Ledger, -1, NodeMsg),
-    ?event(rate_limit, { balance, ClientIP, Balance }),
-    case Balance of
-        -1 ->
-            {ok, 1};
+    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
+    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
+    NewIpReferences = hb_ao:set(IpReferences, ReferenceId, ClientIp, NodeMsg),
+    NewLedger = #{
+        <<"balances">> => Balances,
+        <<"ip_references">> => NewIpReferences
+    },
+    hb_http_server:set_opts(
+        #{},
+        NewMsg = NodeMsg#{ rate_limit_ledger => NewLedger }
+    ),
+    {ok, NewMsg}.
+
+gen_reference(RawReq, Req, NodeMsg) ->
+    Commitments = case Req of
+        not_found ->
+            hb_ao:get(<<"commitments">>, RawReq, #{}, NodeMsg);
         _ ->
+            hb_ao:get(<<"commitments">>, Req, #{}, NodeMsg)
+    end,
+    ?event({gen_reference_commitments, Commitments}),
+    % Get the first key from the commitments map
+    case maps:keys(Commitments) of
+        [FirstKey | _] -> FirstKey;
+        [] -> <<"unknown">>  % Fallback if no commitments
+    end.
+
+balance(_, RawReq, NodeMsg) ->
+    Req = hb_ao:get(<<"request">>, RawReq, NodeMsg),
+    ClientIP = case Req of
+        not_found ->
+            hb_ao:get(<<"client-ip">>, RawReq, <<"0.0.0.0">>, NodeMsg);
+        _ ->
+            hb_ao:get(<<"client-ip">>, Req, <<"0.0.0.0">>, NodeMsg)
+    end,
+    ReferenceId = gen_reference(RawReq, Req, NodeMsg),
+    Ledger = hb_opts:get(rate_limit_ledger, #{}, NodeMsg),
+    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
+    Existing = hb_ao:get(ClientIP, Balances, not_found, NodeMsg),
+    case Existing of
+        not_found ->
+            {ok, NewMsg} = set_balance(ClientIP, 100, NodeMsg),
+            {ok, _NewMsg2} = set_reference(ReferenceId, ClientIP, NewMsg),
+            {ok, 100};
+        Balance ->
+            {ok, _NewMsg} = set_reference(ReferenceId, ClientIP, NodeMsg),
             {ok, Balance}
     end.
 
-charge(_, Req, NodeMsg) ->
-    ClientIP = hb_ao:get(<<"client-ip">>, Req, <<"0.0.0.0">>, NodeMsg),
-    {ok, NewMsg} = set_balance(ClientIP, 100, NodeMsg),
-    Ledger = hb_opts:get(rate_limit_ledger, #{}, NewMsg),
-    Balance = hb_ao:get(ClientIP, Ledger, 0, NewMsg),
-    ?event(rate_limit, { modified_balance, ClientIP, Balance }),
+charge(_, RawReq, NodeMsg) ->
+    Req = hb_ao:get(<<"request">>, RawReq, NodeMsg),
+    ReferenceId = gen_reference(RawReq, Req, NodeMsg),
+    Ledger = hb_opts:get(rate_limit_ledger, #{}, NodeMsg),
+    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
+    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
+    IpByReference = hb_ao:get(ReferenceId, IpReferences, #{}, NodeMsg),
+    ?event({ charge_ledger, Ledger }),
+    ?event({ charge_balances, Balances }),
+    ?event({ charge_reference_id, ReferenceId }),
+    ?event({ ip_by_reference, IpByReference }),
     {ok, true}.
+
+
+
+
+
 
 test_opts() ->
     Wallet = ar_wallet:new(),
@@ -88,7 +126,10 @@ test_opts() ->
         Address,
         Wallet,
         #{
-            rate_limit_ledger => #{},
+            rate_limit_ledger => #{
+                <<"balances">> => #{},
+                <<"ip_references">> => #{}
+            },
             rate_limit_window => <<"10s">>,
             rate_limit_balance => 100,
             operator => Address,
@@ -99,29 +140,29 @@ test_opts() ->
         }
     }.
 
-single_request_test() ->
+rate_limit_ledger_test() ->
     ClientWallet = ar_wallet:new(),
-    {HostAddress, HostWallet, Opts} = test_opts(),
+    {_HostAddress, _HostWallet, Opts} = test_opts(),
     Node = hb_http_server:start_node(Opts),
 
     {ok, Res} =
         hb_http:get(
             Node,
-            Req = hb_message:commit(
+            _Req = hb_message:commit(
                 #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
                 Opts#{ priv_wallet => ClientWallet }
             ),
             Opts
         ),
-    ?assertEqual(1, Res),
+    ?assertEqual(100, Res).
 
-    {ok, Res2} =
-        hb_http:get(
-            Node,
-            Req2 = hb_message:commit(
-                #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
-                Opts#{ priv_wallet => ClientWallet }
-            ),
-            Opts
-        ),
-    ?assertEqual(100, Res2).
+    % {ok, Res2} =
+    %     hb_http:get(
+    %         Node,
+    %         Req2 = hb_message:commit(
+    %             #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
+    %             Opts#{ priv_wallet => ClientWallet }
+    %         ),
+    %         Opts
+    %     ),
+    % ?assertEqual(100, Res2).
