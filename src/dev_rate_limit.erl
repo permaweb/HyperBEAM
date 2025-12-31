@@ -101,12 +101,37 @@ charge(_, RawReq, NodeMsg) ->
     Ledger = hb_opts:get(rate_limit_ledger, #{}, NodeMsg),
     Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
     IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
-    IpByReference = hb_ao:get(ReferenceId, IpReferences, #{}, NodeMsg),
-    ?event({ charge_ledger, Ledger }),
-    ?event({ charge_balances, Balances }),
+
+    % Look up ClientIP using the ReferenceId
+    ClientIP = hb_ao:get(ReferenceId, IpReferences, not_found, NodeMsg),
+
     ?event({ charge_reference_id, ReferenceId }),
-    ?event({ ip_by_reference, IpByReference }),
-    {ok, true}.
+    ?event({ charge_client_ip, ClientIP }),
+
+    case ClientIP of
+        not_found ->
+            % No reference found - this shouldn't happen if balance was called first
+            ?event({ charge_error, no_reference_found }),
+            {error, no_reference};
+        _ ->
+            % Get current balance
+            CurrentBalance = hb_ao:get(ClientIP, Balances, 0, NodeMsg),
+            ?event({ charge_current_balance, CurrentBalance }),
+
+            % Check if balance is sufficient
+            case CurrentBalance > 0 of
+                true ->
+                    % Decrement balance by 1
+                    NewBalance = CurrentBalance - 1,
+                    {ok, _NewMsg} = set_balance(ClientIP, NewBalance, NodeMsg),
+                    ?event({ charge_new_balance, NewBalance }),
+                    {ok, true};
+                false ->
+                    % Insufficient balance
+                    ?event({ charge_insufficient_balance, ClientIP }),
+                    {error, insufficient_balance}
+            end
+    end.
 
 
 
@@ -156,13 +181,47 @@ rate_limit_ledger_test() ->
         ),
     ?assertEqual(100, Res).
 
-    % {ok, Res2} =
-    %     hb_http:get(
-    %         Node,
-    %         Req2 = hb_message:commit(
-    %             #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
-    %             Opts#{ priv_wallet => ClientWallet }
-    %         ),
-    %         Opts
-    %     ),
-    % ?assertEqual(100, Res2).
+concurrent_charge_test() ->
+    ClientWallet = ar_wallet:new(),
+    {_HostAddress, _HostWallet, Opts} = test_opts(),
+    Node = hb_http_server:start_node(Opts),
+
+    {ok, InitialBalance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
+                Opts#{ priv_wallet => ClientWallet }
+            ),
+            Opts
+        ),
+    ?assertEqual(100, InitialBalance),
+
+    NumRequests = 50,
+    Parent = self(),
+    Pids = [spawn(fun() ->
+        Result = hb_http:post(
+            Node,
+            hb_message:commit(
+                #{<<"path">> => <<"/~rate-limit@1.0/charge">>},
+                Opts#{ priv_wallet => ClientWallet }
+            ),
+            Opts
+        ),
+        Parent ! {self(), done, Result}
+    end) || _ <- lists:seq(1, NumRequests)],
+
+    _Results = [receive {Pid, done, Result} -> Result end || Pid <- Pids],
+
+    {ok, FinalBalance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{<<"path">> => <<"/~rate-limit@1.0/balance">>},
+                Opts#{ priv_wallet => ClientWallet }
+            ),
+            Opts
+        ),
+
+    ?event({concurrent_test_final_balance, FinalBalance}),
+    ?assertEqual(50, FinalBalance).
