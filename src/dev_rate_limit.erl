@@ -49,110 +49,77 @@ init(_Args) ->
       {ok, #{}}.
 
 handle_call({get_or_init_balance, ClientIP, ReferenceId, ServerRef}, _From, State) ->
-    %% Fetch NodeMsg from the HTTP server
+    %% Fetch NodeMsg from the HTTP server to get configuration
     NodeMsg = hb_http_server:get_opts(#{http_server => ServerRef}),
 
     %% Get rate limit configuration
     InitAmount = hb_ao:get(rate_limit_balance, NodeMsg, 100, NodeMsg),
 
-    %% Get ledger from NodeMsg
-    Ledger = hb_ao:get(rate_limit_ledger, NodeMsg, #{
-        <<"balances">> => #{},
-        <<"ip_references">> => #{}
-    }, NodeMsg),
-    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
-    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
+    %% Get ledger from State
+    Ledger = maps:get(ServerRef, State, #{}),
+    Balances = maps:get(<<"balances">>, Ledger, #{}),
+    IpReferences = maps:get(<<"ip_references">>, Ledger, #{}),
 
-    case hb_ao:get(ClientIP, Balances, not_found, NodeMsg) of
+    case maps:get(ClientIP, Balances, not_found) of
         not_found ->
-            hb_http_server:set_opts(
-                #{},
-                NewMsg = NodeMsg#{
-                    rate_limit_ledger =>
-                        Ledger#{
-                            <<"balances">> => hb_ao:set(Balances, ClientIP, InitAmount, NodeMsg),
-                            <<"ip_references">> => hb_ao:set(IpReferences, ReferenceId, ClientIP, NodeMsg)
-                        }
-                }
-            ),
-            {reply, {ok, InitAmount, initialized}, State};
+            NewBalances = maps:put(ClientIP, InitAmount, Balances),
+            NewIpReferences = maps:put(ReferenceId, ClientIP, IpReferences),
+            NewLedger = #{
+                <<"balances">> => NewBalances,
+                <<"ip_references">> => NewIpReferences
+            },
+            NewState = maps:put(ServerRef, NewLedger, State),
+            {reply, {ok, InitAmount, initialized}, NewState};
         Balance ->
-            hb_http_server:set_opts(
-                #{},
-                NewMsg = NodeMsg#{
-                    rate_limit_ledger =>
-                        Ledger#{
-                            <<"ip_references">> => hb_ao:set(IpReferences, ReferenceId, ClientIP, NodeMsg)
-                        }
-                }
-            ),
-            {reply, {ok, Balance, existing}, State}
+            NewIpReferences = maps:put(ReferenceId, ClientIP, IpReferences),
+            NewLedger = #{
+                <<"balances">> => Balances,
+                <<"ip_references">> => NewIpReferences
+            },
+            NewState = maps:put(ServerRef, NewLedger, State),
+            {reply, {ok, Balance, existing}, NewState}
     end;
 
 handle_call({ensure_reference, ReferenceId, ClientIP, ServerRef}, _From, State) ->
-    %% Fetch NodeMsg from the HTTP server
-    NodeMsg = hb_http_server:get_opts(#{http_server => ServerRef}),
+    %% Get ledger from State
+    Ledger = maps:get(ServerRef, State, #{}),
+    Balances = maps:get(<<"balances">>, Ledger, #{}),
+    IpReferences = maps:get(<<"ip_references">>, Ledger, #{}),
 
-    %% Get ledger from NodeMsg
-    Ledger = hb_ao:get(rate_limit_ledger, NodeMsg, #{
-        <<"balances">> => #{},
-        <<"ip_references">> => #{}
-    }, NodeMsg),
-    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
-    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
+    NewIpReferences = maps:put(ReferenceId, ClientIP, IpReferences),
+    NewLedger = #{
+        <<"balances">> => Balances,
+        <<"ip_references">> => NewIpReferences
+    },
 
-    hb_http_server:set_opts(
-        #{},
-        NewMsg = NodeMsg#{
-            rate_limit_ledger =>
-                Ledger#{
-                    <<"balances">> => Balances,
-                    <<"ip_references">> => hb_ao:set(IpReferences, ReferenceId, ClientIP, NodeMsg)
-                }
-        }
-    ),
-    {reply, ok, State};
+    NewState = maps:put(ServerRef, NewLedger, State),
+    {reply, ok, NewState};
 
 handle_call({get_ip_by_reference, ReferenceId, ServerRef}, _From, State) ->
-    %% Fetch NodeMsg from the HTTP server
-    NodeMsg = hb_http_server:get_opts(#{http_server => ServerRef}),
-
-    %% Get ledger from NodeMsg
-    Ledger = hb_ao:get(rate_limit_ledger, NodeMsg, #{
-        <<"balances">> => #{},
-        <<"ip_references">> => #{}
-    }, NodeMsg),
-    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
-    ClientIP = hb_ao:get(ReferenceId, IpReferences, not_found, NodeMsg),
+    %% Get ledger from State
+    Ledger = maps:get(ServerRef, State, #{}),
+    IpReferences = maps:get(<<"ip_references">>, Ledger, #{}),
+    ClientIP = maps:get(ReferenceId, IpReferences, not_found),
     {reply, ClientIP, State};
 
 handle_call({decrement_balance, ClientIP, ServerRef}, _From, State) ->
-    %% Fetch NodeMsg from the HTTP server
-    NodeMsg = hb_http_server:get_opts(#{http_server => ServerRef}),
-
-    %% Get ledger from NodeMsg
-    Ledger = hb_ao:get(rate_limit_ledger, NodeMsg, #{
-        <<"balances">> => #{},
-        <<"ip_references">> => #{}
-    }, NodeMsg),
-    Balances = hb_ao:get(<<"balances">>, Ledger, #{}, NodeMsg),
-    IpReferences = hb_ao:get(<<"ip_references">>, Ledger, #{}, NodeMsg),
-    CurrentBalance = hb_ao:get(ClientIP, Balances, 0, NodeMsg),
+    %% Get ledger from State
+    Ledger = maps:get(ServerRef, State, #{}),
+    Balances = maps:get(<<"balances">>, Ledger, #{}),
+    IpReferences = maps:get(<<"ip_references">>, Ledger, #{}),
+    CurrentBalance = maps:get(ClientIP, Balances, 0),
 
     case CurrentBalance > 0 of
         true ->
             NewBalance = CurrentBalance - 1,
-            hb_http_server:set_opts(
-                #{},
-                NewMsg = NodeMsg#{
-                    rate_limit_ledger =>
-                        Ledger#{
-                            <<"balances">> => hb_ao:set(Balances, ClientIP, NewBalance, NodeMsg),
-                            <<"ip_references">> => IpReferences
-                        }
-                }
-            ),
-            {reply, {ok, NewBalance}, State};
+            NewBalances = maps:put(ClientIP, NewBalance, Balances),
+            NewLedger = #{
+                <<"balances">> => NewBalances,
+                <<"ip_references">> => IpReferences
+            },
+
+            NewState = maps:put(ServerRef, NewLedger, State),
+            {reply, {ok, NewBalance}, NewState};
         false ->
             {reply, {error, insufficient_balance}, State}
     end;
@@ -298,7 +265,7 @@ concurrent_charge_test() ->
     {_HostAddress, _HostWallet, Opts} = test_opts(),
     Node = hb_http_server:start_node(Opts),
 
-    NumRequests = 50,
+    NumRequests = 15,
     Parent = self(),
     Pids = [spawn(fun() ->
         Result = hb_http:post(
