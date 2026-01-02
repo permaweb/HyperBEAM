@@ -44,7 +44,7 @@ generate_initial_state(Opts) ->
     StartWeight = hb_invariant:int(1, 10_000),
     StartQty = hb_invariant:int(1, 1_000_000),
     StartResource = hb_invariant:string(id),
-    StartAddr = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
+    StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     S0 =
         #{
             <<"device">> => <<"pot@1.0">>,
@@ -60,7 +60,7 @@ generate_initial_state(Opts) ->
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
-                        hb_util:human_id(StartAddr) => #{
+                        StartAddr => #{
                             <<"quantity">> => StartQty,
                             <<"last-resource-accumulator">> => 1 % TODO: randomize this?
                         }
@@ -69,20 +69,29 @@ generate_initial_state(Opts) ->
             },
             <<"balances">> => dev_token_props:generate_initial_balances(Opts),
             <<"users">> => #{
-                hb_util:human_id(StartAddr) => #{
+                StartAddr => #{
                     <<"deposits">> => #{
                         StartResource => StartQty
                     }
                 }
             }
         },
+    % Register every resource we pre-generated for the scenario
     Resources = hb_maps:get(resources, Opts),
-    lists:foldl(
+    S1 = lists:foldl(
         fun(Resource, State) ->
             dev_pot:register_resource(Resource, hb_invariant:int(), State, Opts)
         end,
         S0,
         Resources
+    ),
+    % Initialize the "originated deposits" helper table (see also: the 'next'
+    % function clause for deposits)
+    hb_private:set(
+        S1,
+        <<"/users/", StartAddr/binary, "/deposits/", StartResource/binary>>,
+        StartQty,
+        Opts
     ).
 
 generate_request() ->
@@ -117,15 +126,15 @@ deposit_generator(_State, Opts) ->
 withdraw_generator(State, Opts) ->
     % TODO: in theory, over the course of a generated scenario, there might exist
     % a deposit with a quantity of 0. We shouldn't pick those.
-    Addrs = hb_maps:keys(hb_maps:get(<<"users">>, hb_private:reset(State))),
+    Addrs = hb_maps:keys(hb_private:get(<<"users">>, State, #{}, Opts)),
     UserAddr = hb_invariant:pick(Addrs),
-    Deposits = hb_ao:get(
+    Deposits = hb_private:get(
         <<"/users/", UserAddr/binary, "/deposits">>,
         State,
         #{},
         Opts
     ),
-    ResourceIDs = hb_maps:keys(hb_private:reset(Deposits)),
+    ResourceIDs = hb_maps:keys(Deposits),
     UserResourceID = hb_invariant:pick(ResourceIDs),
     CurrentQty = hb_maps:get(UserResourceID, Deposits),
     Wallet = hb_maps:get(priv_wallet, hb_maps:get(UserAddr, hb_maps:get(identities, Opts))),
@@ -329,5 +338,44 @@ do_verify_inverted_index(_OldState, Req, NewState, Opts) ->
         }
     }.   
 
-next(OldS, _Req, NewS, Opts) ->
+% Note that we keep private state which mirrors the schema of the inverted
+% index, but which keeps track of the deposits *originated* by each user.
+% That is, deposits without consideration of delegation inflow and outflow.
+% This lets us generate coherent withdrawals without unwinding the whole
+% delegation table.
+next(OldS, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    Addr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    CurrentTotalDeposit = hb_private:get(
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        NewState,
+        0,
+        Opts
+    ),
+    hb_private:set(
+        NewState,
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        CurrentTotalDeposit + Quantity,
+        Opts
+    );
+next(OldS, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    Addr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    CurrentTotalDeposit = hb_private:get(
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        NewState,
+        0,
+        Opts
+    ),
+    hb_private:set(
+        NewState,
+        <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        CurrentTotalDeposit - Quantity,
+        Opts
+    );
+next(_OldS, _Req, NewS, _Opts) ->
     NewS.
