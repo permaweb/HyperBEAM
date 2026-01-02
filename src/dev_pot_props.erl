@@ -117,7 +117,7 @@ deposit_generator(_State, Opts) ->
 withdraw_generator(State, Opts) ->
     % TODO: in theory, over the course of a generated scenario, there might exist
     % a deposit with a quantity of 0. We shouldn't pick those.
-    Addrs = hb_maps:keys(hb_maps:get(<<"users">>, State)),
+    Addrs = hb_maps:keys(hb_maps:get(<<"users">>, hb_private:reset(State))),
     UserAddr = hb_invariant:pick(Addrs),
     Deposits = hb_ao:get(
         <<"/users/", UserAddr/binary, "/deposits">>,
@@ -329,4 +329,5 @@ do_verify_inverted_index(_OldState, Req, NewState, Opts) ->
         }
     }.   
 
-next(OldS, _Req, NewS, Opts) -> OldS.
+next(OldS, _Req, NewS, Opts) ->
+    NewS.
