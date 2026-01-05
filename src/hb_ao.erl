@@ -192,7 +192,7 @@ resolve_many([{resolve, Subres}], Opts) ->
 resolve_many(MsgList, Opts) ->
     ?event(ao_core, {resolve_many, MsgList}, Opts),
     Res = do_resolve_many(MsgList, Opts),
-    ?event(ao_core, {resolve_many_complete, {res, Res}, {req, MsgList}}, Opts),
+    ?event(ao_core, {resolve_many_complete, {res, Res}, {reqs, MsgList}}, Opts),
     Res.
 do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
@@ -385,8 +385,16 @@ resolve_stage(3, Base, Req, Opts) when not is_map(Base) or not is_map(Req) ->
     {error, not_found};
 resolve_stage(3, Base, Req, Opts) ->
     ?event(ao_core, {stage, 3, validation_check}, Opts),
-    % Validation checks: Enable as necessary. We do not presently perform any
-    % validity checks mid-execution, however we may wish to do so in the future.
+    % Validation checks: If `paranoid_message_verification' is enabled, we should
+    % verify the base and request messages prior to execution.
+    hb_message:paranoid_verify(
+        #{
+            <<"reason">> => <<"AO-Core Pre-Execution Validation">>,
+            <<"base">> => Base,
+            <<"request">> => Req
+        },
+        Opts
+    ),
     resolve_stage(4, Base, Req, Opts);
 resolve_stage(4, Base, Req, Opts) ->
     ?event(ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
@@ -576,6 +584,15 @@ resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
                     Opts
                 )
         end,
+    hb_message:paranoid_verify(
+        #{
+            <<"reason">> => <<"AO-Core Post-Execution Validation">>,
+            <<"base">> => Base,
+            <<"request">> => Req,
+            <<"result">> => Res
+        },
+        Opts
+    ),
     resolve_stage(7, Base, Req, Res, ExecName, Opts);
 resolve_stage(7, Base, Req, {St, Res}, ExecName, Opts = #{ on := On = #{ <<"step">> := _ }}) ->
     ?event(ao_core, {stage, 7, ExecName, executing_step_hook, {on, On}}, Opts),
