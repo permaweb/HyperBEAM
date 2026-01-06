@@ -47,6 +47,7 @@
         hb_config_location => {"HB_CONFIG", "config.flat"},
         port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         mode => {"HB_MODE", fun list_to_existing_atom/1},
+        paranoid_verify => {"HB_PARANOID", fun list_to_existing_atom/1, "false"},
         debug_print =>
             {"HB_PRINT",
                 fun
