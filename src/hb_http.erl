@@ -1188,21 +1188,16 @@ ans104_wasm_test() ->
         ),
     ?assert(hb_message:verify(Msg, all, ClientOpts)),
     ?event({msg, Msg}),
-    %% TODO: We could resolve before return, but I don't think that 
-    %% is the desired behaviour.
     {ok, Res} =
         post(
             URL,
             Msg#{ <<"path">> => <<"/init/compute/results">> },
             ClientOpts
         ),
-    %% TODO: Is there a better way to do this?
     {link, LinkID, _ } = maps:get(<<"output">>, Res),
     %% We need to resolve agaisnt the server cache
     {ok, #{<<"body">> := Body}} = post(URL, Msg#{<<"path">> => <<"/", LinkID/binary, "/1">>}, ClientOpts),
     ?assertEqual(<<"6.00000000000000000000e+00">>, Body).
-    %% This is a simple alternative, but I would avoid call internal functions.
-    %%?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, ServerOpts)).
 
 send_large_signed_request_test() ->
     % Note: If the signature scheme ever changes, we will need to run the 
