@@ -7,7 +7,7 @@
 -module(dev_message).
 %%% Base AO-Core reserved keys:
 -export([info/0, keys/1, keys/2]).
--export([set/3, set_path/3, remove/2, remove/3, get/3, get/4]).
+-export([set/3, set_path/3, remove/3, get/3, get/4]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
 -export([commit/3, committed/3, committers/1, committers/2, committers/3, verify/3]).
@@ -785,13 +785,14 @@ set_path(Base, Value, Opts) when not is_map(Value) ->
     end.
 
 %% @doc Remove a key or keys from a message.
-remove(Base, Key) ->
-	remove(Base, Key, #{}).
-
 remove(Base, #{ <<"item">> := Key }, Opts) ->
     remove(Base, #{ <<"items">> => [Key] }, Opts);
 remove(Base, #{ <<"items">> := Keys }, Opts) ->
-    { ok, hb_maps:without(Keys, Base, Opts) }.
+    set(
+        Base,
+        #{ Key => unset || Key <- Keys },
+        Opts
+    ).
 
 %% @doc Get the public keys of a message.
 keys(Msg) ->
