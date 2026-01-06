@@ -218,13 +218,13 @@ update_model(Address, Quantity, Base, Opts) ->
         },
         Opts
     ),
-    OldBalance = hb_ao:get(<<"indexed-deposits">>, Base, 0, Opts),
+    OldDeposit = hb_ao:get(<<"indexed-deposits/", Address/binary>>, Base, 0, Opts),
     ChangesSinceUpdate = hb_ao:get(<<"changes-since-update">>, Base, 0, Opts),
     hb_ao:resolve(
         Base,
         #{
             <<"path">> => <<"set">>,
-            <<"indexed-deposits/", Address/binary>> => Quantity + OldBalance,
+            <<"indexed-deposits/", Address/binary>> => Quantity + OldDeposit,
             <<"changes-since-update">> => ChangesSinceUpdate + 1
         },
         Opts
