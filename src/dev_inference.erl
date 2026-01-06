@@ -105,103 +105,28 @@ forward_health_check(Opts) ->
     end.
 
 do_inference_request(_Base, Req, Opts, Path) ->
-    case ensure_started(Opts) of
-        true ->
-            Params = extract_inference_params(Req, Opts),
-            IsStream = case maps:get(<<"stream">>, Params, false) of
-                true -> true;
-                <<"true">> -> true;
-                _ -> false
-            end,
-
-            case IsStream of
-                true ->
-                    Body = hb_json:encode(Params),
-                    #{
-                        <<"stream_generator">> => fun(Sender) -> 
-                            stream_from_backend(Sender, <<"POST">>, Path, Body, Opts) 
-                        end
-                    };
-                false ->
-                    Body = prepare_request_body(Req, Opts),
-                    Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
-                    
-                    case should_include_attestation(Req, Opts) of
-                        true -> add_attestation(Response, Req, Opts);
-                        false -> format_response(Response, Opts)
-                    end
-            end;
-        false ->
-            {error, #{
-                <<"status">> => 503,
-                <<"message">> => <<"Inference server failed to start">>
-            }}
-    end.
-
-ensure_started(Opts) ->
-    ?event(inference, []),
-    case whereis(inference_server) of
-        undefined -> start_server(Opts);
-        _ -> true
-    end.
-
-start_server(Opts) ->
-    {ok, Cwd} = file:get_cwd(),
-    InferenceDir = filename:join([Cwd, "_build", "deterministic-inference"]),
-    PythonBin = filename:join([InferenceDir, ".venv", "bin", "python"]),
-    
-    InferenceOpts = hb_opts:get(inference_opts, #{}, Opts),
-    ModelName = hb_util:list(maps:get(<<"model_name">>, InferenceOpts, "")),
-    Port = ?SERVER_PORT,
-    
-    Args = ["-m", "deterministic_inference", "--model-path", ModelName, "--port", Port],
-    
-    ?event(inference, {executable, PythonBin, args, Args}),
-    
-    Pid = spawn(fun() -> 
-        process_flag(trap_exit, true),
-        PortRef = open_port({spawn_executable, PythonBin}, [{args, Args}, stream, binary, exit_status, stderr_to_stdout]),
-        server_loop(PortRef)
-    end),
-    register(inference_server, Pid),
-    wait_for_start(Opts, 30).
-
-server_loop(Port) ->
-    receive
-        {Port, {data, Data}} ->
-            io:format("~s", [Data]),
-            server_loop(Port);
-        {Port, {exit_status, Status}} ->
-            io:format("Inference server exited with status ~p~n", [Status]),
-            exit(normal);
-        stop ->
-            port_close(Port),
-            exit(normal)
-    end.
-
-wait_for_start(_Opts, 0) -> false;
-wait_for_start(Opts, N) ->
-    case is_server_running(Opts) of
+    Params = extract_inference_params(Req, Opts),
+    IsStream = case maps:get(<<"stream">>, Params, false) of
         true -> true;
-        false ->
-            timer:sleep(1000),
-            wait_for_start(Opts, N-1)
-    end.
-
-is_server_running(Opts) ->
-    Peer = iolist_to_binary(["http://localhost:", ?SERVER_PORT]),
-    case hb_http_client:request(
-        #{
-            method => <<"GET">>,
-            peer => Peer,
-            path => <<"/health">>,
-            headers => #{},
-            body => <<>>
-        },
-        Opts
-    ) of
-        {ok, 200, _, _} -> true;
+        <<"true">> -> true;
         _ -> false
+    end,
+    case IsStream of
+        true ->
+            Body = hb_json:encode(Params),
+            #{
+                <<"stream_generator">> => fun(Sender) -> 
+                    stream_from_backend(Sender, <<"POST">>, Path, Body, Opts) 
+                end
+            };
+        false ->
+            Body = prepare_request_body(Req, Opts),
+            Response = relay_to_backend(<<"POST">>, Path, Body, Opts),
+            
+            case should_include_attestation(Req, Opts) of
+                true -> add_attestation(Response, Req, Opts);
+                false -> format_response(Response, Req, Opts)
+            end
     end.
 
 prepare_request_body(Req, Opts) ->
@@ -254,18 +179,42 @@ relay_to_backend(Method, Path, Body, Opts) ->
         Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}
     ).
 
-format_response({ok, Res}, Opts) ->
-    {ok, #{
-        <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
-        <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
-        <<"body">> => hb_ao:get(<<"body">>, Res, Opts)
-    }};
-format_response({error, Error}, _Opts) ->
-    {error, #{
-        <<"status">> => 500,
-        <<"message">> => <<"Request failed">>,
-        <<"details">> => hb_util:bin(Error)
-    }}.
+format_response({ok, Res}, Req, Opts) ->
+    Body = hb_ao:get(<<"body">>, Res, Opts),
+    ?event(push, {format_response, Req, hb_ao:get(<<"type">>, Req)}),
+    %% Check if this is being called for scheduling (aos Send with resolve)
+    %% vs direct HTTP call. dev_push:maybe_evaluate_message sets force_message => true
+    case hb_ao:get(<<"type">>, Req) of
+        <<"Message">> ->
+            %% For scheduling: return only valid AO message fields (ANS-104 compatible)
+            {ok, #{
+                <<"data">> => Body,
+                <<"action">> => <<"Inference-Response">>
+            }};
+        _ ->
+            %% For direct HTTP: return full HTTP response format
+            {ok, #{
+                <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
+                <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
+                <<"body">> => Body
+            }}
+    end;
+format_response({error, Error}, Req, Opts) ->
+    case hb_ao:get(<<"type">>, Req) of
+        <<"Message">> ->
+            %% For scheduling: return AO message format
+            {error, #{
+                <<"data">> => hb_util:bin(Error),
+                <<"action">> => <<"Inference-Error">>
+            }};
+        _ ->
+            %% For direct HTTP: return HTTP error format
+            {error, #{
+                <<"status">> => 500,
+                <<"message">> => <<"Request failed">>,
+                <<"body">> => hb_util:bin(Error)
+            }}
+    end.
 
 add_attestation({ok, Res}, Req, Opts) ->
     MergedData = #{
@@ -299,13 +248,24 @@ add_attestation({ok, Res}, Req, Opts) ->
         <<"resolved_model">> => hb_opts:get(inference_opts, #{}, Opts)
     }),
     
-    {ok, #{
-        <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
-        <<"content-type">> => <<"application/json">>,
-        <<"body">> => EnhancedBody
-    }};
-add_attestation({error, Error}, _Req, Opts) ->
-    format_response({error, Error}, Opts).
+    %% Check context: scheduling (aos) vs direct HTTP
+    case hb_ao:get(<<"type">>, Req) of
+        <<"Message">> ->
+            %% For scheduling: return only valid AO message fields (ANS-104 compatible)
+            {ok, #{
+                <<"data">> => EnhancedBody,
+                <<"action">> => <<"Inference-Response">>
+            }};
+        _ ->
+            %% For direct HTTP: return full HTTP response format
+            {ok, #{
+                <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => EnhancedBody
+            }}
+    end;
+add_attestation({error, Error}, Req, Opts) ->
+    format_response({error, Error}, Req, Opts).
 
 stream_from_backend(Sender, Method, Path, Body, _Opts) ->
     {ok, ConnPid} = gun:open("localhost", list_to_integer(?SERVER_PORT)),

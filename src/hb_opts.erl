@@ -375,7 +375,7 @@ default_message() ->
         inference_opts => #{
             <<"model_tx">> => <<"Ybz4a5jX1nX1_2KXJz6F5v8c1X9Yk9V6n0b-1cXoXoU">>,
             <<"model_hash">> => <<"bf3fc475100aa8bafea66766f17bb468ff96e947">>,
-            <<"model_name">> => <<"google/gemma-3-27b-it">>,
+            <<"model_name">> => <<"Qwen/Qwen2.5-0.5B-Instruct">>,
             <<"model_size">> => <<"27b">>,
             <<"tensor_type">> => <<"BF16">>
         },
