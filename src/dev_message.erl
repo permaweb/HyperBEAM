@@ -468,23 +468,23 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
-    ReqCommitters =
-        case maps:get(<<"committers">>, Req, <<"none">>) of
-            X when is_list(X) -> X;
-            CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
-        end,
     RawReqCommitments = maps:get(<<"commitment-ids">>, Req, <<"none">>),
     ReqCommitments =
         case RawReqCommitments of
             X2 when is_list(X2) -> X2;
             CommitmentDescriptor -> hb_ao:normalize_key(CommitmentDescriptor)
         end,
+    ReqCommitters =
+        case maps:get(<<"committers">>, Req, <<"none">>) of
+            X when is_list(X) -> X;
+            CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
+        end,
     ?event(debug_commitments,
         {commitment_ids_from_request,
             {req_commitments, ReqCommitments},
             {req_committers, ReqCommitters}}
     ),
-    % Get the commitments to verify.
+    % Get the commitments to return from explicit commitment IDs.
     FromCommitmentIDs =
         case ReqCommitments of
             <<"none">> -> [];
@@ -526,12 +526,24 @@ commitment_ids_from_request(Base, Req, Opts) ->
                                 not hb_maps:is_key(<<"committer">>, Comm);
                             _ -> false
                         end
+                        % not maps:is_key(
+                        %     <<"committer">>,
+                        %     maps:get(CommitmentID, Commitments)
+                        % )
                     end,
                     maps:keys(Commitments)
                 );
             FinalCommitmentIDs -> FinalCommitmentIDs
         end,
-    ?event({commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}),
+    ?event(debug_commitments,
+        {commitment_ids_from_request,
+            {base, Base}, {req, Req}, {res, Res},
+            {req_commitments, ReqCommitments},
+            {req_committers, ReqCommitters},
+            {from_commitment_ids, FromCommitmentIDs},
+            {from_committer_addrs, FromCommitterAddrs}
+        }
+    ),
     Res.
 
 %% @doc Ensure that the `commitments` submessage of a base message is fully

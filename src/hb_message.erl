@@ -221,6 +221,17 @@ normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
 normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
 
+%% @doc Normalize commitments on a message depending on `Mode':
+%% - `passive`: ensure there is at least one unsigned commitment, 
+%%    preserving any signed ones. If no unsigned commitment is present a new
+%%    one is added using the node-default commitment device
+%%    (aka NormCommitment).
+%% - `add`: always add a NormCommitment if it's not present.
+%% - `verify`: same as `passive`, but replace all existing commitments if
+%%    the committed keys found in the NormCommitment are different.
+%% - `fast`: use a cached `phash2` in `priv.last-phash2` to short‑circuit full
+%%    verification when possible; if it mismatches, recompute and fall back to
+%%    `verify`.
 do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
     Msg;
 do_normalize_commitments(Msg, Opts, passive) ->
@@ -232,28 +243,31 @@ do_normalize_commitments(Msg, Opts, passive) ->
             end,
             hb_maps:to_list(Commitments)
         ),
-    ?event({do_normalize_commitments,
+    ?event(normalization, {
+        {normalizing_commitments, passive},
         {unsigned_commitments, UnsignedCommitments},
         {maybe_signed_commitment, SignedCommitments}
     }),
     case {UnsignedCommitments, SignedCommitments} of
         {[], _} ->
-            {ok, #{ <<"commitments">> := NewCommitments }} =
-                dev_message:commit(
-                    uncommitted(Msg),
-                    #{ 
-                        <<"type">> => <<"unsigned">>
-                    },
-                    Opts
-                ),
+            NormCommitments = generate_norm_commitments(Msg, #{}, Opts),
             MergedCommitments = hb_maps:merge(
-                NewCommitments,
+                NormCommitments,
                 hb_maps:from_list(SignedCommitments),
                 Opts
             ),
             Msg#{ <<"commitments">> => MergedCommitments };
         _ -> Msg
     end;
+do_normalize_commitments(Msg, Opts, add) ->
+    NormCommitments = generate_norm_commitments(Msg, #{}, Opts),
+    Msg#{
+        <<"commitments">> =>
+            hb_maps:merge(
+                NormCommitments,
+                hb_maps:get(<<"commitments">>, Msg, #{}, Opts)
+            )
+    };
 do_normalize_commitments(Msg, Opts, verify) ->
     UnsignedCommitment = commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts),
     {MaybeUnsignedID, MaybeCommittedSpec} =
@@ -262,16 +276,13 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 {ID, #{ <<"committed">> => Committed }};
             _ -> {undefined, #{}}
         end,
-    {ok, #{ <<"commitments">> := NormCommitments }} =
-        dev_message:commit(
-            uncommitted(Msg),
-            MaybeCommittedSpec#{ 
-                <<"type">> => <<"unsigned">>
-            },
-            Opts
-        ),
-    ?event(normalization, {normalizing_commitments, verify}),
+    NormCommitments = generate_norm_commitments(Msg, MaybeCommittedSpec, Opts),
     [NormID] = hb_maps:keys(NormCommitments, Opts),
+    ?event(normalization, {
+        {normalizing_commitments, verify},
+        {maybe_unsigned_id, MaybeUnsignedID},
+        {norm_id, NormID}
+    }),
     case {MaybeUnsignedID, NormID} of
         {MatchedID, MatchedID} ->
             Msg;
@@ -288,12 +299,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 Opts
             );
         {_OldID, _NewID} ->
-            {ok, #{ <<"commitments">> := NewCommitments }} = 
-                dev_message:commit(
-                    uncommitted(Msg),
-                    #{ <<"type">> => <<"unsigned">> },
-                    Opts
-                ),
+            NewCommitments = generate_norm_commitments(Msg, #{}, Opts),
             % We had an unsigned ID to begin with and the new one is different.
             % This means that the committed keys have changed, so we drop any
             % other commitments and return only the new unsigned one.
@@ -316,6 +322,17 @@ do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
             MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
             do_normalize_commitments(MsgWithHash, Opts, verify)
     end.
+
+%% @doc Generate unsigned commitments using the node-default commitment
+%% device. (aka NormCommitments)
+generate_norm_commitments(Msg, BaseSpec, Opts) ->
+    {ok, #{ <<"commitments">> := NormCommitments }} =
+        dev_message:commit(
+            uncommitted(Msg),
+            BaseSpec#{ <<"type">> => <<"unsigned">> },
+            Opts
+        ),
+    NormCommitments.
 
 %% @doc Annotate a message with its phash2 value in the `priv' sub-map,
 %% calculating it if necessary.
@@ -842,12 +859,16 @@ commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
         when is_binary(ID), is_map_key(ID, Commitments) ->
-    hb_maps:get(
-        ID,
-        Commitments,
-        not_found,
-        Opts
-    );
+    FindRes = 
+        hb_maps:find(
+            ID,
+            Commitments,
+            Opts
+        ),
+    case FindRes of
+        error -> not_found;
+        {ok, Comm} -> {ok, ID, Comm}
+    end;
 commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     UnsignedCommitments =
@@ -865,7 +886,8 @@ commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
             {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
         true ->
             ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
-            multiple_matches    end;
+            multiple_matches
+    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
@@ -903,11 +925,13 @@ commitments(_Spec, _Msg, _Opts) ->
 
 %% @doc Return the devices for which there are commitments on a message.
 commitment_devices(#{ <<"commitments">> := Commitments }, Opts) ->
-    lists:map(
-        fun(CommMsg) ->
-            hb_ao:get(<<"commitment-device">>, CommMsg, Opts)
-        end,
-        maps:values(Commitments)
+    hb_util:unique(
+        lists:map(
+            fun(CommMsg) ->
+                hb_ao:get(<<"commitment-device">>, CommMsg, Opts)
+            end,
+            maps:values(Commitments)
+        )
     );
 commitment_devices(_Msg, _Opts) ->
     [].

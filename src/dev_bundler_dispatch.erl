@@ -1001,8 +1001,15 @@ recover_bundles_test() ->
             hb_message:with_commitments(
                 #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
             || Item <- Bundle#bundle.items],
+        WrittenItems = [
+            hb_message:with_commitments(
+                #{ 
+                    <<"commitment-device">> => <<"ans104@1.0">>,
+                    <<"type">> => <<"rsa-pss-sha256">>
+                },
+                Item, Opts) || Item <- [Item1, Item2, Item3]],
         ?assertEqual(
-            lists:sort([Item1, Item2, Item3]),
+            lists:sort(WrittenItems),
             lists:sort(RecoveredItems)),
         ?assertEqual(tx_posted, Bundle#bundle.status),
         ?assert(hb_message:verify(Bundle#bundle.tx)),

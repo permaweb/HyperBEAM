@@ -453,9 +453,19 @@ remote_hyperbeam_node_ans104_test() ->
             ServerOpts,
             #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
+    UnsignedID = hb_message:id(Msg, none, ServerOpts),
+    SignedID = hb_message:id(Msg, all, ServerOpts),
+    ?assertNotEqual(UnsignedID, SignedID),
+    ?event(debug_test, {{unsigned_id, UnsignedID}, {signed_id, SignedID}}),
     {ok, ID} = hb_cache:write(Msg, ServerOpts),
-    {ok, ReadMsg} = hb_cache:read(ID, ServerOpts),
-    ?assert(hb_message:verify(ReadMsg)),
+    ?assertEqual(UnsignedID, ID),
+    {ok, UnsignedMsg} = hb_cache:read(UnsignedID, ServerOpts),
+    {ok, SignedMsg} = hb_cache:read(SignedID, ServerOpts),
+    ?event(debug_test, {
+        {written_id, ID}, {written_msg, Msg},
+        {unsigned_msg, UnsignedMsg}, {signed_msg, SignedMsg}}),
+    ?assert(hb_message:verify(UnsignedMsg)),
+    ?assert(hb_message:verify(SignedMsg)),
     LocalStore = hb_test_utils:test_store(),
     ClientOpts =
         #{
@@ -469,6 +479,9 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
-    {ok, Req} = hb_cache:read(ID, ClientOpts),
+    % Unsigned dataitems can not be synced from the remote node via graphql
+    ?assertEqual(not_found, hb_cache:read(UnsignedID, ClientOpts)),
+    % But signed dataitems can
+    {ok, Req} = hb_cache:read(SignedID, ClientOpts),
     ?assert(hb_message:verify(Req)),
     ?assert(hb_message:match(Msg, Req)).

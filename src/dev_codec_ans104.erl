@@ -35,9 +35,11 @@ commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
 commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
+    ?event({commit, {input_message, Msg}}),
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = ar_bundles:sign_item(TX, Wallet),
+    ?event({commit, {signed_item, Signed}}),
     SignedStructured =
         hb_message:convert(
             Signed,
@@ -45,20 +47,36 @@ commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
             <<"ans104@1.0">>,
             Opts
         ),
-    {ok, SignedStructured};
+    ?event({commit, {signed_structured, SignedStructured}}),
+    commit(SignedStructured, Req#{ <<"type">> => <<"unsigned">> }, Opts);
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.
     % This forces the message to be normalized and the unsigned ID to be
     % recalculated.
-    {
-        ok,
+    ?event({adding_unsigned_commitment, Msg}),
+    WithoutExistingUnsigned =
+        hb_message:without_commitments(
+            #{ <<"type">> => <<"unsigned-sha256">> },
+            Msg,
+            Opts
+        ),
+    ?event({without_existing_unsigned, WithoutExistingUnsigned}),
+    WithoutExistingUnsignedEncoded =
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            WithoutExistingUnsigned,
             <<"ans104@1.0">>,
             <<"structured@1.0">>,
             Opts
-        )
-    }.
+        ),
+    ?event({without_existing_unsigned_encoded, WithoutExistingUnsignedEncoded}),
+    Committed = hb_message:convert(
+        WithoutExistingUnsignedEncoded,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ),
+    ?event({committed, Committed}),
+    {ok, Committed}.
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
@@ -74,8 +92,14 @@ verify(Msg, Req, Opts) ->
     ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
     {ok, TX} = to(OnlyWithCommitment, Req, Opts),
     ?event({verify, {encoded, TX}}),
-    Res = ar_bundles:verify_item(TX),
-    {ok, Res}.
+    case maps:get(<<"type">>, Req) of
+        <<"rsa-pss-sha256">> ->
+            {ok, ar_bundles:verify_item(TX)};
+        <<"unsigned-sha256">> ->
+            ID = hb_util:human_id(TX#tx.unsigned_id),
+            Signature = maps:get(<<"signature">>, Req),
+            {ok, Signature =:= ID }
+    end.
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
@@ -108,7 +132,7 @@ do_from(RawTX, Req, Opts) ->
     FieldCommitments = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
         TX, <<"ans104@1.0">>, FieldCommitments, Tags, Base, Keys, Opts),
-    ?event({from, {parsed_message, WithCommitments}}),
+    ?event({from, {result, WithCommitments}}),
     {ok, WithCommitments}.
 
 %% @doc Internal helper to translate a message to its #tx record representation,
@@ -130,11 +154,8 @@ to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
-    MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"ans104@1.0">> },
-        RawTABM,
-        Opts
-    ),
+    MaybeCommitment = dev_codec_ans104_to:commitment(
+        <<"ans104@1.0">>, RawTABM, Opts),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
     ?event({to, {maybe_bundle, MaybeBundle}}),
@@ -238,9 +259,9 @@ unsigned_duplicated_tag_name_test() ->
         ]
     }),
     Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({msg, Msg}),
+    ?event(debug_test, {msg, Msg}),
     TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
-    ?event({tx2, TX2}),
+    ?event(debug_test, {tx2, TX2}),
     ?assertEqual(TX, TX2).
 
 signed_duplicated_tag_name_test() ->
@@ -469,7 +490,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
         }
     },
     {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
-    ?event({tx, UnsignedTX}),
+    ?event(debug_test, {tx, UnsignedTX}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -479,8 +500,34 @@ unsigned_lowercase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     ?assert(UnsignedTX#tx.manifest =/= undefined),
     {ok, TABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
-    ?event({tabm, TABM}),
-    ?assertEqual(UnsignedTABM, TABM).
+    ExpectedTABM = UnsignedTABM#{ 
+        <<"commitments">> => #{
+            <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">> => #{
+                <<"bundle">> => <<"true">>,
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"committed">> => [<<"data">>, <<"a1">>, <<"c1">>],
+                <<"signature">> => <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">>,
+                <<"type">> => <<"unsigned-sha256">>
+            }
+        },
+        <<"data">> => #{
+            <<"commitments">> => #{
+                <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8">> => #{
+                    <<"bundle">> => <<"false">>,
+                    <<"commitment-device">> => <<"ans104@1.0">>,
+                    <<"committed">> => [<<"data">>, <<"a2">>, <<"c2">>],
+                    <<"signature">> => <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8">>,
+                    <<"type">> => <<"unsigned-sha256">>
+                }
+            },
+            <<"data">> => <<"testdata">>,
+            <<"a2">> => <<"value2">>,
+            <<"c2">> => <<"value3">>
+        }
+    },
+    ?event(debug_test, {expected_tabm, {explicit, ExpectedTABM}}),
+    ?event(debug_test, {tabm, {explicit, TABM}}),
+    ?assertEqual(ExpectedTABM, TABM).
 
 unsigned_mixedcase_bundle_list_tags_1_test() ->
     UnsignedTX = dev_arweave_common:normalize(#tx{
@@ -500,7 +547,6 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
             }
         ]
     }),
-    ?event(debug_test, {unsigned_tx, UnsignedTX}),
     ?assertEqual([
         {<<"TagA1">>, <<"value1">>},
         {<<"TagA2">>, <<"value2">>},
@@ -509,7 +555,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -525,6 +571,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
         ExpectedCommitment,
         hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
     {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    ?event(debug_test, {expected_tx, UnsignedTX}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
     ok.
@@ -556,7 +603,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -605,7 +652,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
-    Commitment = hb_message:commitment(
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -650,8 +697,9 @@ signed_lowercase_bundle_map_tags_test() ->
     ?assert(SignedTX#tx.manifest =/= undefined),
     {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
     ?event({signed_tabm, SignedTABM}),
-    ?assertEqual(UnsignedTABM, hb_maps:without([<<"commitments">>], SignedTABM)),
-    Commitment = hb_message:commitment(
+    % Recursively exclude commitments from the SignedTABM for the match test.
+    ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
     ?event({commitment, Commitment}),
     ExpectedCommitment = #{
@@ -708,8 +756,9 @@ signed_mixedcase_bundle_map_tags_test() ->
     ?assert(SignedTX#tx.manifest =/= undefined),
     {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
     ?event(debug_test, {signed_tabm, SignedTABM}),
-    ?assertEqual(UnsignedTABM, hb_maps:without([<<"commitments">>], SignedTABM)),
-    Commitment = hb_message:commitment(
+    % Recursively exclude commitments from the SignedTABM for the match test.
+    ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
+    {ok, _, Commitment} = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
     ?event(debug_test, {commitment, Commitment}),
     ExpectedCommitment = #{
@@ -762,7 +811,8 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Commit) }),
     ?event(debug_test, {committed, Label, {explicit, Committed}}),
     ?assert(hb_message:verify(Committed, all, Opts), Label),
-    {ok, _, CommittedCommitment} = hb_message:commitment(#{}, Committed, Opts),
+    {ok, _, CommittedCommitment} = hb_message:commitment(
+        #{ <<"type">> => <<"rsa-pss-sha256">> }, Committed, Opts),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
@@ -784,7 +834,8 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
-    {ok, _, DecodedCommitment} = hb_message:commitment(#{}, Decoded, Opts),
+    {ok, _, DecodedCommitment} = hb_message:commitment(
+        #{ <<"type">> => <<"rsa-pss-sha256">> }, Decoded, Opts),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
         Label),

@@ -29,20 +29,36 @@ commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
             <<"tx@1.0">>,
             Opts
         ),
-    {ok, SignedStructured};
+    ?event({commit, {signed_structured, SignedStructured}}),
+    commit(SignedStructured, Req#{ <<"type">> => <<"unsigned">> }, Opts);
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to an L1 TX, 
     % then back. This forces the message to be normalized and the unsigned ID
     % to be recalculated.
-    {
-        ok,
+    ?event({adding_unsigned_commitment, Msg}),
+    WithoutExistingUnsigned =
+        hb_message:without_commitments(
+            #{ <<"type">> => <<"unsigned-sha256">> },
+            Msg,
+            Opts
+        ),
+    ?event({without_existing_unsigned, WithoutExistingUnsigned}),
+    WithoutExistingUnsignedEncoded =
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            WithoutExistingUnsigned,
             <<"tx@1.0">>,
             <<"structured@1.0">>,
             Opts
-        )
-    }.
+        ),
+    ?event({without_existing_unsigned_encoded, WithoutExistingUnsignedEncoded}),
+    Committed = hb_message:convert(
+        WithoutExistingUnsignedEncoded,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ),
+    ?event({committed, Committed}),
+    {ok, Committed}.
 
 %% @doc Verify an L1 TX commitment.
 verify(Msg, Req, Opts) ->
@@ -117,11 +133,8 @@ to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
     ?event({to, {inbound, RawTABM}, {req, Req}}),
-    MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"tx@1.0">> },
-        RawTABM,
-        Opts
-    ),
+    MaybeCommitment = dev_codec_ans104_to:commitment(
+        <<"tx@1.0">>, RawTABM, Opts),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
     ?event({to, {raw_tabm, RawTABM}, {is_bundle, IsBundle}, {maybe_bundle, MaybeBundle}, {req, Req}, {opts, Opts}}),
@@ -860,7 +873,7 @@ do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req) ->
     TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tx_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
+    ?assert(hb_message:match(UnsignedTABM, TABM), unsigned_tx_roundtrip),
     % TABM -> TX
     TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
@@ -890,7 +903,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req) ->
             #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
     ?event(debug_test, {signed_tx_roundtrip,
         {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
+    ?assert(hb_message:match(SignedTABM, TABM), signed_tx_roundtrip),
     % TABM -> TX
     TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = SignedTX#tx{ 
@@ -924,7 +937,7 @@ do_unsigned_tabm_roundtrip(UnsignedTX0, UnsignedTABM, Req) ->
     TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tabm_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(UnsignedTABM, TABM, unsigned_tabm_roundtrip).
+    ?assert(hb_message:match(UnsignedTABM, TABM), unsigned_tabm_roundtrip).
 
 do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % Commit TABM
@@ -934,7 +947,10 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
     ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
     {ok, _, SignedCommitment} = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"tx@1.0">> },
+        #{
+            <<"commitment-device">> => <<"tx@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        },
         SignedTABM,
         #{}
     ),
@@ -963,7 +979,7 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
         }, SignedTX, signed_tabm_roundtrip),
     % TX -> TABM
     FinalTABM = hb_util:ok(from(SignedTX, Req, #{})),
-    ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).
+    ?assert(hb_message:match(SignedTABM, FinalTABM), signed_tabm_roundtrip).
 
 bundle_commitment_test() ->
     test_bundle_commitment(unbundled, unbundled, unbundled),
@@ -989,7 +1005,14 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => ToBool(Commit) }),
     ?event(debug_test, {committed, Label, {explicit, Committed}}),
     ?assert(hb_message:verify(Committed, all, Opts), Label),
-    {ok, _, CommittedCommitment} = hb_message:commitment(#{}, Committed, Opts),
+    {ok, _, CommittedCommitment} =
+        hb_message:commitment(
+            #{
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Committed,
+            Opts
+        ),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
@@ -1011,7 +1034,14 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
-    {ok, _, DecodedCommitment} = hb_message:commitment(#{}, Decoded, Opts),
+    {ok, _, DecodedCommitment} =
+        hb_message:commitment(
+            #{
+                <<"type">> => <<"rsa-pss-sha256">>
+            },
+            Decoded,
+            Opts
+        ),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
         Label),

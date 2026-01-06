@@ -170,6 +170,7 @@ simple_ans104_query_test() ->
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
+    ?event({written_msg, WrittenMsg}),
     ?assertMatch(
         {ok, [_]},
         hb_cache:match(#{<<"type">> => <<"Message">>}, Opts)
@@ -206,27 +207,11 @@ simple_ans104_query_test() ->
             },
             Opts
         ),
-    ExpectedID = hb_message:id(WrittenMsg, all, Opts),
-    ?event({expected_id, ExpectedID}),
     ?event({simple_ans104_query_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
 %% @doc Test transactions query with tags filter
 transactions_query_tags_test() ->
@@ -269,27 +254,12 @@ transactions_query_tags_test() ->
             #{},
             Opts
         ),
-    ExpectedID = hb_message:id(WrittenMsg, all, Opts),
-    ?event({expected_id, ExpectedID}),
     ?event({transactions_query_tags_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, none, Opts),
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
 %% @doc Test transactions query with owners filter
 transactions_query_owners_test() ->
@@ -331,27 +301,11 @@ transactions_query_owners_test() ->
             },
             Opts
         ),
-    ExpectedID = hb_message:id(WrittenMsg, all, Opts),
-    ?event({expected_id, ExpectedID}),
     ?event({transactions_query_owners_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
 %% @doc Test transactions query with recipients filter
 transactions_query_recipients_test() ->
@@ -396,27 +350,11 @@ transactions_query_recipients_test() ->
             },
             Opts
         ),
-    ExpectedID = hb_message:id(WrittenMsg, all, Opts),
-    ?event({expected_id, ExpectedID}),
     ?event({transactions_query_recipients_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
 %% @doc Test transactions query with ids filter
 transactions_query_ids_test() ->
@@ -459,26 +397,11 @@ transactions_query_ids_test() ->
             },
             Opts
         ),
-    ?event({expected_id, ExpectedID}),
     ?event({transactions_query_ids_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
 %% @doc Test transactions query with combined filters
 transactions_query_combined_test() ->
@@ -526,30 +449,14 @@ transactions_query_combined_test() ->
             },
             Opts
         ),
-    ?event({expected_id, ExpectedID}),
     ?event({transactions_query_combined_test, Res}),
-    ?assertMatch(
-        #{
-            <<"data">> := #{
-                <<"transactions">> := #{
-                    <<"edges">> :=
-                        [#{
-                            <<"node">> :=
-                                #{
-                                    <<"id">> := ExpectedID,
-                                    <<"tags">> :=
-                                        [#{ <<"name">> := _, <<"value">> := _ }|_]
-                                }
-                        }]
-                }
-            }
-        } when ?IS_ID(ExpectedID),
-        Res
-    ).
+    ExpectedIDs = [
+        hb_message:id(WrittenMsg, signed, Opts)
+    ],
+    assert_query_match(ExpectedIDs, Res, Opts).
 
-
-%% @doc Test single transaction query by ID
-transaction_query_by_id_test() ->
+%% @doc Test single transaction query by signed ID
+transaction_query_by_signed_id_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
@@ -583,6 +490,7 @@ transaction_query_by_id_test() ->
             },
             Opts
         ),
+    ?event({written_msg, WrittenMsg}),
     ?event({expected_id, ExpectedID}),
     ?event({transaction_query_by_id_test, Res}),
     ?assertMatch(
@@ -719,22 +627,21 @@ transaction_query_with_anchor_test() ->
             store => [hb_test_utils:test_store(hb_store_lmdb)]
         },
     Node = hb_http_server:start_node(Opts),
-    {ok, ID} =
-        hb_cache:write(
-            hb_message:convert(
-                ar_bundles:sign_item(
-                    #tx {
-                        anchor = AnchorID = crypto:strong_rand_bytes(32),
-                        data = <<"test-data">>
-                    },
-                    hb:wallet()
-                ),
-                <<"structured@1.0">>,
-                <<"ans104@1.0">>,
-                Opts
+    Msg =
+        hb_message:convert(
+            ar_bundles:sign_item(
+                #tx {
+                    anchor = AnchorID = crypto:strong_rand_bytes(32),
+                    data = <<"test-data">>
+                },
+                hb:wallet()
             ),
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             Opts
         ),
+    {ok, _UnsignedID} =hb_cache:write(Msg, Opts),
+    SignedID = hb_message:id(Msg, signed, Opts),
     EncodedAnchor = hb_util:encode(AnchorID),
     Query =
         <<"""
@@ -753,7 +660,7 @@ transaction_query_with_anchor_test() ->
             Node,
             Query,
             #{
-                <<"id">> => ID
+                <<"id">> => SignedID
             },
             Opts
         ),
@@ -768,3 +675,45 @@ transaction_query_with_anchor_test() ->
         },
         Res
     ).
+
+assert_query_match(ExpectedIDs, Res, _Opts) ->
+    ?event({expected_ids, ExpectedIDs}),
+    % asset shape of response
+    ?assertMatch(
+        #{
+            <<"data">> := #{
+                <<"transactions">> := #{
+                    <<"edges">> :=
+                        [#{
+                             <<"node">> :=
+                                 #{
+                                     <<"id">> := _,
+                                     <<"tags">> :=
+                                         [#{ <<"name">> := _, <<"value">> := _ }|_]
+                                 }
+                         }
+                        | _]
+                }
+            }
+        },
+        Res
+    ),
+    % assert that the correct IDs are in the response in any order
+    #{
+        <<"data">> := #{
+            <<"transactions">> := #{
+                <<"edges">> := Edges
+            }
+        }
+    } = Res,
+    ActualIDs =
+        [ID
+         ||
+            #{
+                <<"node">> :=
+                    #{
+                        <<"id">> := ID
+                    }
+            } <- Edges
+        ],
+    ?assertEqual(lists:sort(ExpectedIDs), lists:sort(ActualIDs)).
