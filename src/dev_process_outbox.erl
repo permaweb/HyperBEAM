@@ -159,15 +159,13 @@ manage_subscription(State, Req, SubscriptionInfo, Opts) ->
         NewState =
             hb_ao:set(
                 State,
-                #{
-                    <<"subscribers">> => #{
-                        Action => #{
-                            Subject => #{
-                                Listener => SubscriptionInfo
-                            }
-                        }
-                    }
-                },
+                <<
+                    "subscribers/",
+                    Action/binary, "/",
+                    Subject/binary, "/",
+                    Listener/binary
+                >>,
+                SubscriptionInfo,
                 Opts
             ),
         ?event(
