@@ -38,10 +38,11 @@ run_as(Key, Base, Req, Opts) ->
     ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
-    PreparedMsg =
-        hb_util:deep_merge(
+    {ok, PreparedMsg} =
+        hb_ao:resolve(
             ensure_process_key(Base, Opts),
             #{
+                <<"path">> => <<"set">>,
                 <<"device">> =>
                     DeviceSet =
                         hb_maps:get(
