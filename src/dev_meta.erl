@@ -371,6 +371,26 @@ message_to_status(_Item, _NodeMsg) ->
 %% @doc Sign the result of a device call if the node is configured to do so.
 maybe_sign({Status, Res}, NodeMsg) ->
     {Status, maybe_sign(Res, NodeMsg)};
+maybe_sign(Res = #{ <<"stream_generator">> := StreamGen }, NodeMsg) ->
+    Res#{
+        <<"stream_generator">> => fun(Sender) ->
+            WrappedSender = fun
+                (Data) when is_binary(Data) ->
+                    Sender(Data),
+                    put(stream_acc, <<(get_stream_acc())/binary, Data/binary>>);
+                (Other) ->
+                    Sender(Other)
+            end,
+            put(stream_acc, <<>>),
+            try
+                StreamGen(WrappedSender)
+            after
+                FinalBody = get_stream_acc(),
+                send_commitment(Sender, FinalBody, NodeMsg),
+                erase(stream_acc)
+            end
+        end
+    };
 maybe_sign(Res, NodeMsg) ->
     ?event({maybe_sign, Res}),
     case hb_opts:get(force_signed, false, NodeMsg) of
@@ -381,6 +401,19 @@ maybe_sign(Res, NodeMsg) ->
             end;
         false -> Res
     end.
+
+get_stream_acc() ->
+    case get(stream_acc) of
+        undefined -> <<>>;
+        Acc -> Acc
+    end.
+
+send_commitment(Sender, Res, NodeMsg) ->
+    CommittedRes = maybe_sign(Res, NodeMsg),
+    Sender(format_sse_event(<<"commitment">>, CommittedRes)).
+
+format_sse_event(Event, Data) ->
+    [<<"event: ">>, Event, <<"\n">>, <<"data: ">>, hb_json:encode(Data), <<"\n\n">>].
 
 %% @doc Check if the request in question is signed by a given `role' on the node.
 %% The `role' can be one of `operator' or `initiator'.
