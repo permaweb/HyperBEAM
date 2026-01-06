@@ -399,7 +399,10 @@ read(Path, Opts) ->
         store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
     case StoreReadResult of 
         {ok, Res} ->
-            {ok, hb_message:normalize_commitments(Res, Opts)};
+            case hb_opts:get(skip_normalize, false, Opts) of
+                true -> {ok, Res};
+                false -> {ok, hb_message:normalize_commitments(Res, Opts)}
+            end;
         _ -> StoreReadResult
     end.
 do_read_commitment(Path, Opts) ->

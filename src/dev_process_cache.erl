@@ -13,7 +13,16 @@ read(ProcID, Opts) ->
 read(ProcID, SlotRef, Opts) ->
     ?event({reading_computed_result, ProcID, SlotRef}),
     Path = path(ProcID, SlotRef, Opts),
-    hb_cache:read(Path, Opts).
+    % hb_cache:read(Path, Opts).
+    case hb_cache:read(Path, Opts#{ skip_normalize => true }) of
+        {ok, RawResult} ->
+            %% Remove snapshot before normalizing commitments to avoid
+            %% inconsistency between committed keys and actual message keys.
+            ResultWithoutSnapshot = hb_maps:remove(<<"snapshot">>, RawResult, Opts),
+            {ok, hb_message:normalize_commitments(ResultWithoutSnapshot, Opts)};
+        Other ->
+            Other
+    end.
 
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
