@@ -14,7 +14,7 @@ simulation_test() ->
             properties => [
                 fun verify_deposit_quantity/4,
                 fun verify_withdraw_quantity/4,
-                % fun verify_withdraw_liquidation/4,
+                fun verify_withdraw_liquidation/4,
                 fun verify_twu/4,
                 fun verify_inverted_index/4,
                 fun verify_delegate/4
@@ -242,30 +242,36 @@ verify_withdraw_liquidation(OldState, Req = #{ <<"path">> := <<"withdraw">> }, N
         0,
         Opts
     ),
-    OldDelegations = hb_ao:get(
-        <<
-            "/resources/",
-            ResourceID/binary,
-            "/deposits/",
-            Addr/binary,
-            "/delegations"
-        >>,
-        OldState,
-        #{},
-        Opts
-    ),
-    NewDelegations = hb_ao:get(
-        <<
-            "/resources/",
-            ResourceID/binary,
-            "/deposits/",
-            Addr/binary,
-            "/delegations"
-        >>,
-        NewState,
-        #{},
-        Opts
-    ),
+    OldDelegations =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                Addr/binary,
+                "/delegations"
+                >>,
+                OldState,
+                #{},
+                Opts
+            )
+        ),
+    NewDelegations =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                    "/resources/",
+                    ResourceID/binary,
+                    "/deposits/",
+                    Addr/binary,
+                    "/delegations"
+                >>,
+                NewState,
+                #{},
+                Opts
+            )
+        ),
     case OldDeposit >= Quantity of
         true ->
             % No liquidation required
@@ -294,15 +300,15 @@ verify_withdraw_liquidation(_OldState, _Req, _NewState, _Opts) -> true.
 verify_twu(OldState, Req, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req, #{}),
     Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq, 0),
-    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq, <<>>),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
     Weight = hb_ao:get(
         <<"/resources/", ResourceID/binary, "/weight">>,
         NewState,
         0,
         Opts
     ),
-    OldTWU = hb_maps:get(<<"total-weighted-units">>, OldState, 0),
-    NewTWU = hb_maps:get(<<"total-weighted-units">>, NewState, 0),
+    OldTWU = hb_maps:get(<<"total-weighted-units">>, OldState),
+    NewTWU = hb_maps:get(<<"total-weighted-units">>, NewState),
     Path = hb_maps:get(<<"path">>, Req),
     Res =
         case Path of
