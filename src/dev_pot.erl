@@ -591,7 +591,23 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ResourceAcc,
             Opts
         ),
-    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S6, Opts).
+    S7 =
+        update_deposit_index(
+            FromAddr,
+            ResourceID,
+            get_deposit(FromAddr, ResourceID, S6, Opts),
+            S6,
+            Opts
+        ),
+    S8 =
+        update_deposit_index(
+            ToAddr,
+            ResourceID,
+            get_deposit(ToAddr, ResourceID, S7, Opts),
+            S7,
+            Opts
+        ),
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S8, Opts).
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 undelegate(State, Assignment, Opts) ->
@@ -686,7 +702,23 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             ExistingDelegation - Amount,
             Opts
         ),
-    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S3, Opts).
+    S4 =
+        update_deposit_index(
+            FromAddr,
+            ResourceID,
+            get_deposit(FromAddr, ResourceID, S3, Opts),
+            S3,
+            Opts
+        ),
+    S5 =
+        update_deposit_index(
+            ToAddr,
+            ResourceID,
+            get_deposit(ToAddr, ResourceID, S4, Opts),
+            S4,
+            Opts
+        ),
+    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S5, Opts).
 
 %% @doc Set the weight of a specific resource in the pot. Valid requesters to
 %% change resource parameters are:
