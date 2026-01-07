@@ -47,19 +47,12 @@
         hb_config_location => {"HB_CONFIG", "config.flat"},
         port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         mode => {"HB_MODE", fun list_to_existing_atom/1},
-        paranoid_verify => {"HB_PARANOID", fun list_to_existing_atom/1, "false"},
+        paranoid_verify =>
+            {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
         debug_print =>
-            {"HB_PRINT",
-                fun
-                    ({preparsed, Parsed}) -> Parsed;
-                    (Str) when Str == "1" -> true;
-                    (Str) when Str == "true" -> true;
-                    (Str) ->
-                        lists:map(
-                            fun(Topic) -> list_to_atom(Topic) end,
-                            string:tokens(Str, ",")
-                        )
-                end,
+            {
+                "HB_PRINT",
+                fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
@@ -88,6 +81,17 @@
             }
     }
 ).
+
+%% @doc Convert a comma-separated list of topics, as occassionally used by `HB_*`
+%% environment variables, to a list of atoms. Additionally, will return `true' if
+%% the string is `true', `1', or `all'.
+topic_list_to_atoms({preparsed, Parsed}) -> Parsed;
+topic_list_to_atoms("false") -> [];
+topic_list_to_atoms("1") -> true;
+topic_list_to_atoms("true") -> true;
+topic_list_to_atoms("all") -> true;
+topic_list_to_atoms(Str) ->
+    lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
 %% @doc Return the default message with all environment variables set.
 default_message_with_env() ->

@@ -388,6 +388,7 @@ resolve_stage(3, Base, Req, Opts) ->
     % Validation checks: If `paranoid_message_verification' is enabled, we should
     % verify the base and request messages prior to execution.
     hb_message:paranoid_verify(
+        pre_resolve,
         #{
             <<"reason">> => <<"AO-Core Pre-Execution Validation">>,
             <<"base">> => Base,
@@ -585,6 +586,7 @@ resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
                 )
         end,
     hb_message:paranoid_verify(
+        post_resolve,
         #{
             <<"reason">> => <<"AO-Core Post-Execution Validation">>,
             <<"base">> => Base,
