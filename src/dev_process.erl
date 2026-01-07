@@ -159,23 +159,10 @@ snapshot(RawBase, _Req, Opts) ->
             Base,
             #{ <<"path">> => <<"snapshot">>, <<"mode">> => <<"Map">> },
             Opts#{
-                cache_control => [<<"no-cache">>, <<"no-store">>],
-                hashpath => ignore
+                cache_control => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    ProcID = hb_message:id(Base, all, Opts),
-    Slot = hb_ao:get(<<"at-slot">>, {as, <<"message@1.0">>, Base}, Opts),
-    {ok,
-        hb_private:set(
-            SnapshotMsg#{ <<"cache-control">> => [<<"store">>] },
-            #{ <<"priv/additional-hashpaths">> =>
-                    [
-                        hb_path:to_binary([ProcID, <<"snapshot">>, Slot])
-                    ]
-            },
-            Opts
-        )
-    }.
+    {ok, SnapshotMsg}.
 
 %% @doc Before computation begins, a boot phase is required. This phase
 %% allows devices on the execution stack to initialize themselves. We set the
@@ -383,7 +370,10 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             NewProcStateMsgWithSlot =
                 hb_ao:set(
                     NewProcStateMsg,
-                    #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => NextSlot },
+                    #{
+                        <<"device">> => <<"process@1.0">>,
+                        <<"at-slot">> => NextSlot
+                    },
                     Opts
                 ),
             % Notify any waiters that the result for a slot is now available.
@@ -415,8 +405,11 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
         case ForceSnapshot orelse should_snapshot(Slot, Res, Opts) of
             false -> Res;
             true ->
-                ?event(compute_debug,
-                    {snapshotting, {proc_id, ProcID}, {slot, Slot}}, Opts),
+                ?event(
+                    compute_debug,
+                    {snapshotting, {proc_id, ProcID}, {slot, Slot}},
+                    Opts
+                ),
                 {ok, Snapshot} = snapshot(Res, Req, Opts),
 				?event(snapshot,
 					{got_snapshot,
@@ -432,9 +425,16 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
                     },
                     Opts
                 ),
+                WithSnapshot =
+                    hb_ao:set(
+                        Res,
+                        <<"snapshot">>,
+                        Snapshot,
+                        Opts
+                    ),
 				WithLastSnapshot =
                     hb_private:set(
-                        Res#{ <<"snapshot">> => Snapshot },
+                        WithSnapshot,
                         <<"last-snapshot">>,
                         os:system_time(second),
                         Opts
@@ -676,4 +676,4 @@ ensure_loaded(Base, Req, Opts) ->
 
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
-    hb_maps:remove(<<"snapshot">>, Msg, Opts).
+    hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
