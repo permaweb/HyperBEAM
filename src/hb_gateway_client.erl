@@ -10,6 +10,7 @@
 %% Raw access primitives:
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
+-export([assignments/2]).
 %% Application-specific data access functions:
 -export([location/2, assignments/2]).
 -include_lib("include/hb.hrl").
