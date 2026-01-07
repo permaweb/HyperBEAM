@@ -11,7 +11,7 @@
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
--export([location/2]).
+-export([location/2, assignments/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -162,6 +162,70 @@ location(Address, Opts) ->
                     result_to_message(ID, Item, Opts)
             end
     end.
+assignments(ProcessId, Opts) ->
+        Query =
+            <<"query($Processes: [String!]!) { ",
+                "transactions(",
+                    "tags: ["
+                "{ name: \"type\" values: [\"Assignment\"] }, " 
+                "{ name: \"variant\" values: [\"ao.N.1\"] }, ",
+                "{ name: \"process\" values: $Processes } ",
+                "], "
+                "sort: HEIGHT_ASC, "
+                "){ ",
+                    "count "
+                    "edges { ",
+                        (item_spec())/binary ,
+                    " } ",
+                "} ",
+            "}">>,
+        Variables = #{ <<"Processes">> => [ProcessId] },
+        GqlRes = query(Query, Variables, Opts),
+        case GqlRes of 
+            {error, Reason} ->
+                ?event({process_assignments, {query, Query}, {error, Reason}}),
+                {error, Reason};
+            {ok, GqlMsg} ->
+                ?event(j, {scheduler_location_req, {query, Query}, {response, GqlMsg}}),
+                case hb_ao:get(<<"data/transactions/count">>, GqlMsg, Opts) of
+                    0 ->
+                        ?event(scheduler_location,
+                            {graphql_scheduler_location_not_found,
+                                {process_id, ProcessId}
+                            }
+                        ),
+                        {error, not_found};
+                    _ ->
+                        Edges = 
+                            hb_ao:get(
+                                <<"data/transactions/edges">>,
+                                GqlMsg,
+                                [],
+                                Opts
+                            ),
+                        ?event(j, {edges, Edges}),
+                        % EdgesMap = hb_maps:from_list(Edges),
+                        % ?event(j, {edges_map, EdgesMap}),
+                        Results = 
+                            lists:map(
+                                fun(Edge) ->
+                                    ?event(j, {edge_start, Edge}),
+                                    Node = hb_ao:get(<<"node">>, Edge, Opts),
+                                    Id = hb_ao:get(<<"id">>, Node, Opts),
+                                    hb_util:ok(result_to_message(Id, Node, Opts))
+                                end,
+                                Edges
+                            ),
+                        ?event(j,
+                            {found_via_graphql,
+                                {process_id, ProcessId},
+                                {results, Results}
+                            },
+                            Opts
+                        ),
+                        {ok, hb_cache:ensure_all_loaded(Results, Opts)}
+                end
+        end.
         
 %% @doc Run a GraphQL request encoded as a binary. The node message may contain 
 %% a list of URLs to use, optionally as a tuple with an additional map of options
@@ -250,7 +314,28 @@ result_to_message(ExpectedID, Item, Opts) ->
     DataSize = byte_size(Data),
     ?event(gateway, {data, {id, ExpectedID}, {data, Data}, {item, Item}}, Opts),
     % Convert the response to an ANS-104 message.
-    Tags = hb_maps:get(<<"tags">>, Item, tags_not_found, GQLOpts),
+    RawTags = hb_maps:get(<<"tags">>, Item, tags_not_found, GQLOpts),
+    TestTags = RawTags,
+    Tags = 
+        lists:map(
+            fun(Tag) ->
+                ?event(j, {mapping_raw_tags, {tag, Tag}}),
+                Name = maps:get(<<"name">>, Tag),
+                Value = maps:get(<<"value">>, Tag),
+                case byte_size(Name) >= 5 andalso binary:part(Name, byte_size(Name) - 5, 5) =:= <<" link">> of 
+                    true -> 
+                        Start = binary:part(Name, 0, byte_size(Name) - 5),
+                        LinkName = <<Start/binary, "+link">>, 
+                        Ret = #{ <<"name">> => LinkName, <<"value">> => Value},
+                        ?event(j, {tag_ret, Ret}),
+                        Ret;
+                    _ ->
+                        #{ <<"name">> => Name, <<"value">> => Value}
+                end
+            end,
+            RawTags
+        ),
+    ?event(j, {ans_104, {tags, Tags}, {test_tags, TestTags}}),
 	Signature =
         hb_util:decode(
             hb_maps:get(<<"signature">>, Item, not_found, GQLOpts)

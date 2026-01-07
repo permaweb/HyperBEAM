@@ -63,8 +63,9 @@ ensure_loaded(Ref,
         RawOpts) ->
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
-    UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
-    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
+    ?event(debug_c, {ensure_link_loaded, {ref, Ref}, {link, Lk}}),
+    Opts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
+    % Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ?event(debug_cache,
         {loading_multi_link,
@@ -164,6 +165,7 @@ ensure_all_loaded(Msg) ->
 ensure_all_loaded(Msg, Opts) ->
     ensure_all_loaded([], Msg, Opts).
 ensure_all_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
+    ?event(debug_c, {ensuring_all_loaded, {ref, Ref}, {link, Link}}),
     ensure_all_loaded(Ref, ensure_loaded(Ref, Link, Opts), Opts);
 ensure_all_loaded(Ref, Msg, Opts) when is_map(Msg) ->
     maps:map(fun(K, V) -> ensure_all_loaded([K|Ref], V, Opts) end, Msg);
