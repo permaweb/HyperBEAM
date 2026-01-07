@@ -314,8 +314,9 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
         <<"structured@1.0">>, 
         Opts#{ topic => ao_internal }
     ),
+    NormStepMsg = hb_message:normalize_commitments(StepMsg, Opts),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
+    [{as, DevID, NormStepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
@@ -326,8 +327,17 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
         <<"structured@1.0">>, 
         Opts#{ topic => ao_internal }
     ),
-    ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
+    NormStepMsg = hb_message:normalize_commitments(StepMsg, Opts),
+    ?event(
+        parsing,
+        {build_messages,
+            {base, Msg},
+            {additional, Additional},
+            {resulting_step_msg, NormStepMsg}
+        },
+        Opts
+    ),
+    [NormStepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 %% @doc Parse a path part into a message or an ID.
 %% Applies the syntax rules outlined in the module doc, in the following order:

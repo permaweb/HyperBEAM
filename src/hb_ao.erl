@@ -243,11 +243,11 @@ resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_I
     % If the first message is an `as' with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
     ?event(ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
+    RemBase = remove(Raw, <<"path">>, Opts),
     ?event(subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
     Baseb = ensure_message_loaded(ID, Opts),
     ?event(subresolution, {loaded_message, {msg, Baseb}}, Opts),
-    Basec = hb_maps:merge(Baseb, RemBase, Opts),
+    Basec = set(Baseb, RemBase, Opts),
     ?event(subresolution, {merged_message, {msg, Basec}}, Opts),
     Based = set(Basec, <<"device">>, DevID, Opts),
     ?event(subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
