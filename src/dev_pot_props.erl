@@ -427,27 +427,37 @@ verify_twu(OldState, Req, NewState, Opts) ->
         }
     }.
 
-verify_inverted_index(OldState, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
-    do_verify_inverted_index(OldState, Req, NewState, Opts);
-verify_inverted_index(OldState, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
-    do_verify_inverted_index(OldState, Req, NewState, Opts);
-verify_inverted_index(_OldState, _Req, _NewState, _Opts) ->
-    true.
-
-do_verify_inverted_index(_OldState, Req, NewState, Opts) ->
+verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"deposit">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     Addr = hb_maps:get(<<"address">>, UnwrappedReq),
     ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    do_verify_inverted_index(Addr, ResourceID, NewState, Opts);
+verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    Addr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    do_verify_inverted_index(Addr, ResourceID, NewState, Opts);
+verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    do_verify_inverted_index(ToAddr, ResourceID, NewState, Opts) andalso
+    do_verify_inverted_index(FromAddr, ResourceID, NewState, Opts);
+verify_inverted_index(_OldState, _Req, _NewState, _Opts) ->
+    true.
+
+do_verify_inverted_index(Addr, ResourceID, State, Opts) ->
     InvertedQty = hb_ao:get(
         <<"/users/", Addr/binary, "/deposits/", ResourceID/binary>>,
-        NewState,
-        0,
+        State,
+        inverted_qty_not_found,
         Opts
     ),
     DepositQty = hb_ao:get(
         <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
-        NewState,
-        0,
+        State,
+        deposit_qty_not_found,
         Opts
     ),
     InvertedQty =:= DepositQty orelse
