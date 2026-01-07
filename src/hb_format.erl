@@ -643,8 +643,13 @@ message(List, Opts, Indent) when is_list(List) ->
         String -> String
     end;
 message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
-    % Should we filter out the priv key?
+    % Load relevant options.
     FilterPriv = hb_opts:get(debug_show_priv, false, Opts),
+    PrintCommDevice = hb_opts:get(debug_print_comm_device, true, Opts),
+    PrintCommType = hb_opts:get(debug_print_comm_type, true, Opts),
+    PrintCommitted = hb_opts:get(debug_print_committed, true, Opts),
+    MustVerifyAllIDs = hb_opts:get(debug_print_verify, true, Opts),
+    GenerateIDs = hb_opts:get(debug_print_gen_id, false, Opts),
     MainPriv = hb_maps:get(<<"priv">>, RawMsg, #{}, Opts),
     % Add private keys to the output if they are not hidden. Opt takes 3 forms:
     % 1. `false' -- never show priv
@@ -691,17 +696,6 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
                 List
             )
         end,
-    % Prepare the metadata row for formatting.
-    DevicePathMetadata =
-        case {ValOrUndef(<<"device">>), ValOrUndef(<<"path">>)} of
-            {undefined, undefined} -> [<<"Message ">>];
-            {Device, undefined} ->
-                [<<"~">>, Device, <<" ">>];
-            {undefined, Path} ->
-                [<<"Message < Path: ">>, Path, <<" > ">>];
-            {Device, Path} ->
-                [<<"~">>, Device, <<"/">>, Path, <<" ">>]
-        end,
     % Note: We try to get the IDs _if_ they are *already* in the map. We do not
     % force calculation of the IDs here because that may cause significant
     % overhead unless the `debug_ids' option is set.
@@ -712,7 +706,7 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             Opts
         ),
     MsgWithNormComms = #{ <<"commitments">> := Comms } =
-        case map_size(KnownComms) == 0 andalso hb_opts:get(debug_print_gen_id, false, Opts) of
+        case map_size(KnownComms) == 0 andalso GenerateIDs of
             false -> Msg#{ <<"commitments">> => KnownComms };
             true ->
                 case dev_message:commit(Msg, #{ <<"type">> => <<"unsigned">> }, Opts) of
@@ -727,7 +721,6 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             Opts
         ),
     CommIDs = hb_maps:keys(Comms, Opts),
-    MustVerifyAllIDs = hb_opts:get(debug_print_verify, true, Opts),
     {_ValidIDs, InvalidIDs} =
         lists:partition(
             fun(_) when not MustVerifyAllIDs -> true;
@@ -743,8 +736,49 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             end,
             CommIDs
         ),
-    PrintCommDevice = hb_opts:get(debug_print_comm_device, true, Opts),
-    PrintCommType = hb_opts:get(debug_print_comm_type, true, Opts),
+    % Prepare the metadata row for formatting.
+    DevicePathMetadata =
+        case {ValOrUndef(<<"device">>), ValOrUndef(<<"path">>)} of
+            {undefined, undefined} -> [<<"Message ">>];
+            {Device, undefined} ->
+                DeviceValue =
+                    format_key(
+                        PrintCommDevice,
+                        CommittedKeys,
+                        <<"device">>,
+                        <<"~", Device/binary>>,
+                        Opts
+                    ),
+                [DeviceValue, <<" ">>];
+            {undefined, Path} ->
+                PathValue =
+                    format_key(
+                        PrintCommitted,
+                        CommittedKeys,
+                        <<"path">>,
+                        Path,
+                        Opts
+                    ),
+                [<<"Message < Path: ">>, PathValue, <<" > ">>];
+            {Device, Path} ->
+                DeviceValue =
+                    format_key(
+                        PrintCommitted,
+                        CommittedKeys,
+                        <<"device">>,
+                        <<"~", Device/binary>>,
+                        Opts
+                    ),
+                PathValue =
+                    format_key(
+                        PrintCommitted,
+                        CommittedKeys,
+                        <<"path">>,
+                        Path,
+                        Opts
+                    ),
+                [DeviceValue, <<"/">>, PathValue, <<" ">>]
+        end,
     IDMetadata =
         format_ids(
             lists:map(
@@ -845,20 +879,12 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             _ -> {UnsortedGeneralKVs, PrivKeys}
         end,
     FormattedKeys =
-        case hb_opts:get(debug_print_committed, true, Opts) of
-            false -> TruncatedKeys;
-            true ->
-                lists:map(
-                    fun({Key, Val}) ->
-                        NormKey = hb_ao:normalize_key(Key, Opts),
-                        case lists:member(NormKey, CommittedKeys) of
-                            true -> {<<"* ", NormKey/binary>>, Val};
-                            false -> {NormKey, Val}
-                        end
-                    end,
-                    TruncatedKeys
-                )
-        end,
+        lists:map(
+            fun({Key, Val}) ->
+                {format_key(PrintCommitted, CommittedKeys, Key, Opts), Val}
+            end,
+            TruncatedKeys
+        ),
     KeyValsToPrint =
         FilterUndef(PriorityKeys) ++
         lists:sort(
@@ -915,6 +941,21 @@ message(Item, Opts, Indent) ->
     indent("~p", [Item], Opts, Indent).
 
 %%% Utility functions.
+
+%% @doc Format a key for printing, optionally adding the appropriate `committed'
+%% key specifier character. This function may be called with just a key, or a
+%% value to print in place of the key, for use in producing `* ~dev-name@1.0`-style
+%% results.
+format_key(PrintCommitted, Committed, Key, Opts) ->
+    format_key(PrintCommitted, Committed, Key, undefined, Opts).
+format_key(false, _, Key, undefined, Opts) -> hb_ao:normalize_key(Key, Opts);
+format_key(false, _, _, ToPrint, _) -> ToPrint;
+format_key(true, Committed, Key, ToPrint, Opts) ->
+    case lists:member(NormKey = hb_ao:normalize_key(Key, Opts), Committed) of
+        true when ToPrint == undefined -> <<"* ", NormKey/binary>>;
+        true -> <<"* ", ToPrint/binary>>;
+        false -> format_key(false, Committed, Key, undefined, Opts)
+    end.
 
 %% @doc Return a formatted list of short IDs, given a raw list of IDs.
 format_ids([], _Opts) -> undefined;
