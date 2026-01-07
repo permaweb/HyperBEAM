@@ -21,6 +21,8 @@
 -module(hb_http_multi).
 -export([request/5]).
 -include("include/hb.hrl").
+%% Max waiting time for a parallel request to arrive
+-define(DEFAULT_PARALLEL_TIMEOUT, 10000).
 
 %% @doc Dispatch the same HTTP request to many nodes. Can be configured to
 %% await responses from all nodes or just one, and to halt all requests after
