@@ -711,22 +711,33 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
             Opts
         ),
-    Comms =
+    MsgWithNormComms = #{ <<"commitments">> := Comms } =
         case map_size(KnownComms) == 0 andalso hb_opts:get(debug_print_gen_id, false, Opts) of
-            false -> KnownComms;
+            false -> Msg#{ <<"commitments">> => KnownComms };
             true ->
                 case dev_message:commit(Msg, #{ <<"type">> => <<"unsigned">> }, Opts) of
-                    {ok, #{ <<"commitments">> := NewComms }} -> NewComms;
-                    {error, _} -> #{}
+                    {ok, XMsg} -> XMsg;
+                    {error, _} -> Msg#{ <<"commitments">> => #{} }
                 end
         end,
+    {ok, CommittedKeys} =
+        dev_message:committed(
+            MsgWithNormComms,
+            #{ <<"commitment-ids">> => <<"all">> },
+            Opts
+        ),
     CommIDs = hb_maps:keys(Comms, Opts),
     MustVerifyAllIDs = hb_opts:get(debug_print_verify, true, Opts),
-    {ValidIDs, InvalidIDs} =
+    {_ValidIDs, InvalidIDs} =
         lists:partition(
             fun(_) when not MustVerifyAllIDs -> true;
                (ID) ->
-                try hb_message:verify(Msg, #{ <<"commitment-ids">> => ID }, Opts)
+                try
+                    hb_message:verify(
+                        MsgWithNormComms,
+                        #{ <<"commitment-ids">> => ID },
+                        Opts
+                    )
                 catch _:_ -> false
                 end
             end,
@@ -795,9 +806,9 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
         [
             case hb_opts:get(debug_print_metadata, true, Opts) of
                 true ->
-                    {<<"commitments">>, ValOrUndef(<<"metadata">>)};
+                    {<<"commitments">>, ValOrUndef(<<"commitments">>)};
                 false ->
-                    {<<"commitments">>, <<"...">>}
+                    {<<"commitments">>, undefined}
             end
         ],
     % Concatenate the path and device rows with the rest of the key values.
@@ -833,17 +844,27 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
                 };
             _ -> {UnsortedGeneralKVs, PrivKeys}
         end,
-    KeyVals =
+    FormattedKeys =
+        lists:map(
+            fun({Key, Val}) ->
+                NormKey = hb_ao:normalize_key(Key, Opts),
+                case lists:member(NormKey, CommittedKeys) of
+                    true -> {<<"* ", NormKey/binary>>, Val};
+                    false -> {NormKey, Val}
+                end
+            end,
+            TruncatedKeys
+        ),
+    KeyValsToPrint =
         FilterUndef(PriorityKeys) ++
         lists:sort(
             fun({K1, _}, {K2, _}) -> K1 < K2 end,
-            TruncatedKeys
+            FormattedKeys
         ) ++
         FooterKeys,
     % Format the remaining 'normal' keys and values.
     Res = lists:map(
-        fun({Key, Val}) ->
-            KeyStr = hb_ao:normalize_key(Key, Opts),
+        fun({KeyStr, Val}) ->
             indent(
                 "~s => ~s~n",
                 [
@@ -876,7 +897,7 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
                 Indent + 1
             )
         end,
-        KeyVals
+        KeyValsToPrint
     ),
     case Res of
         [] -> lists:flatten(Header ++ " [Empty] }");
