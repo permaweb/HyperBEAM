@@ -59,7 +59,7 @@
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
--export([verify/1, verify/2, verify/3, paranoid_verify/2]).
+-export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
@@ -515,46 +515,55 @@ verify(Msg, Spec, Opts) ->
 
 %% @doc Verify a message recursively, including all nested messages.
 paranoid_verify(Msg, Opts) ->
+    paranoid_verify(default, Msg, Opts).
+paranoid_verify(Topic, Msg, Opts) ->
     ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
     case hb_opts:get(paranoid_verify, false, Opts) of
-        false -> true;
-        true ->
-            try
-                do_paranoid_verify([], Msg, Opts),
-                ?event(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
-                true
-            catch
-                throw:{verification_failure, RawPath, FailedMsg, Details, Stack} ->
-                    Path = hb_path:to_binary(RawPath),
-                    ?event(error,
-                        {paranoid_verification_failure,
-                            {at_path, Path},
-                            {failed_message, FailedMsg},
-                            {while_verifying, Msg},
-                            {details, Details},
-                            {stack, {trace, Stack}}
-                        },
-                        Opts#{
-                            paranoid_verify => false
-                        }
-                    ),
-                    throw({paranoid_verification_failure, Path, Msg, FailedMsg})
+        true -> do_paranoid_verify(Topic, Msg, Opts);
+        Topics ->
+            case lists:member(Topic, Topics) of
+                false -> true;
+                true -> do_paranoid_verify(Topic, Msg, Opts)
             end
     end.
-do_paranoid_verify(Path, {_Status, Msg}, Opts) ->
-    do_paranoid_verify(Path, Msg, Opts);
-do_paranoid_verify(Path, Link, Opts) when ?IS_LINK(Link) ->
+
+do_paranoid_verify(Topic, Msg, Opts) ->
+    try
+        do_paranoid_verify(Topic, [], Msg, Opts),
+        ?event(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
+        true
+    catch
+        throw:{verification_failure, RawPath, FailedMsg, Details, Stack} ->
+            Path = hb_path:to_binary(RawPath),
+            ?event(error,
+                {paranoid_verification_failure,
+                    {triggered_by, Topic},
+                    {at_path, Path},
+                    {failed_message, FailedMsg},
+                    {while_verifying, Msg},
+                    {details, Details},
+                    {stack, {trace, Stack}}
+                },
+                Opts#{
+                    paranoid_verify => false
+                }
+            ),
+            throw({paranoid_verification_failure, Topic, Path, Msg, FailedMsg})
+    end.
+do_paranoid_verify(Topic, Path, {_Status, Msg}, Opts) ->
+    do_paranoid_verify(Topic, Path, Msg, Opts);
+do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
     case hb_opts:get(paranoid_verify_links, true, Opts) of
         false -> true;
         true ->
-            do_paranoid_verify(Path, hb_cache:ensure_loaded(Link, Opts), Opts)
+            do_paranoid_verify(Topic, Path, hb_cache:ensure_loaded(Link, Opts), Opts)
     end;
-do_paranoid_verify(Path, ListMsg, Opts) when is_list(ListMsg) ->
-    do_paranoid_verify(Path, hb_util:list_to_numbered_message(ListMsg), Opts);
-do_paranoid_verify(Path, Msg, Opts) when is_map(Msg) ->
+do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
+    do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
+do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
     hb_maps:map(
         fun(Key, Value) ->
-            do_paranoid_verify(Path ++ [Key], Value, Opts)
+            do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
         end,
         uncommitted(hb_private:reset(Msg), Opts),
         Opts
@@ -562,9 +571,9 @@ do_paranoid_verify(Path, Msg, Opts) when is_map(Msg) ->
     try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
     catch
         _:Details:St ->
-            throw({verification_failure, Path, Msg, Details, St})
+            throw({verification_failure, Topic, Path, Msg, Details, St})
     end;
-do_paranoid_verify(_Path, _Msg, _Opts) ->
+do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
 
 %% @doc Return the unsigned version of a message in AO-Core format.
@@ -865,7 +874,8 @@ commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
             {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
         true ->
             ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
-            multiple_matches    end;
+            multiple_matches
+    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
@@ -877,10 +887,7 @@ commitment(Spec, Msg, Opts) ->
         true ->
             ?event(commitment, {multiple_matches, {matches, Matches}}),
             multiple_matches
-    end;
-commitment(_Spec, _Msg, _Opts) ->
-    % The message has no commitments, so the spec can never match.
-    not_found.
+    end.
 
 %% @doc Return a list of all commitments that match the spec.
 commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
