@@ -13,11 +13,9 @@ simulation_test() ->
             states => fun generate_initial_state/1,
             properties => [
                 fun verify_deposit_quantity/4,
-                fun verify_withdraw_quantity/4,
-                fun verify_withdraw_liquidation/4,
+                fun verify_delegations/4,
                 fun verify_twu/4,
-                fun verify_inverted_index/4,
-                fun verify_delegate/4
+                fun verify_inverted_index/4
             ],
             runs => 3,
             length => 4,
@@ -188,9 +186,7 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"deposit">> }, NewSta
             {qty, Quantity}
         }
     };
-verify_deposit_quantity(_OldState, _Req, _NewState, _Opts) -> true.
-
-verify_withdraw_quantity(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
+verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
     Addr = hb_maps:get(<<"address">>, UnwrappedReq),
@@ -229,9 +225,64 @@ verify_withdraw_quantity(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewS
                 }
             }
     end;
-verify_withdraw_quantity(_OldState, _Req, _NewState, _Opts) -> true.
+verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    OldDepositDelegator = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", FromAddr/binary, "/quantity">>,
+        OldState,
+        0,
+        Opts
+    ),
+    NewDepositDelegator = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", FromAddr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    OldDepositRecipient = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", ToAddr/binary, "/quantity">>,
+        OldState,
+        0,
+        Opts
+    ),
+    NewDepositRecipient = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", ToAddr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    case FromAddr =:= ToAddr of
+        true ->
+            % Delegating to yourself
+            NewDepositDelegator =:= OldDepositDelegator orelse
+            {error,
+                {bad_delegate_math_self_delegation,
+                    {old_deposit, OldDepositDelegator},
+                    {new_deposit, NewDepositDelegator},
+                    {qty, Quantity}
+                }
+            };
+        false ->
+            % Delegating to someone other than yourself
+            NewDepositDelegator =:= OldDepositDelegator - Quantity andalso
+            NewDepositRecipient =:= OldDepositRecipient + Quantity orelse
+            {error,
+                {bad_delegate_math,
+                    {old_delegator_deposit, OldDepositDelegator},
+                    {new_delegator_deposit, NewDepositDelegator},
+                    {old_recipient_deposit, OldDepositRecipient},
+                    {new_recipient_deposit, NewDepositRecipient},
+                    {qty, Quantity}
+                }
+            }
+    end;
+verify_deposit_quantity(_OldState, _Req, _NewState, _Opts) -> true.
 
-verify_withdraw_liquidation(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
+verify_delegations(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
     Addr = hb_maps:get(<<"address">>, UnwrappedReq),
@@ -287,15 +338,63 @@ verify_withdraw_liquidation(OldState, Req = #{ <<"path">> := <<"withdraw">> }, N
             SumOldDelegations = lists:sum(hb_maps:values(OldDelegations)),
             SumNewDelegations = lists:sum(hb_maps:values(NewDelegations)),
             SumOldDelegations - SumNewDelegations =:=
-                Quantity - OldDeposit orelse
-                    {error,
-                        {incoherent_liquidation,
-                            {old_table, OldDelegations},
-                            {new_table, NewDelegations}
-                        }
-                    }
+            Quantity - OldDeposit orelse
+            {error,
+                {incoherent_liquidation,
+                    {old_table, OldDelegations},
+                    {new_table, NewDelegations}
+                }
+            }
     end;
-verify_withdraw_liquidation(_OldState, _Req, _NewState, _Opts) -> true.
+verify_delegations(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    OldDelegations =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations"
+                >>,
+                OldState,
+                #{},
+                Opts
+            )
+        ),
+    NewDelegations =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                    "/resources/",
+                    ResourceID/binary,
+                    "/deposits/",
+                    FromAddr/binary,
+                    "/delegations"
+                >>,
+                NewState,
+                #{},
+                Opts
+            )
+        ),
+    OldDelegatedQty = hb_maps:get(ToAddr, OldDelegations, 0),
+    NewDelegatedQty = hb_maps:get(ToAddr, NewDelegations, 0),
+    NewDelegatedQty =:= OldDelegatedQty + Quantity orelse
+    {error,
+        {bad_delegation_math,
+            {old_table, OldDelegations},
+            {new_table, NewDelegations},
+            {qty, Quantity},
+            {from, FromAddr},
+            {to, ToAddr}
+        }
+    };
+verify_delegations(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_twu(OldState, Req, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req, #{}),
@@ -358,8 +457,6 @@ do_verify_inverted_index(_OldState, Req, NewState, Opts) ->
             {deposit_qty, DepositQty}
         }
     }.   
-
-verify_delegate(OldState, Req, NewState, Opts) -> true.
 
 % Note that we keep private state which mirrors the schema of the inverted
 % index, but which keeps track of the deposits *originated* by each user.
