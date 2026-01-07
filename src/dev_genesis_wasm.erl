@@ -590,11 +590,11 @@ import_legacy_checkpoint() ->
         ),
     ?assertMatch(
         ExpectedSlot,
-        hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
+        hb_ao:get(<<"at-slot">>, ProcWithCheckpoint, Opts)
     ),
     ?assertMatch(
-        #{ <<"data">> := Data } when byte_size(Data) > 0,
-        hb_maps:get(<<"snapshot">>, ProcWithCheckpoint)
+        Data when byte_size(Data) > 0,
+        hb_ao:get(<<"snapshot/data">>, ProcWithCheckpoint, Opts)
     ),
     ?assertMatch(
         {ok, Slot, _} when Slot > 0,
