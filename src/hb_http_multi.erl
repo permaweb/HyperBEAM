@@ -241,6 +241,9 @@ admissible_response(Response, Msg, Opts) ->
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
+parallel_responses(Res,  [], Ref, _Awaiting, _StopAfter, _Admissible, _Statuses, _Opts) ->
+    empty_inbox(Ref),
+    Res;
 parallel_responses(Res, Procs, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
