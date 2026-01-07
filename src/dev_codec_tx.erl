@@ -994,7 +994,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
-        hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
+        hb_util:atom(hb_maps:get(<<"bundle">>, CommittedCommitment, false, Opts)),
         Label),
     
     Encoded = hb_message:convert(Committed, 
@@ -1013,11 +1013,15 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
     {ok, _, DecodedCommitment} = hb_message:commitment(#{}, Decoded, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
-        Label),
-    ?assertEqual(ToBool(Commit),
-        hb_util:atom(hb_ao:get(<<"bundle">>, DecodedCommitment, false, Opts)),
-        Label),
+        [<<"list">>],
+        hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
+        Label
+    ),
+    ?assertEqual(
+        ToBool(Commit),
+        hb_util:atom(hb_maps:get(<<"bundle">>, DecodedCommitment, false, Opts)),
+        Label
+    ),
     case Commit of
         unbundled ->
             ?assertNotEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label);

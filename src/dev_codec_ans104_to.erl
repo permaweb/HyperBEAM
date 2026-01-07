@@ -5,11 +5,11 @@
 -include("include/hb.hrl").
 
 is_bundle({ok, _, Commitment}, _Req, Opts) ->
-    hb_util:atom(hb_ao:get(<<"bundle">>, Commitment, false, Opts));
+    hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts));
 is_bundle(_, Req, Opts) ->
     case hb_maps:is_key(<<"bundle">>, Req, Opts) of
-        true -> hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts));
-        false -> hb_util:atom(hb_ao:get(<<"bundle">>, Opts, false, Opts))
+        true -> hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, Opts));
+        false -> hb_util:atom(hb_opts:get(bundle, false, Opts))
     end.
 
 %% @doc Determine if the message should be loaded from the cache and re-converted
