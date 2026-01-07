@@ -229,6 +229,7 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
+    hb_message:paranoid_verify(cache_write, RawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     ?event(debug_cache, {writing_full_message, {msg, TABM}}),
@@ -399,6 +400,7 @@ read(Path, Opts) ->
         store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
     case StoreReadResult of 
         {ok, Res} ->
+            hb_message:paranoid_verify(cache_read, Res, Opts),
             {ok, hb_message:normalize_commitments(Res, Opts)};
         _ -> StoreReadResult
     end.
