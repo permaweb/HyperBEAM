@@ -130,7 +130,8 @@ decode_all_links(OtherVal) ->
 
 %% @doc Determine if a key is an encoded link.
 is_link_key(Key) when byte_size(Key) >= 5 ->
-    binary:part(Key, byte_size(Key) - 5, 5) =:= <<"+link">>;
+    binary:part(Key, byte_size(Key) - 5, 5) =:= <<"+link">>
+        orelse binary:part(Key, byte_size(Key) - 5, 5) =:= <<" link">>;
 is_link_key(_) -> false.
 
 %% @doc Remove any `+link` suffixes from a key.

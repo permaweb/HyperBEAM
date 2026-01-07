@@ -737,9 +737,9 @@ find_server(ProcID, Base, ToSched, Opts) ->
                         ),
                     ?event({sched_loc, SchedLoc}),
                     case SchedLoc of
-                        not_found ->
-                            {error, <<"No scheduler information provided.">>};
                         _ ->
+                            {error, <<"No scheduler information provided.">>};
+                        false ->
                             ?event(
                                 {confirming_if_scheduler_is_local,
                                     {addr, SchedLoc}
@@ -1050,8 +1050,8 @@ get_schedule(Base, Req, Opts) ->
         {local, _PID} ->
             generate_local_schedule(Format, ProcID, From, To, Opts);
         {redirect, Redirect} ->
-            ?event({redirect_received, {redirect, Redirect}}),
-            case hb_opts:get(scheduler_follow_redirects, true, Opts) of
+            ?event(j, {redirect_received, {redirect, Redirect}}),
+            Ret = case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
                     case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
                         {ok, Res} ->
@@ -1073,8 +1073,40 @@ get_schedule(Base, Req, Opts) ->
                     end;
                 false ->
                     {ok, Redirect}
-            end
+            end,
+            ?event(j, {get_schedule_remote_res, {res, Ret}, {format, Format}}),
+            Ret;
+        _ -> 
+            Ret = 
+                case get_graphql_schedule(ProcID, From, To, Opts) of 
+                    {ok, Res} -> 
+                        case uri_string:percent_decode(Format) of
+                            <<"application/aos-2">> ->
+                                dev_scheduler_formats:assignments_to_aos2(
+                                    ProcID,
+                                    Res,
+                                    undefined,
+                                    Opts
+                                );
+                            _ ->
+                                dev_scheduler_formats:assignments_to_bundle(
+                                    ProcID,
+                                    Res,
+                                    undefined,
+                                    Opts
+                                )
+                        end;
+                    {error, Res} ->
+                        {error, Res}
+                end,
+            ?event(j, {get_schedule_graphql_res, {res, Ret}, {format, Format}}),
+            Ret
     end.
+
+get_graphql_schedule(RawProcID, From, To, Opts) ->
+    ProcID = without_hint(RawProcID),
+    ?event(j, {get_graphql_schedule_start, {proc_id, ProcID}}),
+    hb_gateway_client:assignments(ProcID, Opts).
 
 %% @doc Get a schedule from a remote scheduler, but first read all of the 
 %% assignments from the local cache that we already know about.
