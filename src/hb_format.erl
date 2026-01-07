@@ -845,16 +845,20 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
             _ -> {UnsortedGeneralKVs, PrivKeys}
         end,
     FormattedKeys =
-        lists:map(
-            fun({Key, Val}) ->
-                NormKey = hb_ao:normalize_key(Key, Opts),
-                case lists:member(NormKey, CommittedKeys) of
-                    true -> {<<"* ", NormKey/binary>>, Val};
-                    false -> {NormKey, Val}
-                end
-            end,
-            TruncatedKeys
-        ),
+        case hb_opts:get(debug_print_committed, true, Opts) of
+            false -> TruncatedKeys;
+            true ->
+                lists:map(
+                    fun({Key, Val}) ->
+                        NormKey = hb_ao:normalize_key(Key, Opts),
+                        case lists:member(NormKey, CommittedKeys) of
+                            true -> {<<"* ", NormKey/binary>>, Val};
+                            false -> {NormKey, Val}
+                        end
+                    end,
+                    TruncatedKeys
+                )
+        end,
     KeyValsToPrint =
         FilterUndef(PriorityKeys) ++
         lists:sort(
