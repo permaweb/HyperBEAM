@@ -207,8 +207,7 @@ aos2_normalize_types(Msg) ->
     ?event(
         {
             aos2_normalized_types,
-            {msg, Msg},
-            {anchor, hb_ao:get(<<"anchor">>, Msg, <<>>, #{})}
+            {msg, Msg}
         }
     ),
     Msg.
