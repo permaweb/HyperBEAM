@@ -12,7 +12,7 @@
 -export([term/1, term/2, term/3]).
 -export([print/1, print/3, print/4, print/5, eunit_print/2]).
 -export([message/1, message/2, message/3]).
--export([binary/1, error/2, trace/1, trace_short/0, trace_short/1]).
+-export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
 -export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
 -export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
 %%% Public Utility Functions.
@@ -208,7 +208,7 @@ do_term(MaybePrivMap, Opts, Indent) when is_map(MaybePrivMap) ->
 do_term(Tuple, Opts, Indent) when is_tuple(Tuple) ->
     tuple(Tuple, Opts, Indent);
 do_term(X, Opts, Indent) when is_binary(X) ->
-    indent("~s", [binary(X)], Opts, Indent);
+    indent("~s", [binary(X, Opts)], Opts, Indent);
 do_term(Str = [X | _], Opts, Indent) when is_integer(X) andalso X >= 32 andalso X < 127 ->
     indent("~s", [Str], Opts, Indent);
 do_term(MsgList, Opts, Indent) when is_list(MsgList) ->
@@ -428,29 +428,32 @@ indent_lines(Strings, Indent) when is_list(Strings) ->
     )).
 
 %% @doc Format a binary as a short string suitable for printing.
-binary(Bin) ->
+binary(Bin, Opts) ->
     case short_id(Bin) of
         undefined ->
-            MaxBinPrint = hb_opts:get(debug_print_binary_max),
-            Printable =
+            MaxBinPrint = hb_opts:get(debug_print_binary_max, 60, Opts),
+            Truncated =
                 binary:part(
                     Bin,
                     0,
-                    case byte_size(Bin) of
-                        X when X < MaxBinPrint -> X;
-                        _ -> MaxBinPrint
-                    end
+                    min(
+                        case binary:match(Bin, <<"\n">>) of
+                            {NewlinePos, _} -> NewlinePos;
+                            nomatch -> MaxBinPrint
+                        end,
+                        MaxBinPrint
+                    )
                 ),
             PrintSegment =
-                case hb_util:is_printable_string(Printable) of
-                    true -> Printable;
-                    false -> hb_util:encode(Printable)
+                case hb_util:is_printable_string(Truncated) of
+                    true -> Truncated;
+                    false -> hb_util:encode(Truncated)
                 end,
             lists:flatten(
                 [
                     "\"",
                     [PrintSegment],
-                    case Printable == Bin of
+                    case Truncated == Bin of
                         true -> "\"";
                         false ->
                             io_lib:format(
@@ -463,7 +466,6 @@ binary(Bin) ->
         ShortID ->
             lists:flatten(io_lib:format("~s", [ShortID]))
     end.
-
 
 %% @doc Format a map as either a single line or a multi-line string depending
 %% on the value of the `debug_print_map_line_threshold' runtime option.
@@ -480,7 +482,7 @@ maybe_short(X, Opts, _Indent) ->
     MaxLen = hb_opts:get(debug_print_map_line_threshold, 100, Opts),
     SimpleFmt =
         case is_binary(X) of
-            true -> binary(X);
+            true -> binary(X, Opts);
             false -> io_lib:format("~p", [X])
         end,
     case is_multiline(SimpleFmt) orelse (lists:flatlength(SimpleFmt) > MaxLen) of
@@ -630,7 +632,7 @@ message(Item) -> message(Item, #{}).
 message(Item, Opts) -> message(Item, Opts, 0).
 message(Bin, Opts, Indent) when is_binary(Bin) ->
     indent(
-        binary(Bin),
+        binary(Bin, Opts),
         Opts,
         Indent
     );
@@ -640,10 +642,10 @@ message(List, Opts, Indent) when is_list(List) ->
         [$\n | String] -> String;
         String -> String
     end;
-message(RawMap, Opts, Indent) when is_map(RawMap) ->
+message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
     % Should we filter out the priv key?
     FilterPriv = hb_opts:get(debug_show_priv, false, Opts),
-    MainPriv = hb_maps:get(<<"priv">>, RawMap, #{}, Opts),
+    MainPriv = hb_maps:get(<<"priv">>, RawMsg, #{}, Opts),
     % Add private keys to the output if they are not hidden. Opt takes 3 forms:
     % 1. `false' -- never show priv
     % 2. `if_present' -- show priv only if there are keys inside
@@ -654,22 +656,22 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
             {if_present, #{}} -> [];
             {_, Priv} -> [{<<"!Private!">>, Priv}]
         end,
-    Map =
+    Msg =
         case FilterPriv of
-            false -> RawMap;
-            _ -> hb_private:reset(RawMap)
+            false -> RawMsg;
+            _ -> hb_private:reset(RawMsg)
         end,
     % Define helper functions for formatting elements of the map.
     ValOrUndef =
         fun(<<"hashpath">>) ->
-            case Map of
+            case Msg of
                 #{ <<"priv">> := #{ <<"hashpath">> := HashPath } } ->
                     short_id(HashPath);
                 _ ->
                     undefined
             end;
         (Key) ->
-            case dev_message:get(Key, Map, Opts) of
+            case dev_message:get(Key, Msg, Opts) of
                 {ok, Val} ->
                     case short_id(Val) of
                         undefined -> Val;
@@ -680,73 +682,110 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
         end,
     FilterUndef =
         fun(List) ->
-            lists:filter(fun({_, undefined}) -> false; (_) -> true end, List)
+            lists:filter(
+                fun({_, undefined}) -> false;
+                   (undefined) -> false;
+                   (false) -> false;
+                   (_) -> true
+                end,
+                List
+            )
         end,
     % Prepare the metadata row for formatting.
+    DevicePathMetadata =
+        case {ValOrUndef(<<"device">>), ValOrUndef(<<"path">>)} of
+            {undefined, undefined} -> [<<"Message ">>];
+            {Device, undefined} ->
+                [<<"~">>, Device, <<" ">>];
+            {undefined, Path} ->
+                [<<"Message < Path: ">>, Path, <<" > ">>];
+            {Device, Path} ->
+                [<<"~">>, Device, <<"/">>, Path, <<" ">>]
+        end,
     % Note: We try to get the IDs _if_ they are *already* in the map. We do not
     % force calculation of the IDs here because that may cause significant
     % overhead unless the `debug_ids' option is set.
+    KnownComms =
+        hb_maps:without(
+            [<<"commitments">>, <<"priv">>],
+            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            Opts
+        ),
+    Comms =
+        case map_size(KnownComms) == 0 andalso hb_opts:get(debug_print_gen_id, false, Opts) of
+            false -> KnownComms;
+            true ->
+                case dev_message:commit(Msg, #{ <<"type">> => <<"unsigned">> }, Opts) of
+                    {ok, #{ <<"commitments">> := NewComms }} -> NewComms;
+                    {error, _} -> #{}
+                end
+        end,
+    CommIDs = hb_maps:keys(Comms, Opts),
+    MustVerifyAllIDs = hb_opts:get(debug_print_verify, true, Opts),
+    {ValidIDs, InvalidIDs} =
+        lists:partition(
+            fun(_) when not MustVerifyAllIDs -> true;
+               (ID) ->
+                try hb_message:verify(Msg, #{ <<"commitment-ids">> => ID }, Opts)
+                catch _:_ -> false
+                end
+            end,
+            CommIDs
+        ),
+    PrintCommDevice = hb_opts:get(debug_print_comm_device, true, Opts),
+    PrintCommType = hb_opts:get(debug_print_comm_type, true, Opts),
     IDMetadata =
-        case hb_opts:get(debug_ids, false, #{}) of
-            false ->
-                [
-                    {<<"#P">>, ValOrUndef(<<"hashpath">>)},
-                    {<<"*U">>, ValOrUndef(<<"unsigned_id">>)},
-                    {<<"*S">>, ValOrUndef(<<"id">>)}
-                ];
-            true ->
-                {ok, UID} = dev_message:id(Map, #{}, Opts),
-                {ok, ID} =
-                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, Opts),
-                [
-                    {<<"#P">>, short_id(ValOrUndef(<<"hashpath">>))},
-                    {<<"*U">>, short_id(UID)}
-                ] ++
-                case ID of
-                    UID -> [];
-                    _ -> [{<<"*S">>, short_id(ID)}]
-                end
-        end,
-    CommitterMetadata =
-        case hb_opts:get(debug_committers, true, Opts) of
-            false -> [];
-            true ->
-                case dev_message:committers(Map, #{}, Opts) of
-                    {ok, []} -> [];
-                    {ok, [Committer]} ->
-                        [{<<"Comm.">>, short_id(Committer)}];
-                    {ok, Committers} ->
+        format_ids(
+            lists:map(
+                fun({ID, Comm}) ->
+                    hb_util:bin(io_lib:format(
+                        "~s~s~s~s~s",
                         [
-                            {
-                                <<"Comms.">>,
-                                string:join(
-                                    lists:map(
-                                        fun(X) ->
-                                            [short_id(X)]
-                                        end,
-                                        Committers
-                                    ),
-                                    ", "
-                                )
-                            }
+                            case lists:member(ID, InvalidIDs) of
+                                true -> <<"!INVALID! ">>;
+                                false -> <<>>
+                            end,
+                            short_id(ID),
+                            if PrintCommDevice ->
+                                [
+                                    "~",
+                                    hb_util:bin(
+                                        hb_maps:get(
+                                            <<"commitment-device">>,
+                                            Comm,
+                                            <<"!NO DEVICE!">>,
+                                            Opts
+                                        )
+                                    )
+                                ];
+                               true -> <<>>
+                            end,
+                            case PrintCommType andalso hb_maps:find(<<"type">>, Comm, Opts) of
+                                {ok, Type} -> <<"/", Type/binary>>;
+                               _ -> <<>>
+                            end,
+                            case hb_maps:get(<<"committer">>, Comm, undefined, Opts) of
+                                undefined -> <<>>;
+                                Committer ->
+                                    [<<" (Sig: ">>, short_id(Committer), <<")">>]
+                            end
                         ]
-                end
-        end,
-    % Concatenate the present metadata rows.
-    Metadata = FilterUndef(lists:flatten([IDMetadata, CommitterMetadata])),
+                    ))
+                end,
+                hb_maps:to_list(Comms, Opts)
+            ),
+            Opts
+        ),
     % Format the metadata row.
     Header =
-        indent("Message [~s] {",
+        indent("~s[ ~s~s ] {",
             [
-                string:join(
-                    [
-                        io_lib:format("~s: ~s", [Lbl, Val])
-                        ||
-                            {Lbl, Val} <- Metadata,
-                            Val /= undefined
-                    ],
-                    ", "
-                )
+                hb_util:bin(FilterUndef(DevicePathMetadata)),
+                case ValOrUndef(<<"hashpath">>) of
+                    undefined -> <<>>;
+                    HashPath -> [<<"#p: ">>, short_id(HashPath), <<" ">>]
+                end,
+                IDMetadata
             ],
             Opts,
             Indent
@@ -754,16 +793,20 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
     % Put the path and device rows into the output at the _top_ of the map.
     PriorityKeys =
         [
-            {<<"device">>, ValOrUndef(<<"device">>)},
-            {<<"path">>, ValOrUndef(<<"path">>)},
-            {<<"commitments">>, ValOrUndef(<<"commitments">>)}
+            case hb_opts:get(debug_print_metadata, true, Opts) of
+                true ->
+                    {<<"commitments">>, ValOrUndef(<<"metadata">>)};
+                false ->
+                    {<<"commitments">>, <<"...">>}
+            end
         ],
     % Concatenate the path and device rows with the rest of the key values.
     UnsortedGeneralKVs =
         maps:to_list(
             maps:without(
-                [ PriorityKey || {PriorityKey, _} <- PriorityKeys ],
-                Map
+                [ PriorityKey || {PriorityKey, _} <- PriorityKeys ] ++
+                    [<<"device">>, <<"path">>, <<"method">>],
+                Msg
             )
         ),
     % Truncate the keys to print if there are too many. The `truncate' option
@@ -800,14 +843,7 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
     % Format the remaining 'normal' keys and values.
     Res = lists:map(
         fun({Key, Val}) ->
-            NormKey = hb_ao:normalize_key(Key, Opts#{ error_strategy => ignore }),
-            KeyStr = 
-                case NormKey of
-                    undefined ->
-                        io_lib:format("~p [!!! INVALID KEY !!!]", [Key]);
-                    _ ->
-                        hb_ao:normalize_key(Key)
-                end,
+            KeyStr = hb_ao:normalize_key(Key, Opts),
             indent(
                 "~s => ~s~n",
                 [
@@ -825,7 +861,7 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                         _ when byte_size(Val) == 87 ->
                             io_lib:format("~s [#p]", [short_id(Val)]);
                         Bin when is_binary(Bin) ->
-                            binary(Bin);
+                            binary(Bin, Opts);
                         Link when ?IS_LINK(Link) ->
                             remove_leading_noise(
                                 hb_util:bin(
@@ -854,6 +890,17 @@ message(Item, Opts, Indent) ->
     indent("~p", [Item], Opts, Indent).
 
 %%% Utility functions.
+
+%% @doc Return a formatted list of short IDs, given a raw list of IDs.
+format_ids([], _Opts) -> undefined;
+format_ids(IDs, _Opts) ->
+    string:join(
+        lists:map(
+            fun(XID) -> hb_util:list(short_id(XID)) end,
+            IDs
+        ),
+        ", "
+    ).
 
 %% @doc Return a short ID for the different types of IDs used in AO-Core.
 short_id(<<"http://", _/binary>> = Bin) ->
@@ -888,7 +935,7 @@ short_id(_) -> undefined.
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.
 max_keys(Opts) ->
-    case hb_opts:get(debug_print_truncate, 20, Opts) of
+    case hb_opts:get(debug_print_truncate, 30, Opts) of
         Max when is_integer(Max) -> Max;
         infinity -> infinity;
         Term -> hb_util:int(Term)
