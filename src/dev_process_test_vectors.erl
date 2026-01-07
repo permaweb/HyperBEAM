@@ -386,14 +386,11 @@ aos_state_access_via_http_test_() ->
             port => 10000 + rand:uniform(10000),
             priv_wallet => Wallet,
             cache_control => <<"always">>,
-            store => #{
-                <<"store-module">> => hb_store_fs,
-                <<"name">> => <<"cache-mainnet">>
-            },
+            store => [hb_test_utils:test_store()],
             force_signed_requests => true
         }),
         Proc = aos_process(Opts),
-        ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+        ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
         {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
         Req = 
             hb_message:commit(
@@ -410,7 +407,7 @@ aos_state_access_via_http_test_() ->
                             "}})">>,
                     <<"target">> => ProcID
                 },
-                #{ priv_wallet => Wallet }
+                Opts
             ),
         {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
         ?event({schedule_msg_res, {res, Res}}),
