@@ -41,12 +41,39 @@ run_as(Key, Base, Req, Opts) ->
     ?event(debug_as, {running_as, {key, Key}, {req, Req}}, Opts),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
-    {ok, PreparedMsg} = dev_process:as(Base, Key, Opts),
-    ?event(
-        debug_run_as,
-        {before_resolve, {prepared_msg, PreparedMsg}, {req, Req}},
-        Opts
-    ),
+    {ok, PreparedMsg} =
+        hb_ao:resolve(
+            ensure_process_key(Base, Opts),
+            #{
+                <<"path">> => <<"set">>,
+                <<"device">> =>
+                    DeviceSet =
+                        hb_maps:get(
+                            << Key/binary, "-device">>,
+                            Base,
+                            dev_process:default_device(Base, Key, Opts),
+                            Opts
+                        ),
+                % Configure input prefix for proper message routing within the device
+                <<"input-prefix">> =>
+                    case hb_maps:get(<<"input-prefix">>, Base, not_found, Opts) of
+                        not_found -> <<"process">>;
+                        Prefix -> Prefix
+                    end,
+                % Configure output prefixes for result organization
+                <<"output-prefixes">> =>
+                    hb_maps:get(
+                        <<Key/binary, "-output-prefixes">>,
+                        Base,
+                        undefined, % Undefined in set will be ignored.
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    ?event(debug_prefix,
+        {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
+    }),
     % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
