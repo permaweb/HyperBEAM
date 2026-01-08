@@ -729,9 +729,8 @@ set(Base, NewValuesMsg, Opts) ->
 do_deep_merge(BaseValues, NewValues, Opts) ->
     maps:fold(
         fun(Key, NewDeepMsg, XBaseValues)
-                when (is_map(NewDeepMsg) orelse ?IS_LINK(NewDeepMsg)) andalso
-                (is_map(map_get(Key, XBaseValues)) orelse
-                    ?IS_LINK(map_get(Key, XBaseValues))) ->
+                when ?IS_MESSAGE(NewDeepMsg) andalso
+                ?IS_MESSAGE(map_get(Key, XBaseValues)) ->
             ?event(
                 debug_test,
                 {deeply_merging,
