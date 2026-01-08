@@ -13,23 +13,10 @@ commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 
 %% @doc Convert a flat map to a TABM.
-from(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(Map, Req, Opts) when is_map(Map) ->
     {ok,
         maps:fold(
             fun(Path, Value, Acc) ->
-                case Value of
-                    [] ->
-                        ?event(error,
-                            {empty_list_value,
-                                {path, Path},
-                                {value, Value},
-                                {map, Map}
-                            }
-                        );
-                    _ ->
-                        ok
-                end,
                 hb_util:deep_set(
                     hb_path:term_to_path_parts(Path, Opts),
                     hb_util:ok(from(Value, Req, Opts)),
@@ -40,7 +27,8 @@ from(Map, Req, Opts) when is_map(Map) ->
             #{},
             Map
         )
-    }.
+    };
+from(Value, _, _Opts) -> {ok, Value}.
 
 %% @doc Convert a TABM to a flat map.
 to(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};

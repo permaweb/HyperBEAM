@@ -125,6 +125,12 @@ test_opts() ->
             opts => #{ store => hb_test_utils:test_store() },
             skip => []
         },
+        % #{
+        %     name => normal_http,
+        %     desc => "Default opts for HTTP requests",
+        %     opts => hb_opts:get(http_extra_opts),
+        %     skip => []
+        % },
         #{
             name => without_hashpath,
             desc => "Default without hashpath",
@@ -634,16 +640,20 @@ deep_set_new_messages_test() ->
     ).
 
 deep_set_with_device_test(Opts) ->
-    Device = #{
-        set =>
-            fun(Base, Req) ->
-                % A device where the set function modifies the key
-                % and adds a modified flag.
-                {Key, Val} =
-                    hd(hb_maps:to_list(hb_maps:without([<<"path">>, <<"priv">>], Req, Opts), Opts)),
-                {ok, Base#{ Key => Val, <<"modified">> => true }}
-            end
-    },
+    Device =
+        #{
+            set =>
+                fun(Base, NewMsg) ->
+                    {
+                        ok,
+                        dev_message:set(
+                            Base#{ <<"modified">> => true },
+                            NewMsg,
+                            Opts
+                        )
+                    }
+                end
+        },
     % A message with an interspersed custom device: A and C have it,
     % B does not. A and C will have the modified flag set to true.
     Msg = #{
@@ -654,20 +664,34 @@ deep_set_with_device_test(Opts) ->
                     #{
                         <<"device">> => Device,
                         <<"c">> => <<"1">>,
+                        <<"d">> => <<"2">>,
+                        <<"e">> => <<"3">>,
                         <<"modified">> => false
                     },
-                <<"modified">> => false
+                <<"modified">> => false,
+                <<"f">> => <<"4">>,
+                <<"g">> => <<"5">>
             },
         <<"modified">> => false
     },
-    Outer = hb_ao:set(Msg, <<"a/b/c">>, <<"2">>, Opts),
-    A = hb_ao:get(<<"a">>, Outer, Opts),
-    B = hb_ao:get(<<"b">>, A, Opts),
-    C = hb_ao:get(<<"c">>, B, Opts),
-    ?assertEqual(<<"2">>, C),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer)),
-    ?assertEqual(false, hb_ao:get(<<"modified">>, A)),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, B)).
+    Outer =
+        hb_ao:set(
+            Msg,
+            #{
+                <<"a/b/c">> => <<"mod1">>,
+                <<"a/b/d">> => <<"mod2">>,
+                <<"a/g">> => <<"mod5">>
+            },
+            Opts
+        ),
+    ?assertEqual(<<"mod1">>, hb_ao:get(<<"a/b/c">>, Outer, Opts)),
+    ?assertEqual(<<"mod2">>, hb_ao:get(<<"a/b/d">>, Outer, Opts)),
+    ?assertEqual(<<"3">>, hb_ao:get(<<"a/b/e">>, Outer, Opts)),
+    ?assertEqual(<<"4">>, hb_ao:get(<<"a/f">>, Outer, Opts)),
+    ?assertEqual(<<"mod5">>, hb_ao:get(<<"a/g">>, Outer, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"a/b/modified">>, Outer, Opts)),
+    ?assertEqual(false, hb_ao:get(<<"a/modified">>, Outer, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer, Opts)).
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
