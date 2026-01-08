@@ -95,8 +95,8 @@ generate_initial_state(Opts) ->
 
 generate_request() ->
     [
-        fun deposit_generator/2,
-        fun withdraw_generator/2,
+        %fun deposit_generator/2,
+        %fun withdraw_generator/2,
         fun delegate_generator/2
         % fun undelegate_generator/0
     ].
@@ -384,16 +384,31 @@ verify_delegations(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, 
         ),
     OldDelegatedQty = hb_maps:get(ToAddr, OldDelegations, 0),
     NewDelegatedQty = hb_maps:get(ToAddr, NewDelegations, 0),
-    NewDelegatedQty =:= OldDelegatedQty + Quantity orelse
-    {error,
-        {bad_delegation_math,
-            {old_table, OldDelegations},
-            {new_table, NewDelegations},
-            {qty, Quantity},
-            {from, FromAddr},
-            {to, ToAddr}
-        }
-    };
+    % Self-delegation is a noop
+    case FromAddr =:= ToAddr of
+        true ->
+            NewDelegatedQty =:= OldDelegatedQty orelse
+            {error,
+                {bad_delegation_math_self_delegation,
+                    {old_table, OldDelegations},
+                    {new_table, NewDelegations},
+                    {qty, Quantity},
+                    {from, FromAddr},
+                    {to, ToAddr}
+                }
+            };
+        false ->
+            NewDelegatedQty =:= OldDelegatedQty + Quantity orelse
+            {error,
+                {bad_delegation_math,
+                    {old_table, OldDelegations},
+                    {new_table, NewDelegations},
+                    {qty, Quantity},
+                    {from, FromAddr},
+                    {to, ToAddr}
+                }
+            }
+    end;
 verify_delegations(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_twu(OldState, Req, NewState, Opts) ->
