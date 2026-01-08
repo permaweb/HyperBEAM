@@ -17,7 +17,6 @@
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
--export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
@@ -547,14 +546,6 @@ remove_common([X|Rest1], [X|Rest2]) ->
     remove_common(Rest1, Rest2);
 remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
-
-%% @doc Throw an exception if the Opts map has an `error_strategy' key with the
-%% value `throw'. Otherwise, return the value.
-maybe_throw(Val, Opts) ->
-    case hb_ao:get(error_strategy, Opts) of
-        throw -> throw(Val);
-        _ -> Val
-    end.
 
 %% @doc Is the given module part of HyperBEAM?
 is_hb_module(Atom) ->
