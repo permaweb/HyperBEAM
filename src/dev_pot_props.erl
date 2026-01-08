@@ -44,6 +44,15 @@ generate_initial_state(Opts) ->
     StartQty = hb_invariant:int(1, 1_000_000),
     StartResource = hb_invariant:string(id),
     StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
+    % Pick an address that's not our StartAddr for our initial delegatee
+    DelegateeCandidates =
+        lists:delete(
+            StartAddr,
+            hb_maps:keys(hb_maps:get(identities, Opts))
+        ),
+    DelegateeAddr = hb_invariant:pick(DelegateeCandidates),
+    DelegatedAmount = hb_invariant:int(1, StartQty),
+    DepositMinusDelegated = StartQty - DelegatedAmount,
     S0 =
         #{
             <<"device">> => <<"pot@1.0">>,
@@ -60,7 +69,14 @@ generate_initial_state(Opts) ->
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
                         StartAddr => #{
-                            <<"quantity">> => StartQty,
+                            <<"quantity">> => DepositMinusDelegated,
+                            <<"last-resource-accumulator">> => 1, % TODO: randomize this?
+                            <<"delegations">> => #{
+                                DelegateeAddr => DelegatedAmount
+                            }
+                        },
+                        DelegateeAddr => #{
+                            <<"quantity">> => DelegatedAmount,
                             <<"last-resource-accumulator">> => 1 % TODO: randomize this?
                         }
                     }
@@ -70,7 +86,12 @@ generate_initial_state(Opts) ->
             <<"users">> => #{
                 StartAddr => #{
                     <<"deposits">> => #{
-                        StartResource => StartQty
+                        StartResource => DepositMinusDelegated
+                    }
+                },
+                DelegateeAddr => #{
+                    <<"deposits">> => #{
+                        StartResource => DelegatedAmount
                     }
                 }
             }
@@ -95,10 +116,10 @@ generate_initial_state(Opts) ->
 
 generate_request() ->
     [
-        %fun deposit_generator/2,
-        %fun withdraw_generator/2,
-        fun delegate_generator/2
-        % fun undelegate_generator/0
+        fun deposit_generator/2,
+        fun withdraw_generator/2,
+        fun delegate_generator/2,
+        fun undelegate_generator/2
     ].
 
 deposit_generator(_State, Opts) ->
@@ -118,6 +139,8 @@ deposit_generator(_State, Opts) ->
     ).
 
 withdraw_generator(State, Opts) ->
+    % We use our private "originated deposits" helper table because we want to
+    % base our withdrawal quantity on deposits without consideration of delegations.
     Users = hb_private:get(<<"users">>, State, #{}, Opts),
     NonzeroOriginalDeposits = get_nonzero_deposits(Users),
     % TODO: no nonzero deposits will cause a spurious test
@@ -154,6 +177,27 @@ delegate_generator(State, Opts) ->
                 <<"address">> => ToAddr,
                 <<"quantity">> => DelegatedQty,
                 <<"resource">> => UserResourceID,
+                <<"from">> => FromAddr, 
+                <<"t">> => hb_invariant:int(100000)
+            }
+        },
+        Opts#{ priv_wallet => Wallet }
+    ).
+
+undelegate_generator(State, Opts) ->
+    NonzeroDelegations = get_nonzero_delegations(hb_private:reset(State)),
+    % TODO: no nonzero delegations will cause a spurious test
+    % failure. Should we invent technology to handle it?
+    {FromAddr, ToAddr, ResourceID, Qty} = hb_invariant:pick(NonzeroDelegations),
+    Wallet = hb_maps:get(priv_wallet, hb_maps:get(FromAddr, hb_maps:get(identities, Opts))),
+    UndelegateQty = hb_invariant:int(1, Qty),
+    hb_message:commit(
+        #{
+            <<"path">> => <<"undelegate">>,
+            <<"body">> => #{
+                <<"to">> => ToAddr,
+                <<"amount">> => UndelegateQty,
+                <<"resource">> => ResourceID,
                 <<"from">> => FromAddr, 
                 <<"t">> => hb_invariant:int(100000)
             }
@@ -274,6 +318,61 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewSt
                 {bad_delegate_math,
                     {old_delegator_deposit, OldDepositDelegator},
                     {new_delegator_deposit, NewDepositDelegator},
+                    {old_recipient_deposit, OldDepositRecipient},
+                    {new_recipient_deposit, NewDepositRecipient},
+                    {qty, Quantity}
+                }
+            }
+    end;
+verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"to">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"amount">>, UnwrappedReq),
+    OldDepositUndelegator = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", FromAddr/binary, "/quantity">>,
+        OldState,
+        0,
+        Opts
+    ),
+    NewDepositUndelegator = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", FromAddr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    OldDepositRecipient = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", ToAddr/binary, "/quantity">>,
+        OldState,
+        0,
+        Opts
+    ),
+    NewDepositRecipient = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", ToAddr/binary, "/quantity">>,
+        NewState,
+        0,
+        Opts
+    ),
+    case FromAddr =:= ToAddr of
+        true ->
+            % Undelegating to yourself
+            NewDepositUndelegator =:= OldDepositUndelegator orelse
+            {error,
+                {bad_undelegate_math_self_undelegation,
+                    {old_deposit, OldDepositUndelegator},
+                    {new_deposit, NewDepositUndelegator},
+                    {qty, Quantity}
+                }
+            };
+        false ->
+            % Undelegating to someone other than yourself
+            NewDepositUndelegator =:= OldDepositUndelegator + Quantity andalso
+            NewDepositRecipient =:= OldDepositRecipient - Quantity orelse
+            {error,
+                {bad_undelegate_math,
+                    {old_delegator_deposit, OldDepositUndelegator},
+                    {new_delegator_deposit, NewDepositUndelegator},
                     {old_recipient_deposit, OldDepositRecipient},
                     {new_recipient_deposit, NewDepositRecipient},
                     {qty, Quantity}
@@ -409,6 +508,8 @@ verify_delegations(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, 
                 }
             }
     end;
+verify_delegations(OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
+    true;
 verify_delegations(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_twu(OldState, Req, NewState, Opts) ->
@@ -456,6 +557,13 @@ verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"delegate">> }, NewSta
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
     ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    do_verify_inverted_index(ToAddr, ResourceID, NewState, Opts) andalso
+    do_verify_inverted_index(FromAddr, ResourceID, NewState, Opts);
+verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"to">>, UnwrappedReq),
     ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
     do_verify_inverted_index(ToAddr, ResourceID, NewState, Opts) andalso
     do_verify_inverted_index(FromAddr, ResourceID, NewState, Opts);
@@ -543,4 +651,30 @@ get_nonzero_deposits(Users) ->
         end,
         [],
         Users
+    ).
+
+get_nonzero_delegations(State) ->
+    Resources = hb_maps:get(<<"resources">>, State),
+    hb_maps:fold(
+        fun(ResourceID, DepositsMap, Acc1) ->
+            Deposits = hb_private:reset(hb_maps:get(<<"deposits">>, DepositsMap, #{})),
+            hb_maps:fold(
+                fun(FromAddr, DelegationsMap, Acc2) ->
+                    Delegations =
+                        hb_private:reset(hb_maps:get(<<"delegations">>, DelegationsMap, #{})),
+                    hb_maps:fold(
+                        fun(ToAddr, Quantity, Acc3) when Quantity =/= 0 ->
+                            [{FromAddr, ToAddr, ResourceID, Quantity} | Acc3];
+                            (_, _, Acc3) -> Acc3
+                        end,
+                        Acc2,
+                        Delegations
+                    )
+                end,
+                Acc1,
+                Deposits
+            )
+        end,
+        [],
+        Resources
     ).
