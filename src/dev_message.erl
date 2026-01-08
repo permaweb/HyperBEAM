@@ -727,37 +727,33 @@ set(Base, NewValuesMsg, Opts) ->
 %% @doc Deep merge keys in a message, utilizing the set device of any child
 %% keys that are themselves messages.
 do_deep_merge(BaseValues, NewValues, Opts) ->
-    {WithNestedMerges, StillToDeepMerge} =
-        maps:fold(
-            fun(Key, NewValue, {Acc, ToDeepMerge})
-                    when is_map(NewValue)
-                    andalso is_map(map_get(Key, Acc)) ->
-                {
-                    Acc#{
-                        Key =>
-                            hb_util:ok(
-                                hb_ao:resolve(
-                                    map_get(Key, Acc),
-                                    NewValue#{
-                                        <<"path">> => <<"set">>
-                                    },
-                                    Opts
-                                ),
-                                Opts
-                            )
-                    },
-                    ToDeepMerge
+    maps:fold(
+        fun(Key, NewDeepMsg, XBaseValues)
+                when (is_map(NewDeepMsg) orelse ?IS_LINK(NewDeepMsg)) andalso
+                (is_map(map_get(Key, XBaseValues)) orelse
+                    ?IS_LINK(map_get(Key, XBaseValues))) ->
+            ?event(
+                debug_test,
+                {deeply_merging,
+                    {key, Key},
+                    {new_deep_msg, NewDeepMsg},
+                    {x_base_values, XBaseValues}
+                },
+                Opts
+            ),
+            XBaseValues#{
+                Key =>
+                    hb_ao:set(
+                        map_get(Key, XBaseValues),
+                        NewDeepMsg,
+                        Opts
+                    )
                 };
-            (Key, _, {Acc, ToDeepMerge}) ->
-                {Acc, [Key | ToDeepMerge]}
-            end,
-            {BaseValues, []},
-            NewValues
-        ),
-    hb_util:deep_merge(
-        WithNestedMerges,
-        maps:with(StillToDeepMerge, NewValues),
-        Opts
+        (Key, NewValue, XBaseValues) ->
+            XBaseValues#{ Key => NewValue }
+        end,
+        BaseValues,
+        NewValues
     ).
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
@@ -927,7 +923,8 @@ deep_unset_test() ->
         }
     },
     Req = hb_ao:set(Base, #{ <<"deep/test-key2">> => unset }, Opts),
-    ?assertEqual(#{
+    ?assertEqual(
+        #{
             <<"test-key1">> => <<"Value1">>,
             <<"deep">> => #{ <<"test-key3">> => <<"Value3">> }
         },
