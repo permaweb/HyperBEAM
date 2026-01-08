@@ -4,8 +4,11 @@
 -module(hb_ao_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
--export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
+-export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
+
+%% @doc The default device to use if no device is specified in the message.
+-define(AO_DEFAULT_FALLBACK_DEVICE, dev_message).
 
 %%% All keys in the `message@1.0` device that are not resolved to underlying
 %%% data in the their Erlang map representations.
@@ -102,7 +105,7 @@ message_to_fun(Msg, Key, Opts) ->
 						_ ->
 							% Case 6: The device has no default handler.
 							% We use the default device to handle the key.
-							case default() of
+							case ?AO_DEFAULT_FALLBACK_DEVICE of
 								Dev ->
 									% We are already using the default device,
 									% so we cannot resolve the key. This should
@@ -135,7 +138,7 @@ message_to_device(Msg, Opts) ->
     case dev_message:get(<<"device">>, Msg, Opts) of
         {error, not_found} ->
             % The message does not specify a device, so we use the default device.
-            default();
+            ?AO_DEFAULT_FALLBACK_DEVICE;
         {ok, DevID} ->
             case load(DevID, Opts) of
                 {error, Reason} ->
@@ -156,7 +159,9 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 					{ok, MsgWithoutDevice} =
 						dev_message:remove(Msg, #{ item => device }, Opts),
 					message_to_fun(
-						MsgWithoutDevice#{ <<"device">> => default() },
+						MsgWithoutDevice#{
+                            <<"device">> => ?AO_DEFAULT_FALLBACK_DEVICE
+                        },
 						Key,
 						Opts
 					);
@@ -245,98 +250,110 @@ maybe_normalize_device_key(Key, Mode) ->
     end.
 
 %% @doc Load a device module from its name or a message ID.
-%% Returns {ok, Executable} where Executable is the device module. On error,
-%% a tuple of the form {error, Reason} is returned.
+%% Returns {ok, Executable} where `Executable` is the device module. On error,
+%% a tuple of the form {error, Reason} is returned. Supported device forms are
+%% as follows:
+%% 1. A map of keys with the associated resolver functions as their values.
+%% 2. An atom representing an explicit Erlang module name.
+%% 3. A message ID, which can be resolved to compiled Erlang BEAM code that
+%%    contains a device module.
+%% 4. A name of a device found in the node's `preloaded_devices' parameter.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(ID, _Opts) when is_atom(ID) ->
     try ID:module_info(), {ok, ID}
     catch _:_ -> {error, not_loadable}
     end;
 load(ID, Opts) when ?IS_ID(ID) ->
+    load_device_from_id(ID, Opts);
+load(PreloadedDeviceName, Opts) ->
+    case hb_opts:get(preloaded_devices, #{}, Opts) of
+        #{ PreloadedDeviceName := ModName } -> load(ModName, Opts);
+        Devices ->
+            case maps:find(PreloadedDeviceName, Devices) of
+                {ok, ModName} ->
+                    load(ModName, Opts);
+                error ->
+                    {error, {module_not_admissable, PreloadedDeviceName, Devices}}
+            end
+    end.
+
+%% @doc Load a device from the caches given its ID, if the node options allow
+%% us to do so.
+load_device_from_id(ID, Opts) ->
     ?event(device_load, {requested_load, {id, ID}}, Opts),
 	case hb_opts:get(load_remote_devices, false, Opts) of
         false ->
             {error, remote_devices_disabled};
 		true ->
-            ?event(device_load, {loading_from_cache, {id, ID}}, Opts),
-			{ok, Msg} = hb_cache:read(ID, Opts),
-            ?event(device_load, {received_device, {id, ID}, {msg, Msg}}, Opts),
-            TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
-			Trusted =
-				lists:any(
-					fun(Signer) ->
-						lists:member(Signer, TrustedSigners)
-					end,
-					hb_message:signers(Msg, Opts)
-				),
-            ?event(device_load,
-                {verifying_device_trust,
-                    {id, ID},
-                    {trusted, Trusted},
-                    {signers, hb_message:signers(Msg, Opts)}
-                },
-                Opts
-            ),
-			case Trusted of
-				false -> {error, device_signer_not_trusted};
-				true ->
-                    ?event(device_load, {loading_device, {id, ID}}, Opts),
-					case hb_maps:get(<<"content-type">>, Msg, undefined, Opts) of
-						<<"application/beam">> ->
-                            case verify_device_compatibility(Msg, Opts) of
-                                ok ->
-                                    ModName =
-                                        hb_util:key_to_atom(
-                                            hb_maps:get(
-                                                <<"module-name">>,
-                                                Msg,
-                                                undefined,
-                                                Opts
-                                            ),
-                                            new_atoms
-                                        ),
-                                    LoadRes = 
-                                        erlang:load_module(
-                                            ModName,
-                                            hb_maps:get(
-                                                <<"body">>,
-                                                Msg,
-                                                undefined,
-                                                Opts
-                                            )
-                                        ),
-                                    case LoadRes of
-                                        {module, _} ->
-                                            {ok, ModName};
-                                        {error, Reason} ->
-                                            {error, {device_load_failed, Reason}}
-                                    end;
+            do_load_device_from_id(ID, Opts)
+    end.
+
+do_load_device_from_id(ID, Opts) ->
+    ?event(device_load, {loading_from_cache, {id, ID}}, Opts),
+    {ok, Msg} = hb_cache:read(ID, Opts),
+    ?event(device_load, {received_device, {id, ID}, {msg, Msg}}, Opts),
+    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
+    Trusted =
+        lists:any(
+            fun(Signer) ->
+                lists:member(Signer, TrustedSigners)
+            end,
+            hb_message:signers(Msg, Opts)
+        ),
+    ?event(device_load,
+        {verifying_device_trust,
+            {id, ID},
+            {trusted, Trusted},
+            {signers, hb_message:signers(Msg, Opts)}
+        },
+        Opts
+    ),
+    case Trusted of
+        false -> {error, device_signer_not_trusted};
+        true ->
+            ?event(device_load, {loading_device, {id, ID}}, Opts),
+            case hb_maps:get(<<"content-type">>, Msg, undefined, Opts) of
+                <<"application/beam">> ->
+                    case verify_device_compatibility(Msg, Opts) of
+                        ok ->
+                            ModName =
+                                hb_util:key_to_atom(
+                                    hb_maps:get(
+                                        <<"module-name">>,
+                                        Msg,
+                                        undefined,
+                                        Opts
+                                    ),
+                                    new_atoms
+                                ),
+                            LoadRes = 
+                                erlang:load_module(
+                                    ModName,
+                                    hb_maps:get(
+                                        <<"body">>,
+                                        Msg,
+                                        undefined,
+                                        Opts
+                                    )
+                                ),
+                            case LoadRes of
+                                {module, _} ->
+                                    {ok, ModName};
                                 {error, Reason} ->
                                     {error, {device_load_failed, Reason}}
                             end;
-                        Other ->
-                            {error,
-                                {device_load_failed,
-                                    {incompatible_content_type, Other},
-                                    {expected, <<"application/beam">>},
-                                    {found, Other}
-                                }
-                            }
-                    end
-			end
-	end;
-load(ID, Opts) ->
-    NormKey =
-        case is_atom(ID) of
-            true -> ID;
-            false -> hb_ao:normalize_key(ID)
-        end,
-    case lists:search(
-        fun (#{ <<"name">> := Name }) -> Name =:= NormKey end,
-        Preloaded = hb_opts:get(preloaded_devices, [], Opts)
-    ) of
-        false -> {error, {module_not_admissable, NormKey, Preloaded}};
-        {value, #{ <<"module">> := Mod }} -> load(Mod, Opts)
+                        {error, Reason} ->
+                            {error, {device_load_failed, Reason}}
+                    end;
+                Other ->
+                    {error,
+                        {device_load_failed,
+                            {incompatible_content_type, Other},
+                            {expected, <<"application/beam">>},
+                            {found, Other}
+                        }
+                    }
+            end
     end.
 
 %% @doc Verify that a device is compatible with the current machine.
@@ -455,9 +472,3 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
     end;
 do_is_direct_key_access(_, _, _) ->
     false.
-
-%% @doc The default device is the identity device, which simply returns the
-%% value associated with any key as it exists in its Erlang map. It should also
-%% implement the `set' key, which returns a `Result' with the values changed
-%% according to the `Request' passed to it.
-default() -> dev_message.

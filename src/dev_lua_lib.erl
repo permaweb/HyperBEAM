@@ -26,33 +26,23 @@
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
     % Calculate and set the new `preloaded_devices' option.
-    AllDevs = hb_opts:get(preloaded_devices, Opts),
+    NodeDevs = hb_opts:get(preloaded_devices, #{}, Opts),
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
             {as, <<"message@1.0">>, Base},
-            false,
+            unsandboxed,
             Opts
         ),
     AdmissibleDevs =
-        case DevSandboxDef of
-            false -> AllDevs;
-            DevNames ->
-                lists:map(
-                    fun(Name) ->
-                        [Dev] =
-                            lists:filter(
-                                fun(X) ->
-                                    hb_ao:get(<<"name">>, X, Opts) == Name
-                                end,
-                                AllDevs
-                            ),
-                        Dev
-                    end,
-                    hb_util:message_to_ordered_list(
-                        hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
-                    )
-                )
+        if DevSandboxDef == unsandboxed -> NodeDevs;
+        true ->
+            maps:with(
+                hb_util:message_to_ordered_list(
+                    hb_util:unique(DevSandboxDef ++ ?MINIMAL_AO_CORE_DEVICES)
+                ),
+                NodeDevs
+            )
         end,
     ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
     ExecOpts =
