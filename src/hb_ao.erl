@@ -101,8 +101,6 @@
 -export([keys/1, keys/2, keys/3]).
 -export([get/2, get/3, get/4, get_first/2, get_first/3]).
 -export([set/3, set/4, remove/2, remove/3]).
-%%% Exports for tests in hb_ao_test_vectors.erl:
--export([deep_set/4]).
 -include("include/hb.hrl").
 
 -define(TEMP_OPTS, [add_key, force_message, cache_control, spawn_worker]).
@@ -489,6 +487,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
 					{opts, Opts}
 				}
 			),
+            ?event(ao_short, {Key, Func}, Opts),
 			% Next, add an option to the Opts map to indicate if we should
 			% add the key to the start of the arguments.
 			{
@@ -726,7 +725,7 @@ subresolve(RawBase, DevID, Req, Opts) ->
                     Base,
                     <<"device">>,
                     DevID,
-                    hb_maps:without(?TEMP_OPTS, Opts, Opts)
+                    maps:without(?TEMP_OPTS, Opts)
                 )
         end,
     % If there is no path but there are elements to the request, we set these on
@@ -1003,121 +1002,52 @@ keys(Msg, Opts, remove) ->
 %% Like the `get/3' function, this function honors the `error_strategy' option.
 %% `set' works with maps and recursive paths while maintaining the appropriate
 %% `HashPath' for each step.
-set(RawBase, RawReq, Opts) when is_map(RawReq) ->
-    Base = normalize_keys(RawBase, Opts),
-    Req =
-        hb_maps:without(
-            [<<"hashpath">>, <<"priv">>],
-            normalize_keys(RawReq, Opts),
-            Opts
-        ),
-    ?event(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
-    % Get the next key to set. 
-    case keys(Req, internal_opts(Opts)) of
-        [] -> Base;
-        [Key|_] ->
-            % Get the value to set. Use AO-Core by default, but fall back to
-            % getting via `maps' if it is not found.
-            Val =
-                case get(Key, Req, internal_opts(Opts)) of
-                    not_found -> hb_maps:get(Key, Req, undefined, Opts);
-                    Body -> Body
-                end,
-            ?event({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
-            % Next, set the key and recurse, removing the key from the Req.
-            set(
-                set(Base, Key, Val, internal_opts(Opts)),
-                remove(Req, Key, internal_opts(Opts)),
-                Opts
-            )
-    end.
+set(Base, Req, Opts) ->
+    {ok, UnflattenedReq} = dev_codec_flat:from(Req, #{}, Opts),
+    ?event(debug_set, {unflattened_req, UnflattenedReq}, Opts),
+    device_set(
+        Base,
+        UnflattenedReq,
+        Opts
+    ).
 set(Base, Key, Value, Opts) ->
-    % For an individual key, we run deep_set with the key as the path.
-    % This handles both the case that the key is a path as well as the case
-    % that it is a single key.
-    Path = hb_path:term_to_path_parts(Key, Opts),
-    % ?event(
-    %     {setting_individual_key,
-    %         {base, Base},
-    %         {key, Key},
-    %         {path, Path},
-    %         {value, Value}
-    %     }
-    % ),
-    deep_set(Base, Path, Value, Opts).
-
-%% @doc Recursively search a map, resolving keys, and set the value of the key
-%% at the given path. This function has special cases for handling `set' calls
-%% where the path is an empty list (`/'). In this case, if the value is an 
-%% immediate, non-complex term, we can set it directly. Otherwise, we use the
-%% device's `set' function to set the value.
-deep_set(Msg, [], Value, Opts) when is_map(Msg) or is_list(Msg) ->
-    device_set(Msg, <<"/">>, Value, Opts);
-deep_set(_Msg, [], Value, _Opts) ->
-    Value;
-deep_set(Msg, [Key], Value, Opts) ->
-    device_set(Msg, Key, Value, Opts);
-deep_set(Msg, [Key|Rest], Value, Opts) ->
-    case resolve(Msg, Key, Opts) of 
-        {ok, SubMsg} ->
-            ?event(debug_set,
-                {traversing_deeper_to_set,
-                    {current_key, Key},
-                    {current_value, SubMsg},
-                    {rest, Rest}
-                },
-                Opts
-            ),
-            Res =
-                device_set(
-                    Msg,
-                    Key,
-                    deep_set(SubMsg, Rest, Value, Opts),
-                    <<"explicit">>,
-                    Opts
-                ),
-            ?event(debug_set, {deep_set, {msg, Msg}, {key, Key}, {res, Res}}, Opts),
-            Res;
-        _ ->
-            ?event(debug_set,
-                {creating_new_map,
-                    {current_key, Key},
-                    {rest, Rest}
-                },
-                Opts
-            ),
-            Msg#{ Key => deep_set(#{}, Rest, Value, Opts) }
-    end.
+    set(Base, #{ Key => Value }, Opts).
 
 %% @doc Call the device's `set' function.
-device_set(Msg, Key, Value, Opts) ->
-    device_set(Msg, Key, Value, <<"deep">>, Opts).
-device_set(Msg, Key, Value, Mode, Opts) ->
-    ReqWithoutMode =
-        case Key of
-            <<"path">> ->
-                #{ <<"path">> => <<"set_path">>, <<"value">> => Value };
-            <<"/">> when is_map(Value) ->
-                % The value is a map and it is to be `set' at the root of the
-                % message. Subsequently, we call the device's `set' function
-                % with all of the keys found in the message, leading it to be
-                % merged into the message.
-                Value#{ <<"path">> => <<"set">> };
-            _ ->
-                #{ <<"path">> => <<"set">>, Key => Value }
+device_set(Base, Req, Opts) ->
+    device_set(Base, Req, <<"deep">>, Opts).
+device_set(Base, Req, Mode, Opts) ->
+    % First, generate the options we will use during the resolution.
+    InternalOpts = internal_opts(Opts),
+    % Next, set the path of the base message individually if it is present in the
+    % request.
+    BaseWithPathSet =
+        case hb_maps:find(<<"path">>, Req, Opts) of
+            {ok, Path} ->
+                hb_util:ok(
+                    resolve(
+                        Base,
+                        #{ <<"path">> => <<"set-path">>, <<"value">> => Path },
+                        InternalOpts
+                    ),
+                    Opts
+                );
+            error ->
+                Base
         end,
-    Req =
+    % Next, add the mode to the request if it is not already present and call
+    % the message's device's `set' function with the request.
+    WithMode =
         case Mode of
-            <<"deep">> -> ReqWithoutMode;
-            <<"explicit">> -> ReqWithoutMode#{ <<"set-mode">> => Mode }
+            <<"deep">> -> Req;
+            <<"explicit">> -> Req#{ <<"set-mode">> => Mode }
         end,
     ?event(
         debug_set,
         {
             calling_device_set,
-            {base, Msg},
-            {key, Key},
-            {value, Value},
+            {base, BaseWithPathSet},
+            {with_mode, WithMode},
             {full_req, Req}
         },
         Opts
@@ -1125,11 +1055,11 @@ device_set(Msg, Key, Value, Mode, Opts) ->
     Res =
         hb_util:ok(
             resolve(
-                Msg,
-                Req,
-                internal_opts(Opts)
+                BaseWithPathSet,
+                WithMode#{ <<"path">> => <<"set">> },
+                InternalOpts
             ),
-            internal_opts(Opts)
+            InternalOpts
         ),
     ?event(
         debug_set,

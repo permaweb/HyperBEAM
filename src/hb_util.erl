@@ -303,8 +303,8 @@ deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
 deep_set(_Path, undefined, Msg, _Opts) -> Msg;
 deep_set(Path, Value, Msg, Opts) when not is_list(Path) ->
     deep_set(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts);
-deep_set([Key], unset, Msg, Opts) ->
-    hb_maps:remove(Key, Msg, Opts);
+% deep_set([Key], unset, Msg, Opts) ->
+%     hb_maps:remove(Key, Msg, Opts);
 deep_set([Key], Value, Msg, Opts) ->
     case hb_maps:get(Key, Msg, not_found, Opts) of
         ExistingMap when is_map(ExistingMap) andalso is_map(Value) ->
