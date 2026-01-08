@@ -21,7 +21,8 @@ from(Map, Req, Opts) when is_map(Map) ->
                     hb_path:term_to_path_parts(Path, Opts),
                     hb_util:ok(from(Value, Req, Opts)),
                     Acc,
-                    Opts
+                    Opts,
+                    false
                 )
             end,
             #{},
