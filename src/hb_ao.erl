@@ -98,7 +98,7 @@
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
--export([keys/1, keys/2, keys/3]).
+-export([keys/2]).
 -export([get/2, get/3, get/4, get_first/2, get_first/3]).
 -export([set/3, set/4, remove/2, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
@@ -961,27 +961,8 @@ get_first([{Base, Path}|Msgs], Default, Opts) ->
     end.
 
 %% @doc Shortcut to get the list of keys from a message.
-keys(Msg) -> keys(Msg, #{}).
-keys(Msg, Opts) -> keys(Msg, Opts, keep).
-keys(Msg, Opts, keep) ->
-    % There is quite a lot of AO-Core-specific machinery here. We:
-    % 1. `get' the keys from the message, via AO-Core in order to trigger the
-    %    `keys' function on its device.
-    % 2. Ensure that the result is normalized to a message (not just a list)
-    %    with `normalize_keys'.
-    % 3. Now we have a map of the original keys, so we can use `hb_maps:values' to
-    %    get a list of them.
-    % 4. Normalize each of those keys in turn.
-    try
-        lists:map(
-            fun normalize_key/1,
-            hb_maps:values(
-                normalize_keys(
-                    hb_private:reset(get(<<"keys">>, Msg, Opts))
-                ),
-                Opts
-            )
-        )
+keys(Msg, Opts) ->
+    try get(<<"keys">>, Msg, Opts)
     catch
         A:B:St ->
             throw(
@@ -992,12 +973,7 @@ keys(Msg, Opts, keep) ->
                     {stacktrace, St}
                 }
             )
-    end;
-keys(Msg, Opts, remove) ->
-    lists:filter(
-        fun(Key) -> not lists:member(Key, ?AO_CORE_KEYS) end,
-        keys(Msg, Opts, keep)
-    ).
+    end.
 
 %% @doc Shortcut for setting a key in the message using its underlying device.
 %% Like the `get/3' function, this function honors the `error_strategy' option.

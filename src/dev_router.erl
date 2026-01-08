@@ -403,7 +403,7 @@ match_routes(ToMatch, Routes, Opts) ->
             true ->
                 lists:seq(1, length(hb_util:message_to_ordered_list(Routes, Opts)));
             false ->
-                hb_ao:keys(hb_ao:normalize_keys(Routes, Opts))
+                hb_ao:keys(hb_ao:normalize_keys(Routes, Opts), Opts)
         end,
     match_routes(
         hb_cache:ensure_all_loaded(ToMatch, Opts),
