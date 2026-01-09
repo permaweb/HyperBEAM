@@ -18,7 +18,7 @@ simulation_test() ->
                 fun verify_inverted_index/4
             ],
             runs => 3,
-            length => 4,
+            length => 30,
             next => fun next/4,
             users => ?USERS
         }
@@ -356,32 +356,32 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"undelegate">> }, New
             0,
             Opts
         ),
-  OldDepositRecipient = 
-    hb_ao:get(
-        <<
-            "/resources/",
-            ResourceID/binary,
-            "/deposits/",
-            ToAddr/binary,
-            "/quantity"
-        >>,
-        OldState,
-        0,
-        Opts
-    ),
-NewDepositRecipient =
-    hb_ao:get(
-        <<
-            "/resources/",
-            ResourceID/binary,
-            "/deposits/",
-            ToAddr/binary,
-            "/quantity"
-        >>,
-        NewState,
-        0,
-        Opts
-    ),
+    OldDepositRecipient = 
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/quantity"
+            >>,
+            OldState,
+            0,
+            Opts
+        ),
+    NewDepositRecipient =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/quantity"
+            >>,
+            NewState,
+            0,
+            Opts
+        ),
     UndelegatorDepositOK =
         case FromAddr =:= ToAddr of
             true ->
@@ -407,18 +407,18 @@ NewDepositRecipient =
                         NewDepositRecipient =:= 0
                 end
         end,
-        UndelegatorDepositOK andalso RecipientDepositOK orelse
-        {error,
-            {bad_undelegate_math,
-                {address, FromAddr},
-                {from, ToAddr},
-                {old_undelegator_deposit, OldDepositUndelegator},
-                {new_undelegator_deposit, NewDepositUndelegator},
-                {old_recipient_deposit, OldDepositRecipient},
-                {new_recipient_deposit, NewDepositRecipient},
-                {qty, Quantity}
-            }
-        };
+    UndelegatorDepositOK andalso RecipientDepositOK orelse
+    {error,
+        {bad_undelegate_math,
+            {address, FromAddr},
+            {from, ToAddr},
+            {old_undelegator_deposit, OldDepositUndelegator},
+            {new_undelegator_deposit, NewDepositUndelegator},
+            {old_recipient_deposit, OldDepositRecipient},
+            {new_recipient_deposit, NewDepositRecipient},
+            {qty, Quantity}
+        }
+    };
 verify_deposit_quantity(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_delegations(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
