@@ -602,126 +602,70 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
             )
     end.
 
-%% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
-%% them in the message, overwriting any existing values.
+%% @doc Set keys in a message. Takes a base message and a new values message and 
+%% sets those keys in the base message, overwriting any existing values. If any
+%% values are updated, the message's commitments are recalculated.
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
-	% Filter keys that are in the default device (this one).
-    {ok, NewValuesKeys} = keys(NewValuesMsg, Opts),
-	KeysToSet =
-		lists:filter(
-			fun(Key) ->
-				not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
-					(hb_maps:get(Key, NewValuesMsg, undefined, Opts) =/= undefined)
-			end,
-			NewValuesKeys
-		),
-	% Find keys in the message that are already set (case-insensitive), and 
-	% note them for removal.
-	ConflictingKeys =
-		lists:filter(
-			fun(Key) -> lists:member(Key, KeysToSet) end,
-			hb_maps:keys(Base, Opts)
-		),
-    UnsetKeys =
-        lists:filter(
-            fun(Key) ->
-                case hb_maps:get(Key, NewValuesMsg, not_found, Opts) of
-                    unset -> true;
-                    _ -> false
-                end
-            end,
-            hb_maps:keys(Base, Opts)
-        ),
-    % Base message with keys-to-unset removed
-    BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
-    ?event(message_set,
-        {performing_set,
-            {conflicting_keys, ConflictingKeys},
-            {keys_to_unset, UnsetKeys},
-            {new_values, NewValuesMsg},
-            {original_message, Base}
-        }
-    ),
-    % Create the map of new values
-    NewValues = hb_maps:from_list(
-        lists:filtermap(
-            fun(Key) ->
-                case hb_maps:get(Key, NewValuesMsg, undefined, Opts) of
-                    undefined -> false;
-                    unset -> false;
-                    Value -> {true, {Key, Value}}
-                end
-            end,
-            KeysToSet
-        )
-    ),
-    % Calculate if the keys to be set conflict with any committed keys.
-    {ok, CommittedKeys} =
-        committed(
-            Base,
-            #{
-                <<"committers">> => <<"all">>
+	% Filter keys that are in the default device (this one) from the request.
+    NewValues = maps:without(?DEVICE_KEYS -- [<<"set-mode">>], NewValuesMsg),
+    % Combine with deep merge or if `set-mode` is `explicit' then just merge.
+    % We additionally track whether any keys in the result are different from the
+    % original message, such that we can avoid recalculating commitments if
+    % nothing was changed.
+    {Changed, Merged} =
+        case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
+            <<"deep">> -> {true, do_deep_merge(Base, NewValues, Opts)};
+            <<"explicit">> ->
+                maps:fold(
+                    fun(_Key, undefined, {Changed, XMsg}) ->
+                        % Ignore `undefined' values in the request.
+                        {Changed, XMsg};
+                    (Key, unset, {Changed, XMsg}) ->
+                        % Remove the key from the message and mark the result as
+                        % changed if the key was present in the original message.
+                        {
+                            maps:without([Key], XMsg),
+                            Changed orelse maps:is_key(Key, XMsg)
+                        };
+                    (Key, NewValue, {Changed, XMsg}) ->
+                        {
+                            XMsg#{ Key => NewValue },
+                            Changed orelse
+                                fast_equal_value(
+                                    Key,
+                                    XMsg,
+                                    NewValue,
+                                    Opts
+                                )
+                        }
+                    end,
+                    {false, Base},
+                    NewValues
+                )
+        end,
+    % Re-add the `priv' to the message.
+    MergedWithPriv = hb_private:set_priv(Merged, OriginalPriv),
+    if Changed ->
+        commit(
+            hb_message:uncommitted(MergedWithPriv, Opts),
+            #{ 
+                <<"type">> => <<"unsigned">>
             },
             Opts
-        ),
-    ?event(message_set,
-        {setting,
-            {committed_keys, CommittedKeys},
-            {keys_to_set, KeysToSet},
-            {message, Base}
-        }
-    ),
-    OverwrittenCommittedKeys =
-        lists:filtermap(
-            fun(Key) ->
-                NormKey = hb_ao:normalize_key(Key),
-                ?event({checking_committed_key, {key, Key}, {norm_key, NormKey}}),
-                Res = case lists:member(NormKey, KeysToSet) of
-                    true -> {true, NormKey};
-                    false -> false
-                end,
-                Res
-            end,
-            CommittedKeys
-        ),
-    ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
-    % Combine with deep merge or if `set-mode` is `explicit' then just merge.
-    Merged =
-        hb_private:set_priv(
-            case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
-                <<"explicit">> -> maps:merge(BaseValues, NewValues);
-                _ -> do_deep_merge(BaseValues, NewValues, Opts)
-            end,
-            OriginalPriv
-        ),
-    case OverwrittenCommittedKeys of
-        [] ->
-            ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
-            {ok, Merged};
-        _ ->
-            % We did overwrite some keys, but do their values match the original?
-            % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, strict, Opts) of
-                true ->
-                    ?event(message_set, {set_keys_matched, {merged, Merged}}),
-                    {ok, Merged};
-                % {error, {Details, {trace, Stacktrace}}} ->
-                %     erlang:raise(error, Details, Stacktrace);
-                % {mismatch, Type, Path, Val1, Val2} ->
-                %     ?event(
-                %         set_conflict,
-                %         {set_conflict_removing_commitments,
-                %             {merged, Merged},
-                %             {mismatch, Type},
-                %             {path, Path},
-                %             {expected, Val1},
-                %             {received, Val2}
-                %         }
-                %     ),
-                _ ->
-                    {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
-            end
+        );
+    true -> {ok, MergedWithPriv}
+    end.
+
+%% @doc Fast equality check in messages, taking into account linkification.
+fast_equal_value(Key, Msg, NewValue, Opts)
+        when ?IS_MESSAGE(NewValue) andalso ?IS_MESSAGE(map_get(Key, Msg)) ->
+    hb_cache:ensure_loaded(NewValue, Opts)
+        == hb_cache:ensure_loaded(map_get(Key, Msg), Opts);
+fast_equal_value(Key, Msg, NewValue, _Opts) ->
+    case maps:get(Key, Msg, undefined) of
+        undefined -> false;
+        Value -> Value == NewValue
     end.
 
 %% @doc Deep merge keys in a message, utilizing the set device of any child
@@ -922,28 +866,38 @@ deep_unset_test() ->
         }
     },
     Req = hb_ao:set(Base, #{ <<"deep/test-key2">> => unset }, Opts),
-    ?assertEqual(
+    ?assertMatch(
         #{
-            <<"test-key1">> => <<"Value1">>,
-            <<"deep">> => #{ <<"test-key3">> => <<"Value3">> }
-        },
+            <<"test-key1">> := <<"Value1">>,
+            <<"deep">> := Deep
+        } when not is_map_key(<<"test-key2">>, Deep),
         Req
     ),
     Res = hb_ao:set(Req, <<"deep/test-key3">>, unset, Opts),
-    ?assertEqual(#{
-            <<"test-key1">> => <<"Value1">>,
-            <<"deep">> => #{}
-        },
+    ?assertMatch(#{
+            <<"test-key1">> := <<"Value1">>,
+            <<"deep">> := Deep
+        } when ?IS_EMPTY_MESSAGE(Deep),
         Res
     ),
     Msg4 = hb_ao:set(Res, #{ <<"deep">> => unset }, Opts),
-    ?assertEqual(#{ <<"test-key1">> => <<"Value1">> }, Msg4).
+    ?assertMatch(#{ <<"test-key1">> := <<"Value1">> }, Msg4).
 
 set_ignore_undefined_test() ->
 	Base = #{ <<"test-key">> => <<"Value1">> },
 	Req = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
-	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
-		hb_private:reset(hb_util:ok(set(Base, Req, #{ hashpath => ignore })))).
+	?assertMatch(
+        #{ <<"test-key">> := <<"Value1">> },
+		hb_private:reset(
+            hb_util:ok(
+                set(
+                    Base,
+                    Req,
+                    #{ hashpath => ignore }
+                )
+            )
+        )
+    ).
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },
