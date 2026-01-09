@@ -382,7 +382,7 @@ NewDepositRecipient =
         0,
         Opts
     ),
-    UndelegatorDepositState =
+    UndelegatorDepositOK =
         case FromAddr =:= ToAddr of
             true ->
                 % Undelegating to yourself
@@ -391,7 +391,7 @@ NewDepositRecipient =
                 % Undelegating to someone other than yourself
                 NewDepositUndelegator =:= OldDepositUndelegator + Quantity
         end,
-    RecipientDepositState =
+    RecipientDepositOK =
         case FromAddr =:= ToAddr of
             true ->
                 % Undelegating to yourself
@@ -407,7 +407,7 @@ NewDepositRecipient =
                         NewDepositRecipient =:= 0
                 end
         end,
-        UndelegatorDepositState andalso RecipientDepositState orelse
+        UndelegatorDepositOK andalso RecipientDepositOK orelse
         {error,
             {bad_undelegate_math,
                 {address, FromAddr},
@@ -521,7 +521,6 @@ verify_delegations(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, 
                 Opts
             )
         ),
-
     % Self-delegation is a noop
     case FromAddr =:= ToAddr of
         true ->
@@ -554,7 +553,132 @@ verify_delegations(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewState, 
             }
     end;
 verify_delegations(OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
-    true;
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    OldDelegationsUndelegator =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations"
+                >>,
+                OldState,
+                #{},
+                Opts
+            )
+        ),
+    NewDelegationsUndelegator =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                    "/resources/",
+                    ResourceID/binary,
+                    "/deposits/",
+                    FromAddr/binary,
+                    "/delegations"
+                >>,
+                NewState,
+                #{},
+                Opts
+            )
+        ),
+    OldDelegationsRecipient =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/delegations"
+                >>,
+                OldState,
+                #{},
+                Opts
+            )
+        ),
+    NewDelegationsRecipient =
+        hb_private:reset(
+            hb_ao:get(
+                <<
+                    "/resources/",
+                    ResourceID/binary,
+                    "/deposits/",
+                    ToAddr/binary,
+                    "/delegations"
+                >>,
+                NewState,
+                #{},
+                Opts
+            )
+        ),
+    OldDepositRecipient = 
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                ToAddr/binary,
+                "/quantity"
+            >>,
+            OldState,
+            0,
+            Opts
+        ),
+    UndelegatorDelegationOK =
+        case FromAddr =:= ToAddr of
+            true ->
+                % Undelegating to yourself
+                NewDelegationsUndelegator =:= OldDelegationsUndelegator;
+            false ->
+                % Undelegating to someone other than yourself
+                % Note subtle complexity: it's possible that there was no delegation
+                % in the old state, so we should use a default value of 0. But no
+                % delegation in the new state indicates a malformed schema.
+                OldDelegatedQty = hb_maps:get(ToAddr, OldDelegationsUndelegator, 0),
+                NewDelegatedQty = hb_maps:get(ToAddr, NewDelegationsUndelegator, undefined),
+                NewDelegatedQty =/= undefined andalso
+                NewDelegatedQty =:= OldDelegatedQty - Quantity
+        end,
+    RecipientDelegationOK =
+        case FromAddr =:= ToAddr of
+            true ->
+                % Undelegating to yourself
+                true;
+            false ->
+                % Undelegating to someone other than yourself
+                case OldDepositRecipient >= Quantity of
+                    true ->
+                        % No recipient liquidation required
+                        NewDelegationsRecipient =:= OldDelegationsRecipient;
+                    false ->
+                        % Recipient liquidation required
+                        SumOldDelegations =
+                            lists:sum(hb_maps:values(OldDelegationsRecipient)),
+                        SumNewDelegations =
+                            lists:sum(hb_maps:values(NewDelegationsRecipient)),
+                        SumOldDelegations - SumNewDelegations =:=
+                        Quantity - OldDepositRecipient
+                end
+        end,
+    UndelegatorDelegationOK andalso RecipientDelegationOK orelse
+    {error,
+        {bad_undelegation_math,
+            {old_table_undelegator, OldDelegationsUndelegator},
+            {new_table_undelegator, NewDelegationsUndelegator},
+            {old_table_recipient, OldDelegationsRecipient},
+            {new_table_recipient, NewDelegationsRecipient},
+            {qty, Quantity},
+            {from, FromAddr},
+            {to, ToAddr}
+        }
+    };
 verify_delegations(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_twu(OldState, Req, NewState, Opts) ->
