@@ -1018,13 +1018,13 @@ device_set(Base, Req, Mode, Opts) ->
             <<"deep">> -> Req;
             <<"explicit">> -> Req#{ <<"set-mode">> => Mode }
         end,
+    ReqWithPath = WithMode#{ <<"path">> => <<"set">> },
     ?event(
         debug_set,
         {
             calling_device_set,
             {base, BaseWithPathSet},
-            {with_mode, WithMode},
-            {full_req, Req}
+            {req, ReqWithPath}
         },
         Opts
     ),
@@ -1032,7 +1032,7 @@ device_set(Base, Req, Mode, Opts) ->
         hb_util:ok(
             resolve(
                 BaseWithPathSet,
-                WithMode#{ <<"path">> => <<"set">> },
+                ReqWithPath,
                 InternalOpts
             ),
             InternalOpts

@@ -146,7 +146,16 @@ ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
 %% we report that the key was not found, otherwise we report that the link was
 %% not found.
 report_ensure_loaded_not_found(Ref, Lk, Opts) ->
-    ?event(link_error, {link_not_resolvable, {ref, Ref}, {link, Lk}, {opts, Opts}}),
+    ?event(
+        link_error,
+        {link_not_resolvable,
+            {ref, Ref},
+            {link, Lk},
+            {opts, Opts},
+            {stack, {trace, hb_format:get_trace(erlang)}}
+        },
+        Opts
+    ),
     throw(
         {necessary_message_not_found,
             hb_path:to_binary(lists:reverse(Ref)),
