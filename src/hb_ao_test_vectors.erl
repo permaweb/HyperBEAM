@@ -13,7 +13,7 @@
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
 run_test() ->
-    skip.
+    deep_set_test(#{}).
 
 %% @doc Run each test in the file with each set of options. Start and reset
 %% the store for each test.
@@ -589,15 +589,84 @@ set_with_device_test(Opts) ->
 
 deep_set_test(Opts) ->
     % First validate second layer changes are handled correctly.
-    Msg0 = #{ <<"a">> => #{ <<"b">> => <<"RESULT">> } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, <<"a/b">>, <<"RESULT2">>, Opts)),
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, [<<"a">>, <<"b">>], <<"RESULT2">>, Opts)),
+    Msg0 = #{ <<"a">> => #{ <<"b">> => <<"RESULT">>, <<"c">> => <<"RESULT3">> } },
+    AfterSet = hb_ao:set(Msg0, <<"a/b">>, <<"RESULT2">>, Opts),
+    ?event(debug_test, {after_set, AfterSet}, Opts),
+    ?assert(
+        hb_message:match(
+            #{ <<"a">> => #{ <<"b">> => <<"RESULT2">> } },
+            hb_ao:set(Msg0, <<"a/b">>, <<"RESULT2">>, Opts),
+            primary,
+            Opts
+        )
+    ),
+    ?assert(
+        hb_message:match(
+            #{ <<"a">> => #{ <<"b">> => <<"RESULT2">> } },
+            hb_ao:set(Msg0, [<<"a">>, <<"b">>], <<"RESULT2">>, Opts),
+            primary,
+            Opts
+        )
+    ),
     % Now validate deeper layer changes are handled correctly.
-    Msg = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := #{ <<"c">> := <<"2">> } } },
-        hb_ao:set(Msg, [<<"a">>, <<"b">>, <<"c">>], <<"2">>, Opts)).
+    Msg =
+        #{
+            <<"a">> =>
+                #{
+                    <<"b">> =>
+                        #{
+                            <<"c">> => <<"1">>,
+                            <<"d">> => <<"2">>
+                        },
+                    <<"e">> => <<"3">>
+                }
+        },
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> =>
+                    #{
+                        <<"b">> =>
+                            #{
+                                <<"c">> => <<"2">>,
+                                <<"d">> => <<"2">>
+                            },
+                        <<"e">> => <<"3">>
+                    }
+            },
+            hb_ao:set(Msg, <<"a/b/c">>, <<"2">>, Opts),
+            primary,
+            Opts
+        )
+    ).
+
+deep_set_commits_new_keys_test(Opts) ->
+    Msg0 =
+        #{
+            <<"a">> => #{
+                <<"b">> => #{
+                    <<"c">> => #{
+                        <<"d">> => #{
+                            <<"e">> => 1
+                        }
+                    }
+                }
+            }
+        },
+    Msg0b = hb_ao:set(Msg0, <<"z">>, <<"2">>, Opts),
+    ?event(debug_test, {msg0b, Msg0b}),
+    % {ok, Msg0ID} = hb_cache:write(Msg0, Opts),
+    % {ok, Msg0AfterRead} = hb_cache:read(Msg0ID, Opts),
+    % ?event(debug_test, {msg0, {after_read, Msg0AfterRead}}),
+    % UncommittedMsg0 = hb_message:uncommitted(Msg0AfterRead, Opts),
+    % ?event(debug_test, {uncommitted_msg0, {raw, UncommittedMsg0}}),
+    % Norm0 = hb_message:normalize_commitments(Msg0, Opts, verify),
+    Msg1 = hb_ao:set(Msg0b, <<"a/b/c2/d/e">>, 2, Opts),
+    ?event(debug_test, {msg1, {raw, Msg1}}),
+    {ok, ID1} = hb_cache:write(Msg1, Opts),
+    {ok, Msg1AfterRead} = hb_cache:read(ID1, Opts),
+    ?event(debug_test, {msg1, {after_read, Msg1AfterRead}}),
+    ok.
 
 deep_set_new_messages_test() ->
     Opts = hb_maps:get(opts, hd(test_opts())),
