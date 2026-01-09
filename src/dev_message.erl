@@ -108,9 +108,24 @@ id(RawBase, Req, NodeOpts) ->
     ),
     case hb_maps:keys(Commitments) of
         [] ->
-            % If there are no commitments, we must (re)calculate the ID.
-            ?event(ids, regenerating_id),
-            calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
+            % The relevant commitments are empty, so we must give the 
+            % default (unsigned) ID. First we determine if the message has an 
+            % unsigned ID already.
+            MaybeUnsignedID =
+                hb_message:commitment(
+                    #{ <<"type">> => <<"unsigned">> },
+                    Base,
+                    IDOpts
+                ),
+            case MaybeUnsignedID of
+                {ok, UnsignedID, _} -> {ok, UnsignedID};
+                not_found ->
+                    calculate_unsigned_id(
+                        hb_maps:without([<<"commitments">>], Base, IDOpts),
+                        Req,
+                        IDOpts
+                    )
+            end;
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
             % by module arithmetic of each of the IDs. The effect of this is that:
@@ -134,7 +149,8 @@ id(RawBase, Req, NodeOpts) ->
             }
     end.
 
-calculate_id(RawBase, Req, NodeOpts) ->
+%% @doc Calculate the unsigned ID for a message.
+calculate_unsigned_id(RawBase, Req, NodeOpts) ->
     % Find the ID device for the message.
     Base = hb_message:convert(RawBase, tabm, NodeOpts),
     ?event(debug_id, {calculate_ids, {base, Base}}),
