@@ -195,8 +195,8 @@ undelegate_generator(State, Opts) ->
         #{
             <<"path">> => <<"undelegate">>,
             <<"body">> => #{
-                <<"to">> => ToAddr,
-                <<"amount">> => UndelegateQty,
+                <<"address">> => ToAddr,
+                <<"quantity">> => UndelegateQty,
                 <<"resource">> => ResourceID,
                 <<"from">> => FromAddr, 
                 <<"t">> => hb_invariant:int(100000)
@@ -515,7 +515,7 @@ verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"delegate">> }, NewSta
 verify_inverted_index(_OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
-    ToAddr = hb_maps:get(<<"to">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
     ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
     do_verify_inverted_index(ToAddr, ResourceID, NewState, Opts) andalso
     do_verify_inverted_index(FromAddr, ResourceID, NewState, Opts);

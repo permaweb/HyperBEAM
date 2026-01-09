@@ -619,9 +619,9 @@ undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
         {ok, FromAddr} ?= hb_maps:find(<<"from">>, Req, Opts),
-        {ok, ToAddr} ?= hb_maps:find(<<"to">>, Req, Opts),
+        {ok, ToAddr} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
-        {ok, Amount} ?= hb_maps:find(<<"amount">>, Req, Opts),
+        {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
         {ok, undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
     else
         Reason -> Reason
