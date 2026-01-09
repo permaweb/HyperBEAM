@@ -325,7 +325,100 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"delegate">> }, NewSt
             }
     end;
 verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"undelegate">> }, NewState, Opts) ->
-    true;
+    UnwrappedReq = hb_maps:get(<<"body">>, Req),
+    FromAddr = hb_maps:get(<<"from">>, UnwrappedReq),
+    ToAddr = hb_maps:get(<<"address">>, UnwrappedReq),
+    ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
+    Quantity = hb_maps:get(<<"quantity">>, UnwrappedReq),
+    OldDepositUndelegator =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/quantity"
+            >>,
+            OldState,
+            0,
+            Opts
+        ),
+    NewDepositUndelegator =
+        hb_ao:get(
+                <<
+                    "/resources/",
+                    ResourceID/binary,
+                    "/deposits/",
+                    FromAddr/binary,
+                    "/quantity"
+                >>,
+            NewState,
+            0,
+            Opts
+        ),
+  OldDepositRecipient = 
+    hb_ao:get(
+        <<
+            "/resources/",
+            ResourceID/binary,
+            "/deposits/",
+            ToAddr/binary,
+            "/quantity"
+        >>,
+        OldState,
+        0,
+        Opts
+    ),
+NewDepositRecipient =
+    hb_ao:get(
+        <<
+            "/resources/",
+            ResourceID/binary,
+            "/deposits/",
+            ToAddr/binary,
+            "/quantity"
+        >>,
+        NewState,
+        0,
+        Opts
+    ),
+    UndelegatorDepositState =
+        case FromAddr =:= ToAddr of
+            true ->
+                % Undelegating to yourself
+                NewDepositUndelegator =:= OldDepositUndelegator;
+            false ->
+                % Undelegating to someone other than yourself
+                NewDepositUndelegator =:= OldDepositUndelegator + Quantity
+        end,
+    RecipientDepositState =
+        case FromAddr =:= ToAddr of
+            true ->
+                % Undelegating to yourself
+                true;
+            false ->
+                % Undelegating to someone other than yourself
+                case OldDepositRecipient >= Quantity of
+                    true ->
+                        % No recipient liquidation required
+                        NewDepositRecipient =:= OldDepositRecipient - Quantity;
+                    false ->
+                        % Recipient liquidation required
+                        NewDepositRecipient =:= 0
+                end
+        end,
+        UndelegatorDepositState andalso RecipientDepositState orelse
+        {error,
+            {bad_undelegate_math,
+                {address, FromAddr},
+                {from, ToAddr},
+                {old_undelegator_deposit, OldDepositUndelegator},
+                {new_undelegator_deposit, NewDepositUndelegator},
+                {old_recipient_deposit, OldDepositRecipient},
+                {new_recipient_deposit, NewDepositRecipient},
+                {qty, Quantity}
+            }
+        };
 verify_deposit_quantity(_OldState, _Req, _NewState, _Opts) -> true.
 
 verify_delegations(OldState, Req = #{ <<"path">> := <<"withdraw">> }, NewState, Opts) ->
