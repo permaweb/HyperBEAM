@@ -34,6 +34,9 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         % The value is a link. Deconstruct it and ensure it is
                         % normalized (lazy links are made greedy, and both are
                         % returned in binary TABM form).
+                        % TODO: If the link is lazy, _but to another message_,
+                        % then we should only resolve the lazy part, but not
+                        % read the underlying message.
                         NormKey = hb_util:bin(Key),
                         UnderlyingID =
                             case maps:get(<<"lazy">>, LinkOpts, false) of
@@ -58,7 +61,15 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         ?event(debug_linkify, {link_normalized, Key, UnderlyingID}),
                         {<< NormKey/binary, "+link">>, UnderlyingID};
                     ({Key, V}) when is_map(V) or is_list(V) ->
-                        ?event(debug_linkify, {linkifying_submessage, Key}),
+                        ?event(
+                            debug_linkify,
+                            {linkifying_submessage,
+                                {key, Key},
+                                {mode, Mode},
+                                {value, V},
+                                {opts, Opts}
+                            }
+                        ),
                         % The value is a submessage that we have in local memory.
                         % We must offload it such that it is cached, and
                         % referenced by a link.
@@ -67,6 +78,19 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         NormChild = normalize(V, Mode, Opts),
                         NormKey = hb_util:bin(Key),
                         % Generate the ID of the normalized child message.
+                        % TODO: This call will regenerate unsigned IDs if the
+                        % child does not have a _committer_. This is because the
+                        % second argument to `hb_message:id' interprets `all' as
+                        % related to the committers of the message, not the 
+                        % unknown commitments of the child. We want the:
+                        % 1. Signed ID if only one committer is present.
+                        % 2. The combined ID if multiple committers are present.
+                        % 3. The unsigned ID -- preferably from the existing
+                        %    commitments.
+                        % Part three is the missing piece at the moment:
+                        % `committers: all' will return no commitments, and
+                        % regenerate the unsigned ID even if it is already present
+                        % in the child.
                         ID = hb_message:id(NormChild, all, Opts),
                         % If we are in `offload' mode, we write the message to the
                         % cache. If we are in `discard' mode, we simply drop the 
