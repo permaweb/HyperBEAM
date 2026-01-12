@@ -248,11 +248,15 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     ?event(debug_cache, {writing_full_message, {msg, TABM}}),
     try
+        {Duration, Result} = timer:tc(fun () ->
         do_write_message(
             TABM,
             hb_opts:get(store, no_viable_store, Opts),
             Opts
-        )
+        ) end, millisecond),
+        UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+        ?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, Duration}}),
+        Result
     catch
         Type:Reason:Stacktrace ->
             ?event(error,

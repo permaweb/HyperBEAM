@@ -417,7 +417,9 @@ handle_request(RawReq, Body, ServerID) ->
                                 },
                                 ReqSingleton
                             ),
-                        hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                        {Duration, Result} = timer:tc(fun () -> hb_http:reply(Req, ReqSingleton, Res, NodeMsg) end, millisecond),
+                        ?event(metrics_short, {http_reply, {duration, Duration}}),
+                        Result
                     catch
                         Type:Details:Stacktrace ->
                             handle_error(
