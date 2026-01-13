@@ -108,7 +108,7 @@ maybe_cache(StoreOpts, Message, Links) ->
                 )
         end
     catch Class:Reason:Stacktrace ->
-        erlang:display({Class, Reason, Stacktrace}),
+        ?event(error, {maybe_cache, {class, Class}, {reason, Reason}, {stacktrace, Stacktrace}}),
         ignored
     end.
 
