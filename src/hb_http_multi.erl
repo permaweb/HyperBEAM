@@ -230,12 +230,22 @@ admissible_response(Response, Msg, Opts) ->
     ?event(debug_multi,
         {executing_admissible_message, {message, Base}, {req, Req}}
     ),
-    case hb_ao:resolve(Base, Req, Opts) of
+    try hb_ao:resolve(Base, Req, Opts) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
         {error, Reason} ->
             ?event(debug_multi, {admissible_error, {reason, Reason}}),
+            false
+    catch 
+        Class:Reason:Stacktrace ->
+            ?event(error, 
+                {admissible_response, 
+                    {class, Class}, 
+                    {reason, Reason}, 
+                    {stacktrace, Stacktrace}
+                }
+            ),
             false
     end.
 
