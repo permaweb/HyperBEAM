@@ -321,7 +321,10 @@ deposit(State, Assignment, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(State, Assignment, Opts),
-        deposit(Address, ResourceID, Amount, State, Opts)
+        Body = hb_maps:get(<<"body">>, Assignment),
+        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, State)),
+        StateWithT = State#{<<"t">> := NewT},
+        deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
         Reason -> {error, Reason}
     end.
@@ -334,7 +337,10 @@ withdraw(Base, Req, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(Base, Req, Opts),
-        withdraw(Address, ResourceID, Amount, Base, Opts)
+        Body = hb_maps:get(<<"body">>, Req),
+        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, Base)),
+        BaseWithT = Base#{<<"t">> := NewT},
+        withdraw(Address, ResourceID, Amount, BaseWithT, Opts)
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
@@ -500,7 +506,9 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        {ok, delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
+        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
+        StateWithT = State#{ <<"t">> := NewT },
+        {ok, delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts)}
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
@@ -622,7 +630,9 @@ undelegate(State, Assignment, Opts) ->
         {ok, ToAddr} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        {ok, undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts)}
+        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
+        StateWithT = State#{ <<"t">> := NewT },
+        {ok, undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts)}
     else
         Reason -> Reason
     end.
