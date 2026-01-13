@@ -72,7 +72,7 @@ read(BaseStoreOpts, Key) ->
                             extract_path_value(Message, Rest, StoreOpts)
                     catch Class:Reason:Stacktrace ->
                         ?event(
-                            gateway,
+                            error,
                             {read_failed,
                                 {class, Class},
                                 {reason, Reason},
