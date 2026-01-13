@@ -47,6 +47,7 @@ request(Config, Method, Path, Message, Opts) ->
         admissible_status := Statuses,
         parallel := Parallel
     } = multirequest_opts(Config, Message, Opts),
+    erlang:display({parallel, Parallel}),
     MultirequestMsg =
         hb_message:without_unless_signed(
             lists:filter(
