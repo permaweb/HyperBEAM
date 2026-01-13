@@ -272,6 +272,7 @@ commit(Self, Req, Opts) ->
         ),
     % Encode to a TABM
     Loaded =
+        %% This is where the message is first loaded from cache
         ensure_commitments_loaded(
             hb_message:convert(Base, tabm, CommitOpts),
             Opts

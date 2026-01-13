@@ -238,7 +238,7 @@ do_normalize_commitments(Msg, Opts, passive) ->
     }),
     case {UnsignedCommitments, SignedCommitments} of
         {[], _} ->
-            {ok, #{ <<"commitments">> := NewCommitments }} =
+            {ok, #{ <<"commitments">> := NewCommitments } = LoadedMsg} =
                 dev_message:commit(
                     uncommitted(Msg),
                     #{ 
@@ -251,7 +251,7 @@ do_normalize_commitments(Msg, Opts, passive) ->
                 hb_maps:from_list(SignedCommitments),
                 Opts
             ),
-            Msg#{ <<"commitments">> => MergedCommitments };
+            LoadedMsg#{ <<"commitments">> => MergedCommitments };
         _ -> Msg
     end;
 do_normalize_commitments(Msg, Opts, verify) ->
@@ -262,7 +262,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 {ID, #{ <<"committed">> => Committed }};
             _ -> {undefined, #{}}
         end,
-    {ok, #{ <<"commitments">> := NormCommitments }} =
+    {ok, #{ <<"commitments">> := NormCommitments } = LoadedMsg} =
         dev_message:commit(
             uncommitted(Msg),
             MaybeCommittedSpec#{ 
@@ -278,7 +278,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
         {undefined, _NewID} ->
             % We did not have an unsigned ID to begin with, so we need to add it.
             attach_phash2(
-                Msg#{
+                LoadedMsg#{
                     <<"commitments">> =>
                         hb_maps:merge(
                             NormCommitments,
@@ -290,14 +290,14 @@ do_normalize_commitments(Msg, Opts, verify) ->
         {_OldID, _NewID} ->
             {ok, #{ <<"commitments">> := NewCommitments }} = 
                 dev_message:commit(
-                    uncommitted(Msg),
+                    uncommitted(LoadedMsg),
                     #{ <<"type">> => <<"unsigned">> },
                     Opts
                 ),
             % We had an unsigned ID to begin with and the new one is different.
             % This means that the committed keys have changed, so we drop any
             % other commitments and return only the new unsigned one.
-            attach_phash2(Msg#{ <<"commitments">> => NewCommitments }, Opts)
+            attach_phash2(LoadedMsg#{ <<"commitments">> => NewCommitments }, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
