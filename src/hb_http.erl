@@ -343,6 +343,7 @@ route_to_request(M, {error, Reason}, _Opts) ->
 %% preferred format. This function honors the `accept-bundle' option, if it is
 %% already present in the message, and sets it to `true' if it is not.
 prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
+    ?event(http_full, {full_request, {format, Format}, {method, Method}, {peer, Peer}, {path, Path}, {raw_message, RawMessage}}),
     Message = hb_ao:normalize_keys(RawMessage, Opts),
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.

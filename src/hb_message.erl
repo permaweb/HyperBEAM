@@ -535,7 +535,7 @@ do_paranoid_verify(Topic, Msg, Opts) ->
     catch
         throw:{verification_failure, RawPath, FailedMsg, Details, Stack} ->
             Path = hb_path:to_binary(RawPath),
-            ?event(error,
+            ?event(debug_paranoia_error,
                 {paranoid_verification_failure,
                     {triggered_by, Topic},
                     {at_path, Path},

@@ -164,7 +164,18 @@ from(RawMsg, Opts) ->
     % 5. Generate the list of messages (plus-notation, device, typed keys).
     Result = build_messages(Msgs, ScopedModifications, Opts),
     ?event(parsing, {result, Result}),
-    Result.
+    CommittedResult = 
+        lists:map(
+            fun(Msg) -> 
+                case is_map(Msg) andalso hb_opts:get(priv_wallet, no_viable_wallet, Opts) /= no_viable_wallet of
+                    true -> hb_message:commit(hb_maps:without([<<"commitments">>], Msg, Opts), Opts);
+                    false -> Msg
+                end
+            end,
+            Result
+        ),
+    ?event(debug_invalid, {singleton_committed_result, {committed_result, CommittedResult}}),
+    CommittedResult.
 
 %% @doc Parse the relative reference into path, query, and fragment.
 from_path(RelativeRef) ->

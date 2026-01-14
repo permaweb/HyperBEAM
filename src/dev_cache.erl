@@ -228,14 +228,18 @@ setup_test_env() ->
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     ?event(dev_cache, {setup_test_env, {address, Address}}),
+    NodeWallet = ar_wallet:new(),
+    NodeWalletAddress = hb_util:human_id(ar_wallet:to_address(NodeWallet)),
     Node = hb_http_server:start_node(#{ 
         cache_control => [<<"no-cache">>, <<"no-store">>],
         store => LocalStore,
         cache_writers => [
 			Address,
+            NodeWalletAddress,
 			hb_util:human_id(ar_wallet:to_address(hb:wallet()))
 		],
-        store_all_signed => false
+        store_all_signed => false,
+        priv_wallet => NodeWallet
     }),
     ?event(dev_cache, {setup_test_env, {node_started, Node}}),
     TestOpts = #{
@@ -323,18 +327,19 @@ read_from_cache(Node, Path) ->
 %% @doc Test that the cache can be written to and read from using the hb_cache
 %% API.
 cache_write_message_test() ->
-    ?event(dev_cache, {cache_api_test, {start}}),
+    ?event(j, {cache_api_test, {start}}),
     {ok, Opts, _} = setup_test_env(),
     TestData = #{
         <<"test_key">> => <<"test_value">>
     },
-    ?event(dev_cache, {cache_api_test, {opts, Opts}}),
+    ?event(j, {test_data, TestData}),
+    ?event(j, {cache_api_test, {opts, Opts}}),
     {ok, Path} = hb_cache:write(TestData, Opts),
-    ?event(dev_cache, {cache_api_test, {data_written, Path}}),
+    ?event(j, {cache_api_test, {data_written, Path}}),
     {ok, ReadData} = hb_cache:read(Path, Opts),
-    ?event(dev_cache, {cache_api_test, {data_read, ReadData}}),
+    ?event(j, {cache_api_test, {data_read, ReadData}}),
     ?assert(hb_message:match(TestData, ReadData, only_present, Opts)),
-    ?event(dev_cache, {cache_api_test}),
+    ?event(j, {cache_api_test}),
     ok.
 
 %% @doc Ensure that we can write direct binaries to the cache.

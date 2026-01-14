@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_empty_map_test(
-        <<"structured@1.0">>,
+    signed_with_inner_signed_message_test(
+        <<"httpsig@1.0">>,
         test_opts(normal)
     ).
 
@@ -1228,7 +1228,7 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
                         % For now, only `httpsig@1.0' supports stripping
                         % non-committed keys.
                         case is_device_codec(<<"httpsig@1.0">>, NestedCodec) of
-                            true -> #{ <<"f">> => 6, <<"g">> => 7};
+                            true -> #{}; % #{ <<"f">> => 6, <<"g">> => 7};
                             false -> #{}
                         end
                     )
@@ -1239,12 +1239,13 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
     ?event({initial_msg, Msg}),
     % 1. Verify the outer message without changes.
     ?assert(hb_message:verify(Msg, all, Opts)),
+    ?event(j, {pre_msg, Msg}),
     % 2. Convert the message to the format and back.
     Encoded = hb_message:convert(Msg, Codec, Opts),
-    ?event({encoded, Encoded}),
+    ?event(j, {encoded, Encoded}),
     %?event({encoded_body, {string, hb_maps:get(<<"body">>, Encoded)}}, #{}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, Decoded}),
+    ?event(j, {decoded, Decoded}),
 	{ok, InnerFromDecoded} =
         hb_message:with_only_committed(
             hb_message:normalize_commitments(
@@ -1253,7 +1254,7 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
             ),
             Opts
         ),
-    ?event({verify_inner, {original, InnerSigned}, {from_decoded, InnerFromDecoded}}),
+    ?event(j, {verify_inner, {original, InnerSigned}, {from_decoded, InnerFromDecoded}}),
     % 3. Verify the outer message after decode.
     MatchRes =
         hb_message:match(

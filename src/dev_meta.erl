@@ -68,7 +68,9 @@ build(_, _, _NodeMsg) ->
 %% other messages are routed to the `handle_resolve/2' function.
 handle(NodeMsg, RawRequest) ->
     ?event({singleton_tabm_request, RawRequest}),
+    ?event(debug_invalid, {before_norm, {raw_request, RawRequest}}),
     NormRequest = hb_singleton:from(RawRequest, NodeMsg),
+    ?event(debug_invalid, {after_norm, {norm_request, NormRequest}}),
     ?event(
         http,
         {request,
@@ -223,6 +225,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
         }
     ),
     LoadedMsgs = hb_cache:ensure_all_loaded(Msgs, NodeMsg),
+    ?event(debug_invalid, {dev_meta_resolve_hook, {req, Req}, {msgs, LoadedMsgs}}),
     case resolve_hook(<<"request">>, Req, LoadedMsgs, NodeMsg) of
         {ok, PreProcessedMsg} ->
             ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),

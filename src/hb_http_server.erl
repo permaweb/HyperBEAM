@@ -387,6 +387,7 @@ handle_request(RawReq, Body, ServerID) ->
             % Parse the HTTP request into HyerBEAM's message format.
             try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
                 ReqSingleton ->
+                    ?event(debug_invalid, {hb_http_server_handle_request, {req_singleton, ReqSingleton}}),
                     try
                         CommitmentCodec =
                             hb_http:accept_to_codec(ReqSingleton, NodeMsg),
