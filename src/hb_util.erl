@@ -4,7 +4,7 @@
 -export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
--export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
+-export([key_to_atom/1, key_to_atom/2, atom_to_key/1, binary_to_strings/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
@@ -203,6 +203,10 @@ key_to_atom(Key, Mode) ->
         new_atoms -> binary_to_atom(WithoutDashes, utf8);
         _ -> binary_to_existing_atom(WithoutDashes, utf8)
     end.
+
+%% @doc Convert an atom to a key by replacing `_' with `-'.
+atom_to_key(Key) ->
+    binary:replace(bin(Key), <<"_">>, <<"-">>, [global]).
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already
 %% a native binary ID, it is returned as is.
