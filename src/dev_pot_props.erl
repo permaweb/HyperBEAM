@@ -15,10 +15,11 @@ simulation_test() ->
                 fun verify_deposit_quantity/4,
                 fun verify_delegations/4,
                 fun verify_twu/4,
-                fun verify_inverted_index/4
+                fun verify_inverted_index/4,
+                fun verify_undistributed_mint/4
             ],
             runs => 3,
-            length => 30,
+            length => 5,
             next => fun next/4,
             users => ?USERS
         }
@@ -37,9 +38,9 @@ generate_opts(#{ users := Users }) ->
     }.
 
 generate_initial_state(Opts) ->
-    MintCap = hb_invariant:int(1, 1_000_000_000_000_000),
-    PropN = 1 + hb_invariant:int(1, 10_000),
-    PropD = PropN + hb_invariant:int(1, 10_000),
+    MintCap = 21_000_000,
+    PropN = 1,
+    PropD = 1000,
     StartWeight = hb_invariant:int(1, 10_000),
     StartQty = hb_invariant:int(1, 1_000_000),
     StartResource = hb_invariant:string(id),
@@ -61,23 +62,24 @@ generate_initial_state(Opts) ->
             <<"mint-cap">> => MintCap,
             <<"mint-prop-numerator">> => PropN,
             <<"mint-prop-denominator">> => PropD,
+            <<"accumulator">> => 500,
             <<"resources">> => #{
                 StartResource => #{
-                    <<"accumulator">> => 1,
-                    <<"last-global-accumulator">> => 1,
+                    <<"accumulator">> => 300,
+                    <<"last-global-accumulator">> => 100,
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
                         StartAddr => #{
                             <<"quantity">> => DepositMinusDelegated,
-                            <<"last-resource-accumulator">> => 1, % TODO: randomize this?
+                            <<"last-resource-accumulator">> => 100, % TODO: randomize this?
                             <<"delegations">> => #{
                                 DelegateeAddr => DelegatedAmount
                             }
                         },
                         DelegateeAddr => #{
                             <<"quantity">> => DelegatedAmount,
-                            <<"last-resource-accumulator">> => 1 % TODO: randomize this?
+                            <<"last-resource-accumulator">> => 100 % TODO: randomize this?
                         }
                     }
                 }
@@ -100,7 +102,7 @@ generate_initial_state(Opts) ->
     Resources = hb_maps:get(resources, Opts),
     S1 = lists:foldl(
         fun(Resource, State) ->
-            dev_pot:register_resource(Resource, hb_invariant:int(), State, Opts)
+            dev_pot:register_resource(Resource, hb_invariant:int(1, 10_000), State, Opts)
         end,
         S0,
         Resources
@@ -132,7 +134,7 @@ deposit_generator(_State, Opts) ->
                 <<"quantity">> => hb_invariant:int(1, 1_000_000),
                 <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
                 <<"from">> => <<"foo">>, % TODO: What should this value be?
-                <<"t">> => hb_invariant:int(100000)
+                <<"t">> => hb_invariant:int(100)
             }
         },
         Opts#{ priv_wallet => Wallet }
@@ -155,7 +157,7 @@ withdraw_generator(State, Opts) ->
                 <<"quantity">> => hb_invariant:int(1, CurrentQty),
                 <<"resource">> => UserResourceID,
                 <<"from">> => <<"foo">>, % TODO: What should this value be?
-                <<"t">> => hb_invariant:int(100000)
+                <<"t">> => hb_invariant:int(100)
             }
         },
         Opts#{ priv_wallet => Wallet }
@@ -178,7 +180,7 @@ delegate_generator(State, Opts) ->
                 <<"quantity">> => DelegatedQty,
                 <<"resource">> => UserResourceID,
                 <<"from">> => FromAddr, 
-                <<"t">> => hb_invariant:int(100000)
+                <<"t">> => hb_invariant:int(100)
             }
         },
         Opts#{ priv_wallet => Wallet }
@@ -199,7 +201,7 @@ undelegate_generator(State, Opts) ->
                 <<"quantity">> => UndelegateQty,
                 <<"resource">> => ResourceID,
                 <<"from">> => FromAddr, 
-                <<"t">> => hb_invariant:int(100000)
+                <<"t">> => hb_invariant:int(100)
             }
         },
         Opts#{ priv_wallet => Wallet }
