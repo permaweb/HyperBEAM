@@ -9,6 +9,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(CHUNK_SIZE, 256 * 1024). % Arweave's default chunk size in bytes.
+
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
@@ -129,7 +131,7 @@ get_tx(Base, Request, Opts) ->
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> {error, not_implemented}
+        <<"GET">> -> get_chunk(Base, Request, Opts)
     end.
 
 post_chunk(_Base, Request, Opts) ->
@@ -143,6 +145,30 @@ post_chunk(_Base, Request, Opts) ->
         },
         Opts
     ).
+
+get_chunk(_Base, Request, Opts) ->
+    Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
+    Length = hb_util:int(hb_ao:get(<<"length">>, Request, ?CHUNK_SIZE, Opts)),
+    Res =
+        hb_http:get(
+            hb_opts:get(gateway, not_found, Opts),
+            #{
+                <<"path">> =>
+                    <<
+                        "/chunk/",
+                        (hb_util:bin(Offset))/binary,
+                        "/",
+                        (hb_util:bin(Length))/binary
+                    >>
+            },
+            Opts
+        ),
+    case Res of
+        {ok, #{ <<"body">> := Body }} ->
+            {ok, Body};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 add_data(TXID, TXHeader, Opts) ->
     case data(TXID, Opts) of
