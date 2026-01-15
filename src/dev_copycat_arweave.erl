@@ -9,6 +9,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9-pre">>).
+-define(ARWEAVE_INDEX_PATH, <<?ARWEAVE_DEVICE/binary, "/offset">>).
+
+% GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
 %% @doc Fetch blocks from an Arweave node between a given range, or from the
 %% latest known block towards the Genesis block. If no range is provided, we
@@ -56,9 +59,10 @@ fetch_blocks(Req, Current, To, Opts) ->
     fetch_blocks(Req, Current - 1, To, Opts).
 
 %% @doc Process a block.
-process_block(BlockRes, _Req, Current, To, _Opts) ->
+process_block(BlockRes, _Req, Current, To, Opts) ->
     case BlockRes of
-        {ok, _} ->
+        {ok, Block} ->
+            maybe_index_ids(Block, Opts),
             ?event(
                 copycat_short,
                 {arweave_block_cached,
@@ -73,5 +77,48 @@ process_block(BlockRes, _Req, Current, To, _Opts) ->
                     {height, Current},
                     {target, To}
                 }
+            )
+    end.
+
+%% @doc Index the IDs of all transactions in the block if configured to do so.
+maybe_index_ids(Block, Opts) ->
+    case hb_opts:get(arweave_index_ids, false, Opts) of
+        false -> ok;
+        true ->
+            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+            BlockOffset = hb_maps:get(<<"weave_size">>, Block, 0, Opts),
+            lists:foreach(
+                fun(TXID) ->
+                    TX =
+                        hb_ao:get(
+                            <<
+                                ?ARWEAVE_DEVICE/binary,
+                                "/tx=",
+                                (hb_util:bin(TXID))/binary
+                            >>,
+                            Opts
+                        ),
+                    TXOffset = hb_maps:get(<<"offset">>, TX, 0, Opts),
+                    case is_bundle_tx(TX, Opts) of
+                        false -> ok;
+                        true ->
+                            {ok, BundleIndex} = download_bundle_header(TXID, Opts),
+                            hb_maps:map(
+                                fun(ItemID, #{ <<"offset">> := BundleOffset, <<"length">> := Length}) ->
+                                    Offset = hb_util:bin(BundleOffset + TXOffset + BlockOffset),
+                                    hb_store_arweave:write_offset(
+                                        IndexStore,
+                                        ItemID,
+                                        Offset,
+                                        Length
+                                    )
+                                end,
+                                BundleIndex,
+                                Opts
+                            )
+                    end
+                end,
+                hb_maps:get(<<"txs">>, Block, #{}, Opts),
+                Opts
             )
     end.
