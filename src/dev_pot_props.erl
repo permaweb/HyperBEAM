@@ -63,25 +63,25 @@ generate_initial_state(Opts) ->
             <<"mint-cap">> => MintCap,
             <<"mint-prop-numerator">> => PropN,
             <<"mint-prop-denominator">> => PropD,
-            <<"accumulator">> => 500,
+            <<"accumulator">> => 0,
             <<"total-weighted-units">> => StartQty * StartWeight,
             <<"resources">> => #{
                 StartResource => #{
-                    <<"accumulator">> => 300,
-                    <<"last-global-accumulator">> => 100,
+                    <<"accumulator">> => 0,
+                    <<"last-global-accumulator">> => 0,
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
                         StartAddr => #{
                             <<"quantity">> => DepositMinusDelegated,
-                            <<"last-resource-accumulator">> => 100, % TODO: randomize this?
+                            <<"last-resource-accumulator">> => 0, % TODO: randomize this?
                             <<"delegations">> => #{
                                 DelegateeAddr => DelegatedAmount
                             }
                         },
                         DelegateeAddr => #{
                             <<"quantity">> => DelegatedAmount,
-                            <<"last-resource-accumulator">> => 100 % TODO: randomize this?
+                            <<"last-resource-accumulator">> => 0 % TODO: randomize this?
                         }
                     }
                 }
