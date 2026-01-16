@@ -335,19 +335,20 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
 %% 2. Part subpath resolutions
 %% 3. Inlined key-value pairs
 %% 4. Device specifier
-parse_part(ID, _Opts) when ?IS_ID(ID) -> ID;
 parse_part(Part, Opts) ->
     case maybe_subpath(Part, Opts) of
         {resolve, Subpath} -> {resolve, Subpath};
         Part ->
             case part([$&, $~, $+, $ , $=], Part) of
+                {no_match, PartKey, <<>>} when ?IS_ID(PartKey) ->
+                    PartKey;
                 {no_match, PartKey, <<>>} ->
                     #{ <<"path">> => PartKey };
                 {Sep, PartKey, PartModBin} ->
                     parse_part_mods(
                         << Sep:8/integer, PartModBin/binary >>,
                         #{ <<"path">> => PartKey },
-						Opts
+                        Opts
                     )
             end
     end.
@@ -771,6 +772,20 @@ inlined_keys_test() ->
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Res)),
     ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)).
+
+inlined_keys_long_segment_test() ->
+    Req = #{
+        <<"path">> =>
+            <<"/chunk&offset=377813969707255&length=262144">>
+    },
+    Msgs = from(Req, #{}),
+    ?assertEqual(2, length(Msgs)),
+    [Base, Msg] = Msgs,
+    ?assertEqual(<<"chunk">>, hb_maps:get(<<"path">>, Msg)),
+    ?assertEqual(<<"377813969707255">>, hb_maps:get(<<"offset">>, Msg)),
+    ?assertEqual(<<"262144">>, hb_maps:get(<<"length">>, Msg)),
+    ?assertEqual(not_found, hb_maps:get(<<"offset">>, Base, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"length">>, Base, not_found)).
 
 inlined_quoted_key_test() ->
     Req = #{
