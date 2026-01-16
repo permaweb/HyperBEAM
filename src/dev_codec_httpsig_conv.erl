@@ -908,7 +908,7 @@ encode_message_with_cache_values_test() ->
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
-    ?assertNotMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
+    ?assertEqual(4, maps:get(<<"typed-key">>, Read, #{})),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),
