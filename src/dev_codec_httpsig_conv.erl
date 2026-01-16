@@ -900,7 +900,7 @@ group_maps_flat_compatible_test() ->
     ?assertEqual(dev_codec_flat:from(Lifted, #{}, #{}), {ok, Map}),
     ok.
 
-encode_message_with_links_test() ->
+encode_message_with_cache_values_test() ->
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
         <<"typed-key">> => 4
@@ -908,7 +908,7 @@ encode_message_with_links_test() ->
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
-    ?assertMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
+    ?assertNotMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),

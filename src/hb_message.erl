@@ -66,6 +66,7 @@
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, remove_all_commitments/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
+-export([contains_links/1]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -251,8 +252,19 @@ do_normalize_commitments(Msg, Opts, passive) ->
                 hb_maps:from_list(SignedCommitments),
                 Opts
             ),
-            LoadedMsg#{ <<"commitments">> => MergedCommitments };
-        _ -> Msg
+            %% We don't always want the LoadedMsg. If the Msg isn't linkfied, 
+            %% we will use that instead. Only when Msg is linkfied, we use 
+            %% the LoadedMsg.
+            IsMsgLinked = contains_links(Msg),
+            IsLoadedMsgLinked = contains_links(LoadedMsg),
+            case {IsMsgLinked, IsLoadedMsgLinked} of 
+                {true, false} -> 
+                    LoadedMsg#{ <<"commitments">> => MergedCommitments };
+                _ ->
+                    Msg#{ <<"commitments">> => MergedCommitments }
+            end;
+        _ -> 
+            Msg
     end;
 do_normalize_commitments(Msg, Opts, verify) ->
     UnsignedCommitment = commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts),
@@ -262,7 +274,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 {ID, #{ <<"committed">> => Committed }};
             _ -> {undefined, #{}}
         end,
-    {ok, #{ <<"commitments">> := NormCommitments } = LoadedMsg} =
+    {ok, #{ <<"commitments">> := NormCommitments }} =
         dev_message:commit(
             uncommitted(Msg),
             MaybeCommittedSpec#{ 
@@ -278,7 +290,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
         {undefined, _NewID} ->
             % We did not have an unsigned ID to begin with, so we need to add it.
             attach_phash2(
-                LoadedMsg#{
+                Msg#{
                     <<"commitments">> =>
                         hb_maps:merge(
                             NormCommitments,
@@ -290,14 +302,14 @@ do_normalize_commitments(Msg, Opts, verify) ->
         {_OldID, _NewID} ->
             {ok, #{ <<"commitments">> := NewCommitments }} = 
                 dev_message:commit(
-                    uncommitted(LoadedMsg),
+                    uncommitted(Msg),
                     #{ <<"type">> => <<"unsigned">> },
                     Opts
                 ),
             % We had an unsigned ID to begin with and the new one is different.
             % This means that the committed keys have changed, so we drop any
             % other commitments and return only the new unsigned one.
-            attach_phash2(LoadedMsg#{ <<"commitments">> => NewCommitments }, Opts)
+            attach_phash2(Msg#{ <<"commitments">> => NewCommitments }, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
@@ -990,3 +1002,6 @@ default_tx_message() ->
 default_tx_list() ->
     Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
     lists:zip(Keys, tl(tuple_to_list(#tx{}))).
+
+contains_links(Msg) when is_map(Msg) ->
+    maps:filter(fun (_Key, Value) -> ?IS_LINK(Value) end, Msg) /= #{}.
