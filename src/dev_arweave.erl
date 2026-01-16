@@ -9,8 +9,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(CHUNK_SIZE, 256 * 1024). % Arweave's default chunk size in bytes.
-
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
@@ -129,9 +127,10 @@ get_tx(Base, Request, Opts) ->
     end.
 
 chunk(Base, Request, Opts) ->
+    ?event(debug_test, {chunk, {base, Base}, {request, Request}, {opts, Opts}}),
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> get_chunk(Base, Request, Opts)
+        <<"GET">> -> get_chunk_range(Base, Request, Opts)
     end.
 
 post_chunk(_Base, Request, Opts) ->
@@ -146,26 +145,46 @@ post_chunk(_Base, Request, Opts) ->
         Opts
     ).
 
-get_chunk(_Base, Request, Opts) ->
+get_chunk_range(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
-    Length = hb_util:int(hb_ao:get(<<"length">>, Request, ?CHUNK_SIZE, Opts)),
-    Res =
-        hb_http:get(
-            hb_opts:get(gateway, not_found, Opts),
-            #{
-                <<"path">> =>
-                    <<
-                        "/chunk/",
-                        (hb_util:bin(Offset))/binary,
-                        "/",
-                        (hb_util:bin(Length))/binary
-                    >>
-            },
-            Opts
-        ),
+    Length = hb_util:int(hb_ao:get(<<"length">>, Request, ?DATA_CHUNK_SIZE, Opts)),
+    case get_chunk_range(Offset, Length, Opts, [], 0) of
+        {ok, Chunks} ->
+            Data = iolist_to_binary(Chunks),
+            Truncated =
+                case byte_size(Data) > Length of
+                    true -> binary:part(Data, 0, Length);
+                    false -> Data
+                end,
+            {ok, Truncated};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+get_chunk_range(_Offset, Length, _Opts, Chunks, Size)
+        when Size >= Length ->
+    {ok, lists:reverse(Chunks)};
+get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
+    case get_chunk(Offset, Opts) of
+        {ok, Chunk} ->
+            get_chunk_range(
+                Offset + byte_size(Chunk),
+                Length,
+                Opts,
+                [Chunk | Chunks],
+                Size + byte_size(Chunk)
+            );
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+get_chunk(Offset, Opts) ->
+    Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
+    Res = request(<<"GET">>, Path, Opts),
     case Res of
-        {ok, #{ <<"body">> := Body }} ->
-            {ok, Body};
+        {ok, JSON } ->
+            Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+            {ok, Chunk};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -532,4 +551,55 @@ serialize_data_item_test_disabled() ->
     ?assertEqual(DataItem#tx.data, VerifiedItem#tx.data),
     ?assertEqual(length(DataItem#tx.tags), length(VerifiedItem#tx.tags)),
     ?assert(ar_bundles:verify_item(VerifiedItem)),
+    ok.
+
+get_partial_chunk_test() ->
+    Offset = 377813969707255,
+    ExpectedHash = hb_util:decode(<<"9hCmSqNi2sRo45SBtlY8JUePrkh4v2ZSTTuVga0FMSs">>),
+    ExpectedLength = 1000,
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        #{}
+    ),
+    ?assertEqual(ExpectedLength, byte_size(Data)),
+    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
+    ok.
+
+get_full_chunk_test() ->
+    Offset = 377813969707255,
+    ExpectedHash = hb_util:decode(<<"y3HKeRa2hyEnmwJUd45A2qrtYJcvpC7tCAZgD5qyJ5I">>),
+    ExpectedLength = ?DATA_CHUNK_SIZE,
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        #{}
+    ),
+    ?assertEqual(ExpectedLength, byte_size(Data)),
+    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
+    ok.
+
+get_multi_chunk_test() ->
+    Offset = 377813969707255,
+    ExpectedHash = hb_util:decode(<<"G2EFuA2NGQYOszQZbsEL0QG/lyUzQAxM09/gpBHf88E=">>),
+    ExpectedLength = 526685,
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        #{}
+    ),
+    ?assertEqual(ExpectedLength, byte_size(Data)),
+    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
     ok.
