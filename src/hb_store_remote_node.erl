@@ -6,7 +6,7 @@
 -module(hb_store_remote_node).
 -export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
 %%% Public utilities.
--export([maybe_cache/2, maybe_cache/3, read_local_cache/2]).
+-export([maybe_cache/2, maybe_cache/3, maybe_cache_async/2, maybe_cache_async/3, read_local_cache/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -47,13 +47,19 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @doc Read a key from the remote node.
 %%
 %% Makes an HTTP GET request to the remote node and returns the
-%% committed message.
+%% committed message. Uses singleflight to deduplicate concurrent requests
+%% for the same key.
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
-%% @returns {ok, Msg} on success or not_found if the key is missing.
+%% @returns {ok, Msg} on success, not_found if the key is missing,
+%% or {error, timeout} if the request times out.
 read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+    SFKey = {remote_node_read, Key, Node},
+    hb_singleflight:do(SFKey, fun() -> fetch_from_remote(Opts, Key) end).
+
+fetch_from_remote(Opts = #{ <<"node">> := Node }, Key) ->
     HTTPRes =
         hb_http:get(
             Node,
@@ -62,10 +68,9 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
         ),
     case HTTPRes of
         {ok, Res} ->
-            % returning the whole response to get the test-key
             {ok, Msg} = hb_message:with_only_committed(Res, Opts),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(Opts, Msg, [Key]),
+            maybe_cache_async(Opts, Msg, [Key]),
             {ok, Msg};
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
@@ -111,6 +116,13 @@ maybe_cache(StoreOpts, Message, Links) ->
         ?event(error, {maybe_cache, {class, Class}, {reason, Reason}, {stacktrace, Stacktrace}}),
         ignored
     end.
+
+maybe_cache_async(StoreOpts, Message) ->
+    maybe_cache_async(StoreOpts, Message, []).
+
+maybe_cache_async(StoreOpts, Message, Links) ->
+    spawn(?MODULE, maybe_cache, [StoreOpts, Message, Links]),
+    ok.
 
 should_write(Message, #{<<"store-module">> := StoreModule} = Store) ->
     %% Max file size parameters is inclusive. If the message size match
@@ -305,6 +317,16 @@ read_test() ->
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
     ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)).
 
+timeout_propagation_test() ->
+    ok = meck:new(hb_singleflight, [passthrough]),
+    try
+        ok = meck:expect(hb_singleflight, do, fun(_, _) -> {error, timeout} end),
+        Opts = #{ <<"node">> => <<"http://example.com">> },
+        ?assertEqual({error, timeout}, hb_store_remote_node:read(Opts, <<"key">>))
+    after
+        ok = meck:unload(hb_singleflight)
+    end.
+
 should_write_test() ->
     Store = #{
 		<<"store-module">> => hb_store_lmdb,
@@ -339,4 +361,3 @@ should_write_test() ->
        should_write(Value5Bytes, Store#{<<"min-file-size">> => 7, <<"max-file-size">> => 3}), 
        "Max and min file size set, Message outside these values"
     ).
-

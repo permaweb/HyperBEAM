@@ -97,6 +97,7 @@
 %% @doc Initialize system-wide settings for the hyperbeam node.
 init() ->
     hb_name:start(),
+    hb_singleflight:start(),
     ?event({setting_debug_stack_depth, hb_opts:get(debug_stack_depth)}),
     Old = erlang:system_flag(backtrace_depth, hb_opts:get(debug_stack_depth)),
     ?event({old_system_stack_depth, Old}),

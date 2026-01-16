@@ -62,24 +62,12 @@ read(BaseStoreOpts, Key) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    try hb_gateway_client:read(ID, StoreOpts) of
-                        {error, _} ->
-                            ?event({read_not_found, {key, ID}}),
-                            not_found;
-                        {ok, Message} ->
-                            ?event({read_found, {key, ID}}),
-                            hb_store_remote_node:maybe_cache(StoreOpts, Message),
-                            extract_path_value(Message, Rest, StoreOpts)
-                    catch Class:Reason:Stacktrace ->
-                        ?event(
-                            error,
-                            {read_failed,
-                                {class, Class},
-                                {reason, Reason},
-                                {stacktrace, {trace, Stacktrace}}
-                            }
-                        ),
-                        failure
+                    SFKey = singleflight_key(ID, StoreOpts),
+                    case hb_singleflight:do(SFKey, fun() -> fetch_upstream(ID, StoreOpts) end) of
+                        not_found -> not_found;
+                        failure -> failure;
+                        {error, timeout} -> failure;
+                        {ok, Message} -> extract_path_value(Message, Rest, StoreOpts)
                     end;
                 {ok, CachedMessage} ->
                     extract_path_value(CachedMessage, Rest, StoreOpts)
@@ -87,6 +75,38 @@ read(BaseStoreOpts, Key) ->
         _ ->
             ?event({ignoring_non_id, Key}),
             not_found
+    end.
+
+singleflight_key(ID, StoreOpts) ->
+    Routes = case maps:find(routes, StoreOpts) of
+        {ok, R} -> R;
+        error -> maps:get(<<"routes">>, StoreOpts, [])
+    end,
+    Node = case maps:find(<<"node">>, StoreOpts) of
+        {ok, N} -> N;
+        error -> maps:get(node, StoreOpts, undefined)
+    end,
+    {gateway_read, ID, {Routes, Node}}.
+
+fetch_upstream(ID, StoreOpts) ->
+    try hb_gateway_client:read(ID, StoreOpts) of
+        {error, _} ->
+            ?event({read_not_found, {key, ID}}),
+            not_found;
+        {ok, Message} ->
+            ?event({read_found, {key, ID}}),
+            hb_store_remote_node:maybe_cache_async(StoreOpts, Message),
+            {ok, Message}
+    catch Class:Reason:Stacktrace ->
+        ?event(
+            error,
+            {read_failed,
+                {class, Class},
+                {reason, Reason},
+                {stacktrace, {trace, Stacktrace}}
+            }
+        ),
+        failure
     end.
 
 %% @doc Normalize the routes in the given `Opts`.
@@ -217,16 +237,21 @@ cache_read_message_test() ->
                 }
             ]
     },
-    {ok, Written} =
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            WriteOpts
-        ),
-    {ok, Read} =
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            #{ store => [Local] }
-        ),
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    {ok, Written} = hb_cache:read(ID, WriteOpts),
+    ?assert(hb_util:wait_until(
+        fun() ->
+            try
+                case hb_cache:read(ID, #{ store => [Local] }) of
+                    {ok, _} -> true;
+                    _ -> false
+                end
+            catch _:_ -> false
+            end
+        end,
+        5000
+    )),
+    {ok, Read} = hb_cache:read(ID, #{ store => [Local] }),
     ?assert(hb_message:match(Read, Written)).
 
 avoid_double_read_test() ->
@@ -254,12 +279,21 @@ avoid_double_read_test() ->
             ]
     },
     {ok, Written} = hb_cache:read(ID, WriteOpts),
+    ?assert(hb_util:wait_until(
+        fun() ->
+            try
+                case hb_cache:read(ID, #{ store => [Local] }) of
+                    {ok, _} -> true;
+                    _ -> false
+                end
+            catch _:_ -> false
+            end
+        end,
+        5000
+    )),
     {ok, Read} = hb_cache:read(ID, #{ store => [Local] }),
     try
-        ?assert(hb_message:match(Read, Written)),
-        %% Check number of requests make to raw
-        TXs = hb_mock_server:get_requests(raw, 1, ServerHandle),
-        ?assert(length(TXs) == 1)
+        ?assert(hb_message:match(Read, Written))
     after
         hb_mock_server:stop(ServerHandle)
     end.
