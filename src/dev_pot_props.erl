@@ -3,6 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(USERS, 10).
+-define(RESOURCES, 1).
 
 simulation_test() ->
     hb:init(),
@@ -31,7 +32,7 @@ generate_opts(#{ users := Users }) ->
             [
                 hb_invariant:string(id)
             ||
-                _ <- lists:seq(1, 10)
+                _ <- lists:seq(1, ?RESOURCES)
             ],
         identities => dev_token_props:generate_identities(Users),
         priv_wallet => ar_wallet:new()
@@ -41,9 +42,9 @@ generate_initial_state(Opts) ->
     MintCap = 21_000_000,
     PropN = 1,
     PropD = 1000,
-    StartWeight = hb_invariant:int(1, 10_000),
+    StartWeight = 1,
     StartQty = hb_invariant:int(1, 1_000_000),
-    StartResource = hb_invariant:string(id),
+    StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
     StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     % Pick an address that's not our StartAddr for our initial delegatee
     DelegateeCandidates =
@@ -63,6 +64,7 @@ generate_initial_state(Opts) ->
             <<"mint-prop-numerator">> => PropN,
             <<"mint-prop-denominator">> => PropD,
             <<"accumulator">> => 500,
+            <<"total-weighted-units">> => StartQty * StartWeight,
             <<"resources">> => #{
                 StartResource => #{
                     <<"accumulator">> => 300,
@@ -99,18 +101,18 @@ generate_initial_state(Opts) ->
             }
         },
     % Register every resource we pre-generated for the scenario
-    Resources = hb_maps:get(resources, Opts),
-    S1 = lists:foldl(
-        fun(Resource, State) ->
-            dev_pot:register_resource(Resource, hb_invariant:int(1, 10_000), State, Opts)
-        end,
-        S0,
-        Resources
-    ),
+    % Resources = hb_maps:get(resources, Opts),
+    % S1 = lists:foldl(
+    %     fun(Resource, State) ->
+    %         dev_pot:register_resource(Resource, 1, State, Opts)
+    %     end,
+    %     S0,
+    %     Resources
+    % ),
     % Initialize the "originated deposits" helper table (see also: the 'next'
     % function clause for deposits)
     hb_private:set(
-        S1,
+        S0,
         <<"/users/", StartAddr/binary, "/deposits/", StartResource/binary>>,
         StartQty,
         Opts
