@@ -402,6 +402,37 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
 
 %%% Tests
 
+start_mock_gateway(ChunkData) ->
+    Endpoints = [
+        {"/chunk/:offset", chunk,
+            fun(Req) ->
+                Path = maps:get(<<"path">>, Req, <<>>),
+                Segments = binary:split(Path, <<"/">>, [global, trim_all]),
+                OffsetValue = hb_util:int(lists:last(Segments)),
+                case maps:get(OffsetValue, ChunkData, undefined) of
+                    undefined ->
+                        {404, <<"not found">>};
+                    Data ->
+                        Body = hb_json:encode(#{ <<"chunk">> => hb_util:encode(Data) }),
+                        {200, Body}
+                end
+            end}
+    ],
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    Opts = #{
+        routes => [
+            #{
+                <<"template">> => <<"/arweave">>,
+                <<"node">> => #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockServer,
+                    <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                }
+            }
+        ]
+    },
+    {ServerHandle, Opts}.
+
 post_ans104_tx_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
@@ -448,9 +479,14 @@ post_ans104_tx_test() ->
     ok.
 
 get_tx_basic_data_test() ->
-    Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-    {ok, Structured} = hb_http:get(Node, Path, #{}),
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
+        },
+        #{}
+    ),
     ?event(debug_test, {structured_tx, Structured}),
     ?assert(hb_message:verify(Structured, all, #{})),
     % Hash the data to make it easier to match
@@ -553,53 +589,82 @@ serialize_data_item_test_disabled() ->
     ?assert(ar_bundles:verify_item(VerifiedItem)),
     ok.
 
+%% Note: the following tests use a mock gateway since https://arweave.net/chunk
+%% is not reliable. The current implementation has it delegating to a random
+%% backing node, and depending on which packing node is selected the request
+%% may return valid data or 404. To make the tests reliable, we instead use
+%% a mock server.
 get_partial_chunk_test() ->
     Offset = 377813969707255,
-    ExpectedHash = hb_util:decode(<<"9hCmSqNi2sRo45SBtlY8JUePrkh4v2ZSTTuVga0FMSs">>),
     ExpectedLength = 1000,
-    {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => Offset,
-            <<"length">> => ExpectedLength
-        },
-        #{}
-    ),
-    ?assertEqual(ExpectedLength, byte_size(Data)),
-    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
-    ok.
+    Chunk0 = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
+    ChunkData = #{ Offset => Chunk0 },
+    {ServerHandle, Opts} = start_mock_gateway(ChunkData),
+    try
+        ExpectedData = binary:part(Chunk0, 0, ExpectedLength),
+        {ok, Data} = hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9-pre">> },
+            #{
+                <<"path">> => <<"chunk">>,
+                <<"offset">> => Offset,
+                <<"length">> => ExpectedLength
+            },
+            Opts
+        ),
+        ?assertEqual(ExpectedData, Data),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
 
 get_full_chunk_test() ->
     Offset = 377813969707255,
-    ExpectedHash = hb_util:decode(<<"y3HKeRa2hyEnmwJUd45A2qrtYJcvpC7tCAZgD5qyJ5I">>),
     ExpectedLength = ?DATA_CHUNK_SIZE,
-    {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => Offset,
-            <<"length">> => ExpectedLength
-        },
-        #{}
-    ),
-    ?assertEqual(ExpectedLength, byte_size(Data)),
-    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
-    ok.
+    Chunk0 = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
+    ChunkData = #{ Offset => Chunk0 },
+    {ServerHandle, Opts} = start_mock_gateway(ChunkData),
+    try
+        {ok, Data} = hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9-pre">> },
+            #{
+                <<"path">> => <<"chunk">>,
+                <<"offset">> => Offset,
+                <<"length">> => ExpectedLength
+            },
+            Opts
+        ),
+        ?assertEqual(Chunk0, Data),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
 
 get_multi_chunk_test() ->
     Offset = 377813969707255,
-    ExpectedHash = hb_util:decode(<<"G2EFuA2NGQYOszQZbsEL0QG/lyUzQAxM09/gpBHf88E=">>),
     ExpectedLength = 526685,
-    {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => Offset,
-            <<"length">> => ExpectedLength
-        },
-        #{}
-    ),
-    ?assertEqual(ExpectedLength, byte_size(Data)),
-    ?assertEqual(ExpectedHash, crypto:hash(sha256, Data)),
-    ok.
+    Chunk0 = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
+    Chunk1 = crypto:strong_rand_bytes(132270),
+    Chunk2 = crypto:strong_rand_bytes(132271),
+    ChunkData = #{
+        Offset => Chunk0,
+        Offset + ?DATA_CHUNK_SIZE => Chunk1,
+        Offset + ?DATA_CHUNK_SIZE + 132270 => Chunk2
+    },
+    {ServerHandle, Opts} = start_mock_gateway(ChunkData),
+    try
+        ExpectedData = binary:part(
+            iolist_to_binary([Chunk0, Chunk1, Chunk2]), 0, ExpectedLength),
+        {ok, Data} = hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9-pre">> },
+            #{
+                <<"path">> => <<"chunk">>,
+                <<"offset">> => Offset,
+                <<"length">> => ExpectedLength
+            },
+            Opts
+        ),
+        ?assertEqual(ExpectedData, Data),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
