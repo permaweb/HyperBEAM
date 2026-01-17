@@ -293,7 +293,7 @@ default_message() ->
                 <<"node">> =>
                     #{
                         <<"match">> => <<"^/arweave">>,
-                        <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
+                        <<"with">> => <<"https://arweave.net">>,
                         <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             },
