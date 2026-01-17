@@ -839,8 +839,24 @@ case_insensitive_get(Key, Msg, Opts) ->
     NormKey = hb_util:to_lower(hb_util:bin(Key)),
     NormMsg = hb_ao:normalize_keys(Msg, Opts),
     case hb_maps:get(NormKey, NormMsg, not_found, Opts) of
-        not_found -> {error, not_found};
+        not_found ->
+            case hb_maps:get(<<"...">>, Msg, not_found, Opts) of
+                not_found -> {error, not_found};
+                ExpandedMsg -> get(Key, ExpandedMsg, Opts)
+            end;
         Value -> {ok, Value}
+    end.
+
+%% @doc Return the message, unwrapped to the extent required to find its first
+%% signed subset.
+signed(Msg, Req, Opts) ->
+    case committers(Msg, <<"all">>, Opts) of
+        {ok, AllCommitters} when length(AllCommitters) > 0 -> {ok, Msg};
+        _ ->
+            case hb_maps:get(<<"...">>, Msg, not_found, Opts) of
+                not_found -> {error, not_found};
+                ExpandedMsg -> signed(ExpandedMsg, Req, Opts)
+            end
     end.
 
 %%% Tests
