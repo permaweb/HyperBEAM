@@ -250,17 +250,10 @@ commit(Self, Req, Opts) ->
     % We _do not_ set the `device' key in the message, as the device will be
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
-    CommitOpts =
-        case hb_maps:get(<<"type">>, Req, <<"signed">>) of
-            <<"unsigned">> ->
-                Opts#{ linkify_mode => discard };
-            _ ->
-                Opts#{ linkify_mode => offload }
-        end,
     AttMod =
         hb_ao_device:message_to_device(
             #{ <<"device">> => AttDev },
-            CommitOpts
+            Opts
         ),
     {ok, AttFun} =
         hb_ao_device:find_exported_function(
@@ -268,12 +261,12 @@ commit(Self, Req, Opts) ->
             AttMod,
             commit,
             3,
-            CommitOpts
+            Opts
         ),
     % Encode to a TABM
     Loaded =
         ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, CommitOpts),
+            hb_message:convert(Base, tabm, Opts),
             Opts
         ),
     {ok, Committed} =
@@ -284,11 +277,11 @@ commit(Self, Req, Opts) ->
                 [
                     Loaded,
                     Req#{ <<"type">> => maps:get(<<"type">>, Req, <<"signed">>) },
-                    CommitOpts
+                    Opts
                 ]
             )
         ),
-    {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts)}.
+    {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, Opts)}.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
