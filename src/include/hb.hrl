@@ -10,7 +10,7 @@
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc Macro for checking if a term is a message, either in linkified or map form.
--define(IS_MESSAGE(X), (is_map(X) orelse ?IS_LINK(X))).
+-define(IS_MESSAGE(X), (is_map(X) orelse (?IS_LINK(X) andalso map_get(<<"type">>, element(3, X)) == <<"link">>))).
 %% @doc List of special keys that are used in the AO-Core protocol.
 -define(AO_CORE_KEYS, [<<"path">>, <<"hashpath">>, <<"priv">>]).
 %% @doc Keys that can be regenerated losslessly.
