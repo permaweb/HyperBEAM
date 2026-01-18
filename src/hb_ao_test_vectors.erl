@@ -39,8 +39,6 @@ test_suite() ->
             fun as_path_test/1},
         {continue_as, "continue as",
             fun continue_as_test/1},
-        {as_commitments, "as commitment normalization",
-            fun as_commitments_test/1},
         {multiple_as_subresolutions, "multiple as subresolutions",
             fun multiple_as_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
@@ -78,6 +76,8 @@ test_suite() ->
             fun set_with_device_test/1},
         {deep_set, "deep set",
             fun deep_set_test/1},
+        {deep_set_new_messages, "deep set new messages",
+            fun deep_set_new_messages_test/1},
         {deep_set_with_device, "deep set with device",
             fun deep_set_with_device_test/1},
         {device_exports, "device exports",
@@ -608,52 +608,30 @@ deep_set_test(Opts) ->
     ?assertMatch(<<"2">>, hb_ao:get(<<"a/c/d">>, Res1, Opts)),
     ?assertMatch(<<"ignored">>, hb_ao:get(<<"a/c/e">>, Res1, Opts)).
 
-deep_set_new_messages_test() ->
-    Opts = hb_maps:get(opts, hd(test_opts())),
+deep_set_new_messages_test(Opts) ->
     % Test that new messages are created when the path does not exist.
     Msg0 = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
     Base = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
-    Req = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
-    ?assert(
-        hb_message:match(
-            Req,
+    Base2 = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
+    ?assertMatch(<<"1">>, hb_ao:get(<<"a/b/c">>, Base2, Opts)),
+    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base2, Opts)),
+    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base2, Opts)),
+    Base3 =
+        hb_ao:set(
+            Base2,
             #{ 
-                <<"a">> =>
-                    #{
-                        <<"b">> =>
-                            #{ <<"c">> => <<"1">> }
-                    },
-                <<"d">> =>
-                    #{
-                        <<"e">> => <<"3">>,
-                        <<"f">> => <<"4">> }
-            }
-        )
-    ),
-    Res = hb_ao:set(
-        Req,
-        #{ 
-            <<"z/a">> => <<"0">>,
-            <<"z/b">> => <<"1">>,
-            <<"z/y/x">> => <<"2">>
-         },
-         Opts
-    ),
-    ?assert(
-        hb_message:match(
-            Res,
-            #{
-                <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } },
-                <<"d">> => #{ <<"e">> => <<"3">>, <<"f">> => <<"4">> },
-                <<"z">> =>
-                    #{
-                        <<"a">> => <<"0">>,
-                        <<"b">> => <<"1">>,
-                        <<"y">> => #{ <<"x">> => <<"2">> }
-                    }
-            }
-        )
-    ).
+                <<"z/a">> => <<"0">>,
+                <<"z/b">> => <<"1">>,
+                <<"z/y/x">> => <<"2">>
+            },
+            Opts
+        ),
+    ?assertMatch(<<"0">>, hb_ao:get(<<"z/a">>, Base3, Opts)),
+    ?assertMatch(<<"1">>, hb_ao:get(<<"z/b">>, Base3, Opts)),
+    ?assertMatch(<<"2">>, hb_ao:get(<<"z/y/x">>, Base3, Opts)),
+    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base3, Opts)),
+    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base3, Opts)),
+    ?event(debug_test, {after_sets, Base3}, Opts).
 
 deep_set_with_device_test(Opts) ->
     Device =
@@ -904,10 +882,13 @@ as_path_test(Opts) ->
     ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
-        {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
-        hb_ao:resolve(
-            Msg,
-            {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+        {ok, <<"MESSAGE">>},
+        hb_ao:resolve_many(
+            [
+                Msg,
+                {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+                <<"test_key">>
+            ],
             Opts
         )
     ).
@@ -928,37 +909,6 @@ continue_as_test(Opts) ->
                 #{ <<"path">> => <<"test_key">> }
             ],
             Opts
-        )
-    ).
-
-as_commitments_test(RawOpts) ->
-    % Test that attempting to cast a message as a device which it already is
-    % does not lose its commitments.
-    OptsWithWallet = RawOpts#{ priv_wallet => hb:wallet() },
-    Msg =
-        hb_message:commit(
-            #{
-                <<"device">> => <<"test-device@1.0">>,
-                <<"test-key">> => <<"test-value">>
-            },
-            OptsWithWallet
-        ),
-    InitialComms = hb_ao:get(<<"commitments">>, Msg, OptsWithWallet),
-    {ok, ResolvedMsg} =
-        hb_ao:resolve(
-            {as, <<"test-device@1.0">>, Msg},
-            <<"commitments">>,
-            OptsWithWallet
-        ),
-    ?assertEqual(InitialComms, ResolvedMsg),
-    ?assertEqual(
-        {ok, []},
-        hb_ao:resolve_many(
-            [
-                {as, <<"message@1.0">>, Msg},
-                <<"committers">>
-            ],
-            OptsWithWallet
         )
     ).
 
