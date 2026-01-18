@@ -1047,7 +1047,6 @@ device_set(Base, Req, Mode, Opts) ->
         {
             calling_device_set,
             {base, BaseWithPathSet},
-            {with_mode, WithMode},
             {full_req, Req}
         },
         Opts
