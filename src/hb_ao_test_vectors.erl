@@ -582,15 +582,24 @@ set_with_device_test(Opts) ->
 
 deep_set_test(Opts) ->
     % First validate second layer changes are handled correctly.
-    Msg0 = #{ <<"a">> => #{ <<"b">> => <<"RESULT">> } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, <<"a/b">>, <<"RESULT2">>, Opts)),
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, [<<"a">>, <<"b">>], <<"RESULT2">>, Opts)),
-    % Now validate deeper layer changes are handled correctly.
-    Msg = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := #{ <<"c">> := <<"2">> } } },
-        hb_ao:set(Msg, [<<"a">>, <<"b">>, <<"c">>], <<"2">>, Opts)).
+    Msg0 =
+        #{
+            <<"a">> =>
+                #{
+                    <<"b">> => <<"RESULT">>,
+                    <<"c">> => #{ <<"d">> => <<"1">>, <<"e">> => <<"ignored">> }
+                }
+        },
+    Res1 =
+        hb_ao:set(
+            Msg0,
+            #{ <<"a/b">> => <<"RESULT2">>, <<"a/c/d">> => <<"2">> },
+            Opts
+        ),
+    ?event(debug_test, {res1, Res1}, Opts),
+    ?assertMatch(<<"RESULT2">>, hb_ao:get(<<"a/b">>, Res1, Opts)),
+    ?assertMatch(<<"2">>, hb_ao:get(<<"a/c/d">>, Res1, Opts)),
+    ?assertMatch(<<"ignored">>, hb_ao:get(<<"a/c/e">>, Res1, Opts)).
 
 deep_set_new_messages_test() ->
     Opts = hb_maps:get(opts, hd(test_opts())),
