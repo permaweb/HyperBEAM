@@ -843,11 +843,12 @@ start_as_with_parameters_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
-        {ok, <<"GOOD FUNCTION">>},
+        {ok, <<"MESSAGE">>},
         hb_ao:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
-                #{ <<"path">> => <<"test_func">> }
+                #{ <<"path">> => <<"test_func">> },
+                <<"test_key">>
             ],
             Opts
         )
