@@ -14,7 +14,9 @@ fields(TX, Prefix, Opts) ->
             target_field(TX, Prefix, Opts),
             anchor_field(TX, Prefix, Opts),
             quantity_field(TX, Prefix, Opts),
-            reward_field(TX, Prefix, Opts)
+            reward_field(TX, Prefix, Opts),
+            data_root_field(TX, Prefix, Opts),
+            data_size_field(TX, Prefix, Opts)
         ]
     ).
 
@@ -58,3 +60,16 @@ reward_field(TX, Prefix, _Opts) ->
         }
     end.
 
+data_root_field(#tx{data = ?DEFAULT_DATA, data_root = ?DEFAULT_DATA_ROOT}, _Prefix, _Opts) ->
+    #{};
+data_root_field(#tx{data = ?DEFAULT_DATA, data_root = DataRoot}, Prefix, _Opts) ->
+    #{<<Prefix/binary, "data_root">> => hb_util:encode(DataRoot)};
+data_root_field(_TX, _Prefix, _Opts) ->
+    #{}.
+
+data_size_field(#tx{data = ?DEFAULT_DATA, data_size = ?DEFAULT_DATA_SIZE}, _Prefix, _Opts) ->
+    #{};
+data_size_field(#tx{data = ?DEFAULT_DATA, data_size = DataSize}, Prefix, _Opts) ->
+    #{<<Prefix/binary, "data_size">> => integer_to_binary(DataSize)};
+data_size_field(_TX, _Prefix, _Opts) ->
+    #{}.
