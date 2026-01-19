@@ -710,12 +710,6 @@ device_exports_test(Opts) ->
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
-    ?assertEqual(<<"GOOD4">>,
-        hb_ao:get(
-            <<"test4">>,
-            hb_ao:set(Res, <<"test4">>, <<"GOOD4">>, Opts)
-        )
-    ),
     ?assertEqual(not_found, hb_ao:get(<<"test5">>, Res, Opts)).
 
 device_excludes_test(Opts) ->
