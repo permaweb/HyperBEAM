@@ -190,7 +190,9 @@ default_message() ->
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
+            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
+            #{<<"name">> => <<"sev_gpu@1.0">>, <<"module">> => dev_sev_gpu},
+            #{<<"name">> => <<"inference@1.0">>, <<"module">> => dev_inference}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -267,6 +269,11 @@ default_message() ->
                 % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/state.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
+                % Routes for the inference device to use a local inference server.
+                <<"template">> => <<"/v1/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:8080">> }
             },
             #{
                 % Routes for GraphQL requests to use a remote GraphQL API.
@@ -372,6 +379,13 @@ default_message() ->
             }
         },
         scheduler_default_commitment_spec => <<"httpsig@1.0">>,
+        inference_opts => #{
+            <<"model_tx">> => <<"Ybz4a5jX1nX1_2KXJz6F5v8c1X9Yk9V6n0b-1cXoXoU">>,
+            <<"model_hash">> => <<"bf3fc475100aa8bafea66766f17bb468ff96e947">>,
+            <<"model_name">> => <<"google/gemma-3-27b-it">>,
+            <<"model_size">> => <<"27b">>,
+            <<"tensor_type">> => <<"BF16">>
+        },
         genesis_wasm_import_authorities =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
