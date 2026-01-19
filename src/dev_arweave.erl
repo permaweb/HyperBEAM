@@ -4,7 +4,7 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
--export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx/3, post_tx/4, post_binary_ans104/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -13,8 +13,9 @@
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
 
-%% @doc Returns the given transaction, if known to the client node(s), as an
-%% AO-Core message.
+%% @doc Returns the given transaction as an AO-Core message. By default, this
+%% embeds the `/raw` payload. Set `exclude-data` to true to return just the
+%% header.
 tx(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_tx(Base, Request, Opts);
@@ -114,17 +115,32 @@ post_binary_ans104(SerializedTX, Opts) ->
         }
     ).
 
-%% @doc Get a transaction ID from the Arweave node, as indicated by the `tx` key
-%% in the request or base message. If the `data' key is present and set to
-%% `false', the data is not retrieved and added to the response. If the `data'
-%% key is set to `always', transactions for which the header is available but
-%% the data is not will lead to an error. Otherwise, just the header will be
-%% returned.
+%% @doc Get a transaction from the Arweave node, as indicated by the
+%% `tx` key in the request or base message. By default, this embeds the data
+%% payload. Set `exclude_data` to true to return just the header.
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID -> request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts)
+        TXID ->
+            request(
+                <<"GET">>,
+                <<"/tx/", TXID/binary>>,
+                Opts#{ exclude_data => exclude_data(Base, Request, Opts) }
+            )
     end.
+
+%% @doc Get raw transaction data from the Arweave node, as indicated by the
+%% `tx` key in the request or base message.
+raw(Base, Request, Opts) ->
+    case find_txid(Base, Request, Opts) of
+        not_found -> {error, not_found};
+        TXID -> data(TXID, Opts)
+    end.
+
+%% @doc Retrieve the data of a transaction from Arweave.
+data(TXID, Opts) ->
+    ?event({retrieving_tx_data, {tx, TXID}}),
+    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 chunk(Base, Request, Opts) ->
     ?event(debug_test, {chunk, {base, Base}, {request, Request}, {opts, Opts}}),
@@ -188,33 +204,6 @@ get_chunk(Offset, Opts) ->
         {error, Reason} ->
             {error, Reason}
     end.
-
-add_data(TXID, TXHeader, Opts) ->
-    case data(TXID, Opts) of
-        {ok, Data} ->
-            TX = TXHeader#tx{ data = Data },
-            ?event(
-                {retrieved_tx_with_data,
-                    {id, TXID},
-                    {data_size, byte_size(Data)},
-                    {tx, TX}
-                }
-            ),
-            {ok, TX};
-        {error, Reason} ->
-            ?event(
-                {data_retrieval_failed_after_header,
-                    {id, TXID},
-                    {error, Reason}
-                }
-            ),
-            {error, Reason}
-    end.
-
-%% @doc Retrieve the data of a transaction from Arweave.
-data(TXID, Opts) ->
-    ?event({retrieving_tx_data, {tx, TXID}}),
-    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -306,6 +295,18 @@ find_txid(Base, Request, Opts) ->
         Opts
     ).
 
+exclude_data(Base, Request, Opts) ->
+    RawValue =
+        hb_ao:get_first(
+            [
+                {Request, <<"exclude-data">>},
+                {Base, <<"exclude-data">>}
+            ],
+            false,
+            Opts
+        ),
+    hb_util:bool(RawValue).
+
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
 %% a `content-type' header. Subsequently, we parse the response manually and
@@ -341,16 +342,20 @@ to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) 
             {tx, TXHeader}
         }
     ),
-    {ok, TX} = add_data(TXID, TXHeader, Opts),
-    {
-        ok,
-        hb_message:convert(
-            TX,
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    };
+    case hb_opts:get(exclude_data, false, Opts) of
+        true ->
+            {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+        false ->
+            case data(TXID, Opts) of
+                {ok, RawData} ->
+                    TX = TXHeader#tx{ data = RawData },
+                    {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                {error, not_found} ->
+                    {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                Error ->
+                    Error
+            end
+    end;
 to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
     ?event(
         {arweave_raw_response,
@@ -483,7 +488,8 @@ get_tx_basic_data_test() ->
         #{ <<"device">> => <<"arweave@2.9-pre">> },
         #{
             <<"path">> => <<"tx">>,
-            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"exclude-data">> => false
         },
         #{}
     ),
@@ -502,6 +508,39 @@ get_tx_basic_data_test() ->
         <<"content-type">> => <<"application/json">>
     },
     ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
+    ok.
+
+get_tx_basic_data_exclude_data_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"exclude-data">> => true
+        },
+        #{}
+    ),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"482143296">>,
+        <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
+        },
+        #{}
+    ),
+    StructuredWithData = Structured#{ <<"data">> => Data },
+    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    DataHash = hb_util:encode(crypto:hash(sha256, Data)),
+    ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
     ok.
 
 get_tx_rsa_nested_bundle_test() ->

@@ -179,7 +179,8 @@ maybe_add_bundle_tags(BundleType, TX) ->
     TX#tx{tags = FilteredBundleTags ++ TX#tx.tags }.
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
-normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
+normalize_data_size(Item = #tx{data = Bin})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
 

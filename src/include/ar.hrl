@@ -14,6 +14,7 @@
 -define(DEFAULT_ANCHOR, <<>>).
 -define(DEFAULT_TARGET, <<>>).
 -define(DEFAULT_DATA_ROOT, <<>>).
+-define(DEFAULT_DATA_SIZE, 0).
 -define(DEFAULT_QUANTITY, 0).
 -define(DEFAULT_REWARD, 0).
 
@@ -54,7 +55,7 @@
     data = ?DEFAULT_DATA,
     manifest = undefined,
     %% Size in bytes of the transaction data.
-    data_size = 0,
+    data_size = ?DEFAULT_DATA_SIZE,
     %% Deprecated. Not used, not gossiped.
     data_tree = [],
     %% The Merkle root of the Merkle tree of data chunks.
