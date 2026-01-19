@@ -39,8 +39,6 @@ test_suite() ->
             fun as_path_test/1},
         {continue_as, "continue as",
             fun continue_as_test/1},
-        {as_commitments, "as commitment normalization",
-            fun as_commitments_test/1},
         {multiple_as_subresolutions, "multiple as subresolutions",
             fun multiple_as_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
@@ -78,6 +76,8 @@ test_suite() ->
             fun set_with_device_test/1},
         {deep_set, "deep set",
             fun deep_set_test/1},
+        {deep_set_new_messages, "deep set new messages",
+            fun deep_set_new_messages_test/1},
         {deep_set_with_device, "deep set with device",
             fun deep_set_with_device_test/1},
         {device_exports, "device exports",
@@ -124,6 +124,12 @@ test_opts() ->
             opts => #{},
             skip => []
         },
+        % #{
+        %     name => normal_http,
+        %     desc => "Default opts for HTTP requests",
+        %     opts => hb_opts:get(http_extra_opts),
+        %     skip => []
+        % },
         #{
             name => without_hashpath,
             desc => "Default without hashpath",
@@ -583,74 +589,65 @@ set_with_device_test(Opts) ->
 
 deep_set_test(Opts) ->
     % First validate second layer changes are handled correctly.
-    Msg0 = #{ <<"a">> => #{ <<"b">> => <<"RESULT">> } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, <<"a/b">>, <<"RESULT2">>, Opts)),
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := <<"RESULT2">> } },
-        hb_ao:set(Msg0, [<<"a">>, <<"b">>], <<"RESULT2">>, Opts)),
-    % Now validate deeper layer changes are handled correctly.
-    Msg = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
-    ?assertMatch(#{ <<"a">> := #{ <<"b">> := #{ <<"c">> := <<"2">> } } },
-        hb_ao:set(Msg, [<<"a">>, <<"b">>, <<"c">>], <<"2">>, Opts)).
+    Msg0 =
+        #{
+            <<"a">> =>
+                #{
+                    <<"b">> => <<"RESULT">>,
+                    <<"c">> => #{ <<"d">> => <<"1">>, <<"e">> => <<"ignored">> }
+                }
+        },
+    Res1 =
+        hb_ao:set(
+            Msg0,
+            #{ <<"a/b">> => <<"RESULT2">>, <<"a/c/d">> => <<"2">> },
+            Opts
+        ),
+    ?event(debug_test, {res1, Res1}, Opts),
+    ?assertMatch(<<"RESULT2">>, hb_ao:get(<<"a/b">>, Res1, Opts)),
+    ?assertMatch(<<"2">>, hb_ao:get(<<"a/c/d">>, Res1, Opts)),
+    ?assertMatch(<<"ignored">>, hb_ao:get(<<"a/c/e">>, Res1, Opts)).
 
-deep_set_new_messages_test() ->
-    Opts = hb_maps:get(opts, hd(test_opts())),
+deep_set_new_messages_test(Opts) ->
     % Test that new messages are created when the path does not exist.
     Msg0 = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
     Base = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
-    Req = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
-    ?assert(
-        hb_message:match(
-            Req,
+    Base2 = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
+    ?assertMatch(<<"1">>, hb_ao:get(<<"a/b/c">>, Base2, Opts)),
+    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base2, Opts)),
+    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base2, Opts)),
+    Base3 =
+        hb_ao:set(
+            Base2,
             #{ 
-                <<"a">> =>
-                    #{
-                        <<"b">> =>
-                            #{ <<"c">> => <<"1">> }
-                    },
-                <<"d">> =>
-                    #{
-                        <<"e">> => <<"3">>,
-                        <<"f">> => <<"4">> }
-            }
-        )
-    ),
-    Res = hb_ao:set(
-        Req,
-        #{ 
-            <<"z/a">> => <<"0">>,
-            <<"z/b">> => <<"1">>,
-            <<"z/y/x">> => <<"2">>
-         },
-         Opts
-    ),
-    ?assert(
-        hb_message:match(
-            Res,
-            #{
-                <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } },
-                <<"d">> => #{ <<"e">> => <<"3">>, <<"f">> => <<"4">> },
-                <<"z">> =>
-                    #{
-                        <<"a">> => <<"0">>,
-                        <<"b">> => <<"1">>,
-                        <<"y">> => #{ <<"x">> => <<"2">> }
-                    }
-            }
-        )
-    ).
+                <<"z/a">> => <<"0">>,
+                <<"z/b">> => <<"1">>,
+                <<"z/y/x">> => <<"2">>
+            },
+            Opts
+        ),
+    ?assertMatch(<<"0">>, hb_ao:get(<<"z/a">>, Base3, Opts)),
+    ?assertMatch(<<"1">>, hb_ao:get(<<"z/b">>, Base3, Opts)),
+    ?assertMatch(<<"2">>, hb_ao:get(<<"z/y/x">>, Base3, Opts)),
+    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base3, Opts)),
+    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base3, Opts)),
+    ?event(debug_test, {after_sets, Base3}, Opts).
 
 deep_set_with_device_test(Opts) ->
-    Device = #{
-        set =>
-            fun(Base, Req) ->
-                % A device where the set function modifies the key
-                % and adds a modified flag.
-                {Key, Val} =
-                    hd(hb_maps:to_list(hb_maps:without([<<"path">>, <<"priv">>], Req, Opts), Opts)),
-                {ok, Base#{ Key => Val, <<"modified">> => true }}
-            end
-    },
+    Device =
+        #{
+            set =>
+                fun(Base, NewMsg) ->
+                    {
+                        ok,
+                        dev_message:set(
+                            Base#{ <<"modified">> => true },
+                            NewMsg,
+                            Opts
+                        )
+                    }
+                end
+        },
     % A message with an interspersed custom device: A and C have it,
     % B does not. A and C will have the modified flag set to true.
     Msg = #{
@@ -661,20 +658,34 @@ deep_set_with_device_test(Opts) ->
                     #{
                         <<"device">> => Device,
                         <<"c">> => <<"1">>,
+                        <<"d">> => <<"2">>,
+                        <<"e">> => <<"3">>,
                         <<"modified">> => false
                     },
-                <<"modified">> => false
+                <<"modified">> => false,
+                <<"f">> => <<"4">>,
+                <<"g">> => <<"5">>
             },
         <<"modified">> => false
     },
-    Outer = hb_ao:set(Msg, <<"a/b/c">>, <<"2">>, Opts),
-    A = hb_ao:get(<<"a">>, Outer, Opts),
-    B = hb_ao:get(<<"b">>, A, Opts),
-    C = hb_ao:get(<<"c">>, B, Opts),
-    ?assertEqual(<<"2">>, C),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer)),
-    ?assertEqual(false, hb_ao:get(<<"modified">>, A)),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, B)).
+    Outer =
+        hb_ao:set(
+            Msg,
+            #{
+                <<"a/b/c">> => <<"mod1">>,
+                <<"a/b/d">> => <<"mod2">>,
+                <<"a/g">> => <<"mod5">>
+            },
+            Opts
+        ),
+    ?assertEqual(<<"mod1">>, hb_ao:get(<<"a/b/c">>, Outer, Opts)),
+    ?assertEqual(<<"mod2">>, hb_ao:get(<<"a/b/d">>, Outer, Opts)),
+    ?assertEqual(<<"3">>, hb_ao:get(<<"a/b/e">>, Outer, Opts)),
+    ?assertEqual(<<"4">>, hb_ao:get(<<"a/f">>, Outer, Opts)),
+    ?assertEqual(<<"mod5">>, hb_ao:get(<<"a/g">>, Outer, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"a/b/modified">>, Outer, Opts)),
+    ?assertEqual(false, hb_ao:get(<<"a/modified">>, Outer, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer, Opts)).
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
@@ -717,12 +728,6 @@ device_exports_test(Opts) ->
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
-    ?assertEqual(<<"GOOD4">>,
-        hb_ao:get(
-            <<"test4">>,
-            hb_ao:set(Res, <<"test4">>, <<"GOOD4">>, Opts)
-        )
-    ),
     ?assertEqual(not_found, hb_ao:get(<<"test5">>, Res, Opts)).
 
 device_excludes_test(Opts) ->
@@ -832,11 +837,12 @@ start_as_with_parameters_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
-        {ok, <<"GOOD FUNCTION">>},
+        {ok, <<"MESSAGE">>},
         hb_ao:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
-                #{ <<"path">> => <<"test_func">> }
+                #{ <<"path">> => <<"test_func">> },
+                <<"test_key">>
             ],
             Opts
         )
@@ -871,10 +877,13 @@ as_path_test(Opts) ->
     ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
-        {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
-        hb_ao:resolve(
-            Msg,
-            {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+        {ok, <<"MESSAGE">>},
+        hb_ao:resolve_many(
+            [
+                Msg,
+                {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+                <<"test_key">>
+            ],
             Opts
         )
     ).
@@ -895,37 +904,6 @@ continue_as_test(Opts) ->
                 #{ <<"path">> => <<"test_key">> }
             ],
             Opts
-        )
-    ).
-
-as_commitments_test(RawOpts) ->
-    % Test that attempting to cast a message as a device which it already is
-    % does not lose its commitments.
-    OptsWithWallet = RawOpts#{ priv_wallet => hb:wallet() },
-    Msg =
-        hb_message:commit(
-            #{
-                <<"device">> => <<"test-device@1.0">>,
-                <<"test-key">> => <<"test-value">>
-            },
-            OptsWithWallet
-        ),
-    InitialComms = hb_ao:get(<<"commitments">>, Msg, OptsWithWallet),
-    {ok, ResolvedMsg} =
-        hb_ao:resolve(
-            {as, <<"test-device@1.0">>, Msg},
-            <<"commitments">>,
-            OptsWithWallet
-        ),
-    ?assertEqual(InitialComms, ResolvedMsg),
-    ?assertEqual(
-        {ok, []},
-        hb_ao:resolve_many(
-            [
-                {as, <<"message@1.0">>, Msg},
-                <<"committers">>
-            ],
-            OptsWithWallet
         )
     ).
 

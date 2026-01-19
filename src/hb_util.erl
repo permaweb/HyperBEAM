@@ -8,7 +8,7 @@
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
+-export([deep_merge/3, deep_set/4, deep_set/5, deep_get/3, deep_get/4]).
 -export([number/1, list_to_numbered_message/1]).
 -export([find_target_path/2, template_matches/3]).
 -export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
@@ -17,7 +17,6 @@
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
--export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
@@ -301,22 +300,27 @@ deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
 
 %% @doc Set a deep value in a message by its path, _assuming all messages are
 %% `device: message@1.0`_.
-deep_set(_Path, undefined, Msg, _Opts) -> Msg;
-deep_set(Path, Value, Msg, Opts) when not is_list(Path) ->
-    deep_set(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts);
-deep_set([Key], unset, Msg, Opts) ->
+deep_set(Path, Value, Msg, Opts) -> deep_set(Path, Value, Msg, Opts, false).
+deep_set(_Path, undefined, Msg, _Opts, _) -> Msg;
+deep_set(Path, Value, Msg, Opts, UnsetMode) when not is_list(Path) ->
+    deep_set(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts, UnsetMode);
+deep_set([], Msg2, Msg1, Opts, _) when ?IS_MESSAGE(Msg2) andalso ?IS_MESSAGE(Msg1) ->
+    hb_maps:merge(Msg1, Msg2, Opts);
+deep_set([], ReplacementValue, _Msg1, _Opts, _) ->
+    ReplacementValue;
+deep_set([Key], unset, Msg, Opts, true) ->
     hb_maps:remove(Key, Msg, Opts);
-deep_set([Key], Value, Msg, Opts) ->
+deep_set([Key], Value, Msg, Opts, _) ->
     case hb_maps:get(Key, Msg, not_found, Opts) of
-        ExistingMap when is_map(ExistingMap) andalso is_map(Value) ->
+        ExistingMap when ?IS_MESSAGE(ExistingMap) andalso ?IS_MESSAGE(Value) ->
             % If both are maps, merge them
             Msg#{ Key => hb_maps:merge(ExistingMap, Value, Opts) };
         _ ->
             Msg#{ Key => Value }
     end;
-deep_set([Key|Rest], Value, Map, Opts) ->
+deep_set([Key|Rest], Value, Map, Opts, UnsetMode) ->
     SubMap = hb_maps:get(Key, Map, #{}, Opts),
-    hb_maps:put(Key, deep_set(Rest, Value, SubMap, Opts), Map, Opts).
+    hb_maps:put(Key, deep_set(Rest, Value, SubMap, Opts, UnsetMode), Map, Opts).
 
 %% @doc Get a deep value from a message.
 deep_get(Path, Msg, Opts) -> deep_get(Path, Msg, not_found, Opts).
@@ -545,14 +549,6 @@ remove_common([X|Rest1], [X|Rest2]) ->
     remove_common(Rest1, Rest2);
 remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
-
-%% @doc Throw an exception if the Opts map has an `error_strategy' key with the
-%% value `throw'. Otherwise, return the value.
-maybe_throw(Val, Opts) ->
-    case hb_ao:get(error_strategy, Opts) of
-        throw -> throw(Val);
-        _ -> Val
-    end.
 
 %% @doc Is the given module part of HyperBEAM?
 is_hb_module(Atom) ->
