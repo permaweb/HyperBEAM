@@ -18,7 +18,7 @@ format(TX, Indent, Opts) when is_list(TX); is_map(TX) ->
 format(TX, Indent, Opts) when is_record(TX, tx) ->
     MustVerify = hb_opts:get(debug_ids, true, Opts),
     Valid =
-        if MustVerify -> verify(TX);
+        if MustVerify -> verify(dev_arweave_common:normalize(TX));
         true -> true
         end,
     UnsignedID =

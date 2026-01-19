@@ -549,12 +549,10 @@ get_tx_rsa_nested_bundle_test() ->
     {ok, Root} = hb_http:get(Node, Path, #{}),
     ?event(debug_test, {root, Root}),
     ?assert(hb_message:verify(Root, all, #{})),
-
     ChildPath = <<Path/binary, "/1/2">>,
     {ok, Child} = hb_http:get(Node, ChildPath, #{}),
     ?event(debug_test, {child, Child}),
     ?assert(hb_message:verify(Child, all, #{})),
-
     {ok, ExpectedChild} =
         hb_ao:resolve(
             Root,
@@ -562,7 +560,6 @@ get_tx_rsa_nested_bundle_test() ->
             #{}
         ),
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
-
     ManualChild = #{
         <<"data">> => <<"{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\"tickedRewardDistributions\":[],\"newPruneGatewaysResults\":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\"gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\"prunedGateways\":[],\"slashedGateways\":[],\"gatewayStakeWithdrawing\":0}]}">>,
         <<"data-protocol">> => <<"ao">>,

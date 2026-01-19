@@ -206,7 +206,7 @@ verify_hash(#tx{ id = ID } = TX) ->
     ID == dev_arweave_common:generate_id(TX, signed).
 
 %% @doc On Arweave we don't have data on format=2 transactions, and so
-%% traditionally just verify the transcation based on data_rot and data_size.
+%% traditionally just verify the transaction based on data_root and data_size.
 %% However in HyperBEAM we will often populate the data field. Adding this
 %% check to verify that `data_root`, `data_size`, and `data` are consistent.
 verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
