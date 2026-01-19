@@ -9,7 +9,9 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
         target = target_field(Prefix, Map, Opts),
         anchor = anchor_field(Prefix, Map, Opts),
         quantity = quantity_field(Prefix, Map, Opts),
-        reward = reward_field(Prefix, Map, Opts)
+        reward = reward_field(Prefix, Map, Opts),
+        data_root = data_root_field(Prefix, Map, Opts),
+        data_size = data_size_field(Prefix, Map, Opts)
     }.
 
 format_field(Prefix, Map, Opts) ->
@@ -62,11 +64,43 @@ reward_field(Prefix, Map, Opts) ->
         error -> ?DEFAULT_REWARD
     end.
 
+data_root_field(Prefix, Map, Opts) ->
+    case hb_maps:get(<<"data">>, Map, ?DEFAULT_DATA, Opts) of
+        ?DEFAULT_DATA ->
+            case hb_maps:find(<<Prefix/binary, "data_root">>, Map, Opts) of
+                {ok, EncodedDataRoot} ->
+                    case hb_util:safe_decode(EncodedDataRoot) of
+                        {ok, DataRoot} when ?IS_ID(DataRoot) -> DataRoot;
+                        _ -> ?DEFAULT_DATA_ROOT
+                    end;
+                error -> ?DEFAULT_DATA_ROOT
+            end;
+        _ ->
+            ?DEFAULT_DATA_ROOT
+    end.
+
+data_size_field(Prefix, Map, Opts) ->
+    case hb_maps:get(<<"data">>, Map, ?DEFAULT_DATA, Opts) of
+        ?DEFAULT_DATA ->
+            case hb_maps:find(<<Prefix/binary, "data_size">>, Map, Opts) of
+                {ok, EncodedDataSize} ->
+                    case hb_util:safe_int(EncodedDataSize) of
+                        {ok, DataSize} -> DataSize;
+                        _ -> ?DEFAULT_DATA_SIZE
+                    end;
+                error -> ?DEFAULT_DATA_SIZE
+            end;
+        _ ->
+            ?DEFAULT_DATA_SIZE
+    end.
+
 excluded_tags(TX, TABM, Opts) ->
     exclude_target_tag(TX, TABM, Opts) ++
     exclude_anchor_tag(TX, TABM, Opts) ++
     exclude_quantity_tag(TX, TABM, Opts) ++
-    exclude_reward_tag(TX, TABM, Opts).
+    exclude_reward_tag(TX, TABM, Opts) ++
+    exclude_data_root_tag(TX) ++
+    exclude_data_size_tag(TX).
 
 exclude_target_tag(TX, TABM, Opts) ->
     case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
@@ -98,4 +132,16 @@ exclude_reward_tag(TX, TABM, Opts) ->
         {FieldReward, TagReward} when FieldReward =/= TagReward -> 
             [<<"reward">>];
         _ -> []
+    end.
+
+exclude_data_root_tag(TX) ->
+    case TX#tx.data_root of
+        ?DEFAULT_DATA_ROOT -> [];
+        _ -> [<<"data_root">>]
+    end.
+
+exclude_data_size_tag(TX) ->
+    case TX#tx.data_size of
+        ?DEFAULT_DATA_SIZE -> [];
+        _ -> [<<"data_size">>]
     end.
