@@ -6,7 +6,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BASE_FIELDS, [
-    <<"anchor">>, <<"format">>, <<"quantity">>, <<"reward">>, <<"target">> ]).
+    <<"anchor">>, <<"format">>, <<"quantity">>, <<"reward">>, <<"target">>,
+    <<"data_root">>, <<"data_size">> ]).
 
 %% @doc Sign a message using the `priv_wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
@@ -169,10 +170,8 @@ to(Other, _Req, _Opts) ->
 %%    those are checked as well (e.g. format is 1 or 2).
 %% 3. Unsupported fields are set to their default values.
 %% 
-%% Of note: for now we require that the `data` field be set on an L1 TX if 
-%% there is data. In other words we do not allow `data_root` and `data_size` to
-%% be set if `data` is *not* set. This differs from the Arweave protocol which
-%% explicitly allows TX headers to be validated in the absence of data.
+%% Of note: `data_root`/`data_size` are optional for value transfers and should
+%% be preserved when present on the header, even if `data` is missing.
 %% 
 %% When support is added for new fields (e.g. when we add support for ECDSA signatures),
 %% this function will have to be updated.
@@ -262,28 +261,7 @@ enforce_valid_tx(TX) ->
                 throw({invalid_field, tag, InvalidTagForm})
         end,
         TX#tx.tags
-    ),
-    enforce_valid_tx_data(TX).
-
-%% @doc For now we require that the `data` field be set on an L1 TX if 
-%% there is data. In other words we do not allow `data_root` and `data_size` to
-%% be set if `data` is *not* set. This differs from the Arweave protocol which
-%% explicitly allows TX headers to be validated in the absence of data.
-enforce_valid_tx_data(TX) when TX#tx.data == ?DEFAULT_DATA ->
-    case TX#tx.data_root =/= ?DEFAULT_DATA_ROOT of
-        true ->
-            throw({invalid_field, data_root, TX#tx.data_root});
-        false ->
-            ok
-    end,
-    case TX#tx.data_size > 0 of
-        true ->
-            throw({invalid_field, data_size, TX#tx.data_size});
-        false ->
-            ok
-    end;
-enforce_valid_tx_data(TX) ->
-    ok.
+    ).
 
 %%%===================================================================
 %%% Tests.
@@ -293,7 +271,6 @@ enforce_valid_tx_test() ->
     BaseTX = #tx{ format = 2 },
 
     InvalidUnsignedID = crypto:strong_rand_bytes(1),
-    GoodID = crypto:strong_rand_bytes(32),
     BadID31 = crypto:strong_rand_bytes(31),
     BadID33 = crypto:strong_rand_bytes(33),
     BadOwnerSize = crypto:strong_rand_bytes(byte_size(?DEFAULT_OWNER) - 1),
@@ -340,9 +317,7 @@ enforce_valid_tx_test() ->
         {tag_value_not_binary, BaseTX#tx{tags = [{<<"key">>, not_binary}]}, {invalid_field, tag_value, not_binary}},
         {tag_value_too_long, BaseTX#tx{tags = [{<<"key">>, TooLongTagValue}]}, {invalid_field, tag_value, TooLongTagValue}},
         {invalid_tag_form_atom, BaseTX#tx{tags = [not_a_tuple]}, {invalid_field, tag, not_a_tuple}},
-        {invalid_tag_form_list, BaseTX#tx{tags = [[<<"name">>, <<"value">>]]}, {invalid_field, tag, [<<"name">>, <<"value">>]} },
-        {data_root_without_data, BaseTX#tx{data_root = GoodID}, {invalid_field, data_root, GoodID}},
-        {data_size_without_data, BaseTX#tx{data_size = 1}, {invalid_field, data_size, 1}}
+        {invalid_tag_form_list, BaseTX#tx{tags = [[<<"name">>, <<"value">>]]}, {invalid_field, tag, [<<"name">>, <<"value">>]} }
     ],
 
     lists:foreach(
@@ -395,6 +370,57 @@ happy_tx_test() ->
         <<"field-reward">> => <<"2000">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
+
+data_header_but_no_data_test() ->
+    Anchor = crypto:strong_rand_bytes(32),
+    Target = crypto:strong_rand_bytes(32),
+    Data = <<"test-data">>,
+    DataRoot = ar_tx:data_root(Data),
+    DataSize = byte_size(Data),
+    UnsignedTX = #tx{
+        format = 2,
+        anchor = Anchor,
+        tags = [
+            {<<"tag1">>, <<"value1">>}
+        ],
+        target = Target,
+        quantity = 1000,
+        data_size = DataSize,
+        data_root = DataRoot,
+        reward = 2000
+    },
+    UnsignedTABM = #{
+        <<"anchor">> => hb_util:encode(Anchor),
+        <<"target">> => hb_util:encode(Target),
+        <<"quantity">> => <<"1000">>,
+        <<"reward">> => <<"2000">>,
+        <<"data_root">> => hb_util:encode(DataRoot),
+        <<"data_size">> => integer_to_binary(DataSize),
+        <<"tag1">> => <<"value1">>
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [
+            <<"tag1">>, <<"anchor">>, <<"quantity">>, <<"reward">>,
+            <<"target">>, <<"data_root">>, <<"data_size">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"false">>,
+        <<"field-target">> => hb_util:encode(Target),
+        <<"field-anchor">> => hb_util:encode(Anchor),
+        <<"field-quantity">> => <<"1000">>,
+        <<"field-reward">> => <<"2000">>,
+        <<"field-data_root">> => hb_util:encode(DataRoot),
+        <<"field-data_size">> => integer_to_binary(DataSize)
+    },
+    do_tx_roundtrips(
+        UnsignedTX,
+        UnsignedTABM,
+        SignedCommitment,
+        #{
+            <<"bundle">> => false,
+            <<"exclude-data">> => true
+        }
+    ).
 
 tag_name_case_test() ->
     TX = #tx{
@@ -844,10 +870,13 @@ flatten_items(_) ->
 do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
     % For tests which don't care about bundling, just use false.
     do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, false).
-do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Bundle) ->
-    Req = #{ <<"bundle">> => Bundle },
+do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Req) when is_map(Req) ->
     do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req),
-    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req).
+    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req);
+do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Bundle)
+        when is_boolean(Bundle) ->
+    Req = #{ <<"bundle">> => Bundle },
+    do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Req).
 
 do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req) ->
     % Serialize -> Deserialize

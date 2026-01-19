@@ -65,7 +65,7 @@ format(TX, Indent, Opts) when is_record(TX, tx) ->
                 [hb_util:safe_encode(ar_bundles:signer(TX))], 
                 Indent + 1),
             format_line("Signature: ~s", 
-                [hb_format:binary(TX#tx.signature)],
+                [hb_format:binary(TX#tx.signature, Opts)],
                 Indent + 1);
         false -> []
     end ++
