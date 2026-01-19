@@ -430,14 +430,14 @@ maybe_unbundle(Item) ->
 
 unbundle_list(Item) ->
     case unbundle(Item#tx.data) of
-        detached -> Item#tx{data = detached};
+        ?DEFAULT_DATA -> Item#tx{data = ?DEFAULT_DATA};
         Items -> Item#tx{data = hb_util:list_to_numbered_message(Items)}
     end.
 
 unbundle_map(Item) ->
     MapTXID = dev_arweave_common:tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
     case unbundle(Item#tx.data) of
-        detached -> Item#tx{data = detached};
+        ?DEFAULT_DATA -> Item#tx{data = ?DEFAULT_DATA};
         Items ->
             MapItem = find_single_layer(hb_util:decode(MapTXID), Items),
             Map = hb_json:decode(MapItem#tx.data),
@@ -469,7 +469,7 @@ find_single_layer(UnsignedID, Items) ->
 unbundle(<<Count:256/little-integer, Content/binary>>) ->
     {ItemsBin, Items} = decode_bundle_header(Count, Content),
     decode_bundle_items(Items, ItemsBin);
-unbundle(<<>>) -> detached.
+unbundle(?DEFAULT_DATA) -> ?DEFAULT_DATA.
 
 decode_bundle_items([], <<>>) ->
     [];
