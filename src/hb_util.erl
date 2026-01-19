@@ -1,6 +1,6 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
--export([int/1, float/1, atom/1, bin/1, list/1, map/1, bool_int/1]).
+-export([int/1, float/1, atom/1, bin/1, list/1, map/1, bool/1, bool_int/1]).
 -export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
@@ -82,6 +82,20 @@ bin(Value) when is_list(Value) ->
     list_to_binary(Value);
 bin(Value) when is_binary(Value) ->
     Value.
+
+%% @doc Coerce a value to a boolean.
+bool(Value) ->
+    case Value of
+        true -> true;
+        false -> false;
+        <<"true">> -> true;
+        <<"false">> -> false;
+        <<"1">> -> true;
+        <<"0">> -> false;
+        1 -> true;
+        0 -> false;
+        _ -> false
+    end.
 
 %% @doc Coerce a boolean to 1 or 0.
 bool_int(true) -> 1;
