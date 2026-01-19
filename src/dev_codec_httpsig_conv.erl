@@ -77,7 +77,10 @@ from(HTTP, _Req, Opts) ->
         hb_maps:without(
             Removed =
                 hb_maps:keys(Commitments) ++
-                [<<"content-digest">>] ++
+                case hb_message:is_signed_key(<<"content-digest">>, MsgWithSigs, Opts) of
+                    true -> [];
+                    false -> [<<"content-digest">>]
+                end ++
                 case maps:get(<<"content-type">>, MsgWithSigs, undefined) of
                     <<"multipart/", _/binary>> -> [<<"content-type">>];
                     _ -> []
