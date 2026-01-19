@@ -1,7 +1,7 @@
 -module(dev_test).
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
--export([update_state/3, increment_counter/3, delay/3]).
+-export([mangle/3, update_state/3, increment_counter/3, delay/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -61,7 +61,7 @@ load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
 test_func(_) ->
-	{ok, <<"GOOD_FUNCTION">>}.
+	{ok, <<"GOOD FUNCTION">>}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
@@ -186,6 +186,29 @@ delay(Base, Req, Opts) ->
     ?event(delay, {returning, Return}),
     {ok, Return}.
 
+%% @doc Mangle the message by setting the first committed key to a random value.
+%% We do not update the message's commitments to reflect the new value, such that
+%% the message will be invalid after execution.
+%% 
+%% Caution: This function is not safe to use in production, as it may cause
+%% state inconsistencies.
+mangle(Base, _Req, Opts) ->
+    case hb_opts:get(mode, prod, Opts) of
+        prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};
+        debug ->
+            ?no_prod("`mangle' is not safe to use in production."),
+            case hb_message:committed(Base, #{ <<"commitment-ids">> => <<"all">> }, Opts) of
+                [] ->
+                    {error, <<"No committed keys to mangle found on base message.">>};
+                [FirstKey|_] ->
+                    MangleReference = hb_util:human_id(crypto:strong_rand_bytes(32)),
+                    {
+                        ok,
+                        Base#{ FirstKey => <<"mangled-", MangleReference/binary>> }
+                    }
+            end
+    end.
+
 %%% Tests
 
 %% @doc Tests the resolution of a default function.
@@ -195,7 +218,7 @@ device_with_function_key_module_test() ->
 			<<"device">> => <<"test-device@1.0">>
 		},
 	?assertEqual(
-		{ok, <<"GOOD_FUNCTION">>},
+		{ok, <<"GOOD FUNCTION">>},
 		hb_ao:resolve(Msg, test_func, #{})
 	).
 

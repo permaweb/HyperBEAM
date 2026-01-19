@@ -7,7 +7,7 @@
 -module(dev_message).
 %%% Base AO-Core reserved keys:
 -export([info/0, keys/1, keys/2]).
--export([set/3, set_path/3, remove/2, remove/3, get/3, get/4]).
+-export([set/3, set_path/3, remove/3, get/3, get/4]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
 -export([commit/3, committed/3, committers/1, committers/2, committers/3, verify/3]).
@@ -99,7 +99,7 @@ id(RawBase, Req, NodeOpts) ->
     % filtering for the committers specified in the request.
     #{ <<"commitments">> := Commitments }
         = with_relevant_commitments(Base, Req, IDOpts),
-    ?event(debug_commitments,
+    ?event(debug_id,
         {generating_ids,
             {selected_commitments, Commitments},
             {req, Req},
@@ -109,7 +109,7 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(debug_id, no_commitments_found_in_id_call),
+            ?event(ids, regenerating_id),
             calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
@@ -124,7 +124,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(debug_id, {accumulating_existing_ids, IDs}),
+            ?event(ids, returning_existing_ids),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
@@ -137,13 +137,13 @@ id(RawBase, Req, NodeOpts) ->
 calculate_id(RawBase, Req, NodeOpts) ->
     % Find the ID device for the message.
     Base = hb_message:convert(RawBase, tabm, NodeOpts),
-    ?event(linkify, {calculate_ids, {base, Base}}),
+    ?event(debug_id, {calculate_ids, {base, Base}}),
     IDMod =
         case id_device(Base, NodeOpts) of
             {ok, IDDev} -> IDDev;
             {error, Error} -> throw({id, Error})
         end,
-    ?event(linkify, {generating_id, {idmod, IDMod}, {base, Base}}),
+    ?event(debug_id, {generating_id, {idmod, IDMod}, {base, Base}}),
     % Get the device module from the message, or use the default if it is not
     % set. We can tell if the device is not set (or is the default) by checking 
     % whether the device module is the same as this module.
@@ -316,7 +316,12 @@ verify(Self, Req, Opts) ->
     % additional keys to the commitment device.
     ReqBase =
         maps:without(
-            [<<"path">>, <<"committers">>, <<"commitments">>],
+            [
+                <<"path">>,
+                <<"committers">>,
+                <<"commitments">>,
+                <<"commitment-ids">>
+            ],
             Req
         ),
     % Verify the commitments. Stop execution if any fail.
@@ -445,7 +450,7 @@ committed(Self, Req, Opts) ->
                     OnlyCommittedKeys
                 )
         end,
-    ?event({only_committed_keys, CommittedNormalizedKeys}),
+    ?event(debug_commitments, {only_committed_keys, CommittedNormalizedKeys}),
     {ok, CommittedNormalizedKeys}.
 
 %% @doc Return a message with only the relevant commitments for a given request.
@@ -492,14 +497,17 @@ commitment_ids_from_request(Base, Req, Opts) ->
     FromCommitterAddrs =
         case ReqCommitters of
             <<"none">> ->
-                ?event(no_commitment_ids_for_committers),
+                ?event(debug_commitments, no_commitment_ids_for_committers),
                 [];
             <<"all">> ->
                 {ok, Committers} = committers(Base, Req, Opts),
                 ?event(debug_commitments, {commitment_ids_from_committers, Committers}),
                 commitment_ids_from_committers(Committers, Commitments, Opts);
             RawCommitterAddrs ->
-                ?event({getting_commitment_ids_for_committers, RawCommitterAddrs}),
+                ?event(
+                    debug_commitments,
+                    {getting_commitment_ids_for_committers, RawCommitterAddrs}
+                ),
                 CommitterAddrs =
                     if is_list(RawCommitterAddrs) -> RawCommitterAddrs;
                     true -> [RawCommitterAddrs]
@@ -526,7 +534,10 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 );
             FinalCommitmentIDs -> FinalCommitmentIDs
         end,
-    ?event({commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}),
+    ?event(
+        debug_commitments,
+        {commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}
+    ),
     Res.
 
 %% @doc Ensure that the `commitments` submessage of a base message is fully
@@ -645,7 +656,7 @@ set(Base, NewValuesMsg, Opts) ->
             KeysToSet
         )
     ),
-    % Caclulate if the keys to be set conflict with any committed keys.
+    % Calculate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
             Base,
@@ -780,13 +791,14 @@ set_path(Base, Value, Opts) when not is_map(Value) ->
     end.
 
 %% @doc Remove a key or keys from a message.
-remove(Base, Key) ->
-	remove(Base, Key, #{}).
-
 remove(Base, #{ <<"item">> := Key }, Opts) ->
     remove(Base, #{ <<"items">> => [Key] }, Opts);
 remove(Base, #{ <<"items">> := Keys }, Opts) ->
-    { ok, hb_maps:without(Keys, Base, Opts) }.
+    set(
+        Base,
+        #{ Key => unset || Key <- Keys },
+        Opts
+    ).
 
 %% @doc Get the public keys of a message.
 keys(Msg) ->
@@ -802,7 +814,7 @@ keys(Msg, Opts) ->
         ok,
         lists:filter(
             fun(Key) -> not hb_private:is_private(Key) end,
-            hb_maps:keys(Msg, Opts)
+            hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
         )
     }.
 
@@ -939,7 +951,7 @@ set_ignore_undefined_test() ->
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },
-    Signed = hb_message:commit(Unsigned, hb:wallet()),
+    Signed = hb_message:commit(Unsigned, #{ priv_wallet => hb:wallet() }),
     ?event({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
     ?event({bad_signed, BadSigned}),

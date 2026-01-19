@@ -187,16 +187,13 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
                 }
             ),
             {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
+            Raw = hb_json:decode(JSONRes, Opts),
             {ok,
                 hb_ao:set(
                     Base,
                     #{
                         <<OutputPrefix/binary, "/results">> => Msg,
-                        <<OutputPrefix/binary, "/results/json">> =>
-                            #{
-                                <<"content-type">> => <<"application/json">>,
-                                <<"body">> => JSONRes
-                            }
+                        <<OutputPrefix/binary, "/results/raw">> => Raw
                     },
                     Opts
                 )

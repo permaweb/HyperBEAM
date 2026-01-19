@@ -254,10 +254,9 @@ from_body_part(InlinedKey, Part, Opts) ->
             RestHeaders =
                 hb_maps:without(
                     [
-                        <<"content-disposition">>, 
-                        <<"content-type">>, 
-                        <<"ao-body-key">>, 
-                        <<"content-digest">>
+                        <<"ao-body-key">>,
+                        <<"content-digest">>,
+                        <<"content-disposition">>
                     ],
                     Headers,
                     Opts

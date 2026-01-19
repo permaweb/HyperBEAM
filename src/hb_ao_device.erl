@@ -34,13 +34,19 @@ truncate_args(Fun, Args) ->
 %% 1. The message does not specify a device, so we use the default device.
 %% 2. The device has a `handler' key in its `Dev:info()' map, which is a
 %% function that takes a key and returns a function to handle that key. We pass
-%% the key as an additional argument to this function.
+%% the key as an additional argument to this function:
+%%     `Mod:Handler(Key, Base, Req, Opts) -> {Status, Fun}'
 %% 3. The device has a function of the name `Key', which should be called
 %% directly.
-%% 4. The device does not implement the key, but does have a default handler
-%% for us to call. We pass it the key as an additional argument.
-%% 5. The device does not implement the key, and has no default handler. We use
-%% the default device to handle the key.
+%% 4. The device does not implement the key, but does have a default function
+%% for us to call. We pass it the key as an additional argument, as with (2).
+%% `default' differs from `handler' in that it only matches for keys where the
+%% module exports no function of the given name.
+%% 5. The device has a `default' key with a device or module name as its value.
+%% We use this device to handle the key, restarting the process of resolving the
+%% key to a function.
+%% 6. The device does not implement the key and states no defaults. We use the
+%% global default device to handle the key.
 %% Error: If the device is specified, but not loadable, we raise an error.
 %%
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
@@ -83,15 +89,18 @@ message_to_fun(Msg, Key, Opts) ->
 							% Case 4: The device has a default handler.
                             ?event({found_default_handler, {func, DefaultFunc}}),
 							{add_key, Dev, DefaultFunc};
-                        {{ok, DefaultMod}, true} when is_atom(DefaultMod) ->
+                        {{ok, DefaultMod}, true} when is_binary(DefaultMod)
+                                orelse is_atom(DefaultMod) ->
+                            % Case 5: The device gives a specific further device
+                            % to default to.
 							?event({found_default_handler, {mod, DefaultMod}}),
-                            {Status, Func} =
-                                message_to_fun(
-                                    Msg#{ <<"device">> => DefaultMod }, Key, Opts
-                                ),
-                            {Status, Dev, Func};
+                            message_to_fun(
+                                Msg#{ <<"device">> => DefaultMod },
+                                Key,
+                                Opts
+                            );
 						_ ->
-							% Case 5: The device has no default handler.
+							% Case 6: The device has no default handler.
 							% We use the default device to handle the key.
 							case default() of
 								Dev ->
@@ -164,6 +173,11 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 %% If the device is a map, we look for a key in the map. First we try to find
 %% the key using its literal value. If that fails, we cast the key to an atom
 %% and try again.
+find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
+	try hb_util:key_to_atom(Key, false) of
+		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
+	catch _:_ -> not_found
+	end;
 find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
     NormKey = hb_ao:normalize_key(Key),
     NormDev = hb_ao:normalize_keys(Dev, Opts),
@@ -181,11 +195,6 @@ find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
 	end;
 find_exported_function(_Msg, _Mod, _Key, Arity, _Opts) when Arity < 0 ->
     not_found;
-find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
-	try hb_util:key_to_atom(Key, false) of
-		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
-	catch _:_ -> not_found
-	end;
 find_exported_function(Msg, Mod, Key, Arity, Opts) ->
 	case erlang:function_exported(Mod, Key, Arity) of
 		true ->
@@ -211,17 +220,29 @@ is_exported(Msg, Dev, Key, Opts) ->
 	is_exported(info(Dev, Msg, Opts), Key, Opts).
 is_exported(_, info, _Opts) -> true;
 is_exported(Info = #{ excludes := Excludes }, Key, Opts) ->
-    NormKey = hb_ao:normalize_key(Key),
-    case lists:member(NormKey, lists:map(fun hb_ao:normalize_key/1, Excludes)) of
+    NormKey = maybe_normalize_device_key(Key, existing),
+    case lists:member(NormKey, lists:map(fun maybe_normalize_device_key/1, Excludes)) of
         true -> false;
         false -> is_exported(hb_maps:remove(excludes, Info, Opts), Key, Opts)
     end;
 is_exported(#{ exports := Exports }, Key, _Opts) ->
     lists:member(
-        hb_ao:normalize_key(Key),
-        lists:map(fun hb_ao:normalize_key/1, Exports)
+        maybe_normalize_device_key(Key, existing),
+        lists:map(fun maybe_normalize_device_key/1, Exports)
     );
 is_exported(_Info, _Key, _Opts) -> true.
+
+%% @doc Normalize an exported key to its canonical atomized form. By default
+%% new atoms are created if necessary. In practice this is used for keys that
+%% orinate from a device's `info' response, but _not_ for keys that could be
+%% chosen by non-author users. This imparts a requirement that device developers
+%% should not generate too many different exports/excludes -- just as they should
+%% not generate too many atoms.
+maybe_normalize_device_key(Key) -> maybe_normalize_device_key(Key, new_atoms).
+maybe_normalize_device_key(Key, Mode) ->
+    try hb_util:key_to_atom(hb_ao:normalize_key(Key), Mode)
+    catch _:_ -> Key
+    end.
 
 %% @doc Load a device module from its name or a message ID.
 %% Returns {ok, Executable} where Executable is the device module. On error,

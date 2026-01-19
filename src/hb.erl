@@ -82,7 +82,7 @@
 %%% modules of the hyperbeam node.
 -module(hb).
 %%% Configuration and environment:
--export([init/0, now/0, build/0, deploy_scripts/0]).
+-export([init/0, top/0, now/0, build/0, deploy_scripts/0]).
 %%% Base start configurations:
 -export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
 -export([topup/3, topup/4]).
@@ -101,6 +101,14 @@ init() ->
     Old = erlang:system_flag(backtrace_depth, hb_opts:get(debug_stack_depth)),
     ?event({old_system_stack_depth, Old}),
     ok.
+
+-ifdef(AO_TOP).
+%% @doc Start a monitoring interface for the node. Presently this is offered
+%% with the `observer_cli' module atop `Recon'.
+top() -> observer_cli:start().
+-else.
+top() -> not_available.
+-endif.
 
 %% @doc Start a mainnet server without payments.
 start_mainnet() ->
