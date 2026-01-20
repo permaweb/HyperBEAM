@@ -1,6 +1,6 @@
 -module(dev_test).
 -export([info/3]).
--export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([info/0, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -16,9 +16,9 @@
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
-info(_) ->
+info() ->
 	#{
-        <<"default">> => dev_message,
+        default => <<"message@1.0">>,
 		handlers => #{
 			<<"info">> => fun info/3,
 			<<"update_state">> => fun update_state/3,
