@@ -8,9 +8,13 @@
 %% AO-Core execution.
 vary(Device, Key, Base, Request, Opts) ->
     {ok, #{ keys := KeySchemas, types := _Types }} = extract(Device, Opts),
-    case maps:get(Key, KeySchemas, undefined) of
+    ?event(debug_types, {key_schemas, KeySchemas}),
+    Schema = maps:get(hb_util:atom(Key), KeySchemas, undefined),
+    ?event(debug_types, {schema, {key, Key}, {schema, Schema}}),
+    case Schema of
         undefined -> {ok, Base, Request};
         #{ base := BaseSchema, request := RequestSchema } ->
+            ?event(debug_types, {vary, {base_schema, BaseSchema}, {request_schema, RequestSchema}}),
             {
                 ok,
                 apply_schema(BaseSchema, Base, Opts),
@@ -21,29 +25,67 @@ vary(Device, Key, Base, Request, Opts) ->
 %% @doc Apply a schema to a message, throwing an error if a required key is
 %% missing.
 apply_schema(Schema, Message, Opts) ->
+    ?event(debug_types, {apply_schema, {schema, Schema}, {message, Message}}),
     AllKeys = hb_maps:keys(Schema, Opts),
     RequiredKeys =
         hb_maps:keys(
             hb_maps:filter(
-                fun({_, {Required, _}}) -> Required == required end,
+                fun(_, {Required, _}) -> Required == required end,
                 Schema,
                 Opts
             ),
             Opts
         ),
+    ?event(debug_types, {required_keys, RequiredKeys}),
     lists:foreach(
         fun(Key) ->
             case hb_maps:find(Key, Message, Opts) of
-                {ok, _} -> ok;
+                {ok, Value} -> 
+                    {_, ExpectedType} = maps:get(Key, Schema, undefined),
+                    ?event(debug_types, {checking_key, {key, Key}, {value, Value}, {expected_type, ExpectedType}}),
+                    case is_map(ExpectedType) of
+                        true -> 
+                            apply_schema(ExpectedType, Value, Opts);
+                        _ ->
+                            case check_type(ExpectedType, Value) of
+                                true -> ok;
+                                false -> throw({invalid_type, Key, Value})
+                            end
+                    end;
                 error -> throw({required_key_missing, Key})
             end
         end,
         RequiredKeys
     ),
+    OptionalKeys =
+        hb_maps:keys(
+            hb_maps:filter(
+                fun(_, {Optional, _}) -> Optional == optional end,
+                Schema,
+                Opts
+            ),
+            Opts
+        ),
+    ?event(debug_types, {optional_keys, OptionalKeys}),
+    lists:foreach(
+        fun(Key) ->
+            case hb_maps:find(Key, Message, Opts) of
+                {ok, Value} -> 
+                    {_, ExpectedType} = maps:get(Key, Schema, undefined),
+                    ?event(debug_types, {checking_key, {key, Key}, {value, Value}, {expected_type, ExpectedType}}),
+                    case check_type(ExpectedType, Value) of
+                        true -> ok;
+                        false -> throw({invalid_type, Key, Value})
+                    end;
+                error -> ok
+            end
+        end,
+        OptionalKeys
+    ),
     hb_message:normalize_commitments(
         hb_maps:with(
-            Message,
             AllKeys,
+            Message,
             Opts
         ),
         Opts,
@@ -129,6 +171,12 @@ parse_type(Other) -> {unknown_type, Other}.
 optional(map_field_assoc) -> optional;
 optional(map_field_exact) -> required.
 
+check_type([], Value) ->
+    is_list(Value);
+check_type(integer, Value) ->
+    is_integer(Value);
+check_type(_, _) -> false.
+
 %%% Tests
 
 extract_test() ->
@@ -137,4 +185,61 @@ extract_test() ->
     ?assertMatch(
         {ok, #{ keys := #{}, types := #{}}},
         Res
+    ).
+successful_vary_test() ->
+    Base = #{},
+    Req = #{ <<"slot">> => 1 },
+    Opts = #{},
+    Res = vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts),
+    ?event({vary_result, Res}).
+
+vary_throw_required_key_missing_test() ->
+    Base = #{},
+    Req = #{},
+    Opts = #{},
+    ?assertThrow(
+        {required_key_missing, <<"slot">>},
+        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+    ).
+vary_throw_required_key_wrong_type_test() ->
+    Base = #{},
+    Req = #{ <<"slot">> => <<"1">> },
+    Opts = #{},
+    ?assertThrow(
+        {invalid_type, <<"slot">>, <<"1">>},
+        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+    ).
+
+vary_throw_optional_key_wrong_type_test() ->
+    Base = #{ <<"already-seen">> => false },
+    Req = #{ <<"slot">> => 1 },
+    Opts = #{},
+    ?assertThrow(
+        {invalid_type, <<"already-seen">>, false},
+        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+    ).
+
+successful_nested_vary_test() ->
+    Base = #{},
+    Req = #{ <<"outer">> => #{ <<"slot">> => 1 }},
+    Opts = #{},
+    Res = vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts),
+    ?event({vary_result, Res}).
+
+vary_throw_nested_key_missing_test() ->
+    Base = #{},
+    Req = #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
+    Opts = #{},
+    ?assertThrow(
+        {required_key_missing, <<"slot">>},
+        vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts)
+    ).
+
+vary_throw_nested_key_wrong_type_test() ->
+    Base = #{},
+    Req = #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
+    Opts = #{},
+    ?assertThrow(
+        {invalid_type, <<"slot">>, <<"1">>},
+        vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts)
     ).
