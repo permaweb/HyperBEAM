@@ -18,7 +18,7 @@
 %% handler resolution mechanism.
 info() ->
 	#{
-        default => dev_message,
+        default => <<"message@1.0">>,
 		handlers => #{
 			<<"info">> => fun info/3,
 			<<"update_state">> => fun update_state/3,

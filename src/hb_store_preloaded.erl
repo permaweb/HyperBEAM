@@ -47,7 +47,7 @@ read(StoreOpts, Key) ->
     end.
 
 %% @doc Find the maximum arity of a function exported by a module.
-max_arity(_Mod, info) -> {ok, 0};
+max_arity(Mod, info) -> max_arity(Mod, info, 2);
 max_arity(Mod, Function) -> max_arity(Mod, Function, 4).
 max_arity(Mod, Function, MaxArity) when MaxArity >= 0 ->
     case erlang:function_exported(Mod, Function, MaxArity) of
@@ -75,12 +75,11 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
                             };
                         _ -> {ok, Fun}
                     end;
-                #{ default := DefaultDevice } when is_atom(DefaultDevice) ->
-                    DeviceName = find_device_name(StoreOpts, DefaultDevice),
+                #{ default := DefaultDevice } when is_binary(DefaultDevice) ->
                     read(
                         StoreOpts,
                         <<
-                            DeviceName/binary,
+                            DefaultDevice/binary,
                             "/",
                             Key/binary
                         >>
@@ -88,20 +87,6 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
                 _ -> not_found
             end
     end.
-
-%% @doc Find the device name (key) in StoreOpts where the value matches DeviceModule.
-find_device_name(StoreOpts, DeviceModule) ->
-    case maps:fold(
-        fun(K, V, Acc) when V =:= DeviceModule -> [K | Acc];
-           (_, _, Acc) -> Acc
-        end,
-        [],
-        StoreOpts
-    ) of
-        [DeviceName | _] -> DeviceName;
-        [] -> error({device_not_found, DeviceModule})
-    end.
-
 
 info(StoreOpts, BaseID) ->
     case read(StoreOpts, <<BaseID/binary, "/info">>) of
@@ -141,8 +126,12 @@ find_message_default_test() ->
     PreloadedStore = default_preloaded_store(),
     {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/*">>),
     ?event({default_func, Fun}),
+    FunInfo = erlang:fun_info(Fun),
+    ?event(preloaded, {fun_info, FunInfo}),
     {env, Env} = erlang:fun_info(Fun, env),
+    ?event(preloaded, {env, Env}),
     InnerFunc = lists:nth(2, Env),
+    ?event(preloaded, {inner_func_info, erlang:fun_info(InnerFunc)}),
     io:format("InnerFunc: ~p~n", [InnerFunc]),
     ?assertEqual(InnerFunc, fun dev_message:get/4).
 
@@ -158,5 +147,4 @@ find_message_default_device_test() ->
 %% TODO:
 %% How we match (env vs dev_message:get) - can be improved
 %% Info arity (always 0? 1?) 
-%% Default binary vs atom
-%% Why are we using '.' and '*'?
+%% Why are we using '.' and '*'? - any not exported key, should work with /bob
