@@ -34,8 +34,7 @@ read(StoreOpts, Key) ->
             {finding_max_arity,
                 {mod_name, ModName},
                 {function_key, FunctionKey},
-                {module, ModName},
-                {module_info, erlang:module_info(ModName)}
+                {module, ModName}
             }
         ),
         case FunctionKey of
@@ -48,8 +47,9 @@ read(StoreOpts, Key) ->
     end.
 
 %% @doc Find the maximum arity of a function exported by a module.
+max_arity(_Mod, info) -> {ok, 0};
 max_arity(Mod, Function) -> max_arity(Mod, Function, 4).
-max_arity(Mod, Function, MaxArity) when MaxArity > 0 ->
+max_arity(Mod, Function, MaxArity) when MaxArity >= 0 ->
     case erlang:function_exported(Mod, Function, MaxArity) of
         false -> max_arity(Mod, Function, MaxArity - 1);
         true -> {ok, MaxArity}
@@ -64,7 +64,7 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
         {ok, MaxArity} -> {ok, fun ModName:'.'/MaxArity};
         not_found ->
             case info(StoreOpts, BaseID) of
-                #{ <<"default">> := Fun } when is_function(Fun) ->
+                #{ default := Fun } when is_function(Fun) ->
                     case erlang:fun_info(Fun, arity) of
                         {arity, 4} ->
                             {
@@ -75,17 +75,39 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
                             };
                         _ -> {ok, Fun}
                     end;
-                #{ <<"default">> := DefaultDevice } when is_binary(DefaultDevice) ->
-                    read(StoreOpts, <<DefaultDevice/binary, "/", Key/binary>>);
+                #{ default := DefaultDevice } when is_atom(DefaultDevice) ->
+                    DeviceName = find_device_name(StoreOpts, DefaultDevice),
+                    read(
+                        StoreOpts,
+                        <<
+                            DeviceName/binary,
+                            "/",
+                            Key/binary
+                        >>
+                    );
                 _ -> not_found
             end
     end.
 
+%% @doc Find the device name (key) in StoreOpts where the value matches DeviceModule.
+find_device_name(StoreOpts, DeviceModule) ->
+    case maps:fold(
+        fun(K, V, Acc) when V =:= DeviceModule -> [K | Acc];
+           (_, _, Acc) -> Acc
+        end,
+        [],
+        StoreOpts
+    ) of
+        [DeviceName | _] -> DeviceName;
+        [] -> error({device_not_found, DeviceModule})
+    end.
+
+
 info(StoreOpts, BaseID) ->
     case read(StoreOpts, <<BaseID/binary, "/info">>) of
-        {ok, Info} -> Info;
+        {ok, Info} -> Info();
         not_found -> info(StoreOpts, ?DEFAULT_DEVICE_ID)
-    end.
+    end.  
 
 %% @doc Store is read-only, so writing is not supported.
 write(_Opts, _Key, _Value) ->
@@ -98,6 +120,7 @@ make_link(_Opts, _Source, _Destination) ->
 %%% Tests
 
 default_preloaded_store() ->
+    application:ensure_all_started(hb),
     #{store := Stores} = hb_opts:default_message(),
     [PreloadedStore] =
         lists:filter(
@@ -113,3 +136,27 @@ find_message_set_test() ->
     Result = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/set">>),
     io:format("Result: ~p~n", [Result]),
     ?assertEqual({ok, fun dev_message:set/3}, Result).
+
+find_message_default_test() ->
+    PreloadedStore = default_preloaded_store(),
+    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/*">>),
+    ?event({default_func, Fun}),
+    {env, Env} = erlang:fun_info(Fun, env),
+    InnerFunc = lists:nth(2, Env),
+    io:format("InnerFunc: ~p~n", [InnerFunc]),
+    ?assertEqual(InnerFunc, fun dev_message:get/4).
+
+find_message_default_device_test() ->
+    PreloadedStore = default_preloaded_store(),
+    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"test-device@1.0/*">>),
+    ?event({default_func, Fun}),
+    {env, Env} = erlang:fun_info(Fun, env),
+    InnerFunc = lists:nth(2, Env),
+    io:format("InnerFunc: ~p~n", [InnerFunc]),
+    ?assertEqual(InnerFunc, fun dev_message:get/4).
+
+%% TODO:
+%% How we match (env vs dev_message:get) - can be improved
+%% Info arity (always 0? 1?) 
+%% Default binary vs atom
+%% Why are we using '.' and '*'?
