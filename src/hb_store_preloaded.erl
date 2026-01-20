@@ -5,6 +5,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(DEFAULT_DEVICE_ID, <<"message@1.0">>).
+
 %% @doc Return the scope of this store.
 scope(_StoreOpts) ->
     local.
@@ -25,8 +27,8 @@ type(StoreOpts, Key) ->
 read(StoreOpts, Key) ->
     ?event({reading_preloaded_key, {key, Key}, {store_opts, StoreOpts}}),
     maybe
-        [Device, FunctionString] ?= hb_path:term_to_path_parts(Key),
-        {ok, ModName} ?= maps:find(Device, StoreOpts),
+        [BaseID, FunctionString] ?= hb_path:term_to_path_parts(Key),
+        {ok, ModName} ?= maps:find(BaseID, StoreOpts),
         FunctionKey = hb_util:key_to_atom(FunctionString),
         ?event(
             {finding_max_arity,
@@ -36,11 +38,16 @@ read(StoreOpts, Key) ->
                 {module_info, erlang:module_info(ModName)}
             }
         ),
-        {ok, MaxArity} = max_arity(ModName, FunctionKey),
-        {ok, fun ModName:FunctionKey/MaxArity}
+        case FunctionKey of
+            '*' -> default_function(StoreOpts, ModName, BaseID, FunctionString);
+            _ ->
+                {ok, MaxArity} = max_arity(ModName, FunctionKey),
+                {ok, fun ModName:FunctionKey/MaxArity}
+        end
     else _ -> not_found
     end.
 
+%% @doc Find the maximum arity of a function exported by a module.
 max_arity(Mod, Function) -> max_arity(Mod, Function, 4).
 max_arity(Mod, Function, MaxArity) when MaxArity > 0 ->
     case erlang:function_exported(Mod, Function, MaxArity) of
@@ -49,6 +56,36 @@ max_arity(Mod, Function, MaxArity) when MaxArity > 0 ->
     end;
 max_arity(_Mod, _Function, _MaxArity) ->
     not_found.
+
+%% @doc Return the default function for a device. Uses `.` if exported, otherwise
+%% checks `info/handler'.
+default_function(StoreOpts, ModName, BaseID, Key) ->
+    case max_arity(ModName, '.') of
+        {ok, MaxArity} -> {ok, fun ModName:'.'/MaxArity};
+        not_found ->
+            case info(StoreOpts, BaseID) of
+                #{ <<"default">> := Fun } when is_function(Fun) ->
+                    case erlang:fun_info(Fun, arity) of
+                        {arity, 4} ->
+                            {
+                                ok,
+                                fun(Base, Req, Opts) ->
+                                    Fun(Key, Base, Req, Opts)
+                                end
+                            };
+                        _ -> {ok, Fun}
+                    end;
+                #{ <<"default">> := DefaultDevice } when is_binary(DefaultDevice) ->
+                    read(StoreOpts, <<DefaultDevice/binary, "/", Key/binary>>);
+                _ -> not_found
+            end
+    end.
+
+info(StoreOpts, BaseID) ->
+    case read(StoreOpts, <<BaseID/binary, "/info">>) of
+        {ok, Info} -> Info;
+        not_found -> info(StoreOpts, ?DEFAULT_DEVICE_ID)
+    end.
 
 %% @doc Store is read-only, so writing is not supported.
 write(_Opts, _Key, _Value) ->
