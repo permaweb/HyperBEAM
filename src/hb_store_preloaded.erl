@@ -48,8 +48,12 @@ read(StoreOpts, Key) ->
         if (FunctionKey == '*') orelse Status =/= ok ->
             default_function(StoreOpts, ModName, BaseID, FunctionString);
         true ->
-            {ok, MaxArity} = max_arity(ModName, FunctionKey),
-            {ok, fun ModName:FunctionKey/MaxArity}
+            case max_arity(ModName, FunctionKey) of
+                {ok, MaxArity} ->
+                    {ok, fun ModName:FunctionKey/MaxArity};
+                not_found ->
+                    default_function(StoreOpts, ModName, BaseID, FunctionString)
+            end
         end
     else _ -> not_found
     end.
