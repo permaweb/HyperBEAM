@@ -179,8 +179,10 @@ initialize(Base, Modules, Opts) ->
         end,
     % Install the AO-Core Lua library into the state.
     {ok, State3} = dev_lua_lib:install(Base, State2, Opts),
+    % Install the crypto library into the state.
+    {ok, State4} = dev_lua_lib_crypto:install(Base, State3, Opts),
     % Return the base message with the state added to it.
-    {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
+    {ok, hb_private:set(Base, <<"state">>, State4, Opts)}.
 
 %%% @doc Return a list of all functions in the Lua environment.
 functions(Base, _Req, Opts) ->
