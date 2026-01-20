@@ -50,7 +50,15 @@ read(StoreOpts, Key) ->
         true ->
             case max_arity(ModName, FunctionKey) of
                 {ok, MaxArity} ->
-                    {ok, fun ModName:FunctionKey/MaxArity};
+                    {ok,
+                        #{
+                            <<"function">> => fun ModName:FunctionKey/MaxArity,
+                            <<"vary">> =>
+                                fun(Base, Req, Opts) ->
+                                    hb_types:vary(ModName, Req, Base, Opts)
+                                end
+                        }
+                    };
                 not_found ->
                     default_function(StoreOpts, ModName, BaseID, FunctionString)
             end
