@@ -1,11 +1,16 @@
 %%% @doc A store module that reads keys from the preloaded device modules of 
 %%% a node.
 -module(hb_store_preloaded).
--export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
+-export([start/1, scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DEVICE_ID, <<"message@1.0">>).
+
+%% @doc Invoke the `module_info/0' function on all preloaded device modules.
+start(Preloaded) ->
+    maps:map(fun(_, Mod) -> Mod:module_info() end, Preloaded),
+    ok.
 
 %% @doc Return the scope of this store.
 scope(_StoreOpts) ->
@@ -29,19 +34,22 @@ read(StoreOpts, Key) ->
     maybe
         [BaseID, FunctionString] ?= hb_path:term_to_path_parts(Key),
         {ok, ModName} ?= maps:find(BaseID, StoreOpts),
-        FunctionKey = hb_util:key_to_atom(FunctionString),
+        {Status, FunctionKey} =
+            try {ok, hb_util:key_to_atom(FunctionString)}
+            catch _:_ -> {error, undefined}
+            end,
         ?event(
-            {finding_max_arity,
-                {mod_name, ModName},
-                {function_key, FunctionKey},
-                {module, ModName}
+            {finding_resolver_function,
+                {base, BaseID},
+                {function_key, FunctionString},
+                {device_module, ModName}
             }
         ),
-        case FunctionKey of
-            '*' -> default_function(StoreOpts, ModName, BaseID, FunctionString);
-            _ ->
-                {ok, MaxArity} = max_arity(ModName, FunctionKey),
-                {ok, fun ModName:FunctionKey/MaxArity}
+        if (FunctionKey == '*') orelse Status =/= ok ->
+            default_function(StoreOpts, ModName, BaseID, FunctionString);
+        true ->
+            {ok, MaxArity} = max_arity(ModName, FunctionKey),
+            {ok, fun ModName:FunctionKey/MaxArity}
         end
     else _ -> not_found
     end.
@@ -50,6 +58,7 @@ read(StoreOpts, Key) ->
 max_arity(Mod, info) -> max_arity(Mod, info, 2);
 max_arity(Mod, Function) -> max_arity(Mod, Function, 4).
 max_arity(Mod, Function, MaxArity) when MaxArity >= 0 ->
+    ?event({finding_max_arity, {mod, Mod}, {function, Function}, {max_arity, MaxArity}}),
     case erlang:function_exported(Mod, Function, MaxArity) of
         false -> max_arity(Mod, Function, MaxArity - 1);
         true -> {ok, MaxArity}
@@ -60,8 +69,8 @@ max_arity(_Mod, _Function, _MaxArity) ->
 %% @doc Return the default function for a device. Uses `.` if exported, otherwise
 %% checks `info/handler'.
 default_function(StoreOpts, ModName, BaseID, Key) ->
-    case max_arity(ModName, '.') of
-        {ok, MaxArity} -> {ok, fun ModName:'.'/MaxArity};
+    case max_arity(ModName, '*') of
+        {ok, MaxArity} -> {ok, fun ModName:'*'/MaxArity};
         not_found ->
             case info(StoreOpts, BaseID) of
                 #{ default := Fun } when is_function(Fun) ->
@@ -124,27 +133,21 @@ find_message_set_test() ->
 
 find_message_default_test() ->
     PreloadedStore = default_preloaded_store(),
-    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/*">>),
+    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/abc">>),
     ?event({default_func, Fun}),
     FunInfo = erlang:fun_info(Fun),
     ?event(preloaded, {fun_info, FunInfo}),
-    {env, Env} = erlang:fun_info(Fun, env),
-    ?event(preloaded, {env, Env}),
-    InnerFunc = lists:nth(2, Env),
-    ?event(preloaded, {inner_func_info, erlang:fun_info(InnerFunc)}),
-    io:format("InnerFunc: ~p~n", [InnerFunc]),
-    ?assertEqual(InnerFunc, fun dev_message:get/4).
+    ?assertEqual(fun dev_message:get/4, unwrap_4_fun(Fun)).
 
 find_message_default_device_test() ->
     PreloadedStore = default_preloaded_store(),
-    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"test-device@1.0/*">>),
+    start(PreloadedStore),
+    {ok, Fun} = hb_store_preloaded:read(PreloadedStore, <<"test-device@1.0/xyz">>),
     ?event({default_func, Fun}),
-    {env, Env} = erlang:fun_info(Fun, env),
-    InnerFunc = lists:nth(2, Env),
-    io:format("InnerFunc: ~p~n", [InnerFunc]),
-    ?assertEqual(InnerFunc, fun dev_message:get/4).
+    ?assertEqual(fun dev_message:get/4, unwrap_4_fun(Fun)).
 
-%% TODO:
-%% How we match (env vs dev_message:get) - can be improved
-%% Info arity (always 0? 1?) 
-%% Why are we using '.' and '*'? - any not exported key, should work with /bob
+%%% Test utilities
+
+unwrap_4_fun(Fun) ->
+    {env, [_X, InnerFunc]} = erlang:fun_info(Fun, env),
+    InnerFunc.
