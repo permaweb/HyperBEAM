@@ -19,7 +19,7 @@
 -module(hb_store_fs).
 -behavior(hb_store).
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
--export([type/2, read/2, write/3, list/2]).
+-export([type/2, read/2, read_with_type/2, write/3, list/2]).
 -export([make_group/2, make_link/3, resolve/2]).
 -include_lib("kernel/include/file.hrl").
 -include("include/hb.hrl").
@@ -61,6 +61,31 @@ read(Path) ->
 					not_found
 			end
 	end.
+
+%% @doc Read a value and its type in a single call.
+read_with_type(Opts, Key) ->
+    read_with_type_inner(add_prefix(Opts, resolve(Opts, Key))).
+read_with_type_inner(Path) ->
+    ?event({read_with_type, Path}),
+    case file:read_file_info(Path) of
+        {ok, #file_info{type = directory}} ->
+            case file:list_dir(Path) of
+                {ok, Files} -> {composite, lists:map(fun hb_util:bin/1, Files)};
+                {error, _} -> failure
+            end;
+        {ok, #file_info{type = regular}} ->
+            case file:read_file(Path) of
+                {ok, Data} -> {simple, Data};
+                {error, _} -> failure
+            end;
+        _ ->
+            case file:read_link(Path) of
+                {ok, Link} ->
+                    read_with_type_inner(Link);
+                _ ->
+                    not_found
+            end
+    end.
 
 %% @doc Write a value to the specified path in the store.
 write(Opts, PathComponents, Value) ->
@@ -192,3 +217,29 @@ add_prefix(#{ <<"name">> := Prefix }, Path) ->
 %% @doc Remove the directory prefix from a path.
 remove_prefix(#{ <<"name">> := Prefix }, Path) ->
     hb_util:remove_common(Path, Prefix).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+test_store_opts() ->
+    #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"/tmp/hb_store_fs_test">>
+    }.
+
+read_with_type_test() ->
+    StoreOpts = test_store_opts(),
+    reset(StoreOpts),
+    ?assertEqual(not_found, read_with_type(StoreOpts, <<"nonexistent">>)),
+    write(StoreOpts, <<"simple-key">>, <<"simple-value">>),
+    ?assertEqual({simple, <<"simple-value">>}, read_with_type(StoreOpts, <<"simple-key">>)),
+    make_group(StoreOpts, <<"group-key">>),
+    write(StoreOpts, <<"group-key/child1">>, <<"v1">>),
+    write(StoreOpts, <<"group-key/child2">>, <<"v2">>),
+    {composite, Keys} = read_with_type(StoreOpts, <<"group-key">>),
+    ?assertEqual([<<"child1">>, <<"child2">>], lists:sort(Keys)),
+    make_link(StoreOpts, <<"simple-key">>, <<"link-to-simple">>),
+    ?assertEqual({simple, <<"simple-value">>}, read_with_type(StoreOpts, <<"link-to-simple">>)),
+    reset(StoreOpts).
+
+-endif.

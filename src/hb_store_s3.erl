@@ -26,7 +26,7 @@ start(_) -> error(s3_profile_not_enabled).
 -behaviour(hb_store).
 %% Store behavior callbacks
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
--export([read/2, write/3, list/2, type/2]).
+-export([read/2, read_with_type/2, write/3, list/2, type/2]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([path/2, add_path/3]).
 -export([default_test_opts/0, get_config/1]).
@@ -589,6 +589,21 @@ type(Opts, Key) ->
         not_found -> not_found
     end.
 
+%% @doc Read a value and its type in a single call.
+-spec read_with_type(opts(), key()) -> {simple, value()} | {composite, [binary()]} | not_found | failure.
+read_with_type(Opts, Key) when is_list(Key) ->
+    read_with_type(Opts, hb_store:join(Key));
+read_with_type(Opts, Key) ->
+    case read(Opts, Key, true) of
+        {ok, Value} -> {simple, Value};
+        group ->
+            case list(Opts, Key) of
+                {ok, Keys} -> {composite, Keys};
+                {error, _} -> failure
+            end;
+        not_found -> not_found
+    end.
+
 %% @doc HEAD check for object existence without downloading content
 head_exists(Opts, Key) when is_binary(Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
@@ -967,6 +982,20 @@ type_test() ->
     Type2 = type(StoreOpts, <<"assets/1">>),
     ?event({type2, Type2}),
     ?assertEqual(simple, Type2).
+
+read_with_type_test() ->
+    init(),
+    StoreOpts = default_test_opts(),
+    start(StoreOpts),
+    reset(StoreOpts),
+    ?assertEqual(not_found, read_with_type(StoreOpts, <<"nonexistent">>)),
+    write(StoreOpts, <<"simple-key">>, <<"simple-value">>),
+    ?assertEqual({simple, <<"simple-value">>}, read_with_type(StoreOpts, <<"simple-key">>)),
+    make_group(StoreOpts, <<"group-key">>),
+    write(StoreOpts, <<"group-key/child1">>, <<"v1">>),
+    write(StoreOpts, <<"group-key/child2">>, <<"v2">>),
+    {composite, Keys} = read_with_type(StoreOpts, <<"group-key">>),
+    ?assertEqual([<<"child1">>, <<"child2">>], lists:sort(Keys)).
 
 %% @doc Link key list test - verifies symbolic link creation using structured key paths.
 %%

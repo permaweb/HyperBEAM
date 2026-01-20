@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, list/2, match/2]).
+-export([read/2, read_with_type/2, write/3, list/2, match/2]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -108,7 +108,6 @@ type(Opts, Key) ->
         {ok, Value} ->
             case is_link(Value) of
                 {true, Link} ->
-                    % This is a link, check the target's type
                     type(Opts, Link);
                 false ->
                     case Value of
@@ -117,6 +116,30 @@ type(Opts, Key) ->
                     end
             end;
         not_found -> not_found
+    end.
+
+%% @doc Read a value and its type in a single call.
+-spec read_with_type(map(), binary() | list()) -> {simple, binary()} | {composite, [binary()]} | not_found | failure.
+read_with_type(Opts, PathParts) when is_list(PathParts) ->
+    read_with_type(Opts, to_path(PathParts));
+read_with_type(Opts, Path) ->
+    case read_direct(Opts, Path) of
+        {ok, Value} ->
+            case is_link(Value) of
+                {true, Link} ->
+                    read_with_type(Opts, Link);
+                false ->
+                    case Value of
+                        <<"group">> ->
+                            case list(Opts, Path) of
+                                {ok, Keys} -> {composite, Keys};
+                                {error, _} -> failure
+                            end;
+                        _ -> {simple, Value}
+                    end
+            end;
+        not_found -> not_found;
+        {error, _} -> failure
     end.
 
 %% @doc Write a key-value pair to the database asynchronously.
@@ -714,6 +737,25 @@ type_test() ->
     Type2 = type(StoreOpts, <<"assets/1">>),
     ?event({type2, Type2}),
     ?assertEqual(simple, Type2).
+
+read_with_type_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/store-read-with-type">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    ?assertEqual(not_found, read_with_type(StoreOpts, <<"nonexistent">>)),
+    write(StoreOpts, <<"simple-key">>, <<"simple-value">>),
+    ?assertEqual({simple, <<"simple-value">>}, read_with_type(StoreOpts, <<"simple-key">>)),
+    make_group(StoreOpts, <<"group-key">>),
+    write(StoreOpts, <<"group-key/child1">>, <<"v1">>),
+    write(StoreOpts, <<"group-key/child2">>, <<"v2">>),
+    {composite, Keys} = read_with_type(StoreOpts, <<"group-key">>),
+    ?assertEqual([<<"child1">>, <<"child2">>], lists:sort(Keys)),
+    make_link(StoreOpts, <<"simple-key">>, <<"link-to-simple">>),
+    ?assertEqual({simple, <<"simple-value">>}, read_with_type(StoreOpts, <<"link-to-simple">>)),
+    stop(StoreOpts).
 
 %% @doc Link key list test - verifies symbolic link creation using structured key paths.
 %%

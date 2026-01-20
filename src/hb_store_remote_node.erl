@@ -4,7 +4,7 @@
 %%% been written to the remote node. In that case, the node would probably want
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
--export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
+-export([scope/1, type/2, read/2, read_with_type/2, write/3, make_link/3, resolve/2]).
 %%% Public utilities.
 -export([maybe_cache/2, maybe_cache/3, maybe_cache_async/2, maybe_cache_async/3, read_local_cache/2]).
 -include("include/hb.hrl").
@@ -42,6 +42,16 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
     case read(Opts, Key) of
         not_found -> not_found;
         _ -> simple
+    end.
+
+%% @doc Read data and return type in a single call.
+%% Remote node store always returns simple (never composite).
+read_with_type(Opts = #{ <<"node">> := Node }, Key) ->
+    ?event({remote_read_with_type, {node, Node}, {key, Key}}),
+    case read(Opts, Key) of
+        not_found -> not_found;
+        {error, timeout} -> failure;
+        {ok, Data} -> {simple, Data}
     end.
 
 %% @doc Read a key from the remote node.
@@ -323,6 +333,20 @@ timeout_propagation_test() ->
         ok = meck:expect(hb_singleflight, do, fun(_, _) -> {error, timeout} end),
         Opts = #{ <<"node">> => <<"http://example.com">> },
         ?assertEqual({error, timeout}, hb_store_remote_node:read(Opts, <<"key">>))
+    after
+        ok = meck:unload(hb_singleflight)
+    end.
+
+read_with_type_test() ->
+    ok = meck:new(hb_singleflight, [passthrough]),
+    try
+        Opts = #{ <<"node">> => <<"http://example.com">> },
+        ok = meck:expect(hb_singleflight, do, fun(_, _) -> {ok, <<"test_data">>} end),
+        ?assertEqual({simple, <<"test_data">>}, read_with_type(Opts, <<"key">>)),
+        ok = meck:expect(hb_singleflight, do, fun(_, _) -> not_found end),
+        ?assertEqual(not_found, read_with_type(Opts, <<"missing_key">>)),
+        ok = meck:expect(hb_singleflight, do, fun(_, _) -> {error, timeout} end),
+        ?assertEqual(failure, read_with_type(Opts, <<"timeout_key">>))
     after
         ok = meck:unload(hb_singleflight)
     end.

@@ -46,7 +46,7 @@
 -export([behavior_info/1]).
 -export([start/1, stop/1, reset/1]).
 -export([filter/2, scope/2, sort/2]).
--export([type/2, read/2, write/3, list/2, match/2]).
+-export([type/2, read/2, read_with_type/2, write/3, list/2, match/2]).
 -export([path/1, path/2, add_path/2, add_path/3, join/1]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
@@ -67,7 +67,7 @@
 behavior_info(callbacks) ->
     [
         {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
-        {type, 2}, {read, 2}, {write, 3},
+        {type, 2}, {read, 2}, {read_with_type, 2}, {write, 3},
         {list, 2}, {match, 2}, {path, 2}, {add_path, 3}
     ].
 
@@ -76,7 +76,7 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, path, add_path, join],
+    <<"read">> => [read, read_with_type, resolve, list, type, path, add_path, join],
     <<"write">> => [write, make_link, make_group, reset, path, add_path, join],
     <<"admin">> => [start, stop, reset]
 }).
@@ -283,6 +283,52 @@ reset(Modules) -> call_function(Modules, reset, []).
 %% @doc Get the type of element of a given path in the store. This can be
 %% a performance killer if the store is remote etc. Use only when necessary.
 type(Modules, Path) -> call_function(Modules, type, [Path]).
+
+%% @doc Read data and return its type in a single call.
+%% This avoids the double-fetch that occurs when calling type() then read().
+%% Returns {simple, Data} | {composite, Keys} | not_found | failure.
+%% For stores that don't implement this natively, falls back to type() + read()/list().
+read_with_type(no_viable_store, _Path) ->
+    not_found;
+read_with_type(X, Path) when not is_list(X) ->
+    read_with_type([X], Path);
+read_with_type([], _Path) ->
+    not_found;
+read_with_type([Store = #{<<"store-module">> := Mod} | Rest], Path) ->
+    _ = code:ensure_loaded(Mod),
+    Result = case erlang:function_exported(Mod, read_with_type, 2) of
+        true ->
+            call_function([Store], read_with_type, [Path]);
+        false ->
+            fallback_read_with_type_single(Store, Path)
+    end,
+    case Result of
+        not_found ->
+            read_with_type(Rest, Path);
+        Other ->
+            Other
+    end.
+
+%% @doc Fallback for a single store that doesn't implement read_with_type.
+fallback_read_with_type_single(Store, Path) ->
+    case type([Store], Path) of
+        simple ->
+            case read([Store], Path) of
+                {ok, Data} -> {simple, Data};
+                {error, _} -> failure;
+                not_found -> not_found;
+                failure -> failure
+            end;
+        composite ->
+            case list([Store], Path) of
+                {ok, Keys} -> {composite, Keys};
+                {error, _} -> failure;
+                not_found -> not_found;
+                failure -> failure
+            end;
+        not_found -> not_found;
+        failure -> failure
+    end.
 
 %% @doc Create a path from a list of path components. If no store implements
 %% the path function, we return the path with the 'default' transformation (id).

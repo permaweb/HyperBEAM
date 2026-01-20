@@ -1,7 +1,7 @@
 %%% @doc A store module that reads data from the nodes Arweave gateway and 
 %%% GraphQL routes, additionally including additional store-specific routes.
 -module(hb_store_gateway).
--export([scope/1, type/2, read/2, resolve/2, list/2]).
+-export([scope/1, type/2, read/2, read_with_type/2, resolve/2, list/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -39,6 +39,27 @@ type(StoreOpts, Key) ->
             if
                 IsFlat -> simple;
                 true -> composite
+            end
+    end.
+
+%% @doc Read data and return type in a single call.
+%% Avoids the double-fetch issue where type() and read() each hit upstream.
+read_with_type(StoreOpts, Key) ->
+    ?event(store_gateway, executing_read_with_type),
+    case read(StoreOpts, Key) of
+        not_found -> not_found;
+        failure -> failure;
+        {ok, Data} ->
+            UncommittedData = hb_private:reset(
+                hb_message:uncommitted(Data, StoreOpts)
+            ),
+            IsFlat = lists:all(
+                fun({_, Value}) -> not is_map(Value) end,
+                hb_maps:to_list(UncommittedData, StoreOpts)
+            ),
+            case IsFlat of
+                true -> {simple, Data};
+                false -> {composite, hb_maps:keys(Data, StoreOpts)}
             end
     end.
 
@@ -194,6 +215,32 @@ graphql_from_cache_test() ->
             Opts
         )
     ).
+
+double_read_single_request_test() ->
+    ok = meck:new(hb_gateway_client, [passthrough]),
+    try
+        CounterKey = make_ref(),
+        put(CounterKey, 0),
+        Message = #{<<"data">> => <<"value">>},
+        ok = meck:expect(hb_gateway_client, read, fun(_, _) ->
+            put(CounterKey, get(CounterKey) + 1),
+            {ok, Message}
+        end),
+        ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+        Opts = #{
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_gateway,
+                        <<"local-store">> => false
+                    }
+                ]
+        },
+        {ok, _} = hb_cache:read(ID, Opts),
+        ?assertEqual(1, get(CounterKey))
+    after
+        ok = meck:unload(hb_gateway_client)
+    end.
 
 manual_local_cache_test() ->
     hb_http_server:start_node(#{}),

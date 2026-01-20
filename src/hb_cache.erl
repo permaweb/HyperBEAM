@@ -483,69 +483,65 @@ read_all_commitments(Msg, Opts) ->
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
 store_read(Path, Store, Opts) ->
-    store_read(Path, Path, Store, Opts).
-store_read(_Target, _Path, no_viable_store, _) ->
-    not_found;
-store_read(_Target, _Path, [], _) ->
-    not_found;
-store_read(Target, Path, Store, Opts) when is_map(Store) ->
-    store_read(Target, Path, [Store], Opts);
-store_read(Target, Path, [Store | RemainingStores], Opts) ->
+    store_read(Path, Path, Store, false, Opts).
+store_read(_Target, _Path, no_viable_store, SawFailure, _) ->
+    case SawFailure of
+        true -> failure;
+        false -> not_found
+    end;
+store_read(_Target, _Path, [], SawFailure, _) ->
+    case SawFailure of
+        true -> failure;
+        false -> not_found
+    end;
+store_read(Target, Path, Store, SawFailure, Opts) when is_map(Store) ->
+    store_read(Target, Path, [Store], SawFailure, Opts);
+store_read(Target, Path, [Store | RemainingStores], SawFailure, Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
         {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
-    ResolvedFullPathContent = case hb_store:type(Store, ResolvedFullPath) of
+    ResolvedFullPathContent = case hb_store:read_with_type(Store, ResolvedFullPath) of
         failure -> failure;
         not_found -> not_found;
-        simple ->
+        {simple, Bin} ->
             ?event({reading_data, ResolvedFullPath}),
-            case hb_store:read(Store, ResolvedFullPath) of
-                {ok, Bin} -> {ok, Bin};
-                failure -> failure;
-                not_found -> not_found
-            end;
-        composite ->
+            {ok, Bin};
+        {composite, RawSubpaths} ->
             ?event({reading_composite, ResolvedFullPath}),
-            case hb_store:list(Store, ResolvedFullPath) of
-                {ok, RawSubpaths} ->
-                    Subpaths =
-                        lists:map(fun hb_util:bin/1, RawSubpaths),
-                    ?event(
-                        {listed,
-                            {original_path, Path},
-                            {subpaths, {explicit, Subpaths}}
-                        }
-                    ),
-                    % Generate links for each of the listed keys. We only list
-                    % the target ID given in the case of multiple known
-                    % commitments.
-                    Msg =
-                        prepare_links(
-                            Target,
-                            ResolvedFullPath,
-                            Subpaths,
-                            Store,
-                            Opts
-                        ),
-                    ?event(
-                        {completed_read,
-                            {resolved_path, ResolvedFullPath},
-                            {explicit, Msg}
-                        }
-                    ),
-                    {ok, Msg};
-                _ ->
-                    ?event({empty_composite_message, ResolvedFullPath}),
-                    {ok, #{}}
-            end
+            Subpaths =
+                lists:map(fun hb_util:bin/1, RawSubpaths),
+            ?event(
+                {listed,
+                    {original_path, Path},
+                    {subpaths, {explicit, Subpaths}}
+                }
+            ),
+            Msg =
+                prepare_links(
+                    Target,
+                    ResolvedFullPath,
+                    Subpaths,
+                    Store,
+                    Opts
+                ),
+            ?event(
+                {completed_read,
+                    {resolved_path, ResolvedFullPath},
+                    {explicit, Msg}
+                }
+            ),
+            {ok, Msg}
     end,
     case ResolvedFullPathContent of
         {ok, _} = Response -> Response;
-        failure -> failure;
-        not_found -> store_read(Target, Path, RemainingStores, Opts)
+        failure ->
+            ?event({store_read_failed, {store, Store}, {path, Path}}),
+            store_read(Target, Path, RemainingStores, true, Opts);
+        not_found ->
+            store_read(Target, Path, RemainingStores, SawFailure, Opts)
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.

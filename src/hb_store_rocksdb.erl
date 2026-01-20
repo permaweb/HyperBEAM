@@ -10,7 +10,7 @@
 -behaviour(gen_server).
 -behaviour(hb_store).
 -export([enabled/0, start/1, start_link/1, stop/1, scope/1]).
--export([read/2, write/3, list/2, reset/1, list/0]).
+-export([read/2, read_with_type/2, write/3, list/2, reset/1, list/0]).
 -export([make_link/3, make_group/2, type/2, add_path/3, path/2, resolve/2]).
 -export([init/1, terminate/2, handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
@@ -171,6 +171,25 @@ type(Opts, RawKey) ->
         {ok, {raw, _Item}} -> simple;
         {ok, {link, NewKey}} -> type(Opts, NewKey);
         {ok, {group, _Item}} -> composite
+    end.
+
+%% @doc Read a value and its type in a single call.
+-spec read_with_type(Opts, Key) -> Result when
+    Opts :: map(),
+    Key :: key(),
+    Result :: {simple, value()} | {composite, [binary()]} | not_found | failure.
+read_with_type(Opts, RawPath) ->
+    Path = resolve(Opts, RawPath),
+    case do_read(Opts, Path) of
+        not_found -> not_found;
+        {error, _} -> failure;
+        {ok, {raw, Result}} -> {simple, Result};
+        {ok, {link, Link}} -> read_with_type(Opts, Link);
+        {ok, {group, _}} ->
+            case list(Opts, Path) of
+                {ok, Keys} -> {composite, Keys};
+                {error, _} -> failure
+            end
     end.
 
 %% @doc Creates group under the given path.
@@ -601,6 +620,21 @@ api_test_() ->
                     ),
                     ?assertEqual(read(#{}, <<"messages/ids/item1">>),{ok, <<"1">>}),
                     ?assertEqual(read(#{}, <<"messages/ids/item2">>), {ok, <<"2">>})
+                end
+            },
+            {
+                "read_with_type/2 returns type and data together",
+                fun() ->
+                    ?assertEqual(not_found, read_with_type(#{}, <<"nonexistent">>)),
+                    write(#{}, <<"simple_key">>, <<"simple_value">>),
+                    ?assertEqual({simple, <<"simple_value">>}, read_with_type(#{}, <<"simple_key">>)),
+                    make_group(#{}, <<"group_key">>),
+                    write(#{}, <<"group_key/child1">>, <<"v1">>),
+                    write(#{}, <<"group_key/child2">>, <<"v2">>),
+                    {composite, Keys} = read_with_type(#{}, <<"group_key">>),
+                    ?assertEqual([<<"child1">>, <<"child2">>], lists:sort(Keys)),
+                    make_link(#{}, <<"simple_key">>, <<"link_to_simple">>),
+                    ?assertEqual({simple, <<"simple_value">>}, read_with_type(#{}, <<"link_to_simple">>))
                 end
             }
         ]}.
