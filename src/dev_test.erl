@@ -66,6 +66,7 @@ test_func(_) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
+-spec compute(#{ already_seen => list() }, #{ slot := integer() }, map()) -> {ok, map()}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -83,6 +84,24 @@ compute(Base, Req, Opts) ->
         )
     }.
 
+-spec compute_nested(#{ already_seen => list() }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
+compute_nested(Base, Req, Opts) ->
+        AssignmentSlot = hb_ao:get(<<"outer/slot">>, Req, Opts),
+        Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
+        ?event({compute_called, {base, Base}, {req, Req}, {opts, Opts}}),
+        {ok,
+            hb_ao:set(
+                Base,
+                #{
+                    <<"random-key">> => <<"random-value">>,
+                    <<"results">> =>
+                        #{ <<"assignment-slot">> => AssignmentSlot },
+                    <<"already-seen">> => [AssignmentSlot | Seen]
+                },
+                Opts
+            )
+        }.
+    
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
