@@ -14,6 +14,7 @@
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
 
 start() ->
+    prometheus_init(),
     httpc:set_options([{max_keep_alive_length, 0}]),
     ok.
 
@@ -471,6 +472,7 @@ reply(Req, TABMReq, Message, Opts) ->
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
+    StartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
     {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
     {Status, HeadersBeforeCors, EncodedBody} =
@@ -497,11 +499,12 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
     EndTime = os:system_time(millisecond),
+    TotalDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ?event(http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_short,
         {sent,
             {status, Status},
-            {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
+            {duration, TotalDuration},
             {method, cowboy_req:method(Req)},
             {path,
                 {string,
@@ -513,6 +516,9 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             {body_size, byte_size(EncodedBody)}
         }
     ),
+    ReplyDuration = EndTime-StartTime,
+    record_reply_duration(TotalDuration*1000000, ReplyDuration*1000000, Status),
+    ?event(metrics_short, {http_reply, {duration, ReplyDuration}}),
     {ok, PostStreamReq, no_state}.
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
@@ -619,6 +625,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     {bundle, AcceptBundle}
                 }
             ),
+            %% TODO: This is causing some error.
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_error(Message, Opts),
             {Status,
@@ -1094,6 +1101,61 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         not_found -> WithPeer;
         Device -> WithPeer#{<<"device">> => Device}
     end.
+
+record_reply_duration(TotalDuration, ReplyDuration, StatusCode) ->
+    spawn(
+        fun() ->
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    prometheus_histogram:observe(
+                        http_request_server_duration_seconds,
+                        [StatusCode],
+                       TotalDuration
+                    ),
+                                        prometheus_histogram:observe(
+                        http_request_server_reply_duration_seconds,
+                        [StatusCode],
+                       ReplyDuration
+                    )
+            end,
+            %% TODO: check maybe_invoke_monitor
+            ok
+        end
+    ).
+
+prometheus_init() -> 
+    prometheus_histogram:declare([
+		{name, http_request_server_reply_duration_seconds},
+        {labels, [status_code]},
+		{buckets, [0.001, 0.0025, 0.005,
+                    0.01, 0.025, 0.05,
+                    0.1, 0.25, 0.5,
+                    1, 2.5, 5,
+                    10, 30, 60]},
+		{
+			help,
+			"The total duration of an hb_http:reply call. This starts when a response"
+            "is ready to send back to the client and ends when the message is deliver"
+            "to the client. "
+		}
+	]),
+    prometheus_histogram:declare([
+		{name, http_request_server_duration_seconds},
+        {labels, [status_code]},
+		{buckets, [0.001, 0.0025, 0.005,
+                    0.01, 0.025, 0.05,
+                    0.1, 0.25, 0.5,
+                    1, 2.5, 5,
+                    10, 30, 60]},
+		{
+			help,
+			"The total duration of an hb_http_server request call." 
+		}
+	]).
+
+
+
 
 %%% Tests
 

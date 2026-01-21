@@ -255,9 +255,10 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
             TABM,
             hb_opts:get(store, no_viable_store, Opts),
             Opts
-        ) end, millisecond),
+        ) end, native),
         UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
-        ?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, Duration}}),
+        record_duration(Duration),
+        ?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, erlang:convert_time_unit(Duration, native, millisecond)}}),
         Result
     catch
         Type:Reason:Stacktrace ->
@@ -420,14 +421,17 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    StoreReadResult =
-        store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
-    case StoreReadResult of 
-        {ok, Res} ->
-            hb_message:paranoid_verify(cache_read, Res, Opts),
-            {ok, hb_message:normalize_commitments(Res, Opts)};
-        _ -> StoreReadResult
-    end.
+    {Duration, Result} = timer:tc(fun() ->
+        StoreReadResult = store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
+        case StoreReadResult of 
+            {ok, Res} ->
+                hb_message:paranoid_verify(cache_read, Res, Opts),
+                {ok, hb_message:normalize_commitments(Res, Opts)};
+            _ -> StoreReadResult
+        end 
+        end, millisecond),
+    ?event(metrics_short, {hb_cache_read, {path, Path}, {duration, Duration}}),
+    Result.
 do_read_commitment(Path, Opts) ->
     store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
@@ -802,6 +806,33 @@ link(Existing, New, Opts) ->
         Existing,
         New
     ).
+record_duration(Duration) ->
+    spawn(
+        fun() ->
+                init_prometheus(),
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    prometheus_histogram:observe(
+                        cache_write_message_duration_seconds,
+                        Duration
+                    )
+            end,
+            %% TODO: maybe_invoke_monitor
+            ok
+        end
+    ).
+
+init_prometheus() ->
+    application:ensure_all_started([prometheus]),
+    prometheus_histogram:declare([
+		{name, cache_write_message_duration_seconds},
+		{buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
+		{
+			help,
+			"The total duration of hb_cache:write_message."
+		}
+	]).
 
 %%% Tests
 

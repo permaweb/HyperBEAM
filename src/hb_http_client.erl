@@ -132,10 +132,10 @@ httpc_req(Args, Opts) ->
         end,
     ?event({http_client_outbound, Method, URL, Request}),
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
-	StartTime = os:system_time(millisecond),
+	StartTime = os:system_time(native),
     case httpc:request(Method, Request, [], HTTPCOpts) of
         {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-	        EndTime = os:system_time(millisecond),
+	        EndTime = os:system_time(native),
             RespHeaders =
                 [
                     {list_to_binary(Key), list_to_binary(Value)}
@@ -160,7 +160,7 @@ httpc_req(Args, Opts) ->
 gun_req(Args, Opts) ->
     gun_req(Args, false, Opts).
 gun_req(Args, ReestablishedConnection, Opts) ->
-	StartTime = os:system_time(millisecond),
+	StartTime = os:system_time(native),
 	#{ peer := Peer, path := Path, method := Method } = Args,
 	Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
@@ -181,7 +181,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             Error ->
                 Error
 	    end,
-	EndTime = os:system_time(millisecond),
+	EndTime = os:system_time(native),
 	%% Only log the metric for the top-level call to req/2 - not the recursive call
 	%% that happens when the connection is reestablished.
 	case ReestablishedConnection of
@@ -208,7 +208,17 @@ record_duration(Details, Opts) ->
             % First, write to prometheus if it is enabled. Prometheus works
             % only with strings as lists, so we encode the data before granting
             % it.
-            GetFormat = fun(Key) -> hb_util:list(maps:get(Key, Details)) end,
+            GetFormat = fun 
+                            (<<"request-category">>) ->
+                                case maps:get(<<"request-path">>, Details) of
+                                    %% TODO: Make it configurable for S3 bucket defined
+                                    <<"/hb-s3", _/binary>> -> <<"S3">>;
+                                    <<"/graphql">> -> <<"GraphQL">>;
+                                    <<"/raw", _/binary>> -> <<"RAW">>
+                                end;
+                            (Key) -> 
+                                hb_util:list(maps:get(Key, Details)) 
+                        end,
             case application:get_application(prometheus) of
                 undefined -> ok;
                 _ ->
@@ -218,7 +228,8 @@ record_duration(Details, Opts) ->
                             GetFormat,
                             [
                                 <<"request-method">>,
-                                <<"status-class">>
+                                <<"status-class">>,
+                                <<"request-category">>
                             ]
                         ),
                         maps:get(<<"duration">>, Details)
@@ -313,7 +324,7 @@ init_prometheus(Opts) ->
 	prometheus_histogram:new([
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
-        {labels, [http_method, status_class]},
+        {labels, [http_method, status_class, category]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
