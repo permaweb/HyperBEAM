@@ -6,7 +6,7 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-GENESIS_WASM_BRANCH = feat/hb-unit
+GENESIS_WASM_BRANCH = VinceJuliano/hb-unit-mem-reset-update
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
