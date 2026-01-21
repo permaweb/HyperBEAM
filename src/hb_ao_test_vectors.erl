@@ -4,6 +4,12 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
+%%% Test configuration.
+
+%% The AO-Core implementation to use.
+%% Expected interface: `resolve/2', `resolve/3', `get/2', `set/2'.
+-define(AO, hb_ao_micro).
+
 %% The time to run the benchmarks for in seconds.
 -define(BENCHMARK_TIME, 0.25).
 %% The number of iterations to run each benchmark for.
@@ -13,7 +19,7 @@
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
 run_test() ->
-    skip.
+    resolve_id_test(#{}).
 
 %% @doc Run each test in the file with each set of options. Start and reset
 %% the store for each test.
@@ -226,7 +232,7 @@ exec_dummy_device(Opts) ->
     {ok, ModName, Bin} = compile:file("test/dev_dummy.erl", [binary]),
     DevMsg =
         hb_message:commit(
-            hb_ao:normalize_keys(
+            ?AO:normalize_keys(
                 #{
                     <<"data-protocol">> => <<"ao">>,
                     <<"variant">> => <<"ao.N.1">>,
@@ -253,7 +259,7 @@ exec_dummy_device(Opts) ->
     ?assertEqual(DevMsg, ReadMsg),
     % Create a base message with the device ID, then request a dummy path from
     % it.
-    hb_ao:resolve(
+    ?AO:resolve(
         #{ <<"device">> => ID },
         #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },
         Opts
@@ -296,51 +302,51 @@ untrusted_load_device_test() ->
 %%% Test vector suite
 
 resolve_simple_test(Opts) ->
-    Res = hb_ao:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),
+    Res = ?AO:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),
     ?assertEqual({ok, <<"RESULT">>}, Res).
 
 resolve_id_test(Opts) ->
     ?assertMatch(
         ID when byte_size(ID) == 43,
-        hb_ao:get(<<"id">>, #{ <<"test_key">> => <<"1">> }, Opts)
+        ?AO:get(<<"id">>, #{ <<"test_key">> => <<"1">> }, Opts)
     ).
 
 resolve_key_twice_test(Opts) ->
     % Ensure that the same message can be resolved again.
     % This is not as trivial as it may seem, because resolutions are cached and
     % de-duplicated.
-    ?assertEqual({ok, <<"1">>}, hb_ao:resolve(#{ <<"a">> => <<"1">> }, <<"a">>, Opts)),
-    ?assertEqual({ok, <<"1">>}, hb_ao:resolve(#{ <<"a">> => <<"1">> }, <<"a">>, Opts)).
+    ?assertEqual({ok, <<"1">>}, ?AO:resolve(#{ <<"a">> => <<"1">> }, <<"a">>, Opts)),
+    ?assertEqual({ok, <<"1">>}, ?AO:resolve(#{ <<"a">> => <<"1">> }, <<"a">>, Opts)).
 
 resolve_from_multiple_keys_test(Opts) ->
     ?assertEqual(
         {ok, [<<"a">>]},
-        hb_ao:resolve(#{ <<"a">> => <<"1">>, <<"priv_a">> => <<"2">> }, <<"keys">>, Opts)
+        ?AO:resolve(#{ <<"a">> => <<"1">>, <<"priv_a">> => <<"2">> }, <<"keys">>, Opts)
     ).
 
 resolve_path_element_test(Opts) ->
     ?assertEqual(
         {ok, [<<"test_path">>]},
-        hb_ao:resolve(#{ <<"path">> => [<<"test_path">>] }, <<"path">>, Opts)
+        ?AO:resolve(#{ <<"path">> => [<<"test_path">>] }, <<"path">>, Opts)
     ),
     ?assertEqual(
         {ok, [<<"a">>]},
-        hb_ao:resolve(#{ <<"Path">> => [<<"a">>] }, <<"Path">>, Opts)
+        ?AO:resolve(#{ <<"Path">> => [<<"a">>] }, <<"Path">>, Opts)
     ).
 
 key_to_binary_test(Opts) ->
-    ?assertEqual(<<"a">>, hb_ao:normalize_key(a, Opts)),
-    ?assertEqual(<<"a">>, hb_ao:normalize_key(<<"a">>, Opts)),
-    ?assertEqual(<<"a">>, hb_ao:normalize_key("a", Opts)).
+    ?assertEqual(<<"a">>, ?AO:normalize_key(a, Opts)),
+    ?assertEqual(<<"a">>, ?AO:normalize_key(<<"a">>, Opts)),
+    ?assertEqual(<<"a">>, ?AO:normalize_key("a", Opts)).
 
 resolve_binary_key_test(Opts) ->
     ?assertEqual(
         {ok, <<"RESULT">>},
-        hb_ao:resolve(#{ a => <<"RESULT">> }, <<"a">>, Opts)
+        ?AO:resolve(#{ a => <<"RESULT">> }, <<"a">>, Opts)
     ),
     ?assertEqual(
         {ok, <<"1">>},
-        hb_ao:resolve(
+        ?AO:resolve(
             #{
                 <<"Test-Header">> => <<"1">>
             },
@@ -425,7 +431,7 @@ key_from_id_device_with_args_test(Opts) ->
         },
     ?assertEqual(
         {ok, <<"1">>},
-        hb_ao:resolve(
+        ?AO:resolve(
             Msg,
             #{
                 <<"path">> => <<"key_using_only_state">>,
@@ -436,7 +442,7 @@ key_from_id_device_with_args_test(Opts) ->
     ),
     ?assertEqual(
         {ok, <<"13">>},
-        hb_ao:resolve(
+        ?AO:resolve(
             Msg,
             #{
                 <<"path">> => <<"key_using_state_and_msg">>,
@@ -447,7 +453,7 @@ key_from_id_device_with_args_test(Opts) ->
     ),
     ?assertEqual(
         {ok, <<"1337">>},
-        hb_ao:resolve(
+        ?AO:resolve(
             Msg,
             #{
                 <<"path">> => <<"key_using_all">>,
@@ -468,7 +474,7 @@ device_with_handler_function_test(Opts) ->
         },
     ?assertEqual(
         {ok, <<"HANDLER VALUE">>},
-        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+        ?AO:resolve(Msg, <<"test_key">>, Opts)
     ).
 
 device_with_default_handler_function_test(Opts) ->
@@ -478,19 +484,19 @@ device_with_default_handler_function_test(Opts) ->
         },
     ?assertEqual(
         {ok, <<"STATE">>},
-        hb_ao:resolve(Msg, <<"state_key">>, Opts)
+        ?AO:resolve(Msg, <<"state_key">>, Opts)
     ),
     ?assertEqual(
         {ok, <<"DEFAULT">>},
-        hb_ao:resolve(Msg, <<"any_random_key">>, Opts)
+        ?AO:resolve(Msg, <<"any_random_key">>, Opts)
     ).
 
 basic_get_test(Opts) ->
     Msg = #{ <<"key1">> => <<"value1">>, <<"key2">> => <<"value2">> },
-    ?assertEqual(<<"value1">>, hb_ao:get(<<"key1">>, Msg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, Msg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, Msg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get([<<"key2">>], Msg, Opts)).
+    ?assertEqual(<<"value1">>, ?AO:get(<<"key1">>, Msg, Opts)),
+    ?assertEqual(<<"value2">>, ?AO:get(<<"key2">>, Msg, Opts)),
+    ?assertEqual(<<"value2">>, ?AO:get(<<"key2">>, Msg, Opts)),
+    ?assertEqual(<<"value2">>, ?AO:get([<<"key2">>], Msg, Opts)).
 
 recursive_get_test(Opts) ->
     Msg = #{
@@ -507,15 +513,15 @@ recursive_get_test(Opts) ->
     },
     ?assertEqual(
         {ok, <<"value1">>},
-        hb_ao:resolve(Msg, #{ <<"path">> => <<"key1">> }, Opts)
+        ?AO:resolve(Msg, #{ <<"path">> => <<"key1">> }, Opts)
     ),
-    ?assertEqual(<<"value1">>, hb_ao:get(<<"key1">>, Msg, Opts)),
+    ?assertEqual(<<"value1">>, ?AO:get(<<"key1">>, Msg, Opts)),
     ?assertEqual(
         {ok, <<"value3">>},
-        hb_ao:resolve(Msg, #{ <<"path">> => [<<"key2">>, <<"key3">>] }, Opts)
+        ?AO:resolve(Msg, #{ <<"path">> => [<<"key2">>, <<"key3">>] }, Opts)
     ),
-    ?assertEqual(<<"value3">>, hb_ao:get([<<"key2">>, <<"key3">>], Msg, Opts)),
-    ?assertEqual(<<"value3">>, hb_ao:get(<<"key2/key3">>, Msg, Opts)).
+    ?assertEqual(<<"value3">>, ?AO:get([<<"key2">>, <<"key3">>], Msg, Opts)),
+    ?assertEqual(<<"value3">>, ?AO:get(<<"key2/key3">>, Msg, Opts)).
 
 deep_recursive_get_test(Opts) ->
     Msg = #{
@@ -530,14 +536,14 @@ deep_recursive_get_test(Opts) ->
             }
         }
     },
-    ?assertEqual(<<"value7">>, hb_ao:get(<<"key2/key4/key6/key7">>, Msg, Opts)).
+    ?assertEqual(<<"value7">>, ?AO:get(<<"key2/key4/key6/key7">>, Msg, Opts)).
 
 basic_set_test(Opts) ->
     Msg = #{ <<"key1">> => <<"value1">>, <<"key2">> => <<"value2">> },
-    UpdatedMsg = hb_ao:set(Msg, #{ <<"key1">> => <<"new_value1">> }, Opts),
+    UpdatedMsg = ?AO:set(Msg, #{ <<"key1">> => <<"new_value1">> }, Opts),
     ?event({set_key_complete, {key, <<"key1">>}, {value, <<"new_value1">>}}),
-    ?assertEqual(<<"new_value1">>, hb_ao:get(<<"key1">>, UpdatedMsg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, UpdatedMsg, Opts)).
+    ?assertEqual(<<"new_value1">>, ?AO:get(<<"key1">>, UpdatedMsg, Opts)),
+    ?assertEqual(<<"value2">>, ?AO:get(<<"key2">>, UpdatedMsg, Opts)).
 
 get_with_device_test(Opts) ->
     Msg =
@@ -545,8 +551,8 @@ get_with_device_test(Opts) ->
             <<"device">> => generate_device_with_keys_using_args(),
             <<"state_key">> => <<"STATE">>
         },
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, Msg, Opts)),
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"key_using_only_state">>, Msg, Opts)).
+    ?assertEqual(<<"STATE">>, ?AO:get(<<"state_key">>, Msg, Opts)),
+    ?assertEqual(<<"STATE">>, ?AO:get(<<"key_using_only_state">>, Msg, Opts)).
 
 get_as_with_device_test(Opts) ->
     Msg =
@@ -556,11 +562,11 @@ get_as_with_device_test(Opts) ->
         },
     ?assertEqual(
         <<"HANDLER VALUE">>,
-        hb_ao:get(test_key, Msg, Opts)
+        ?AO:get(test_key, Msg, Opts)
     ),
     ?assertEqual(
         <<"ACTUAL VALUE">>,
-        hb_ao:get(test_key, {as, dev_message, Msg}, Opts)
+        ?AO:get(test_key, {as, dev_message, Msg}, Opts)
     ).
 
 set_with_device_test(Opts) ->
@@ -580,12 +586,12 @@ set_with_device_test(Opts) ->
                 },
             <<"state_key">> => <<"STATE">>
         },
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, Msg, Opts)),
-    SetOnce = hb_ao:set(Msg, #{ <<"state_key">> => <<"SET_ONCE">> }, Opts),
-    ?assertEqual(<<".">>, hb_ao:get(<<"set_count">>, SetOnce, Opts)),
-    SetTwice = hb_ao:set(SetOnce, #{ <<"state_key">> => <<"SET_TWICE">> }, Opts),
-    ?assertEqual(<<"..">>, hb_ao:get(<<"set_count">>, SetTwice, Opts)),
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, SetTwice, Opts)).
+    ?assertEqual(<<"STATE">>, ?AO:get(<<"state_key">>, Msg, Opts)),
+    SetOnce = ?AO:set(Msg, #{ <<"state_key">> => <<"SET_ONCE">> }, Opts),
+    ?assertEqual(<<".">>, ?AO:get(<<"set_count">>, SetOnce, Opts)),
+    SetTwice = ?AO:set(SetOnce, #{ <<"state_key">> => <<"SET_TWICE">> }, Opts),
+    ?assertEqual(<<"..">>, ?AO:get(<<"set_count">>, SetTwice, Opts)),
+    ?assertEqual(<<"STATE">>, ?AO:get(<<"state_key">>, SetTwice, Opts)).
 
 deep_set_test(Opts) ->
     % First validate second layer changes are handled correctly.
@@ -598,26 +604,26 @@ deep_set_test(Opts) ->
                 }
         },
     Res1 =
-        hb_ao:set(
+        ?AO:set(
             Msg0,
             #{ <<"a/b">> => <<"RESULT2">>, <<"a/c/d">> => <<"2">> },
             Opts
         ),
     ?event(debug_test, {res1, Res1}, Opts),
-    ?assertMatch(<<"RESULT2">>, hb_ao:get(<<"a/b">>, Res1, Opts)),
-    ?assertMatch(<<"2">>, hb_ao:get(<<"a/c/d">>, Res1, Opts)),
-    ?assertMatch(<<"ignored">>, hb_ao:get(<<"a/c/e">>, Res1, Opts)).
+    ?assertMatch(<<"RESULT2">>, ?AO:get(<<"a/b">>, Res1, Opts)),
+    ?assertMatch(<<"2">>, ?AO:get(<<"a/c/d">>, Res1, Opts)),
+    ?assertMatch(<<"ignored">>, ?AO:get(<<"a/c/e">>, Res1, Opts)).
 
 deep_set_new_messages_test(Opts) ->
     % Test that new messages are created when the path does not exist.
     Msg0 = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
-    Base = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
-    Base2 = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
-    ?assertMatch(<<"1">>, hb_ao:get(<<"a/b/c">>, Base2, Opts)),
-    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base2, Opts)),
-    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base2, Opts)),
+    Base = ?AO:set(Msg0, <<"d/e">>, <<"3">>, Opts),
+    Base2 = ?AO:set(Base, <<"d/f">>, <<"4">>, Opts),
+    ?assertMatch(<<"1">>, ?AO:get(<<"a/b/c">>, Base2, Opts)),
+    ?assertMatch(<<"3">>, ?AO:get(<<"d/e">>, Base2, Opts)),
+    ?assertMatch(<<"4">>, ?AO:get(<<"d/f">>, Base2, Opts)),
     Base3 =
-        hb_ao:set(
+        ?AO:set(
             Base2,
             #{ 
                 <<"z/a">> => <<"0">>,
@@ -626,11 +632,11 @@ deep_set_new_messages_test(Opts) ->
             },
             Opts
         ),
-    ?assertMatch(<<"0">>, hb_ao:get(<<"z/a">>, Base3, Opts)),
-    ?assertMatch(<<"1">>, hb_ao:get(<<"z/b">>, Base3, Opts)),
-    ?assertMatch(<<"2">>, hb_ao:get(<<"z/y/x">>, Base3, Opts)),
-    ?assertMatch(<<"3">>, hb_ao:get(<<"d/e">>, Base3, Opts)),
-    ?assertMatch(<<"4">>, hb_ao:get(<<"d/f">>, Base3, Opts)),
+    ?assertMatch(<<"0">>, ?AO:get(<<"z/a">>, Base3, Opts)),
+    ?assertMatch(<<"1">>, ?AO:get(<<"z/b">>, Base3, Opts)),
+    ?assertMatch(<<"2">>, ?AO:get(<<"z/y/x">>, Base3, Opts)),
+    ?assertMatch(<<"3">>, ?AO:get(<<"d/e">>, Base3, Opts)),
+    ?assertMatch(<<"4">>, ?AO:get(<<"d/f">>, Base3, Opts)),
     ?event(debug_test, {after_sets, Base3}, Opts).
 
 deep_set_with_device_test(Opts) ->
@@ -669,7 +675,7 @@ deep_set_with_device_test(Opts) ->
         <<"modified">> => false
     },
     Outer =
-        hb_ao:set(
+        ?AO:set(
             Msg,
             #{
                 <<"a/b/c">> => <<"mod1">>,
@@ -678,14 +684,14 @@ deep_set_with_device_test(Opts) ->
             },
             Opts
         ),
-    ?assertEqual(<<"mod1">>, hb_ao:get(<<"a/b/c">>, Outer, Opts)),
-    ?assertEqual(<<"mod2">>, hb_ao:get(<<"a/b/d">>, Outer, Opts)),
-    ?assertEqual(<<"3">>, hb_ao:get(<<"a/b/e">>, Outer, Opts)),
-    ?assertEqual(<<"4">>, hb_ao:get(<<"a/f">>, Outer, Opts)),
-    ?assertEqual(<<"mod5">>, hb_ao:get(<<"a/g">>, Outer, Opts)),
-    ?assertEqual(true, hb_ao:get(<<"a/b/modified">>, Outer, Opts)),
-    ?assertEqual(false, hb_ao:get(<<"a/modified">>, Outer, Opts)),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer, Opts)).
+    ?assertEqual(<<"mod1">>, ?AO:get(<<"a/b/c">>, Outer, Opts)),
+    ?assertEqual(<<"mod2">>, ?AO:get(<<"a/b/d">>, Outer, Opts)),
+    ?assertEqual(<<"3">>, ?AO:get(<<"a/b/e">>, Outer, Opts)),
+    ?assertEqual(<<"4">>, ?AO:get(<<"a/f">>, Outer, Opts)),
+    ?assertEqual(<<"mod5">>, ?AO:get(<<"a/g">>, Outer, Opts)),
+    ?assertEqual(true, ?AO:get(<<"a/b/modified">>, Outer, Opts)),
+    ?assertEqual(false, ?AO:get(<<"a/modified">>, Outer, Opts)),
+    ?assertEqual(true, ?AO:get(<<"modified">>, Outer, Opts)).
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
@@ -725,10 +731,10 @@ device_exports_test(Opts) ->
             <<"test1">> => <<"BAD1">>,
             <<"test3">> => <<"GOOD3">>
         },
-    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
-    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
-    ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
-    ?assertEqual(not_found, hb_ao:get(<<"test5">>, Res, Opts)).
+    ?assertEqual(<<"Handler-Value">>, ?AO:get(<<"test1">>, Res, Opts)),
+    ?assertEqual(<<"Handler-Value">>, ?AO:get(<<"test2">>, Res, Opts)),
+    ?assertEqual(<<"GOOD3">>, ?AO:get(<<"test3">>, Res, Opts)),
+    ?assertEqual(not_found, ?AO:get(<<"test5">>, Res, Opts)).
 
 device_excludes_test(Opts) ->
     % Create a device that returns an identifiable message for any key, but also
@@ -746,9 +752,9 @@ device_excludes_test(Opts) ->
     Msg = #{ <<"device">> => Dev, <<"Test-Key">> => <<"Test-Value">> },
     ?assert(hb_ao_device:is_exported(Msg, Dev, <<"test-key2">>, Opts)),
     ?assert(not hb_ao_device:is_exported(Msg, Dev, set, Opts)),
-    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test-key2">>, Msg, Opts)),
+    ?assertEqual(<<"Handler-Value">>, ?AO:get(<<"test-key2">>, Msg, Opts)),
     ?assertMatch(#{ <<"test-key2">> := <<"2">> },
-        hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
+        ?AO:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
 device_inheritance_test(Opts) ->
     % Create a device that inherits from another device and ensure that the
@@ -769,14 +775,14 @@ device_inheritance_test(Opts) ->
             end
     },
     Msg = #{ <<"device">> => Dev, <<"message-key">> => <<"MESSAGE VALUE">> },
-    ?assertEqual(<<"DEVICE VALUE">>, hb_ao:get(<<"device-key">>, Msg, Opts)),
-    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test-func">>, Msg, Opts)),
-    ?assertEqual(<<"MESSAGE VALUE">>, hb_ao:get(<<"message-key">>, Msg, Opts)).
+    ?assertEqual(<<"DEVICE VALUE">>, ?AO:get(<<"device-key">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, ?AO:get(<<"test-func">>, Msg, Opts)),
+    ?assertEqual(<<"MESSAGE VALUE">>, ?AO:get(<<"message-key">>, Msg, Opts)).
 
 denormalized_device_name_test(Opts) ->
     Msg = #{ <<"device">> => dev_test },
-    ?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
-    ?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
+    ?assertEqual(dev_test, ?AO:get(device, Msg, Opts)),
+    ?assertEqual(dev_test, ?AO:get(<<"device">>, Msg, Opts)),
     ?assertEqual(
         {module, dev_test},
         erlang:fun_info(
@@ -804,25 +810,25 @@ denormalized_key_test(Opts) ->
         },
     ?assertEqual(
         {ok, <<"TEST VALUE">>},
-        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+        ?AO:resolve(Msg, <<"test_key">>, Opts)
     ),
     ?assertEqual(
         {ok, <<"TEST VALUE">>},
-        hb_ao:resolve(Msg, <<"test-key">>, Opts)
+        ?AO:resolve(Msg, <<"test-key">>, Opts)
     ).
 
 list_transform_test(Opts) ->
     Msg = [<<"A">>, <<"B">>, <<"C">>, <<"D">>, <<"E">>],
-    ?assertEqual(<<"A">>, hb_ao:get(1, Msg, Opts)),
-    ?assertEqual(<<"B">>, hb_ao:get(2, Msg, Opts)),
-    ?assertEqual(<<"C">>, hb_ao:get(3, Msg, Opts)),
-    ?assertEqual(<<"D">>, hb_ao:get(4, Msg, Opts)),
-    ?assertEqual(<<"E">>, hb_ao:get(5, Msg, Opts)).
+    ?assertEqual(<<"A">>, ?AO:get(1, Msg, Opts)),
+    ?assertEqual(<<"B">>, ?AO:get(2, Msg, Opts)),
+    ?assertEqual(<<"C">>, ?AO:get(3, Msg, Opts)),
+    ?assertEqual(<<"D">>, ?AO:get(4, Msg, Opts)),
+    ?assertEqual(<<"E">>, ?AO:get(5, Msg, Opts)).
 
 start_as_test(Opts) ->
     ?assertEqual(
         {ok, <<"GOOD FUNCTION">>},
-        hb_ao:resolve_many(
+        ?AO:resolve_many(
             [
                 {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
                 #{ <<"path">> => <<"test_func">> }
@@ -838,7 +844,7 @@ start_as_with_parameters_test(Opts) ->
     },
     ?assertEqual(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        ?AO:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
                 #{ <<"path">> => <<"test_func">> },
@@ -857,7 +863,7 @@ load_as_test(Opts) ->
     {ok, ID} = hb_cache:write(Msg, Opts),
     ?assertEqual(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        ?AO:resolve_many(
             [
                 {as, <<"message@1.0">>, #{ <<"path">> => <<ID/binary>> }},
                 <<"test_func">>,
@@ -874,11 +880,11 @@ as_path_test(Opts) ->
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, ?AO:get(<<"test_func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        ?AO:resolve_many(
             [
                 Msg,
                 {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
@@ -896,7 +902,7 @@ continue_as_test(Opts) ->
     },
     ?assertEqual(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        ?AO:resolve_many(
             [
                 Msg,
                 {as, <<"message@1.0">>, <<>>},
@@ -918,7 +924,7 @@ multiple_as_subresolutions_test(Opts) ->
                     #{ <<"test-key-2">> => <<"MESSAGE-2">> }
             }
     },
-    Res = hb_ao:resolve_many(
+    Res = ?AO:resolve_many(
         [
             {as, <<"message@1.0">>, Msg},
             #{ <<"path">> => <<"test-message">> },
@@ -932,7 +938,7 @@ multiple_as_subresolutions_test(Opts) ->
     Path = <<"/~meta@1.0/info/~hyperbuddy@1.0/format">>,
     Parsed = hb_singleton:from(Path, Opts),
     ?event(subresolution, {parsed_sequence, Parsed}),
-    Res2 = hb_ao:resolve(Path, Opts),
+    Res2 = ?AO:resolve(Path, Opts),
     ?assertMatch({ok, #{ <<"body">> := Bin }} when is_binary(Bin), Res2).
 
 step_hook_test(InitOpts) ->
@@ -972,7 +978,7 @@ step_hook_test(InitOpts) ->
     % Test that the response has completed and is correct.
     ?assertMatch(
         {ok, <<"1">>},
-        hb_ao:resolve(
+        ?AO:resolve(
             Msg,
             #{ <<"path">> => <<"a/b/c">> },
             Opts
@@ -1013,8 +1019,8 @@ paranoid_input_verification_test(RawOpts) ->
             #{ <<"path">> => <<"keys">>, <<"a">> => 1 },
             Opts
         ),
-    ?assertThrow(_, hb_ao:resolve(Base#{ <<"a">> => 2 }, Request, Opts)),
-    ?assertThrow(_, hb_ao:resolve(Base, Request#{ <<"a">> => 2 }, Opts)).
+    ?assertThrow(_, ?AO:resolve(Base#{ <<"a">> => 2 }, Request, Opts)),
+    ?assertThrow(_, ?AO:resolve(Base, Request#{ <<"a">> => 2 }, Opts)).
 
 paranoid_result_verification_test(RawOpts) ->
     % Test that the result message is verified after execution.
@@ -1024,13 +1030,13 @@ paranoid_result_verification_test(RawOpts) ->
             #{ <<"device">> => <<"test-device@1.0">>, <<"a">> => 1 },
             Opts
         ),
-    ?assertThrow(_, hb_ao:resolve(Base, <<"mangle">>, Opts)).
+    ?assertThrow(_, ?AO:resolve(Base, <<"mangle">>, Opts)).
 
 %%% Benchmark tests
 benchmark_simple_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
-            fun(I) -> hb_ao:resolve(#{ <<"a">> => I }, <<"a">>, Opts) end,
+            fun(I) -> ?AO:resolve(#{ <<"a">> => I }, <<"a">>, Opts) end,
             ?BENCHMARK_ITERATIONS
         ),
     hb_test_utils:benchmark_print(
@@ -1043,7 +1049,7 @@ benchmark_multistep_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
             fun(I) ->
-                hb_ao:resolve(
+                ?AO:resolve(
                     #{
                         <<"iteration">> => I,
                         <<"a">> => #{ <<"b">> => #{ <<"return">> => I } }
@@ -1064,7 +1070,7 @@ benchmark_get_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
             fun(I) ->
-                hb_ao:get(
+                ?AO:get(
                     <<"a">>,
                     #{ <<"a">> => <<"1">>, <<"iteration">> => I },
                     Opts
@@ -1082,7 +1088,7 @@ benchmark_set_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
             fun(I) ->
-                hb_ao:set(
+                ?AO:set(
                     #{ <<"a">> => <<"1">>, <<"iteration">> => I },
                     <<"a">>,
                     <<"2">>,
@@ -1101,7 +1107,7 @@ benchmark_set_multiple_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
             fun(I) ->
-                hb_ao:set(
+                ?AO:set(
                     #{ <<"a">> => <<"1">>, <<"iteration">> => I },
                     #{ <<"a">> => <<"1a">>, <<"b">> => <<"2">> },
                     Opts
@@ -1120,7 +1126,7 @@ benchmark_set_multiple_deep_test(Opts) ->
     Time =
         hb_test_utils:benchmark_iterations(
             fun(I) ->
-                hb_ao:set(
+                ?AO:set(
                     #{ <<"a">> => #{ <<"b">> => <<"1">> } },
                     #{ <<"a">> => #{ <<"b">> => <<"2">>, <<"c">> => I } },
                     Opts
