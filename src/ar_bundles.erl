@@ -5,6 +5,7 @@
 -export([encode_tags/1, decode_tags/1]).
 -export([serialize/1, deserialize/1, serialize_bundle/3]).
 -export([data_item_signature_data/1]).
+-export([decode_bundle_header/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -467,7 +468,7 @@ find_single_layer(UnsignedID, Items) ->
     end.
 
 unbundle(<<Count:256/little-integer, Content/binary>>) ->
-    {ItemsBin, Items} = decode_bundle_header(Count, Content),
+    {ItemsBin, Items, _HeaderSize} = decode_bundle_header(Count, Content),
     decode_bundle_items(Items, ItemsBin);
 unbundle(?DEFAULT_DATA) -> ?DEFAULT_DATA.
 
@@ -487,11 +488,19 @@ decode_bundle_items([{_ID, Size} | RestItems], ItemsBin) ->
             )
     ].
 
-decode_bundle_header(Count, Bin) -> decode_bundle_header(Count, Bin, []).
-decode_bundle_header(0, ItemsBin, Header) ->
-    {ItemsBin, lists:reverse(Header)};
-decode_bundle_header(Count, <<Size:256/little-integer, ID:32/binary, Rest/binary>>, Header) ->
-    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]).
+decode_bundle_header(<<Count:256/little-integer, Content/binary>>) ->
+    decode_bundle_header(Count, Content).
+
+decode_bundle_header(Count, Bin) -> decode_bundle_header(Count, Bin, 32, []).
+decode_bundle_header(0, ItemsBin, HeaderSize, Header) ->
+    {ItemsBin, lists:reverse(Header), HeaderSize};
+decode_bundle_header(
+    Count,
+    <<Size:256/little-integer, ID:32/binary, Rest/binary>>,
+    HeaderSize,
+    Header
+) ->
+    decode_bundle_header(Count - 1, Rest, HeaderSize + 64, [{ID, Size} | Header]).
 
 %% @doc Decode the signature from a binary format. Only RSA 4096 is currently supported.
 %% Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
