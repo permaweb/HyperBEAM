@@ -9,7 +9,11 @@
 vary(Device, Key, Base, Request, Opts) ->
     {ok, #{ keys := KeySchemas, types := _Types }} = extract(Device, Opts),
     ?event(debug_types, {key_schemas, KeySchemas}),
-    Schema = maps:get(hb_util:atom(Key), KeySchemas, undefined),
+    Schema = 
+        try 
+            maps:get(hb_util:atom(Key), KeySchemas, undefined)
+        catch _:_ -> undefined
+        end,
     ?event(debug_types, {schema, {key, Key}, {schema, Schema}}),
     case Schema of
         undefined -> {ok, Base, Request};
@@ -17,7 +21,9 @@ vary(Device, Key, Base, Request, Opts) ->
             ?event(
                 debug_types,
                 {vary,
+                    {base, {explicit, Base}},
                     {base_schema, {explicit, BaseSchema}},
+                    {request, {explicit, Request}},
                     {request_schema, {explicit, RequestSchema}}
                 }
             ),
@@ -31,10 +37,13 @@ vary(Device, Key, Base, Request, Opts) ->
 %% @doc Apply a schema to a message, throwing an error if a required key is
 %% missing.
 apply_schema(Schema, MessageID, Opts) ->
+    ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}}),
     hb_maps:filtermap(
         fun(Key, {IsRequired, Type}) ->
             IsNestedMessage = hb_link:is_link_key(Key),
-            case hb_cache:read(<<MessageID/binary, "/", Key/binary>>, Opts) of
+            CacheKey = <<MessageID/binary, "/", Key/binary>>,
+            ?event(debug_types, {filtering, {key, Key}, {is_required, IsRequired}, {type, Type}, {cache_key, CacheKey}}),
+            case hb_cache:read(CacheKey, Opts) of
                 {ok, Value} when IsNestedMessage ->
                     % The child is itself a message, so we recursively
                     % apply the schema to it.

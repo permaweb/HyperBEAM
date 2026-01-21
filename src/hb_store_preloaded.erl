@@ -66,7 +66,23 @@ read(StoreOpts, Key) ->
                         }
                     };
                 not_found ->
-                    default_function(StoreOpts, ModName, BaseID, FunctionString)
+                    {ok, DefaultFun} =
+                        default_function(StoreOpts, ModName, BaseID, FunctionString),
+                    {ok, 
+                        #{
+                            <<"resolver">> => DefaultFun,
+                            <<"vary">> =>
+                                fun(Base, Req, Opts) ->
+                                    hb_types:vary(
+                                        BaseID,
+                                        FunctionString,
+                                        Base,
+                                        Req,
+                                        Opts
+                                    )
+                                end
+                        }
+                    }
             end
         end
     else _ -> not_found
@@ -117,6 +133,7 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
 
 info(StoreOpts, BaseID) ->
     case read(StoreOpts, <<BaseID/binary, "/info">>) of
+        {ok, #{ <<"resolver">> := InfoResolver }} -> InfoResolver();
         {ok, Info} -> Info();
         not_found -> info(StoreOpts, ?DEFAULT_DEVICE_ID)
     end.  
@@ -145,9 +162,10 @@ default_preloaded_store() ->
 
 find_message_set_test() ->
     PreloadedStore = default_preloaded_store(),
-    Result = hb_store_preloaded:read(PreloadedStore, <<"message@1.0/set">>),
-    io:format("Result: ~p~n", [Result]),
-    ?assertEqual({ok, fun dev_message:set/3}, Result).
+    {ok, #{ <<"resolver">> := Resolver }} = 
+        hb_store_preloaded:read(PreloadedStore, <<"message@1.0/set">>),
+    io:format("Resolver: ~p~n", [Resolver]),
+    ?assertEqual(fun dev_message:set/3, Resolver).
 
 find_message_default_test() ->
     PreloadedStore = default_preloaded_store(),

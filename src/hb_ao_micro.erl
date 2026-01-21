@@ -155,11 +155,14 @@ stage_7(BaseID, Func, VariedBase, VariedReq, Opts) ->
 %% reduce to the same `VariedBase/VariedReq' key will be able to read this
 %% result from the cache.
 stage_8(BaseID, VariedBase, VariedReq, RawResult, Opts) ->
+    {ok, VariedBaseID} = hb_cache:write(VariedBase, Opts),
+    {ok, VariedReqID} = hb_cache:write(VariedReq, Opts),
     {ok, ResultID} = hb_cache:write(RawResult, Opts),
+    VariedHP = <<VariedBaseID/binary, "/", VariedReqID/binary>>,
     ok =
         hb_cache:link(
             ResultID,
-            VariedHP = <<VariedBase/binary, "/", VariedReq/binary>>,
+            VariedHP,  
             Opts
         ),
     ?event(
@@ -214,14 +217,15 @@ message_device_extension_lookup_test() ->
         resolve(
             #{
                 <<"ignored">> => <<"value">>,
-                <<"...">> => #{ <<"key">> => <<"value">> }
+                <<"...">> => #{ <<"test-key">> => <<"value">> }
             },
-            <<"key">>,
+            <<"test-key">>,
             #{}
         )
     ).
 
 device_key_resolution_test() ->
+    dev_test:info(),
     ?assertEqual(
         {ok, <<"GOOD FUNCTION">>},
         resolve(
@@ -232,11 +236,29 @@ device_key_resolution_test() ->
     ).
 
 varied_result_test() ->
-    ?assertEqual(
-        {ok, #{ <<"x">> => 2, '...' => #{ <<"x">> => 1 } }},
+    ResolveResult = 
         resolve(
             #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },
             <<"varied">>,
             #{}
-        )
+        ),
+    {ok, ExpectedBaseId} = 
+        dev_message:id(
+            #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },    
+            #{ <<"committers">> => <<"none">> },
+            #{}
+        ),
+    ?assertEqual(
+        {
+            ok,
+            #{ 
+                <<"x">> => 2, 
+                '...' => ExpectedBaseId
+            }
+        },
+        ResolveResult  
     ).
+
+% TODO: 
+%% Carry VariedReqId, VariedBaseId from stage 6 -> 8
+%% Catch <<"base">> in dev_message:case_insensitive_get
