@@ -52,10 +52,16 @@ read(StoreOpts, Key) ->
                 {ok, MaxArity} ->
                     {ok,
                         #{
-                            <<"function">> => fun ModName:FunctionKey/MaxArity,
+                            <<"resolver">> => fun ModName:FunctionKey/MaxArity,
                             <<"vary">> =>
                                 fun(Base, Req, Opts) ->
-                                    hb_types:vary(ModName, Req, Base, Opts)
+                                    hb_types:vary(
+                                        BaseID,
+                                        FunctionString,
+                                        Base,
+                                        Req,
+                                        Opts
+                                    )
                                 end
                         }
                     };
