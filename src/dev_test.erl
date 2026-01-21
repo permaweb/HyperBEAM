@@ -1,7 +1,7 @@
 -module(dev_test).
 -export([info/3]).
--export([info/0, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
--export([mangle/3, update_state/3, increment_counter/3, delay/3]).
+-export([info/0, example/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([mangle/3, update_state/3, increment_counter/3, delay/3, varied/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -34,7 +34,7 @@ info(_Base, _Req, _Opts) ->
 		<<"version">> => <<"1.0">>,
 		<<"paths">> => #{
 			<<"info">> => <<"Get device info">>,
-			<<"test_func">> => <<"Test function">>,
+			<<"example">> => <<"Test function">>,
 			<<"compute">> => <<"Compute function">>,
 			<<"init">> => <<"Initialize function">>,
 			<<"restore">> => <<"Restore function">>,
@@ -60,8 +60,12 @@ index(Msg, _Req, Opts) ->
 load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
-test_func(_) ->
+example(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
+
+-spec varied(#{ x := integer() }, _, _) -> {ok, #{ x := integer(), '...' => base }}.
+varied(#{ <<"x">> := X }, _Req, _Opts) ->
+    {ok, #{ <<"x">> => X + 1, '...' => base }}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
@@ -238,7 +242,7 @@ device_with_function_key_module_test() ->
 		},
 	?assertEqual(
 		{ok, <<"GOOD FUNCTION">>},
-		hb_ao:resolve(Msg, test_func, #{})
+		hb_ao:resolve(Msg, example, #{})
 	).
 
 compute_test() ->

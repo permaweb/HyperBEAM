@@ -786,7 +786,7 @@ denormalized_device_name_test(Opts) ->
     ?assertEqual(
         {module, dev_test},
         erlang:fun_info(
-            element(3, hb_ao_device:message_to_fun(Msg, test_func, Opts)),
+            element(3, hb_ao_device:message_to_fun(Msg, example, Opts)),
             module
         )
     ).
@@ -831,7 +831,7 @@ start_as_test(Opts) ->
         ?AO:resolve_many(
             [
                 {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
-                #{ <<"path">> => <<"test_func">> }
+                #{ <<"path">> => <<"example">> }
             ],
             Opts
         )
@@ -840,14 +840,14 @@ start_as_with_parameters_test(Opts) ->
     % Resolve a key on a message that has its device set with `as'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"example">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
         {ok, <<"MESSAGE">>},
         ?AO:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
-                #{ <<"path">> => <<"test_func">> },
+                #{ <<"path">> => <<"example">> },
                 <<"test_key">>
             ],
             Opts
@@ -858,7 +858,7 @@ load_as_test(Opts) ->
     % Load a message as a device with the `as' keyword.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"example">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     {ok, ID} = hb_cache:write(Msg, Opts),
     ?assertEqual(
@@ -866,7 +866,7 @@ load_as_test(Opts) ->
         ?AO:resolve_many(
             [
                 {as, <<"message@1.0">>, #{ <<"path">> => <<ID/binary>> }},
-                <<"test_func">>,
+                <<"example">>,
                 <<"test_key">>
             ],
             Opts
@@ -874,20 +874,20 @@ load_as_test(Opts) ->
     ).
 
 as_path_test(Opts) ->
-    % Create a message with the test device, which implements the test_func
+    % Create a message with the test device, which implements the example
     % function. It normally returns `GOOD FUNCTION'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"example">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(<<"GOOD FUNCTION">>, ?AO:get(<<"test_func">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, ?AO:get(<<"example">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
         {ok, <<"MESSAGE">>},
         ?AO:resolve_many(
             [
                 Msg,
-                {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+                {as, <<"message@1.0">>, #{ <<"path">> => <<"example">> }},
                 <<"test_key">>
             ],
             Opts
@@ -898,7 +898,7 @@ continue_as_test(Opts) ->
     % Resolve a list of messages in sequence, swapping the device in the middle.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"example">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
         {ok, <<"MESSAGE">>},
@@ -906,7 +906,7 @@ continue_as_test(Opts) ->
             [
                 Msg,
                 {as, <<"message@1.0">>, <<>>},
-                #{ <<"path">> => <<"test_func">> },
+                #{ <<"path">> => <<"example">> },
                 #{ <<"path">> => <<"test_key">> }
             ],
             Opts

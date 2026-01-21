@@ -2,6 +2,7 @@
 -module(hb_ao_micro).
 -export([get/3, resolve/2, resolve/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Shortcut to resolve a key and return the result, unwrapping `resolve's
 %% `{ok, ...}' return.
@@ -183,3 +184,57 @@ stage_9(_BaseID, Result, Opts) ->
         Opts
     ),
     {ok, Result}.
+
+%%% AO-Core 1.5 micro-tests.
+
+lookup_test() ->
+    ?assertEqual(
+        {ok, <<"value">>},
+        resolve(#{ <<"key">> => <<"value">> }, <<"key">>, #{})
+    ).
+
+deep_lookup_test() ->
+    ?assertEqual(
+        {ok, <<"value">>},
+        resolve(
+            [
+                #{ <<"deep">> => #{ <<"key">> => <<"value">> } },
+                <<"deep">>,
+                <<"key">>
+            ],
+            #{}
+        )
+    ).
+
+message_device_extension_lookup_test() ->
+    ?assertEqual(
+        {ok, <<"value">>},
+        resolve(
+            #{
+                <<"ignored">> => <<"value">>,
+                <<"...">> => #{ <<"key">> => <<"value">> }
+            },
+            <<"key">>,
+            #{}
+        )
+    ).
+
+device_key_resolution_test() ->
+    ?assertEqual(
+        {ok, <<"GOOD FUNCTION">>},
+        resolve(
+            #{ <<"device">> => <<"test-device@1.0">> },
+            <<"example">>,
+            #{}
+        )
+    ).
+
+varied_result_test() ->
+    ?assertEqual(
+        {ok, #{ <<"x">> => 2, '...' => #{ <<"x">> => 1 } }},
+        resolve(
+            #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },
+            <<"varied">>,
+            #{}
+        )
+    ).
