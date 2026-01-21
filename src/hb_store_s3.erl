@@ -259,33 +259,37 @@ read(Opts, Key, ReturnGroup) ->
         true -> hb_store:join(Key);
         false -> Key
     end,
-    % Try direct read first (fast path for non-link paths)
-    ?event(store_s3, {s3_read, {key, NormalizedKey}}),
-    Result = case read_with_links(Opts, NormalizedKey) of
-        {ok, Value} ->
-            {ok, Value};
-        Value when Value == not_found orelse Value == group ->
-            try
-                PathParts = binary:split(NormalizedKey, <<"/">>, [global]),
-                case resolve_path_segments(Opts, PathParts) of
-                    {ok, ResolvedPathParts} ->
-                        ResolvedPathBin = to_path(ResolvedPathParts),
-                        read_with_links(Opts, ResolvedPathBin);
-                    {error, _} ->
-                        not_found
-                end
-            catch
-                Class:Reason:Stacktrace ->
-                    ?event(error,
-                        {resolve_path_links_failed,
-                            {class, Class},
-                            {reason, Reason},
-                            {stacktrace, Stacktrace},
-                            {key, NormalizedKey}
-                        }
-                    ),
-                    % If link resolution fails, return not_found
-                    not_found
+    SkipResolve = hb_maps:get(<<"skip_resolve">>, Opts, false, #{}),
+    ?event(store_s3, {s3_read, {key, NormalizedKey}, {skip_resolve, SkipResolve}}),
+    Result = case SkipResolve of
+        true ->
+            read_with_links(Opts, NormalizedKey);
+        false ->
+            case read_with_links(Opts, NormalizedKey) of
+                {ok, Value} ->
+                    {ok, Value};
+                Value when Value == not_found orelse Value == group ->
+                    try
+                        PathParts = binary:split(NormalizedKey, <<"/">>, [global]),
+                        case resolve_path_segments(Opts, PathParts) of
+                            {ok, ResolvedPathParts} ->
+                                ResolvedPathBin = to_path(ResolvedPathParts),
+                                read_with_links(Opts, ResolvedPathBin);
+                            {error, _} ->
+                                not_found
+                        end
+                    catch
+                        Class:Reason:Stacktrace ->
+                            ?event(error,
+                                {resolve_path_links_failed,
+                                    {class, Class},
+                                    {reason, Reason},
+                                    {stacktrace, Stacktrace},
+                                    {key, NormalizedKey}
+                                }
+                            ),
+                            not_found
+                    end
             end
     end,
     case Result of
@@ -332,18 +336,20 @@ read_direct(Opts, Key) ->
     ShardedKey = shard_key(Key),
     ShardedKeyStr = hb_util:list(ShardedKey),
     ?event(store_s3, {s3_read_direct, {key, Key}, {sharded_key, ShardedKey}}),
-    try erlcloud_s3:get_object(BucketStr, ShardedKeyStr, [], Config) of
-        Response when is_list(Response) ->
-            Content = proplists:get_value(content, Response),
-            {ok, hb_util:bin(Content)}
-    catch
-        _:{aws_error, {http_error, 404, _, _}} ->
-            not_found;
-        _:Reason ->
-            ?event(error, {s3_read_error, {key, Key}, {reason, Reason}}),
-            %% To enable store chain fallback
-            not_found
-    end.
+    hb_trace:span(<<"s3:get_object">>, fun() ->
+        try erlcloud_s3:get_object(BucketStr, ShardedKeyStr, [], Config) of
+            Response when is_list(Response) ->
+                Content = proplists:get_value(content, Response),
+                {ok, hb_util:bin(Content)}
+        catch
+            _:{aws_error, {http_error, 404, _, _}} ->
+                not_found;
+            _:Reason ->
+                ?event(error, {s3_read_error, {key, Key}, {reason, Reason}}),
+                %% To enable store chain fallback
+                not_found
+        end
+    end).
 
 %% @doc Shardk the first key (excluding `data`) into 2 parts defined
 %% by ?SHARD_CUT:
@@ -487,19 +493,23 @@ delete_object(Opts, Key) when is_binary(Key) ->
 list(Opts, Path) when is_list(Path) ->
     list(Opts, hb_store:join(Path));
 list(Opts, Path) ->
-    %% Check make_group note.
     RemoveChildren = [?CREATE_GROUP_KEY],
     #{bucket := Bucket, config := Config} = get_config(Opts),
-    ResolvedPath = case read_direct(Opts, Path) of
-        {ok, Value} ->
-            case is_link(Value) of
-                {true, Target} -> Target;
-                false -> Path
-            end;
-        _ ->
-            Path
+    SkipResolve = hb_maps:get(<<"skip_resolve">>, Opts, false, #{}),
+    FullPath = case SkipResolve of
+        true ->
+            Path;
+        false ->
+            case read_direct(Opts, Path) of
+                {ok, Value} ->
+                    case is_link(Value) of
+                        {true, Target} -> Target;
+                        false -> Path
+                    end;
+                _ ->
+                    Path
+            end
     end,
-    FullPath = ResolvedPath,
     SearchPrefix = ensure_trailing_slash(FullPath),
     ShardedSearchPrefix = shard_key(SearchPrefix),
     BucketStr = hb_util:list(Bucket),

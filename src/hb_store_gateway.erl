@@ -84,7 +84,9 @@ read(BaseStoreOpts, Key) ->
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
                     SFKey = singleflight_key(ID, StoreOpts),
-                    case hb_singleflight:do(SFKey, fun() -> fetch_upstream(ID, StoreOpts) end) of
+                    case hb_trace:span(<<"gateway:singleflight">>, fun() ->
+                        hb_singleflight:do(SFKey, fun() -> fetch_upstream(ID, StoreOpts) end)
+                    end) of
                         not_found -> not_found;
                         failure -> failure;
                         {error, timeout} -> failure;
@@ -110,25 +112,27 @@ singleflight_key(ID, StoreOpts) ->
     {gateway_read, ID, {Routes, Node}}.
 
 fetch_upstream(ID, StoreOpts) ->
-    try hb_gateway_client:read(ID, StoreOpts) of
-        {error, _} ->
-            ?event({read_not_found, {key, ID}}),
-            not_found;
-        {ok, Message} ->
-            ?event({read_found, {key, ID}}),
-            hb_store_remote_node:maybe_cache_async(StoreOpts, Message),
-            {ok, Message}
-    catch Class:Reason:Stacktrace ->
-        ?event(
-            error,
-            {read_failed,
-                {class, Class},
-                {reason, Reason},
-                {stacktrace, {trace, Stacktrace}}
-            }
-        ),
-        failure
-    end.
+    hb_trace:span(<<"gateway:fetch_upstream">>, fun() ->
+        try hb_gateway_client:read(ID, StoreOpts) of
+            {error, _} ->
+                ?event({read_not_found, {key, ID}}),
+                not_found;
+            {ok, Message} ->
+                ?event({read_found, {key, ID}}),
+                hb_store_remote_node:maybe_cache_async(StoreOpts, Message),
+                {ok, Message}
+        catch Class:Reason:Stacktrace ->
+            ?event(
+                error,
+                {read_failed,
+                    {class, Class},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stacktrace}}
+                }
+            ),
+            failure
+        end
+    end).
 
 %% @doc Normalize the routes in the given `Opts`.
 opts(Opts) ->

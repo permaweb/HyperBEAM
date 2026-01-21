@@ -25,7 +25,7 @@ read(_M1, M2, Opts) ->
     Location = hb_ao:get(<<"target">>, M2, Opts),
     ?event({read, {key_extracted, Location}}),
     ?event(debug_gateway, cache_read),
-    case hb_cache:read(Location, Opts) of
+    case hb_trace:span(<<"dev_cache:read">>, fun() -> hb_cache:read(Location, Opts) end) of
         {ok, Res} ->
             ?event({read, {cache_result, ok, Res}}),
             case hb_ao:get(<<"accept">>, M2, Opts) of

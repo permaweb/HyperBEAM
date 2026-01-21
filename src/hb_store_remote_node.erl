@@ -131,7 +131,7 @@ maybe_cache_async(StoreOpts, Message) ->
     maybe_cache_async(StoreOpts, Message, []).
 
 maybe_cache_async(StoreOpts, Message, Links) ->
-    spawn(?MODULE, maybe_cache, [StoreOpts, Message, Links]),
+    spawn(fun() -> maybe_cache(StoreOpts, Message, Links) end),
     ok.
 
 should_write(Message, #{<<"store-module">> := StoreModule} = Store) ->

@@ -35,7 +35,7 @@
 %% }
 read(ID, Opts) ->
     {Query, Variables} = case maps:is_key(<<"subindex">>, Opts) of
-      true -> 
+      true ->
         Tags = subindex_to_tags(maps:get(<<"subindex">>, Opts)),
         {
             <<
@@ -51,7 +51,7 @@ read(ID, Opts) ->
                 <<"transactionIds">> => [hb_util:human_id(ID)]
             }
         };
-      false -> 
+      false ->
         {
             <<
                 "query($transactionIds: [ID!]!) { ",
@@ -65,7 +65,7 @@ read(ID, Opts) ->
             }
         }
     end,
-    case query(Query, Variables, Opts) of
+    case hb_trace:span(<<"gql:query">>, fun() -> query(Query, Variables, Opts) end) of
         {error, Reason} -> {error, Reason};
         {ok, GqlMsg} ->
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
@@ -97,7 +97,7 @@ item_spec() ->
     """>>.
 
 %% @doc Get the data associated with a transaction by its ID, using the node's
-%% Arweave `gateway' peers. The item is expected to be available in its 
+%% Arweave `gateway' peers. The item is expected to be available in its
 %% unmodified (by caches or other proxies) form at the following location:
 %%      https://<gateway>/raw/<id>
 %% where `<id>' is the base64-url-encoded transaction ID.
@@ -108,7 +108,7 @@ data(ID, Opts) ->
         <<"path">> => <<"/arweave/raw/", ID/binary>>,
         <<"method">> => <<"GET">>
     },
-    case hb_http:request(Req, Opts) of
+    case hb_trace:span(<<"gql:fetch_raw_data">>, fun() -> hb_http:request(Req, Opts) end) of
         {ok, Res} ->
             ?event(gateway,
                 {data,
@@ -294,14 +294,20 @@ result_to_message(ExpectedID, Item, Opts) ->
         }),
     ?event({raw_ans104, TX}),
     ?event({ans104_form_response, TX}),
-    TABM = hb_util:ok(dev_codec_ans104:from(TX, #{}, Opts)),
+    TABM = hb_trace:span(<<"gql:ans104_decode">>, fun() ->
+        hb_util:ok(dev_codec_ans104:from(TX, #{}, Opts))
+    end),
     ?event({decoded_tabm, TABM}),
-    Structured = hb_util:ok(dev_codec_structured:to(TABM, #{}, Opts)),
+    Structured = hb_trace:span(<<"gql:to_structured">>, fun() ->
+        hb_util:ok(dev_codec_structured:to(TABM, #{}, Opts))
+    end),
     % Some graphql nodes do not grant the `anchor' or `last_tx' fields, so we
     % verify the data item and optionally add the explicit keys as committed
     % fields _if_ the node desires it.
     Embedded =
-        case try ar_bundles:verify_item(TX) catch _:_ -> false end of
+        case hb_trace:span(<<"gql:verify_item">>, fun() ->
+            try ar_bundles:verify_item(TX) catch _:_ -> false end
+        end) of
             true ->
                 ?event({gql_verify_succeeded, Structured}),
                 Structured;

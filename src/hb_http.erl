@@ -485,7 +485,16 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    EncodedHeaders = hb_private:reset(HeadersWithCors),
+    HeadersWithTrace = case hb_trace:enabled() of
+        true ->
+            TraceHeader = hb_trace:format_header(),
+            hb_trace:stop(),
+            hb_trace:disable(),
+            HeadersWithCors#{ <<"x-hb-trace">> => TraceHeader };
+        false ->
+            HeadersWithCors
+    end,
+    EncodedHeaders = hb_private:reset(HeadersWithTrace),
     ?event(http,
         {http_replying,
             {status, {explicit, Status}},

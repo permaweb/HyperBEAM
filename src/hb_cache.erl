@@ -507,7 +507,10 @@ store_read(Target, Path, [Store | RemainingStores], SawFailure, Opts) ->
         {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
-    ResolvedFullPathContent = case hb_store:read_with_type(Store, ResolvedFullPath) of
+    StoreMod = hb_maps:get(<<"store-module">>, Store, unknown, #{}),
+    StoreLabel = iolist_to_binary([<<"store:">>, atom_to_binary(StoreMod, utf8)]),
+    ResolvedFullPathContent = hb_trace:span(StoreLabel, fun() ->
+      case hb_store:read_with_type(Store, ResolvedFullPath) of
         failure -> failure;
         not_found -> not_found;
         {simple, Bin} ->
@@ -538,7 +541,8 @@ store_read(Target, Path, [Store | RemainingStores], SawFailure, Opts) ->
                 }
             ),
             {ok, Msg}
-    end,
+      end
+    end),
     case ResolvedFullPathContent of
         {ok, _} = Response -> Response;
         failure ->

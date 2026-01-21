@@ -371,8 +371,24 @@ handle_request(RawReq, Body, ServerID) ->
     Req = RawReq#{ start_time => StartTime },
     NodeMsg = get_opts(#{ http_server => ServerID }),
     put(server_id, ServerID),
+    TraceHeader = cowboy_req:header(<<"x-hb-trace">>, RawReq, <<>>),
+    TraceQuery = cowboy_req:match_qs([{trace, [], <<>>}], RawReq),
+    case TraceHeader =/= <<>> orelse maps:get(trace, TraceQuery, <<>>) =/= <<>> of
+        true ->
+            hb_trace:enable(),
+            hb_trace:start();
+        false ->
+            ok
+    end,
     case {cowboy_req:path(RawReq), cowboy_req:qs(RawReq)} of
         {<<"/">>, <<>>} ->
+            case hb_trace:enabled() of
+                true ->
+                    hb_trace:stop(),
+                    hb_trace:disable();
+                false ->
+                    ok
+            end,
             % If the request is for the root path, serve a redirect to the default 
             % request of the node.
             Req2 = cowboy_req:reply(
