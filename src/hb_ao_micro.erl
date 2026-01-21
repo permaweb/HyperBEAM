@@ -110,7 +110,9 @@ stage_5(BaseID, ReqID, {Vary, Func}, Opts) ->
 %% prior computations for `Base` and `Req' messages that reduce to the same
 %% `Vary'ed versions.
 stage_6(BaseID, Func, VariedBase, VariedReq, Opts) ->
-    case hb_cache:read(HP = <<VariedBase/binary, "/", VariedReq/binary>>, Opts) of
+    {ok, VariedBaseID} = hb_cache:write(VariedBase, Opts),
+    {ok, VariedReqID} = hb_cache:write(VariedReq, Opts),
+    case hb_cache:read(HP = <<VariedBaseID/binary, "/", VariedReqID/binary>>, Opts) of
         not_found -> stage_7(BaseID, Func, VariedBase, VariedReq, Opts);
         {ok, VariedResult} ->
             % If the generic result upon the `VariedBase/VariedReq' key is found,

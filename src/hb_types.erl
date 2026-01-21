@@ -14,7 +14,13 @@ vary(Device, Key, Base, Request, Opts) ->
     case Schema of
         undefined -> {ok, Base, Request};
         #{ base := BaseSchema, request := RequestSchema } ->
-            ?event(debug_types, {vary, {base_schema, BaseSchema}, {request_schema, RequestSchema}}),
+            ?event(
+                debug_types,
+                {vary,
+                    {base_schema, {explicit, BaseSchema}},
+                    {request_schema, {explicit, RequestSchema}}
+                }
+            ),
             {
                 ok,
                 apply_schema(BaseSchema, Base, Opts),
@@ -24,72 +30,35 @@ vary(Device, Key, Base, Request, Opts) ->
 
 %% @doc Apply a schema to a message, throwing an error if a required key is
 %% missing.
-apply_schema(Schema, Message, Opts) ->
-    ?event(debug_types, {apply_schema, {schema, Schema}, {message, Message}}),
-    AllKeys = hb_maps:keys(Schema, Opts),
-    RequiredKeys =
-        hb_maps:keys(
-            hb_maps:filter(
-                fun(_, {Required, _}) -> Required == required end,
-                Schema,
-                Opts
-            ),
-            Opts
-        ),
-    ?event(debug_types, {required_keys, RequiredKeys}),
-    lists:foreach(
-        fun(Key) ->
-            case hb_maps:find(Key, Message, Opts) of
-                {ok, Value} -> 
-                    {_, ExpectedType} = maps:get(Key, Schema, undefined),
-                    ?event(debug_types, {checking_key, {key, Key}, {value, Value}, {expected_type, ExpectedType}}),
-                    case is_map(ExpectedType) of
-                        true -> 
-                            apply_schema(ExpectedType, Value, Opts);
-                        _ ->
-                            case check_type(ExpectedType, Value) of
-                                true -> ok;
-                                false -> throw({invalid_type, Key, Value})
-                            end
+apply_schema(Schema, MessageID, Opts) ->
+    hb_maps:filtermap(
+        fun(Key, {IsRequired, Type}) ->
+            IsNestedMessage = hb_link:is_link_key(Key),
+            case hb_cache:read(<<MessageID/binary, "/", Key/binary>>, Opts) of
+                {ok, Value} when IsNestedMessage ->
+                    % The child is itself a message, so we recursively
+                    % apply the schema to it.
+                    {true, apply_schema(Type, Value, Opts)};
+                {ok, Value} ->
+                    case check_type(Type, Value) of
+                        true -> {true, Value};
+                        false ->
+                            throw(
+                                {invalid_type,
+                                    {key, Key},
+                                    {value, Value},
+                                    {expected_type, Type}
+                                }
+                            )
                     end;
-                error -> throw({required_key_missing, Key})
+                not_found when IsRequired == optional ->
+                    false;
+                not_found when IsRequired == required ->
+                    throw({required_key_missing, Key})
             end
         end,
-        RequiredKeys
-    ),
-    OptionalKeys =
-        hb_maps:keys(
-            hb_maps:filter(
-                fun(_, {Optional, _}) -> Optional == optional end,
-                Schema,
-                Opts
-            ),
-            Opts
-        ),
-    ?event(debug_types, {optional_keys, OptionalKeys}),
-    lists:foreach(
-        fun(Key) ->
-            case hb_maps:find(Key, Message, Opts) of
-                {ok, Value} -> 
-                    {_, ExpectedType} = maps:get(Key, Schema, undefined),
-                    ?event(debug_types, {checking_key, {key, Key}, {value, Value}, {expected_type, ExpectedType}}),
-                    case check_type(ExpectedType, Value) of
-                        true -> ok;
-                        false -> throw({invalid_type, Key, Value})
-                    end;
-                error -> ok
-            end
-        end,
-        OptionalKeys
-    ),
-    hb_message:normalize_commitments(
-        hb_maps:with(
-            AllKeys,
-            Message,
-            Opts
-        ),
-        Opts,
-        verify
+        Schema,
+        Opts
     ).
 
 %% @doc Returns a message containing a pair of key name and key dependencies for
@@ -175,6 +144,7 @@ check_type([], Value) ->
     is_list(Value);
 check_type(integer, Value) ->
     is_integer(Value);
+check_type(any, _) -> true;
 check_type(_, _) -> false.
 
 %%% Tests
