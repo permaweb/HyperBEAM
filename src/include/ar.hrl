@@ -113,3 +113,8 @@
 
 -define(BUNDLE_KEYS, [
     <<"bundle-format">>, <<"bundle-version">>, <<"bundle-map">>]).
+
+%% The threshold was determined on the mainnet at the 2.5 fork block. The chunks
+%% submitted after the threshold must adhere to stricter validation rules.
+%% This offset is about half way through partition 8
+-define(STRICT_DATA_SPLIT_THRESHOLD, 30_607_159_107_830).

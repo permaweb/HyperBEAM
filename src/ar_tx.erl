@@ -5,7 +5,9 @@
 -export([id/1, id/2, get_owner_address/1, data_root/1]).
 -export([generate_signature_data_segment/1, generate_chunk_id/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
+-export([generate_chunk_tree/1, generate_chunk_tree/2]).
 -export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
+-export([get_weave_size_increase/2]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -404,6 +406,22 @@ chunks_to_size_tagged_chunks(Chunks) ->
 %% the list of chunk ID, byte offset tuples.
 sized_chunks_to_sized_chunk_ids(SizedChunks) ->
     [{generate_chunk_id(Chunk), Size} || {Chunk, Size} <- SizedChunks].
+
+%% @doc Return the number of bytes the weave is increased by when the given transaction
+%% is included.
+get_weave_size_increase(#tx{ data_size = DataSize }, Height) ->
+	get_weave_size_increase(DataSize, Height);
+
+get_weave_size_increase(0, _Height) ->
+	0;
+get_weave_size_increase(DataSize, Height) ->
+	case Height >= ar_fork:height_2_5() of
+		true ->
+			%% The smallest multiple of ?DATA_CHUNK_SIZE larger than or equal to data_size.
+			ar_poa:get_padded_offset(DataSize, 0);
+		false ->
+			DataSize
+	end.
 
 %%%===================================================================
 %%% Tests.
