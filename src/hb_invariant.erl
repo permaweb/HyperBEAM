@@ -189,6 +189,7 @@ run_state_machines(#{ runs_remaining := 0 }) ->
     ok;
 run_state_machines(
     Spec = #{
+        runs := Runs,
         runs_remaining := RunsRemaining,
         length := Length
     }
@@ -199,6 +200,7 @@ run_state_machines(
     InitialState = generate_initial_state(SpecWithOpts),
     ?event({generated_initial_state, InitialState}),
     InitialModelState = generate_initial_model_state(SpecWithOpts),
+    hb_format:format("begin run ~p/~p...~n", [Runs - RunsRemaining + 1, Runs]),
     ResSequence =
         run_state_machine(
             SpecWithOpts#{
