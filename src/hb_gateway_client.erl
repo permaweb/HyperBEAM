@@ -119,7 +119,7 @@ data(ID, Opts) ->
             ),
             {ok, hb_ao:get(<<"body">>, Res, <<>>, Opts)};
         Res ->
-            ?event(gateway, {request_error, {id, ID}, {response, Res}}),
+            ?event(error, {request_error, {id, ID}, {response, Res}}),
             {error, no_viable_gateway}
     end.
 
@@ -239,14 +239,20 @@ result_to_message(ExpectedID, Item, Opts) ->
             cache_control => [<<"no-cache">>, <<"no-store">>]
         },
     % We have the headers, so we can get the data.
-    Data =
-        case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
-            #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
-            BinData when is_binary(BinData) -> BinData;
-            _ ->
-                {ok, Bytes} = data(ExpectedID, Opts),
-                Bytes
-        end,
+    Data = case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
+        #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
+        BinData when is_binary(BinData) -> BinData;
+        _ ->
+            data(ExpectedID, Opts)
+    end,
+    result_to_message_handle_data(ExpectedID, Item, Data, GQLOpts, Opts).
+
+result_to_message_handle_data(ExpectedID, _, {error, Reason}, _, _) ->
+    ?event(error, {valid_graphql_without_raw_data, {id, ExpectedID}, {reason, Reason}}),
+    {error, not_found};
+result_to_message_handle_data(ExpectedID, Item, {ok, Data}, GQLOpts,  Opts) -> 
+    result_to_message_handle_data(ExpectedID, Item, Data, GQLOpts, Opts);
+result_to_message_handle_data(ExpectedID, Item, Data, GQLOpts, Opts) when is_binary(Data) ->
     DataSize = byte_size(Data),
     ?event(gateway, {data, {id, ExpectedID}, {data, Data}, {item, Item}}, Opts),
     % Convert the response to an ANS-104 message.
