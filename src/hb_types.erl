@@ -16,7 +16,8 @@ vary(Device, Key, Base, Request, Opts) ->
         end,
     ?event(debug_types, {schema, {key, Key}, {schema, Schema}}),
     case Schema of
-        undefined -> {ok, Base, Request};
+        undefined ->
+            {ok, hb_cache:ensure_loaded(Base, Opts), hb_cache:ensure_loaded(Request, Opts)};
         #{ base := BaseSchema, request := RequestSchema } ->
             ?event(
                 debug_types,

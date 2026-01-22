@@ -38,8 +38,8 @@
 -endif.
 
 -define(DEFAULT_PRIMARY_STORE, #{
-    <<"name">> => <<"cache-mainnet/fs">>,
-    <<"store-module">> => hb_store_fs
+    <<"name">> => <<"cache-mainnet/lmdb">>,
+    <<"store-module">> => hb_store_lmdb
 }).
 -define(ENV_KEYS,
     #{

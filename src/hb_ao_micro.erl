@@ -32,6 +32,10 @@ resolve(Base, Req, Opts) -> stage_1(Base, Req, Opts).
 %% @doc Stage 1: Normalize the `Base' and `Req' components.
 %% If either of the components is not a binary, we write them to the cache and 
 %% use the resulting IDs as the `Base' and `Req' for the next stage.
+stage_1({link, ID, _}, Req, Opts) ->
+    stage_1(ID, Req, Opts);
+stage_1(Base, {link, ID, _}, Opts) ->
+    stage_1(Base, ID, Opts);
 stage_1(Base, Req, Opts) when not is_binary(Base) ->
     ?event(ao_core, {normalize_offloading_base, Base}, Opts),
     {ok, BaseID} = hb_cache:write(Base, Opts),
@@ -159,13 +163,22 @@ stage_7(BaseID, Func, VariedBase, VariedReq, Opts) ->
 stage_8(BaseID, VariedBase, VariedReq, RawResult, Opts) ->
     {ok, VariedBaseID} = hb_cache:write(VariedBase, Opts),
     {ok, VariedReqID} = hb_cache:write(VariedReq, Opts),
-    {ok, ResultID} = hb_cache:write(RawResult, Opts),
+    ResultID =
+        case RawResult of
+            {link, ID, _} -> ID;
+            _ ->
+                case hb_cache:write(RawResult, Opts) of
+                    {ok, ID} -> ID;
+                    not_found -> throw({failed_to_write_result, RawResult})
+                end
+        end,
     VariedHP = <<VariedBaseID/binary, "/", VariedReqID/binary>>,
+    Store = hb_opts:get(store, no_store, Opts),
     ok =
-        hb_cache:link(
+        hb_store:make_link(
+            Store,
             ResultID,
-            VariedHP,  
-            Opts
+            VariedHP
         ),
     ?event(
         ao_core,
@@ -210,7 +223,7 @@ deep_lookup_test() ->
                 <<"deep">>,
                 <<"key">>
             ],
-            #{}
+            #{ store => lists:sublist(hb_opts:get(store, no_store, #{}), 2)}
         )
     ).
 

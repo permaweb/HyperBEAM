@@ -127,7 +127,7 @@ read_local_cache(StoreOpts, ID) ->
         false ->
             not_found;
         Store ->
-            hb_cache:read(ID, #{store => Store})
+            hb_store:read(Store, ID)
     end.
 
 %% @doc Write a key to the remote node.
