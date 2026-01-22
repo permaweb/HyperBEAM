@@ -37,24 +37,45 @@ vary(Device, Key, Base, Request, Opts) ->
 %% @doc Apply a schema to a message, throwing an error if a required key is
 %% missing.
 apply_schema(Schema, MessageID, Opts) ->
-    ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}}),
+    apply_schema(Schema, MessageID, Opts, MessageID).
+apply_schema(Schema, MessageID, Opts, PathRef) ->
+    ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}, {ref, PathRef}}),
     hb_maps:filtermap(
         fun(Key, {IsRequired, Type}) ->
-            IsNestedMessage = hb_link:is_link_key(Key),
+            % IsNestedMessage = hb_link:is_link_key(Key),
             CacheKey = <<MessageID/binary, "/", Key/binary>>,
-            ?event(debug_types, {filtering, {key, Key}, {is_required, IsRequired}, {type, Type}, {cache_key, CacheKey}}),
-            case hb_cache:read(CacheKey, Opts) of
-                {ok, Value} when IsNestedMessage ->
+            ?event(debug_types, {filtering, {key, Key}, {is_required, IsRequired}, {type, Type}}),
+            CacheRes = hb_cache:read(CacheKey, Opts),
+            ?event(debug_types, {cache_read, {cache_key, CacheKey}, {cache_res, CacheRes}}),
+            case CacheRes of
+                {ok, Value} when is_map(Value) ->
                     % The child is itself a message, so we recursively
                     % apply the schema to it.
-                    {true, apply_schema(Type, Value, Opts)};
+
+                    %% TODO: this is not ideal, we must get this from the cache
+                    CacheID = hb_message:id(Value, none, Opts),
+                    ?event(debug_types, {cache_id, CacheID}),
+                    {
+                        true,
+                        apply_schema(
+                            Type,
+                            CacheID,
+                            Opts,
+                            <<PathRef/binary, "/", Key/binary>>
+                        )
+                    };
                 {ok, Value} ->
+                    ?event(debug_types, {found_value, {value, Value}}),
                     case check_type(Type, Value) of
                         true -> {true, Value};
                         false ->
+                            ?event(debug_types, {throwing_invalid_type,
+                                {key, Key},
+                                {list, <<PathRef/binary, "/", Key/binary>>}
+                            }),
                             throw(
                                 {invalid_type,
-                                    {key, Key},
+                                    {key, <<PathRef/binary, "/", Key/binary>>},
                                     {value, Value},
                                     {expected_type, Type}
                                 }
@@ -63,7 +84,12 @@ apply_schema(Schema, MessageID, Opts) ->
                 not_found when IsRequired == optional ->
                     false;
                 not_found when IsRequired == required ->
-                    throw({required_key_missing, Key})
+                    throw(
+                        {
+                            required_key_missing, 
+                            <<PathRef/binary, "/", Key/binary>>
+                        }
+                    )
             end
         end,
         Schema,
@@ -200,25 +226,38 @@ vary_throw_optional_key_wrong_type_test() ->
 
 successful_nested_vary_test() ->
     Base = #{},
-    Req = #{ <<"outer">> => #{ <<"slot">> => 1 }},
+    Req = #{ <<"outer">> => #{ <<"slot">> => 1, <<"unused">> => #{ <<"unused-key">> => <<"unused-value">> }}},
     Opts = #{},
-    Res = vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts),
+    {ok, BaseID} = hb_cache:write(Base, #{}),
+    {ok, ReqID} = hb_cache:write(Req, #{}),
+    Res =
+        vary(<<"test-device@1.0">>, <<"compute_nested">>, BaseID, ReqID, Opts),
     ?event({vary_result, Res}).
 
 vary_throw_nested_key_missing_test() ->
     Base = #{},
     Req = #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
     Opts = #{},
+    {ok, BaseID} = hb_cache:write(Base, #{}),
+    {ok, ReqID} = hb_cache:write(Req, #{}),
+    ExpectedErrorPath = <<ReqID/binary, "/outer/slot">>,
     ?assertThrow(
-        {required_key_missing, <<"slot">>},
-        vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts)
+        {required_key_missing, ExpectedErrorPath},
+        vary(<<"test-device@1.0">>, <<"compute_nested">>, BaseID, ReqID, Opts)
     ).
 
 vary_throw_nested_key_wrong_type_test() ->
     Base = #{},
     Req = #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
     Opts = #{},
+    {ok, BaseID} = hb_cache:write(Base, #{}),
+    {ok, ReqID} = hb_cache:write(Req, #{}),
+    ExpectedErrorPath = <<ReqID/binary, "/outer/slot">>,
     ?assertThrow(
-        {invalid_type, <<"slot">>, <<"1">>},
-        vary(<<"test-device@1.0">>, <<"compute_nested">>, Base, Req, Opts)
+        {invalid_type, 
+            {key, ExpectedErrorPath},
+            {value, <<"1">>},
+            {expected_type, integer}
+        },
+        vary(<<"test-device@1.0">>, <<"compute_nested">>, BaseID, ReqID, Opts)
     ).
