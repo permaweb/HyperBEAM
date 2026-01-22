@@ -38,8 +38,8 @@
 -endif.
 
 -define(DEFAULT_PRIMARY_STORE, #{
-    <<"name">> => <<"cache-mainnet/lmdb">>,
-    <<"store-module">> => hb_store_lmdb
+    <<"name">> => <<"cache-mainnet/fs">>,
+    <<"store-module">> => hb_store_fs
 }).
 -define(ENV_KEYS,
     #{
@@ -137,6 +137,7 @@ default_message() ->
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
             #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
+            #{<<"name">> => <<"arith@1.0">>, <<"module">> => dev_arith},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
@@ -232,7 +233,7 @@ default_message() ->
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
         debug_print_metadata => true,
-        debug_print_gen_id => true,
+        debug_print_gen_id => false,
         debug_print_committers => true,
         debug_print_comm_device => true,
         debug_print_comm_type => true,
@@ -312,6 +313,7 @@ default_message() ->
                 ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_preloaded,
+                    <<"arith@1.0">> => dev_arith,
                     <<"arweave@2.9-pre">> => dev_arweave,
                     <<"apply@1.0">> => dev_apply,
                     <<"auth-hook@1.0">> => dev_auth_hook,

@@ -46,10 +46,12 @@ stage_1(BaseID, ReqID, Opts) ->
 %% @doc Stage 2: Try to read the key directly. Return if found.
 %% If not found, we move on to the next stage.
 stage_2(BaseID, ReqID, Opts) ->
-    case hb_cache:read(HP = <<BaseID/binary, "/", ReqID/binary>>, Opts) of
-        {ok, Result} ->
-            ?event(ao_core, {cache_hit, {path, HP}, Result}, Opts),
-            {ok, Result};
+    Store = hb_opts:get(store, no_store, Opts),
+    ?hr(),
+    case hb_store:read(Store, HP = <<BaseID/binary, "/", ReqID/binary>>) of
+        {ok, ResultID} ->
+            ?event(ao_core, {cache_hit, {path, HP}, {result, {explicit, ResultID}}}, Opts),
+            {ok, ResultID};
         not_found ->
             stage_3(BaseID, ReqID, Opts)
     end.
@@ -199,6 +201,7 @@ lookup_test() ->
     ).
 
 deep_lookup_test() ->
+    hb:init(),
     ?assertEqual(
         {ok, <<"value">>},
         resolve(
@@ -259,6 +262,21 @@ varied_result_test() ->
         ResolveResult  
     ).
 
-% TODO: 
-%% Carry VariedReqId, VariedBaseId from stage 6 -> 8
-%% Catch <<"base">> in dev_message:case_insensitive_get
+device_precedence_test() ->
+    Root = #{ <<"i-like">> => <<"dogs">> },
+    Middle =
+        #{
+            <<"i-like">> => <<"cows">>,
+            <<"device">> => <<"test-device@1.0">>,
+            <<"...">> => Root
+        },
+    Middle2 =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"...">> => Root
+        },
+    Top = #{ <<"i-like">> => <<"cats">>, <<"...">> => Middle },
+    ?assertEqual({ok, <<"dogs">>}, resolve(Root, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"cows">>}, resolve(Middle, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"cats">>}, resolve(Top, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"turtles">>}, resolve(Middle2, <<"i-like">>, #{})).

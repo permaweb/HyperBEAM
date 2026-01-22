@@ -39,31 +39,24 @@ vary(Device, Key, Base, Request, Opts) ->
 apply_schema(Schema, MessageID, Opts) ->
     apply_schema(Schema, MessageID, Opts, MessageID).
 apply_schema(Schema, MessageID, Opts, PathRef) ->
-    ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}, {ref, PathRef}}),
+    ?event(debug_types,
+        {applying_schema,
+            {schema, Schema},
+            {message_id, MessageID},
+            {ref, PathRef}
+        }
+    ),
     hb_maps:filtermap(
         fun(Key, {IsRequired, Type}) ->
-            % IsNestedMessage = hb_link:is_link_key(Key),
             CacheKey = <<MessageID/binary, "/", Key/binary>>,
-            ?event(debug_types, {filtering, {key, Key}, {is_required, IsRequired}, {type, Type}}),
-            CacheRes = hb_cache:read(CacheKey, Opts),
-            ?event(debug_types, {cache_read, {cache_key, CacheKey}, {cache_res, CacheRes}}),
-            case CacheRes of
-                {ok, Value} when is_map(Value) ->
-                    % The child is itself a message, so we recursively
-                    % apply the schema to it.
-
-                    %% TODO: this is not ideal, we must get this from the cache
-                    CacheID = hb_message:id(Value, none, Opts),
-                    ?event(debug_types, {cache_id, CacheID}),
-                    {
-                        true,
-                        apply_schema(
-                            Type,
-                            CacheID,
-                            Opts,
-                            <<PathRef/binary, "/", Key/binary>>
-                        )
-                    };
+            ?event(debug_types,
+                {reading_schema_key,
+                    {key, Key},
+                    {is_required, IsRequired},
+                    {type, Type}
+                }
+            ),
+            case hb_ao_micro:resolve(CacheKey, Opts) of
                 {ok, Value} ->
                     ?event(debug_types, {found_value, {value, Value}}),
                     case check_type(Type, Value) of
@@ -81,15 +74,36 @@ apply_schema(Schema, MessageID, Opts, PathRef) ->
                                 }
                             )
                     end;
-                not_found when IsRequired == optional ->
-                    false;
-                not_found when IsRequired == required ->
-                    throw(
-                        {
-                            required_key_missing, 
-                            <<PathRef/binary, "/", Key/binary>>
-                        }
-                    )
+                not_found ->
+                    case hb_ao_micro:resolve(<<CacheKey/binary, "+link">>, Opts) of
+                        % {ok, LinkedID} ->
+                        %     ?event(
+                        %         debug_types,
+                        %         {found_linked_id,
+                        %             {ref, <<PathRef/binary, "/", Key/binary>>},
+                        %             {linked_id, LinkedID}
+                        %         },
+                        %         Opts
+                        %     ),
+                        %     {
+                        %         true,
+                        %         apply_schema(
+                        %             Type,
+                        %             LinkedID,
+                        %             Opts,
+                        %             <<PathRef/binary, "/", Key/binary>>
+                        %         )
+                        %     };
+                        not_found when IsRequired == optional ->
+                            false;
+                        not_found when IsRequired == required ->
+                            throw(
+                                {
+                                    required_key_missing, 
+                                    <<PathRef/binary, "/", Key/binary>>
+                                }
+                            )
+                        end
             end
         end,
         Schema,
@@ -161,6 +175,7 @@ parse_type({type, _, list, List}) ->
 parse_type({type, _, tuple, TupleElements}) ->
     list_to_tuple(lists:map(fun parse_type/1, TupleElements));
 parse_type({type, _, map, any}) -> #{};
+parse_type({var, _, '_'}) -> any;
 parse_type({type, _, map, Fields}) ->
     #{
         (parse_type(K)) => {optional(Optional), parse_type(V)}
@@ -175,11 +190,9 @@ parse_type(Other) -> {unknown_type, Other}.
 optional(map_field_assoc) -> optional;
 optional(map_field_exact) -> required.
 
-check_type([], Value) ->
-    is_list(Value);
-check_type(integer, Value) ->
-    is_integer(Value);
 check_type(any, _) -> true;
+check_type([], Value) -> is_list(Value);
+check_type(integer, Value) -> is_integer(Value);
 check_type(_, _) -> false.
 
 %%% Tests

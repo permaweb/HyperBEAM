@@ -2,7 +2,7 @@
 -export([info/3]).
 -export([info/0, example/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, varied/3]).
--export([index/3, postprocess/3, load/3]).
+-export([index/3, postprocess/3, load/3, i_like/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -55,6 +55,10 @@ index(Msg, _Req, Opts) ->
             <<"body">> => <<"i like ", Name/binary, "!">>
         }
     }.
+
+%% @doc Key for use with precedence testing. Returns `turtles'.
+i_like(_Msg, _, _Opts) ->
+    {ok, <<"turtles">>}.
 
 %% @doc Return a message with the device set to this module.
 load(Base, _, _Opts) ->

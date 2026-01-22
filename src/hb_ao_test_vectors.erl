@@ -8,7 +8,7 @@
 
 %% The AO-Core implementation to use.
 %% Expected interface: `resolve/2', `resolve/3', `get/2', `set/2'.
--define(AO, hb_ao_micro).
+-define(AO, hb_ao).
 
 %% The time to run the benchmarks for in seconds.
 -define(BENCHMARK_TIME, 0.25).

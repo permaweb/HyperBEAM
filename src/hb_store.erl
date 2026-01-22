@@ -51,6 +51,8 @@
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
 -export([generate_test_suite/1, generate_test_suite/2, test_stores/0]).
+%%% Debugging tools.
+-export([print/0, print/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -80,6 +82,30 @@ behavior_info(callbacks) ->
     <<"write">> => [write, make_link, make_group, reset, path, add_path, join],
     <<"admin">> => [start, stop, reset]
 }).
+
+%%% Debugging tools.
+
+print() ->
+    print([hd(hb_opts:get(store, no_store, #{}))]).
+print(Store) ->
+    io:format("store: ~p~n", [Store]),
+    case list(Store, <<"">>) of
+        {ok, Keys} ->
+            io:format("keys: ~p~n", [Keys]),
+            lists:foreach(
+                fun(Key) ->
+                    case read(Store, Key) of
+                        {ok, Value} ->
+                            io:format("~s: ~p~n", [Key, Value]);
+                        not_found ->
+                            io:format("~s: not found~n", [Key])
+                    end
+                end,
+                Keys
+            );
+        not_found ->
+            io:format("store: not found~n")
+    end.
 
 %%% Store named terms registry functions.
 
@@ -323,7 +349,7 @@ call_function(X, Function, Args) ->
                 end
             },
             {time, Time},
-            {result, Result}
+            {result, {explicit, Result}}
         }
     ),
     hb_event:increment(<<"store_duration">>, hb_util:bin(Function), #{}, Time),
@@ -382,7 +408,9 @@ apply_store_function(_Mod, _Store, _Function, _Args, 0) ->
 apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
     try apply(Mod, Function, [Store | Args]) of
         retry -> retry(Mod, Store, Function, Args, AttemptsRemaining);
-        Other -> Other
+        Other ->
+            ?event(store_events, {raw_store_result, {explicit, Other}}),
+            Other
     catch Class:Reason:Stacktrace ->
         ?event(store_error,
             {store_call_failed_retrying,
