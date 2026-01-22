@@ -162,6 +162,7 @@ forall(Spec) ->
 state_machine(Spec = #{ requests := _ }) ->
     Runs = hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
     Length = hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
+    hb_format:format("~n"),
     run_state_machines(
         Spec#{
             seed =>
@@ -235,7 +236,8 @@ run_state_machines(
 %% @doc Invoke the execution of a single state machine run.
 run_state_machine(#{ requests_remaining := 0, state := State }) -> [{ok, State}];
 run_state_machine(Spec = #{ requests_remaining := RequestsRemaining }) ->
-    Req = generate_request(Spec),
+    {Tag, Req} = generate_request(Spec),
+    hb_format:format("~p...", [Tag]),
     ?event({evaluating_request, {request, Req}}),
     case execute_request(Spec, Req) of
         {error, Type, Reason} ->
@@ -243,6 +245,7 @@ run_state_machine(Spec = #{ requests_remaining := RequestsRemaining }) ->
         Result ->
             case enforce_properties(Spec, Req, Result) of
                 ok ->
+                    hb_format:format("ok~n"),
                     NextSpec = apply_next(Spec, Req, Result),
                     [
                         Req
@@ -254,6 +257,7 @@ run_state_machine(Spec = #{ requests_remaining := RequestsRemaining }) ->
                         )
                     ];
                 {error, Type, Reason} ->
+                    hb_format:format("*failed*~n"),
                     [Req, {error, Type, Reason}]
             end
     end.

@@ -128,19 +128,22 @@ generate_request() ->
 
 deposit_generator(_State, Opts) ->
     Wallet = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
-    hb_message:commit(
-        #{
-            <<"path">> => <<"deposit">>,
-            <<"body">> => #{
-                <<"address">> => hb_util:human_id(Wallet),
-                <<"quantity">> => hb_invariant:int(1, 1_000_000),
-                <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
-                <<"from">> => <<"foo">>, % TODO: What should this value be?
-                <<"t">> => hb_invariant:int(100)
-            }
-        },
-        Opts#{ priv_wallet => Wallet }
-    ).
+    {
+        deposit,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"deposit">>,
+                <<"body">> => #{
+                    <<"address">> => hb_util:human_id(Wallet),
+                    <<"quantity">> => hb_invariant:int(1, 1_000_000),
+                    <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
+                    <<"from">> => <<"foo">>, % TODO: What should this value be?
+                    <<"t">> => hb_invariant:int(100)
+                }
+            },
+            Opts#{ priv_wallet => Wallet }
+        )
+    }.
 
 withdraw_generator(State, Opts) ->
     % We use our private "originated deposits" helper table because we want to
@@ -151,19 +154,22 @@ withdraw_generator(State, Opts) ->
     % failure. Should we invent technology to handle it?
     {UserAddr, UserResourceID, CurrentQty} = hb_invariant:pick(NonzeroOriginalDeposits),
     Wallet = hb_maps:get(priv_wallet, hb_maps:get(UserAddr, hb_maps:get(identities, Opts))),
-    hb_message:commit(
-        #{
-            <<"path">> => <<"withdraw">>,
-            <<"body">> => #{
-                <<"address">> => UserAddr,
-                <<"quantity">> => hb_invariant:int(1, CurrentQty),
-                <<"resource">> => UserResourceID,
-                <<"from">> => <<"foo">>, % TODO: What should this value be?
-                <<"t">> => hb_invariant:int(100)
-            }
-        },
-        Opts#{ priv_wallet => Wallet }
-    ).
+    {
+        withdraw,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"withdraw">>,
+                <<"body">> => #{
+                    <<"address">> => UserAddr,
+                    <<"quantity">> => hb_invariant:int(1, CurrentQty),
+                    <<"resource">> => UserResourceID,
+                    <<"from">> => <<"foo">>, % TODO: What should this value be?
+                    <<"t">> => hb_invariant:int(100)
+                }
+            },
+            Opts#{ priv_wallet => Wallet }
+        )
+    }.
 
 delegate_generator(State, Opts) ->
     Users = hb_maps:get(<<"users">>, State, #{}, Opts),
@@ -174,19 +180,22 @@ delegate_generator(State, Opts) ->
     Wallet = hb_maps:get(priv_wallet, hb_maps:get(FromAddr, hb_maps:get(identities, Opts))),
     ToAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     DelegatedQty = hb_invariant:int(1, CurrentQty),
-    hb_message:commit(
-        #{
-            <<"path">> => <<"delegate">>,
-            <<"body">> => #{
-                <<"address">> => ToAddr,
-                <<"quantity">> => DelegatedQty,
-                <<"resource">> => UserResourceID,
-                <<"from">> => FromAddr, 
-                <<"t">> => hb_invariant:int(100)
-            }
-        },
-        Opts#{ priv_wallet => Wallet }
-    ).
+    {
+        delegate,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"delegate">>,
+                <<"body">> => #{
+                    <<"address">> => ToAddr,
+                    <<"quantity">> => DelegatedQty,
+                    <<"resource">> => UserResourceID,
+                    <<"from">> => FromAddr, 
+                    <<"t">> => hb_invariant:int(100)
+                }
+            },
+            Opts#{ priv_wallet => Wallet }
+        )
+    }.
 
 undelegate_generator(State, Opts) ->
     NonzeroDelegations = get_nonzero_delegations(hb_private:reset(State)),
@@ -195,19 +204,22 @@ undelegate_generator(State, Opts) ->
     {FromAddr, ToAddr, ResourceID, Qty} = hb_invariant:pick(NonzeroDelegations),
     Wallet = hb_maps:get(priv_wallet, hb_maps:get(FromAddr, hb_maps:get(identities, Opts))),
     UndelegateQty = hb_invariant:int(1, Qty),
-    hb_message:commit(
-        #{
-            <<"path">> => <<"undelegate">>,
-            <<"body">> => #{
-                <<"address">> => ToAddr,
-                <<"quantity">> => UndelegateQty,
-                <<"resource">> => ResourceID,
-                <<"from">> => FromAddr, 
-                <<"t">> => hb_invariant:int(100)
-            }
-        },
-        Opts#{ priv_wallet => Wallet }
-    ).
+    {
+        undelegate,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"undelegate">>,
+                <<"body">> => #{
+                    <<"address">> => ToAddr,
+                    <<"quantity">> => UndelegateQty,
+                    <<"resource">> => ResourceID,
+                    <<"from">> => FromAddr, 
+                    <<"t">> => hb_invariant:int(100)
+                }
+            },
+            Opts#{ priv_wallet => Wallet }
+        )
+    }.
 
 verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"deposit">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),

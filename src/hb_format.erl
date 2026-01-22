@@ -10,7 +10,7 @@
 -module(hb_format).
 %%% Public API.
 -export([term/1, term/2, term/3]).
--export([print/1, print/3, print/4, print/5, eunit_print/2]).
+-export([print/1, print/3, print/4, print/5, eunit_print/2, format/1, format/2]).
 -export([message/1, message/2, message/3]).
 -export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
 -export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
@@ -501,6 +501,10 @@ eunit_print(FmtStr, FmtArgs) ->
         "~n~s ",
         [indent(FmtStr ++ "...", FmtArgs, #{}, 4)]
     ).
+
+%% @doc A thin wrapper for io:format which won't be suppressed by Eunit.
+format(Fmt) -> format(Fmt, []).
+format(Fmt, Args) -> io:format(standard_error, Fmt, Args).
 
 %% @doc Print the trace of the current stack, up to the first non-hyperbeam
 %% module. Prints each stack frame on a new line, until it finds a frame that
