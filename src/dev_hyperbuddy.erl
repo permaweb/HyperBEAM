@@ -177,7 +177,14 @@ return_file(Device, Name, Template) ->
                     end
                 }
             };
-        {error, _} ->
+        {error, ErrorMsg} ->
+            %% Instead of return an error, we report the error and return a default 500 page.
+            ?event(error, 
+                {return_file, 
+                    {device, Device}, 
+                    {name, Name}, 
+                    {template, Template}, 
+                    {error_message, ErrorMsg}}),
             {error, not_found}
     end.
 

@@ -47,7 +47,7 @@ info(_Opts) ->
 graphql(Req, Base, Opts) ->
     dev_query_graphql:handle(Req, Base, Opts).
 
-%% @doc Return whether a GraphQL esponse in a message has transaction results.
+%% @doc Return whether a GraphQL response in a message has transaction results.
 %% This key is used in HB's gateway client multirequest configuration to
 %% determine if the response from the node should be considered admissible.
 has_results(Base, Req, Opts) ->

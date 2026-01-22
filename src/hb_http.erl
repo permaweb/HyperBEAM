@@ -129,7 +129,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         Error ->
             Error
     end.
-    
 
 request_response(Method, Peer, Path, Response, Duration, Opts) ->
     {_ErlStatus, Status, Headers, Body} = Response,
@@ -1162,9 +1161,6 @@ prometheus_init() ->
 			"The total duration of an hb_http_server request call." 
 		}
 	]).
-
-
-
 
 %%% Tests
 

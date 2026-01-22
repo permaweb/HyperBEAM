@@ -344,8 +344,14 @@ read_direct(Opts, Key) ->
         catch
             _:{aws_error, {http_error, 404, _, _}} ->
                 not_found;
-            _:Reason ->
-                ?event(error, {s3_read_error, {key, Key}, {reason, Reason}}),
+            _:Reason:Stacktrace ->
+                ?event(s3_error,
+                    {s3_read_error,
+                        {key, Key},
+                        {sharded_key, ShardedKey},
+                        {reason, Reason},
+                        {opts, Opts},
+                        {stacktrace, Stacktrace}}),
                 %% To enable store chain fallback
                 not_found
         end
@@ -625,7 +631,15 @@ head_exists(Opts, Key) when is_binary(Key) ->
         Response = erlcloud_s3:head_object(BucketStr, ShardedKeyStr, [], Config),
         is_list(Response)
     catch
-        _:_ -> false
+        error:{aws_error, {http_error, 404, _, _}}:_ ->
+            false;
+        Class:Reason:Stacktrace ->
+            ?event(s3_error, 
+                {head_exists, 
+                    {class, Class}, 
+                    {reason, Reason}, 
+                    {stacktrace, Stacktrace}}),
+            false
     end.
 
 %% @doc Resolve any links in a path.
