@@ -259,6 +259,35 @@ varied_result_test() ->
         ResolveResult  
     ).
 
-% TODO: 
-%% Carry VariedReqId, VariedBaseId from stage 6 -> 8
-%% Catch <<"base">> in dev_message:case_insensitive_get
+device_precedence_test() ->
+    Root = #{ <<"i-like">> => <<"dogs">> },
+    Middle =
+        #{
+            <<"i-like">> => <<"cows">>,
+            <<"device">> => <<"test-device@1.0">>,
+            <<"...">> => Root
+        },
+    Middle2 =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"...">> => Root
+        },
+    Top = #{ <<"i-like">> => <<"cats">>, <<"...">> => Middle },
+    ?assertEqual({ok, <<"dogs">>}, resolve(Root, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"cows">>}, resolve(Middle, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"cats">>}, resolve(Top, <<"i-like">>, #{})),
+    ?assertEqual({ok, <<"turtles">>}, resolve(Middle2, <<"i-like">>, #{})).
+
+device_param_precedence_test() ->
+    ?assertEqual(
+        {ok, 1},
+        resolve(
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"x">> => 1,
+                <<"...">> => #{ <<"inc">> => 0 }
+            },
+            <<"inc">>,
+            #{}
+        )
+    ).
