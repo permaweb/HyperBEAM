@@ -111,15 +111,13 @@ value_or_device_from_message(LoadedBase, Req, Opts) ->
 %% @doc Stage 3: Try to read the `device' of the `BaseID' and the `path' of the
 %% `ReqID'. The default device is `message@1.0', and absence of a `path' results
 %% in a `throw'.
-stage_3(BaseID, Req, DeviceID, Opts) ->
-    case not ?IS_ID(Req) of
-        true -> stage_4(BaseID, Req, DeviceID, Req, Opts);
-        false ->
-            case hb_cache_micro:read(<<Req/binary, "/path">>, Opts) of
-                {ok, Key} -> stage_4(BaseID, Req, DeviceID, Key, Opts);
-                not_found -> throw({no_path_in_request, {base, BaseID}, {req, Req}})
-            end
-    end.
+stage_3(BaseID, ReqID, DeviceID, Opts) when ?IS_ID(ReqID) ->
+    case hb_cache_micro:read(<<ReqID/binary, "/path">>, Opts) of
+        {ok, Key} -> stage_4(BaseID, ReqID, DeviceID, Key, Opts);
+        not_found -> throw({no_path_in_request, {base, BaseID}, {req, ReqID}})
+    end;
+stage_3(BaseID, ReqKey, DeviceID, Opts) when is_binary(ReqKey) ->
+    stage_4(BaseID, ReqKey, DeviceID, ReqKey, Opts).
 
 %% @doc Stage 4: Read the device and key from the cache. We expect to find a
 %% `resolver' function and a `vary' function in return.
