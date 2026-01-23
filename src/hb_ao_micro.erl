@@ -33,22 +33,20 @@ resolve([Base, Req|Rest], Opts) ->
 -spec resolve(binary() | map(), binary() | map(), map()) -> {ok, any()}.
 resolve(Base, Req, Opts) -> stage_1(Base, Req, Opts).
 
-%% @doc Stage 1: Normalize the `Base' and `Req' components.
-%% If either of the components is not a binary, we write them to the cache and 
-%% use the resulting IDs as the `Base' and `Req' for the next stage.
+%% @doc Stage 1: Write the `Base' component to the cache. Refer to it in the 
+%% future via its ID.
 stage_1(Base, Req, Opts) when is_map(Base) ->
     ?event(ao_core, {normalize_offloading_base, Base}, Opts),
     {ok, BaseID} = hb_cache_micro:write(Base, Opts),
     stage_1(BaseID, Req, Opts);
-stage_1(BaseID, Req, Opts) when is_map(Req) ->
-    ?event(ao_core, {normalize_offloading_req, Req}, Opts),
-    {ok, ReqID} = hb_cache_micro:write(Req, Opts),
-    stage_1(BaseID, ReqID, Opts);
 stage_1(Base, Req, Opts) ->
     stage_2(Base, Req, Opts).
 
-%% @doc Stage 2: Try to read the key directly. Return if found.
-%% If not found, we move on to the next stage.
+%% @doc Stage 2: Try to read the key directly. If it is not found, try to locate
+%% a `device' key. Search each layer of a potentially extended message in turn.
+%% The desire semantics are a breadth-first (explicit key then device lookup
+%% per layer), rather than depth-first (search recursively for the key, then for
+%% the device).
 stage_2(Base, ReqID, Opts) ->
     case value_or_device(Base, ReqID, Opts) of
         {value, Result} ->
@@ -66,13 +64,7 @@ stage_2(Base, ReqID, Opts) ->
             ),
             stage_3(Base, ReqID, Device, Opts);
         not_found ->
-            ?event(ao_core,
-                {lookup_failure,
-                    {base, Base},
-                    {tried, [ReqID, <<"device">>, <<"...">>]}
-                },
-                Opts
-            ),
+            ?event(ao_core, {lookup_failure, {base, Base}}, Opts),
             {error, not_found}
     end.
 
