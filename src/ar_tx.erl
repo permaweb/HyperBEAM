@@ -12,6 +12,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% Minimum chunk size targeted by the arweave-js chuking algorithm.
+-define(MIN_CHUNK_SIZE, (32 * 1024)).
+
 %%%===================================================================
 %%% Public interface.
 %%%===================================================================
@@ -90,7 +93,10 @@ get_owner_address(#tx{ owner_address = OwnerAddress }) ->
     OwnerAddress.
 
 data_root(Bin) ->
-    Chunks = chunk_binary(?DATA_CHUNK_SIZE, Bin),
+    data_root(arweavejs, Bin).
+
+data_root(Mode, Bin) ->
+    Chunks = chunk_binary(Mode, ?DATA_CHUNK_SIZE, Bin),
     SizeTaggedChunks = chunks_to_size_tagged_chunks(Chunks),
     SizeTaggedChunkIDs = sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
     {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
@@ -213,8 +219,8 @@ verify_hash(#tx{ id = ID } = TX) ->
 %% check to verify that `data_root`, `data_size`, and `data` are consistent.
 verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
     true;
-verify_v2_data(#tx{ 
-        format = 2, data_root = DataRoot, 
+verify_v2_data(#tx{
+        format = 2, data_root = DataRoot,
         data_size = DataSize, data = Data }) ->
     (DataSize == byte_size(Data)) andalso (DataRoot == data_root(Data));
 verify_v2_data(_) ->
@@ -380,11 +386,36 @@ generate_chunk_id(Chunk) ->
 %% @doc Split the binary into chunks. Used for computing the Merkle roots of
 %% v1 transactions' data and computing Merkle proofs for v2 transactions' when
 %% their data is uploaded without proofs.
-chunk_binary(ChunkSize, Bin) when byte_size(Bin) < ChunkSize ->
-    [Bin];
 chunk_binary(ChunkSize, Bin) ->
+    chunk_binary(arweavejs, ChunkSize, Bin).
+
+%% @doc Split the binary into chunks using the requested mode.
+%% legacy: fixed-size chunking with a smaller final chunk.
+%% arweavejs: size-balanced chunking where the last two chunks may be small.
+%%            This is the chunking logic used by the arweave-js library.
+%%            Adapted from: https://github.com/ArweaveTeam/arweave-js/blob/39d8ef2799a2c555e6f9b0cc6adabd7cbc411bc8/src/common/lib/merkle.ts#L43
+chunk_binary(legacy, ChunkSize, Bin) when byte_size(Bin) < ChunkSize ->
+    [Bin];
+chunk_binary(legacy, ChunkSize, Bin) ->
     <<ChunkBin:ChunkSize/binary, Rest/binary>> = Bin,
-    [ChunkBin | chunk_binary(ChunkSize, Rest)].
+    [ChunkBin | chunk_binary(legacy, ChunkSize, Rest)];
+chunk_binary(arweavejs, ChunkSize, Bin) ->
+    chunk_binary_arweavejs(arweavejs, ChunkSize, Bin, []).
+
+chunk_binary_arweavejs(arweavejs, ChunkSize, Bin, Acc)
+        when byte_size(Bin) >= ChunkSize ->
+    BinSize = byte_size(Bin),
+    NextChunkSize = BinSize - ChunkSize,
+    ChunkSize2 =
+        case NextChunkSize > 0 andalso NextChunkSize < ?MIN_CHUNK_SIZE of
+            true -> 
+                (BinSize + 1) div 2;
+            false -> ChunkSize
+        end,
+    <<Chunk:ChunkSize2/binary, Rest/binary>> = Bin,
+    chunk_binary_arweavejs(arweavejs, ChunkSize, Rest, [Chunk | Acc]);
+chunk_binary_arweavejs(arweavejs, _ChunkSize, Bin, Acc) ->
+    lists:reverse([Bin | Acc]).
 
 %% @doc Assign a byte offset to every chunk in the list.
 chunks_to_size_tagged_chunks(Chunks) ->
@@ -437,6 +468,31 @@ new(Data, Reward) ->
         reward = Reward,
         data_size = byte_size(Data)
     }.
+
+chunk_binary_legacy_test() ->
+    ChunkSize = 10,
+    Data = binary:copy(<<"a">>, 25),
+    ChunksLegacy = chunk_binary(legacy, ChunkSize, Data),
+    ?assertEqual([10, 10, 5], [byte_size(Chunk) || Chunk <- ChunksLegacy]),
+    ?assertEqual(ChunksLegacy, chunk_binary(legacy, ChunkSize, Data)).
+
+chunk_binary_arweavejs_balanced_test() ->
+    ChunkSize = ?DATA_CHUNK_SIZE,
+    MinChunkSize = ?MIN_CHUNK_SIZE,
+    DataSize = ChunkSize + MinChunkSize - 1,
+    Data = binary:copy(<<"b">>, DataSize),
+    Chunks = chunk_binary(arweavejs, ChunkSize, Data),
+    ExpectedFirst = (DataSize + 1) div 2,
+    ExpectedSecond = DataSize - ExpectedFirst,
+    ?assertEqual([ExpectedFirst, ExpectedSecond], [byte_size(Chunk) || Chunk <- Chunks]).
+
+chunk_binary_arweavejs_standard_test() ->
+    ChunkSize = ?DATA_CHUNK_SIZE,
+    MinChunkSize = ?MIN_CHUNK_SIZE,
+    DataSize = ChunkSize + MinChunkSize,
+    Data = binary:copy(<<"c">>, DataSize),
+    Chunks = chunk_binary(arweavejs, ChunkSize, Data),
+    ?assertEqual([ChunkSize, MinChunkSize], [byte_size(Chunk) || Chunk <- Chunks]).
 
 sign_tx_test_() ->
     {timeout, 30, fun test_sign_tx/0}.
