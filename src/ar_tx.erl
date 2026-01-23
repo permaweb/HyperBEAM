@@ -2,11 +2,12 @@
 -module(ar_tx).
 
 -export([sign/2, verify/1, verify_tx_id/2]).
--export([id/1, id/2, get_owner_address/1, data_root/1]).
+-export([id/1, id/2, get_owner_address/1, data_root/1, data_root/2]).
 -export([generate_signature_data_segment/1, generate_chunk_id/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 -export([generate_chunk_tree/1, generate_chunk_tree/2]).
--export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
+-export([chunk_binary/2, chunk_binary/3, chunking_mode/1]).
+-export([chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
 -export([get_weave_size_increase/2]).
 
 -include("include/hb.hrl").
@@ -367,10 +368,11 @@ tx_to_json_struct(
 %% Used to compute the Merkle roots of v1 transactions' data and to compute
 %% Merkle proofs for v2 transactions when their data is uploaded without proofs.
 generate_chunk_tree(TX) ->
+    Mode = chunking_mode(TX#tx.format),
     generate_chunk_tree(TX,
         sized_chunks_to_sized_chunk_ids(
             chunks_to_size_tagged_chunks(
-                chunk_binary(?DATA_CHUNK_SIZE, TX#tx.data)
+                chunk_binary(Mode, ?DATA_CHUNK_SIZE, TX#tx.data)
             )
         )
     ).
@@ -388,6 +390,13 @@ generate_chunk_id(Chunk) ->
 %% their data is uploaded without proofs.
 chunk_binary(ChunkSize, Bin) ->
     chunk_binary(arweavejs, ChunkSize, Bin).
+
+chunking_mode(1) ->
+    legacy;
+chunking_mode(2) ->
+    arweavejs;
+chunking_mode(_) ->
+    legacy.
 
 %% @doc Split the binary into chunks using the requested mode.
 %% legacy: fixed-size chunking with a smaller final chunk.
