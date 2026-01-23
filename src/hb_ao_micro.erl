@@ -18,8 +18,12 @@ resolve(Path, Opts) when is_binary(Path) ->
     resolve(hb_path:term_to_path_parts(Path, Opts), Opts);
 resolve([Base, Req|Rest], Opts) ->
     case resolve(Base, Req, Opts) of
-        {ok, Result} when length(Rest) == 0 -> {ok, Result};
-        {ok, Result} -> resolve([Result|Rest], Opts);
+        {ok, Result} when length(Rest) == 0 ->
+            ?event(ao_core, {resolved_final_result, {result, Result}}, Opts),
+            {ok, Result};
+        {ok, Result} ->
+            ?event(ao_core, {resolved_intermediate_result, {result, {explicit, Result}}}, Opts),
+            resolve([Result|Rest], Opts);
         {error, Reason} -> {error, Reason}
     end.
 
@@ -32,23 +36,27 @@ resolve(Base, Req, Opts) -> stage_1(Base, Req, Opts).
 %% @doc Stage 1: Normalize the `Base' and `Req' components.
 %% If either of the components is not a binary, we write them to the cache and 
 %% use the resulting IDs as the `Base' and `Req' for the next stage.
-stage_1(Base, Req, Opts) when not is_binary(Base) ->
-    ?event(ao_core, {normalize_offloading_base, Base}, Opts),
-    {ok, BaseID} = hb_cache:write(Base, Opts),
+stage_1({link, ID, _Opts}, Req, Opts) ->
+    stage_1(ID, Req, Opts);
+stage_1(Base, {link, ID, _Opts}, Opts) ->
+    stage_1(Base, ID, Opts);
+stage_1(Base, Req, Opts) when is_map(Base) ->
+    ?event(ao_core, {normalize_offloading_base, {explicit, Base}}, Opts),
+    {ok, BaseID} = hb_cache_micro:write(Base, Opts),
     stage_1(BaseID, Req, Opts);
-stage_1(BaseID, Req, Opts) when not is_binary(Req) ->
+stage_1(BaseID, Req, Opts) when is_map(Req) ->
     ?event(ao_core, {normalize_offloading_req, Req}, Opts),
-    {ok, ReqID} = hb_cache:write(Req, Opts),
+    {ok, ReqID} = hb_cache_micro:write(Req, Opts),
     stage_1(BaseID, ReqID, Opts);
-stage_1(BaseID, ReqID, Opts) ->
+stage_1(BaseID, ReqID, Opts) when is_binary(BaseID) andalso is_binary(ReqID) ->
     stage_2(BaseID, ReqID, Opts).
 
 %% @doc Stage 2: Try to read the key directly. Return if found.
 %% If not found, we move on to the next stage.
 stage_2(BaseID, ReqID, Opts) ->
-    case hb_cache:read(HP = <<BaseID/binary, "/", ReqID/binary>>, Opts) of
+    case hb_cache_micro:read(HP = <<BaseID/binary, "/", ReqID/binary>>, Opts) of
         {ok, Result} ->
-            ?event(ao_core, {cache_hit, {path, HP}, Result}, Opts),
+            ?event(ao_core, {cache_hit, {path, HP}, {result, Result}}, Opts),
             {ok, Result};
         not_found ->
             stage_3(BaseID, ReqID, Opts)
@@ -57,25 +65,27 @@ stage_2(BaseID, ReqID, Opts) ->
 %% @doc Stage 3: Try to read the `device' of the `BaseID' and the `path' of the
 %% `ReqID'. The default device is `message@1.0', and absence of a `path' results
 %% in a `throw'.
-stage_3(BaseID, ReqID, Opts) ->
+stage_3(BaseID, Req, Opts) ->
+    Store = hb_opts:get(store, no_store, Opts),
     DeviceID =
-        case hb_cache:read(<<BaseID/binary, "/device">>, Opts) of
+        case hb_store:read(Store, <<BaseID/binary, "/device">>) of
             {ok, Device} -> Device;
             not_found -> <<"message@1.0">>
         end,
-    case not ?IS_ID(ReqID) of
-        true -> stage_4(BaseID, ReqID, DeviceID, ReqID, Opts);
+    case not ?IS_ID(Req) of
+        true -> stage_4(BaseID, Req, DeviceID, Req, Opts);
         false ->
-            case hb_cache:read(<<ReqID/binary, "/path">>, Opts) of
-                {ok, Key} -> stage_4(BaseID, ReqID, DeviceID, Key, Opts);
-                not_found -> throw({no_path_in_request, {base, BaseID}, {req, ReqID}})
+            case hb_store:read(Store, <<Req/binary, "/path">>) of
+                {ok, Key} -> stage_4(BaseID, Req, DeviceID, Key, Opts);
+                not_found -> throw({no_path_in_request, {base, BaseID}, {req, Req}})
             end
     end.
 
 %% @doc Stage 4: Read the device and key from the cache. We expect to find a
 %% `resolver' function and a `vary' function in return.
 stage_4(BaseID, ReqID, DeviceID, Key, Opts) ->
-    case hb_cache:read(<<DeviceID/binary, "/", Key/binary>>, Opts) of
+    Store = hb_opts:get(store, no_store, Opts),
+    case hb_store:read(Store, <<DeviceID/binary, "/", Key/binary>>) of
         {ok, #{ <<"resolver">> := Func, <<"vary">> := Vary }} ->
             ?event(ao_core,
                 {found_resolver_and_vary,
@@ -110,9 +120,9 @@ stage_5(BaseID, ReqID, {Vary, Func}, Opts) ->
 %% prior computations for `Base` and `Req' messages that reduce to the same
 %% `Vary'ed versions.
 stage_6(BaseID, Func, VariedBase, VariedReq, Opts) ->
-    {ok, VariedBaseID} = hb_cache:write(VariedBase, Opts),
-    {ok, VariedReqID} = hb_cache:write(VariedReq, Opts),
-    case hb_cache:read(HP = <<VariedBaseID/binary, "/", VariedReqID/binary>>, Opts) of
+    {ok, VariedBaseID} = hb_cache_micro:write(VariedBase, Opts),
+    {ok, VariedReqID} = hb_cache_micro:write(VariedReq, Opts),
+    case hb_cache_micro:read(HP = <<VariedBaseID/binary, "/", VariedReqID/binary>>, Opts) of
         not_found -> stage_7(BaseID, Func, VariedBase, VariedReq, Opts);
         {ok, VariedResult} ->
             % If the generic result upon the `VariedBase/VariedReq' key is found,
@@ -155,16 +165,11 @@ stage_7(BaseID, Func, VariedBase, VariedReq, Opts) ->
 %% reduce to the same `VariedBase/VariedReq' key will be able to read this
 %% result from the cache.
 stage_8(BaseID, VariedBase, VariedReq, RawResult, Opts) ->
-    {ok, VariedBaseID} = hb_cache:write(VariedBase, Opts),
-    {ok, VariedReqID} = hb_cache:write(VariedReq, Opts),
-    {ok, ResultID} = hb_cache:write(RawResult, Opts),
+    {ok, VariedBaseID} = hb_cache_micro:write(VariedBase, Opts),
+    {ok, VariedReqID} = hb_cache_micro:write(VariedReq, Opts),
+    {ok, ResultID} = hb_cache_micro:write(RawResult, Opts),
     VariedHP = <<VariedBaseID/binary, "/", VariedReqID/binary>>,
-    ok =
-        hb_cache:link(
-            ResultID,
-            VariedHP,  
-            Opts
-        ),
+    ok = hb_cache_micro:link(ResultID, VariedHP, Opts),
     ?event(
         ao_core,
         {wrote_result_to_cache, {varied_path, VariedHP}, {result, ResultID}},
@@ -192,10 +197,15 @@ stage_9(_BaseID, Result, Opts) ->
 
 %%% AO-Core 1.5 micro-tests.
 
+opts() ->
+    #{
+        store => [hb_test_utils:test_store(hb_store_fs), hd(tl(hb_opts:get(store)))]
+    }.
+
 lookup_test() ->
     ?assertEqual(
         {ok, <<"value">>},
-        resolve(#{ <<"key">> => <<"value">> }, <<"key">>, #{})
+        resolve(#{ <<"key">> => <<"value">> }, <<"key">>, opts())
     ).
 
 deep_lookup_test() ->
@@ -207,7 +217,7 @@ deep_lookup_test() ->
                 <<"deep">>,
                 <<"key">>
             ],
-            #{}
+            opts()
         )
     ).
 
@@ -220,7 +230,7 @@ message_device_extension_lookup_test() ->
                 <<"...">> => #{ <<"test-key">> => <<"value">> }
             },
             <<"test-key">>,
-            #{}
+            opts()
         )
     ).
 
@@ -231,7 +241,7 @@ device_key_resolution_test() ->
         resolve(
             #{ <<"device">> => <<"test-device@1.0">> },
             <<"example">>,
-            #{}
+            opts()
         )
     ).
 
@@ -240,13 +250,13 @@ varied_result_test() ->
         resolve(
             #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },
             <<"varied">>,
-            #{}
+            opts()
         ),
     {ok, ExpectedBaseId} = 
         dev_message:id(
             #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },    
             #{ <<"committers">> => <<"none">> },
-            #{}
+            opts()
         ),
     ?assertEqual(
         {
@@ -273,10 +283,11 @@ device_precedence_test() ->
             <<"...">> => Root
         },
     Top = #{ <<"i-like">> => <<"cats">>, <<"...">> => Middle },
-    ?assertEqual({ok, <<"dogs">>}, resolve(Root, <<"i-like">>, #{})),
-    ?assertEqual({ok, <<"cows">>}, resolve(Middle, <<"i-like">>, #{})),
-    ?assertEqual({ok, <<"cats">>}, resolve(Top, <<"i-like">>, #{})),
-    ?assertEqual({ok, <<"turtles">>}, resolve(Middle2, <<"i-like">>, #{})).
+    ?assertEqual({ok, <<"test-device@1.0">>}, resolve(Root, <<"device">>, opts())),
+    ?assertEqual({ok, <<"dogs">>}, resolve(Root, <<"i-like">>, opts())),
+    ?assertEqual({ok, <<"cows">>}, resolve(Middle, <<"i-like">>, opts())),
+    ?assertEqual({ok, <<"cats">>}, resolve(Top, <<"i-like">>, opts())),
+    ?assertEqual({ok, <<"turtles">>}, resolve(Middle2, <<"i-like">>, opts())).
 
 device_param_precedence_test() ->
     ?assertEqual(
@@ -288,6 +299,6 @@ device_param_precedence_test() ->
                 <<"...">> => #{ <<"inc">> => 0 }
             },
             <<"inc">>,
-            #{}
+            opts()
         )
     ).

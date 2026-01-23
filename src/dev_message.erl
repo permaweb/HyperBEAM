@@ -721,12 +721,6 @@ keys(Msg, Opts) ->
 %% underlying Erlang map. First check the public keys, then check case-
 %% insensitively if the key is a binary.
 get(Key, Msg, Opts) -> get(Key, Msg, #{ <<"path">> => <<"get">> }, Opts).
-
-get(Key, MsgId, Req, Opts) when ?IS_ID(MsgId) ->
-    case hb_cache:read(MsgId, Opts) of 
-        not_found -> {error, not_found};
-        {ok, Msg} -> get(Key, Msg, Req, Opts)
-    end;
 get(Key, Msg, _Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
