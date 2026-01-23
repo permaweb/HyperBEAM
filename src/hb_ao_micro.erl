@@ -39,7 +39,14 @@ stage_1(Base, Req, Opts) when is_map(Base) ->
     ?event(ao_core, {normalize_offloading_base, Base}, Opts),
     {ok, BaseID} = hb_cache_micro:write(Base, Opts),
     stage_1(BaseID, Req, Opts);
+stage_1(Base, #{ <<"path">> := Key }, Opts) ->
+    stage_1(Base, Key, Opts);
+stage_1(Base, Req, Opts) when is_map(Req) ->
+    ?event(ao_core, {normalize_offloading_req, Req}, Opts),
+    {ok, ReqID} = hb_cache_micro:write(Req, Opts),
+    stage_1(Base, ReqID, Opts);
 stage_1(Base, Req, Opts) ->
+    ?event(ao_core, {stage_1, {base_id, Base}, {req_id, Req}}),
     stage_2(Base, Req, Opts).
 
 %% @doc Stage 2: Try to read the key directly. If it is not found, try to locate
@@ -64,7 +71,7 @@ stage_2(Base, ReqID, Opts) ->
             ),
             stage_3(Base, ReqID, Device, Opts);
         not_found ->
-            ?event(ao_core, {lookup_failure, {base, Base}}, Opts),
+            ?event(ao_core, {lookup_failure, {base, Base}, {req, ReqID}}, Opts),
             {error, not_found}
     end.
 
