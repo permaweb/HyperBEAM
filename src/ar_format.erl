@@ -125,6 +125,7 @@ format_fields(TX, Indent) ->
     format_anchor(TX, Indent) ++
     format_quantity(TX, Indent) ++
     format_reward(TX, Indent) ++
+    format_data_size(TX, Indent) ++
     format_data_root(TX, Indent).
 
 format_format(TX, Indent) ->
@@ -151,6 +152,9 @@ format_quantity(TX, Indent) ->
 
 format_reward(TX, Indent) ->
     format_line("Reward: ~p", [TX#tx.reward], Indent + 1).
+
+format_data_size(TX, Indent) ->
+    format_line("Data Size: ~p", [TX#tx.data_size], Indent + 1).
 
 format_data_root(TX, Indent) ->
     format_line("Data Root: ~s", [
