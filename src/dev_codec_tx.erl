@@ -343,7 +343,7 @@ happy_tx_test() ->
         quantity = 1000,
         data = Data,
         data_size = byte_size(Data),
-        data_root = ar_tx:data_root(Data),
+        data_root = ar_tx:data_root(arweavejs, Data),
         reward = 2000
     },
     UnsignedTABM = #{
@@ -375,7 +375,7 @@ data_header_but_no_data_test() ->
     Anchor = crypto:strong_rand_bytes(32),
     Target = crypto:strong_rand_bytes(32),
     Data = <<"test-data">>,
-    DataRoot = ar_tx:data_root(Data),
+    DataRoot = ar_tx:data_root(arweavejs, Data),
     DataSize = byte_size(Data),
     UnsignedTX = #tx{
         format = 2,
@@ -556,7 +556,7 @@ ao_data_key_test() ->
         ],
         data = Data,
         data_size = byte_size(Data),
-        data_root = ar_tx:data_root(Data)
+        data_root = ar_tx:data_root(arweavejs, Data)
     },
     SignedCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
