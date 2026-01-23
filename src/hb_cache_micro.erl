@@ -2,95 +2,34 @@
 %%% `hb_ao_micro' module. Supports `write' and `read' operations, with minimal
 %%% type-tagging and untagging support.
 -module(hb_cache_micro).
--export([write/2, read/2, link/3]).
+-export([resolve/2, read/2, read_loaded/2, write/2, link/3]).
 -include("include/hb.hrl").
 
 -define(DEFAULT_SCOPE, local).
 
-%% @doc Return the store value from the node options, scoped to the
-%% `DEFAULT_SCOPE'.
-scoped_store(Opts) ->
-    hb_opts:get(store, no_store, hb_store:scope(Opts, ?DEFAULT_SCOPE)).
-
-%% @doc Link a hashpath to another in the cache.
-link(Existing, New, Opts) ->
-    Store = scoped_store(Opts),
-    case hb_store:make_link(Store, Existing, New) of
-        ok -> ok;
-        _ -> error
+%% @doc Resolve a link or a raw path to a simple prefix (either to a raw binary
+%% value or a collection of hashpaths representing a message).
+resolve(Path, Opts) -> resolve({link, Path, #{}}, Opts);
+resolve(L = {link, ID, _LinkOpts}, Opts) when ?IS_ID(ID) -> {ok, L};
+resolve({link, Path, LinkOpts}, Opts) ->
+    ?event({resolving_path, Path}),
+    case hb_store:read(scoped_store(merge_opts(Opts, LinkOpts)), Path) of
+        {ok, ID} when ?IS_ID(ID) ->
+            ?event({resolved, {path, Path}, {result, ID}}),
+            {ok, {link, ID, LinkOpts}};
+        {ok, NextPath} ->
+            ?event({resolve_recursing, {path, Path}, {next_path, NextPath}}),
+            resolve({link, NextPath, LinkOpts}, Opts);
+        not_found ->
+            not_found
     end.
-
-%% @doc Write a (possibly deep) message to the cache, if caching is enabled.
-%% Returns `{ok, ID}' on success, or `skipped' if caching is disabled.
-write(Message, Opts) ->
-    case hb_opts:get(cache, true, Opts) of
-        false -> skipped;
-        true -> do_write(Message, Opts)
-    end.
-
-%% @doc Recursively write message keys to the stores, passing the ID of values
-%% to link back to the parent.
-do_write(Message, Opts) when is_map(Message) ->
-    BinaryMessage=
-        maps:map(
-            fun(Key, Value) ->
-                {ok, InnerID} = do_write(Value, Opts),
-                ?event(
-                    {wrote_nested_value_to_cache,
-                        {id, InnerID},
-                        {key, Key},
-                        {value, Value}
-                    }
-                ),
-                InnerID
-             end,
-            Message
-        ),
-    ID = id(BinaryMessage, Opts),
-    ?event({writing_links_to_cache, {id, ID}, {message, Message}}),
-    Store = scoped_store(Opts),
-    maps:map(
-        fun(Key, Value) ->
-            hb_store:write(Store, <<ID/binary, "/", Key/binary>>, Value)
-        end,
-        BinaryMessage
-    ),
-    ?event({wrote_nested_message_to_cache, {id, ID}}),
-    {ok, ID};
-do_write({link, ID, _LinkOpts}, _Opts) when ?IS_ID(ID) ->
-    {ok, ID};
-do_write({link, Path, _LinkOpts}, Opts) when is_binary(Path) ->
-    Store = scoped_store(Opts),
-    {ok, LinkedID} = hb_store:read(Store, Path),
-    {ok, LinkedID};
-do_write(Value, Opts) ->
-    Binary = type(hb_util:bin(Value), Value),
-    ID = id(Binary, Opts),
-    Store = scoped_store(Opts),
-    ok = hb_store:write(Store, ID, Binary),
-    ?event({wrote_explicit_value_to_cache, {id, ID}, {typed_binary, Binary}}),
-    {ok, ID}.
-
-%% @doc Add a type character to a linked ID.
-type(EncodedValue, Value) when is_map(Value) -> <<"m:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_binary(Value) -> <<"b:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_integer(Value) -> <<"i:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_float(Value) -> <<"f:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_boolean(Value) -> <<"a:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_list(Value) -> <<"l:", EncodedValue/binary>>.
-
-%% @doc Take a type-tagged binary and return the typed value.
-untype(<<"m:", ID/binary>>) -> {link, ID, #{}};
-untype(<<"b:", Binary/binary>>) -> Binary;
-untype(<<"i:", Binary/binary>>) -> hb_util:int(Binary);
-untype(<<"f:", Binary/binary>>) -> hb_util:float(Binary);
-untype(<<"a:", Binary/binary>>) -> hb_util:atom(Binary);
-untype(<<"l:", ID/binary>>) -> {link, ID, #{}}.
 
 %% @doc Read a value from the cache, if it exists. If the path is a valid ID, we
 %% read the value from the store. If that fails, we try to list the path and
 %% return a message containing known keys and links to their values. For raw
 %% paths, we attempt to read and untype their values.
+read({link, LinkedID, LinkOpts}, Opts) ->
+    read(LinkedID, merge_opts(Opts, LinkOpts));
 read(ID, Opts) when ?IS_ID(ID) ->
     ?event({reading_id, {id, ID}}),
     Store = scoped_store(Opts),
@@ -122,13 +61,126 @@ read(ID, Opts) when ?IS_ID(ID) ->
 read(Path, Opts) ->
     Store = scoped_store(Opts),
     case hb_store:read(Store, Path) of
-        {ok, LinkedID} ->
-            ?event({found_linked_id, {path, Path}, {linked_id, LinkedID}}),
-            read(LinkedID, Opts);
+        {ok, NextPath} when ?IS_ID(NextPath) ->
+            ?event({found_link, {original_path, Path}, {next_path, NextPath}}),
+            read(NextPath, Opts);
+        {ok, Msg} when is_map(Msg) ->
+            ?event({found_nested_message, {path, Path}, {message, Msg}}),
+            {ok, Msg};
         Res ->
             ?event({read_raw_path_failed, {path, Path}, {result, Res}}),
             not_found
     end.
+
+%% @doc Read a path from the cache and return its result in loaded (non-link)
+%% form. Only loads at maximum one 'layer' of linked messages.
+read_loaded(Path, Opts) ->
+    case read(Path, Opts) of
+        {ok, {link, NextPath, LinkOpts}} ->
+            ?event({read_loaded_recursing, {original_path, Path}, {next, NextPath}}),
+            read_loaded(NextPath, merge_opts(Opts, LinkOpts));
+        LoadedResult ->
+            ?event({returning_loaded_result, LoadedResult}),
+            LoadedResult
+    end.
+
+%% @doc Link a hashpath to another in the cache.
+link(Existing, New, Opts) ->
+    case hb_store:make_link(scoped_store(Opts), Existing, New) of
+        ok -> ok;
+        _ -> error
+    end.
+
+%% @doc Write a (possibly deep) message to the cache, if caching is enabled.
+%% Returns `{ok, ID}' on success, or `skipped' if caching is disabled.
+write(Message, Opts) ->
+    case hb_opts:get(cache, true, Opts) of
+        false -> skipped;
+        true -> do_write(Message, Opts)
+    end.
+
+%% @doc Recursively write message keys to the stores, passing the ID of values
+%% to link back to the parent.
+do_write(Message, Opts) when is_map(Message) ->
+    BinaryMessage =
+        maps:map(
+            fun(Key, Value) ->
+                {ok, InnerID} = do_write(Value, Opts),
+                ?event(
+                    {wrote_nested_value_to_cache,
+                        {id, InnerID},
+                        {key, Key},
+                        {value, Value}
+                    }
+                ),
+                <<InnerID/binary>>
+             end,
+            Message
+        ),
+    PrefixID = id(BinaryMessage, Opts),
+    ?event({writing_links_to_cache, {id, PrefixID}, {message, Message}}),
+    Store = scoped_store(Opts),
+    maps:map(
+        fun(Key, Value) ->
+            hb_store:write(
+                Store,
+                <<PrefixID/binary, "/", (hb_util:bin(Key))/binary>>,
+                Value
+            )
+        end,
+        BinaryMessage
+    ),
+    ?event({wrote_nested_message_to_cache, {id, PrefixID}}),
+    {ok, PrefixID};
+do_write({link, ID, _LinkOpts}, _Opts) when ?IS_ID(ID) ->
+    {ok, ID};
+do_write({link, Path, _LinkOpts}, Opts) when is_binary(Path) ->
+    Store = scoped_store(Opts),
+    {ok, LinkedID} = hb_store:read(Store, Path),
+    {ok, LinkedID};
+do_write(Value, Opts) ->
+    Binary = type(hb_util:bin(Value), Value),
+    ID = id(Binary, Opts),
+    Store = scoped_store(Opts),
+    ok = hb_store:write(Store, ID, Binary),
+    ?event({wrote_explicit_value_to_cache, {id, ID}, {typed_binary, Binary}}),
+    {ok, ID}.
+
+%%% Utilities
+
+%% @doc Return the store value from the node options, scoped to the
+%% `DEFAULT_SCOPE'.
+scoped_store(Opts) ->
+    hb_opts:get(store, no_store, hb_store:scope(Opts, ?DEFAULT_SCOPE)).
+
+%% @doc Merge two `Opts`, appending the stores of the second before the first.
+%% Supports 
+merge_opts(Opts, {link, _, LinkOpts}) -> merge_opts(Opts, LinkOpts);
+merge_opts({link, _, LinkOpts}, NewOpts) -> merge_opts(LinkOpts, NewOpts);
+merge_opts(Opts = #{ store := Store }, NewOpts) when not is_list(Store) ->
+    merge_opts(Opts#{ store := [Store]}, NewOpts);
+merge_opts(Opts, NewOpts = #{ store := Store }) when not is_list(Store) ->
+    merge_opts(Opts, NewOpts#{ store := [Store]});
+merge_opts(Opts, NewOpts) ->
+    (maps:merge(Opts, NewOpts))#{
+        store => maps:get(store, NewOpts, []) ++ maps:get(store, Opts, [])
+    }.
+
+%% @doc Add a type character to an encoded value. Takes the value in its original
+%% form and uses that to source the type to annotate the provided encoded form
+%% with.
+type(EncodedValue, Value) when is_map(Value) -> <<"p:", EncodedValue/binary>>;
+type(EncodedValue, Value) when is_binary(Value) -> <<"b:", EncodedValue/binary>>;
+type(EncodedValue, Value) when is_integer(Value) -> <<"i:", EncodedValue/binary>>;
+type(EncodedValue, Value) when is_float(Value) -> <<"f:", EncodedValue/binary>>;
+type(EncodedValue, Value) when is_atom(Value) -> <<"a:", EncodedValue/binary>>.
+
+%% @doc Take a type-tagged binary and return the typed value.
+untype(<<"p:", ID/binary>>) -> {link, ID, #{}};
+untype(<<"b:", Binary/binary>>) -> Binary;
+untype(<<"i:", Binary/binary>>) -> hb_util:int(Binary);
+untype(<<"f:", Binary/binary>>) -> hb_util:float(Binary);
+untype(<<"a:", Binary/binary>>) -> hb_util:atom(Binary).
 
 %% @doc Generate a simple prefix (message ID) for a flat set of hashpath suffixes
 %% (keys) and type-tagged values. This function is deterministic and will return
@@ -144,7 +196,11 @@ id(Message, _Opts) when is_map(Message) ->
                 fun(Key, State) ->
                     crypto:hash_update(
                         State,
-                        <<Key/binary, ":", (maps:get(Key, Message))/binary>>
+                        <<
+                            (hb_util:bin(Key))/binary,
+                            ":",
+                            (maps:get(Key, Message))/binary
+                        >>
                     )
                 end,
                 crypto:hash_init(sha256),

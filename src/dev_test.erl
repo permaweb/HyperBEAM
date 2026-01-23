@@ -74,7 +74,7 @@ example(_) ->
 
 -spec varied(#{ x := any() }, #{}, #{}) -> {ok, #{ x := any(), '...' => base }}.
 varied(#{ <<"x">> := X }, _Req, _Opts) ->
-    {ok, #{ <<"x">> => hb_util:int(X) + 1, '...' => base }}.
+    {ok, #{ <<"x">> => hb_util:int(X) + 1, <<"...">> => base }}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
