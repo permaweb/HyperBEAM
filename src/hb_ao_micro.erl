@@ -81,21 +81,22 @@ stage_2(Base, ReqID, Opts) ->
 value_or_device(BaseMsg, Req, Opts) when is_map(BaseMsg) ->
     value_or_device_from_message(BaseMsg, Req, Opts);
 value_or_device(Link, Req, Opts) when ?IS_LINK(Link) ->
-    {ok, {link, ID, _}} = hb_cache_micro:resolve(Link, Opts),
-    value_or_device(ID, Req, Opts);
+    case hb_cache_micro:resolve(Link, Opts) of
+        not_found -> not_found;
+        {ok, {link, ID, _}} -> value_or_device(ID, Req, Opts)
+    end;
 value_or_device(BaseID, Req, Opts) ->
-    case hb_cache_micro:read_loaded(<<BaseID/binary, "/", Req/binary>>, Opts) of
+    case hb_cache_micro:read(<<BaseID/binary, "/", Req/binary>>, Opts) of
         {ok, Result} -> {value, Result};
         not_found ->
-            case hb_cache_micro:read_loaded(<<BaseID/binary, "/device">>, Opts) of
+            case hb_cache_micro:read(<<BaseID/binary, "/device">>, Opts) of
                 {ok, Device} -> {device, Device};
                 not_found ->
-                    case hb_cache_micro:read_loaded(<<BaseID/binary, "/...">>, Opts) of
-                        {ok, Loaded} when is_map(Loaded) ->
-                            value_or_device(Loaded, Req, Opts);
-                        not_found ->
-                            not_found
-                    end
+                    value_or_device(
+                        {link, <<BaseID/binary, "/...">>, #{}},
+                        Req,
+                        Opts
+                    )
             end
     end.
 
@@ -104,9 +105,13 @@ value_or_device(BaseID, Req, Opts) ->
 value_or_device_from_message(LoadedBase, Req, Opts) ->
     ?event(ao_core, {finding_value_or_device_from_loaded, LoadedBase}),
     case LoadedBase of
+        #{ Req := Link } when ?IS_LINK(Link) ->
+            {value, hb_util:ok(hb_cache_micro:read(Link, Opts))};
         #{ Req := Value } -> {value, Value};
         #{ <<"device">> := Link } when ?IS_LINK(Link) ->
-            {device, hb_util:ok(hb_cache_micro:read_loaded(Link, Opts))};
+            {device, hb_util:ok(hb_cache_micro:read(Link, Opts))};
+        #{ <<"device">> := Device } ->
+            {device, Device};
         #{ <<"...">> := Inner } -> value_or_device(Inner, Req, Opts);
         _ -> not_found
     end.
@@ -266,17 +271,12 @@ message_device_extension_lookup_test() ->
     Opts = opts(),
     ?assertEqual(
         {ok, <<"value">>},
-        hb_cache_micro:read(
-            hb_util:ok(
-                resolve(
-                    #{
-                        <<"ignored">> => <<"value">>,
-                        <<"...">> => #{ <<"test-key">> => <<"value">> }
-                    },
-                    <<"test-key">>,
-                    Opts
-                )
-            ),
+        resolve(
+            #{
+                <<"ignored">> => <<"value">>,
+                <<"...">> => #{ <<"test-key">> => <<"value">> }
+            },
+            <<"test-key">>,
             Opts
         )
     ).

@@ -2,25 +2,33 @@
 %%% `hb_ao_micro' module. Supports `write' and `read' operations, with minimal
 %%% type-tagging and untagging support.
 -module(hb_cache_micro).
--export([resolve/2, read/2, read_loaded/2, write/2, link/3]).
+-export([resolve/2, read/2, write/2, link/3]).
 -include("include/hb.hrl").
 
 -define(DEFAULT_SCOPE, local).
 
 %% @doc Resolve a link or a raw path to a simple prefix (either to a raw binary
 %% value or a collection of hashpaths representing a message).
-resolve(Path, Opts) -> resolve({link, Path, #{}}, Opts);
+resolve(Path, Opts) when not ?IS_LINK(Path) -> resolve({link, Path, #{}}, Opts);
 resolve(L = {link, ID, _LinkOpts}, Opts) when ?IS_ID(ID) -> {ok, L};
 resolve({link, Path, LinkOpts}, Opts) ->
-    ?event({resolving_path, Path}),
-    case hb_store:read(scoped_store(merge_opts(Opts, LinkOpts)), Path) of
+    ?event({resolving, Path}),
+    case hb_store:read(scoped_store(Opts), Path) of
         {ok, ID} when ?IS_ID(ID) ->
             ?event({resolved, {path, Path}, {result, ID}}),
             {ok, {link, ID, LinkOpts}};
-        {ok, NextPath} ->
+        {ok, NextPath} when is_binary(NextPath) ->
             ?event({resolve_recursing, {path, Path}, {next_path, NextPath}}),
             resolve({link, NextPath, LinkOpts}, Opts);
+        {ok, Msg} when is_map(Msg) ->
+            ?event(
+                warning,
+                {unexpectedly_received_full_message, {path, Path}, {message, Msg}},
+                Opts
+            ),
+            {ok, Msg};
         not_found ->
+            ?event({failed_resolve, Path}),
             not_found
     end.
 
@@ -58,31 +66,13 @@ read(ID, Opts) when ?IS_ID(ID) ->
                     not_found
             end
     end;
-read(Path, Opts) ->
-    Store = scoped_store(Opts),
-    case hb_store:read(Store, Path) of
-        {ok, NextPath} when ?IS_ID(NextPath) ->
-            ?event({found_link, {original_path, Path}, {next_path, NextPath}}),
-            read(NextPath, Opts);
-        {ok, Msg} when is_map(Msg) ->
-            ?event({found_nested_message, {path, Path}, {message, Msg}}),
-            {ok, Msg};
-        Res ->
-            ?event({read_raw_path_failed, {path, Path}, {result, Res}}),
-            not_found
-    end.
-
-%% @doc Read a path from the cache and return its result in loaded (non-link)
-%% form. Only loads at maximum one 'layer' of linked messages.
-read_loaded(Path, Opts) ->
-    case read(Path, Opts) of
-        {ok, {link, NextPath, LinkOpts}} ->
-            ?event({read_loaded_recursing, {original_path, Path}, {next, NextPath}}),
-            read_loaded(NextPath, merge_opts(Opts, LinkOpts));
-        LoadedResult ->
-            ?event({returning_loaded_result, LoadedResult}),
-            LoadedResult
-    end.
+read(Path, Opts) when is_binary(Path) ->
+    case resolve(Path, Opts) of
+        {ok, Resolved} -> read(Resolved, Opts);
+        not_found -> not_found
+    end;
+read(LoadedMessage, Opts) when is_map(LoadedMessage) ->
+    {ok, LoadedMessage}.
 
 %% @doc Link a hashpath to another in the cache.
 link(Existing, New, Opts) ->
