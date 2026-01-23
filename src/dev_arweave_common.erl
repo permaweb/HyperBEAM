@@ -190,9 +190,12 @@ reset_owner_address(TX) ->
     TX#tx{owner_address = ar_tx:get_owner_address(TX)}.
 
 
+normalize_data_root(Item = #tx{data = Bin, format = 1})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
+    Item#tx{data_root = ar_tx:data_root(legacy, Bin)};
 normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
-    Item#tx{data_root = ar_tx:data_root(Bin)};
+    Item#tx{data_root = ar_tx:data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
 
 %% @doc Turn off debug_print_verify when logging within the to/from functions
