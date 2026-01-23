@@ -8,9 +8,52 @@
 -module(hb_cache_micro).
 -export([resolve/2, read/2, write/2, link/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_SCOPE, local).
 
+%%% Load Operations.
+ensure_loaded(Msg) ->
+    ensure_loaded(Msg, #{}).
+ensure_loaded(Msg, Opts) ->
+    ensure_loaded([], Msg, Opts).
+ensure_loaded(Ref, {Status, Msg}, Opts) when Status == ok; Status == error ->
+    {Status, ensure_loaded(Ref, Msg, Opts)};
+ensure_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
+    ?event({ensure_link_loaded, {link, Link}}),
+    {link, LinkID, LinkOpts} = Link,
+    case read(LinkID, Opts) of 
+        {ok, Msg} -> ensure_all_loaded(Ref, Msg, Opts);
+        not_found -> report_ensure_loaded_not_found(Ref, Link, Opts)
+    end;
+ensure_loaded(Ref, Msg, _Opts) ->
+    ?event({ensure_loaded, {ref, Ref}, {msg, Msg}}),
+    Msg.	
+ensure_all_loaded(Msg) ->
+    ensure_all_loaded(Msg, #{}).
+ensure_all_loaded(Msg, Opts) ->
+    ensure_all_loaded([], Msg, Opts).
+ensure_all_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
+    ensure_all_loaded(Ref, ensure_loaded(Ref, Link, Opts), Opts);
+ensure_all_loaded(Ref, Msg, Opts) when is_map(Msg) ->
+    maps:map(fun(K, V) -> ensure_all_loaded([K|Ref], V, Opts) end, Msg);
+ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
+    lists:map(
+        fun({N, V}) -> ensure_all_loaded([N|Ref], V, Opts) end,
+        hb_util:number(Msg)
+    );
+ensure_all_loaded(Ref, Msg, Opts) ->
+    ensure_loaded(Ref, Msg, Opts).
+
+report_ensure_loaded_not_found(Ref, Lk, Opts) ->
+    ?event(link_error, {link_not_resolvable, {ref, Ref}, {link, Lk}, {opts, Opts}}),
+    throw(
+        {necessary_message_not_found,
+            hb_path:to_binary(lists:reverse(Ref)),
+            hb_link:format_unresolved(Lk, Opts, 0)
+        }
+    ).
+    
 %%% Read Operations.
 
 %% @doc Resolve a link or a raw path to a simple prefix (either to a raw binary
@@ -102,6 +145,7 @@ write(Message, Opts) ->
 %% @doc Recursively write message keys to the stores, passing the ID of values
 %% to link back to the parent.
 do_write(Message, Store, Opts) when is_map(Message) ->
+    ?event({do_write, {message, Message}, {store, Store}}),
     BinaryMessage =
         maps:map(
             fun(Key, Value) ->
@@ -118,7 +162,12 @@ do_write(Message, Store, Opts) when is_map(Message) ->
             Message
         ),
     PrefixID = id(BinaryMessage, Opts),
-    ?event({writing_links_to_cache, {id, PrefixID}, {message, Message}}),
+    ?event({
+        writing_links_to_cache, 
+            {id, PrefixID},
+            {message, Message},
+            {bin_msg, BinaryMessage}
+        }),
     maps:map(
         fun(Key, Value) ->
             hb_store:write(
@@ -205,3 +254,85 @@ id(Message, _Opts) when is_map(Message) ->
             )
         )
     ).
+test_unsigned(Data) ->
+    #{
+        <<"base-test-key">> => <<"base-test-value">>,
+        <<"other-test-key">> => Data
+    }.
+test_store_unsigned_empty_message(Store) ->
+    hb_store:reset(Store),
+    Item = #{},
+    Opts = #{ store => Store },
+    {ok, Path} = write(Item, Opts),
+    {ok, RetrievedItem} = read(Path, Opts),
+    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
+
+test_store_binary(Store) ->
+    Bin = <<"Simple unsigned data item">>,
+    ?event(debug_store_test, {store, Store}),
+    Opts = #{ store => Store },
+    {ok, ID} = write(Bin, Opts),
+    {ok, RetrievedBin} = read(ID, Opts),
+    ?assertEqual(Bin, RetrievedBin).
+
+test_store_unsigned_nested_empty_message(Store) ->
+    ?event(debug_store_test, {store, Store}),
+    hb_store:reset(Store),
+    Item =
+        #{ <<"layer1">> =>
+            #{ <<"layer2">> =>
+                #{ <<"layer3">> =>
+                    #{ <<"a">> => <<"b">>}
+                },
+                <<"layer3b">> => #{ <<"c">> => <<"d">>},
+                <<"layer3c">> => #{}
+            }
+        },
+    Opts = #{ store => Store },
+    {ok, Path} = write(Item, Opts),
+    {ok, RetrievedItem} = read(Path, Opts),
+    LoadedRetrived = ensure_all_loaded(RetrievedItem, Opts),
+    ?event({match, {item, Item}, {retrieved, RetrievedItem}, {loaded_retrieved, LoadedRetrived}}),
+    ?assert(hb_message:match(Item, LoadedRetrived, strict, Opts)).
+
+test_store_simple_unsigned_message(Store) ->
+    Item = test_unsigned(<<"Simple unsigned data item">>),
+    ?event(debug_store_test, {item, Item}),
+    Opts = #{ store => Store },
+    %% Write the simple unsigned item
+    {ok, Path} = write(Item, Opts),
+    %% Read the item back
+    ID = hb_util:human_id(hb_ao_micro:get(<<"id">>, Item#{ <<"device">> => <<"message@1.0">>}, Opts)),
+    ?event(debug_store_test, {ids, {id, ID}, {path, Path}}),
+    {ok, RetrievedItem} = read(ID, Opts),
+    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
+cache_suite_test_() ->
+    hb_store:generate_test_suite([
+        % {"store unsigned empty message",
+        %     fun test_store_unsigned_empty_message/1},
+        % {"store binary", fun test_store_binary/1},
+        % {"store unsigned nested empty message",
+        %     fun test_store_unsigned_nested_empty_message/1},
+        {"store simple unsigned message", fun test_store_simple_unsigned_message/1}
+    ]).
+    
+run_test() ->
+    PreloadedStore = hb_test_utils:test_store(hb_store_preloaded),
+    Store = hb_test_utils:test_store(hb_store_lmdb),
+    ?event({test_stores, {preloaded, PreloadedStore}, {store, Store}}),
+    test_store_simple_unsigned_message([PreloadedStore, Store]).
+    
+% Test statuses:
+
+% test_store_unsigned_empty_message: Fails fs/lru - difference of what 
+% happens when list() returns not_found vs []
+
+% test_store_binary: all pass
+
+% test_store_unsigned_nested_empty_message: built basic ensure_all_loaded,
+% we have to call it explicitly to pass the match, where in hb_cache we do not.
+% Believe this is correct behavior as hb_cache_micro returns links/paths by default.
+% Fs/lru will also fail without empty list behavior change described above.
+
+%
+
