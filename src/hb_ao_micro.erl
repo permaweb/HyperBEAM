@@ -111,13 +111,25 @@ value_or_device_from_message(LoadedBase, Req, Opts) ->
 %% @doc Stage 3: Try to read the `device' of the `BaseID' and the `path' of the
 %% `ReqID'. The default device is `message@1.0', and absence of a `path' results
 %% in a `throw'.
-stage_3(BaseID, ReqID, DeviceID, Opts) when ?IS_ID(ReqID) ->
+stage_3(Base, ReqID, DeviceID, Opts) when ?IS_ID(ReqID) ->
     case hb_cache_micro:read(<<ReqID/binary, "/path">>, Opts) of
-        {ok, Key} -> stage_4(BaseID, ReqID, DeviceID, Key, Opts);
-        not_found -> throw({no_path_in_request, {base, BaseID}, {req, ReqID}})
+        {ok, Key} -> stage_4(Base, ReqID, DeviceID, Key, Opts);
+        not_found -> throw({no_path_in_request, {base, Base}, {req, ReqID}})
     end;
-stage_3(BaseID, ReqKey, DeviceID, Opts) when is_binary(ReqKey) ->
-    stage_4(BaseID, ReqKey, DeviceID, ReqKey, Opts).
+stage_3(Base, ReqKey, DeviceID, Opts) when is_binary(ReqKey) ->
+    stage_4(Base, ReqKey, DeviceID, ReqKey, Opts);
+stage_3(Base, Req = #{ <<"path">> := Path }, DeviceID, Opts) when ?IS_LINK(Path) ->
+    case hb_cache_micro:read(Path, Opts) of
+        {ok, ReqKey} -> stage_4(Base, Req, DeviceID, ReqKey, Opts);
+        _ -> throw({no_path_in_request, {base, Base}, {req, Req}})
+    end;
+stage_3(Base, Req = #{ <<"path">> := ReqKey }, DeviceID, Opts) ->
+    stage_4(Base, Req, DeviceID, ReqKey, Opts);
+stage_3(Base, Req, DeviceID, Opts) ->
+    case value_or_device(Req, <<"path">>, Opts) of
+        {value, ReqKey} -> stage_4(Base, Req, DeviceID, ReqKey, Opts);
+        _ -> throw({no_path_in_request, {base, Base}, {req, Req}})
+    end.
 
 %% @doc Stage 4: Read the device and key from the cache. We expect to find a
 %% `resolver' function and a `vary' function in return.
@@ -242,6 +254,10 @@ lookup_test() ->
     ?assertEqual(
         {ok, <<"value">>},
         resolve(#{ <<"key">> => <<"value">> }, <<"key">>, opts())
+    ),
+    ?assertEqual(
+        {ok, <<"value">>},
+        resolve(#{ <<"key">> => <<"value">> }, #{ <<"path">> => <<"key">> }, opts())
     ).
 
 deep_lookup_test() ->

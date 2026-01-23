@@ -1,6 +1,10 @@
 %%% @doc A minimized implementation of the `hb_ao' cache, matching with the
-%%% `hb_ao_micro' module. Supports `write' and `read' operations, with minimal
-%%% type-tagging and untagging support.
+%%% `hb_ao_micro' module. Supports `write' and `read' operations, with
+%%% `~structured@1.0` type-tagging support.
+%%% 
+%%% The structure of a produced store is as follows:
+%%% BaseID/RequestID -> << "path:", [AO-Core Executable Path] >>
+%%% ID -> << TypeCharacter, ":", BinaryMatchingID >>.
 -module(hb_cache_micro).
 -export([resolve/2, read/2, write/2, link/3]).
 -include("include/hb.hrl").
