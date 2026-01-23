@@ -66,16 +66,15 @@ stage_2(BaseID, ReqID, Opts) ->
 %% `ReqID'. The default device is `message@1.0', and absence of a `path' results
 %% in a `throw'.
 stage_3(BaseID, Req, Opts) ->
-    Store = hb_opts:get(store, no_store, Opts),
     DeviceID =
-        case hb_store:read(Store, <<BaseID/binary, "/device">>) of
+        case hb_cache_micro:read(<<BaseID/binary, "/device">>, Opts) of
             {ok, Device} -> Device;
             not_found -> <<"message@1.0">>
         end,
     case not ?IS_ID(Req) of
         true -> stage_4(BaseID, Req, DeviceID, Req, Opts);
         false ->
-            case hb_store:read(Store, <<Req/binary, "/path">>) of
+            case hb_cache_micro:read(<<Req/binary, "/path">>, Opts) of
                 {ok, Key} -> stage_4(BaseID, Req, DeviceID, Key, Opts);
                 not_found -> throw({no_path_in_request, {base, BaseID}, {req, Req}})
             end
@@ -84,8 +83,7 @@ stage_3(BaseID, Req, Opts) ->
 %% @doc Stage 4: Read the device and key from the cache. We expect to find a
 %% `resolver' function and a `vary' function in return.
 stage_4(BaseID, ReqID, DeviceID, Key, Opts) ->
-    Store = hb_opts:get(store, no_store, Opts),
-    case hb_store:read(Store, <<DeviceID/binary, "/", Key/binary>>) of
+    case hb_cache_micro:read(<<DeviceID/binary, "/", Key/binary>>, Opts) of
         {ok, #{ <<"resolver">> := Func, <<"vary">> := Vary }} ->
             ?event(ao_core,
                 {found_resolver_and_vary,

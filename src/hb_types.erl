@@ -16,7 +16,15 @@ vary(Device, Key, Base, Request, Opts) ->
         end,
     ?event(debug_types, {schema, {key, Key}, {schema, Schema}}),
     case Schema of
-        undefined -> {ok, Base, Request};
+        undefined ->
+            {
+                ok,
+                hb_util:ok(hb_cache_micro:read(Base, Opts)),
+                if ?IS_ID(Request) ->
+                    hb_util:ok(hb_cache_micro:read(Request, Opts));
+                true -> Request
+                end
+            };
         #{ base := BaseSchema, request := RequestSchema } ->
             ?event(
                 debug_types,
@@ -42,24 +50,20 @@ apply_schema(Schema, MessageID, Opts, PathRef) ->
     ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}, {ref, PathRef}}),
     hb_maps:filtermap(
         fun(Key, {IsRequired, Type}) ->
-            % IsNestedMessage = hb_link:is_link_key(Key),
             CacheKey = <<MessageID/binary, "/", Key/binary>>,
-            ?event(debug_types, {filtering, {key, Key}, {is_required, IsRequired}, {type, Type}}),
-            CacheRes = hb_cache:read(CacheKey, Opts),
-            ?event(debug_types, {cache_read, {cache_key, CacheKey}, {cache_res, CacheRes}}),
-            case CacheRes of
+            ?event(debug_types, {cache_read, {cache_key, CacheKey}}),
+            case hb_ao_micro:resolve(CacheKey, Opts) of
                 {ok, Value} when is_map(Value) ->
-                    % The child is itself a message, so we recursively
-                    % apply the schema to it.
-
-                    %% TODO: this is not ideal, we must get this from the cache
-                    CacheID = hb_message:id(Value, none, Opts),
-                    ?event(debug_types, {cache_id, CacheID}),
+                    ?event(
+                        debug_types,
+                        {applying_schema_to_nested_message, {value, Value}},
+                        Opts
+                    ),
                     {
                         true,
                         apply_schema(
                             Type,
-                            CacheID,
+                            Value,
                             Opts,
                             <<PathRef/binary, "/", Key/binary>>
                         )
