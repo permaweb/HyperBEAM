@@ -243,7 +243,7 @@ specific_route_test() ->
                             %% This prefix allow us to set a custom message that is a little bit 
                             %% different than the original one (data field isn't provided).
                             #{
-                                <<"prefix">> => <<LocalNode/binary, "~message@1.0/message?message=3#">>,
+                                <<"prefix">> => <<LocalNode/binary, "~message@1.0/set&body=3#">>,
                                 <<"opts">> => #{
                                     <<"http_client">> => gun,
                                     <<"protocol">> => http2 
@@ -257,7 +257,7 @@ specific_route_test() ->
     {ok, Response} = hb_cache:read(ID, Opts),
     %% If the result returns <<"1984">>, it is using the default route, 
     %% not the custom one we defined
-    ?assert(maps:get(<<"data">>, Response, <<>>) /= <<"1984">>).
+    ?assertEqual(<<"3">>, maps:get(<<"data">>, Response)).
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->
