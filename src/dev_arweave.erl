@@ -166,40 +166,50 @@ post_chunk(_Base, Request, Opts) ->
 
 get_chunk_range(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
-    % get_chunk_range will attempt to query Length *or more* bytes, it will
-    % accumulate all the bytes that are returned by the gateway which in
-    % some cases will exceed the requested length.
-    Length = hb_util:int(hb_ao:get(<<"length">>, Request, ?DATA_CHUNK_SIZE, Opts)),
+    % Default to 1 to ensure a single chunk is read.
+    Length = hb_util:int(hb_ao:get(<<"length">>, Request, 1, Opts)),
     case get_chunk_range(Offset, Length, Opts, [], 0) of
         {ok, Chunks} ->
             Data = iolist_to_binary(Chunks),
-            StartOffset = ar_block:get_chunk_padded_offset(Offset) - ?DATA_CHUNK_SIZE + 1,
-            StartGap = Offset - StartOffset,
-            TruncatedLength = min(Length, byte_size(Data) - StartGap),
-            ?event(debug_test, {
-                get_chunk_range,
-                {offset, Offset}, {length, Length}, {data_size, byte_size(Data)},
-                {start_offset, StartOffset}, {start_gap, StartGap},
-                {truncated_length, TruncatedLength}
-            }),
-            Truncated = binary:part(Data, StartGap, TruncatedLength),
-            {ok, Truncated};
+            % When no `length` is specified, we'll read only a single chunk.
+            % If `length` is specified, we'll read until we've accumulated
+            % `length` or more bytes, and then truncate down to `length` bytes.
+            case hb_maps:is_key(<<"length">>, Request, Opts) of
+                true ->
+                    {ok, binary:part(Data, 0, Length)};
+                false ->
+                    {ok, Data}
+            end;
         {error, Reason} ->
             {error, Reason}
     end.
 
 get_chunk_range(_Offset, Length, _Opts, Chunks, Size)
         when Size >= Length ->
+    ?event(debug_test, {end_get_chunk_range, {offset, _Offset}, {length, Length}, {size, Size}}),
     {ok, lists:reverse(Chunks)};
 get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
+    ?event(debug_test, {get_chunk_range, {offset, Offset}, {length, Length}, {size, Size}}),
     case get_chunk(Offset, Opts) of
-        {ok, Chunk} ->
+        {ok, JSON} ->
+            Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+            ChunkSize = byte_size(Chunk),
+            AbsoluteEndOffset = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
+            AbsoluteStartOffset = AbsoluteEndOffset - ChunkSize + 1,
+            StartGap = Offset - AbsoluteStartOffset,
+            TruncatedLength = ChunkSize - StartGap,
+            ?event(debug_test, {
+                {absolute_end_offset, AbsoluteEndOffset},
+                {absolute_start_offset, AbsoluteStartOffset},
+                {chunk_size, ChunkSize}, {offset, Offset},
+                {chunk_hash, hb_util:encode(crypto:hash(sha256, Chunk))}}),
+            SlicedChunk = binary:part(Chunk, StartGap, TruncatedLength),
             get_chunk_range(
-                Offset + ?DATA_CHUNK_SIZE,
+                AbsoluteEndOffset + 1,
                 Length,
                 Opts,
-                [Chunk | Chunks],
-                Size + ?DATA_CHUNK_SIZE
+                [SlicedChunk | Chunks],
+                Size + byte_size(SlicedChunk)
             );
         {error, Reason} ->
             {error, Reason}
@@ -207,15 +217,7 @@ get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
 
 get_chunk(Offset, Opts) ->
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    Res = request(<<"GET">>, Path, Opts),
-    ?event(debug_test, {{path, Path}, {get_chunk_response, Res}}),
-    case Res of
-        {ok, JSON } ->
-            Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-            {ok, Chunk};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    request(<<"GET">>, Path, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -522,6 +524,36 @@ get_tx_basic_data_test() ->
     ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
     ok.
 
+%% @doc The data for this transaction ends with two smaller chunks.
+get_tx_split_chunk_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+            <<"exclude-data">> => false
+        },
+        #{}
+    ),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        hb_message:id(Structured, signed)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"6035386935">>,
+        <<"anchor">> => <<"PX16-598IrIMvLxFkvfNTWLVKXqXSmArOdW3o7X8jWMCH1fiNOjBZ2XjQlw0FOme">>,
+        <<"Contract">> => <<"KTzTXT_ANmF84fWEKHzWURD1LWd9QaFR9yfYUwH2Lxw">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+
+    Child = hb_ao:get(<<"1/2">>, Structured),
+    ?assert(hb_message:verify(Child, all, #{})),
+    ?event(debug_test, {child, {explicit, hb_message:id(Child, signed)}}),
+    ?assertEqual(
+        <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
+        hb_message:id(Child, signed)),
+    ok.
+
 get_tx_basic_data_exclude_data_test() ->
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9-pre">> },
@@ -637,62 +669,11 @@ serialize_data_item_test_disabled() ->
     ?assert(ar_bundles:verify_item(VerifiedItem)),
     ok.
 
-%% Note: the following tests use a mock gateway since https://arweave.net/chunk
-%% is not reliable. The current implementation has it delegating to a random
-%% backing node, and depending on which packing node is selected the request
-%% may return valid data or 404. To make the tests reliable, we instead use
-%% a mock server.
-get_partial_chunk_test() ->
-    Offset = 377813969707255,
-    ExpectedLength = 1000,
-    Chunk0 = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
-    ChunkData = #{ Offset => Chunk0 },
-    {ServerHandle, Opts} = start_mock_gateway(ChunkData),
-    try
-        ExpectedData = binary:part(Chunk0, 0, ExpectedLength),
-        {ok, Data} = hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9-pre">> },
-            #{
-                <<"path">> => <<"chunk">>,
-                <<"offset">> => Offset,
-                <<"length">> => ExpectedLength
-            },
-            Opts
-        ),
-        ?assertEqual(?DATA_CHUNK_SIZE, byte_size(Data)),
-        ?assertEqual(ExpectedData,  binary:part(Data, 0, ExpectedLength)),
-        ok
-    after
-        hb_mock_server:stop(ServerHandle)
-    end.
-
-get_full_chunk_test() ->
-    Offset = 377813969707255,
-    ExpectedLength = ?DATA_CHUNK_SIZE,
-    Chunk0 = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
-    ChunkData = #{ Offset => Chunk0 },
-    {ServerHandle, Opts} = start_mock_gateway(ChunkData),
-    try
-        {ok, Data} = hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9-pre">> },
-            #{
-                <<"path">> => <<"chunk">>,
-                <<"offset">> => Offset,
-                <<"length">> => ExpectedLength
-            },
-            Opts
-        ),
-        ?assertEqual(Chunk0, Data),
-        ok
-    after
-        hb_mock_server:stop(ServerHandle)
-    end.
-
-get_multi_chunk_test() ->
-    %% http://tip-1.arweave.xyz:1984/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+get_partial_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399,
-    ExpectedLength = 1264430,
+    ExpectedLength = 1000,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9-pre">> },
@@ -703,13 +684,58 @@ get_multi_chunk_test() ->
         },
         Opts
     ),
-    ?event(debug_test, {{data, byte_size(Data)}, {expected_length, ExpectedLength}}),
-    % ?assertEqual(ExpectedData, Data),
+    ?assertEqual(
+        <<"G62E7qonT1RBmkC6e3pNJz_thpS9xkVD3qTJAk6o3Uc">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
     ok.
 
+get_full_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399,
+    ExpectedLength = ?DATA_CHUNK_SIZE,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"LyTBdUe0rNmpqt8C-p7HksdiredXaa0wCBAPt3504W0">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_multi_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399,
+    ExpectedLength = ?DATA_CHUNK_SIZE * 3,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"4Cb_N0z0tMDwCiWrUbuzktfn-H6NLHT1btXGDo3CByI">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+
 %% @doc Query a chunk range that starts and ends in the middle of a chunk.
-get_mid_chunk_test() ->
-    %% http://tip-1.arweave.xyz:1984/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+get_mid_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399 + 200_000,
     ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
@@ -723,6 +749,92 @@ get_mid_chunk_test() ->
         },
         Opts
     ),
-    ?event(debug_test, {{data, byte_size(Data)}, {expected_length, ExpectedLength}}),
-    % ?assertEqual(ExpectedData, Data),
+    ?assertEqual(
+        <<"xkEZpGqDiCVuVZfGVyscmfYNZqYmgBLjOrMD2P_SfWs">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_partial_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = 1000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"yU5tZyDCTZ4MFcT6lng74tvx1oIbPkpCw1VAJsSqeuo">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_full_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = ?DATA_CHUNK_SIZE,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"nVCvjEq9T5nxIR6jvglNbX1_CYCg0WifxfQoXhS4gik">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_multi_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = ?DATA_CHUNK_SIZE * 3,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"DfS3jtLXqG3zO_IFA3P-r55SUBoeJmeIh4Eim2Rldeo">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_mid_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109 + 200_000,
+    ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"mgSfqsNapn_BXpbnIHtdeu3rQyvrjBaS0c7rEbUbtBU">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
     ok.
