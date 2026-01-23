@@ -289,6 +289,16 @@ default_message() ->
             },
             #{
                 % Routes for Arweave transaction requests to use a remote gateway.
+                <<"template">> => <<"/chunk">>,
+                <<"node">> =>
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://neo-arweave.zephyrdev.xyz">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
+            },
+            #{
+                % Routes for Arweave transaction requests to use a remote gateway.
                 <<"template">> => <<"/arweave">>,
                 <<"node">> =>
                     #{
