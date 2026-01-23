@@ -247,17 +247,23 @@ stage_9(_BaseID, Result, Opts) ->
 
 opts() ->
     #{
-        store => [hb_test_utils:test_store(hb_store_fs), hd(tl(hb_opts:get(store)))]
+        store => [hb_test_utils:test_store(hb_store_lmdb), hd(tl(hb_opts:get(store)))]
     }.
 
 lookup_test() ->
     ?assertEqual(
         {ok, <<"value">>},
         resolve(#{ <<"key">> => <<"value">> }, <<"key">>, opts())
-    ),
+    ).
+
+lookup_with_req_msg_test() ->
     ?assertEqual(
         {ok, <<"value">>},
-        resolve(#{ <<"key">> => <<"value">> }, #{ <<"path">> => <<"key">> }, opts())
+        resolve(
+            #{ <<"key">> => <<"value">> },
+            #{ <<"path">> => <<"key">> },
+            opts()
+        )
     ).
 
 deep_lookup_test() ->
