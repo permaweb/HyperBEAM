@@ -19,8 +19,12 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             [IsTX, EndOffset, Size] = binary:split(Binary, <<":">>, [global]),
             ?event(
                 debug_test,
-                {reading_offset, {is_tx, IsTX},
-                {end_offset, EndOffset}, {size, Size}}
+                {reading_offset, 
+                    {path, path(ID)},
+                    {is_tx, IsTX},
+                    {end_offset, EndOffset},
+                    {size, Size}
+                }
             ),
             case hb_util:bool(IsTX) of
                 true ->
@@ -30,7 +34,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                     load_item(
                         hb_util:int(EndOffset), hb_util:int(Size), StoreOpts)
             end;
-        {error, not_found} ->
+        not_found ->
             {error, not_found}
     end.
 
@@ -102,7 +106,7 @@ write_offset(#{ <<"index-store">> := IndexStore }, ID, IsTX, EndOffset, Size) ->
         ":",
         (hb_util:bin(Size))/binary
     >>,
-    ?event(debug_test, {value, Value}),
+    ?event(debug_test, {{path, path(ID)}, {value, Value}}),
     hb_store:write(IndexStore, path(ID), Value).
 
 path(ID) ->
