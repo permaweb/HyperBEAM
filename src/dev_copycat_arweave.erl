@@ -212,28 +212,80 @@ index_ids_test() ->
     ),
     ?event(debug_test, {Block}),
     ?assertEqual(ok, maybe_index_ids(Block, Opts)),
+    % WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4 is a bundle signed with
+    % an Ethereum signature which is not supported by HB as of Jan 2026.
+    % The bundle should be indexed even though we can't deserialized the
+    % bundle itself.
+    ?assertException(
+        error,
+        {badmatch, unsupported_tx_format},
+        hb_store_arweave:read(
+            StoreOpts,
+            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>)
+    ),
+    % These 3 items are within the WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4
+    % bundle.
+    assert_item_read(StoreOpts,
+        <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>),
+    assert_item_read(StoreOpts,
+        <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>),
+    assert_item_read(StoreOpts,
+        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>),
+    % The T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs can be deserialized so
+    % we'll verify that some of its items were index and match the version
+    % in the deserialized bundle.
+    assert_bundle_read(
+        StoreOpts,
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        [
+            {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
+            {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
+            {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
+        ]
+    ),
+    % Non-ans104 transaction in the block should not be indexed.
+    ?assertEqual({error, not_found},
+        hb_store_arweave:read(StoreOpts,
+            <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>)),
+    % Another bundle with an unsupported signature should be indexed even if
+    % it can't be deserialized.
+    ?assertException(
+        error,
+        {badmatch, unsupported_tx_format},
+        hb_store_arweave:read(
+            StoreOpts,
+            <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
+    ),
+    assert_bundle_read(
+        StoreOpts,
+        <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
+        [
+            {<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, <<"1">>}
+        ]
+    ),
+   ok.
 
-    % Bundles with unsupprted signatures should still be indexed, but when
-    % we go to desiarlize the data it will fail.
-    % ?assertEqual({badmatch, unsupported_tx_format},
-    %     hb_store_arweave:read(
-    %         StoreOpts,
-    %         <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)),
-
-    % This is a single item bundle with nested items. The immediately
-    % bundled item is indexed, the nested items are not.
-    {ok, TX5} = hb_store_arweave:read(StoreOpts, <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>),
-    ?assertEqual(<<"871231847">>, hb_maps:get(<<"reward">>, TX5, #{})),
-    ?assert(hb_message:verify(TX5, all, #{})),
-    TX5Item = hb_ao:get(<<"1">>, TX5,  #{}),
-    TX5ItemID = hb_message:id(TX5Item, signed),
-    ?assertEqual(<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, TX5ItemID),
-    TX5ItemRead = hb_store_arweave:read(StoreOpts, <<"XJq09oboLC7Z5LQ0lsg2klHa3pkCW_H1kWeBnrMLmfc">>),
-    ?event(debug_test, {{id, TX5ItemID}, {read, TX5ItemRead}}),
-    ?assert(hb_message:verify(TX5ItemRead, all, #{})),
-    ?assertEqual(TX5Item, TX5ItemRead),
-
-
-    % ?assert(hb_message:verify(TX5Item, all, #{})),
-    % {error not_found} = hb_store_arweave:read(StoreOpts, hb_message:id(TX5Item, signed)),
+assert_bundle_read(StoreOpts, BundleID, ExpectedItems) ->
+    ReadItems =
+        lists:map(
+            fun({ItemID, _Index}) ->
+                assert_item_read(StoreOpts, ItemID)
+            end,
+            ExpectedItems
+        ),
+    Bundle = assert_item_read(StoreOpts, BundleID),
+    lists:foreach(
+        fun({{_ItemID, Index}, Item}) ->
+            QueriedItem = hb_ao:get(Index, Bundle, #{}),
+            ?assertEqual(hb_maps:without(?AO_CORE_KEYS, Item), hb_maps:without(?AO_CORE_KEYS, QueriedItem))
+        end,
+        lists:zip(ExpectedItems, ReadItems)
+    ),
     ok.
+
+assert_item_read(StoreOpts, ItemID) ->
+    {ok, Item} = hb_store_arweave:read(StoreOpts, ItemID),
+    ?assert(hb_message:verify(Item, all, #{})),
+    ?assertEqual(ItemID, hb_message:id(Item, signed)),
+    Item.
+
