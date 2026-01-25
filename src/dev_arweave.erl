@@ -186,10 +186,8 @@ get_chunk_range(_Base, Request, Opts) ->
 
 get_chunk_range(_Offset, Length, _Opts, Chunks, Size)
         when Size >= Length ->
-    ?event(debug_test, {end_get_chunk_range, {offset, _Offset}, {length, Length}, {size, Size}}),
     {ok, lists:reverse(Chunks)};
 get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
-    ?event(debug_test, {get_chunk_range, {offset, Offset}, {length, Length}, {size, Size}}),
     case get_chunk(Offset, Opts) of
         {ok, JSON} ->
             Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
@@ -198,11 +196,6 @@ get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
             AbsoluteStartOffset = AbsoluteEndOffset - ChunkSize + 1,
             StartGap = Offset - AbsoluteStartOffset,
             TruncatedLength = ChunkSize - StartGap,
-            ?event(debug_test, {
-                {absolute_end_offset, AbsoluteEndOffset},
-                {absolute_start_offset, AbsoluteStartOffset},
-                {chunk_size, ChunkSize}, {offset, Offset},
-                {chunk_hash, hb_util:encode(crypto:hash(sha256, Chunk))}}),
             SlicedChunk = binary:part(Chunk, StartGap, TruncatedLength),
             get_chunk_range(
                 AbsoluteEndOffset + 1,
@@ -420,37 +413,6 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
     }.
 
 %%% Tests
-
-start_mock_gateway(ChunkData) ->
-    Endpoints = [
-        {"/chunk/:offset", chunk,
-            fun(Req) ->
-                Path = maps:get(<<"path">>, Req, <<>>),
-                Segments = binary:split(Path, <<"/">>, [global, trim_all]),
-                OffsetValue = hb_util:int(lists:last(Segments)),
-                case maps:get(OffsetValue, ChunkData, undefined) of
-                    undefined ->
-                        {404, <<"not found">>};
-                    Data ->
-                        Body = hb_json:encode(#{ <<"chunk">> => hb_util:encode(Data) }),
-                        {200, Body}
-                end
-            end}
-    ],
-    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
-    Opts = #{
-        routes => [
-            #{
-                <<"template">> => <<"/arweave">>,
-                <<"node">> => #{
-                    <<"match">> => <<"^/arweave">>,
-                    <<"with">> => MockServer,
-                    <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                }
-            }
-        ]
-    },
-    {ServerHandle, Opts}.
 
 post_ans104_tx_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
