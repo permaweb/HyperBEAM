@@ -62,7 +62,7 @@ fetch_blocks(Req, Current, To, Opts) ->
 process_block(BlockRes, _Req, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            % maybe_index_ids(Block, Opts),
+            maybe_index_ids(Block, Opts),
             ?event(
                 copycat_short,
                 {arweave_block_cached,
@@ -203,15 +203,15 @@ index_ids_test() ->
         arweave_index_ids => true,
         arweave_index_store => StoreOpts
     },
-    {ok, Block} = hb_ao:resolve(
-        <<
-            ?ARWEAVE_DEVICE/binary,
-            "/block=5Ya_2_jLshzNodGRVrBwlAhcEowIFgVbvOcN4j_MJI4QfodQ7Nd8ke7CMN9OnpK0"
-        >>,
+    {ok, 1827941} = hb_ao:resolve(
+        #{ <<"device">> => <<"copycat@1.0">> },
+        #{
+            <<"path">> => <<"arweave">>,
+            <<"from">> => 1827942,
+            <<"to">> => 1827941
+        },
         Opts
     ),
-    ?event(debug_test, {Block}),
-    ?assertEqual(ok, maybe_index_ids(Block, Opts)),
     % WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4 is a bundle signed with
     % an Ethereum signature which is not supported by HB as of Jan 2026.
     % The bundle should be indexed even though we can't deserialized the
