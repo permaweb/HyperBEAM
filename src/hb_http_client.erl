@@ -645,6 +645,8 @@ method_to_bin(trace) ->
 	<<"TRACE">>;
 method_to_bin(patch) ->
 	<<"PATCH">>;
+method_to_bin(Method) when is_binary(Method) ->
+    Method;
 method_to_bin(_) ->
 	<<"unknown">>.
 
@@ -796,6 +798,8 @@ upload_metric(_) ->
 % gun_requests_total metrics.
 get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 	get_status_class(Status);
+get_status_class({ok, Status, _RespondeHeaders, _Body}) ->
+    get_status_class(Status);
 get_status_class({error, connection_closed}) ->
 	<<"connection_closed">>;
 get_status_class({error, connect_timeout}) ->
