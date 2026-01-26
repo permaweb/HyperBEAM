@@ -91,11 +91,6 @@ maybe_index_ids(Block, Opts) ->
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block_size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            ?event(debug_test, {
-                {block_end_offset, BlockEndOffset},
-                {block_size, BlockSize},
-                {block_start_offset, BlockStartOffset}
-            }),
             TXs = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
             Height = hb_maps:get(<<"height">>, Block, 0, Opts),
             TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
@@ -103,12 +98,6 @@ maybe_index_ids(Block, Opts) ->
                 ({{padding, _PaddingRoot}, _EndOffset}) ->
                     ok;
                 ({{TX, _TXDataRoot}, EndOffset}) ->
-                    ?event(debug_test, {
-                        {tx, TX},
-                        {end_offset, BlockStartOffset + EndOffset},
-                        {tx_size, TX#tx.data_size},
-                        {is_bundle_tx, is_bundle_tx(TX, Opts)}
-                    }),
                     case is_bundle_tx(TX, Opts) of
                         false -> ok;
                         true ->
@@ -123,15 +112,9 @@ maybe_index_ids(Block, Opts) ->
                             ),
                             {ok, {BundleIndex, HeaderSize}} = download_bundle_header(
                                 TXEndOffset, TX#tx.data_size, Opts),
-                            ?event(debug_test, {{bundle_index, BundleIndex}, {header_size, HeaderSize}}),
                             lists:foldl(
                                 fun({ItemID, Size}, OffsetAcc) ->
                                     ItemEndOffset = OffsetAcc + Size,
-                                    ?event(debug_test, {
-                                        {item_id, {explicit, hb_util:encode(ItemID)}},
-                                        {item_end_offset, ItemEndOffset},
-                                        {size, Size}
-                                    }),
                                     hb_store_arweave:write_offset(
                                         IndexStore,
                                         hb_util:encode(ItemID),
@@ -197,9 +180,37 @@ index_ids_test() ->
     %% signature type is not yet (as of Jan 2026) supported by ar_bundles.erl,
     %% however we should still be able to index it (we just can't deserialize
     %% it).
-    Store = [hb_test_utils:test_store()],
-    StoreOpts = #{ <<"index-store">> => Store },
+    TestStore = hb_test_utils:test_store(),
+    StoreOpts = #{ <<"index-store">> => [TestStore] },
+    Store = [
+        TestStore,
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> => <<"cache-mainnet">>
+        },
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"name">> => <<"cache-arweave">>,
+            <<"index-store">> => [TestStore],
+            <<"arweave-node">> => <<"https://arweave.net">>
+        },
+        #{
+            <<"store-module">> => hb_store_gateway,
+            <<"subindex">> => [
+                #{
+                    <<"name">> => <<"Data-Protocol">>,
+                    <<"value">> => <<"ao">>
+                }
+            ],
+            <<"local-store">> => [TestStore]
+        },
+        #{
+            <<"store-module">> => hb_store_gateway,
+            <<"local-store">> => [TestStore]
+        }
+    ],
     Opts = #{
+        store => Store,
         arweave_index_ids => true,
         arweave_index_store => StoreOpts
     },
@@ -225,17 +236,17 @@ index_ids_test() ->
     ),
     % These 3 items are within the WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4
     % bundle.
-    assert_item_read(StoreOpts,
+    assert_item_read(Opts,
         <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>),
-    assert_item_read(StoreOpts,
+    assert_item_read(Opts,
         <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>),
-    assert_item_read(StoreOpts,
+    assert_item_read(Opts,
         <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>),
     % The T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs can be deserialized so
     % we'll verify that some of its items were index and match the version
     % in the deserialized bundle.
     assert_bundle_read(
-        StoreOpts,
+        Opts,
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         [
             {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
@@ -257,7 +268,7 @@ index_ids_test() ->
             <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
     ),
     assert_bundle_read(
-        StoreOpts,
+        Opts,
         <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
         [
             {<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, <<"1">>}
@@ -265,27 +276,27 @@ index_ids_test() ->
     ),
    ok.
 
-assert_bundle_read(StoreOpts, BundleID, ExpectedItems) ->
+assert_bundle_read(Opts, BundleID, ExpectedItems) ->
     ReadItems =
         lists:map(
             fun({ItemID, _Index}) ->
-                assert_item_read(StoreOpts, ItemID)
+                assert_item_read(Opts, ItemID)
             end,
             ExpectedItems
         ),
-    Bundle = assert_item_read(StoreOpts, BundleID),
+    Bundle = assert_item_read(Opts, BundleID),
     lists:foreach(
         fun({{_ItemID, Index}, Item}) ->
-            QueriedItem = hb_ao:get(Index, Bundle, #{}),
+            QueriedItem = hb_ao:get(Index, Bundle, Opts),
             ?assertEqual(hb_maps:without(?AO_CORE_KEYS, Item), hb_maps:without(?AO_CORE_KEYS, QueriedItem))
         end,
         lists:zip(ExpectedItems, ReadItems)
     ),
     ok.
 
-assert_item_read(StoreOpts, ItemID) ->
-    {ok, Item} = hb_store_arweave:read(StoreOpts, ItemID),
-    ?assert(hb_message:verify(Item, all, #{})),
+assert_item_read(Opts, ItemID) ->
+    {ok, Item} = hb_ao:resolve(ItemID, Opts),
+    ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
 
