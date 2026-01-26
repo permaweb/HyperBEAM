@@ -299,12 +299,14 @@ http3_conn_sup_loop() ->
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http2, ServerID}),
-    StartRes =
-        cowboy:start_clear(
-            ServerID,
-            [{port, RequestedPort = hb_opts:get(port, 0, NodeMsg)}],
-            ProtoOpts
-        ),
+    StartRes = cowboy:start_clear(
+        ServerID,
+        #{
+            socket_opts => [{port, Port = hb_opts:get(port, 8734, NodeMsg)}],
+            max_connections => 10000
+         },
+        ProtoOpts
+    ),
     case StartRes of
         {ok, Listener} ->
             ActualPort = ranch:get_port(ServerID),
