@@ -107,22 +107,21 @@ maybe_index_ids(Block, Opts) ->
                                 IndexStore,
                                 hb_util:encode(TX#tx.id),
                                 true,
-                                TXEndOffset,
+                                TXStartOffset,
                                 TX#tx.data_size
                             ),
                             {ok, {BundleIndex, HeaderSize}} = download_bundle_header(
                                 TXEndOffset, TX#tx.data_size, Opts),
                             lists:foldl(
-                                fun({ItemID, Size}, OffsetAcc) ->
-                                    ItemEndOffset = OffsetAcc + Size,
+                                fun({ItemID, Size}, ItemStartOffset) ->
                                     hb_store_arweave:write_offset(
                                         IndexStore,
                                         hb_util:encode(ItemID),
                                         false,
-                                        ItemEndOffset,
+                                        ItemStartOffset,
                                         Size
                                     ),
-                                    ItemEndOffset
+                                    ItemStartOffset + Size
                                 end,
                                 TXStartOffset + HeaderSize,
                                 BundleIndex
