@@ -595,7 +595,9 @@ default_message() ->
         % Options:
         % - fallback: Fallback to the index page
         % - error: Return 404 Not Found
-        manifest_404 => fallback
+        manifest_404 => fallback,
+        arweave_index_ids => true,
+        arweave_index_store => #{ <<"index-store">> => [?DEFAULT_PRIMARY_STORE] }
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a
