@@ -34,17 +34,17 @@ parse_range(Request, Opts) ->
                 LatestHeight
         end,
     To = hb_maps:get(<<"to">>, Request, 0, Opts),
-    {From, To}.
+    {hb_util:int(From), hb_util:int(To)}.
 
 %% @doc Fetch blocks from an Arweave node between a given range.
-fetch_blocks(Req, Current, Current, _Opts) ->
+fetch_blocks(Req, Current, To, _Opts) when Current < To ->
     ?event(copycat_arweave,
         {arweave_block_indexing_completed,
-            {reached_target, Current},
+            {reached_target, To},
             {initial_request, Req}
         }
     ),
-    {ok, Current};
+    {ok, To};
 fetch_blocks(Req, Current, To, Opts) ->
     BlockRes =
         hb_ao:resolve(
@@ -213,12 +213,12 @@ index_ids_test() ->
         arweave_index_ids => true,
         arweave_index_store => StoreOpts
     },
-    {ok, 1827941} = hb_ao:resolve(
+    {ok, 1827942} = hb_ao:resolve(
         #{ <<"device">> => <<"copycat@1.0">> },
         #{
             <<"path">> => <<"arweave">>,
-            <<"from">> => 1827942,
-            <<"to">> => 1827941
+            <<"from">> => <<"1827942">>,
+            <<"to">> => <<"1827942">>
         },
         Opts
     ),
