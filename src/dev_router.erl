@@ -338,7 +338,8 @@ apply_routes(Msg, R, Opts) ->
 %% - `match' and `with': A regex to replace in the path.
 apply_route(Msg, Route, Opts) ->
     % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
-    RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
+    RouteOpts = hb_opts:mimic_default_types(
+        hb_maps:get(<<"opts">>, Route, #{}), existing, Opts),
     {ok, #{
         <<"opts">> => RouteOpts,
         <<"uri">> =>

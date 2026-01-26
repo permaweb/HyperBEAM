@@ -1810,7 +1810,7 @@ redirect_from_graphql() ->
         #{ store =>
             [
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-                #{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
+                #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
             ]
         },
     {ok, Msg} = hb_cache:read(<<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, Opts),
@@ -1883,7 +1883,7 @@ http_init(Opts) ->
                 <<"store-module">> => hb_store_lmdb,
                 <<"name">> => <<"cache-mainnet/lmdb">>
             },
-			#{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
+			#{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
 		]
 	},
     Node = hb_http_server:start_node(ExtendedOpts),

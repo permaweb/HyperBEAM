@@ -80,7 +80,8 @@ read(BaseStoreOpts, Key) ->
 %% @doc Normalize the routes in the given `Opts`.
 opts(Opts) ->
     case hb_maps:find(<<"node">>, Opts) of
-        error -> Opts;
+        error ->
+            hb_opts:mimic_default_types(Opts, existing, Opts);
         {ok, Node} ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
@@ -285,23 +286,49 @@ custom_raw_routes(MockServer) ->
 %% produce the same result, despite an empty 'only' route list, then we would
 %% know that the module is not respecting the route list.
 specific_route_test() ->
-    hb_http_server:start_node(#{}),
+    LocalNode = hb_http_server:start_node(#{}),
+    %% Define the response we want
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    %% Define configuration, we use a valid gateway to obtain a valid response
+    %% and then mock the raw endpoint to our mockserver.
     Opts = #{
         store =>
             [
                 #{ <<"store-module">> => hb_store_gateway, 
-                   <<"routes">> => [],
-                   <<"only">> => local
+                   <<"routes">> => [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => httpc,
+                                    <<"protocol">> => http2
+                                }
+                            }
+                        ]
+                    },
+                    #{
+                        <<"template">> => <<"/raw">>,
+                        <<"node">> =>
+                            %% This prefix allow us to set a custom message that is a little bit 
+                            %% different than the original one (data field isn't provided).
+                            #{
+                                <<"prefix">> => <<LocalNode/binary, "~message@1.0/set&body=3#">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => gun,
+                                    <<"protocol">> => http2 
+                                }
+                            }
+                     }
+                   ]
                 }
             ]
     },
-    ?assertMatch(
-        not_found,
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            Opts
-        )
-    ).
+    {ok, Response} = hb_cache:read(ID, Opts),
+    %% If the result returns <<"1984">>, it is using the default route, 
+    %% not the custom one we defined
+    ?assertEqual(<<"3">>, maps:get(<<"data">>, Response)).
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->
