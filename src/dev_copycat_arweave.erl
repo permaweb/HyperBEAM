@@ -110,8 +110,12 @@ maybe_index_ids(Block, Opts) ->
                                 TXStartOffset,
                                 TX#tx.data_size
                             ),
-                            {ok, {BundleIndex, HeaderSize}} = download_bundle_header(
-                                TXEndOffset, TX#tx.data_size, Opts),
+                            ?event(debug_test, {writing_bundle_offset, 
+                                {tx, {explicit, hb_util:encode(TX#tx.id)}}
+                            }),
+                            {ok, {BundleIndex, HeaderSize}} = 
+                                download_bundle_header(
+                                    TXEndOffset, TX#tx.data_size, Opts),
                             lists:foldl(
                                 fun({ItemID, Size}, ItemStartOffset) ->
                                     hb_store_arweave:write_offset(
@@ -138,7 +142,7 @@ is_bundle_tx(TX, _Opts) ->
 
 download_bundle_header(EndOffset, Size, Opts) ->
     StartOffset = EndOffset - Size + 1,
-    {ok, Chunk} = hb_ao:resolve(
+    {ok, FirstChunk} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9-pre">> },
         #{
             <<"path">> => <<"chunk">>,
@@ -146,8 +150,30 @@ download_bundle_header(EndOffset, Size, Opts) ->
         },
         Opts
     ),
-    {_ItemsBin, BundleIndex, HeaderSize} = ar_bundles:decode_bundle_header(Chunk),
+    % Most bundle headers can fit in a single chunk, but those with thousands
+    % of items might require multiple chunks to full represent the item
+    % index.
+    HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
+    BundleHeader =
+        case HeaderSize =< byte_size(FirstChunk) of
+            true -> FirstChunk;
+            false ->
+                {ok, HeaderChunks} = hb_ao:resolve(
+                    #{ <<"device">> => <<"arweave@2.9-pre">> },
+                    #{
+                        <<"path">> => <<"chunk">>,
+                        <<"offset">> => StartOffset,
+                        <<"length">> => HeaderSize
+                    },
+                    Opts
+                ),
+                HeaderChunks
+        end,
+    {_ItemsBin, BundleIndex} =
+        ar_bundles:decode_bundle_header(BundleHeader),
     {ok, {BundleIndex, HeaderSize}}.
+
+
 
 resolve_tx_headers(TXIDs, Opts) ->
     lists:map(
@@ -179,40 +205,7 @@ index_ids_test() ->
     %% signature type is not yet (as of Jan 2026) supported by ar_bundles.erl,
     %% however we should still be able to index it (we just can't deserialize
     %% it).
-    TestStore = hb_test_utils:test_store(),
-    StoreOpts = #{ <<"index-store">> => [TestStore] },
-    Store = [
-        TestStore,
-        #{
-            <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-mainnet">>
-        },
-        #{
-            <<"store-module">> => hb_store_arweave,
-            <<"name">> => <<"cache-arweave">>,
-            <<"index-store">> => [TestStore],
-            <<"arweave-node">> => <<"https://arweave.net">>
-        },
-        #{
-            <<"store-module">> => hb_store_gateway,
-            <<"subindex">> => [
-                #{
-                    <<"name">> => <<"Data-Protocol">>,
-                    <<"value">> => <<"ao">>
-                }
-            ],
-            <<"local-store">> => [TestStore]
-        },
-        #{
-            <<"store-module">> => hb_store_gateway,
-            <<"local-store">> => [TestStore]
-        }
-    ],
-    Opts = #{
-        store => Store,
-        arweave_index_ids => true,
-        arweave_index_store => StoreOpts
-    },
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} = hb_ao:resolve(
         #{ <<"device">> => <<"copycat@1.0">> },
         #{
@@ -274,6 +267,118 @@ index_ids_test() ->
         ]
     ),
    ok.
+
+bundle_header_index_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    TXID = <<"bnMTI7LglBGSaK5EdV_juh6GNtXLm0cd5lkd2q4nlT0">>,
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    {ok, {BundleIndex, _HeaderSize}} =
+        download_bundle_header(EndOffset, Size, Opts),
+    ?assertEqual(15000, length(BundleIndex)),
+    ok.
+
+index_ids_perf() ->
+    {TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    From = 1600100,
+    To = 1600000,
+    {IndexTimeUs, {ok, _}} =
+        timer:tc(
+            fun() ->
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"copycat@1.0">> },
+                    #{
+                        <<"path">> => <<"arweave">>,
+                        <<"from">> => hb_util:bin(From),
+                        <<"to">> => hb_util:bin(To)
+                    },
+                    Opts
+                )
+            end
+        ),
+    BlockCount = From - To + 1,
+    {TxCount, ItemCount} = count_index_entries(TestStore),
+    hb_format:eunit_print(
+        "Indexed ~s blocks in ~p ms (~s txs, ~s items)",
+        [
+            hb_util:human_int(BlockCount),
+            IndexTimeUs / 1000,
+            hb_util:human_int(TxCount),
+            hb_util:human_int(ItemCount)
+        ]
+    ),
+    ok.
+
+setup_index_opts() ->
+    TestStore = hb_test_utils:test_store(),
+    StoreOpts = #{ <<"index-store">> => [TestStore] },
+    Store = [
+        TestStore,
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> => <<"cache-mainnet">>
+        },
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"name">> => <<"cache-arweave">>,
+            <<"index-store">> => [TestStore],
+            <<"arweave-node">> => <<"https://arweave.net">>
+        },
+        #{
+            <<"store-module">> => hb_store_gateway,
+            <<"subindex">> => [
+                #{
+                    <<"name">> => <<"Data-Protocol">>,
+                    <<"value">> => <<"ao">>
+                }
+            ],
+            <<"local-store">> => [TestStore]
+        },
+        #{
+            <<"store-module">> => hb_store_gateway,
+            <<"local-store">> => [TestStore]
+        }
+    ],
+    Opts = #{
+        store => Store,
+        arweave_index_ids => true,
+        arweave_index_store => StoreOpts
+    },
+    {TestStore, StoreOpts, Opts}.
+
+count_index_entries(IndexStore) ->
+    case hb_store:list(IndexStore, ?ARWEAVE_INDEX_PATH) of
+        {ok, Keys} ->
+            lists:foldl(
+                fun(Key, {TxCount, ItemCount}) ->
+                    Path = <<?ARWEAVE_INDEX_PATH/binary, "/", Key/binary>>,
+                    case hb_store:read(IndexStore, Path) of
+                        {ok, Value} ->
+                            [IsTx | _] =
+                                binary:split(Value, <<":">>, [global]),
+                            case hb_util:bool(IsTx) of
+                                true -> {TxCount + 1, ItemCount};
+                                false -> {TxCount, ItemCount + 1}
+                            end;
+                        _ ->
+                            {TxCount, ItemCount}
+                    end
+                end,
+                {0, 0},
+                Keys
+            );
+        not_found ->
+            {0, 0}
+    end.
 
 assert_bundle_read(Opts, BundleID, ExpectedItems) ->
     ReadItems =
