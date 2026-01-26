@@ -215,8 +215,10 @@ record_duration(Details, Opts) ->
                                 case maps:get(<<"request-path">>, Details) of
                                     %% TODO: Make it configurable for S3 bucket defined
                                     <<"/hb-s3", _/binary>> -> <<"S3">>;
+                                    <<"/hyperbeam", _/binary>> -> <<"S3">>;
                                     <<"/graphql">> -> <<"GraphQL">>;
-                                    <<"/raw", _/binary>> -> <<"RAW">>
+                                    <<"/raw", _/binary>> -> <<"RAW">>;
+                                    _ -> <<"unknown">>
                                 end;
                             (Key) -> 
                                 hb_util:list(maps:get(Key, Details)) 
