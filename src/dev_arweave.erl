@@ -146,7 +146,6 @@ data(TXID, Opts) ->
     request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 chunk(Base, Request, Opts) ->
-    ?event(debug_test, {chunk, {base, Base}, {request, Request}, {opts, Opts}}),
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
         <<"GET">> -> get_chunk_range(Base, Request, Opts)
