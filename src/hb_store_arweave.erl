@@ -2,13 +2,28 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([read/2]).
+-export([type/2, read/2]).
 %%% Indexing API:
 -export([write_offset/5]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_INDEX_PATH, <<"~arweave@2.9-pre/offset">>).
+
+%% @doc Get the type of the data at the given key. We potentially cache the
+%% result, so that we don't have to read the data from the GraphQL route
+%% multiple times.
+type(StoreOpts, Key) ->
+    case read(StoreOpts, Key) of
+        not_found -> not_found;
+        {ok, _Data} ->
+            % TODO:
+            % - should this return composite for any index L1 bundles?
+            % - if so, I guess we need to implement list/2?
+            % - for now we don't index nested bundle children, but once we
+            %   do we may nalso need to return composite for them.
+            simple
+    end.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     case hb_store:read(IndexStore, path(ID)) of
@@ -17,15 +32,6 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             % Length) to preserve consistency with the Arweave API's
             % `/tx/<hash>/offset` endpoint.
             [IsTX, EndOffset, Size] = binary:split(Binary, <<":">>, [global]),
-            ?event(
-                debug_test,
-                {reading_offset, 
-                    {path, path(ID)},
-                    {is_tx, IsTX},
-                    {end_offset, EndOffset},
-                    {size, Size}
-                }
-            ),
             case hb_util:bool(IsTX) of
                 true ->
                     load_bundle(ID,
@@ -106,7 +112,6 @@ write_offset(#{ <<"index-store">> := IndexStore }, ID, IsTX, EndOffset, Size) ->
         ":",
         (hb_util:bin(Size))/binary
     >>,
-    ?event(debug_test, {{path, path(ID)}, {value, Value}}),
     hb_store:write(IndexStore, path(ID), Value).
 
 path(ID) ->
@@ -121,7 +126,6 @@ path(ID) ->
 
 write_read_tx_test() ->
     Store = [hb_test_utils:test_store()],
-    ?event(debug_test, {store, Store}),
     Opts = #{ 
         <<"index-store">> => Store 
     },
