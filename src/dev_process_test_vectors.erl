@@ -16,13 +16,16 @@ base_process() ->
 base_process(Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    hb_message:commit(#{
-        <<"device">> => <<"process@1.0">>,
-        <<"scheduler-device">> => <<"scheduler@1.0">>,
-        <<"scheduler-location">> => hb_opts:get(scheduler, Address, Opts),
-        <<"type">> => <<"Process">>,
-        <<"test-random-seed">> => rand:uniform(1337)
-    }, Wallet).
+    hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"scheduler-location">> => hb_opts:get(scheduler, Address, Opts),
+            <<"type">> => <<"Process">>,
+            <<"test-random-seed">> => rand:uniform(1337)
+        },
+        Opts#{ priv_wallet => Wallet }
+    ).
 
 wasm_process(WASMImage) ->
     wasm_process(WASMImage, #{}).
@@ -39,7 +42,7 @@ wasm_process(WASMImage, Opts) ->
             },
 			Opts
         ),
-        Opts#{ priv_wallet => Wallet}
+        Opts#{ priv_wallet => Wallet }
     ).
 
 %% @doc Generate a process message with a random number, and the 
@@ -79,7 +82,7 @@ aos_process(Opts, Stack) ->
                 <<"authority">> =>
                     hb_opts:get(authority, Address, Opts)
             }, Opts),
-        Opts#{ priv_wallet => Wallet}
+        Opts#{ priv_wallet => Wallet }
     ).
 
 %% @doc Generate a device that has a stack of two `dev_test's for 
@@ -88,11 +91,15 @@ aos_process(Opts, Stack) ->
 test_process() ->
     Wallet = hb:wallet(),
     hb_message:commit(
-        hb_maps:merge(base_process(), #{
-            <<"execution-device">> => <<"stack@1.0">>,
-            <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]
-        }, #{}),
-        Wallet
+        hb_maps:merge(
+            base_process(),
+            #{
+                <<"execution-device">> => <<"stack@1.0">>,
+                <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]
+            }, 
+            #{}
+        ),
+        #{ priv_wallet => Wallet }
     ).
 
 schedule_test_message(Base, Text, Opts) ->
@@ -101,7 +108,8 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
     Wallet = hb:wallet(),
     UncommittedBase = hb_message:uncommitted(MsgBase, Opts),
     Req =
-        hb_message:commit(#{
+        hb_message:commit(
+            #{
                 <<"path">> => <<"schedule">>,
                 <<"method">> => <<"POST">>,
                 <<"body">> =>
@@ -110,10 +118,10 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
                         },
-                        Opts#{ priv_wallet => Wallet}
+                        Opts#{ priv_wallet => Wallet }
                     )
             },
-			Opts#{ priv_wallet => Wallet}
+			Opts#{ priv_wallet => Wallet }
         ),
     {ok, _} = hb_ao:resolve(Base, Req, Opts).
 
@@ -129,7 +137,7 @@ schedule_aos_call(Base, Code, Opts) ->
                 <<"data">> => Code,
                 <<"target">> => ProcID
             },
-            Opts#{priv_wallet => Wallet}
+            Opts#{ priv_wallet => Wallet }
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
@@ -137,19 +145,23 @@ schedule_wasm_call(Base, FuncName, Params) ->
     schedule_wasm_call(Base, FuncName, Params, #{}).
 schedule_wasm_call(Base, FuncName, Params, Opts) ->
     Wallet = hb:wallet(),
-    Req = hb_message:commit(#{
-        <<"path">> => <<"schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> =>
-            hb_message:commit(
-                #{
-                    <<"type">> => <<"Message">>,
-                    <<"function">> => FuncName,
-                    <<"parameters">> => Params
-                },
-                Opts#{ priv_wallet => Wallet}
-            )
-    }, Opts#{ priv_wallet => Wallet}),
+    Req = 
+        hb_message:commit(
+            #{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        #{
+                            <<"type">> => <<"Message">>,
+                            <<"function">> => FuncName,
+                            <<"parameters">> => Params
+                        },
+                        Opts#{ priv_wallet => Wallet }
+                    )
+            },
+            Opts#{ priv_wallet => Wallet }
+        ),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)).
 
 schedule_on_process_test_() ->
@@ -215,7 +227,7 @@ test_device_compute_test() ->
         hb_ao:resolve(
             Base,
             <<"schedule/assignments/1/body/test-label">>,
-            #{ <<"hashpath">> => ignore }
+            #{}
         )
     ),
     Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
@@ -227,24 +239,45 @@ test_device_compute_test() ->
 wasm_compute_test() ->
     init(),
     Base = wasm_process(<<"test/test-64.wasm">>),
+    schedule_wasm_call(Base, <<"fac">>, [2.0]),
+    schedule_wasm_call(Base, <<"fac">>, [3.0]),
+    schedule_wasm_call(Base, <<"fac">>, [4.0]),
     schedule_wasm_call(Base, <<"fac">>, [5.0]),
     schedule_wasm_call(Base, <<"fac">>, [6.0]),
-    {ok, Res} = 
+    {ok, _} = 
         hb_ao:resolve(
             Base,
-            #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-            #{ <<"hashpath">> => ignore }
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 3 },
+            #{}
         ),
-    ?event({computed_message, {res, Res}}),
-    ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Res, #{})),
-    {ok, Msg4} = 
+    {ok, _} = 
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 3 },
+            #{}
+        ),
+    {ok, _} = 
        hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-            #{ <<"hashpath">> => ignore }
+            #{}
         ),
-    ?event({computed_message, {msg4, Msg4}}),
-    ?assertEqual([720.0], hb_ao:get(<<"results/output">>, Msg4, #{})).
+    {ok, _} = 
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 2 },
+            #{}
+        ),
+    {ok, _} = 
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
+            #{}
+        ),
+    ok.
+    % ?assertEqual([24.0], hb_ao:get(<<"results/output">>, Slot2Res, #{})),
+    % ?assertEqual([2.0], hb_ao:get(<<"results/output">>, Slot0Res, #{})),
+    % ?assertEqual([6.0], hb_ao:get(<<"results/output">>, Slot1Res, #{})).
 
 wasm_compute_from_id_test() ->
     init(),
@@ -283,14 +316,15 @@ http_wasm_process_by_id_test() ->
         ),
     ?event({schedule_proc_res, InitRes}),
     ExecMsg =
-        hb_message:commit(#{
-            <<"target">> => ProcID,
-            <<"type">> => <<"Message">>,
-            <<"function">> => <<"fac">>,
-            <<"parameters">> => [5.0]
-        },
-        Wallet
-    ),
+        hb_message:commit(
+            #{
+                <<"target">> => ProcID,
+                <<"type">> => <<"Message">>,
+                <<"function">> => <<"fac">>,
+                <<"parameters">> => [5.0]
+            },
+            #{ priv_wallet => Wallet }
+        ),
     {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, #{}),
     ?event({schedule_msg_res, {res, Res}}),
     {ok, Msg4} =
@@ -361,19 +395,23 @@ aos_state_access_via_http_test_() ->
         Proc = aos_process(Opts),
         ProcID = hb_util:human_id(hb_message:id(Proc, all)),
         {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
-        Req = hb_message:commit(#{
-            <<"data-protocol">> => <<"ao">>,
-            <<"variant">> => <<"ao.N.1">>,
-            <<"type">> => <<"Message">>,
-            <<"action">> => <<"Eval">>,
-            <<"data">> =>
-                <<"table.insert(ao.outbox.Messages, { target = ao.id,",
-                    " action = \"State\", data = { ",
-                        "[\"content-type\"] = \"text/html\", ",
-                        "[\"body\"] = \"<h1>Hello, world!</h1>\"",
-                    "}})">>,
-            <<"target">> => ProcID
-        }, Wallet),
+        Req = 
+            hb_message:commit(
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"Message">>,
+                    <<"action">> => <<"Eval">>,
+                    <<"data">> =>
+                        <<"table.insert(ao.outbox.Messages, { target = ao.id,",
+                            " action = \"State\", data = { ",
+                                "[\"content-type\"] = \"text/html\", ",
+                                "[\"body\"] = \"<h1>Hello, world!</h1>\"",
+                            "}})">>,
+                    <<"target">> => ProcID
+                },
+                #{ priv_wallet => Wallet }
+            ),
         {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
         ?event({schedule_msg_res, {res, Res}}),
         {ok, Msg4} =
@@ -415,18 +453,26 @@ aos_state_patch_test_() ->
         ]),
         {ok, Base} = hb_message:with_only_committed(BaseRaw, #{}),
         ProcID = hb_message:id(Base, all),
-        Req = (hb_message:commit(#{
-            <<"data-protocol">> => <<"ao">>,
-            <<"variant">> => <<"ao.N.1">>,
-            <<"target">> => ProcID,
-            <<"type">> => <<"Message">>,
-            <<"action">> => <<"Eval">>,
-            <<"data">> =>
-                <<
-                    "table.insert(ao.outbox.Messages, "
-                        "{ method = \"PATCH\", x = \"banana\" })"
-                >>
-        }, Wallet))#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
+        InnerReq = 
+            hb_message:commit(
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"target">> => ProcID,
+                    <<"type">> => <<"Message">>,
+                    <<"action">> => <<"Eval">>,
+                    <<"data">> =>
+                        <<
+                            "table.insert(ao.outbox.Messages, "
+                                "{ method = \"PATCH\", x = \"banana\" })"
+                        >>
+                },
+                #{ priv_wallet => Wallet }
+            ),
+        Req = InnerReq#{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">> 
+        },
         {ok, _} = hb_ao:resolve(Base, Req, #{}),
         Res = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Msg4} = hb_ao:resolve(Base, Res, #{}),

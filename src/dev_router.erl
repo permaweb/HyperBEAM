@@ -26,6 +26,7 @@
 -module(dev_router).
 -export([info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
+-export([field_distance/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -337,7 +338,8 @@ apply_routes(Msg, R, Opts) ->
 %% - `match' and `with': A regex to replace in the path.
 apply_route(Msg, Route, Opts) ->
     % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
-    RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
+    RouteOpts = hb_opts:mimic_default_types(
+        hb_maps:get(<<"opts">>, Route, #{}), existing, Opts),
     {ok, #{
         <<"opts">> => RouteOpts,
         <<"uri">> =>
@@ -476,10 +478,22 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_ao:get(<<"wallet">>, Node, Opts),
+                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
+                Salt =
+                    case hb_maps:find(<<"salt">>, Node, Opts) of
+                        {ok, S} -> <<":", S/binary>>;
+                        error -> <<>>
+                    end,
                 DistanceScore =
                     field_distance(
-                        hb_util:native_id(Wallet),
+                        hb_crypto:sha256(
+                            <<
+                                HashPath/binary,
+                                ":",
+                                Wallet/binary,
+                                Salt/binary
+                            >>
+                        ),
                         BareHashPath
                     ),
                 {Node, DistanceScore}
@@ -1521,7 +1535,7 @@ add_route_test() ->
                     <<"node">> => <<"new">>,
                     <<"priority">> => 15
                 },
-                Owner
+                #{ priv_wallet => Owner }
             ),
             #{}
         ),

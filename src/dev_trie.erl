@@ -14,7 +14,7 @@
 %%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
 %%% 4 children!)
 -module(dev_trie).
--export([info/0, set/3, get/3, get/4]).
+-export([info/0, keys/2, set/3, get/3, get/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -28,6 +28,40 @@ info() ->
     #{
         default => fun get/4
      }.
+
+keys(Trie, Opts) ->
+    collect_keys(Trie, <<>>, Opts, []).
+
+collect_keys(TrieNode, Prefix, Opts, Acc) ->
+    EdgeLabels = edges(TrieNode, Opts),
+    IsLeafTerminal = length(EdgeLabels) =:= 0,
+    NodeValue = hb_maps:find(<<"node-value">>, TrieNode, Opts),
+    IsInteriorTerminal =
+        case NodeValue of
+            error -> false;
+            _ -> true
+        end,
+    IsTerminal = IsLeafTerminal orelse IsInteriorTerminal,
+    NewAcc =
+        case IsTerminal of
+            true -> [Prefix|Acc];
+            false -> Acc
+        end,
+    lists:foldl(
+        fun(ChildEdgeLabel, ChildrenAcc) ->
+            NewPrefix = <<Prefix/binary, ChildEdgeLabel/binary>>,
+            ChildNode = hb_maps:get(ChildEdgeLabel, TrieNode, undefined, Opts),
+            case is_map(ChildNode) of
+                true ->
+                    collect_keys(ChildNode, NewPrefix, Opts, ChildrenAcc);
+                false ->
+                    % Implicit leaf node
+                    [NewPrefix | ChildrenAcc]
+            end
+        end,
+        NewAcc,
+        EdgeLabels
+    ).
 
 %% @doc Get the value associated with a key from a trie represented in a base
 %% message.
@@ -394,6 +428,31 @@ basic_retrievability_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, #{})).
+
+basic_key_collection_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"car">> => 31337,
+            <<"card">> => 90210,
+            <<"cardano">> => 666,
+            <<"carmex">> => 8675309,
+            <<"camshaft">> => 777,
+            <<"zebra">> => 0
+         },
+         #{}
+    ),
+    ?assertEqual(
+        [
+            <<"zebra">>,
+            <<"carmex">>,
+            <<"cardano">>,
+            <<"card">>,
+            <<"car">>,
+            <<"camshaft">>
+        ],
+        keys(Trie, #{})
+    ).
 
 verify_test() ->
     Trie = hb_ao:set(

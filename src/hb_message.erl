@@ -59,7 +59,8 @@
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
--export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
+-export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
+-export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
@@ -417,21 +418,19 @@ without_unless_signed(Keys, Msg, Opts) ->
     ).
 
 %% @doc Sign a message with the given wallet.
-commit(Msg, WalletOrOpts) ->
+commit(Msg, Opts) ->
     commit(
         Msg,
-        WalletOrOpts,
+        Opts,
         hb_opts:get(
             commitment_device,
             no_viable_commitment_device,
-            case is_map(WalletOrOpts) of
-                true -> WalletOrOpts;
-                false -> #{ priv_wallet => WalletOrOpts }
-            end
+            Opts
         )
     ).
-commit(Msg, Wallet, Format) when not is_map(Wallet) ->
-    commit(Msg, #{ priv_wallet => Wallet }, Format);
+commit(Msg, NotOpts, CodecName) when not is_map(NotOpts) ->
+    ?event(error, {deprecated_commit_call, {msg, Msg}, {opts, NotOpts}, {codec, CodecName}}),
+    error({deprecated_commit_call, {arg_must_be_node_msg, NotOpts}});
 commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, Opts, Spec) ->
@@ -444,11 +443,19 @@ commit(Msg, Opts, Spec) ->
                         none ->
                             case hb_maps:get(<<"device">>, Spec, none, Opts) of
                                 none ->
-                                    hb_opts:get(
-                                        commitment_device,
-                                        no_viable_commitment_device,
-                                        Opts
-                                    );
+                                    FromOpts =
+                                        hb_opts:get(
+                                            commitment_device,
+                                            no_viable_commitment_device,
+                                            Opts
+                                        ),
+                                    case FromOpts of
+                                        no_viable_commitment_device ->
+                                            throw(
+                                                {unset_commitment_device, Spec}
+                                            );
+                                        Device -> Device
+                                    end;
                                 Device -> Device
                             end;
                         CommitmentDevice -> CommitmentDevice
@@ -505,6 +512,69 @@ verify(Msg, Spec, Opts) ->
             Opts
         ),
     Res.
+
+%% @doc Verify a message recursively, including all nested messages.
+paranoid_verify(Msg, Opts) ->
+    paranoid_verify(default, Msg, Opts).
+paranoid_verify(Topic, Msg, Opts) ->
+    ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+    case hb_opts:get(paranoid_verify, false, Opts) of
+        true -> do_paranoid_verify(Topic, Msg, Opts);
+        Topics ->
+            case lists:member(Topic, Topics) of
+                false -> true;
+                true -> do_paranoid_verify(Topic, Msg, Opts)
+            end
+    end.
+
+do_paranoid_verify(Topic, Msg, Opts) ->
+    try
+        do_paranoid_verify(Topic, [], Msg, Opts),
+        ?event(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
+        true
+    catch
+        throw:{verification_failure, _Topic, RawPath, FailedMsg, Details, Stack} ->
+            Path = hb_path:to_binary(RawPath),
+            ?event(error,
+                {paranoid_verification_failure,
+                    {triggered_by, Topic},
+                    {at_path, Path},
+                    {failed_message, FailedMsg},
+                    {while_verifying, Msg},
+                    {details, Details},
+                    {stack, {trace, Stack}}
+                },
+                Opts#{
+                    paranoid_verify => false
+                }
+            ),
+            throw({paranoid_verification_failure, Topic, Path, Msg, FailedMsg})
+    end.
+do_paranoid_verify(Topic, Path, {_Status, Msg}, Opts) ->
+    do_paranoid_verify(Topic, Path, Msg, Opts);
+do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
+    case hb_opts:get(paranoid_verify_links, true, Opts) of
+        false -> true;
+        true ->
+            do_paranoid_verify(Topic, Path, hb_cache:ensure_loaded(Link, Opts), Opts)
+    end;
+do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
+    do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
+do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
+    hb_maps:map(
+        fun(Key, Value) ->
+            do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
+        end,
+        uncommitted(hb_private:reset(Msg), Opts),
+        Opts
+    ),
+    try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
+    catch
+        _:Details:St ->
+            throw({verification_failure, Topic, Path, Msg, Details, St})
+    end;
+do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
+    true.
 
 %% @doc Return the unsigned version of a message in AO-Core format.
 uncommitted(Msg) -> uncommitted(Msg, #{}).
@@ -804,7 +874,8 @@ commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
             {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
         true ->
             ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
-            multiple_matches    end;
+            multiple_matches
+    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
@@ -816,10 +887,7 @@ commitment(Spec, Msg, Opts) ->
         true ->
             ?event(commitment, {multiple_matches, {matches, Matches}}),
             multiple_matches
-    end;
-commitment(_Spec, _Msg, _Opts) ->
-    % The message has no commitments, so the spec can never match.
-    not_found.
+    end.
 
 %% @doc Return a list of all commitments that match the spec.
 commitments(ID, Link, Opts) when ?IS_LINK(Link) ->

@@ -47,18 +47,12 @@
         hb_config_location => {"HB_CONFIG", "config.flat"},
         port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         mode => {"HB_MODE", fun list_to_existing_atom/1},
+        paranoid_verify =>
+            {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
         debug_print =>
-            {"HB_PRINT",
-                fun
-                    ({preparsed, Parsed}) -> Parsed;
-                    (Str) when Str == "1" -> true;
-                    (Str) when Str == "true" -> true;
-                    (Str) ->
-                        lists:map(
-                            fun(Topic) -> list_to_atom(Topic) end,
-                            string:tokens(Str, ",")
-                        )
-                end,
+            {
+                "HB_PRINT",
+                fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
@@ -87,6 +81,17 @@
             }
     }
 ).
+
+%% @doc Convert a comma-separated list of topics, as occassionally used by `HB_*`
+%% environment variables, to a list of atoms. Additionally, will return `true' if
+%% the string is `true', `1', or `all'.
+topic_list_to_atoms({preparsed, Parsed}) -> Parsed;
+topic_list_to_atoms("false") -> [];
+topic_list_to_atoms("1") -> true;
+topic_list_to_atoms("true") -> true;
+topic_list_to_atoms("all") -> true;
+topic_list_to_atoms(Str) ->
+    lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
 %% @doc Return the default message with all environment variables set.
 default_message_with_env() ->
@@ -223,15 +228,18 @@ default_message() ->
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
+        debug_print_truncate => 30,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_print_metadata => true,
+        debug_print_gen_id => true,
+        debug_print_committers => true,
+        debug_print_comm_device => true,
+        debug_print_comm_type => true,
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
-        debug_metadata => true,
-        debug_ids => false,
-        debug_committers => true,
         debug_show_priv => if_present,
-        debug_resolve_links => false,
+        debug_resolve_links => true,
         debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
@@ -367,13 +375,19 @@ default_message() ->
         genesis_wasm_import_authorities =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
-            ]
+            ],
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+        % Define the behaviour when accessing a file inside a manifest that 
+        % doesn't exists.
+        % Options:
+        % - fallback: Fallback to the index page
+        % - error: Return 404 Not Found
+        manifest_404 => fallback
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a

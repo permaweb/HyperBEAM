@@ -62,6 +62,8 @@ test_suite() ->
             fun device_with_default_handler_function_test/1},
         {basic_get, "basic get",
             fun basic_get_test/1},
+        {get_with_denormalized_key, "get with denormalized key",
+            fun denormalized_key_test/1},
         {recursive_get, "recursive get",
             fun recursive_get_test/1},
         {deep_recursive_get, "deep recursive get",
@@ -82,12 +84,20 @@ test_suite() ->
             fun device_exports_test/1},
         {device_excludes, "device excludes",
             fun device_excludes_test/1},
-        {denormalized_device_key, "denormalized device key",
-            fun denormalized_device_key_test/1},
+        {device_inheritance, "device inheritance",
+            fun device_inheritance_test/1},
+        {denormalized_device_name, "denormalized device name",
+            fun denormalized_device_name_test/1},
         {list_transform, "list transform",
             fun list_transform_test/1},
         {step_hook, "step hook",
-            fun step_hook_test/1}
+            fun step_hook_test/1},
+        {paranoid_message_verification, "paranoid message verification",
+            fun paranoid_message_verification_test/1},
+        {paranoid_input_verification, "paranoid input verification",
+            fun paranoid_input_verification_test/1},
+        {paranoid_result_verification, "paranoid result verification",
+            fun paranoid_result_verification_test/1}
     ].
 
 benchmark_suite() ->
@@ -149,7 +159,7 @@ test_opts() ->
                 }
             },
             skip => [
-                denormalized_device_key,
+                denormalized_device_name,
                 deep_set_with_device,
                 load_as
             ],
@@ -175,21 +185,26 @@ test_opts() ->
                 as_path,
                 multiple_as_subresolutions,
                 key_from_id_device_with_args,
+                get_with_denormalized_key,
                 set_new_messages,
                 resolve_from_multiple_keys,
                 resolve_path_element,
                 device_with_default_handler_function,
                 device_with_handler_function,
-                denormalized_device_key,
+                denormalized_device_name,
                 get_with_device,
                 get_as_with_device,
                 set_with_device,
                 device_exports,
                 device_excludes,
+                device_inheritance,
                 deep_set_with_device,
                 as,
                 as_commitments,
-                step_hook
+                step_hook,
+                paranoid_message_verification,
+                paranoid_input_verification,
+                paranoid_result_verification
             ]
         }
     ].
@@ -685,7 +700,7 @@ device_exports_test(Opts) ->
         info =>
             fun() ->
                 #{
-                    exports => [test1, <<"test2">>],
+                    exports => [test1, test2],
                     handler =>
                         fun() ->
                             {ok, <<"Handler-Value">>}
@@ -693,7 +708,12 @@ device_exports_test(Opts) ->
                 }
             end
     },
-    Res = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
+    Res =
+        #{
+            <<"device">> => Dev2,
+            <<"test1">> => <<"BAD1">>,
+            <<"test3">> => <<"GOOD3">>
+        },
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
@@ -725,15 +745,65 @@ device_excludes_test(Opts) ->
     ?assertMatch(#{ <<"test-key2">> := <<"2">> },
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
-denormalized_device_key_test(Opts) ->
-	Msg = #{ <<"device">> => dev_test },
-	?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
-	?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
-	?assertEqual({module, dev_test},
-		erlang:fun_info(
+device_inheritance_test(Opts) ->
+    % Create a device that inherits from another device and ensure that the
+    % precedence order of matching keys is correct:
+    %     The local device > the inherited device > the global default device*
+    % Note that we only fallback to the global device in this case because the
+    % inherited device does not specify a further `default' key in its `info'.
+    Dev = #{
+        info =>
+            fun() ->
+                #{
+                    default => <<"test-device@1.0">>
+                }
+            end,
+        device_key =>
+            fun(_, _, _) ->
+                {ok, <<"DEVICE VALUE">>}
+            end
+    },
+    Msg = #{ <<"device">> => Dev, <<"message-key">> => <<"MESSAGE VALUE">> },
+    ?assertEqual(<<"DEVICE VALUE">>, hb_ao:get(<<"device-key">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test-func">>, Msg, Opts)),
+    ?assertEqual(<<"MESSAGE VALUE">>, hb_ao:get(<<"message-key">>, Msg, Opts)).
+
+denormalized_device_name_test(Opts) ->
+    Msg = #{ <<"device">> => dev_test },
+    ?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
+    ?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
+    ?assertEqual(
+        {module, dev_test},
+        erlang:fun_info(
             element(3, hb_ao_device:message_to_fun(Msg, test_func, Opts)),
             module
         )
+    ).
+
+denormalized_key_test(Opts) ->
+    Msg =
+        #{
+            device =>
+                #{
+                    info =>
+                        fun() ->
+                            #{
+                                exports => [<<"test-key">>]
+                            }
+                        end,
+                    test_key =>
+                        fun(_) ->
+                            {ok, <<"TEST VALUE">>}
+                        end
+                }
+        },
+    ?assertEqual(
+        {ok, <<"TEST VALUE">>},
+        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"TEST VALUE">>},
+        hb_ao:resolve(Msg, <<"test-key">>, Opts)
     ).
 
 list_transform_test(Opts) ->
@@ -746,7 +816,7 @@ list_transform_test(Opts) ->
 
 start_as_test(Opts) ->
     ?assertEqual(
-        {ok, <<"GOOD_FUNCTION">>},
+        {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
                 {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
@@ -762,7 +832,7 @@ start_as_with_parameters_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
-        {ok, <<"GOOD_FUNCTION">>},
+        {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
                 {as, <<"message@1.0">>, Msg},
@@ -793,12 +863,12 @@ load_as_test(Opts) ->
 
 as_path_test(Opts) ->
     % Create a message with the test device, which implements the test_func
-    % function. It normally returns `GOOD_FUNCTION'.
+    % function. It normally returns `GOOD FUNCTION'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(<<"GOOD_FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
         {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
@@ -933,6 +1003,51 @@ step_hook_test(InitOpts) ->
     % Test that the step hook was called.
     ?assert(receive {step, Ref} -> true after 100 -> false end).
 
+%% @doc Return the options for paranoid-mode verification tests. Adds the
+%% `paranoid_verify' flag and removes the `error' print option such that the 
+%% error messages are not printed.
+paranoid_opts(RawOpts) ->
+    PrintOpts =
+        case hb_opts:get(debug_print, false, RawOpts) of
+            List when is_list(List) ->
+                List -- [error];
+            Other ->
+                Other
+        end,
+    RawOpts#{
+        paranoid_verify => true,
+        debug_print => PrintOpts
+    }.
+
+paranoid_message_verification_test(RawOpts) ->
+    % Test that the `hb_message:paranoid_verify' infrastructure works correctly.
+    Opts = paranoid_opts(RawOpts),
+    Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
+    ?assert(hb_message:paranoid_verify(Base, Opts)),
+    ?assertThrow(_, hb_message:paranoid_verify(Base#{ <<"a">> => 2 }, Opts)).
+
+paranoid_input_verification_test(RawOpts) ->
+    Opts = paranoid_opts(RawOpts),
+    % Test that the input and base messages are verified prior to execution.
+    Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
+    Request =
+        hb_message:normalize_commitments(
+            #{ <<"path">> => <<"keys">>, <<"a">> => 1 },
+            Opts
+        ),
+    ?assertThrow(_, hb_ao:resolve(Base#{ <<"a">> => 2 }, Request, Opts)),
+    ?assertThrow(_, hb_ao:resolve(Base, Request#{ <<"a">> => 2 }, Opts)).
+
+paranoid_result_verification_test(RawOpts) ->
+    % Test that the result message is verified after execution.
+    Opts = paranoid_opts(RawOpts),
+    Base =
+        hb_message:normalize_commitments(
+            #{ <<"device">> => <<"test-device@1.0">>, <<"a">> => 1 },
+            Opts
+        ),
+    ?assertThrow(_, hb_ao:resolve(Base, <<"mangle">>, Opts)).
+
 %%% Benchmark tests
 benchmark_simple_test(Opts) ->
     Time =
@@ -953,9 +1068,7 @@ benchmark_multistep_test(Opts) ->
                 hb_ao:resolve(
                     #{
                         <<"iteration">> => I,
-                        <<"a">> => #{
-                            <<"b">> => #{ <<"return">> => I }
-                        }
+                        <<"a">> => #{ <<"b">> => #{ <<"return">> => I } }
                     },
                     <<"a/b/return">>,
                     Opts

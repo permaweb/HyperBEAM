@@ -40,29 +40,37 @@ type(StoreOpts, Key) ->
             end
     end.
 
+%% @doc Extract a value from a message, handling sub-paths.
+extract_path_value(Message, Rest, StoreOpts) ->
+    case Rest of
+        [] -> {ok, Message};
+        _ ->
+            case hb_util:deep_get(Rest, Message, StoreOpts) of
+                not_found -> not_found;
+                Value -> {ok, Value}
+            end
+    end.
+
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
 read(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
-            ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-            case hb_gateway_client:read(ID, StoreOpts) of
-                {error, _} ->
-                    ?event({read_not_found, {key, ID}}),
-                    not_found;
-                {ok, Message} ->
-                    ?event({read_found, {key, ID}}),
-                    try hb_store_remote_node:maybe_cache(StoreOpts, Message)
-                    catch _:_ -> ignored end,
-                    case Rest of
-                        [] -> {ok, Message};
-                        _ ->
-                            case hb_util:deep_get(Rest, Message, StoreOpts) of
-                                not_found -> not_found;
-                                Value -> {ok, Value}
-                            end
-                    end
+            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+                not_found ->
+                    ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+                    case hb_gateway_client:read(ID, StoreOpts) of
+                        {error, _} ->
+                            ?event({read_not_found, {key, ID}}),
+                            not_found;
+                        {ok, Message} ->
+                            ?event({read_found, {key, ID}}),
+                            hb_store_remote_node:maybe_cache(StoreOpts, Message),
+                            extract_path_value(Message, Rest, StoreOpts)
+                    end;
+                {ok, CachedMessage} ->
+                    extract_path_value(CachedMessage, Rest, StoreOpts)
             end;
         _ ->
             ?event({ignoring_non_id, Key}),
@@ -72,7 +80,8 @@ read(BaseStoreOpts, Key) ->
 %% @doc Normalize the routes in the given `Opts`.
 opts(Opts) ->
     case hb_maps:find(<<"node">>, Opts) of
-        error -> Opts;
+        error ->
+            hb_opts:mimic_default_types(Opts, existing, Opts);
         {ok, Node} ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
@@ -208,29 +217,118 @@ cache_read_message_test() ->
         ),
     ?assert(hb_message:match(Read, Written)).
 
+avoid_double_read_test() ->
+    hb_http_server:start_node(#{}),
+    %% Setup local node
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    Data = <<"123">>,
+    DefaultResponse = {200, Data},
+    Endpoints = [{<<"/raw/", ID/binary>>, raw, DefaultResponse}],
+    %% Start MockServer
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    %% Setup local store
+    Local = #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"cache-TEST/avoid_double_read_test">>
+    },
+    hb_store:reset(Local),
+    WriteOpts = #{
+        store =>
+            [
+                #{ <<"store-module">> => hb_store_gateway,
+                    <<"local-store">> => [Local],
+                    %% To be replaced with `<<"routes">>` after PR 563
+                    routes => custom_raw_routes(MockServer)
+                }
+            ]
+    },
+    {ok, Written} = hb_cache:read(ID, WriteOpts),
+    {ok, Read} = hb_cache:read(ID, #{ store => [Local] }),
+    try
+        ?assert(hb_message:match(Read, Written)),
+        %% Check number of requests make to raw
+        TXs = hb_mock_server:get_requests(raw, 1, ServerHandle),
+        ?assert(length(TXs) == 1)
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+custom_raw_routes(MockServer) ->
+    [
+        #{
+            <<"template">> => <<"/graphql">>,
+            <<"nodes">> => [
+                #{
+                    <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                    <<"opts">> => #{
+                        <<"http_client">> => httpc,
+                        <<"protocol">> => http2
+                    }
+                }
+            ]
+        },
+        #{
+            <<"template">> => <<"/raw">>,
+            <<"node">> =>
+                #{
+                    <<"prefix">> => MockServer,
+                    <<"opts">> => #{
+                        <<"http_client">> => gun,
+                        <<"protocol">> => http2
+                    }
+                }
+        }
+    ].
+
 %% @doc Routes can be specified in the options, overriding the default routes.
 %% We test this by inversion: If the above cache read test works, then we know 
 %% that the default routes allow access to the item. If the test below were to
 %% produce the same result, despite an empty 'only' route list, then we would
 %% know that the module is not respecting the route list.
 specific_route_test() ->
-    hb_http_server:start_node(#{}),
+    LocalNode = hb_http_server:start_node(#{}),
+    %% Define the response we want
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    %% Define configuration, we use a valid gateway to obtain a valid response
+    %% and then mock the raw endpoint to our mockserver.
     Opts = #{
         store =>
             [
                 #{ <<"store-module">> => hb_store_gateway, 
-                   <<"routes">> => [],
-                   <<"only">> => local
+                   <<"routes">> => [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => httpc,
+                                    <<"protocol">> => http2
+                                }
+                            }
+                        ]
+                    },
+                    #{
+                        <<"template">> => <<"/raw">>,
+                        <<"node">> =>
+                            %% This prefix allow us to set a custom message that is a little bit 
+                            %% different than the original one (data field isn't provided).
+                            #{
+                                <<"prefix">> => <<LocalNode/binary, "~message@1.0/set&body=3#">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => gun,
+                                    <<"protocol">> => http2 
+                                }
+                            }
+                     }
+                   ]
                 }
             ]
     },
-    ?assertMatch(
-        not_found,
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            Opts
-        )
-    ).
+    {ok, Response} = hb_cache:read(ID, Opts),
+    %% If the result returns <<"1984">>, it is using the default route, 
+    %% not the custom one we defined
+    ?assertEqual(<<"3">>, maps:get(<<"data">>, Response)).
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->

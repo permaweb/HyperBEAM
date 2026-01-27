@@ -230,7 +230,8 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
         normalize_for_encoding(Msg, UnauthedCommitment, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),    
     HMac = hb_util:human_id(crypto:mac(hmac, sha256, Key, SigBase)),
-    ?event(httpsig_commit,
+    ?event(
+        debug_commitments,
         {hmac_commit,
             {type, <<"hmac-sha256">>},
             {keyid, KeyID},
@@ -255,7 +256,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
                     }
             }
         },
-    ?event({hmac_generation_complete, Res}),
+    ?event(debug_commitments, {hmac_generation_complete, Res}),
     Res.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains
@@ -576,8 +577,9 @@ validate_large_message_from_http_test() ->
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed = hb_message:commit(Msg, hb:wallet()),
-    ?assert(hb_message:verify(Signed, all, #{})),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Signed = hb_message:commit(Msg, Opts),
+    ?assert(hb_message:verify(Signed, all, Opts)),
     ?event({signed_msg, Signed}),
     UnsignedID = hb_message:id(Signed, none),
     SignedID = hb_message:id(Signed, all),
@@ -586,10 +588,11 @@ committed_id_test() ->
 
 commit_secret_key_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
+    Opts = #{ priv_wallet => hb:wallet() },
     CommittedMsg =
         hb_message:commit(
             Msg,
-            #{},
+            Opts,
             #{
                 <<"type">> => <<"hmac-sha256">>,
                 <<"secret">> => <<"test-secret">>,
@@ -618,8 +621,8 @@ commit_secret_key_test() ->
 
 multicommitted_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed1 = hb_message:commit(Msg, Wallet1 = ar_wallet:new()),
-    Signed2 = hb_message:commit(Signed1, Wallet2 = ar_wallet:new()),
+    Signed1 = hb_message:commit(Msg, #{ priv_wallet => Wallet1 = ar_wallet:new() }),
+    Signed2 = hb_message:commit(Signed1, #{ priv_wallet => Wallet2 = ar_wallet:new() }),
     Addr1 = hb_util:human_id(ar_wallet:to_address(Wallet1)),
     Addr2 = hb_util:human_id(ar_wallet:to_address(Wallet2)),
     ?event({signed_msg, Signed2}),
@@ -641,8 +644,9 @@ sign_and_verify_link_test() ->
         <<"untyped">> => #{ <<"inner-untyped">> => <<"inner-value">> },
         <<"typed">> => #{ <<"inner-typed">> => 123 }
     },
+    Opts = #{ priv_wallet => hb:wallet() },
     NormMsg = hb_message:convert(Msg, <<"structured@1.0">>, #{}),
     ?event({msg, NormMsg}),
-    Signed = hb_message:commit(NormMsg, hb:wallet()),
+    Signed = hb_message:commit(NormMsg, Opts),
     ?event({signed_msg, Signed}),
-    ?assert(hb_message:verify(Signed)).
+    ?assert(hb_message:verify(Signed, Opts)).
