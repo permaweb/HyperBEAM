@@ -62,11 +62,12 @@ fetch_blocks(Req, Current, To, Opts) ->
 process_block(BlockRes, _Req, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            maybe_index_ids(Block, Opts),
+            IndexedItems = maybe_index_ids(Block, Opts),
             ?event(
                 copycat_short,
                 {arweave_block_cached,
                     {height, Current},
+                    {indexed_items, IndexedItems},
                     {target, To}
                 }
             );
@@ -83,7 +84,7 @@ process_block(BlockRes, _Req, Current, To, Opts) ->
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_ids(Block, Opts) ->
     case hb_opts:get(arweave_index_ids, false, Opts) of
-        false -> ok;
+        false -> 0;
         true ->
             IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             BlockEndOffset = hb_util:int(
@@ -94,12 +95,12 @@ maybe_index_ids(Block, Opts) ->
             TXs = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
             Height = hb_maps:get(<<"height">>, Block, 0, Opts),
             TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-            lists:foreach(fun
+            lists:sum(lists:map(fun
                 ({{padding, _PaddingRoot}, _EndOffset}) ->
-                    ok;
+                    0;
                 ({{TX, _TXDataRoot}, EndOffset}) ->
                     case is_bundle_tx(TX, Opts) of
-                        false -> ok;
+                        false -> 0;
                         true ->
                             TXEndOffset = BlockStartOffset + EndOffset,
                             TXStartOffset = TXEndOffset - TX#tx.data_size,
@@ -126,12 +127,12 @@ maybe_index_ids(Block, Opts) ->
                                 end,
                                 TXStartOffset + HeaderSize,
                                 BundleIndex
-                            )
+                            ),
+                            length(BundleIndex)
                     end
                 end,
                 TXsWithData
-            ),
-            ok
+            ))
     end.
 
 is_bundle_tx(TX, _Opts) ->
