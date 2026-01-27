@@ -283,6 +283,83 @@ commit(Self, Req, Opts) ->
         ),
     {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, Opts)}.
 
+-spec commit_micro(any(), #{ commitment_device => binary() }, any()) -> {ok, map()}.
+commit_micro(Base, Req, Opts) ->
+    {ok, CommitmentDevice} =
+        maps:get(
+            <<"commitment-device">>,
+            Req,
+            hb_opts:get(
+                commitment_device,
+                no_viable_commitment_device,
+                Opts
+            )
+        ),
+    hb_ao_micro:resolve(
+        #{ <<"device">> => CommitmentDevice, <<"...">> => Base },
+        Req,
+        Opts#{ cache_control => [<<"no-store">>] }
+    ).
+    % {ok, Base} = hb_message:find_target(Self, Req, Opts),
+    % AttDev =
+    %     case hb_maps:get(<<"commitment-device">>, Req, not_specified, Opts) of
+    %         not_specified ->
+    %             hb_opts:get(commitment_device, no_viable_commitment_device, Opts);
+    %         Dev -> Dev
+    %     end,
+    % % We _do not_ set the `device' key in the message, as the device will be
+    % % part of the commitment. Instead, we find the device module's `commit'
+    % % function and apply it.
+    % AttMod =
+    %     hb_ao_device:message_to_device(
+    %         #{ <<"device">> => AttDev },
+    %         Opts
+    %     ),
+    % {ok, AttFun} =
+    %     hb_ao_device:find_exported_function(
+    %         Base,
+    %         AttMod,
+    %         commit,
+    %         3,
+    %         Opts
+    %     ),
+    % ?event(new_commit, {att, {att_dev, AttDev}, {att_mod, AttMod}, {att_fun, AttFun}}),
+    % Converted = hb_message:convert(Base, tabm, Opts),
+    % ?event(new_commit, {converted, Converted}),
+    % % Encode to a TABM
+    % Loaded =
+    %     ensure_commitments_loaded(
+    %         hb_message:convert(Base, tabm, Opts),
+    %         Opts
+    %     ),
+    % ?event(new_commit, {loaded, Loaded}),
+    % {ok, Committed} =
+    %     apply(
+    %         AttFun,
+    %         hb_ao_device:truncate_args(
+    %             AttFun,
+    %             [
+    %                 Loaded,
+    %                 Req#{ <<"type">> => maps:get(<<"type">>, Req, <<"signed">>) },
+    %                 Opts
+    %             ]
+    %         )
+    %     ),
+    % ?event(new_commit, {committed, Committed}),
+    % ConvertedBack = hb_message:convert(Committed, <<"structured@1.0">>, tabm, Opts),
+    % ?event(new_commit, {converted_back, ConvertedBack}),
+    % % TODO: Match this more broadly
+    % {ok, SignedID, SignedCommitment} = 
+    %     hb_message:commitment(
+    %         #{ 
+    %             <<"commitment-device">> => AttDev,
+    %             <<"type">> => <<"rsa-pss-sha512">>
+    %         },
+    %         ConvertedBack,
+    %         Opts
+    %     ),
+    % ?event(new_commit, {signed, {id, SignedID}, {commitment, SignedCommitment}}),
+    % {ok, ConvertedBack}.
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
 %% commitments from specific committers should be verified. Similarly, specific
@@ -761,6 +838,27 @@ signed(Msg, Req, Opts) ->
 
 %%% Tests
 
+new_commit_test() -> 
+    Opts = #{ store => [#{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST/fs">> }] },
+    Item = #{ <<"a">> => 1, <<"b">> => 2 },
+    {ok, CommittedItem} = 
+        hb_ao_micro:resolve(
+            Item,
+            #{ 
+                <<"path">> => <<"commit-micro">>,
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"type">> => <<"signed">>
+            },
+            Opts
+        ),
+    ?event(new_commit_test, {committed_item, CommittedItem}),
+
+    % {ok, Path} = hb_cache_micro:write(CommittedItem, Opts),
+    % {ok, Result} = hb_cache_micro:read(Path, Opts),
+    % {ok, ResA} = hb_cache_micro:read(<<Path/binary, "/a">>, Opts),
+    % {ok, ResB} = hb_cache_micro:read(<<Path/binary, "/b">>, Opts),
+    % ?event(new_commit_test, {done, {path, Path}, {result, Result}, {res_a, ResA}, {res_b, ResB}}),
+    ok.
 %%% Internal module functionality tests:
 get_keys_mod_test() ->
     ?assertEqual([a], hb_maps:keys(#{a => 1}, #{})).

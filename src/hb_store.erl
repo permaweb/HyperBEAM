@@ -465,7 +465,8 @@ generate_test_suite(Suite, Stores) ->
                     hb_store:start(Store)
                 end,
                 fun(_) ->
-                    hb_store:reset(Store)
+                    a
+                    % hb_store:reset(Store)
                     % hb_store:stop(Store)
                 end,
                 [

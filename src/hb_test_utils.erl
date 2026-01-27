@@ -80,9 +80,7 @@ test_store(Mod) ->
 test_store(Mod, Tag) ->
     TestDir =
         <<
-            "cache-TEST/run-",
-            Tag/binary, "-",
-            (integer_to_binary(erlang:system_time(millisecond)))/binary
+            "cache-TEST"
         >>,
     % Wait a tiny interval to ensure that any further tests will get their own
     % directory.

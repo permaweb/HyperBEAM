@@ -167,34 +167,54 @@ write(Opts, Path, Value) ->
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
 read(Opts, Path) ->
+    ?event(read, {path, Path}),
+    ReadWithLinksResult = read_with_links(Opts, Path),
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Path) of
-        {ok, Value} -> 
-            {ok, Value};
-        not_found ->
-            try
-                PathParts = binary:split(Path, <<"/">>, [global]),
-                case resolve_path_links(Opts, PathParts) of
-                    {ok, ResolvedPathParts} ->
-                        ResolvedPathBin = to_path(ResolvedPathParts),
-                        read_with_links(Opts, ResolvedPathBin);
-                    {error, _} ->
+    ?event(read, {read_with_links_result, ReadWithLinksResult}),
+    try 
+        case ReadWithLinksResult of
+            {ok, Value} -> 
+                ?event(read, {path, Path}, {value, Value}),
+                {ok, Value};
+            not_found ->
+                ?event(read, {not_found, {path, Path}}),
+                try
+                    PathParts = binary:split(Path, <<"/">>, [global]),
+                    case resolve_path_links(Opts, PathParts) of
+                        {ok, ResolvedPathParts} ->
+                            ?event(read, {resolved_path_parts, ResolvedPathParts}),
+                            ResolvedPathBin = to_path(ResolvedPathParts),
+                            read_with_links(Opts, ResolvedPathBin);
+                        {error, _} ->
+                            not_found
+                    end
+                catch
+                    Class:Reason:Stacktrace ->
+                        ?event(error,
+                            {
+                                resolve_path_links_failed, 
+                                {class, Class},
+                                {reason, Reason},
+                                {stacktrace, Stacktrace},
+                                {path, Path}
+                            }
+                        ),
+                        % If link resolution fails, return not_found
                         not_found
                 end
-            catch
-                Class:Reason:Stacktrace ->
-                    ?event(error,
-                        {
-                            resolve_path_links_failed, 
-                            {class, Class},
-                            {reason, Reason},
-                            {stacktrace, Stacktrace},
-                            {path, Path}
-                        }
-                    ),
-                    % If link resolution fails, return not_found
-                    not_found
-            end
+        end
+    catch
+        C:R:ST ->
+            ?event(error,
+                {
+                    read_failed,
+                    {class, C},
+                    {reason, R},
+                    {stacktrace, ST},
+                    {path, Path}
+                }
+            ),
+            not_found
     end.
 
 %% @doc Helper function to check if a value is a link and extract the target.
@@ -233,14 +253,18 @@ read_direct(Opts, Path) ->
 %% @doc Read a value directly from the database with link resolution.
 %% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
+    ?event(read, {read_with_links, Path}),
     case read_direct(Opts, Path) of
         {ok, Value} ->
+            ?event(read, {read_with_links_direct, {path, Path}, {value, Value}}),
             % Check if this value is actually a link to another key
             case is_link(Value) of
                 {true, Link} -> 
+                    ?event(read, {read_with_links_link, {path, Path}, {link, Link}}),
                    % Extract the target key and recursively resolve the link
                    read_with_links(Opts, Link);
                 false ->
+                    ?event(read, {read_with_links_not_link, {path, Path}, {value, Value}}),
                     % Check if this is a group marker - groups should not be
                     % readable as simple values
                     case Value of
@@ -249,6 +273,7 @@ read_with_links(Opts, Path) ->
                     end
             end;
         not_found ->
+            ?event(read, {read_with_links_not_found, {path, Path}}),
             not_found
     end.
 

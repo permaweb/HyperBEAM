@@ -182,7 +182,14 @@ do_write(Message, Store, Opts) when is_map(Message) ->
     {ok, PrefixID};
 do_write({link, Path, _LinkOpts}, _Store, _Opts) ->
     {ok, Path};
+do_write(List, Store, Opts) when is_list(List) ->
+    do_write(
+        hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
+        Store,
+        Opts
+    );
 do_write(Value, Store, Opts) ->
+    ?event(do_write, {do_write, {value, Value}, {store, Store}, {opts, Opts}}),
     Binary = type(hb_util:bin(Value), Value),
     ID = id(Binary, Opts),
     ok = hb_store:write(Store, ID, Binary),
@@ -277,7 +284,7 @@ test_store_binary(Store) ->
 
 test_store_unsigned_nested_empty_message(Store) ->
     ?event(debug_store_test, {store, Store}),
-    hb_store:reset(Store),
+    % hb_store:reset(Store),
     Item =
         #{ <<"layer1">> =>
             #{ <<"layer2">> =>

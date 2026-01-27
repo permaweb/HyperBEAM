@@ -58,7 +58,8 @@ serialize(Msg, _Req, Opts) ->
     HTTPSig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts), 
     {ok, dev_codec_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
 
-verify(Base, Req, RawOpts) ->
+verify(WrappedMsg, Req, RawOpts) ->
+    Base = hb_ao_micro:get(<<"...">>, WrappedMsg, RawOpts),
     % A rsa-pss-sha512 commitment is verified by regenerating the signature
     % base and validating against the signature.
     Opts = opts(RawOpts),
@@ -120,7 +121,8 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"hmac-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha512">> }, Opts);
-commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
+commit(WrappedMsg, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
+    MsgToSign = hb_ao_micro:get(<<"...">>, WrappedMsg, RawOpts),
     ?event(
         {generating_rsa_pss_sha512_commitment, {msg, MsgToSign}, {req, Req}}
     ),
@@ -186,7 +188,8 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         Req#{ <<"type">> => <<"hmac-sha256">> },
         Opts
     );
-commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
+commit(WrappedMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
+    BaseMsg = hb_ao_micro:get(<<"...">>, WrappedMsg, RawOpts),
     % Extract the key material from the request.
     Opts = opts(RawOpts),
     ?event({req_to_key_material, {req, Req}}),
