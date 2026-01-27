@@ -202,3 +202,19 @@ normalize_data_root(Item) -> Item.
 %% to avoid infinite recursion.
 log_conversion(Topic, X) ->
     ?event(Topic, X, #{debug_print_verify => false}).
+%%%===================================================================
+%%% Tests.
+%%%===================================================================
+
+tagfind_test() ->
+    Default = <<"default">>,
+    ?assertEqual(
+        <<"v1">>,
+        tagfind(<<"Foo">>, [{<<"fOo">>, <<"v1">>}], Default)
+    ),
+    ?assertEqual(
+        Default,
+        tagfind(<<"Missing">>, [{<<"foo">>, <<"v">>}], Default)
+    ).
+
+
