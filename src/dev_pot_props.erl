@@ -768,14 +768,23 @@ do_verify_inverted_index(Addr, ResourceID, State, Opts) ->
         deposit_qty_not_found,
         Opts
     ),
+    Delegations =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                Addr/binary,
+                "/delegations"
+            >>,
+            State,
+            #{},
+            Opts
+        ),
     ExpectedInvertedQty =
-        case DepositQty of
-            0 ->
-                inverted_qty_not_found;
-            deposit_qty_not_found ->
-                inverted_qty_not_found;
-            _ ->
-                DepositQty
+        case DepositQty =:= 0 andalso ?IS_EMPTY_MESSAGE(Delegations) of
+            true -> inverted_qty_not_found;
+            _ -> DepositQty
         end,
     InvertedQty =:= ExpectedInvertedQty orelse
     {error,
