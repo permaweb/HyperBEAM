@@ -110,9 +110,6 @@ maybe_index_ids(Block, Opts) ->
                                 TXStartOffset,
                                 TX#tx.data_size
                             ),
-                            ?event(debug_test, {writing_bundle_offset, 
-                                {tx, {explicit, hb_util:encode(TX#tx.id)}}
-                            }),
                             {ok, {BundleIndex, HeaderSize}} = 
                                 download_bundle_header(
                                     TXEndOffset, TX#tx.data_size, Opts),
@@ -176,26 +173,41 @@ download_bundle_header(EndOffset, Size, Opts) ->
 
 
 resolve_tx_headers(TXIDs, Opts) ->
-    lists:map(
-        fun(TXID) ->
-            {ok, StructuredTXHeader} =
-                hb_ao:resolve(
-                    #{ <<"device">> => <<"arweave@2.9-pre">> },
-                    #{ 
-                        <<"path">> => <<"tx">>,
-                        <<"tx">> => TXID,
-                        <<"exclude-data">> => true
-                    },
-                    Opts
-                ),
+    lists:foldr(
+        fun(TXID, Acc) ->
+            case resolve_tx_header(TXID, Opts) of
+                {ok, TX} -> [TX | Acc];
+                skip -> Acc
+            end
+        end,
+        [],
+        TXIDs
+    ).
+
+resolve_tx_header(TXID, Opts) ->
+    try
+        {ok, StructuredTXHeader} =
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9-pre">> },
+                #{ 
+                    <<"path">> => <<"tx">>,
+                    <<"tx">> => TXID,
+                    <<"exclude-data">> => true
+                },
+                Opts
+            ),
+        {ok,
             hb_message:convert(
                 StructuredTXHeader,
                 <<"tx@1.0">>,
                 <<"structured@1.0">>,
-                Opts)
-        end,
-        TXIDs
-    ).
+                Opts)}
+    catch
+        error:{badmatch, {ecdsa, secp256k1}} ->
+            % Skip for now (until HyperBEAM supports Arweave L1 TXs 
+            % ith ECDSA signatures)
+            skip
+    end.
 
 %%% Tests
 
@@ -287,33 +299,23 @@ bundle_header_index_test() ->
     ?assertEqual(15000, length(BundleIndex)),
     ok.
 
-index_ids_perf() ->
-    {TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    From = 1600100,
-    To = 1600000,
-    {IndexTimeUs, {ok, _}} =
-        timer:tc(
-            fun() ->
-                hb_ao:resolve(
-                    #{ <<"device">> => <<"copycat@1.0">> },
-                    #{
-                        <<"path">> => <<"arweave">>,
-                        <<"from">> => hb_util:bin(From),
-                        <<"to">> => hb_util:bin(To)
-                    },
-                    Opts
-                )
-            end
-        ),
-    BlockCount = From - To + 1,
-    {TxCount, ItemCount} = count_index_entries(TestStore),
-    hb_format:eunit_print(
-        "Indexed ~s blocks in ~p ms (~s txs, ~s items)",
+index_ids_ecdsa_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827904} = hb_ao:resolve(
+        #{ <<"device">> => <<"copycat@1.0">> },
+        #{
+            <<"path">> => <<"arweave">>,
+            <<"from">> => <<"1827904">>,
+            <<"to">> => <<"1827904">>
+        },
+        Opts
+    ),
+    assert_bundle_read(
+        Opts,
+        <<"VNhX_pSANk_8j0jZBR5bh_5jr-lkfbHDjtHd8FKqx7U">>,
         [
-            hb_util:human_int(BlockCount),
-            IndexTimeUs / 1000,
-            hb_util:human_int(TxCount),
-            hb_util:human_int(ItemCount)
+            {<<"3xDKhrCQcPuBtcm1ipZS5C9gAfFYClgHuHOHAXGfchM">>, <<"1">>},
+            {<<"JantC8f89VE-RidArHnU9589gY5T37NDXnWpI7H_psc">>, <<"7">>}
         ]
     ),
     ok.
@@ -354,31 +356,6 @@ setup_index_opts() ->
         arweave_index_store => StoreOpts
     },
     {TestStore, StoreOpts, Opts}.
-
-count_index_entries(IndexStore) ->
-    case hb_store:list(IndexStore, ?ARWEAVE_INDEX_PATH) of
-        {ok, Keys} ->
-            lists:foldl(
-                fun(Key, {TxCount, ItemCount}) ->
-                    Path = <<?ARWEAVE_INDEX_PATH/binary, "/", Key/binary>>,
-                    case hb_store:read(IndexStore, Path) of
-                        {ok, Value} ->
-                            [IsTx | _] =
-                                binary:split(Value, <<":">>, [global]),
-                            case hb_util:bool(IsTx) of
-                                true -> {TxCount + 1, ItemCount};
-                                false -> {TxCount, ItemCount + 1}
-                            end;
-                        _ ->
-                            {TxCount, ItemCount}
-                    end
-                end,
-                {0, 0},
-                Keys
-            );
-        not_found ->
-            {0, 0}
-    end.
 
 assert_bundle_read(Opts, BundleID, ExpectedItems) ->
     ReadItems =
