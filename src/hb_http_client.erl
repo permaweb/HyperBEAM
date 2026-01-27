@@ -298,7 +298,9 @@ init(Opts) ->
             ),
             try
                 application:ensure_all_started([prometheus, prometheus_cowboy]),
-                init_prometheus(Opts)
+                init_prometheus(),
+                erlang:send_after(5000, self(), conn_mailbox_monitoring),
+	            {ok, #state{ opts = Opts }}
             catch
                 Type:Reason:Stack ->
                     ?event(warning,
@@ -313,7 +315,7 @@ init(Opts) ->
         false -> {ok, #state{ opts = Opts }}
     end.
 
-init_prometheus(Opts) ->
+init_prometheus() ->
     application:ensure_all_started([prometheus, prometheus_cowboy]),
 	prometheus_counter:new([
 		{name, gun_requests_total},
@@ -353,8 +355,13 @@ init_prometheus(Opts) ->
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
+    prometheus_gauge:new([
+        {name, gun_mailbox_size},
+        {labels, [conn_id]},
+		{help, "Gun connection mailbox size"}
+    ]),
     ?event(started),
-	{ok, #state{ opts = Opts }}.
+    ok.
 
 handle_call({get_connection, Args, Opts}, From,
 		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
@@ -507,6 +514,13 @@ handle_info({'DOWN', _Ref, process, PID, Reason},
             }
 	end;
 
+handle_info(conn_mailbox_monitoring, #state{pid_by_peer = PidByPeer} = State) ->
+    spawn(fun() ->
+        maps:foreach(fun sample_conn_pid/2, PidByPeer)
+    end),
+    %% We should monitor for
+    erlang:send_after(5000, self(),     conn_mailbox_monitoring),
+    {noreply, State};
 handle_info(Message, State) ->
 	?event(warning, {unhandled_info, {module, ?MODULE}, {message, Message}}),
 	{noreply, State}.
@@ -520,6 +534,22 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 %%% Private functions.
 %%% ==================================================================
 
+sample_conn_pid(Peer, ConnPID) ->
+  %% Mailbox size
+  case process_info(ConnPID, message_queue_len) of
+    {message_queue_len, Len} ->
+        report(Peer, Len);
+    undefined ->
+          ok
+  end.
+
+%% Replace with prometheus_gauge:set/3 in real code
+report(Peer, Value) ->
+    prometheus_gauge:set(
+      gun_mailbox_size, 
+      [Peer], 
+      Value).
+
 %% @doc Safe wrapper for prometheus_gauge:inc/2.
 inc_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
@@ -527,7 +557,7 @@ inc_prometheus_gauge(Name) ->
         _ ->
             try prometheus_gauge:inc(Name)
             catch _:_ ->
-                init_prometheus(#{}),
+                init_prometheus(),
                 prometheus_gauge:inc(Name)
             end
     end.
@@ -559,6 +589,7 @@ open_connection(#{ peer := Peer }, Opts) ->
                             Opts
                         )
                 },
+            % We handle the retry
             retry => 0,
             connect_timeout =>
                 hb_opts:get(
@@ -686,9 +717,13 @@ do_gun_request(PID, Args, Opts) ->
 	Ref = gun:request(PID, Method, Path, Headers, Body),
 	ResponseArgs =
         #{
-            pid => PID, stream_ref => Ref,
-			timer => Timer, limit => hb_maps:get(limit, Args, infinity, Opts),
-			counter => 0, acc => [], start => os:system_time(microsecond),
+            pid => PID, 
+            stream_ref => Ref,
+			timer => Timer, 
+            limit => hb_maps:get(limit, Args, infinity, Opts),
+			counter => 0, 
+            acc => [], 
+            start => os:system_time(microsecond),
 			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
 	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
@@ -738,6 +773,7 @@ await_response(Args, Opts) ->
             };
 		{error, timeout} = Response ->
 			record_response_status(Method, Response),
+            ?event(http_outbound, {gun_cancel, {path, Path}}),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
@@ -822,6 +858,8 @@ get_status_class({error, noproc}) ->
 	<<"noproc">>;
 get_status_class(208) ->
 	<<"already_processed">>;
+get_status_class(429) ->
+	<<"too_many_requests">>;
 get_status_class(Data) when is_integer(Data), Data > 0 ->
 	hb_util:bin(prometheus_http:status_class(Data));
 get_status_class(Data) when is_binary(Data) ->
