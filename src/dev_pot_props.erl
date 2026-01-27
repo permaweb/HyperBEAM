@@ -768,13 +768,66 @@ do_verify_inverted_index(Addr, ResourceID, State, Opts) ->
         deposit_qty_not_found,
         Opts
     ),
-    InvertedQty =:= DepositQty orelse
+    ExpectedInvertedQty =
+        case DepositQty of
+            0 ->
+                inverted_qty_not_found;
+            deposit_qty_not_found ->
+                inverted_qty_not_found;
+            _ ->
+                DepositQty
+        end,
+    InvertedQty =:= ExpectedInvertedQty orelse
     {error,
         {bad_inverted_index,
             {inverted_deposit, InvertedQty},
             {deposit_qty, DepositQty}
         }
-    }.   
+    }.
+
+verify_undistributed_mint(OldState, Req, NewState, Opts) ->
+    UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
+    OldBalanceSum =
+        lists:sum(
+            lists:map(
+                fun(Addr) -> dev_pot:balance(Addr, OldState, Opts)
+                end,
+                UserAddrs
+            )
+        ),
+    NewBalanceSum =
+        lists:sum(
+            lists:map(
+                fun(Addr) -> dev_pot:balance(Addr, NewState, Opts)
+                end,
+                UserAddrs
+            )
+        ),
+    AccumulatedYield = NewBalanceSum - OldBalanceSum,
+    OldUndistributedMint = hb_maps:get(<<"undistributed-mint">>, OldState, 0),
+    NewUndistributedMint = hb_maps:get(<<"undistributed-mint">>, NewState, 0),
+    Minted = hb_maps:get(<<"minted">>, OldState, 0),
+    Max = hb_maps:get(<<"mint-cap">>, NewState),
+    PropN = hb_maps:get(<<"mint-prop-numerator">>, NewState),
+    PropD = hb_maps:get(<<"mint-prop-denominator">>, NewState),
+    LastT = hb_maps:get(<<"t">>, OldState),
+    T = hb_maps:get(<<"t">>, NewState),
+    Path = hb_maps:get(<<"path">>, Req),
+    MintedOverDeltaT =
+        dev_pot_math:minted_between(Minted, Max, PropN, PropD, LastT, T),
+    UndistributedDisbursed = OldUndistributedMint - NewUndistributedMint,
+    AccumulatedYield =:= MintedOverDeltaT + UndistributedDisbursed orelse
+    {error,
+        {bad_undistributed_mint,
+            {minted_over_deltat, MintedOverDeltaT},
+            {accumulated_yield, AccumulatedYield},
+            {new_undistributed_mint, NewUndistributedMint},
+            {old_undistributed_mint, OldUndistributedMint},
+            {loss, AccumulatedYield - (MintedOverDeltaT + UndistributedDisbursed)},
+            {last_t, LastT},
+            {t, T}
+        }
+    }.
 
 % Note that we keep private state which mirrors the schema of the inverted
 % index, but which keeps track of the deposits *originated* by each user.
