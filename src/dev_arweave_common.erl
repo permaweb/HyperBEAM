@@ -245,6 +245,7 @@ deserialize_sig_type(Type) ->
 %% to avoid infinite recursion.
 log_conversion(Topic, X) ->
     ?event(Topic, X, #{debug_print_verify => false}).
+
 %%%===================================================================
 %%% Tests.
 %%%===================================================================
