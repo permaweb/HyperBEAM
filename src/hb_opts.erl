@@ -339,7 +339,7 @@ default_message() ->
                     <<"lookup@1.0">> => dev_lookup,
                     <<"lua@5.3a">> => dev_lua,
                     <<"manifest@1.0">> => dev_manifest,
-                    <<"message@1.0">> => dev_message,
+                    <<"message@1.0">> => dev_message_micro,
                     <<"meta@1.0">> => dev_meta,
                     <<"monitor@1.0">> => dev_monitor,
                     <<"multipass@1.0">> => dev_multipass,

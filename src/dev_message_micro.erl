@@ -1,6 +1,7 @@
 -module(dev_message_micro).
 -export([commit/3, set/3, do_deep_merge/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE_KEYS, [
     <<"id">>,
@@ -13,6 +14,23 @@
     <<"verify">>
 ]).
 -spec commit(any(), #{ commitment_device => binary() }, any()) -> {ok, map()}.
+
+to(Base, Req, Opts) ->
+    {ok, CodecDevice} =
+        maps:get(
+            <<"codec-device">>,
+            Req,
+            hb_opts:get(
+                codec_device,
+                no_viable_codec_device,
+                Opts
+            )
+        ),
+    hb_ao_micro:resolve(
+        #{ <<"device">> => CodecDevice, <<"path">> => <<"to">>, <<"...">> => Base },
+        Req,
+        Opts#{ cache_control => [<<"no-store">>] }
+    ).
 commit(Base, Req, Opts) ->
     {ok, CommitmentDevice} =
         maps:get(
@@ -114,18 +132,42 @@ verify(Base, Req, Opts) ->
 new_commit_test() -> 
     Opts = #{ store => [#{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST/fs">> }] },
     Item = #{ <<"a">> => 1, <<"b">> => 2 },
+    {ok, Path} = hb_cache_micro:write(Item, Opts),
     {ok, CommittedItem} = 
         hb_ao_micro:resolve(
             Item,
             #{ 
-                <<"path">> => <<"commit-micro">>,
+                <<"path">> => <<"commit">>,
                 <<"commitment-device">> => <<"httpsig@1.0">>,
                 <<"type">> => <<"signed">>
             },
             Opts
         ),
     ?event(new_commit_test, {committed_item, CommittedItem}),
-
+    ?assertEqual(
+        hb_ao_micro:get(
+            <<"...">>,
+            CommittedItem,
+            Opts
+        ),
+        Path
+    ),
+    ?assertEqual(
+        hb_ao_micro:get(
+            <<"id">>,
+            CommittedItem,
+            Opts
+        ),
+        Path
+    ),
+    ?assertEqual(
+        hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts),
+        <<"httpsig@1.0">>
+    ),
+    ?assertEqual(
+        hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
+        [<<"a">>, <<"b">>]
+    ),
     % {ok, Path} = hb_cache_micro:write(CommittedItem, Opts),
     % {ok, Result} = hb_cache_micro:read(Path, Opts),
     % {ok, ResA} = hb_cache_micro:read(<<Path/binary, "/a">>, Opts),

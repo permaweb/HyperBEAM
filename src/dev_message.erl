@@ -845,13 +845,14 @@ new_commit_test() ->
         hb_ao_micro:resolve(
             Item,
             #{ 
-                <<"path">> => <<"commit-micro">>,
+                <<"path">> => <<"commit">>,
                 <<"commitment-device">> => <<"httpsig@1.0">>,
                 <<"type">> => <<"signed">>
             },
             Opts
         ),
     ?event(new_commit_test, {committed_item, CommittedItem}),
+    % hb_ao_micro:resolve()
 
     % {ok, Path} = hb_cache_micro:write(CommittedItem, Opts),
     % {ok, Result} = hb_cache_micro:read(Path, Opts),
