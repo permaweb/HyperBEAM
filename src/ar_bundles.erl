@@ -493,7 +493,9 @@ bundle_header_size(<<Count:256/little-integer, _/binary>>) ->
     32 + (Count * 64).
 
 decode_bundle_header(<<Count:256/little-integer, Content/binary>>) ->
-    decode_bundle_header(Count, Content).
+    decode_bundle_header(Count, Content);
+decode_bundle_header(<<>>) ->
+    {<<>>, []}.
 
 decode_bundle_header(Count, Bin) -> decode_bundle_header(Count, Bin, []).
 decode_bundle_header(0, ItemsBin, Header) ->
@@ -654,6 +656,38 @@ with_zero_length_tag_test() ->
     Serialized = serialize(Item),
     Deserialized = deserialize(Serialized),
     ?assertEqual(Item, Deserialized).
+
+decode_bundle_header_test() ->
+    ?assertEqual({<<>>, []}, decode_bundle_header(<<>>)),
+    Tail = <<"tail">>,
+    ?assertEqual(
+        {Tail, []},
+        decode_bundle_header(<<0:256/little, Tail/binary>>)
+    ),
+    ID1 = crypto:strong_rand_bytes(32),
+    Items1 = <<"abcde">>,
+    ?assertEqual(
+        {Items1, [{ID1, 5}]},
+        decode_bundle_header(<<1:256/little, 5:256/little, ID1:32/binary, Items1/binary>>)
+    ),
+    ID2 = crypto:strong_rand_bytes(32),
+    ID3 = crypto:strong_rand_bytes(32),
+    Items2 = <<"payload">>,
+    ?assertEqual(
+        {Items2, [{ID2, 4}, {ID3, 2}]},
+        decode_bundle_header(
+            <<
+                2:256/little,
+                4:256/little, ID2:32/binary,
+                2:256/little, ID3:32/binary,
+                Items2/binary
+            >>
+        )
+    ),
+    ?assertEqual(
+        {<<>>, [{ID1, 6}]},
+        decode_bundle_header(<<1:256/little, 6:256/little, ID1:32/binary>>)
+    ).
 
 unsigned_data_item_id_test() ->
     Item1 = deserialize(
