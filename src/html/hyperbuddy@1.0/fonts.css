@@ -1,63 +1,15 @@
 @font-face {
-	font-family: 'Open Sans';
-	src: url('./font-open-sans.ttf') format('truetype');
+	font-family: 'DM Sans';
+	src: url('./font-dm-sans-variable.ttf') format('truetype');
 	font-weight: 500;
 	font-style: normal;
 	font-display: swap;
 }
 
 @font-face {
-	font-family: 'Titillium Web';
-	src: url('./font-titillium-web-regular.ttf') format('truetype');
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Titillium Web';
-	src: url('./font-titillium-web-semibold.ttf') format('truetype');
-	font-weight: 600;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Titillium Web';
-	src: url('./font-titillium-web-bold.ttf') format('truetype');
-	font-weight: 700;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Source Code Pro';
-	src: url('./font-source-code-pro-regular.ttf') format('truetype');
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Source Code Pro';
-	src: url('./font-source-code-pro-medium.ttf') format('truetype');
+	font-family: 'Geist Mono';
+	src: url('./font-geist-mono-variable.ttf') format('truetype');
 	font-weight: 500;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Source Code Pro';
-	src: url('./font-source-code-pro-semibold.ttf') format('truetype');
-	font-weight: 600;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'Source Code Pro';
-	src: url('./font-source-code-pro-bold.ttf') format('truetype');
-	font-weight: 700;
 	font-style: normal;
 	font-display: swap;
 }
