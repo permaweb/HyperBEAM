@@ -76,6 +76,12 @@ start(Opts) ->
             host := Host,
             port := Port
         } ?= uri_string:parse(Endpoint),
+        HttpClientAtom = maps:get(<<"http_client">>, Opts, gun),
+        HttpClient = 
+            case HttpClientAtom of 
+                gun -> fun gun_request/6;
+                httpc -> httpc
+            end,
         BaseConfig = erlcloud_s3:new(AccessKey, SecretKey, hb_util:list(Host), Port),
         Config = BaseConfig#aws_config{
             s3_scheme = hb_util:list(hb_util:list(Scheme) ++ "://"),
@@ -83,7 +89,7 @@ start(Opts) ->
             s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
             % Use `gun_pool` to define a connection pool. Default is `httpc`
-            http_client = fun gun_request/6
+            http_client = HttpClient
         },
         ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
@@ -91,7 +97,7 @@ start(Opts) ->
             StoreRef,
             #{bucket => Bucket, config => Config}
         ),
-        ?event(store_s3, {started, {bucket, Bucket}}),
+        ?event(store_s3, {started, {bucket, Bucket}, {http_client, HttpClientAtom}}),
         {ok, #{module => ?MODULE, bucket => Bucket}}
     else
         Error ->
