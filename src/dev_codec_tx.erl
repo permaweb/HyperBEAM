@@ -197,7 +197,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.owner, [byte_size(?DEFAULT_OWNER)]),
+        hb_util:check_type(TX#tx.owner, binary),
         {invalid_field, owner, TX#tx.owner}
     ),
     hb_util:ok_or_throw(TX,
@@ -217,7 +217,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, data_root, TX#tx.data_root}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.signature, [65, byte_size(?DEFAULT_SIG)]),
+        hb_util:check_type(TX#tx.signature, binary),
         {invalid_field, signature, TX#tx.signature}
     ),
     hb_util:ok_or_throw(TX,
@@ -294,20 +294,14 @@ enforce_valid_tx_test() ->
         {unsigned_id_invalid_val, BaseTX#tx{unsigned_id = InvalidUnsignedID}, {invalid_field, unsigned_id, InvalidUnsignedID}},
         {anchor_too_short_31, BaseTX#tx{anchor = BadID31}, {invalid_field, anchor, BadID31}},
         {anchor_too_long_33, BaseTX#tx{anchor = BadID33}, {invalid_field, anchor, BadID33}},
-        {owner_wrong_size, BaseTX#tx{owner = BadOwnerSize}, {invalid_field, owner, BadOwnerSize}},
-        {owner_empty, BaseTX#tx{owner = <<>>}, {invalid_field, owner, <<>>}},
+        {owner_wrong_type, BaseTX#tx{owner = "hello"}, {invalid_field, owner, "hello"}},
         {target_too_short_31, BaseTX#tx{target = BadID31}, {invalid_field, target, BadID31}},
         {target_too_long_33, BaseTX#tx{target = BadID33}, {invalid_field, target, BadID33}},
         {quantity_not_integer, BaseTX#tx{quantity = <<"100">>}, {invalid_field, quantity, <<"100">>}},
         {data_size_not_integer, BaseTX#tx{data_size = an_atom}, {invalid_field, data_size, an_atom}},
         {data_root_too_short_31, BaseTX#tx{data_root = BadID31}, {invalid_field, data_root, BadID31}},
         {data_root_too_long_33, BaseTX#tx{data_root = BadID33}, {invalid_field, data_root, BadID33}},
-        {signature_invalid_size_1, BaseTX#tx{signature = SigInvalidSize1}, {invalid_field, signature, SigInvalidSize1}},
-        {signature_invalid_size_64, BaseTX#tx{signature = SigInvalidSize64}, {invalid_field, signature, SigInvalidSize64}},
-        {signature_invalid_size_66, BaseTX#tx{signature = SigInvalidSize66}, {invalid_field, signature, SigInvalidSize66}},
-        {signature_invalid_size_511, BaseTX#tx{signature = SigInvalidSize511}, {invalid_field, signature, SigInvalidSize511}},
-        {signature_too_long_513, BaseTX#tx{signature = SigTooLong513}, {invalid_field, signature, SigTooLong513}},
-        {signature_empty, BaseTX#tx{signature = <<>>}, {invalid_field, signature, <<>>}},
+        {signature_invalid_type, BaseTX#tx{signature = "hello"}, {invalid_field, signature, "hello"}},
         {reward_not_integer, BaseTX#tx{reward = 1.0}, {invalid_field, reward, 1.0}},
         {denomination_not_zero, BaseTX#tx{denomination = 1}, {invalid_field, denomination, 1}},
         {signature_type_not_rsa, BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {invalid_field, signature_type, ?ECDSA_KEY_TYPE}},
@@ -786,6 +780,12 @@ real_ecdsa_single_item_bundle_tx_test_disabled() ->
         []
     ).
 
+real_2048_bit_rsa_tx_test() ->
+    do_real_tx_verify(
+        <<"tj76flZk936u0S2owyEzUFBvBAYle9Al5LH8zJ7icNc">>,
+        [<<"tj76flZk936u0S2owyEzUFBvBAYle9Al5LH8zJ7icNc">>]
+    ).
+
 real_no_data_tx_test() ->
     do_real_tx_verify(
         <<"N1Cyu67lQtmZMQlIZVFpNfy3xz6k9wEZ8LLeDbOebbk">>,
@@ -825,24 +825,46 @@ do_real_tx_verify(TXID, ExpectedIDs) ->
     end,
     ?event(debug_test, {tx, {explicit, TX}}),
     ?assert(ar_tx:verify(TX)),
-    
+    StructuredTX = hb_message:convert(
+        TX,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ),
+    ?assert(hb_message:verify(StructuredTX, all, #{})),
     Deserialized = ar_bundles:deserialize(TX),
     ?event(debug_test, {deserialized}),
+    verify_items(Deserialized, ExpectedIDs, Opts).
 
-    verify_items(Deserialized, ExpectedIDs).
-
-verify_items(RootItem, ExpectedIDs) ->
+verify_items(RootItem, ExpectedIDs, Opts) ->
     AllItems = flatten_items(RootItem),
     ?assertEqual(length(ExpectedIDs), length(AllItems)),
     [RootItem | NestedItems] = AllItems,
     [RootID | NestedIDs] = ExpectedIDs,
+    NormalizedRootItem = dev_arweave_common:normalize(RootItem),
     ?assert(
-        ar_tx:verify(dev_arweave_common:normalize(RootItem)),
+        ar_tx:verify(NormalizedRootItem),
+        hb_util:encode(RootItem#tx.id)),
+    StructuredRootItem = hb_message:convert(
+        NormalizedRootItem,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ),
+    ?assert(hb_message:verify(StructuredRootItem, all, Opts),
         hb_util:encode(RootItem#tx.id)),
     ?assertEqual(RootID, hb_util:encode(RootItem#tx.id)),
     lists:zipwith(
         fun(Item, ExpectedID) ->
             ?assert(ar_bundles:verify_item(Item), hb_util:encode(Item#tx.id)),
+            StructuredItem = hb_message:convert(
+                Item,
+                <<"structured@1.0">>,
+                <<"ans104@1.0">>,
+                Opts
+            ),
+            ?assert(hb_message:verify(StructuredItem, all, Opts),
+                hb_util:encode(Item#tx.id)),
             ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id))
         end,
         NestedItems,
