@@ -124,7 +124,10 @@ schedule(ErlangProcID, Message) ->
     ErlangProcID ! {schedule, Message, self(), AbortTime},
     receive
         {scheduled, Message, Assignment} ->
-            Assignment
+            Assignment;
+        {scheduling_error, Message, {error, Reason}} ->
+            % Handle error from assign/3 instead of timing out
+            throw({scheduling_failed, {proc_id, ErlangProcID}, {reason, Reason}})
     after ?DEFAULT_TIMEOUT ->
         throw({scheduler_timeout, {proc_id, ErlangProcID}, {message, Message}})
     end.
@@ -174,7 +177,11 @@ assign(State, Message, ReplyPID) ->
         do_assign(State, Message, ReplyPID)
     catch
         _Class:Reason:Stack ->
-            ?event({error_scheduling, {reason, Reason}, {trace, Stack}}),
+            ?event(error, {error_scheduling, {reason, Reason}, {trace, Stack}}),
+            % CRITICAL: Send error reply to prevent client timeout.
+            % Previously this returned State without replying, causing a 10-second
+            % timeout on the client side (scheduler_timeout error).
+            ReplyPID ! {scheduling_error, Message, {error, Reason}},
             State
     end.
 
