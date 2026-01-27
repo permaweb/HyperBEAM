@@ -216,9 +216,15 @@ resolve_tx_header(TXID, Opts) ->
                 skip
         end
     catch
-        error:{badmatch, {ecdsa, secp256k1}} ->
-            % Skip for now (until HyperBEAM supports Arweave L1 TXs
-            % with ECDSA signatures)
+        Class:Reason:_ ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, TXID}},
+                    {class, Class},
+                    {reason, Reason}
+                }
+            ),
             skip
     end.
 
@@ -324,6 +330,12 @@ index_ids_ecdsa_test() ->
             {<<"JantC8f89VE-RidArHnU9589gY5T37NDXnWpI7H_psc">>, <<"7">>}
         ]
     ),
+    ok.
+
+non_string_tags_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    ?assertEqual(skip, 
+        resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts)),
     ok.
 
 setup_index_opts() ->
