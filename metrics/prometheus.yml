@@ -7,7 +7,14 @@ scrape_configs:
     metrics_path: '/~hyperbuddy@1.0/metrics'
     static_configs:
       - targets: ['host.docker.internal:8734']
-    scrape_interval: 10s
+        labels:
+          node: 'local'
+      - targets: ['green.hyperbeam']
+        labels:
+          node: 'green'
+      - targets: ['blue.hyperbeam']
+        labels:
+          node: 'blue'
 
   - job_name: 'node-exporter'
     static_configs:
