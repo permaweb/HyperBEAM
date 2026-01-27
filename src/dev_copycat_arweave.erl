@@ -7,9 +7,9 @@
 -export([arweave/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("public_key/include/OTP-PUB-KEY.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9-pre">>).
--define(ARWEAVE_INDEX_PATH, <<?ARWEAVE_DEVICE/binary, "/offset">>).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -26,12 +26,13 @@ parse_range(Request, Opts) ->
         case hb_maps:find(<<"from">>, Request, Opts) of
             {ok, Height} -> Height;
             error ->
-                {ok, LatestHeight} =
-                    hb_ao:resolve(
-                        <<?ARWEAVE_DEVICE/binary, "/current/height">>,
-                        Opts
-                    ),
-                LatestHeight
+                case hb_ao:resolve(
+                    <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+                    Opts
+                ) of
+                    {ok, LatestHeight} -> LatestHeight;
+                    {error, _} -> 0
+                end
         end,
     To = hb_maps:get(<<"to">>, Request, 0, Opts),
     {hb_util:int(From), hb_util:int(To)}.
@@ -71,13 +72,13 @@ process_block(BlockRes, _Req, Current, To, Opts) ->
                     {target, To}
                 }
             );
-        {error, not_found} ->
+        {error, _} = Error ->
             ?event(
                 copycat_short,
                 {arweave_block_not_found,
                     {height, Current},
-                    {target, To}
-                }
+                    {target, To},
+                    {reason, Error}} 
             )
     end.
 
@@ -111,9 +112,10 @@ maybe_index_ids(Block, Opts) ->
                                 TXStartOffset,
                                 TX#tx.data_size
                             ),
-                            {ok, {BundleIndex, HeaderSize}} = 
+                            {ok, {BundleIndex, HeaderSize}} =
                                 download_bundle_header(
-                                    TXEndOffset, TX#tx.data_size, Opts),
+                                    TXEndOffset, TX#tx.data_size, Opts
+                                ),
                             lists:foldl(
                                 fun({ItemID, Size}, ItemStartOffset) ->
                                     hb_store_arweave:write_offset(
@@ -140,38 +142,45 @@ is_bundle_tx(TX, _Opts) ->
 
 download_bundle_header(EndOffset, Size, Opts) ->
     StartOffset = EndOffset - Size + 1,
-    {ok, FirstChunk} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => StartOffset
-        },
+    case hb_ao:resolve(
+        <<
+            ?ARWEAVE_DEVICE/binary,
+            "/chunk&offset=",
+            (hb_util:bin(StartOffset))/binary
+        >>,
         Opts
-    ),
-    % Most bundle headers can fit in a single chunk, but those with thousands
-    % of items might require multiple chunks to full represent the item
-    % index.
-    HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-    BundleHeader =
-        case HeaderSize =< byte_size(FirstChunk) of
-            true -> FirstChunk;
-            false ->
-                {ok, HeaderChunks} = hb_ao:resolve(
-                    #{ <<"device">> => <<"arweave@2.9-pre">> },
-                    #{
-                        <<"path">> => <<"chunk">>,
-                        <<"offset">> => StartOffset,
-                        <<"length">> => HeaderSize
-                    },
-                    Opts
-                ),
-                HeaderChunks
-        end,
-    {_ItemsBin, BundleIndex} =
-        ar_bundles:decode_bundle_header(BundleHeader),
-    {ok, {BundleIndex, HeaderSize}}.
+    ) of
+        {ok, FirstChunk} ->
+            % Most bundle headers can fit in a single chunk, but those with
+            % thousands of items might require multiple chunks to fully
+            % represent the item index.
+            HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
+            {ok, BundleHeader} =
+                header_chunk(HeaderSize, FirstChunk, StartOffset, Opts),
+            {_ItemsBin, BundleIndex} =
+                ar_bundles:decode_bundle_header(BundleHeader),
+            {ok, {BundleIndex, HeaderSize}};
+        {error, _} ->
+            {ok, {[], 0}}
+    end.
 
-
+header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
+        when HeaderSize =< byte_size(FirstChunk) ->
+    {ok, FirstChunk};
+header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
+    case hb_ao:resolve(
+        <<
+            ?ARWEAVE_DEVICE/binary,
+            "/chunk&offset=",
+            (hb_util:bin(StartOffset))/binary,
+            "&length=",
+            (hb_util:bin(HeaderSize))/binary
+        >>,
+        Opts
+    ) of
+        {ok, HeaderChunk} -> {ok, HeaderChunk};
+        {error, _} -> {ok, <<>>}
+    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     lists:foldr(
@@ -187,28 +196,32 @@ resolve_tx_headers(TXIDs, Opts) ->
 
 resolve_tx_header(TXID, Opts) ->
     try
-        {ok, StructuredTXHeader} =
-            hb_ao:resolve(
-                #{ <<"device">> => <<"arweave@2.9-pre">> },
-                #{ 
-                    <<"path">> => <<"tx">>,
-                    <<"tx">> => TXID,
-                    <<"exclude-data">> => true
-                },
-                Opts
-            ),
-        {ok,
-            hb_message:convert(
-                StructuredTXHeader,
-                <<"tx@1.0">>,
-                <<"structured@1.0">>,
-                Opts)}
+        case hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary,
+                "/tx&tx=",
+                TXID/binary,
+                "&exclude-data=true"
+            >>,
+            Opts
+        ) of
+            {ok, StructuredTXHeader} ->
+                {ok,
+                    hb_message:convert(
+                        StructuredTXHeader,
+                        <<"tx@1.0">>,
+                        <<"structured@1.0">>,
+                        Opts)};
+            {error, _} ->
+                skip
+        end
     catch
         error:{badmatch, {ecdsa, secp256k1}} ->
-            % Skip for now (until HyperBEAM supports Arweave L1 TXs 
-            % ith ECDSA signatures)
+            % Skip for now (until HyperBEAM supports Arweave L1 TXs
+            % with ECDSA signatures)
             skip
     end.
+
 
 %%% Tests
 
@@ -219,15 +232,11 @@ index_ids_test() ->
     %% however we should still be able to index it (we just can't deserialize
     %% it).
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
-    {ok, 1827942} = hb_ao:resolve(
-        #{ <<"device">> => <<"copycat@1.0">> },
-        #{
-            <<"path">> => <<"arweave">>,
-            <<"from">> => <<"1827942">>,
-            <<"to">> => <<"1827942">>
-        },
-        Opts
-    ),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            Opts
+        ),
     % WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4 is a bundle signed with
     % an Ethereum signature which is not supported by HB as of Jan 2026.
     % The bundle should be indexed even though we can't deserialized the
@@ -302,15 +311,11 @@ bundle_header_index_test() ->
 
 index_ids_ecdsa_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, 1827904} = hb_ao:resolve(
-        #{ <<"device">> => <<"copycat@1.0">> },
-        #{
-            <<"path">> => <<"arweave">>,
-            <<"from">> => <<"1827904">>,
-            <<"to">> => <<"1827904">>
-        },
-        Opts
-    ),
+    {ok, 1827904} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827904&to=1827904">>,
+            Opts
+        ),
     assert_bundle_read(
         Opts,
         <<"VNhX_pSANk_8j0jZBR5bh_5jr-lkfbHDjtHd8FKqx7U">>,
@@ -381,4 +386,3 @@ assert_item_read(Opts, ItemID) ->
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
-
