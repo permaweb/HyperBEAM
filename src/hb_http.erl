@@ -1299,11 +1299,13 @@ parallel_request_test() ->
          }
     ],
     hb_store:reset(Store),
-    Opts = #{store => Store},
+    Opts = #{ store => Store },
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch({ok, #{<<"data">> := <<"1984">>}},
+    ?assertMatch(
+        {ok, #{<<"data">> := <<"1984">>}},
         hb_http:get(
             Node,
             #{<<"path">> => <<"/BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>},
             Opts
-        )).
+        )
+    ).
