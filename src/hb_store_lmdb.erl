@@ -174,7 +174,7 @@ read(Opts, Path) ->
     try 
         case ReadWithLinksResult of
             {ok, Value} -> 
-                ?event(read, {path, Path}, {value, Value}),
+                ?event(read, {found_value, {path, Path}, {value, Value}}),
                 {ok, Value};
             not_found ->
                 ?event(read, {not_found, {path, Path}}),
