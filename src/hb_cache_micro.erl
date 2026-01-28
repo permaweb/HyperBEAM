@@ -261,6 +261,30 @@ id(Message, _Opts) when is_map(Message) ->
             )
         )
     ).
+match(MatchSpec, Opts) ->
+    ?event(cache_micro, {matching, {spec, MatchSpec}}),
+    Spec = hb_message:convert(MatchSpec, tabm, <<"structured@1.0">>, Opts),
+    ConvertedMatchSpec =
+        maps:map(
+            fun(_, Value) ->
+                Value
+                % generate_binary_path(Value, Opts)
+            end,
+            maps:without([<<"ao-types">>], hb_ao:normalize_keys(Spec, Opts))
+        ),
+    ?event(cache_micro, {matching, {converted_spec, {explicit, ConvertedMatchSpec}}}),
+    case hb_store:match(hb_opts:get(store, no_viable_store, Opts), ConvertedMatchSpec) of
+        {ok, Matches} -> {ok, Matches};
+        _ -> not_found
+    end.
+
+%% @doc Generate the path at which a binary value should be stored.
+generate_binary_path(Bin, Opts) ->
+    Hashpath = hb_path:hashpath(Bin, Opts),
+    <<"data/", Hashpath/binary>>.
+
+    
+%% TESTS
 test_unsigned(Data) ->
     #{
         <<"base-test-key">> => <<"base-test-value">>,
