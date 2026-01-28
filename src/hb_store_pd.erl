@@ -1,14 +1,16 @@
 -module(hb_store_pd).
 
 %% Standard hb_store exports
--export([start/1, stop/1, reset/1, scope/0]).
+-export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([read/2, write/3, list/2, match/2]).
--export([type/2, resolve/2, path/2, add_path/3]).
--export([make_group/2, make_link/3]).
+-export([make_group/2, make_link/3, type/2]).
+-export([path/2, add_path/3, resolve/2]).
 -export([flush/2, flush/3, buffer_size/1, keys/1]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(MAX_REDIRECTS, 1000). 
 
 %% @doc Start the process dictionary store.
 -spec start(map()) -> {ok, map()} | {error, term()}.
@@ -31,133 +33,317 @@ reset(_Opts = #{<<"name">> := Name}) ->
     erlang:erase(StateKey),
     ok.
 
-%% @doc Return the scope of this store.
-%% Process dictionary storage is always in-memory and process-local.
--spec scope() -> in_memory.
-scope() -> in_memory.
+%% @doc Return the scope of this store (local = only this process).
+-spec scope() -> local.
+scope() -> local.
 
-%% @doc Write a key-value pair to the process dictionary.
-%% This operation is extremely fast as it only modifies local process state.
--spec write(map(), binary(), binary()) -> ok.
-write(#{<<"name">> := Name}, Key, Value) ->
-    StateKey = get_state_key(Name),
-    ?event({ statekey, StateKey}),
-    Data = case erlang:get(StateKey) of
-        undefined -> #{};
-        D -> D
-    end,
-    ?event({data, Data}),
-    erlang:put(StateKey, Data#{Key => Value}),
-    ok.
+%% @doc Return the scope of this store (ignores parameters).
+-spec scope(term()) -> local.
+scope(_) -> scope().
 
-%% @doc Read a value from the process dictionary by key.
--spec read(map(), binary()) -> {ok, binary()} | not_found.
-read(#{<<"name">> := Name}, Key) ->
+%% @doc Generate the process dictionary key for a given store name.
+-spec get_state_key(binary()) -> {?MODULE, binary()}.
+get_state_key(Name) ->
+    {?MODULE, Name}.
+
+%% @doc Get the data map from the process dictionary.
+get_data(Name) ->
     StateKey = get_state_key(Name),
     case erlang:get(StateKey) of
-        undefined ->
+        undefined -> #{};
+        Data -> Data
+    end.
+
+%% @doc Put the data map into the process dictionary.
+put_data(Name, Data) ->
+    StateKey = get_state_key(Name),
+    erlang:put(StateKey, Data).
+
+%% @doc Convert path parts to a binary path.
+to_path(PathParts) ->
+    hb_util:bin(lists:join(<<"/">>, PathParts)).
+
+%% @doc Check if a value is a symbolic link (format: "link:<target>").
+%% Returns {true, Target} or false.
+is_link(Value) when is_binary(Value) ->
+    case binary:split(Value, <<":">>) of
+        [<<"link">>, Target] -> {true, Target};
+        _ -> false
+    end;
+is_link(_) ->
+    false.
+
+%% @doc Write a key-value pair to the store.
+%% Accepts path as binary or list of segments.
+-spec write(map(), binary() | list(), binary()) -> ok.
+write(Opts, PathParts, Value) when is_list(PathParts) ->
+    write(Opts, to_path(PathParts), Value);
+write(#{<<"name">> := Name}, Key, Value) ->
+    Data = get_data(Name),
+    put_data(Name, Data#{Key => Value}),
+    ok.
+
+%% @doc Read a value directly without following any links.
+%% This is the lowest-level read operation.
+read_direct(#{<<"name">> := Name}, Key) ->
+    Data = get_data(Name),
+    case maps:find(Key, Data) of
+        {ok, Value} -> {ok, Value};
+        error -> not_found
+    end.
+
+%% @doc Read a value and follow links in the value itself (recursive).
+%% Returns not_found for "group" marker values.
+read_with_links(Opts, Path) ->
+    case read_direct(Opts, Path) of
+        {ok, <<"group">>} ->
             not_found;
-        Data ->
-            case maps:find(Key, Data) of
-                {ok, Value} ->
-                    ?event(store_pd, {read_hit, Name, Key}),
-                    {ok, Value};
-                error ->
-                    ?event(store_pd, {read_miss, Name, Key}),
+        {ok, Value} ->
+            case is_link(Value) of
+                {true, Target} -> read_with_links(Opts, Target);
+                false -> {ok, Value}
+            end;
+        not_found ->
+            not_found
+    end.
+
+%% @doc Resolve links in a path by checking each segment (except the last).
+resolve_path_links(Opts, PathParts) ->
+    resolve_path_links(Opts, PathParts, 0).
+
+resolve_path_links(_Opts, _Path, Depth) when Depth > ?MAX_REDIRECTS ->
+    {error, too_many_redirects};
+resolve_path_links(_Opts, [LastSegment], _Depth) ->
+    {ok, [LastSegment]};
+resolve_path_links(Opts, PathParts, Depth) ->
+    resolve_segments(Opts, PathParts, [], Depth).
+
+%% Walk through path segments, resolving links as we go.
+resolve_segments(_Opts, [], ResolvedAcc, _Depth) ->
+    {ok, lists:reverse(ResolvedAcc)};
+resolve_segments(Opts, [Segment | Rest], ResolvedAcc, Depth) ->
+    CurrentPath = to_path(lists:reverse([Segment | ResolvedAcc])),
+    case read_direct(Opts, CurrentPath) of
+        {ok, Value} ->
+            case is_link(Value) of
+                {true, Target} ->
+                    TargetParts = binary:split(Target, <<"/">>, [global]),
+                    resolve_path_links(Opts, TargetParts ++ Rest, Depth + 1);
+                false ->
+                    resolve_segments(Opts, Rest, [Segment | ResolvedAcc], Depth)
+            end;
+        not_found ->
+            resolve_segments(Opts, Rest, [Segment | ResolvedAcc], Depth)
+    end.
+
+%% @doc Read a value with full link resolution (both in path and value).
+-spec read(map(), binary() | list()) -> {ok, binary()} | not_found.
+read(Opts, PathParts) when is_list(PathParts) ->
+    read(Opts, to_path(PathParts));
+read(Opts, Path) ->
+    case read_with_links(Opts, Path) of
+        {ok, Value} ->
+            {ok, Value};
+        not_found ->
+            PathParts = binary:split(Path, <<"/">>, [global]),
+            case resolve_path_links(Opts, PathParts) of
+                {ok, ResolvedParts} ->
+                    ResolvedPath = to_path(ResolvedParts),
+                    read_with_links(Opts, ResolvedPath);
+                {error, _} ->
                     not_found
             end
     end.
 
-%% @doc List all keys in the store.
+%% @doc List immediate children of a path (like "ls" in a directory).
 -spec list(map(), binary()) -> {ok, [binary()]} | not_found.
-list(#{<<"name">> := Name}, _Path) ->
-    StateKey = get_state_key(Name),
-    case erlang:get(StateKey) of
-        undefined ->
-            not_found;
-        Data ->
-            {ok, maps:keys(Data)}
+list(Opts, Path) ->
+    ResolvedPath = case read_direct(Opts, Path) of
+        {ok, Value} ->
+            case is_link(Value) of
+                {true, Target} -> Target;
+                false -> Path
+            end;
+        not_found ->
+            Path
+    end,
+    Prefix = normalize_prefix(ResolvedPath),
+    #{<<"name">> := Name} = Opts,
+    Data = get_data(Name),
+    Children = find_children(Prefix, maps:keys(Data)),
+
+    case Children of
+        [] ->
+            case is_empty_group(Opts, Path) of
+                true -> {ok, []};
+                false -> not_found
+            end;
+        _ ->
+            {ok, lists:usort(Children)}
     end.
 
-%% @doc Match keys by pattern.
--spec match(map(), binary()) -> {ok, [binary()]} | not_found.
-match(Opts, _Pattern) ->
-    list(Opts, <<>>).
+%% Normalize a path to a prefix for matching (ensure trailing slash).
+normalize_prefix(<<>>) -> <<>>;
+normalize_prefix(<<"/">>) -> <<>>;
+normalize_prefix(Path) ->
+    case binary:last(Path) of
+        $/ -> Path;
+        _ -> <<Path/binary, "/">>
+    end.
 
-%% @doc Get the type of a value.
--spec type(map(), binary()) -> simple | not_found.
+%% Find immediate children under a prefix.
+find_children(Prefix, Keys) ->
+    PrefixLen = byte_size(Prefix),
+    lists:filtermap(
+        fun(Key) ->
+            extract_child_name(Key, Prefix, PrefixLen)
+        end,
+        Keys
+    ).
+
+%% Extract the immediate child name from a key, if it matches the prefix.
+extract_child_name(Key, Prefix, PrefixLen) ->
+    KeyLen = byte_size(Key),
+    if
+        PrefixLen =:= 0, KeyLen > 0 ->
+            case binary:split(Key, <<"/">>) of
+                [Child | _] -> {true, Child};
+                _ -> false
+            end;
+
+        KeyLen > PrefixLen ->
+            case Key of
+                <<Prefix:PrefixLen/binary, Rest/binary>> ->
+                    case binary:split(Rest, <<"/">>) of
+                        [Child | _] when Child =/= <<>> -> {true, Child};
+                        _ -> false
+                    end;
+                _ ->
+                    false
+            end;
+        true ->
+            false
+    end.
+
+%% Check if a path points to an empty group (group marker with no children).
+is_empty_group(Opts, Path) ->
+    case read_direct(Opts, Path) of
+        {ok, <<"group">>} -> true;
+        _ -> false
+    end.
+
+%% @doc Find all keys where child paths match the given patterns.
+
+-spec match(map(), map() | list()) -> {ok, [binary()]} | not_found.
+match(Opts, MatchMap) when is_map(MatchMap) ->
+    match(Opts, maps:to_list(MatchMap));
+match(#{<<"name">> := Name}, Patterns) ->
+    LinkPatterns = [{Key, <<"link:", Path/binary>>} || {Key, Path} <- Patterns],
+
+    Data = get_data(Name),
+    Matches = [K || K <- maps:keys(Data), matches_all_patterns(K, LinkPatterns, Data)],
+
+    case Matches of
+        [] -> not_found;
+        _ -> {ok, Matches}
+    end.
+
+%% Check if a key matches all the given patterns.
+matches_all_patterns(Key, Patterns, Data) ->
+    lists:all(
+        fun({PatternKey, Expected}) ->
+            FullKey = <<Key/binary, "/", PatternKey/binary>>,
+            maps:get(FullKey, Data, undefined) =:= Expected
+        end,
+        Patterns
+    ).
+
+%% @doc Determine whether a key is a simple value or composite group.
+%% Follows links to determine the type of the target.
+-spec type(map(), binary()) -> composite | simple | not_found.
 type(Opts, Key) ->
-    case read(Opts, Key) of
-        {ok, _Value} -> simple;
-        not_found -> not_found
+    case read_direct(Opts, Key) of
+        {ok, <<"group">>} -> composite;
+        {ok, Value} ->
+            case is_link(Value) of
+                {true, Target} -> type(Opts, Target);  
+                false -> simple
+            end;
+        not_found ->
+            not_found
     end.
 
-%% @doc Resolve a path by following links.
--spec resolve(map(), binary()) -> binary().
-resolve(_Opts, Path) ->
+%% @doc Resolve a path by following any symbolic links in the path segments.
+%% Returns the fully resolved path as a binary.
+-spec resolve(map(), binary() | list()) -> binary().
+resolve(Opts, Path) when is_binary(Path) ->
+    resolve(Opts, binary:split(Path, <<"/">>, [global]));
+resolve(Opts, PathParts) when is_list(PathParts) ->
+    case resolve_path_links(Opts, PathParts) of
+        {ok, ResolvedParts} -> to_path(ResolvedParts);
+        {error, _} -> to_path(PathParts)  
+    end.
+
+%% @doc Convert a path to the store's canonical form (binary).
+-spec path(map(), binary() | [binary()]) -> binary().
+path(_Opts, PathParts) when is_list(PathParts) ->
+    to_path(PathParts);
+path(_Opts, Path) when is_binary(Path) ->
     Path.
 
-%% @doc Transform a path to the store's canonical form.
--spec path(map(), binary() | [binary()]) -> binary().
-path(_Opts, Path) when is_binary(Path) ->
-    Path;
-path(_Opts, PathParts) when is_list(PathParts) ->
-    hb_util:encode(PathParts).
+%% @doc Join two paths together.
+-spec add_path(map(), binary() | list(), binary() | list()) -> binary().
+add_path(_Opts, Path1, Path2) when is_list(Path1), is_list(Path2) ->
+    to_path(Path1 ++ Path2);
+add_path(Opts, Path1, Path2) when is_binary(Path1) ->
+    Parts1 = binary:split(Path1, <<"/">>, [global]),
+    Parts2 = ensure_path_parts(Path2),
+    add_path(Opts, Parts1, Parts2);
+add_path(Opts, Path1, Path2) when is_binary(Path2) ->
+    Parts1 = ensure_path_parts(Path1),
+    Parts2 = binary:split(Path2, <<"/">>, [global]),
+    add_path(Opts, Parts1, Parts2).
 
-%% @doc Add two path components together.
--spec add_path(map(), binary(), binary()) -> binary().
-add_path(_Opts, Path1, Path2) ->
-    <<Path1/binary, "/", Path2/binary>>.
+ensure_path_parts(Path) when is_list(Path) -> Path;
+ensure_path_parts(Path) when is_binary(Path) -> binary:split(Path, <<"/">>, [global]).
 
-%% @doc Create a group 
--spec make_group(map(), binary()) -> {error, not_implemented}.
-make_group(_Opts, _Path) ->
-    {error, not_implemented}.
+%% @doc Create a group marker (indicates a key can have children).
+-spec make_group(map(), binary()) -> ok | {error, term()}.
+make_group(Opts, GroupName) when is_binary(GroupName) ->
+    write(Opts, GroupName, <<"group">>);
+make_group(_, _) ->
+    {error, {badarg, <<"GroupName must be a binary">>}}.
 
-%% @doc Create a symbolic link from one key to another.
--spec make_link(map(), binary(), binary()) -> {error, not_implemented}.
-make_link(_Opts, _Existing, _New) ->
-    {error, not_implemented}.
-    
-%% @doc Flush all data from the process dictionary to a target store.
+%% @doc Create a symbolic link from source to target.
+%% Format: writes "link:<target>" at the source key.
+-spec make_link(map(), binary() | list(), binary()) -> ok.
+make_link(Opts, Target, LinkName) when is_list(Target) ->
+    make_link(Opts, to_path(Target), LinkName);
+make_link(Opts, Target, LinkName) ->
+    TargetBin = hb_util:bin(Target),
+    write(Opts, LinkName, <<"link:", TargetBin/binary>>).
+
+%% @doc Flush all buffered data to a target store.
 -spec flush(map(), map()) -> {ok, map()}.
-flush(PDStoreOpts, TargetStoreOpts) ->
-    flush(PDStoreOpts, TargetStoreOpts, #{}).
+flush(BufferOpts, TargetOpts) ->
+    flush(BufferOpts, TargetOpts, #{}).
 
+%% @doc Flush with options controlling clear behavior.
 -spec flush(map(), map(), map()) -> {ok, map()}.
-flush(#{<<"name">> := Name}, TargetStoreOpts, FlushOpts) ->
-    StateKey = get_state_key(Name),
-    case erlang:get(StateKey) of
-        undefined ->
+flush(#{<<"name">> := Name}, TargetOpts, FlushOpts) ->
+    Data = get_data(Name),
+    case map_size(Data) of
+        0 ->
             ?event(store_pd, {flush_empty, Name}),
             {ok, #{written => 0, failed => []}};
-        Data ->
-            ?event(store_pd, {flush_start, Name, {keys, map_size(Data)}}),
-            %% Write each key-value pair to the target store
-            Results = maps:fold(
-                fun(Key, Value, Acc = #{written := W, failed := F}) ->
-                    case hb_store:write(TargetStoreOpts, Key, Value) of
-                        ok ->
-                            Acc#{written => W + 1};
-                        Error ->
-                            ?event(error,
-                                {store_pd_flush_failed,
-                                    {key, Key},
-                                    {error, Error}
-                                }
-                            ),
-                            Acc#{failed => [{Key, Error} | F]}
-                    end
-                end,
-                #{written => 0, failed => []},
-                Data
-            ),
+        Size ->
+            ?event(store_pd, {flush_start, Name, {keys, Size}}),
 
-            %% Determine whether to clear the buffer
-            ShouldClear = should_clear_buffer(Results, FlushOpts),
-            case ShouldClear of
+            Results = write_all_to_target(Data, TargetOpts),
+
+            case should_clear_buffer(Results, FlushOpts) of
                 true ->
-                    erlang:erase(StateKey),
+                    erlang:erase(get_state_key(Name)),
                     ?event(store_pd, {flush_complete_cleared, Name, Results});
                 false ->
                     ?event(store_pd, {flush_complete_kept, Name, Results})
@@ -166,37 +352,37 @@ flush(#{<<"name">> := Name}, TargetStoreOpts, FlushOpts) ->
             {ok, Results}
     end.
 
+%% Write all key-value pairs to the target store.
+write_all_to_target(Data, TargetOpts) ->
+    maps:fold(
+        fun(Key, Value, #{written := W, failed := F} = Acc) ->
+            case hb_store:write(TargetOpts, Key, Value) of
+                ok ->
+                    Acc#{written => W + 1};
+                Error ->
+                    ?event(error, {store_pd_flush_failed, {key, Key}, {error, Error}}),
+                    Acc#{failed => [{Key, Error} | F]}
+            end
+        end,
+        #{written => 0, failed => []},
+        Data
+    ).
+
+%% Determine if buffer should be cleared based on flush results.
+should_clear_buffer(#{failed := []}, FlushOpts) ->
+    maps:get(<<"clear-on-flush">>, FlushOpts, true);  
+should_clear_buffer(#{failed := [_|_]}, FlushOpts) ->
+    maps:get(<<"clear-on-error">>, FlushOpts, false).  
+
 %% @doc Get the number of keys currently in the buffer.
 -spec buffer_size(map()) -> non_neg_integer().
 buffer_size(#{<<"name">> := Name}) ->
-    StateKey = get_state_key(Name),
-    case erlang:get(StateKey) of
-        undefined -> 0;
-        Data -> map_size(Data)
-    end.
+    map_size(get_data(Name)).
 
 %% @doc Get all keys currently in the buffer.
 -spec keys(map()) -> [binary()].
 keys(#{<<"name">> := Name}) ->
-    StateKey = get_state_key(Name),
-    case erlang:get(StateKey) of
-        undefined -> [];
-        Data -> maps:keys(Data)
-    end.
-
-%% @doc Generate the process dictionary key for a given store name.
--spec get_state_key(binary()) -> {?MODULE, binary()}.
-get_state_key(Name) ->
-    {?MODULE, Name}.
-
-%% @doc Determine if the buffer should be cleared after flush.
--spec should_clear_buffer(map(), map()) -> boolean().
-should_clear_buffer(#{failed := []}, FlushOpts) ->
-    %% No failures - respect clear_on_flush option (default true)
-    maps:get(<<"clear-on-flush">>, FlushOpts, true);
-should_clear_buffer(#{failed := [_|_]}, FlushOpts) ->
-    %% Some failures - only clear if clear_on_error is true (default false)
-    maps:get(<<"clear-on-error">>, FlushOpts, false).
+    maps:keys(get_data(Name)).
     
 %%% Tests
 
@@ -213,7 +399,7 @@ list_keys_test() ->
     Store = #{ <<"store-module">> => <<"hb_store_pd">>, <<"name">> => <<"test">> },
     {ok, _} = start(Store),
     ?event({lissts, list(Store, <<>>)}),
-    ?assertEqual({ok, []}, list(Store, <<>>)),
+    ?assertEqual(not_found, list(Store, <<>>)),
     ok = write(Store, <<"key1">>, <<"value1">>),
     ok = write(Store, <<"key2">>, <<"value2">>),
     {ok, Keys} = list(Store, <<>>),
