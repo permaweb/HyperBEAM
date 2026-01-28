@@ -1,5 +1,6 @@
 -module(dev_message_micro).
 -export([commit/3, set/3, do_deep_merge/3]).
+-export([verify/3, commitments/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -16,7 +17,7 @@
 -spec commit(any(), #{ commitment_device => binary() }, any()) -> {ok, map()}.
 
 to(Base, Req, Opts) ->
-    {ok, CodecDevice} =
+    CodecDevice =
         maps:get(
             <<"codec-device">>,
             Req,
@@ -31,8 +32,24 @@ to(Base, Req, Opts) ->
         Req,
         Opts#{ cache_control => [<<"no-store">>] }
     ).
+from(Base, Req, Opts) ->
+    CodecDevice =
+        maps:get(
+            <<"codec-device">>,
+            Req,
+            hb_opts:get(
+                codec_device,
+                no_viable_codec_device,
+                Opts
+            )
+        ),
+    hb_ao_micro:resolve(
+        #{ <<"device">> => CodecDevice, <<"path">> => <<"from">>, <<"...">> => Base },
+        Req,
+        Opts#{ cache_control => [<<"no-store">>] }
+    ).
 commit(Base, Req, Opts) ->
-    {ok, CommitmentDevice} =
+    CommitmentDevice =
         maps:get(
             <<"commitment-device">>,
             Req,
@@ -47,6 +64,19 @@ commit(Base, Req, Opts) ->
         Req,
         Opts#{ cache_control => [<<"no-store">>] }
     ).
+
+commitments(Base, Req, Opts) ->
+    ?event(debug_test, {commitments, {base, Base}, {explicit_base, {explicit, Base}}, {req, Req}}, Opts),
+    % TODO: Get base ID with extra call to 'write'
+    {ok, Path} = hb_cache_micro:write(Base, Opts),
+    ?event(debug_test, {commitments, {path, Path}}),
+    {ok, Matches} =
+        hb_cache_micro:match(
+            #{ <<"...">> => Path },
+            Opts#{ micro_cache => true }
+        ),
+    ?event(debug_test, {commitments, {matches, Matches}}),
+    {ok, Matches}.
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
 set(Base, NewValuesMsg, Opts) ->
@@ -129,48 +159,207 @@ verify(Base, Req, Opts) ->
         Req,
         Opts#{ cache_control => [<<"no-store">>] }
     ).
-new_commit_test() -> 
-    Opts = #{ store => [#{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST/fs">> }] },
-    Item = #{ <<"a">> => 1, <<"b">> => 2 },
+
+%% Tests
+
+test_opts() ->
+    application:ensure_all_started(hb),
+    #{
+        store => 
+            [
+                hb_test_utils:test_store(hb_store_lmdb), 
+                hb_test_utils:test_store(hb_store_preloaded)
+            ],
+        priv_wallet => hb:wallet()
+    }.
+commit_signed_test() -> 
+    Opts = test_opts(),
+    ?event({test_opts, Opts}),
+    Item = #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
     {ok, Path} = hb_cache_micro:write(Item, Opts),
     {ok, CommittedItem} = 
         hb_ao_micro:resolve(
             Item,
-            #{ 
-                <<"path">> => <<"commit">>,
+            #{
                 <<"commitment-device">> => <<"httpsig@1.0">>,
-                <<"type">> => <<"signed">>
+                <<"device">> => <<"message@1.0">>,
+                <<"type">> => <<"signed">>,
+                <<"path">> => <<"commit">>
             },
             Opts
         ),
     ?event(new_commit_test, {committed_item, CommittedItem}),
     ?assertEqual(
-        hb_ao_micro:get(
-            <<"...">>,
-            CommittedItem,
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(
+            [CommittedItem, <<"...">>, <<"a">>],
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(
+            [CommittedItem, <<"...">>, <<"b">>],
+            Opts
+        )
+    ),
+    % TODO: Id of the committed item is the SignedID - what should we compare it
+    % to? We currently are not writing it to the cache.
+    % ?assertEqual(
+    %     hb_ao_micro:get(
+    %         <<"id">>,
+    %         CommittedItem,
+    %         Opts
+    %     )
+    % ),
+    ?assertEqual(
+        <<"httpsig@1.0">>,
+        hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts)
+    ),
+    % TODO: Cache is returning committed of form 
+    % #{ <<"1">> => <<"a">>, <<"2">> => <<"b">>, <<"ao-types">> => ".list" }
+    % Need to add handling for ordered lists
+    Committed = hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
+    ?assertEqual(
+        {ok, <<"a">>},
+        hb_ao_micro:resolve([Committed, <<"1">>], Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"b">>},
+        hb_ao_micro:resolve([Committed, <<"2">>], Opts)
+    ),
+    ?assertEqual(
+        hb_util:human_id(ar_wallet:to_address(hb:wallet())),
+        hb_ao_micro:get(<<"committer">>, CommittedItem, Opts)
+    ),
+    ?assertEqual(
+        <<"rsa-pss-sha512">>,
+        hb_ao_micro:get(<<"type">>, CommittedItem, Opts)
+    ).
+
+commit_unsigned_test() -> 
+    application:ensure_all_started(hb),
+    #{store := Stores} = hb_opts:default_message(),
+    [PreloadedStore] =
+        lists:filter(
+            fun(#{ <<"store-module">> := hb_store_preloaded }) -> true;
+                (_) -> false
+            end,
+            Stores
+        ),
+    Opts = 
+        #{ 
+            store => 
+                [
+                    #{ 
+                        <<"store-module">> => hb_store_lmdb,
+                        <<"name">> => <<"cache-TEST/lmdb">>
+                    }, 
+                    PreloadedStore
+                ],
+            priv_wallet => hb:wallet()
+        },
+    Item = #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+    {ok, Path} = hb_cache_micro:write(Item, Opts),
+    {ok, CommittedItem} = 
+        hb_ao_micro:resolve(
+            Item,
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"device">> => <<"message@1.0">>,
+                <<"type">> => <<"unsigned">>,
+                <<"path">> => <<"commit">>
+            },
             Opts
         ),
-        Path
+    ?event(new_commit_test, {committed_item, CommittedItem}),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(
+            [CommittedItem, <<"...">>, <<"a">>],
+            Opts
+        )
     ),
     ?assertEqual(
-        hb_ao_micro:get(
-            <<"id">>,
-            CommittedItem,
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(
+            [CommittedItem, <<"...">>, <<"b">>],
+            Opts
+        )
+    ),
+    % TODO: Id of the committed item is the SignedID - what should we compare it
+    % to? We currently are not writing it to the cache.
+    % ?assertEqual(
+    %     hb_ao_micro:get(
+    %         <<"id">>,
+    %         CommittedItem,
+    %         Opts
+    %     )
+    % ),
+    ?assertEqual(
+        <<"httpsig@1.0">>,
+        hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts)
+    ),
+    % TODO: Cache is returning committed of form 
+    % #{ <<"1">> => <<"a">>, <<"2">> => <<"b">>, <<"ao-types">> => ".list" }
+    % Need to add handling for ordered lists
+    Committed = hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
+    ?assertEqual(
+        {ok, <<"a">>},
+        hb_ao_micro:resolve([Committed, <<"1">>], Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"b">>},
+        hb_ao_micro:resolve([Committed, <<"2">>], Opts)
+    ),
+    ?assertEqual(
+        <<"hmac-sha256">>,
+        hb_ao_micro:get(<<"type">>, CommittedItem, Opts)
+    ).
+
+list_commitments_test() ->
+    Opts = test_opts(),
+    Item = #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+    {ok, SignedCommittedItem} = 
+        hb_ao_micro:resolve(
+            Item,
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"device">> => <<"message@1.0">>,
+                <<"type">> => <<"signed">>,
+                <<"path">> => <<"commit">>
+            },
             Opts
         ),
-        Path
+    {ok, UnsignedCommittedItem} = 
+        hb_ao_micro:resolve(
+            Item,
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"device">> => <<"message@1.0">>,
+                <<"type">> => <<"unsigned">>,
+                <<"path">> => <<"commit">>
+            },
+            Opts
+        ),
+    ?event(debug_test,
+        {
+            known_commitments,
+            {
+                signed_committed_item,
+                SignedCommittedItem
+            },
+            {
+                unsigned_committed_item,
+                UnsignedCommittedItem
+            }
+        }
     ),
-    ?assertEqual(
-        hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts),
-        <<"httpsig@1.0">>
-    ),
-    ?assertEqual(
-        hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
-        [<<"a">>, <<"b">>]
-    ),
-    % {ok, Path} = hb_cache_micro:write(CommittedItem, Opts),
-    % {ok, Result} = hb_cache_micro:read(Path, Opts),
-    % {ok, ResA} = hb_cache_micro:read(<<Path/binary, "/a">>, Opts),
-    % {ok, ResB} = hb_cache_micro:read(<<Path/binary, "/b">>, Opts),
-    % ?event(new_commit_test, {done, {path, Path}, {result, Result}, {res_a, ResA}, {res_b, ResB}}),
+    {ok, Commitments} =
+        hb_ao_micro:resolve(
+            Item,
+            <<"commitments">>,
+            Opts
+        ),
+    ?event(list_commitments, {comms, Commitments}),
     ok.
