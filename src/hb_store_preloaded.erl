@@ -30,7 +30,7 @@ type(StoreOpts, Key) ->
 
 %% @doc Read a key from a preloaded device module, if it exists.
 read(StoreOpts, Key) ->
-    ?event({reading_preloaded_key, {key, Key}, {store_opts, StoreOpts}}),
+    ?event({reading_preloaded_key, {key, Key}}),
     maybe
         [BaseID, FunctionString] ?= hb_path:term_to_path_parts(Key),
         {ok, ModName} ?= maps:find(BaseID, StoreOpts),
@@ -106,36 +106,43 @@ default_function(StoreOpts, ModName, BaseID, Key) ->
     case max_arity(ModName, '*') of
         {ok, MaxArity} -> {ok, fun ModName:'*'/MaxArity};
         not_found ->
-            case info(StoreOpts, BaseID) of
-                #{ default := Fun } when is_function(Fun) ->
-                    case erlang:fun_info(Fun, arity) of
-                        {arity, 4} ->
-                            {
-                                ok,
-                                fun(Base, Req, Opts) ->
-                                    Fun(Key, Base, Req, Opts)
-                                end
-                            };
-                        _ -> {ok, Fun}
-                    end;
-                #{ default := DefaultDevice } when is_binary(DefaultDevice) ->
-                    read(
-                        StoreOpts,
-                        <<
-                            DefaultDevice/binary,
-                            "/",
-                            Key/binary
-                        >>
-                    );
-                _ -> not_found
+            case Key of 
+                <<"info">> -> not_found;
+                _ ->
+                    case info(StoreOpts, BaseID) of
+                        #{ default := Fun } when is_function(Fun) ->
+                            case erlang:fun_info(Fun, arity) of
+                                {arity, 4} ->
+                                    {
+                                        ok,
+                                        fun(Base, Req, Opts) ->
+                                            Fun(Key, Base, Req, Opts)
+                                        end
+                                    };
+                                _ -> {ok, Fun}
+                            end;
+                        #{ default := DefaultDevice } when is_binary(DefaultDevice) ->
+                            read(
+                                StoreOpts,
+                                <<
+                                    DefaultDevice/binary,
+                                    "/",
+                                    Key/binary
+                                >>
+                            );
+                        _ -> not_found
+                    end
             end
+            
     end.
 
 info(StoreOpts, BaseID) ->
-    case read(StoreOpts, <<BaseID/binary, "/info">>) of
+    InfoRead = read(StoreOpts, <<BaseID/binary, "/info">>),
+    ?event(info, {info_read, InfoRead}),
+    case InfoRead of
         {ok, #{ <<"resolver">> := InfoResolver }} -> InfoResolver();
         {ok, Info} -> Info();
-        not_found -> info(StoreOpts, ?DEFAULT_DEVICE_ID)
+        not_found -> not_found % info(StoreOpts, ?DEFAULT_DEVICE_ID)
     end.  
 
 %% @doc Store is read-only, so writing is not supported.
