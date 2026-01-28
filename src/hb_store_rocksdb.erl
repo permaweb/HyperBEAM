@@ -33,6 +33,7 @@ enabled() -> false.
 -ifdef(ENABLE_ROCKSDB).
 %% @doc Start the RocksDB store.
 start_link(#{ <<"store-module">> := hb_store_rocksdb, <<"name">> := Dir}) ->
+    init_prometheus(),
     ?event(rocksdb, {starting, Dir}),
     application:ensure_all_started(rocksdb),
     gen_server:start_link({local, ?MODULE}, ?MODULE, Dir, []);
@@ -235,6 +236,7 @@ init(Dir) ->
     filelib:ensure_dir(Dir),
     case open_rockdb(Dir) of
         {ok, DBHandle} ->
+            erlang:send_after(5000, self(), mailbox_monitoring),
             State = #{
                 db_handle => DBHandle,
                 dir => Dir
@@ -247,6 +249,15 @@ init(Dir) ->
 handle_cast(_Request, State) ->
     {noreply, State}.
 
+handle_info(mailbox_monitoring, State) ->
+    case process_info(self(), message_queue_len) of
+        {message_queue_len, Len} ->
+            report_mailbox_size(Len);
+        undefined ->
+            ok
+    end,
+    erlang:send_after(5000, self(), mailbox_monitoring),
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -256,7 +267,11 @@ handle_call(Request, From, #{ db_handle := undefined, dir := Dir } = State) ->
     handle_call(Request, From, State#{db_handle => DBHandle});
 handle_call({do_write, Key, Value}, _From, #{db_handle := DBHandle} = State) ->
     BaseName = filename:basename(Key),
-    rocksdb:put(DBHandle, Key, Value, #{}),
+    WriteOpts = [
+        {disable_wal, true}, 
+        {sync, false}
+    ],
+    rocksdb:put(DBHandle, Key, Value, WriteOpts),
     case filename:dirname(Key) of
         <<".">> ->
             ignore;
@@ -264,12 +279,13 @@ handle_call({do_write, Key, Value}, _From, #{db_handle := DBHandle} = State) ->
             ensure_dir(DBHandle, BaseDir),
             {ok, RawDirContent}  = rocksdb:get(DBHandle, BaseDir, #{}),
             NewDirContent = maybe_append_key_to_group(BaseName, RawDirContent),
-            ok = rocksdb:put(DBHandle, BaseDir, NewDirContent, #{})
+            ok = rocksdb:put(DBHandle, BaseDir, NewDirContent, WriteOpts)
     end,
     {reply, ok, State};
 handle_call({do_read, Key}, _From, #{db_handle := DBHandle} = State) ->
+    ReadOpts = [{verify_checksums, false}],
     Response =
-        case rocksdb:get(DBHandle, Key, #{}) of
+        case rocksdb:get(DBHandle, Key, ReadOpts) of
             {ok, Result} ->
                 {Type, Value} = decode_value(Result),
                 {ok, {Type, Value}};
@@ -357,7 +373,32 @@ maybe_create_dir(DBHandle, DirPath, Value) ->
 
 open_rockdb(RawDir) ->
     filelib:ensure_dir(Dir = ensure_list(RawDir)),
-    Options = [{create_if_missing, true}],
+    Options = [
+        {create_if_missing, true},
+        %% Read Optimization
+        {unordered_write, true},
+        {compression, none},
+        {target_file_size_base, 256 * 1024 * 1024},
+        {block_based_table_options, [
+            % Up to 50% or RAM
+            {block_cache, 4 * 1024 * 1024 * 1024},
+            {block_size, 32 * 1024},
+            {filter_policy, {bloom_filter, 10}},
+            {cache_index_and_filter_blocks, true}
+        ]},
+        {prefix_extractor, 8},
+        {allow_mmap_reads, true},
+        {allow_mmap_writes, true},
+        {max_open_files, -1},
+        %% Write Optimization
+        {write_buffer_size, 256 * 1024 * 1024},   % 1GB
+        {max_write_buffer_number, 6},
+        {min_write_buffer_number_to_merge, 2},
+        {max_background_jobs, 8},
+        {max_background_flushes, 2},
+        {max_background_compactions, 6},
+        {num_levels, 5}
+    ],
     rocksdb:open(Dir, Options).
 
 % Helper function to convert lists to binaries
@@ -408,6 +449,28 @@ maybe_append_key_to_group(Key, CurrentDirContents) ->
         _ ->
             CurrentDirContents
     end.
+
+init_prometheus() ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try
+                prometheus_gauge:new([
+                    {name, rocksdb_mailbox_size},
+                    {help, "RocksDB store gen_server mailbox size"}
+                ])
+            catch
+                error:mfa_already_exists -> ok;
+                _:_ -> ok
+            end
+    end.
+
+report_mailbox_size(Size) ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ -> prometheus_gauge:set(rocksdb_mailbox_size, Size)
+    end.
+
 %%%=============================================================================
 %%% Tests
 %%%=============================================================================
