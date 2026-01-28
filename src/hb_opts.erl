@@ -163,7 +163,7 @@ default_message() ->
             #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
             #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
             #{<<"name">> => <<"manifest@1.0">>, <<"module">> => dev_manifest},
-            #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
+            #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message_micro},
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
             #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
