@@ -188,9 +188,7 @@ stage_6(BaseID, Func, VariedBase, VariedReq, Opts) ->
 
 %% @doc Stage 7: Execute the `resolver' function with the given arguments.
 stage_7(BaseID, Func, VariedBase, VariedReq, Opts) ->
-    RawArgs = hb_ao_device:truncate_args(Func, [VariedBase, VariedReq, Opts]),
-    % TODO: Load this here? Otherwise function guard clauses will fail to match.
-    Args = hb_cache_micro:ensure_all_loaded(RawArgs, Opts),
+    Args = hb_ao_device:truncate_args(Func, [VariedBase, VariedReq, Opts]),
     ?event(ao_core, {executing_resolver, {func, Func}, {args, Args}}, Opts),
     case apply(Func, Args) of
         {ok, RawResult} ->
