@@ -174,20 +174,18 @@ commit(WrappedMsg, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
     % Calculate the ID and place the signature into the `commitments' key of the
     % message. After, we call `commit' again to add the hmac to the new
     % message.
-    commit(
-        MsgToSign#{
-            <<"commitments">> =>
-                (maps:get(<<"commitments">>, MsgToSign, #{}))#{
-                    ID =>
-                        UnsignedCommitment#{
-                            <<"signature">> => hb_util:encode(Signature),
-                            <<"committed">> => ModCommittedKeys
-                        }
-                }
-        },
-        Req#{ <<"type">> => <<"hmac-sha256">> },
-        Opts
-    );
+    {
+        ok,
+        UnsignedCommitment#{
+            <<"...">> => MsgToSign,
+            <<"id">> => ID,
+            <<"signature">> => hb_util:encode(Signature),
+            <<"committed">> => ModCommittedKeys
+        }
+    };
+% TODO: Fix this so can be called from above? Before, signed commit/3 called
+% unsigned commit/3 at the end, normalizing commitments. Since these functions
+% both start with an unwrap, this is no longer possible.
 commit(WrappedMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     BaseMsg = hb_ao_micro:get(<<"...">>, WrappedMsg, RawOpts),
     % Extract the key material from the request.
@@ -245,23 +243,21 @@ commit(WrappedMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
             {hmac, HMac}
         }
     ),
+    ?event(new_commit, {writing_unsigned_to_cache, {base_msg, BaseMsg}, {explicit_base, {explicit, BaseMsg}}}),
+    {ok, BaseMsgPath} = hb_cache_micro:write(BaseMsg, Opts),
     Res =
         {
             ok,
-            Msg#{
-                <<"commitments">> =>
-                    Commitments#{
-                        HMac =>
-                            UnauthedCommitment#{
-                                <<"signature">> => HMac,
-                                <<"committed">> => ModCommittedKeys
-                            }
-                    }
+            UnauthedCommitment#{
+                <<"...">> => BaseMsgPath,
+                % TODO: What should this be?
+                <<"id">> => HMac,
+                <<"signature">> => HMac,
+                <<"committed">> => ModCommittedKeys
             }
         },
     ?event(debug_commitments, {hmac_generation_complete, Res}),
     Res.
-
 %% @doc Annotate the commitment with the `bundle' key if the request contains
 %% it.
 maybe_bundle_tag_commitment(Commitment, Req, _Opts) ->
