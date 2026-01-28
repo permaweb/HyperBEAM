@@ -13,6 +13,7 @@ list(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
     end.
 
@@ -23,6 +24,7 @@ type(StoreOpts, Key) ->
     ?event(store_gateway, executing_type),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Data} ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
@@ -60,7 +62,7 @@ read(BaseStoreOpts, Key) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    case hb_gateway_client:read(ID, StoreOpts) of
+                    try hb_gateway_client:read(ID, StoreOpts) of
                         {error, _} ->
                             ?event({read_not_found, {key, ID}}),
                             not_found;
@@ -68,6 +70,16 @@ read(BaseStoreOpts, Key) ->
                             ?event({read_found, {key, ID}}),
                             hb_store_remote_node:maybe_cache(StoreOpts, Message),
                             extract_path_value(Message, Rest, StoreOpts)
+                    catch Class:Reason:Stacktrace ->
+                        ?event(
+                            gateway,
+                            {read_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {stacktrace, {trace, Stacktrace}}
+                            }
+                        ),
+                        failure
                     end;
                 {ok, CachedMessage} ->
                     extract_path_value(CachedMessage, Rest, StoreOpts)
@@ -462,6 +474,23 @@ verifiability_test() ->
         ),
     ?event({verifying, {structured, Structured}, {original, Message}}),
     ?assert(hb_message:verify(Structured)).
+
+%% @doc Reading an unsupported signature type transaction should fail
+failure_to_process_message_test() ->
+    hb_http_server:start_node(#{}),
+    ?assertEqual(failure,
+        hb_cache:read(
+            <<"j0_mJMXG2YO4oRcOtjYsNoUJbN2TaKLo4nTtbhKqnEU">>,
+            #{
+                store =>
+                    [
+                        #{
+                            <<"store-module">> => hb_store_gateway
+                        }
+                    ]
+            }
+        )
+    ).
 
 %% @doc Test that another HyperBEAM node offering the `~query@1.0' device can
 %% be used as a store.

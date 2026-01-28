@@ -846,6 +846,8 @@ ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
     case hb_cache:read(MsgID, Opts) of
         {ok, LoadedMsg} ->
             LoadedMsg;
+        failure ->
+            failure;
         not_found ->
             throw({necessary_message_not_found, <<"/">>, MsgID})
     end;
