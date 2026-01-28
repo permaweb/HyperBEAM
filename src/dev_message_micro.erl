@@ -1,6 +1,7 @@
 -module(dev_message_micro).
 -export([commit/3, set/3, do_deep_merge/3]).
 -export([verify/3, commitments/3]).
+-export([keys/3, flatten/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -160,6 +161,22 @@ verify(Base, Req, Opts) ->
         Opts#{ cache_control => [<<"no-store">>] }
     ).
 
+flatten(Base, Req, Opts) -> 
+    case hb_ao_micro:resolve(Base, <<"...">>, Opts) of
+        {ok, Result} ->
+            Without = maps:without([<<"...">>], Base),
+            Merged = maps:merge(Result, Without),
+            hb_ao_micro:resolve(Merged, <<"flatten">>, Opts);
+        {error, not_found} ->
+            {ok, Base}
+    end.
+keys(Base, Req, Opts) ->
+    ?event(debug_test, {keys, {base, Base}}),
+    {ok, Flattened} = hb_ao_micro:resolve(Base, <<"flatten">>, Opts),
+    ?event(debug_test, {keys, {flattened, Flattened}}),
+    Keys = maps:keys(Flattened),
+    ?event(debug_test, {keys, {keys, Keys}}),
+    {ok, Keys}.
 %% Tests
 
 test_opts() ->
@@ -363,3 +380,61 @@ list_commitments_test() ->
         ),
     ?event(list_commitments, {comms, Commitments}),
     ok.
+
+flatten_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>
+        },
+    {ok, Flattened} = hb_ao_micro:resolve(Item, <<"flatten">>, Opts),
+    ?event(flatten_test, {flattened, Flattened}),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(Flattened, <<"a">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(Flattened, <<"b">>, Opts)
+    ).
+flatten_nested_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
+            <<"...">> => #{ <<"a">> => <<"3">>, <<"c">> => <<"4">> }
+        },
+    {ok, Flattened} = hb_ao_micro:resolve(Item, <<"flatten">>, Opts),
+    ?event(flatten_test, {flattened, Flattened}),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(Flattened, <<"a">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(Flattened, <<"b">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"4">>},
+        hb_ao_micro:resolve(Flattened, <<"c">>, Opts)
+    ).
+keys_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
+            <<"...">> => #{ <<"a">> => <<"3">>, <<"c">> => <<"4">> }
+        },
+    {ok, Keys} = hb_ao_micro:resolve(Item, <<"keys">>, Opts),
+    ?event(keys_test, {keys, Keys}),
+    ?assertEqual(
+        [<<"a">>, <<"b">>, <<"c">>],
+        Keys
+    ),
+    ?assertEqual(
+        {ok, [<<"a">>, <<"b">>, <<"c">>]},
+        hb_ao_micro:resolve(Item, <<"keys">>, Opts)
+    ).
