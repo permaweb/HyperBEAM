@@ -785,6 +785,10 @@ encode_http_flat_msg(Httpsig, Opts) ->
 
 %% @doc All maps are encoded into the body of the HTTP message
 %% to be further encoded later.
+field_to_http(Httpsig, {Name, {link, ID, LinkOpts}}, Opts) ->
+    % TODO: This should not be necessary - figure out why this is needed
+    {ok, Value} = hb_cache_micro:read(ID, LinkOpts),
+    field_to_http(Httpsig, {Name, Value}, Opts);
 field_to_http(Httpsig, {Name, Value}, Opts) when is_map(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
     OldBody = hb_maps:get(<<"body">>, Httpsig, #{}, Opts),
