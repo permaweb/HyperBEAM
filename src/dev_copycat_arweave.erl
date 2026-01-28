@@ -63,12 +63,13 @@ fetch_blocks(Req, Current, To, Opts) ->
 process_block(BlockRes, _Req, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            IndexedItems = maybe_index_ids(Block, Opts),
+            {IndexedItems, SkippedTxs} = maybe_index_ids(Block, Opts),
             ?event(
                 copycat_short,
                 {arweave_block_cached,
                     {height, Current},
                     {indexed_items, IndexedItems},
+                    {skipped_txs, SkippedTxs},
                     {target, To}
                 }
             );
@@ -85,7 +86,7 @@ process_block(BlockRes, _Req, Current, To, Opts) ->
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_ids(Block, Opts) ->
     case hb_opts:get(arweave_index_ids, false, Opts) of
-        false -> 0;
+        false -> {0, 0};
         true ->
             IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             BlockEndOffset = hb_util:int(
@@ -93,48 +94,61 @@ maybe_index_ids(Block, Opts) ->
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block_size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            TXs = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
+            {TXs, SkippedFromHeaders} = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
             Height = hb_maps:get(<<"height">>, Block, 0, Opts),
             TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-            lists:sum(lists:map(fun
-                ({{padding, _PaddingRoot}, _EndOffset}) ->
-                    0;
-                ({{TX, _TXDataRoot}, EndOffset}) ->
+            {IndexedItems, SkippedFromBundles} = lists:foldl(fun
+                ({{padding, _PaddingRoot}, _EndOffset}, {ItemsAcc, SkippedAcc}) ->
+                    {ItemsAcc, SkippedAcc};
+                ({{TX, _TXDataRoot}, EndOffset}, {ItemsAcc, SkippedAcc}) ->
                     case is_bundle_tx(TX, Opts) of
-                        false -> 0;
+                        false -> {ItemsAcc, SkippedAcc};
                         true ->
+                            TXID = hb_util:encode(TX#tx.id),
                             TXEndOffset = BlockStartOffset + EndOffset,
                             TXStartOffset = TXEndOffset - TX#tx.data_size,
                             hb_store_arweave:write_offset(
                                 IndexStore,
-                                hb_util:encode(TX#tx.id),
+                                TXID,
                                 true,
                                 TXStartOffset,
                                 TX#tx.data_size
                             ),
-                            {ok, {BundleIndex, HeaderSize}} =
-                                download_bundle_header(
-                                    TXEndOffset, TX#tx.data_size, Opts
-                                ),
-                            lists:foldl(
-                                fun({ItemID, Size}, ItemStartOffset) ->
-                                    hb_store_arweave:write_offset(
-                                        IndexStore,
-                                        hb_util:encode(ItemID),
-                                        false,
-                                        ItemStartOffset,
-                                        Size
+                            case download_bundle_header(
+                                TXEndOffset, TX#tx.data_size, Opts
+                            ) of
+                                {ok, {BundleIndex, HeaderSize}} ->
+                                    _ = lists:foldl(
+                                        fun({ItemID, Size}, ItemStartOffset) ->
+                                            hb_store_arweave:write_offset(
+                                                IndexStore,
+                                                hb_util:encode(ItemID),
+                                                false,
+                                                ItemStartOffset,
+                                                Size
+                                            ),
+                                            ItemStartOffset + Size
+                                        end,
+                                        TXStartOffset + HeaderSize,
+                                        BundleIndex
                                     ),
-                                    ItemStartOffset + Size
-                                end,
-                                TXStartOffset + HeaderSize,
-                                BundleIndex
-                            ),
-                            length(BundleIndex)
+                                    {ItemsAcc + length(BundleIndex), SkippedAcc};
+                                {error, Reason} ->
+                                    ?event(
+                                        copycat_short,
+                                        {arweave_bundle_skipped,
+                                            {tx_id, {explicit, TXID}},
+                                            {reason, Reason}
+                                        }
+                                    ),
+                                    {ItemsAcc, SkippedAcc + 1}
+                            end
                     end
                 end,
+                {0, 0},
                 TXsWithData
-            ))
+            ),
+            {IndexedItems, SkippedFromHeaders + SkippedFromBundles}
     end.
 
 is_bundle_tx(TX, _Opts) ->
@@ -155,20 +169,23 @@ download_bundle_header(EndOffset, Size, Opts) ->
             % thousands of items might require multiple chunks to fully
             % represent the item index.
             HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-            {ok, BundleHeader} =
-                header_chunk(HeaderSize, FirstChunk, StartOffset, Opts),
-            {_ItemsBin, BundleIndex} =
-                ar_bundles:decode_bundle_header(BundleHeader),
-            {ok, {BundleIndex, HeaderSize}};
-        {error, _} ->
-            {ok, {[], 0}}
+            case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
+                {ok, BundleHeader} ->
+                    {_ItemsBin, BundleIndex} =
+                        ar_bundles:decode_bundle_header(BundleHeader),
+                    {ok, {BundleIndex, HeaderSize}};
+                Error ->
+                    Error
+            end;
+        Error ->
+            Error
     end.
 
 header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
         when HeaderSize =< byte_size(FirstChunk) ->
     {ok, FirstChunk};
 header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
-    case hb_ao:resolve(
+    hb_ao:resolve(
         <<
             ?ARWEAVE_DEVICE/binary,
             "/chunk&offset=",
@@ -177,20 +194,17 @@ header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
             (hb_util:bin(HeaderSize))/binary
         >>,
         Opts
-    ) of
-        {ok, HeaderChunk} -> {ok, HeaderChunk};
-        {error, _} -> {ok, <<>>}
-    end.
+    ).
 
 resolve_tx_headers(TXIDs, Opts) ->
     lists:foldr(
-        fun(TXID, Acc) ->
+        fun(TXID, {Acc, SkippedAcc}) ->
             case resolve_tx_header(TXID, Opts) of
-                {ok, TX} -> [TX | Acc];
-                skip -> Acc
+                {ok, TX} -> {[TX | Acc], SkippedAcc};
+                skip -> {Acc, SkippedAcc + 1}
             end
         end,
-        [],
+        {[], 0},
         TXIDs
     ).
 
@@ -212,7 +226,14 @@ resolve_tx_header(TXID, Opts) ->
                         <<"tx@1.0">>,
                         <<"structured@1.0">>,
                         Opts)};
-            {error, _} ->
+            {error, ResolveError} ->
+                ?event(
+                    copycat_short,
+                    {arweave_tx_skipped,
+                        {tx_id, {explicit, TXID}},
+                        {reason, ResolveError}
+                    }
+                ),
                 skip
         end
     catch
