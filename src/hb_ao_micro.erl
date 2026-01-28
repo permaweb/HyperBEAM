@@ -39,8 +39,6 @@ stage_1(Base, Req, Opts) when is_map(Base) ->
     ?event(ao_core, {normalize_offloading_base, Base}, Opts),
     {ok, BaseID} = hb_cache_micro:write(Base, Opts),
     stage_1(BaseID, Req, Opts);
-stage_1(Base, #{ <<"path">> := Key }, Opts) ->
-    stage_1(Base, Key, Opts);
 stage_1(Base, Req, Opts) when is_map(Req) ->
     ?event(ao_core, {normalize_offloading_req, Req}, Opts),
     {ok, ReqID} = hb_cache_micro:write(Req, Opts),
@@ -72,7 +70,7 @@ stage_2(Base, ReqID, Opts) ->
             stage_3(Base, ReqID, Device, Opts);
         not_found ->
             ?event(ao_core, {lookup_failure, {base, Base}, {req, ReqID}}, Opts),
-            {error, not_found}
+            stage_3(Base, ReqID, <<"message@1.0">>, Opts)
     end.
 
 %% @doc Search through each layer of a message in turn to find the first instance
@@ -190,8 +188,10 @@ stage_6(BaseID, Func, VariedBase, VariedReq, Opts) ->
 
 %% @doc Stage 7: Execute the `resolver' function with the given arguments.
 stage_7(BaseID, Func, VariedBase, VariedReq, Opts) ->
-    Args = hb_ao_device:truncate_args(Func, [VariedBase, VariedReq, Opts]),
-    ?event(ao_core, {executing_resolver, {func, Func}}, Opts),
+    RawArgs = hb_ao_device:truncate_args(Func, [VariedBase, VariedReq, Opts]),
+    % TODO: Load this here? Otherwise function guard clauses will fail to match.
+    Args = hb_cache_micro:ensure_all_loaded(RawArgs, Opts),
+    ?event(ao_core, {executing_resolver, {func, Func}, {args, Args}}, Opts),
     case apply(Func, Args) of
         {ok, RawResult} ->
             ?event(
