@@ -180,7 +180,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             ),
             case {Key, hb_maps:get(Key, Msg, undefined, Opts)} of
                 {<<"body">>, undefined} ->
-                    {response_status_to_atom(Status), <<>>};
+                    {hb_http_client:response_status_to_atom(Status), <<>>};
                 {_, undefined} ->
                     {failure,
                         <<
@@ -195,7 +195,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                         >>
                     };
                 {_, Value} ->
-                    {response_status_to_atom(Status), Value}
+                    {hb_http_client:response_status_to_atom(Status), Value}
             end;
         false ->
             % Find the codec device from the headers, if set.
@@ -215,14 +215,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             )
     end.
 
-%% @doc Convert a HTTP status code to a status atom.
-response_status_to_atom(Status) ->
-    case Status of
-        201 -> created;
-        X when X < 400 -> ok;
-        X when X < 500 -> error;
-        _ -> failure
-    end.
 
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
@@ -233,7 +225,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
     try ar_bundles:deserialize(Body) of
         Deserialized ->
             {
-                response_status_to_atom(Status),
+                hb_http_client:response_status_to_atom(Status),
                 hb_message:convert(
                     Deserialized,
                     <<"structured@1.0">>,
@@ -259,7 +251,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
     ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
     {
-        response_status_to_atom(Status),
+        hb_http_client:response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
     }.
 
