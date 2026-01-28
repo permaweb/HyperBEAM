@@ -230,21 +230,34 @@ admissible_response(Response, Msg, Opts) ->
     ?event(debug_multi,
         {executing_admissible_message, {message, Base}, {req, Req}}
     ),
-    case hb_ao:resolve(Base, Req, Opts) of
+    try hb_ao:resolve(Base, Req, Opts) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
         {error, Reason} ->
             ?event(debug_multi, {admissible_error, {reason, Reason}}),
             false
+    catch 
+        Class:Reason:Stacktrace ->
+            ?event(error, 
+                {admissible_response, 
+                    {class, Class}, 
+                    {reason, Reason}, 
+                    {stacktrace, Stacktrace}
+                }
+            ),
+            false
     end.
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
+parallel_responses(Res,  [], Ref, _Awaiting, _StopAfter, _Admissible, _Statuses, _Opts) ->
+    empty_inbox(Ref),
+    Res;
 parallel_responses(Res, Procs, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
-    {ok, Res};
+    Res;
 parallel_responses(Res, Procs, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> exit(P, kill) end, Procs),
     empty_inbox(Ref),
@@ -255,7 +268,7 @@ parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Admissible, Statuses, O
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
                     parallel_responses(
-                        [NewRes | Res],
+                        [{Status, NewRes} | Res],
                         lists:delete(Pid, Procs),
                         Ref,
                         Awaiting - 1,
