@@ -65,16 +65,26 @@ read(ID, Opts) ->
             }
         }
     end,
+    Parent = self(),
+    Ref = make_ref(),
+    spawn(fun() ->
+        Result = hb_trace:span(<<"gql:fetch_raw_data">>, fun() -> data(ID, Opts) end),
+        Parent ! {Ref, raw_data, Result}
+    end),
     case hb_trace:span(<<"gql:query">>, fun() -> query(Query, Variables, Opts) end) of
-        {error, Reason} -> {error, Reason};
+        {error, Reason} ->
+            receive {Ref, raw_data, _} -> ok after 0 -> ok end,
+            {error, Reason};
         {ok, GqlMsg} ->
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
                 not_found ->
+                    receive {Ref, raw_data, _} -> ok after 0 -> ok end,
                     ?event({read_not_found, {id, ID}, {gql_msg, GqlMsg}}),
                     {error, not_found};
                 Item ->
                     ?event({read_found, {id, ID}, {item, Item}}),
-                    result_to_message(ID, Item, Opts)
+                    RawData = receive {Ref, raw_data, R} -> R after 30000 -> {error, timeout} end,
+                    result_to_message_with_data(ID, Item, RawData, Opts)
             end
     end.
 
@@ -238,12 +248,24 @@ result_to_message(ExpectedID, Item, Opts) ->
             hashpath => ignore,
             cache_control => [<<"no-cache">>, <<"no-store">>]
         },
-    % We have the headers, so we can get the data.
     Data = case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
         #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
         BinData when is_binary(BinData) -> BinData;
         _ ->
             data(ExpectedID, Opts)
+    end,
+    result_to_message_handle_data(ExpectedID, Item, Data, GQLOpts, Opts).
+
+result_to_message_with_data(ExpectedID, Item, PrefetchedData, Opts) ->
+    GQLOpts =
+        Opts#{
+            hashpath => ignore,
+            cache_control => [<<"no-cache">>, <<"no-store">>]
+        },
+    Data = case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
+        #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
+        BinData when is_binary(BinData) -> BinData;
+        _ -> PrefetchedData
     end,
     result_to_message_handle_data(ExpectedID, Item, Data, GQLOpts, Opts).
 
