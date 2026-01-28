@@ -432,6 +432,9 @@ test_stores() ->
         (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
+        (hb_test_utils:test_store(hb_store_pd))#{
+            <<"benchmark-scale">> => 0.5
+        },
         (hb_test_utils:test_store(hb_store_lru))#{
             <<"persistent-store">> => [
                 #{
