@@ -327,7 +327,10 @@ request(Method, Path, Extra, Opts) ->
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
-            Opts
+            Opts#{
+                http_retry => 3,
+                http_retry_response => [error, failure]
+            }
         ),
     to_message(Path, Res, Opts).
 

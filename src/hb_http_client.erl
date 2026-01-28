@@ -3,7 +3,7 @@
 -module(hb_http_client).
 -behaviour(gen_server).
 -include("include/hb.hrl").
--export([start_link/1, request/2]).
+-export([start_link/1, response_status_to_atom/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -24,12 +24,28 @@
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
+%% @doc Convert a HTTP status code to a status atom.
+response_status_to_atom(Status) ->
+    case Status of
+        201 -> created;
+        X when X < 400 -> ok;
+        X when X < 500 -> error;
+        _ -> failure
+    end.
+
 request(Args, Opts) ->
     request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
 request(Args, RemainingRetries, Opts) ->
-    case do_request(Args, Opts) of
-        {error, Details} -> maybe_retry(RemainingRetries, Args, Details, Opts);
-        {ok, Status, Headers, Body} -> {ok, Status, Headers, Body}
+    Response = do_request(Args, Opts),
+    case Response of
+        {error, _Details} -> maybe_retry(RemainingRetries, Args, Response, Opts);
+        {ok, Status, _Headers, _Body} ->
+            StatusAtom = response_status_to_atom(Status),
+            RetryResponses = hb_opts:get(http_retry_response, [], Opts),
+            case lists:member(StatusAtom, RetryResponses) of
+                true -> maybe_retry(RemainingRetries, Args, Response, Opts);
+                false -> Response
+            end
     end.
 
 do_request(Args, Opts) ->
@@ -38,8 +54,8 @@ do_request(Args, Opts) ->
         httpc -> httpc_req(Args, Opts)
     end.
 
-maybe_retry(0, _, ErrDetails, _) -> {error, ErrDetails};
-maybe_retry(Remaining, Args, ErrDetails, Opts) ->
+maybe_retry(0, _, OriginalResponse, _) -> OriginalResponse;
+maybe_retry(Remaining, Args, OriginalResponse, Opts) ->
     RetryBaseTime = hb_opts:get(http_retry_time, ?DEFAULT_RETRY_TIME, Opts),
     RetryTime =
         case hb_opts:get(http_retry_mode, backoff, Opts) of
@@ -48,6 +64,10 @@ maybe_retry(Remaining, Args, ErrDetails, Opts) ->
                 BaseRetries = hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts),
                 RetryBaseTime * (1 + (BaseRetries - Remaining))
         end,
+    ErrDetails = case OriginalResponse of
+        {error, Details} -> Details;
+        {ok, Status, _, _} -> Status
+    end,
     ?event(
         warning,
         {retrying_http_request,
