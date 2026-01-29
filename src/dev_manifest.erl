@@ -63,24 +63,28 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
-    {ok, Manifest} = manifest(M1, M2, Opts),
-    Res = hb_ao:get(
-        <<"paths/", Key/binary>>,
-        {as, <<"message@1.0">>, Manifest},
-        Opts
-    ),
-    case Res of
-        not_found ->
-            %% Support materialized view in some JavaScript frameworks
-            case hb_opts:get(manifest_404, fallback, Opts) of
-                error ->
-                    {error, not_found};
-                fallback ->
-                    ?event({manifest_fallback, {key, Key}}),
-                    route(<<"index">>, M1, M2, Opts)
+    case manifest(M1, M2, Opts) of
+        {ok, Manifest} ->
+            Res = hb_ao:get(
+                <<"paths/", Key/binary>>,
+                {as, <<"message@1.0">>, Manifest},
+                Opts
+            ),
+            case Res of
+                not_found ->
+                    %% Support materialized view in some JavaScript frameworks
+                    case hb_opts:get(manifest_404, fallback, Opts) of
+                        error ->
+                            {error, not_found};
+                        fallback ->
+                            ?event({manifest_fallback, {key, Key}}),
+                            route(<<"index">>, M1, M2, Opts)
+                    end;
+                _ ->
+                    {ok, Res}
             end;
-        _ ->
-            {ok, Res}
+        {error, not_found} ->
+            {error, not_found}
     end.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
@@ -94,11 +98,16 @@ manifest(Base, _Req, Opts) ->
             ],
             Opts
         ),
-    FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
-    LinkifiedPaths = linkify(DeepPaths, Opts),
-    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
-    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+    case JSON of 
+        not_found ->
+            {error, not_found};
+        JSON ->
+            FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
+            {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
+            LinkifiedPaths = linkify(DeepPaths, Opts),
+            Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
+            {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}
+    end.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
