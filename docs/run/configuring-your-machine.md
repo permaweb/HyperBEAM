@@ -2,30 +2,45 @@
 
 This guide details the various ways to configure your HyperBEAM node's behavior, including ports, storage, keys, and logging.
 
-## Configuration (`config.flat`)
+## Configuration (`config.json`)
 
-The primary way to configure your HyperBEAM node is through a `config.flat` file located in the node's working directory or specified by the `HB_CONFIG_LOCATION` environment variable.
+The primary way to configure your HyperBEAM node is through a `config.json` file located in the node's working directory or specified by the `HB_CONFIG` environment variable.
 
-This file uses a simple `Key = Value.` format (note the period at the end of each line).
+### Flat config file
+
+Another possibility is to use `config.flat` that uses a simple `Key: Value` format.
 
 **Example `config.flat`:**
 
-```erlang
+```
 % Set the HTTP port
-port = 8080.
+port: 8080
 
 % Specify the Arweave key file
-priv_key_location = "/path/to/your/wallet.json".
+priv_key_location: /path/to/your/wallet.json
 
-% Set the data store directory
-% Note: Storage configuration can be complex. See below.
-% store = [{local, [{root, <<"./node_data_mainnet">>}]}]. % Example of complex config, not for config.flat
+% Maps can be used with forward dash (/)
+default_store/lmdb/ao-types: store-module=atom
+default_store/lmdb/store-module: hb_store_lmdb
+default_store/lmdb/name: /tmp/store
 
-% Enable verbose logging for specific modules
-% debug_print = [hb_http, dev_router]. % Example of complex config, not for config.flat
+% Lists can be used with dot (.) and sequential integer key map
+store/ao-types: .=list
+store/1/ao-types: store-module=atom
+store/1/store-module: hb_store_lmdb
+store/1/name: /tmp/store
+
+store/2/ao-types: store-module=atom
+store/2/store-module: hb_store_s3
+store/2/bucket: hb-s3
+store/2/priv_access_key_id: minioadmin
+store/2/priv_secret_access_key: minioadmin
+store/2/endpoint: http://localhost:9000
+store/2/force_path_style: true
+store/2/region: us-east-1
 ```
 
-Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports simple key-value pairs (Atoms, Strings, Integers, Booleans). For complex configurations (Lists, Maps), you must use environment variables or `hb:start_mainnet/1`.
+Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps and List).
 
 ### Core Configuration
 
