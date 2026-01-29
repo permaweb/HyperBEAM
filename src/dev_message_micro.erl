@@ -162,10 +162,23 @@ verify(Base, Req, Opts) ->
     ).
 
 flatten(Base, Req, Opts) -> 
+    ?event({flattening, {base, Base}, {req, Req}}),
     case hb_ao_micro:resolve(Base, <<"...">>, Opts) of
-        {ok, Result} ->
-            Without = maps:without([<<"...">>], Base),
-            Merged = maps:merge(Result, Without),
+        {ok, Outer} ->
+            OuterWithout = 
+                maps:without(
+                    [<<"id">>, <<"committed">>],
+                    Outer
+                ),
+            ?event({flattening, {outer, OuterWithout}}),
+            BaseWithout = 
+                maps:without(
+                    [<<"...">>, <<"id">>, <<"committed">>],
+                    Base
+                ),
+            ?event({flattening, {base_without, BaseWithout}}),
+            Merged = maps:merge(OuterWithout, BaseWithout),
+            ?event({flattening, {merged, {explicit, Merged}}}),
             hb_ao_micro:resolve(Merged, <<"flatten">>, Opts);
         {error, not_found} ->
             {ok, Base}
@@ -404,6 +417,41 @@ flatten_nested_test() ->
         #{ 
             <<"a">> => <<"1">>,
             <<"b">> => <<"2">>,
+            <<"nested">> => #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> }
+        },
+    {ok, Flattened} = hb_ao_micro:resolve(Item, <<"flatten">>, Opts),
+    ?event(flatten_test, {flattened, Flattened}),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(Flattened, <<"a">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(Flattened, <<"b">>, Opts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_ao_micro:resolve(Flattened, <<"c">>, Opts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_ao_micro:resolve(Flattened, <<"d">>, Opts)
+    ),
+    Nested = hb_ao_micro:get(<<"nested">>, Flattened, Opts),
+    ?assertEqual(
+        {ok, <<"3">>},
+        hb_ao_micro:resolve(Nested, <<"c">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"4">>},
+        hb_ao_micro:resolve(Nested, <<"d">>, Opts)
+    ).
+flatten_nested_expansion_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
             <<"...">> => #{ <<"a">> => <<"3">>, <<"c">> => <<"4">> }
         },
     {ok, Flattened} = hb_ao_micro:resolve(Item, <<"flatten">>, Opts),
@@ -420,7 +468,15 @@ flatten_nested_test() ->
         {ok, <<"4">>},
         hb_ao_micro:resolve(Flattened, <<"c">>, Opts)
     ).
-keys_test() ->
+
+%%% TODO: This points out a potentially bigger problem of cache infinite loops 
+%%% When we flatten a message (BaseID) that does not have a <<"...">> key,
+%%% the "result" is simply the original message. So, a hashpath is written to
+%%% BaseID/flatten => BaseID. When hitting this key, since flatten is recursive,
+%%% it will try to flatten the message again, causing an infinite loop.
+double_flatten_test_() ->
+    {timeout, 10, fun double_flatten/0}.
+double_flatten() ->
     Opts = test_opts(),
     Item = 
         #{ 
@@ -428,13 +484,72 @@ keys_test() ->
             <<"b">> => <<"2">>,
             <<"...">> => #{ <<"a">> => <<"3">>, <<"c">> => <<"4">> }
         },
+    {ok, Flattened} = hb_ao_micro:resolve(Item, <<"flatten">>, Opts),
+    ?event(flatten_test, {flattened, Flattened}),
+    {ok, DoubleFlattened} = hb_ao_micro:resolve(Flattened, <<"flatten">>, Opts),
+    ?event(flatten_test, {double_flattened, DoubleFlattened}),
+    ?assertEqual(
+        {ok, <<"1">>},
+        hb_ao_micro:resolve(Flattened, <<"a">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"2">>},
+        hb_ao_micro:resolve(Flattened, <<"b">>, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"4">>},
+        hb_ao_micro:resolve(Flattened, <<"c">>, Opts)
+    ).
+%%% TODO:
+%%% Should this returns a, b or a, b, committed, id?
+keys_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>
+            % <<"...">> => #{ <<"a">> => <<"3">>, <<"c">> => <<"4">> }
+        },
     {ok, Keys} = hb_ao_micro:resolve(Item, <<"keys">>, Opts),
     ?event(keys_test, {keys, Keys}),
     ?assertEqual(
-        [<<"a">>, <<"b">>, <<"c">>],
+        [<<"a">>, <<"b">>, <<"committed">>, <<"id">>],
         Keys
-    ),
+    ).
+keys_nested_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
+            <<"z">> => <<"26">>,
+            <<"nested">> => #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> }
+        },
+    {ok, Keys} = hb_ao_micro:resolve(Item, <<"keys">>, Opts),
+    ?event(keys_test, {keys, Keys}),
     ?assertEqual(
-        {ok, [<<"a">>, <<"b">>, <<"c">>]},
-        hb_ao_micro:resolve(Item, <<"keys">>, Opts)
+        % TODO: These are alphabetically sorted - is that good?
+        [<<"a">>, <<"b">>, <<"committed">>, <<"id">>, <<"nested">>, <<"z">>],
+        Keys
+    ).
+keys_nested_expansion_test() ->
+    Opts = test_opts(),
+    Item = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
+            <<"z">> => <<"26">>,
+            <<"...">> =>
+                #{ 
+                    <<"a">> => <<"inner">>,
+                    <<"c">> => <<"3">>,
+                    <<"d">> => <<"4">>
+                }
+        },
+    {ok, Keys} = hb_ao_micro:resolve(Item, <<"keys">>, Opts),
+    ?event(keys_test, {keys, Keys}),
+    ?assertEqual(
+        % TODO: These are alphabetically sorted - is that good?
+        [<<"a">>, <<"b">>, <<"c">>, <<"committed">>, <<"d">>, <<"id">>, <<"z">>],
+        Keys
     ).
