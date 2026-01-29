@@ -188,8 +188,7 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
             list(Path, Store)
     end;
 list(Path, Store) ->
-    ResolvedPath = hb_store:resolve(Store, Path),
-    case hb_store:list(Store, ResolvedPath) of
+    case hb_store_common:resolved_list(Store, Path) of
         {ok, Names} -> Names;
         {error, _} -> [];
         not_found -> []
@@ -409,67 +408,79 @@ do_read_commitment(Path, Opts) ->
 
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    Store = hb_store:scope(hb_opts:get(store, no_viable_store, Opts), local),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
-    CommitmentsPath =
-        hb_store:resolve(
-            Store,
-            hb_store:path(Store, [UncommittedID, <<"commitments">>])
-        ),
-    FoundCommitments =
-        case hb_store:list(Store, CommitmentsPath) of
-            {ok, CommitmentIDs} ->
-                lists:filtermap(
-                    fun(CommitmentID) ->
-                        ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
-                        ResolvedCommPath =
-                            hb_store:path(
-                                Store,
-                                [CommitmentsPath, CommitmentID]
-                            ),
-                        case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
-                            {ok, Commitment} ->
-                                {
-                                    true,
-                                    {
-                                        CommitmentID,
-                                        ensure_all_loaded(
-                                            Commitment,
-                                            Opts#{ commitment => true }
-                                        )
-                                    }
-                                };
-                            _ ->
-                                false
-                        end
-                    end,
-                    CommitmentIDs
-                );
-            not_found ->
-                []
-    end,
+    FoundCommitments = read_all_commitments_by_store(Msg, Store, Opts),
     NewCommitments =
         hb_maps:merge(
             CurrentCommitments,
             maps:from_list(FoundCommitments)
         ),
     Msg#{ <<"commitments">> => NewCommitments }.
+
+read_all_commitments_by_store(Msg, Store, Opts) when not is_list(Store) ->
+    read_all_commitments_by_store(Msg, [Store], Opts);
+read_all_commitments_by_store(_Msg, [], _Opts) ->
+    [];
+read_all_commitments_by_store(Msg, [Store | ReaminingStores], Opts) ->
+    CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
+    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    CommitmentsPath =
+        hb_store:resolve(
+            Store,
+            hb_store:path(Store, [UncommittedID, <<"commitments">>])
+        ),
+    case hb_store:list(Store, CommitmentsPath) of
+        {ok, CommitmentIDs} ->
+            lists:filtermap(
+                fun(CommitmentID) ->
+                    ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
+                    ResolvedCommPath =
+                        hb_store:path(
+                            Store,
+                            [CommitmentsPath, CommitmentID]
+                        ),
+                    case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts#{store => Store}) of
+                        {ok, Commitment} ->
+                            {
+                                true,
+                                {
+                                    CommitmentID,
+                                    ensure_all_loaded(
+                                        Commitment,
+                                        Opts#{ commitment => true }
+                                    )
+                                }
+                            };
+                        _ ->
+                            false
+                    end
+                end,
+                CommitmentIDs
+            );
+        not_found ->
+            read_all_commitments_by_store(Msg, ReaminingStores, Opts)
+    end.
+
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
 store_read(Path, Store, Opts) ->
     store_read(Path, Path, Store, Opts).
 store_read(_Target, _Path, no_viable_store, _) ->
     not_found;
-store_read(Target, Path, Store, Opts) ->
+store_read(_Target, _Path, [], _) ->
+    not_found;
+store_read(Target, Path, Store, Opts) when is_map(Store) ->
+    store_read(Target, Path, [Store], Opts);
+store_read(Target, Path, [Store | RemainingStores], Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
         {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
-    case hb_store:type(Store, ResolvedFullPath) of
+    ResolvedFullPathContent = case hb_store:type(Store, ResolvedFullPath) of
         failure -> failure;
         not_found -> not_found;
         simple ->
@@ -509,10 +520,14 @@ store_read(Target, Path, Store, Opts) ->
                         }
                     ),
                     {ok, Msg};
-                _ ->
+                not_found ->
                     ?event({empty_composite_message, ResolvedFullPath}),
                     {ok, #{}}
             end
+    end,
+    case ResolvedFullPathContent of
+        {ok, _} = Response -> Response;
+        not_found -> store_read(Target, Path, RemainingStores, Opts)
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.
@@ -1054,6 +1069,7 @@ test_match_typed_message(Store) ->
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
+        {"store ans104 message", fun test_store_ans104_message/1},
         {"store unsigned empty message",
             fun test_store_unsigned_empty_message/1},
         {"store binary", fun test_store_binary/1},
@@ -1086,3 +1102,22 @@ test_device_map_cannot_be_written_test() ->
 run_test() ->
     Store = hb_test_utils:test_store(hb_store_lmdb),
     test_match_typed_message(Store).
+
+%% @doc Read value from Store1 and Store2 when is only available in Store2
+multiple_stores_store_read_test() ->
+    [_Store1, Store2] = Stores = hb_store_common:get_multiple_stores(),
+    %% Write test data
+    hb_store:make_group(Store2, <<"group1">>),
+    hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
+    hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
+    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
+    %% Check result
+    Opts = #{},
+    Path = <<"random_id">>,
+    Content = store_read(Path, Stores, Opts),
+    try 
+        ?assertMatch({ok, #{<<"data">> := _}}, Content)
+    after
+        hb_store_common:shutdown_stores(Stores)
+    end.
+

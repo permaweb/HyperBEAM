@@ -366,10 +366,26 @@ list(Opts, Path) ->
     % Use native elmdb:list function
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
-        {ok, Children} -> {ok, Children};
-        {error, not_found} -> {ok, []};  % Normalize new error format
-        not_found -> {ok, []}  % Handle both old and new format
+        {ok, Children} -> 
+            {ok, Children};
+        {error, not_found} -> 
+            % Normalize new error format
+            compatibility_not_found(DBInstance, Path);
+        not_found -> 
+            % Handle both old and new format
+            compatibility_not_found(DBInstance, Path)
     end.
+
+%% By checking if is a group we can return if there is elements 
+%% or it wasn't found.
+compatibility_not_found(DBInstance, Path) ->
+    case elmdb:get(DBInstance, remove_ending_slash(Path)) of 
+        {ok, <<"group">>} -> {ok, []};
+        _ -> not_found 
+    end.
+
+remove_ending_slash(Path) -> 
+    list_to_binary(string:replace(Path, <<"/">>, <<"">>, trailing)).
 
 %% @doc Match a series of keys and values against the database. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
@@ -661,7 +677,7 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    ?assertEqual(list(StoreOpts, <<"colors">>), {ok, []}),
+    ?assertEqual(list(StoreOpts, <<"colors">>), not_found),
     % Create immediate children under colors/
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),

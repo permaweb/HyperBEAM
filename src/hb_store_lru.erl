@@ -242,8 +242,7 @@ list(Opts, Path) ->
             no_store ->
                 not_found;
             Store ->
-                ResolvedPath = hb_store:resolve(Store, Path),
-                case hb_store:list(Store, ResolvedPath) of
+                case hb_store_common:resolved_list(Store, Path) of
                     {ok, Keys} -> Keys;
                     not_found -> not_found
                 end
@@ -287,8 +286,7 @@ type(Opts, Key) ->
                 no_store ->
                     not_found;
                 Store ->
-                    ResolvedKey = hb_store:resolve(Store, Key),
-                    hb_store:type(Store, ResolvedKey)
+                    hb_store_common:resolved_type(Store, Key)
             end;
         {raw, _} ->
             simple;
