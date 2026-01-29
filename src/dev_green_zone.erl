@@ -456,8 +456,9 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
                 InitOpts
             ),
             % Create an committed join request using the wallet.
+            % hb_message:commit expects Opts map (which contains priv_wallet), not wallet tuple
             Req = hb_cache:ensure_all_loaded(
-                hb_message:commit(MergedReq, Wallet),
+                hb_message:commit(MergedReq, InitOpts),
                 InitOpts
             ),
             ?event({join_req, {explicit, Req}}),
