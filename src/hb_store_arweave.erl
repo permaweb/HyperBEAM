@@ -15,7 +15,7 @@
 %% multiple times.
 type(StoreOpts, Key) ->
     case read(StoreOpts, Key) of
-        not_found -> not_found;
+        {error, not_found} -> not_found;
         {ok, _Data} ->
             % TODO:
             % - should this return composite for any index L1 bundles?

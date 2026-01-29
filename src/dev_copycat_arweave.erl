@@ -107,7 +107,7 @@ maybe_index_ids(Block, Opts) ->
                             TXID = hb_util:encode(TX#tx.id),
                             TXEndOffset = BlockStartOffset + EndOffset,
                             TXStartOffset = TXEndOffset - TX#tx.data_size,
-                            hb_store_arweave:write_offset(
+                            ok = hb_store_arweave:write_offset(
                                 IndexStore,
                                 TXID,
                                 true,
@@ -120,7 +120,7 @@ maybe_index_ids(Block, Opts) ->
                                 {ok, {BundleIndex, HeaderSize}} ->
                                     _ = lists:foldl(
                                         fun({ItemID, Size}, ItemStartOffset) ->
-                                            hb_store_arweave:write_offset(
+                                            ok = hb_store_arweave:write_offset(
                                                 IndexStore,
                                                 hb_util:encode(ItemID),
                                                 false,
