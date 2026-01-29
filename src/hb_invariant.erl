@@ -529,7 +529,13 @@ int(Max) -> rand:uniform(Max).
 
 %% @doc Generate a random integer between the given minimum and maximum values --
 %% expressed either explicitly or as a named size constant.
-int(Min, Max) -> num(Min) + rand:uniform(num(Max) - num(Min)).
+int(Min, Max) ->
+    Floor = num(Min),
+    Offset = num(Max) - Floor,
+    case Offset of
+        0 -> Floor;
+        _ -> Floor + rand:uniform(Offset)
+    end.
 
 %% @doc Convert a named size constant to an integer.
 num(Int) when is_integer(Int) -> Int;
