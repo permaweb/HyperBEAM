@@ -104,23 +104,34 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
+    Response = hb_http_client:request(Req, Opts),
     % Process the response.
     EndTime = os:system_time(millisecond),
-    ?event(http_outbound,
-        {
-            http_response,
-            {req, Req},
-            {response,
-                #{
-                    status => Status,
-                    headers => Headers,
-                    body => Body
-                }
-            }
-        },
-        Opts
-    ),
+    Duration = EndTime - StartTime,
+    case Response of
+        {_ErlStatus, Status, Headers, Body} ->
+            ?event(http_outbound,
+                {
+                    http_response,
+                    {req, Req},
+                    {response,
+                        #{
+                            status => Status,
+                            headers => Headers,
+                            body => Body
+                        }
+                    }
+                },
+                Opts
+            ),
+            request_response(Method, Peer, Path, Response, Duration, Opts);
+        Error ->
+            Error
+    end.
+    
+
+request_response(Method, Peer, Path, Response, Duration, Opts) ->
+    {_ErlStatus, Status, Headers, Body} = Response,
     % Convert the set-cookie headers into a cookie message, if they are present.
     % We do this by extracting the set-cookie headers and converting them into a
     % cookie message if they are present.
@@ -161,7 +172,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     ?event(http_short,
         {received,
             {status, Status},
-            {duration, EndTime - StartTime},
+            {duration, Duration},
             {method, Method},
             {peer, Peer},
             {path, {string, Path}},
@@ -1318,3 +1329,16 @@ parallel_request_test() ->
             Opts
         )
     ).
+
+request_error_handling_test() ->
+    Opts = #{},
+    NonExistentDomain = <<"http://nonexistent.invalid:80">>,
+    Result = hb_http:request(
+        <<"GET">>,
+        NonExistentDomain,
+        <<"/">>,
+        #{},
+        Opts
+    ),
+    % The result should be an error tuple, not crash with badmatch
+    ?assertMatch({error, _}, Result).
