@@ -11,6 +11,22 @@
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9-pre">>).
 
+-record(perf, {
+    start_time = 0,                      %% monotonic start time (microseconds)
+    blocks_processed = 0,                %% count (total)
+    resolve_block_time = 0,              %% microseconds
+    resolve_tx_count = 0,                %% count (total)
+    resolve_tx_time = 0,                 %% microseconds
+    items_indexed = 0,                   %% count (total)
+    write_offset_time = 0,               %% microseconds
+    bundles_processed = 0,               %% count (total)
+    download_bundle_header_time = 0,     %% microseconds
+    last_block_items_indexed = 0,        %% count (per-block)
+    last_block_total_txs = 0,            %% count (per-block)
+    last_block_bundle_txs = 0,           %% count (per-block)
+    last_block_skipped_txs = 0           %% count (per-block)
+}).
+
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
 %% @doc Fetch blocks from an Arweave node between a given range, or from the
@@ -18,7 +34,8 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     {From, To} = parse_range(Request, Opts),
-    fetch_blocks(Request, From, To, Opts).
+    Perf = perf_init(),
+    fetch_blocks(Request, From, To, Perf, Opts).
 
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
@@ -37,8 +54,123 @@ parse_range(Request, Opts) ->
     To = hb_maps:get(<<"to">>, Request, 0, Opts),
     {hb_util:int(From), hb_util:int(To)}.
 
+%% @doc Initialize performance tracker at start of run.
+perf_init() ->
+    #perf{start_time = erlang:monotonic_time(microsecond)}.
+
+%% @doc Calculate total elapsed time in microseconds.
+perf_elapsed(#perf{start_time = Start}) ->
+    erlang:monotonic_time(microsecond) - Start.
+
+%% @doc Generic timing wrapper - updates perf record with timing data.
+perf_time(Fun, Perf, TimeField) ->
+    {Time, Result} = timer:tc(Fun),
+    NewPerf = update_perf(Perf, TimeField, Time),
+    {Result, NewPerf}.
+
+%% @doc Update perf record with new timing data.
+update_perf(Perf, resolve_block_time, Time) ->
+    Perf#perf{
+        resolve_block_time = Perf#perf.resolve_block_time + Time
+    };
+update_perf(Perf, resolve_tx_time, Time) ->
+    Perf#perf{
+        resolve_tx_time = Perf#perf.resolve_tx_time + Time,
+        resolve_tx_count = Perf#perf.resolve_tx_count + 1
+    };
+update_perf(Perf, write_offset_time, Time) ->
+    Perf#perf{
+        write_offset_time = Perf#perf.write_offset_time + Time
+    };
+update_perf(Perf, download_bundle_header_time, Time) ->
+    Perf#perf{
+        download_bundle_header_time = Perf#perf.download_bundle_header_time + Time,
+        bundles_processed = Perf#perf.bundles_processed + 1
+    }.
+
+%% @doc Calculate percentage of elapsed time that an operation took.
+perf_pct(_OperationTime, 0) -> 0.0;
+perf_pct(OperationTime, ElapsedTime) ->
+    (OperationTime / ElapsedTime) * 100.0.
+
+%% @doc Convert perf record to map for event logging (running totals).
+perf_to_stats(Perf) ->
+    Elapsed = perf_elapsed(Perf),
+    #{
+        blocks_processed => Perf#perf.blocks_processed,
+        resolve_block_time_us => Perf#perf.resolve_block_time,
+        resolve_block_pct => perf_pct(Perf#perf.resolve_block_time, Elapsed),
+        resolve_tx_count => Perf#perf.resolve_tx_count,
+        resolve_tx_time_us => Perf#perf.resolve_tx_time,
+        resolve_tx_pct => perf_pct(Perf#perf.resolve_tx_time, Elapsed),
+        items_indexed => Perf#perf.items_indexed,
+        write_offset_time_us => Perf#perf.write_offset_time,
+        write_offset_pct => perf_pct(Perf#perf.write_offset_time, Elapsed),
+        bundles_processed => Perf#perf.bundles_processed,
+        download_bundle_header_time_us => Perf#perf.download_bundle_header_time,
+        download_bundle_header_pct => perf_pct(Perf#perf.download_bundle_header_time, Elapsed),
+        elapsed_us => Elapsed
+    }.
+
+%% @doc Get CSV file path from options or use default.
+perf_csv_path(Opts) ->
+    hb_opts:get(arweave_perf_csv_path, <<"copycat_perf.csv">>, Opts).
+
+%% @doc Write CSV header if file doesn't exist.
+perf_csv_write_header(FilePath) ->
+    try
+        case filelib:is_file(FilePath) of
+            false ->
+                Header = "height,blocks_processed,resolve_block_time_us,resolve_block_pct,"
+                    "resolve_tx_count,resolve_tx_time_us,resolve_tx_pct,"
+                    "items_indexed,write_offset_time_us,write_offset_pct,"
+                    "bundles_processed,download_bundle_header_time_us,download_bundle_header_pct,"
+                    "elapsed_us\n",
+                file:write_file(FilePath, Header, [write]);
+            true ->
+                ok
+        end
+    catch
+        _:_ -> ok
+    end.
+
+%% @doc Format perf stats as CSV row.
+perf_csv_format_row(Height, PerfStats) ->
+    BlocksProcessed = maps:get(blocks_processed, PerfStats),
+    ResolveBlockTime = maps:get(resolve_block_time_us, PerfStats),
+    ResolveBlockPct = maps:get(resolve_block_pct, PerfStats),
+    ResolveTxCount = maps:get(resolve_tx_count, PerfStats),
+    ResolveTxTime = maps:get(resolve_tx_time_us, PerfStats),
+    ResolveTxPct = maps:get(resolve_tx_pct, PerfStats),
+    ItemsIndexed = maps:get(items_indexed, PerfStats),
+    WriteOffsetTime = maps:get(write_offset_time_us, PerfStats),
+    WriteOffsetPct = maps:get(write_offset_pct, PerfStats),
+    BundlesProcessed = maps:get(bundles_processed, PerfStats),
+    DownloadBundleHeaderTime = maps:get(download_bundle_header_time_us, PerfStats),
+    DownloadBundleHeaderPct = maps:get(download_bundle_header_pct, PerfStats),
+    Elapsed = maps:get(elapsed_us, PerfStats),
+    io_lib:format("~w,~w,~w,~.2f,~w,~w,~.2f,~w,~w,~.2f,~w,~w,~.2f,~w\n",
+        [Height, BlocksProcessed, ResolveBlockTime, ResolveBlockPct,
+         ResolveTxCount, ResolveTxTime, ResolveTxPct,
+         ItemsIndexed, WriteOffsetTime, WriteOffsetPct,
+         BundlesProcessed, DownloadBundleHeaderTime, DownloadBundleHeaderPct,
+         Elapsed]).
+
+%% @doc Write perf stats to CSV file.
+perf_csv_write(Height, PerfStats, Opts) ->
+    try
+        FilePath = perf_csv_path(Opts),
+        perf_csv_write_header(FilePath),
+        RowIoList = perf_csv_format_row(Height, PerfStats),
+        Row = iolist_to_binary(RowIoList),
+        file:write_file(FilePath, Row, [append])
+    catch
+        _:_ -> ok
+    end.
+
+
 %% @doc Fetch blocks from an Arweave node between a given range.
-fetch_blocks(Req, Current, To, _Opts) when Current < To ->
+fetch_blocks(Req, Current, To, _Perf, _Opts) when Current < To ->
     ?event(copycat_arweave,
         {arweave_block_indexing_completed,
             {reached_target, To},
@@ -46,33 +178,51 @@ fetch_blocks(Req, Current, To, _Opts) when Current < To ->
         }
     ),
     {ok, To};
-fetch_blocks(Req, Current, To, Opts) ->
-    BlockRes =
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/block=",
-                (hb_util:bin(Current))/binary
-            >>,
-            Opts
-        ),
-    process_block(BlockRes, Req, Current, To, Opts),
-    fetch_blocks(Req, Current - 1, To, Opts).
+fetch_blocks(Req, Current, To, Perf, Opts) ->
+    {BlockRes, Perf1} = perf_time(
+        fun() ->
+            hb_ao:resolve(
+                <<
+                    ?ARWEAVE_DEVICE/binary,
+                    "/block=",
+                    (hb_util:bin(Current))/binary
+                >>,
+                Opts
+            )
+        end,
+        Perf,
+        resolve_block_time
+    ),
+    Perf2 = Perf1#perf{blocks_processed = Perf1#perf.blocks_processed + 1},
+    Perf3 = process_block(BlockRes, Req, Current, To, Perf2, Opts),
+    fetch_blocks(Req, Current - 1, To, Perf3, Opts).
 
 %% @doc Process a block.
-process_block(BlockRes, _Req, Current, To, Opts) ->
+process_block(BlockRes, _Req, Current, To, PerfAfterBlock, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            {IndexedItems, SkippedTxs} = maybe_index_ids(Block, Opts),
+            PerfAfterIndex = maybe_index_ids(Block, PerfAfterBlock, Opts),
+            PerfStats = perf_to_stats(PerfAfterIndex),
             ?event(
                 copycat_short,
                 {arweave_block_cached,
                     {height, Current},
-                    {indexed_items, IndexedItems},
-                    {skipped_txs, SkippedTxs},
+                    {items_indexed, PerfAfterIndex#perf.last_block_items_indexed},
+                    {total_txs, PerfAfterIndex#perf.last_block_total_txs},
+                    {bundle_txs, PerfAfterIndex#perf.last_block_bundle_txs},
+                    {skipped_txs, PerfAfterIndex#perf.last_block_skipped_txs},
                     {target, To}
                 }
-            );
+            ),
+            ?event(
+                copycat_perf,
+                {arweave_block_perf,
+                    {height, Current},
+                    {perf, PerfStats}
+                }
+            ),
+            perf_csv_write(Current, PerfStats, Opts),
+            PerfAfterIndex;
         {error, _} = Error ->
             ?event(
                 copycat_short,
@@ -80,13 +230,20 @@ process_block(BlockRes, _Req, Current, To, Opts) ->
                     {height, Current},
                     {target, To},
                     {reason, Error}} 
-            )
+            ),
+            PerfAfterBlock
     end.
 
 %% @doc Index the IDs of all transactions in the block if configured to do so.
-maybe_index_ids(Block, Opts) ->
+maybe_index_ids(Block, Perf, Opts) ->
+    TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
     case hb_opts:get(arweave_index_ids, false, Opts) of
-        false -> {0, 0};
+        false -> Perf#perf{
+            last_block_items_indexed = 0,
+            last_block_total_txs = TotalTXs,
+            last_block_bundle_txs = 0,
+            last_block_skipped_txs = 0
+        };
         true ->
             IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             BlockEndOffset = hb_util:int(
@@ -94,45 +251,61 @@ maybe_index_ids(Block, Opts) ->
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block_size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            {TXs, SkippedFromHeaders} = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
+            {TXs, SkippedFromHeaders, Perf1} = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Perf, Opts),
+            Perf2 = Perf1,
             Height = hb_maps:get(<<"height">>, Block, 0, Opts),
             TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-            {IndexedItems, SkippedFromBundles} = lists:foldl(fun
-                ({{padding, _PaddingRoot}, _EndOffset}, {ItemsAcc, SkippedAcc}) ->
-                    {ItemsAcc, SkippedAcc};
-                ({{TX, _TXDataRoot}, EndOffset}, {ItemsAcc, SkippedAcc}) ->
+            ItemsBefore = Perf2#perf.items_indexed,
+            {Perf3, BundleTXs, SkippedFromBundles} = lists:foldl(fun
+                ({{padding, _PaddingRoot}, _EndOffset}, {PerfAcc, BundleAcc, SkippedAcc}) ->
+                    {PerfAcc, BundleAcc, SkippedAcc};
+                ({{TX, _TXDataRoot}, EndOffset}, {PerfAcc, BundleAcc, SkippedAcc}) ->
                     case is_bundle_tx(TX, Opts) of
-                        false -> {ItemsAcc, SkippedAcc};
+                        false -> {PerfAcc, BundleAcc, SkippedAcc};
                         true ->
                             TXID = hb_util:encode(TX#tx.id),
                             TXEndOffset = BlockStartOffset + EndOffset,
                             TXStartOffset = TXEndOffset - TX#tx.data_size,
-                            ok = hb_store_arweave:write_offset(
-                                IndexStore,
-                                TXID,
-                                true,
-                                TXStartOffset,
-                                TX#tx.data_size
+                            {ok, PerfAfterWrite} = perf_time(
+                                fun() ->
+                                    hb_store_arweave:write_offset(
+                                        IndexStore,
+                                        TXID,
+                                        true,
+                                        TXStartOffset,
+                                        TX#tx.data_size
+                                    )
+                                end,
+                                PerfAcc,
+                                write_offset_time
                             ),
-                            case download_bundle_header(
-                                TXEndOffset, TX#tx.data_size, Opts
-                            ) of
+                            {BundleRes, Perf4} = download_bundle_header(
+                                TXEndOffset, TX#tx.data_size, PerfAfterWrite, Opts
+                            ),
+                            case BundleRes of
                                 {ok, {BundleIndex, HeaderSize}} ->
-                                    _ = lists:foldl(
-                                        fun({ItemID, Size}, ItemStartOffset) ->
-                                            ok = hb_store_arweave:write_offset(
-                                                IndexStore,
-                                                hb_util:encode(ItemID),
-                                                false,
-                                                ItemStartOffset,
-                                                Size
+                                    {_, Perf5} = lists:foldl(
+                                        fun({ItemID, Size}, {ItemStartOffset, PerfFold}) ->
+                                            {ok, PerfUpdated} = perf_time(
+                                                fun() ->
+                                                    hb_store_arweave:write_offset(
+                                                        IndexStore,
+                                                        hb_util:encode(ItemID),
+                                                        false,
+                                                        ItemStartOffset,
+                                                        Size
+                                                    )
+                                                end,
+                                                PerfFold,
+                                                write_offset_time
                                             ),
-                                            ItemStartOffset + Size
+                                            {ItemStartOffset + Size, PerfUpdated}
                                         end,
-                                        TXStartOffset + HeaderSize,
+                                        {TXStartOffset + HeaderSize, Perf4},
                                         BundleIndex
                                     ),
-                                    {ItemsAcc + length(BundleIndex), SkippedAcc};
+                                    Perf6 = Perf5#perf{items_indexed = Perf5#perf.items_indexed + length(BundleIndex)},
+                                    {Perf6, BundleAcc + 1, SkippedAcc};
                                 {error, Reason} ->
                                     ?event(
                                         copycat_short,
@@ -141,45 +314,60 @@ maybe_index_ids(Block, Opts) ->
                                             {reason, Reason}
                                         }
                                     ),
-                                    {ItemsAcc, SkippedAcc + 1}
+                                    {Perf4, BundleAcc + 1, SkippedAcc + 1}
                             end
                     end
                 end,
-                {0, 0},
+                {Perf2, 0, 0},
                 TXsWithData
             ),
-            {IndexedItems, SkippedFromHeaders + SkippedFromBundles}
+            ItemsAfter = Perf3#perf.items_indexed,
+            ItemsIndexed = ItemsAfter - ItemsBefore,
+            SkippedTXs = SkippedFromHeaders + SkippedFromBundles,
+            Perf3#perf{
+                last_block_items_indexed = ItemsIndexed,
+                last_block_total_txs = TotalTXs,
+                last_block_bundle_txs = BundleTXs,
+                last_block_skipped_txs = SkippedTXs
+            }
     end.
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
 
-download_bundle_header(EndOffset, Size, Opts) ->
-    StartOffset = EndOffset - Size + 1,
-    case hb_ao:resolve(
-        <<
-            ?ARWEAVE_DEVICE/binary,
-            "/chunk&offset=",
-            (hb_util:bin(StartOffset))/binary
-        >>,
-        Opts
-    ) of
-        {ok, FirstChunk} ->
-            % Most bundle headers can fit in a single chunk, but those with
-            % thousands of items might require multiple chunks to fully
-            % represent the item index.
-            HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-            case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
-                {ok, BundleHeader} ->
-                    {_ItemsBin, BundleIndex} =
-                        ar_bundles:decode_bundle_header(BundleHeader),
-                    {ok, {BundleIndex, HeaderSize}};
+download_bundle_header(EndOffset, Size, Perf, Opts) ->
+    {Result, Perf1} = perf_time(
+        fun() ->
+            StartOffset = EndOffset - Size + 1,
+            case hb_ao:resolve(
+                <<
+                    ?ARWEAVE_DEVICE/binary,
+                    "/chunk&offset=",
+                    (hb_util:bin(StartOffset))/binary
+                >>,
+                Opts
+            ) of
+                {ok, FirstChunk} ->
+                    % Most bundle headers can fit in a single chunk, but those with
+                    % thousands of items might require multiple chunks to fully
+                    % represent the item index.
+                    HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
+                    case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
+                        {ok, BundleHeader} ->
+                            {_ItemsBin, BundleIndex} =
+                                ar_bundles:decode_bundle_header(BundleHeader),
+                            {ok, {BundleIndex, HeaderSize}};
+                        Error ->
+                            Error
+                    end;
                 Error ->
                     Error
-            end;
-        Error ->
-            Error
-    end.
+            end
+        end,
+        Perf,
+        download_bundle_header_time
+    ),
+    {Result, Perf1}.
 
 header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
         when HeaderSize =< byte_size(FirstChunk) ->
@@ -196,36 +384,44 @@ header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
         Opts
     ).
 
-resolve_tx_headers(TXIDs, Opts) ->
+resolve_tx_headers(TXIDs, Perf, Opts) ->
     lists:foldr(
-        fun(TXID, {Acc, SkippedAcc}) ->
-            case resolve_tx_header(TXID, Opts) of
-                {ok, TX} -> {[TX | Acc], SkippedAcc};
-                skip -> {Acc, SkippedAcc + 1}
+        fun(TXID, {Acc, SkippedAcc, PerfAcc}) ->
+            {Res, PerfUpdated} = resolve_tx_header(TXID, PerfAcc, Opts),
+            case Res of
+                {ok, TX} -> {[TX | Acc], SkippedAcc, PerfUpdated};
+                skip -> {Acc, SkippedAcc + 1, PerfUpdated}
             end
         end,
-        {[], 0},
+        {[], 0, Perf},
         TXIDs
     ).
 
-resolve_tx_header(TXID, Opts) ->
+resolve_tx_header(TXID, Perf, Opts) ->
     try
-        case hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/tx&tx=",
-                TXID/binary,
-                "&exclude-data=true"
-            >>,
-            Opts
-        ) of
+        {ResolveRes, Perf1} = perf_time(
+            fun() ->
+                hb_ao:resolve(
+                    <<
+                        ?ARWEAVE_DEVICE/binary,
+                        "/tx&tx=",
+                        TXID/binary,
+                        "&exclude-data=true"
+                    >>,
+                    Opts
+                )
+            end,
+            Perf,
+            resolve_tx_time
+        ),
+        case ResolveRes of
             {ok, StructuredTXHeader} ->
-                {ok,
+                {{ok,
                     hb_message:convert(
                         StructuredTXHeader,
                         <<"tx@1.0">>,
                         <<"structured@1.0">>,
-                        Opts)};
+                        Opts)}, Perf1};
             {error, ResolveError} ->
                 ?event(
                     copycat_short,
@@ -234,7 +430,7 @@ resolve_tx_header(TXID, Opts) ->
                         {reason, ResolveError}
                     }
                 ),
-                skip
+                {skip, Perf1}
         end
     catch
         Class:Reason:_ ->
@@ -246,7 +442,7 @@ resolve_tx_header(TXID, Opts) ->
                     {reason, Reason}
                 }
             ),
-            skip
+            {skip, Perf}
     end.
 
 
@@ -331,8 +527,9 @@ bundle_header_index_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, _HeaderSize}} =
-        download_bundle_header(EndOffset, Size, Opts),
+    Perf = perf_init(),
+    {{ok, {BundleIndex, _HeaderSize}}, _Perf1} =
+        download_bundle_header(EndOffset, Size, Perf, Opts),
     ?assertEqual(15000, length(BundleIndex)),
     ok.
 
@@ -355,8 +552,9 @@ index_ids_ecdsa_test() ->
 
 non_string_tags_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    ?assertEqual(skip, 
-        resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts)),
+    Perf = perf_init(),
+    {Res, _Perf1} = resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Perf, Opts),
+    ?assertEqual(skip, Res),
     ok.
 
 setup_index_opts() ->
