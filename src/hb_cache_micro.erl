@@ -103,7 +103,7 @@ write(Message, Opts) ->
 %% @doc Recursively write message keys to the stores, passing the ID of values
 %% to link back to the parent.
 do_write(Message, Store, Opts) when is_map(Message) ->
-    ?event({do_write, {message, Message}, {store, Store}}),
+    ?event({do_write_msg, {message, Message}}),
     BinaryMessage =
         maps:map(
             fun(Key, Value) ->
@@ -119,23 +119,31 @@ do_write(Message, Store, Opts) when is_map(Message) ->
              end,
             Message
         ),
-    PrefixID = id(BinaryMessage, Opts),
+    ?event({do_write_messages, {bin_msg, BinaryMessage}, {message, Message}}),
+    PrefixID = 
+        case maps:get(<<"id">>, Message, not_found) of
+            not_found -> 
+                GeneratedID = id(BinaryMessage, Opts),
+                ?event({no_id_in_message, {generated, GeneratedID}}),
+                do_write_id(GeneratedID, Store, Opts),
+                do_write_committed(GeneratedID, BinaryMessage, Store, Opts),
+                GeneratedID;
+            {link, Link, LinkOpts} -> 
+                ?event({using_provided_id_link, {link, Link}}),
+                Resolved = hb_util:ok(resolve(Link, LinkOpts)),
+                ?event({used_provided_id_link, {resolved, Resolved}}),
+                Resolved;
+            ID -> 
+                ?event({using_provided_id, {id, ID}, {untyped_id, untype(ID)}}),
+                untype(ID)
+        end,
+    ?event({prefix_id, PrefixID}),
     ?event({
         writing_links_to_cache, 
             {id, PrefixID},
             {message, Message},
             {bin_msg, BinaryMessage}
         }),
-    maps:map(
-        fun(Key, Value) ->
-            hb_store:write(
-                Store,
-                <<PrefixID/binary, "/", (hb_util:bin(Key))/binary>>,
-                Value
-            )
-        end,
-        BinaryMessage
-    ),
     ?event({wrote_nested_message_to_cache, {id, PrefixID}}),
     {ok, PrefixID};
 do_write({link, Path, _LinkOpts}, _Store, _Opts) ->
@@ -147,14 +155,56 @@ do_write(List, Store, Opts) when is_list(List) ->
         Opts
     );
 do_write(Value, Store, Opts) ->
-    ?event(do_write, {do_write, {value, Value}, {store, Store}, {opts, Opts}}),
+    ?event(do_write, {do_write, {value, Value}}),
     Binary = type(hb_util:bin(Value), Value),
     ID = id(Binary, Opts),
     ok = hb_store:write(Store, ID, Binary),
     ?event({wrote_explicit_value_to_cache, {id, ID}, {typed_binary, Binary}}),
     {ok, ID}.
-
+do_write_id(ID, Store, _Opts) ->
+    hb_store:write(
+        Store,
+        <<ID/binary, "/", "id">>,
+        ID
+    ).
+do_write_committed(ID, Message, Store, _Opts) ->
+    Committed =
+        maps:keys(
+            maps:map(
+                fun(Key, Value) ->
+                    hb_store:write(
+                        Store,
+                        <<ID/binary, "/", (hb_util:bin(Key))/binary>>,
+                        Value
+                    ),
+                    Key
+                end,
+                Message
+            )
+        ),
+    CommittedKeys = list_to_binary(lists:join(<<",">>, Committed)),
+    EncodedCommittedKeys = type(CommittedKeys, Committed),
+    hb_store:write(
+        Store,
+        <<ID/binary, "/", "committed">>,
+        EncodedCommittedKeys
+    ),
+    ?event({wrote_committed_keys_to_cache, {id, ID}, {committed_keys, CommittedKeys}, {encoded_committed_keys, EncodedCommittedKeys}}).
 %%% Utilities
+with_only_committed(Message, Opts) ->
+    Committed = 
+        case maps:get(<<"committed">>, Message, not_found) of
+            not_found -> <<"l:">>;
+            {link, Link, LinkOpts} -> hb_util:ok(resolve(Link, LinkOpts));
+            Comm -> Comm
+        end,
+    CommittedKeys = untype(Committed),
+    maps:filter(
+        fun(Key, Value) ->
+            lists:member(Key, CommittedKeys)
+        end,
+        Message
+    ).
 
 %% @doc Return the store value from the node options, scoped to the
 %% `DEFAULT_SCOPE'.
@@ -181,14 +231,16 @@ type(EncodedValue, Value) when is_map(Value) -> <<"path:", EncodedValue/binary>>
 type(EncodedValue, Value) when is_binary(Value) -> <<"b:", EncodedValue/binary>>;
 type(EncodedValue, Value) when is_integer(Value) -> <<"i:", EncodedValue/binary>>;
 type(EncodedValue, Value) when is_float(Value) -> <<"f:", EncodedValue/binary>>;
-type(EncodedValue, Value) when is_atom(Value) -> <<"a:", EncodedValue/binary>>.
+type(EncodedValue, Value) when is_atom(Value) -> <<"a:", EncodedValue/binary>>;
+type(EncodedValue, Value) when is_list(Value) -> <<"l:", EncodedValue/binary>>.
 
 %% @doc Take a type-tagged binary and return the typed value.
 untype(<<"path:", ID/binary>>) -> {link, ID, #{}};
 untype(<<"b:", Binary/binary>>) -> Binary;
 untype(<<"i:", Binary/binary>>) -> hb_util:int(Binary);
 untype(<<"f:", Binary/binary>>) -> hb_util:float(Binary);
-untype(<<"a:", Binary/binary>>) -> hb_util:atom(Binary).
+untype(<<"a:", Binary/binary>>) -> hb_util:atom(Binary);
+untype(<<"l:", Binary/binary>>) -> binary:split(Binary, <<",">>, [global]).
 
 %% @doc Generate a simple prefix (message ID) for a flat set of hashpath suffixes
 %% (keys) and type-tagged values. This function is deterministic and will return
@@ -280,9 +332,9 @@ test_store_unsigned_nested_empty_message(Store) ->
     Opts = #{ store => Store },
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
-    LoadedRetrived = ensure_all_loaded(RetrievedItem, Opts),
-    ?event({match, {item, Item}, {retrieved, RetrievedItem}, {loaded_retrieved, LoadedRetrived}}),
-    ?assert(hb_message:match(Item, LoadedRetrived, strict, Opts)).
+    ?event(debug_test, {match, {item, Item}, {retrieved, RetrievedItem}}),
+    ?event(debug_test, {only_committed, with_only_committed(RetrievedItem, Opts)}),
+    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
 
 test_store_simple_unsigned_message(Store) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
@@ -291,9 +343,9 @@ test_store_simple_unsigned_message(Store) ->
     %% Write the simple unsigned item
     {ok, Path} = write(Item, Opts),
     %% Read the item back
-    ID = hb_util:human_id(hb_ao_micro:get(<<"id">>, Item#{ <<"device">> => <<"message@1.0">>}, Opts)),
-    ?event(debug_store_test, {ids, {id, ID}, {path, Path}}),
-    {ok, RetrievedItem} = read(ID, Opts),
+    {ok, RetrievedItem} = read(Path, Opts),
+    ?event(debug_test, {match, {item, Item}, {retrieved, RetrievedItem}}),
+    ?event(debug_test, {only_committed, with_only_committed(RetrievedItem, Opts)}),
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
 cache_suite_test_() ->
     hb_store:generate_test_suite([
