@@ -47,7 +47,6 @@
 -export([start/1, stop/1, reset/1]).
 -export([filter/2, scope/2, sort/2]).
 -export([type/2, read/2, read_with_type/2, write/3, list/2, match/2]).
--export([write_all/3, make_group_all/2, make_link_all/3]).
 -export([path/1, path/2, add_path/2, add_path/3, join/1]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
@@ -277,15 +276,6 @@ make_group(Modules, Path) -> call_function(Modules, make_group, [Path]).
 make_link(Modules, Existing, New) ->
     call_function(Modules, make_link, [Existing, New]).
 
-write_all(Modules, Key, Value) ->
-    do_call_all(Modules, write, [Key, Value]).
-
-make_group_all(Modules, Path) ->
-    do_call_all(Modules, make_group, [Path]).
-
-make_link_all(Modules, Existing, New) ->
-    do_call_all(Modules, make_link, [Existing, New]).
-
 %% @doc Delete all of the keys in a store. Should be used with extreme
 %% caution. Lost data can lose money in many/most of hyperbeam's use cases.
 reset(Modules) -> call_function(Modules, reset, []).
@@ -468,56 +458,19 @@ retry(Mod, Store, Function, Args, AttemptsRemaining) ->
     start(Store),
     apply_store_function(Mod, Store, Function, Args, AttemptsRemaining - 1).
 
-do_call_all(X, Function, Args) when not is_list(X) ->
-    do_call_all([X], Function, Args);
-do_call_all(Stores, Function, Args) ->
-    do_call_all(Stores, Function, Args, false, ok).
-
-do_call_all([], _Function, _Args, false, ok) ->
-    not_found;
-do_call_all([], _Function, _Args, false, FirstError) ->
-    FirstError;
-do_call_all([], _Function, _Args, true, ok) ->
+%% @doc Call a function on all modules in the store.
+call_all(X, _Function, _Args) when not is_list(X) ->
+    call_all([X], _Function, _Args);
+call_all([], _Function, _Args) ->
     ok;
-do_call_all([], _Function, _Args, true, FirstError) ->
-    FirstError;
-do_call_all([Store = #{<<"access">> := Access} | Rest], Function, Args, WroteAny, FirstError) ->
-    IsAdmissible =
-        lists:any(
-            fun(Group) ->
-                lists:any(
-                    fun(F) -> F == Function end,
-                    maps:get(Group, ?STORE_ACCESS_POLICIES, [])
-                )
-            end,
-            Access
-        ),
-    case IsAdmissible of
-        true ->
-            do_call_all(
-                [maps:remove(<<"access">>, Store) | Rest],
-                Function,
-                Args,
-                WroteAny,
-                FirstError
-            );
-        false ->
-            do_call_all(Rest, Function, Args, WroteAny, FirstError)
-    end;
-do_call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, WroteAny, FirstError) ->
-    Result = try apply_store_function(Mod, Store, Function, Args)
-    catch _:_:_ -> not_found
+call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
+    try apply_store_function(Mod, Function, Store, Args)
+    catch
+        Class:Reason:Stacktrace ->
+            ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
+            ok
     end,
-    case Result of
-        ok ->
-            do_call_all(Rest, Function, Args, true, FirstError);
-        {ok, _} ->
-            do_call_all(Rest, Function, Args, true, FirstError);
-        Error when FirstError =:= ok ->
-            do_call_all(Rest, Function, Args, WroteAny, Error);
-        _Error ->
-            do_call_all(Rest, Function, Args, WroteAny, FirstError)
-    end.
+    call_all(Rest, Function, Args).
 
 %%% Test helpers
 
