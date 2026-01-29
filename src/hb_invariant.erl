@@ -240,27 +240,41 @@ run_state_machine(#{ requests_remaining := 0, state := State }) -> [{ok, State}]
 run_state_machine(Spec = #{ requests_remaining := RequestsRemaining }) ->
     {Tag, Req} = generate_request(Spec),
     hb_format:format("~p...", [Tag]),
-    ?event({evaluating_request, {request, Req}}),
-    case execute_request(Spec, Req) of
-        {error, Type, Reason} ->
-            [Req, {error, Type, Reason}];
-        Result ->
-            case enforce_properties(Spec, Req, Result) of
-                ok ->
-                    hb_format:format("ok~n"),
-                    NextSpec = apply_next(Spec, Req, Result),
-                    [
-                        Req
-                    |
-                        run_state_machine(
-                            NextSpec#{
-                                requests_remaining => RequestsRemaining - 1
-                            }
-                        )
-                    ];
+    case Tag =:= noop of
+        true ->
+            hb_format:format("skipped~n"),
+            [
+                Req
+            |
+                run_state_machine(
+                    Spec#{
+                        requests_remaining => RequestsRemaining - 1
+                    }
+                )
+            ];
+        false ->
+            ?event({evaluating_request, {request, Req}}),
+            case execute_request(Spec, Req) of
                 {error, Type, Reason} ->
-                    hb_format:format("*failed*~n"),
-                    [Req, {error, Type, Reason}]
+                    [Req, {error, Type, Reason}];
+                Result ->
+                    case enforce_properties(Spec, Req, Result) of
+                        ok ->
+                            hb_format:format("ok~n"),
+                            NextSpec = apply_next(Spec, Req, Result),
+                            [
+                                Req
+                            |
+                                run_state_machine(
+                                    NextSpec#{
+                                        requests_remaining => RequestsRemaining - 1
+                                    }
+                                )
+                            ];
+                        {error, Type, Reason} ->
+                            hb_format:format("*failed*~n"),
+                            [Req, {error, Type, Reason}]
+                    end
             end
     end.
 

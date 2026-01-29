@@ -150,76 +150,100 @@ withdraw_generator(State, Opts) ->
     % base our withdrawal quantity on deposits without consideration of delegations.
     Users = hb_private:get(<<"users">>, State, #{}, Opts),
     NonzeroOriginalDeposits = get_nonzero_deposits(Users),
-    % TODO: no nonzero deposits will cause a spurious test
-    % failure. Should we invent technology to handle it?
-    {UserAddr, UserResourceID, CurrentQty} = hb_invariant:pick(NonzeroOriginalDeposits),
-    Wallet = hb_maps:get(priv_wallet, hb_maps:get(UserAddr, hb_maps:get(identities, Opts))),
-    {
-        withdraw,
-        hb_message:commit(
-            #{
-                <<"path">> => <<"withdraw">>,
-                <<"body">> => #{
-                    <<"address">> => UserAddr,
-                    <<"quantity">> => hb_invariant:int(1, CurrentQty),
-                    <<"resource">> => UserResourceID,
-                    <<"from">> => <<"foo">>, % TODO: What should this value be?
-                    <<"t">> => hb_invariant:int(100)
-                }
-            },
-            Opts#{ priv_wallet => Wallet }
-        )
-    }.
+    case length(NonzeroOriginalDeposits) =:= 0 of
+        true -> {noop, #{}};
+        false ->
+            {UserAddr, UserResourceID, CurrentQty} =
+                hb_invariant:pick(NonzeroOriginalDeposits),
+            Wallet =
+                hb_maps:get(
+                    priv_wallet, 
+                    hb_maps:get(UserAddr, hb_maps:get(identities, Opts))
+                ),
+            {
+                withdraw,
+                hb_message:commit(
+                    #{
+                        <<"path">> => <<"withdraw">>,
+                        <<"body">> => #{
+                            <<"address">> => UserAddr,
+                            <<"quantity">> => hb_invariant:int(1, CurrentQty),
+                            <<"resource">> => UserResourceID,
+                            <<"from">> => <<"foo">>, % TODO: What should this value be?
+                            <<"t">> => hb_invariant:int(10)
+                        }
+                    },
+                    Opts#{ priv_wallet => Wallet }
+                )
+            }
+    end.
 
 delegate_generator(State, Opts) ->
     Users = hb_maps:get(<<"users">>, State, #{}, Opts),
     NonzeroDeposits = get_nonzero_deposits(hb_private:reset(Users)),
-    % TODO: no nonzero deposits will cause a spurious test
-    % failure. Should we invent technology to handle it?
-    {FromAddr, UserResourceID, CurrentQty} = hb_invariant:pick(NonzeroDeposits),
-    Wallet = hb_maps:get(priv_wallet, hb_maps:get(FromAddr, hb_maps:get(identities, Opts))),
-    ToAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
-    DelegatedQty = hb_invariant:int(1, CurrentQty),
-    {
-        delegate,
-        hb_message:commit(
-            #{
-                <<"path">> => <<"delegate">>,
-                <<"body">> => #{
-                    <<"address">> => ToAddr,
-                    <<"quantity">> => DelegatedQty,
-                    <<"resource">> => UserResourceID,
-                    <<"from">> => FromAddr, 
-                    <<"t">> => hb_invariant:int(100)
-                }
-            },
-            Opts#{ priv_wallet => Wallet }
-        )
-    }.
+    case length(NonzeroDeposits) =:= 0 of
+        true -> {noop, #{}};
+        false ->
+            {FromAddr, UserResourceID, CurrentQty} =
+                hb_invariant:pick(NonzeroDeposits),
+            Wallet =
+                hb_maps:get(
+                    priv_wallet,
+                    hb_maps:get(FromAddr, hb_maps:get(identities, Opts))
+                ),
+            ToAddr =
+                hb_util:human_id(
+                    hb_invariant:pick(dev_token_props:user_wallets(Opts))
+                ),
+            DelegatedQty = hb_invariant:int(1, CurrentQty),
+            {
+                delegate,
+                hb_message:commit(
+                    #{
+                        <<"path">> => <<"delegate">>,
+                        <<"body">> => #{
+                            <<"address">> => ToAddr,
+                            <<"quantity">> => DelegatedQty,
+                            <<"resource">> => UserResourceID,
+                            <<"from">> => FromAddr, 
+                            <<"t">> => hb_invariant:int(10)
+                        }
+                    },
+                    Opts#{ priv_wallet => Wallet }
+                )
+            }
+    end.
 
 undelegate_generator(State, Opts) ->
     NonzeroDelegations = get_nonzero_delegations(hb_private:reset(State)),
-    % TODO: no nonzero delegations will cause a spurious test
-    % failure. Should we invent technology to handle it?
-    {FromAddr, ToAddr, ResourceID, Qty} = hb_invariant:pick(NonzeroDelegations),
-    Wallet = hb_maps:get(priv_wallet, hb_maps:get(FromAddr, hb_maps:get(identities, Opts))),
-    UndelegateQty = hb_invariant:int(1, Qty),
-    {
-        undelegate,
-        hb_message:commit(
-            #{
-                <<"path">> => <<"undelegate">>,
-                <<"body">> => #{
-                    <<"address">> => ToAddr,
-                    <<"quantity">> => UndelegateQty,
-                    <<"resource">> => ResourceID,
-                    <<"from">> => FromAddr, 
-                    <<"t">> => hb_invariant:int(100)
-                }
-            },
-            Opts#{ priv_wallet => Wallet }
-        )
-    }.
+    case length(NonzeroDelegations) =:= 0 of
+        true -> {noop, #{}};
+        false ->
+            {FromAddr, ToAddr, ResourceID, Qty} =
+                hb_invariant:pick(NonzeroDelegations),
+            Wallet =
+                hb_maps:get(
+                    priv_wallet,
+                    hb_maps:get(FromAddr, hb_maps:get(identities, Opts))
+                ),
+            UndelegateQty = hb_invariant:int(1, Qty),
+            {
+                undelegate,
+                hb_message:commit(
+                    #{
+                        <<"path">> => <<"undelegate">>,
+                        <<"body">> => #{
+                            <<"address">> => ToAddr,
+                            <<"quantity">> => UndelegateQty,
+                            <<"resource">> => ResourceID,
+                            <<"from">> => FromAddr, 
+                            <<"t">> => hb_invariant:int(10)
+                        }
+                    },
+                    Opts#{ priv_wallet => Wallet }
+                )
+            }
+    end.
 
 verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"deposit">> }, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
