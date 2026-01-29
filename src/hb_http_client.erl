@@ -16,6 +16,8 @@
 -define(DEFAULT_RETRY_TIME, 1000).
 -define(DEFAULT_KEEPALIVE_TIMEOUT, 60_000).
 -define(DEFAULT_CONNECT_TIMEOUT, 60_000).
+-define(DEFAULT_429_BACKOFF_MS, 5000).
+-define(RATE_LIMIT_ETS, hb_http_client_rate_limits).
 
 %%% ==================================================================
 %%% Public interface.
@@ -181,6 +183,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             {'EXIT', _} ->
                 {error, client_error};
             Error ->
+                ?event(http_client, {gun_error, Error}),
                 Error
 	    end,
 	EndTime = os:system_time(native),
@@ -290,6 +293,7 @@ maybe_invoke_monitor(Details, Opts) ->
 %%% ==================================================================
 
 init(Opts) ->
+    init_rate_limit_ets(),
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
             ?event({starting_prometheus_application,
@@ -313,6 +317,19 @@ init(Opts) ->
                     {ok, #state{ opts = Opts }}
             end;
         false -> {ok, #state{ opts = Opts }}
+    end.
+
+init_rate_limit_ets() ->
+    case ets:whereis(?RATE_LIMIT_ETS) of
+        undefined ->
+            ets:new(?RATE_LIMIT_ETS, [
+                named_table,
+                public,
+                set,
+                {read_concurrency, true}
+            ]);
+        _ ->
+            ok
     end.
 
 init_prometheus() ->
@@ -455,7 +472,8 @@ handle_info({gun_error, PID, Reason},
 					ok
 			end,
 			gun:shutdown(PID),
-			?event({connection_error, {reason, Reason}}),
+            ?event(http_outbound, {gun_shutdown, {peer, Peer}}),
+			?event(http_client, {connection_error, {peer, Peer}, {reason, Reason}}),
 			{noreply, State#state{ status_by_pid = StatusByPID2, pid_by_peer = PIDByPeer2 }}
 	end;
 
@@ -521,6 +539,11 @@ handle_info(conn_mailbox_monitoring, #state{pid_by_peer = PidByPeer} = State) ->
     %% We should monitor for
     erlang:send_after(5000, self(),     conn_mailbox_monitoring),
     {noreply, State};
+
+handle_info({clear_rate_limit, Peer, Path}, State) ->
+	clear_rate_limit(Peer, Path),
+	{noreply, State};
+
 handle_info(Message, State) ->
 	?event(warning, {unhandled_info, {module, ?MODULE}, {message, Message}}),
 	{noreply, State}.
@@ -589,8 +612,7 @@ open_connection(#{ peer := Peer }, Opts) ->
                             Opts
                         )
                 },
-            % We handle the retry
-            retry => 0,
+            retry => 3,
             connect_timeout =>
                 hb_opts:get(
                     http_connect_timeout,
@@ -682,6 +704,17 @@ method_to_bin(_) ->
 	<<"unknown">>.
 
 do_gun_request(PID, Args, Opts) ->
+	Peer = hb_maps:get(peer, Args, undefined, Opts),
+	Path = hb_maps:get(path, Args, undefined, Opts),
+	case check_rate_limit(Peer, Path) of
+		ok ->
+			do_gun_request_inner(PID, Args, Opts);
+		{rate_limited, RetryAfterMs} ->
+			?event(http_client, {rate_limited_fast_fail, {peer, Peer}, {path, Path}, {retry_after_ms, RetryAfterMs}}),
+			{error, {rate_limited, RetryAfterMs}}
+	end.
+
+do_gun_request_inner(PID, Args, Opts) ->
 	Timer =
         inet:start_timer(
             hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)
@@ -735,10 +768,20 @@ await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
 			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
 	case gun:await(PID, Ref, inet:timeout(Timer)) of
+		{response, fin, 429, Headers} ->
+			upload_metric(Args),
+			Peer = hb_maps:get(peer, Args, undefined, Opts),
+			handle_429_response(Peer, Path, Headers),
+			?event(http, {gun_response, {status, 429}, {headers, Headers}, {body, none}}),
+			{ok, 429, Headers, <<>>};
 		{response, fin, Status, Headers} ->
 			upload_metric(Args),
 			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
 			{ok, Status, Headers, <<>>};
+		{response, nofin, 429, Headers} ->
+			Peer = hb_maps:get(peer, Args, undefined, Opts),
+			handle_429_response(Peer, Path, Headers),
+			await_response(Args#{ status => 429, headers => Headers }, Opts);
 		{response, nofin, Status, Headers} ->
 			await_response(Args#{ status => Status, headers => Headers }, Opts);
 		{data, nofin, Data} ->
@@ -772,11 +815,14 @@ await_response(Args, Opts) ->
                 FinData
             };
 		{error, timeout} = Response ->
-			record_response_status(Method, Response),
             ?event(http_outbound, {gun_cancel, {path, Path}}),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
+        {error,{connection_error,{stream_closed, Message}}} = Response ->
+            ?event(http_outbound, {gun_cancel, {path, Path}, {message, Message}}),
+            gun:cancel(PID, Ref),
+            Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
 			record_response_status(Method, Response),
 			log(warn, gun_await_process_down, Args, Reason, Opts),
@@ -856,8 +902,14 @@ get_status_class({error, {closed,_}}) ->
 	<<"closed">>;
 get_status_class({error, noproc}) ->
 	<<"noproc">>;
+get_status_class({error, {rate_limited, _}}) ->
+	<<"rate_limited_fast_fail">>;
+get_status_class({error,{connection_error,{stream_closed, _Message}}}) -> 
+    <<"stream_closed">>;
 get_status_class(208) ->
 	<<"already_processed">>;
+get_status_class(404) ->
+	<<"not_found">>;
 get_status_class(429) ->
 	<<"too_many_requests">>;
 get_status_class(Data) when is_integer(Data), Data > 0 ->
@@ -873,3 +925,84 @@ get_status_class(Data) when is_atom(Data) ->
 	atom_to_binary(Data);
 get_status_class(_) ->
 	<<"unknown">>.
+
+%% ==================================================================
+%% Rate limiting (429) fail-fast functions
+%% ==================================================================
+
+%% @doc Check if the peer+path is currently rate-limited.
+%% Returns `ok` if not rate-limited, or `{rate_limited, RemainingMs}` if it is.
+check_rate_limit(Peer, Path) ->
+	case ets:lookup(?RATE_LIMIT_ETS, {Peer, Path}) of
+		[] ->
+			ok;
+		[{{Peer, Path}, ExpiresAt}] ->
+			Now = erlang:system_time(millisecond),
+			case ExpiresAt > Now of
+				true ->
+					{rate_limited, ExpiresAt - Now};
+				false ->
+					%% Entry expired, clean it up
+					ets:delete(?RATE_LIMIT_ETS, {Peer, Path}),
+					ok
+			end
+	end.
+
+%% @doc Handle a 429 response by parsing Retry-After header and storing rate limit.
+handle_429_response(Peer, Path, Headers) ->
+	RetryAfterMs = parse_retry_after_header(Headers),
+	set_rate_limit(Peer, Path, RetryAfterMs).
+
+%% @doc Store the rate limit in ETS and schedule cleanup.
+set_rate_limit(Peer, Path, RetryAfterMs) ->
+	ExpiresAt = erlang:system_time(millisecond) + RetryAfterMs,
+	ets:insert(?RATE_LIMIT_ETS, {{Peer, Path}, ExpiresAt}),
+	?event(http_client, {rate_limit_set, {peer, Peer}, {path, Path}, {expires_at, ExpiresAt}}),
+	%% Schedule cleanup after the backoff period
+	erlang:send_after(RetryAfterMs, self(), {clear_rate_limit, Peer, Path}),
+	ok.
+
+%% @doc Parse the Retry-After header from response headers.
+%% Returns the backoff time in milliseconds.
+%% If no Retry-After header is present, returns the default backoff.
+parse_retry_after_header(Headers) ->
+	case find_header(<<"retry-after">>, Headers) of
+		undefined ->
+			?DEFAULT_429_BACKOFF_MS;
+		Value ->
+			parse_retry_after_value(Value)
+	end.
+
+%% @doc Find a header value by name (case-insensitive).
+find_header(Name, Headers) ->
+	LowerName = hb_util:to_lower(Name),
+	case lists:search(
+		fun({Key, _}) -> hb_util:to_lower(Key) == LowerName end,
+		Headers
+	) of
+		{value, {_, Value}} -> Value;
+		false -> undefined
+	end.
+
+%% @doc Parse Retry-After value which can be:
+%% - An integer (delay in seconds)
+%% - An HTTP-date (absolute time)
+%% Returns delay in milliseconds.
+parse_retry_after_value(Value) when is_binary(Value) ->
+	case catch binary_to_integer(Value) of
+		Seconds when is_integer(Seconds), Seconds > 0 ->
+			Seconds * 1000;
+		_ ->
+			%% Could be an HTTP-date, but for simplicity use default
+			?DEFAULT_429_BACKOFF_MS
+	end;
+parse_retry_after_value(Value) when is_list(Value) ->
+	parse_retry_after_value(list_to_binary(Value));
+parse_retry_after_value(_) ->
+	?DEFAULT_429_BACKOFF_MS.
+
+%% @doc Clear a rate limit entry from ETS.
+clear_rate_limit(Peer, Path) ->
+	ets:delete(?RATE_LIMIT_ETS, {Peer, Path}),
+	?event(http_client, {rate_limit_cleared, {peer, Peer}, {path, Path}}),
+	ok.
