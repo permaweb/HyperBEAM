@@ -12,48 +12,6 @@
 
 -define(DEFAULT_SCOPE, local).
 
-%%% Load Operations.
-ensure_loaded(Msg) ->
-    ensure_loaded(Msg, #{}).
-ensure_loaded(Msg, Opts) ->
-    ensure_loaded([], Msg, Opts).
-ensure_loaded(Ref, {Status, Msg}, Opts) when Status == ok; Status == error ->
-    {Status, ensure_loaded(Ref, Msg, Opts)};
-ensure_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
-    ?event({ensure_link_loaded, {link, Link}}),
-    {link, LinkID, LinkOpts} = Link,
-    case read(LinkID, Opts) of 
-        {ok, Msg} -> ensure_all_loaded(Ref, Msg, Opts);
-        not_found -> report_ensure_loaded_not_found(Ref, Link, Opts)
-    end;
-ensure_loaded(Ref, Msg, _Opts) ->
-    ?event({ensure_loaded, {ref, Ref}, {msg, Msg}}),
-    Msg.	
-ensure_all_loaded(Msg) ->
-    ensure_all_loaded(Msg, #{}).
-ensure_all_loaded(Msg, Opts) ->
-    ensure_all_loaded([], Msg, Opts).
-ensure_all_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
-    ensure_all_loaded(Ref, ensure_loaded(Ref, Link, Opts), Opts);
-ensure_all_loaded(Ref, Msg, Opts) when is_map(Msg) ->
-    maps:map(fun(K, V) -> ensure_all_loaded([K|Ref], V, Opts) end, Msg);
-ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
-    lists:map(
-        fun({N, V}) -> ensure_all_loaded([N|Ref], V, Opts) end,
-        hb_util:number(Msg)
-    );
-ensure_all_loaded(Ref, Msg, Opts) ->
-    ensure_loaded(Ref, Msg, Opts).
-
-report_ensure_loaded_not_found(Ref, Lk, Opts) ->
-    ?event(link_error, {link_not_resolvable, {ref, Ref}, {link, Lk}, {opts, Opts}}),
-    throw(
-        {necessary_message_not_found,
-            hb_path:to_binary(lists:reverse(Ref)),
-            hb_link:format_unresolved(Lk, Opts, 0)
-        }
-    ).
-    
 %%% Read Operations.
 
 %% @doc Resolve a link or a raw path to a simple prefix (either to a raw binary
