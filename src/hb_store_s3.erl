@@ -280,7 +280,10 @@ read(Opts, Key, ReturnGroup) ->
                         case resolve_path_segments(Opts, PathParts) of
                             {ok, ResolvedPathParts} ->
                                 ResolvedPathBin = to_path(ResolvedPathParts),
-                                read_with_links(Opts, ResolvedPathBin);
+                                case ResolvedPathBin == NormalizedKey of 
+                                    true -> Value;
+                                    false -> read_with_links(Opts, ResolvedPathBin)
+                                end;
                             {error, _} ->
                                 not_found
                         end
