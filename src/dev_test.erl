@@ -114,6 +114,10 @@ compute_nested(Base, Req, Opts) ->
                 Opts
             )
         }.
+
+-spec compute_all(any(), #{ slot := integer() }, map()) -> {ok, map()}.
+compute_all(Base, Req, Opts) ->
+    {ok, Base#{ <<"all">> => <<"done">> }}.
     
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 init(Msg, _Req, Opts) ->
