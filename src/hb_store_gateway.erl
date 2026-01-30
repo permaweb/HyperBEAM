@@ -1,13 +1,16 @@
 %%% @doc A store module that reads data from the nodes Arweave gateway and 
 %%% GraphQL routes, additionally including additional store-specific routes.
 -module(hb_store_gateway).
--export([scope/1, type/2, read/2, read_with_type/2, resolve/2, list/2]).
+-export([start/1, scope/1, type/2, read/2, read_with_type/2, resolve/2, list/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc The scope of a GraphQL store is always remote, due to performance.
 scope(_) -> remote.
 resolve(_, Key) -> Key.
+
+start(#{<<"local-store">> := LocalStore}) ->
+    hb_store:start(LocalStore).
 
 list(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
