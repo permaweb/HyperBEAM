@@ -98,7 +98,6 @@ maybe_index_ids(Block, Opts) ->
     case hb_opts:get(arweave_index_ids, false, Opts) of
         false -> {0, TotalTXs, 0, 0};
         true ->
-            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             BlockEndOffset = hb_util:int(
                 hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
             BlockSize = hb_util:int(
@@ -107,65 +106,147 @@ maybe_index_ids(Block, Opts) ->
             {TXs, SkippedFromHeaders} = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
             Height = hb_maps:get(<<"height">>, Block, 0, Opts),
             TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-            {ItemsIndexed, BundleTXs, SkippedFromBundles} = lists:foldl(fun
-                ({{padding, _PaddingRoot}, _EndOffset}, {ItemsAcc, BundleAcc, SkippedAcc}) ->
-                    {ItemsAcc, BundleAcc, SkippedAcc};
-                ({{TX, _TXDataRoot}, EndOffset}, {ItemsAcc, BundleAcc, SkippedAcc}) ->
-                    case is_bundle_tx(TX, Opts) of
-                        false -> {ItemsAcc, BundleAcc, SkippedAcc};
-                        true ->
-                            TXID = hb_util:encode(TX#tx.id),
-                            TXEndOffset = BlockStartOffset + EndOffset,
-                            TXStartOffset = TXEndOffset - TX#tx.data_size,
-                            observe_event(<<"item_indexed">>, fun() ->
-                                hb_store_arweave:write_offset(
-                                    IndexStore,
-                                    TXID,
-                                    true,
-                                    TXStartOffset,
-                                    TX#tx.data_size
-                                )
-                            end),
-                            BundleRes = download_bundle_header(
-                                TXEndOffset, TX#tx.data_size, Opts
-                            ),
-                            case BundleRes of
-                                {ok, {BundleIndex, HeaderSize}} ->
-                                    {_, ItemsCount} = lists:foldl(
-                                        fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
-                                            observe_event(<<"item_indexed">>, fun() ->
-                                                hb_store_arweave:write_offset(
-                                                    IndexStore,
-                                                    hb_util:encode(ItemID),
-                                                    false,
-                                                    ItemStartOffset,
-                                                    Size
-                                                )
-                                            end),
-                                            {ItemStartOffset + Size, ItemsCountAcc + 1}
-                                        end,
-                                        {TXStartOffset + HeaderSize, 0},
-                                        BundleIndex
-                                    ),
-                                    {ItemsAcc + ItemsCount, BundleAcc + 1, SkippedAcc};
-                                {error, Reason} ->
-                                    ?event(
-                                        copycat_short,
-                                        {arweave_bundle_skipped,
-                                            {tx_id, {explicit, TXID}},
-                                            {reason, Reason}
-                                        }
-                                    ),
-                                    {ItemsAcc, BundleAcc + 1, SkippedAcc + 1}
-                            end
-                    end
-                end,
-                {0, 0, 0},
+            % Filter out padding entries before processing
+            ValidTXs = lists:filter(
+                fun({{padding, _}, _}) -> false; (_) -> true end,
                 TXsWithData
             ),
+            {ItemsIndexed, BundleTXs, SkippedFromBundles} = 
+                process_txs(ValidTXs, BlockStartOffset, Opts),
             SkippedTXs = SkippedFromHeaders + SkippedFromBundles,
             {ItemsIndexed, TotalTXs, BundleTXs, SkippedTXs}
     end.
+
+%% @doc Apply Fun to each item in Items with parallel workers.
+%% Fun takes an item and returns a result.
+%% Returns a list of results in the same order as the input items.
+%% Uses arweave_index_workers from Opts to determine max concurrency (default 1 = sequential).
+parallel_map(Items, Fun, Opts) ->
+    MaxWorkers = max(1, hb_opts:get(arweave_index_workers, 1, Opts)),
+    Parent = self(),
+    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
+    % Spawn initial batch up to MaxWorkers
+    {ToSpawn, Remaining} = lists:split(min(length(ItemsWithRefs), MaxWorkers), ItemsWithRefs),
+    ActiveRefs = [spawn_worker(ItemWithRef, Fun, Parent) || ItemWithRef <- ToSpawn],
+    % Wait for workers to complete and refill pool, collecting results
+    ResultsMap = parallel_map_wait(ActiveRefs, Remaining, Fun, MaxWorkers, Parent, #{}),
+    % Return results in order by matching refs (inspired by pmap pattern)
+    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+
+%% @doc Spawn a worker process for a single item.
+spawn_worker({Item, Ref}, Fun, Parent) ->
+    spawn(fun() ->
+        Result = Fun(Item),
+        Parent ! {pmap_work, Ref, Result}
+    end),
+    Ref.
+
+%% @doc Wait for workers to complete and refill the pool as slots become available.
+parallel_map_wait([], [], _Fun, _MaxWorkers, _Parent, ResultsMap) ->
+    ResultsMap;
+parallel_map_wait(ActiveRefs, Remaining, Fun, MaxWorkers, Parent, ResultsMap) ->
+    receive
+        {pmap_work, CompletedRef, Result} ->
+            % Store result and remove completed ref
+            NewResultsMap = ResultsMap#{CompletedRef => Result},
+            NewActiveRefs = lists:delete(CompletedRef, ActiveRefs),
+            case Remaining of
+                [] ->
+                    % No more items, just wait for remaining workers
+                    parallel_map_wait(NewActiveRefs, [], Fun, MaxWorkers, Parent, NewResultsMap);
+                _ ->
+                    % Spawn replacement worker
+                    [NextItemWithRef | NewRemaining] = Remaining,
+                    NextRef = spawn_worker(NextItemWithRef, Fun, Parent),
+                    parallel_map_wait([NextRef | NewActiveRefs], NewRemaining, Fun, MaxWorkers, Parent, NewResultsMap)
+            end
+    end.
+
+%% @doc Process a single transaction and return its contribution to the counters.
+%% Returns a map with keys: items_count, bundle_count, skipped_count
+process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
+    #{items_count => 0, bundle_count => 0, skipped_count => 0};
+process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
+    case is_bundle_tx(TX, Opts) of
+        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        true ->
+            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+            TXID = hb_util:encode(TX#tx.id),
+            TXEndOffset = BlockStartOffset + EndOffset,
+            TXStartOffset = TXEndOffset - TX#tx.data_size,
+            observe_event(<<"item_indexed">>, fun() ->
+                hb_store_arweave:write_offset(
+                    IndexStore,
+                    TXID,
+                    true,
+                    TXStartOffset,
+                    TX#tx.data_size
+                )
+            end),
+            BundleRes = download_bundle_header(
+                TXEndOffset, TX#tx.data_size, Opts
+            ),
+            case BundleRes of
+                {ok, {BundleIndex, HeaderSize}} ->
+                    % Batch event tracking: measure total time and count for all write_offset calls
+                    {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
+                        lists:foldl(
+                            fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                                hb_store_arweave:write_offset(
+                                    IndexStore,
+                                    hb_util:encode(ItemID),
+                                    false,
+                                    ItemStartOffset,
+                                    Size
+                                ),
+                                {ItemStartOffset + Size, ItemsCountAcc + 1}
+                            end,
+                            {TXStartOffset + HeaderSize, 0},
+                            BundleIndex
+                        )
+                    end),
+                    % Single event increment for the batch
+                    record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
+                    #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+                {error, Reason} ->
+                    ?event(
+                        copycat_short,
+                        {arweave_bundle_skipped,
+                            {tx_id, {explicit, TXID}},
+                            {reason, Reason}
+                        }
+                    ),
+                    #{items_count => 0, bundle_count => 1, skipped_count => 1}
+            end
+    end.
+
+%% @doc Process transactions: spawn workers and manage the worker pool.
+%% This function processes transactions in parallel using parallel_map.
+%% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
+%% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
+%% Returns {ItemsIndexed, BundleTXs, SkippedTXs}.
+process_txs(ValidTXs, BlockStartOffset, Opts) ->
+    Results = parallel_map(
+        ValidTXs,
+        fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, Opts) end,
+        Opts
+    ),
+    Aggregated = lists:foldl(
+        fun(Result, Acc) ->
+            #{
+                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
+                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
+                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
+            }
+        end,
+        #{items_count => 0, bundle_count => 0, skipped_count => 0},
+        Results
+    ),
+    {
+        maps:get(items_count, Aggregated, 0),
+        maps:get(bundle_count, Aggregated, 0),
+        maps:get(skipped_count, Aggregated, 0)
+    }.
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
@@ -215,16 +296,20 @@ header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
     ).
 
 resolve_tx_headers(TXIDs, Opts) ->
+    Results = parallel_map(
+        TXIDs,
+        fun(TXID) -> resolve_tx_header(TXID, Opts) end,
+        Opts
+    ),
     lists:foldr(
-        fun(TXID, {Acc, SkippedAcc}) ->
-            Res = resolve_tx_header(TXID, Opts),
+        fun(Res, {Acc, SkippedAcc}) ->
             case Res of
                 {ok, TX} -> {[TX | Acc], SkippedAcc};
                 skip -> {Acc, SkippedAcc + 1}
             end
         end,
         {[], 0},
-        TXIDs
+        Results
     ).
 
 resolve_tx_header(TXID, Opts) ->
@@ -271,12 +356,16 @@ resolve_tx_header(TXID, Opts) ->
             skip
     end.
 
+%% @doc Record event metrics (count and duration) using hb_event:increment.
+record_event_metrics(MetricName, Count, Duration) ->
+    hb_event:increment(<<"arweave_block_count">>, MetricName, #{}, Count),
+    hb_event:increment(<<"arweave_block_duration">>, MetricName, #{}, Duration).
+
 %% @doc Track an operation's execution time and count using hb_event:increment.
 %% Always tracks both count and duration, regardless of success/failure.
 observe_event(MetricName, Fun) ->
     {Time, Result} = timer:tc(Fun),
-    hb_event:increment(<<"arweave_block_count">>, MetricName, #{}, 1),
-    hb_event:increment(<<"arweave_block_duration">>, MetricName, #{}, Time),
+    record_event_metrics(MetricName, 1, Time),
     Result.
 
 %%% Tests
