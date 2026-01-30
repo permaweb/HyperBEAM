@@ -194,19 +194,24 @@ do_write_committed(ID, Message, Store, _Opts) ->
     ?event({wrote_committed_keys_to_cache, {id, ID}, {committed_keys, CommittedKeys}, {encoded_committed_keys, EncodedCommittedKeys}}).
 %%% Utilities
 with_only_committed(Message, Opts) ->
-    Committed = 
+    {Status, Committed} = 
         case maps:get(<<"committed">>, Message, not_found) of
-            not_found -> <<"l:">>;
-            {link, Link, LinkOpts} -> hb_util:ok(resolve(Link, LinkOpts));
-            Comm -> Comm
+            not_found -> {error, not_found};
+            {link, Link, LinkOpts} -> resolve(Link, LinkOpts);
+            Comm -> {ok, Comm}
         end,
-    CommittedKeys = untype(Committed),
-    maps:filter(
-        fun(Key, Value) ->
-            lists:member(Key, CommittedKeys)
-        end,
-        Message
-    ).
+    case Status of
+        ok ->
+            CommittedKeys = untype(Committed),
+            maps:filter(
+                fun(Key, Value) ->
+                    lists:member(Key, CommittedKeys)
+                end,
+                Message
+            );
+        error ->
+            Message
+    end.
 
 %% @doc Return the store value from the node options, scoped to the
 %% `DEFAULT_SCOPE'.
@@ -308,7 +313,7 @@ test_store_unsigned_empty_message(Store) ->
     Opts = #{ store => Store },
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
-    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
+    ?assert(dev_message_micro:match(Item, RetrievedItem, strict, Opts)).
 
 test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,
@@ -335,8 +340,7 @@ test_store_unsigned_nested_empty_message(Store) ->
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
     ?event(debug_test, {match, {item, Item}, {retrieved, RetrievedItem}}),
-    ?event(debug_test, {only_committed, with_only_committed(RetrievedItem, Opts)}),
-    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
+    ?assert(dev_message_micro:match(Item, RetrievedItem, strict, Opts)).
 
 test_store_simple_unsigned_message(Store) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
@@ -347,15 +351,14 @@ test_store_simple_unsigned_message(Store) ->
     %% Read the item back
     {ok, RetrievedItem} = read(Path, Opts),
     ?event(debug_test, {match, {item, Item}, {retrieved, RetrievedItem}}),
-    ?event(debug_test, {only_committed, with_only_committed(RetrievedItem, Opts)}),
-    ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
+    ?assert(dev_message_micro:match(Item, RetrievedItem, strict, Opts)).
 cache_suite_test_() ->
     hb_store:generate_test_suite([
-        % {"store unsigned empty message",
-        %     fun test_store_unsigned_empty_message/1},
-        % {"store binary", fun test_store_binary/1},
-        % {"store unsigned nested empty message",
-        %     fun test_store_unsigned_nested_empty_message/1},
+        {"store unsigned empty message",
+            fun test_store_unsigned_empty_message/1},
+        {"store binary", fun test_store_binary/1},
+        {"store unsigned nested empty message",
+            fun test_store_unsigned_nested_empty_message/1},
         {"store simple unsigned message", fun test_store_simple_unsigned_message/1}
     ]).
     
@@ -363,7 +366,7 @@ run_test() ->
     PreloadedStore = hb_test_utils:test_store(hb_store_preloaded),
     Store = hb_test_utils:test_store(hb_store_lmdb),
     ?event({test_stores, {preloaded, PreloadedStore}, {store, Store}}),
-    test_store_simple_unsigned_message([PreloadedStore, Store]).
+    test_store_unsigned_nested_empty_message([PreloadedStore, Store]).
     
 % Test statuses:
 
