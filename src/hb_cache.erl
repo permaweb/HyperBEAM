@@ -257,7 +257,7 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
             Opts
         ) end, native),
         UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
-        record_duration(Duration),
+        record_cache_write_message_duration(Duration),
         ?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, erlang:convert_time_unit(Duration, native, millisecond)}}),
         Result
     catch
@@ -500,49 +500,57 @@ store_read(_Target, _Path, [], SawFailure, _) ->
     end;
 store_read(Target, Path, Store, SawFailure, Opts) when is_map(Store) ->
     store_read(Target, Path, [Store], SawFailure, Opts);
-store_read(Target, Path, [Store | RemainingStores], SawFailure, Opts) ->
-    ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
-    ?event({reading,
-        {original_path, {string, PathBin}},
-        {fully_resolved_path, ResolvedFullPath},
-        {store, Store}
-    }),
-    StoreMod = hb_maps:get(<<"store-module">>, Store, unknown, #{}),
-    StoreLabel = iolist_to_binary([<<"store:">>, atom_to_binary(StoreMod, utf8)]),
-    ResolvedFullPathContent = hb_trace:span(StoreLabel, fun() ->
-      case hb_store:read_with_type(Store, ResolvedFullPath) of
-        failure -> failure;
-        not_found -> not_found;
-        {simple, Bin} ->
-            ?event({reading_data, ResolvedFullPath}),
-            {ok, Bin};
-        {composite, RawSubpaths} ->
-            ?event({reading_composite, ResolvedFullPath}),
-            Subpaths =
-                lists:map(fun hb_util:bin/1, RawSubpaths),
-            ?event(
-                {listed,
-                    {original_path, Path},
-                    {subpaths, {explicit, Subpaths}}
-                }
-            ),
-            Msg =
-                prepare_links(
-                    Target,
-                    ResolvedFullPath,
-                    Subpaths,
-                    Store,
-                    Opts
-                ),
-            ?event(
-                {completed_read,
-                    {resolved_path, ResolvedFullPath},
-                    {explicit, Msg}
-                }
-            ),
-            {ok, Msg}
-      end
-    end),
+store_read(Target, Path, [#{<<"store-module">> := StoreMod} = Store | RemainingStores], SawFailure, Opts) ->
+    %% TODO: Make store read parallel? (not a priority)
+    {Duration, ResolvedFullPathContent} = timer:tc(fun() -> 
+        ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
+        ?event({reading,
+            {original_path, {string, PathBin}},
+            {fully_resolved_path, ResolvedFullPath},
+            {store, StoreMod}
+        }),
+        StoreLabel = iolist_to_binary([<<"store:">>, atom_to_binary(StoreMod, utf8)]),
+        hb_trace:span(StoreLabel, fun() ->
+            case hb_store:read_with_type(Store, ResolvedFullPath) of
+                failure -> failure;
+                not_found -> not_found;
+                {simple, Bin} ->
+                    ?event({reading_data, ResolvedFullPath}),
+                    {ok, Bin};
+                {composite, RawSubpaths} ->
+                    ?event({reading_composite, ResolvedFullPath}),
+                    Subpaths =
+                        lists:map(fun hb_util:bin/1, RawSubpaths),
+                    ?event(
+                        {listed,
+                            {original_path, Path},
+                            {subpaths, {explicit, Subpaths}}
+                        }
+                    ),
+                    Msg =
+                        prepare_links(
+                            Target,
+                            ResolvedFullPath,
+                            Subpaths,
+                            Store,
+                            Opts
+                        ),
+                    ?event(
+                        {completed_read,
+                            {resolved_path, ResolvedFullPath},
+                            {explicit, Msg}
+                        }
+                    ),
+                    {ok, Msg}
+            end
+        end)
+    end, native),
+    ?event(cache, 
+        {store_read, 
+            {path, Path}, 
+            {store_module, StoreMod},
+            {duration, erlang:convert_time_unit(Duration, native, millisecond)}}),
+    record_store_read_duration(Duration, StoreMod),
     case ResolvedFullPathContent of
         {ok, _} = Response -> Response;
         failure ->
@@ -810,15 +818,25 @@ link(Existing, New, Opts) ->
         Existing,
         New
     ).
-record_duration(Duration) ->
+record_cache_write_message_duration(Duration) ->
+    record_duration(cache_write_message_duration_seconds, Duration).
+
+record_store_read_duration(Duration, StoreModule) ->
+    record_duration(cache_store_read_duration_seconds, Duration, [StoreModule]).
+
+record_duration(Name, Duration) ->
+    record_duration(Name, Duration, []).
+
+record_duration(Name, Duration, Labels) ->
     spawn(
         fun() ->
-                init_prometheus(),
+            init_prometheus(),
             case application:get_application(prometheus) of
                 undefined -> ok;
                 _ ->
                     prometheus_histogram:observe(
-                        cache_write_message_duration_seconds,
+                        Name,
+                        Labels,
                         Duration
                     )
             end,
@@ -836,7 +854,17 @@ init_prometheus() ->
 			help,
 			"The total duration of hb_cache:write_message."
 		}
+	]),
+    prometheus_histogram:declare([
+		{name, cache_store_read_duration_seconds},
+        {labels, [store_module]},
+		{buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
+		{
+			help,
+			"The total duration of hb_cache:store_read."
+		}
 	]).
+
 
 %%% Tests
 
