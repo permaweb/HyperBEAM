@@ -30,7 +30,7 @@
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
--define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(DEFAULT_SIZE, 2 * 1024 * 1024 * 1024 * 1024). % 16GB default database size
 -define(CONNECT_TIMEOUT, 6000).                 % Timeout for server communication
 -define(DEFAULT_IDLE_FLUSH_TIME, 5).            % Idle server time before auto-flush
 -define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
