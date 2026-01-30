@@ -46,6 +46,47 @@ vary(Device, Key, Base, Request, Opts) ->
 %% missing.
 apply_schema(Schema, MessageID, Opts) ->
     apply_schema(Schema, MessageID, Opts, MessageID).
+apply_schema(Schema, Message, Opts, PathRef) when is_map(Message) ->
+    %%% TODO: This should be hb_ao_micro:get(<<"id">>, Message, Opts)
+    %%% once implemented
+    {ok, MessageID} = hb_cache_micro:write(Message, Opts),
+    apply_schema(Schema, MessageID, Opts, PathRef);
+apply_schema(any, MessageID, Opts, PathRef) ->
+    ?event(debug_types, {applying_any_schema, {message_id, {explicit, MessageID}}}),
+    Message = 
+        hb_cache_micro:with_only_committed(
+            hb_util:ok(hb_cache_micro:read(MessageID, Opts)),
+            Opts
+        ),
+    ?event(debug_types, {applying_any_message, {message, Message}}),
+    hb_maps:filtermap(
+        fun(Key, _) ->
+            CacheKey = <<MessageID/binary, "/", Key/binary>>,
+            ?event(debug_types, {cache_read, {cache_key, CacheKey}}),
+            case hb_ao_micro:resolve(CacheKey, Opts) of
+                {ok, Value} when is_map(Value) ->
+                    ?event(
+                        debug_types,
+                        {applying_schema_to_nested_message, {value, Value}},
+                        Opts
+                    ),
+                    {
+                        true,
+                        apply_schema(
+                            any,
+                            Value,
+                            Opts,
+                            <<PathRef/binary, "/", Key/binary>>
+                        )
+                    };
+                {ok, Value} ->
+                    ?event(debug_types, {found_value, {value, Value}}),
+                    {true, Value}
+            end
+        end,
+        Message,
+        Opts
+    );
 apply_schema(Schema, MessageID, Opts, PathRef) ->
     ?event(debug_types, {applying_schema, {schema, Schema}, {message_id, MessageID}, {ref, PathRef}}),
     hb_maps:filtermap(
@@ -85,9 +126,9 @@ apply_schema(Schema, MessageID, Opts, PathRef) ->
                                 }
                             )
                     end;
-                not_found when IsRequired == optional ->
+                {error, not_found} when IsRequired == optional ->
                     false;
-                not_found when IsRequired == required ->
+                {error, not_found} when IsRequired == required ->
                     throw(
                         {
                             required_key_missing, 
@@ -187,6 +228,16 @@ check_type(any, _) -> true;
 check_type(_, _) -> false.
 
 %%% Tests
+test_opts() ->
+    application:ensure_all_started(hb),
+    #{
+        store => 
+            [
+                hb_test_utils:test_store(hb_store_lmdb), 
+                hb_test_utils:test_store(hb_store_preloaded)
+            ],
+        priv_wallet => hb:wallet()
+    }.
 
 extract_test() ->
     Res = extract(<<"test-device@1.0">>, #{}),
@@ -196,54 +247,86 @@ extract_test() ->
         Res
     ).
 successful_vary_test() ->
-    Base = #{},
-    Req = #{ <<"slot">> => 1 },
-    Opts = #{},
-    Res = vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts),
-    ?event({vary_result, Res}).
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{ <<"unused">> => 1 }, Opts),
+    {ok, ReqID} = hb_cache_micro:write(#{ <<"slot">> => 1 }, Opts),
+    {ok, VariedBase, VariedReq} =
+        vary(<<"test-device@1.0">>, <<"compute">>, BaseID, ReqID, Opts),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq),
+    ?event(debug_types, {vary_result, {varied_base, {explicit, VariedBase}}, {varied_req, {explicit, VariedReq}}}).
 
 vary_throw_required_key_missing_test() ->
-    Base = #{},
-    Req = #{},
-    Opts = #{},
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{}, Opts),
+    {ok, ReqID} = hb_cache_micro:write(#{}, Opts),
+    ExpectedErrorPath = <<BaseID/binary, "/slot">>,
     ?assertThrow(
-        {required_key_missing, <<"slot">>},
-        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+        {required_key_missing, ExpectedErrorPath},
+        vary(<<"test-device@1.0">>, <<"compute">>, BaseID, ReqID, Opts)
     ).
 vary_throw_required_key_wrong_type_test() ->
-    Base = #{},
-    Req = #{ <<"slot">> => <<"1">> },
-    Opts = #{},
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{}, Opts),
+    {ok, ReqID} = hb_cache_micro:write(#{ <<"slot">> => <<"1">> }, Opts),
+    ExpectedErrorPath = <<ReqID/binary, "/slot">>,
     ?assertThrow(
-        {invalid_type, <<"slot">>, <<"1">>},
-        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+        {
+            invalid_type,
+                {key, ExpectedErrorPath},
+                {value, <<"1">>},
+                {expected_type, integer}
+        },
+        vary(<<"test-device@1.0">>, <<"compute">>, BaseID, ReqID, Opts)
     ).
 
 vary_throw_optional_key_wrong_type_test() ->
-    Base = #{ <<"already-seen">> => false },
-    Req = #{ <<"slot">> => 1 },
-    Opts = #{},
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{ <<"already-seen">> => false }, Opts),
+    {ok, ReqID} = hb_cache_micro:write(#{ <<"slot">> => 1 }, Opts),
+    ExpectedErrorPath = <<BaseID/binary, "/already-seen">>,
     ?assertThrow(
-        {invalid_type, <<"already-seen">>, false},
-        vary(<<"test-device@1.0">>, <<"compute">>, Base, Req, Opts)
+        {
+            invalid_type,
+                {key, ExpectedErrorPath},
+                {value, false},
+                {expected_type, []}
+        },
+        vary(<<"test-device@1.0">>, <<"compute">>, BaseID, ReqID, Opts)
     ).
 
 successful_nested_vary_test() ->
-    Base = #{},
-    Req = #{ <<"outer">> => #{ <<"slot">> => 1, <<"unused">> => #{ <<"unused-key">> => <<"unused-value">> }}},
-    Opts = #{},
-    {ok, BaseID} = hb_cache:write(Base, #{}),
-    {ok, ReqID} = hb_cache:write(Req, #{}),
-    Res =
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{}, Opts),
+    {ok, ReqID} = 
+        hb_cache_micro:write(
+            #{ 
+                <<"outer">> => 
+                    #{ 
+                        <<"slot">> => 1, 
+                        <<"unused">> => 
+                            #{ <<"unused-key">> => <<"unused-value">> }
+                    }
+            },
+            Opts
+        ),
+    {ok, VariedBase, VariedReq} =
         vary(<<"test-device@1.0">>, <<"compute_nested">>, BaseID, ReqID, Opts),
-    ?event({vary_result, Res}).
+    ?event(debug_types, {vary_result, {varied_base, VariedBase}, {varied_req, VariedReq}}),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(
+        #{ <<"outer">> => #{ <<"slot">> => 1 }},
+        VariedReq
+    ).
 
 vary_throw_nested_key_missing_test() ->
-    Base = #{},
-    Req = #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
-    Opts = #{},
-    {ok, BaseID} = hb_cache:write(Base, #{}),
-    {ok, ReqID} = hb_cache:write(Req, #{}),
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{}, Opts),
+    {ok, ReqID} = 
+        hb_cache_micro:write(
+            #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
+            Opts
+        ),
     ExpectedErrorPath = <<ReqID/binary, "/outer/slot">>,
     ?assertThrow(
         {required_key_missing, ExpectedErrorPath},
@@ -251,11 +334,13 @@ vary_throw_nested_key_missing_test() ->
     ).
 
 vary_throw_nested_key_wrong_type_test() ->
-    Base = #{},
-    Req = #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
-    Opts = #{},
-    {ok, BaseID} = hb_cache:write(Base, #{}),
-    {ok, ReqID} = hb_cache:write(Req, #{}),
+    Opts = test_opts(),
+    {ok, BaseID} = hb_cache_micro:write(#{}, Opts),
+    {ok, ReqID} = 
+        hb_cache_micro:write(
+            #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
+            Opts
+        ),
     ExpectedErrorPath = <<ReqID/binary, "/outer/slot">>,
     ?assertThrow(
         {invalid_type, 
@@ -265,3 +350,42 @@ vary_throw_nested_key_wrong_type_test() ->
         },
         vary(<<"test-device@1.0">>, <<"compute_nested">>, BaseID, ReqID, Opts)
     ).
+
+vary_on_all_test() -> 
+    Opts = test_opts(),
+    {ok, BaseID} = 
+        hb_cache_micro:write(
+            #{ <<"a">> => 1, <<"b">> => 2 },
+            Opts
+        ),
+    {ok, ReqID} = hb_cache_micro:write(#{ <<"slot">> => 1 }, Opts),
+    {ok, VariedBase, VariedReq} =
+        vary(<<"test-device@1.0">>, <<"compute_all">>, BaseID, ReqID, Opts),
+    ?event(debug_types, {vary_result, {varied_base, VariedBase}, {varied_req, VariedReq}}),
+    ?assertEqual(#{ <<"a">> => 1, <<"b">> => 2 }, VariedBase),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
+
+vary_on_all_nested_test() -> 
+    Opts = test_opts(),
+    {ok, BaseID} = 
+        hb_cache_micro:write(
+            #{ 
+                <<"a">> => 1, 
+                <<"b">> => 2, 
+                <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 } 
+            },
+            Opts
+        ),
+    {ok, ReqID} = hb_cache_micro:write(#{ <<"slot">> => 1 }, Opts),
+    {ok, VariedBase, VariedReq} =
+        vary(<<"test-device@1.0">>, <<"compute_all">>, BaseID, ReqID, Opts),
+    ?event(debug_types, {vary_result, {varied_base, VariedBase}, {varied_req, VariedReq}}),
+    ?assertEqual(
+        #{ 
+            <<"a">> => 1, 
+            <<"b">> => 2, 
+            <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 } 
+        },
+        VariedBase
+    ),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
