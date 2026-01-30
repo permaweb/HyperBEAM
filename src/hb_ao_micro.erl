@@ -265,8 +265,13 @@ stage_9(_BaseID, Result, Opts) ->
 %%% AO-Core 1.5 micro-tests.
 
 opts() ->
+    application:ensure_all_started(hb),
     #{
-        store => [hb_test_utils:test_store(hb_store_lmdb), hd(tl(hb_opts:get(store)))]
+        store => 
+            [
+                hb_test_utils:test_store(hb_store_preloaded), 
+                hb_test_utils:test_store(hb_store_lmdb)
+            ]
     }.
 
 lookup_test() ->
@@ -324,23 +329,27 @@ device_key_resolution_test() ->
     ).
 
 varied_result_test() ->
-    ResolveResult = 
-        resolve(
-            #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },
-            <<"varied">>,
-            opts()
-        ),
-    {ok, ExpectedBaseId} = 
+    Opts = opts(),
+    {ok, BaseID} = 
         hb_cache_micro:write(
             #{ <<"x">> => 1, <<"device">> => <<"test-device@1.0">> },    
-            opts()
+            Opts
         ),
+    ?event(debug_test, {base_id, BaseID}),
+    ResolveResult = 
+        resolve(
+            BaseID,
+            <<"varied">>,
+            Opts
+        ),
+    
+    ?event(debug_test, {resolve_result, ResolveResult}),
     ?assertEqual(
         {
             ok,
             #{ 
                 <<"x">> => 2, 
-                <<"...">> => ExpectedBaseId
+                <<"...">> => BaseID
             }
         },
         ResolveResult  
