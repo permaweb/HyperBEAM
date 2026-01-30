@@ -167,7 +167,8 @@ validate_config(Opts) ->
 test_bucket_access(Bucket, Config) ->
     BucketStr = hb_util:list(Bucket),
     try erlcloud_s3:head_bucket(BucketStr, Config) of
-        Response when is_list(Response) -> ok
+        Response when is_list(Response) -> 
+            ok
     catch
         Class:Reason:Stacktrace ->
             case Reason of
@@ -312,6 +313,7 @@ read(Opts, Key, ReturnGroup) ->
     end.
 
 read_with_links(Opts, Path) ->
+    %% TODO: Paralelize the two calls.
     case read_direct(Opts, Path) of
         {ok, Value} ->
             % Check if this value is actually a link to another key
@@ -488,7 +490,7 @@ is_link(Value) ->
 -spec make_group(opts(), key()) -> ok.
 make_group(Opts, Path) ->
     GroupKey = create_make_group_key(Path),
-    delete_object(Opts, Path),
+    %delete_object(Opts, Path),
     write(Opts, GroupKey, <<>>).
 
 create_make_group_key(Path) ->
@@ -619,6 +621,7 @@ type(Opts, Key) ->
 read_with_type(Opts, Key) when is_list(Key) ->
     read_with_type(Opts, hb_store:join(Key));
 read_with_type(Opts, Key) ->
+    ?event(store_s3, {read_with_type, {key, Key}}),
     case read(Opts, Key, true) of
         {ok, Value} -> {simple, Value};
         group ->
