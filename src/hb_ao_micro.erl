@@ -54,13 +54,23 @@ stage_1(Base, Req, Opts) ->
 %% the device).
 stage_2(Base, ReqID, Opts) ->
     case value_or_device(Base, ReqID, Opts) of
-        {value, Result} ->
+        {value, {link, LinkID, LinkOpts}} ->
             ?event(
                 ao_core,
-                {cache_hit, {base, Base}, {req, ReqID}, {result, Result}},
+                {cache_hit, {base, Base}, {req, ReqID}, {result, {link, LinkID, LinkOpts}}},
                 Opts
             ),
+            hb_cache_micro:read(LinkID, Opts);
+        {value, Result} ->
             {ok, Result};
+        {device, {link, LinkID, LinkOpts}} ->
+            ?event(
+                ao_core,
+                {device_found_link, {base, Base}, {device, {link, LinkID}}},
+                Opts
+            ),
+            {ok, Device} = hb_cache_micro:read(LinkID, Opts),
+            stage_3(Base, ReqID, Device, Opts);
         {device, Device} ->
             ?event(
                 ao_core,
@@ -117,7 +127,11 @@ value_or_device_from_message(LoadedBase, Req, Opts) ->
 %% `ReqID'. The default device is `message@1.0', and absence of a `path' results
 %% in a `throw'.
 stage_3(Base, ReqID, DeviceID, Opts) when ?IS_ID(ReqID) ->
-    case hb_cache_micro:read(<<ReqID/binary, "/path">>, Opts) of
+    PathRead = hb_cache_micro:read(<<ReqID/binary, "/path">>, Opts),
+    case PathRead of
+        {ok, {link, LinkID, LinkOpts}} -> 
+            {ok, Key} = hb_cache_micro:read(LinkID, Opts),
+            stage_4(Base, ReqID, DeviceID, Key, Opts);
         {ok, Key} -> stage_4(Base, ReqID, DeviceID, Key, Opts);
         not_found -> throw({no_path_in_request, {base, Base}, {req, ReqID}})
     end;
