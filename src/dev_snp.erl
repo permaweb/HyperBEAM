@@ -216,9 +216,22 @@ extract_and_normalize_message(M2, NodeOpts) ->
                 )
             ),
         ?event({msg_with_json_report, {explicit, MsgWithJSONReport}}),
-        % Normalize the request message
-        ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
-        Report = hb_json:decode(ReportJSON),
+        % Normalize the request message. First try to get the report from the
+        % committed message. If not found (e.g., message not signed), fall back
+        % to the raw message.
+        ReportJSON = case hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts) of
+            not_found ->
+                ?event({report_not_in_committed, falling_back_to_raw}),
+                hb_ao:get(<<"report">>, RawMsg, NodeOpts);
+            Found -> Found
+        end,
+        {ok, ValidReportJSON} ?= case ReportJSON of
+            not_found -> 
+                ?event({report_not_found, {m2, M2}, {raw_msg, RawMsg}}),
+                {error, {report_not_found, <<"No 'report' key found in message">>}};
+            _ -> {ok, ReportJSON}
+        end,
+        Report = hb_json:decode(ValidReportJSON),
         Msg =
             maps:merge(
                 maps:without([<<"report">>], MsgWithJSONReport),
