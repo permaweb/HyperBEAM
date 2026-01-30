@@ -14,6 +14,10 @@ services:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
+    ulimits:
+      nofile:
+        soft: "1048576"
+        hard: "1048576"
 
   mc:
     image: quay.io/minio/minio
