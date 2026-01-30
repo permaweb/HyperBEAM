@@ -7,6 +7,7 @@
 %%% ID -> << TypeCharacter, ":", BinaryMatchingID >>.
 -module(hb_cache_micro).
 -export([resolve/2, read/2, write/2, link/3]).
+-export([with_only_committed/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
