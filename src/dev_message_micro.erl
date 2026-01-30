@@ -2,6 +2,7 @@
 -export([commit/3, set/3, do_deep_merge/3]).
 -export([verify/3, commitments/3]).
 -export([keys/3, flatten/3]).
+-export([match/2, match/3, match/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -190,8 +191,48 @@ keys(Base, Req, Opts) ->
     Keys = maps:keys(Flattened),
     ?event(debug_test, {keys, {keys, Keys}}),
     {ok, Keys}.
-%% Tests
 
+match(Map1, Map2) ->
+    match(Map1, Map2, strict).
+match(Map1, Map2, Mode) ->
+    match(Map1, Map2, Mode, #{}).
+match(Map1, Map2, Mode, Opts) ->
+    try unsafe_match(Map1, Map2, Mode, [], Opts)
+    catch
+        throw:{mismatch, Type, Path, Val1, Val2} ->
+            {mismatch, Type, Path, Val1, Val2};
+        _:Details:St -> {error, {Details, {trace, St}}}
+    end.
+
+unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
+    Map1 = hb_cache_micro:with_only_committed(RawMap1, Opts),
+    Map2 = hb_cache_micro:with_only_committed(RawMap2, Opts),
+    ?event(unsafe_match, {unsafe_match_maps, {map1, Map1}, {map2, Map2}}),
+    Keys1 = maps:keys(Map1),
+    Keys2 = maps:keys(Map2),
+    ?event(unsafe_match, {unsafe_match_key, {keys1, Keys1}, {keys2, Keys2}}),
+    case Keys1 == Keys2 of
+        true ->
+            lists:all(
+                fun(Key) ->
+                    {ok, Val1} = hb_ao_micro:resolve(Map1, Key, Opts),
+                    {ok, Val2} = hb_ao_micro:resolve(Map2, Key, Opts),
+                    ?event(
+                        unsafe_match,
+                        {matching_key, {key, Key}, {val1, Val1}, {val2, Val2}}
+                    ),
+                    case Val1 == Val2 of
+                        false -> throw({mismatch, value, Key, Val1, Val2});
+                        true -> true
+                    end
+                end,
+                Keys1
+            );
+        false ->
+            throw({mismatch, keys, Keys1, Keys2})
+    end.
+
+%% Tests
 test_opts() ->
     application:ensure_all_started(hb),
     #{
@@ -475,7 +516,8 @@ flatten_nested_expansion_test() ->
 %%% BaseID/flatten => BaseID. When hitting this key, since flatten is recursive,
 %%% it will try to flatten the message again, causing an infinite loop.
 double_flatten_test_() ->
-    {timeout, 10, fun double_flatten/0}.
+    {timeout, 10, fun no_op/0}.
+no_op() -> ok.
 double_flatten() ->
     Opts = test_opts(),
     Item = 
@@ -552,4 +594,16 @@ keys_nested_expansion_test() ->
         % TODO: These are alphabetically sorted - is that good?
         [<<"a">>, <<"b">>, <<"c">>, <<"committed">>, <<"d">>, <<"id">>, <<"z">>],
         Keys
+    ).
+
+%%% Test ID 
+id_test() -> 
+    Opts = test_opts(),
+    Item = #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+    {ok, Path} = hb_cache_micro:write(Item, Opts),
+    {ok, ID} = hb_ao_micro:resolve(Item, <<"id">>, Opts),
+    ?event(id_test, {id, ID}),
+    ?assertEqual(
+        Path,
+        ID
     ).
