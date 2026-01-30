@@ -7,7 +7,6 @@
 -export([arweave/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("public_key/include/OTP-PUB-KEY.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9-pre">>).
 
@@ -49,7 +48,13 @@ fetch_blocks(Req, Current, To, _Opts) when Current < To ->
     ),
     {ok, To};
 fetch_blocks(Req, Current, To, Opts) ->
-    BlockRes = observe_event(<<"block">>, fun() ->
+    observe_event(<<"block_indexed">>, fun() ->
+        fetch_and_process_block(Current, To, Opts)
+    end),
+    fetch_blocks(Req, Current - 1, To, Opts).
+
+fetch_and_process_block(Current, To, Opts) ->
+    BlockRes = observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
             <<
                 ?ARWEAVE_DEVICE/binary,
@@ -59,11 +64,10 @@ fetch_blocks(Req, Current, To, Opts) ->
             Opts
         )
     end),
-    process_block(BlockRes, Req, Current, To, Opts),
-    fetch_blocks(Req, Current - 1, To, Opts).
+    process_block(BlockRes, Current, To, Opts).
 
 %% @doc Process a block.
-process_block(BlockRes, _Req, Current, To, Opts) ->
+process_block(BlockRes, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
             {ItemsIndexed, TotalTXs, BundleTXs, SkippedTXs} = maybe_index_ids(Block, Opts),
