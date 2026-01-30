@@ -61,8 +61,17 @@
 verify(M1, M2, NodeOpts) ->
     ?event(snp_verify, verify_called),
     maybe
+        % In pipeline flows (e.g., /~relay@1.0/call/verify~snp@1.0), the report
+        % comes from M1 (result of previous stage). For direct calls, it may be
+        % in M2. Try M1 first, then fall back to M2.
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}} 
-            ?= extract_and_normalize_message(M2, NodeOpts),
+            ?= case extract_and_normalize_message(M1, NodeOpts) of
+                {ok, Result} -> {ok, Result};
+                {error, {report_not_found, _}} ->
+                    ?event(snp_verify, {report_not_in_m1_trying_m2}),
+                    extract_and_normalize_message(M2, NodeOpts);
+                {error, ExtractReason} -> {error, ExtractReason}
+            end,
         % Perform all validation steps
         {ok, NonceResult} ?= verify_nonce(Address, NodeMsgID, Msg, NodeOpts),
         {ok, SigResult} ?= 
