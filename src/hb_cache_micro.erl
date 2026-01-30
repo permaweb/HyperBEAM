@@ -75,8 +75,9 @@ read(ID, Opts) when ?IS_ID(ID) ->
             end
     end;
 read(Path, Opts) when is_binary(Path) ->
+    ?event({doing_path_read, {path, Path}}),
     case resolve(Path, Opts) of
-        {ok, Resolved} -> read(Resolved, Opts);
+        {ok, Resolved} -> {ok, Resolved};
         not_found -> not_found
     end;
 read(LoadedMessage, Opts) when is_map(LoadedMessage) ->
