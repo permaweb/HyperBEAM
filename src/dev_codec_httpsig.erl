@@ -125,7 +125,6 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         {generating_rsa_pss_sha512_commitment, {msg, MsgToSign}, {req, Req}}
     ),
     Opts = opts(RawOpts),
-    ensure_unique_committed_req(Req),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     if Wallet =:= no_viable_wallet ->
         throw({cannot_commit, no_viable_wallet, MsgToSign});
@@ -190,7 +189,6 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),
-    ensure_unique_committed_req(Req),
     ?event({req_to_key_material, {req, Req}}),
     {ok, Scheme, Key, KeyID} = dev_codec_httpsig_keyid:req_to_key_material(Req, Opts),
     Committer = dev_codec_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
@@ -324,6 +322,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             maps:get(<<"committed">>, Commitment, []),
             Opts
         ),
+    ensure_unique_components(RawInputs),
     % Normalize the keys to their maybe-linked form, adding `+link` if necessary.
     Inputs =
         lists:map(
@@ -483,15 +482,6 @@ ensure_unique_components(Components) ->
     case length(Components) =:= length(lists:usort(Components)) of
         true -> ok;
         false -> throw({duplicate_signature_component, Components})
-    end.
-
-ensure_unique_committed_req(Req) ->
-    case maps:get(<<"committed">>, Req, undefined) of
-        undefined -> ok;
-        Explicit ->
-            ensure_unique_components(
-                hb_util:message_to_ordered_list(Explicit, #{})
-            )
     end.
 
 %% @doc construct the "signature-params-line" part of the signature base.
@@ -684,5 +674,20 @@ duplicate_signature_component_test() ->
                 <<"committed">> => [<<"normal">>, <<"normal">>]
             },
             Opts
+        ),
+    ?assertMatch({duplicate_signature_component, _}, Res).
+
+%% @doc Ensure duplicate committed components error during verify path.
+duplicate_signature_component_verify_test() ->
+    Base = #{ <<"normal">> => <<"typical-value">> },
+    Res =
+        catch dev_codec_httpsig:verify(
+            Base,
+            #{
+                <<"type">> => <<"rsa-pss-sha512">>,
+                <<"signature">> => <<"dummy">>,
+                <<"committed">> => [<<"normal">>, <<"normal">>]
+            },
+            #{}
         ),
     ?assertMatch({duplicate_signature_component, _}, Res).
