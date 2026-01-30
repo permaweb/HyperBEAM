@@ -450,8 +450,8 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"undelegate">> }, New
     UndelegatorDepositOK andalso RecipientDepositOK orelse
     {error,
         {bad_undelegate_math,
-            {address, FromAddr},
-            {from, ToAddr},
+            {address, ToAddr},
+            {from, FromAddr},
             {old_undelegator_deposit, OldDepositUndelegator},
             {new_undelegator_deposit, NewDepositUndelegator},
             {old_recipient_deposit, OldDepositRecipient},
