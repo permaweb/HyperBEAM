@@ -35,11 +35,13 @@
 %% Additionally, we exclude the `keys', `set', `encode' and `decode' functions
 %% which are `message@1.0' core functions, and Lua public utility functions.
 info(Base) ->
+    #{ keys := MessageKeys } = dev_message:info(),
     #{
         default => fun compute/4,
         excludes =>
-            [<<"keys">>, <<"set">>, <<"encode">>, <<"decode">>]
-                ++ maps:keys(Base)
+            MessageKeys ++
+                [<<"encode">>, <<"decode">>] ++
+                maps:keys(Base)
     }.
 
 %% @doc Initialize the device state, loading the script into memory if it is 
@@ -156,6 +158,14 @@ initialize(Base, Modules, Opts) ->
     State1 =
         lists:foldl(
             fun({ModuleID, ModuleBin}, StateIn) ->
+                ?event(
+                    debug_lua,
+                    {loading_module,
+                        {module_id, ModuleID},
+                        {module_bin, ModuleBin}
+                    },
+                    Opts
+                ),
                 {ok, _, StateOut} =
                     luerl:do_dec(
                         ModuleBin,

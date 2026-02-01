@@ -33,7 +33,8 @@
 %% @doc Return the info for the identity device.
 info() ->
     #{
-        default => fun dev_message:get/4
+        default => fun dev_message:get/4,
+        keys => ?DEVICE_KEYS
     }.
 
 %% @doc Generate an index page for a message, in the event that the `body' and
