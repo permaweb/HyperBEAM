@@ -7,6 +7,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% Utility macro to check if a binary is a Lua script content-type.
+-define(IS_LUA_TYPE(CT), CT == <<"application/lua">> orelse CT == <<"text/x-lua">>).
+
 %%% The set of functions that will be sandboxed by default if `sandbox' is set 
 %%% to only `true'. Setting `sandbox' to a map allows the invoker to specify
 %%% which functions should be sandboxed and what to return instead. Providing
@@ -67,27 +70,53 @@ ensure_initialized(Base, _Req, Opts) ->
             end
     end.
 
-%% @doc Find the script in the base message, either by ID or by string.
+%% @doc Find the script(s) specified in the base message. If the `content-type'
+%% key is set to `application/lua' or `text/x-lua', we assume that the `body' key
+%% contains a Lua script. Additionally, if a `module' key may be present with
+%% the following forms:
+%% 1. A binary ID of a Lua module.
+%% 2. A list of binary IDs of Lua modules.
+%% 3. A message containing a series of named Lua modules.
 find_modules(Base, Opts) ->
-    case hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts) of
-        not_found ->
-            {error, <<"no-modules-found">>};
-        Module when is_binary(Module) ->
+    MaybeBodyMod =
+        case hb_ao:get(<<"content-type">>, {as, <<"message@1.0">>, Base}, Opts) of
+            CT when ?IS_LUA_TYPE(CT) -> [Base];
+            _ -> []
+        end,
+    ?event(
+        debug_lua,
+        {finding_modules, {base, Base}, {body_mod, MaybeBodyMod}},
+        Opts
+    ),
+    case {hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts), MaybeBodyMod} of
+        {not_found, []} ->
+            {error, <<"No Lua modules found when preparing environment for call.">>};
+        {not_found, _} ->
+            load_modules(MaybeBodyMod, Opts);
+        {Module, _} when is_binary(Module)->
             find_modules(Base#{ <<"module">> => [Module] }, Opts);
-        Module when is_map(Module) ->
+        {Module, _} when is_map(Module) ->
             % If the module is a map, check its content type to see if it is 
             % a literal Lua module, or a map of modules with content types.
             case hb_ao:get(<<"content-type">>, Module, Opts) of
-                CT when CT == <<"application/lua">> orelse CT == <<"text/x-lua">> ->
-                    find_modules(Base#{ <<"module">> => [Module] }, Opts);
+                LuaCT when ?IS_LUA_TYPE(LuaCT) ->
+                    find_modules(
+                        Base#{ <<"module">> => [Module] },
+                        Opts
+                    );
                 _ ->
-                    % If the script is not a literal Lua script, assume it is a
-                    % map of scripts with content types, and recurse.
-                    find_modules(Base#{ <<"module">> => maps:values(Module) }, Opts)
+                    % If the script is not a literal Lua script binary, assume
+                    % it is a map of scripts with content types, and recurse.
+                    find_modules(
+                        Base#{
+                            <<"module">> => maps:values(Module)
+                        },
+                        Opts
+                    )
             end;
-        Modules when is_list(Modules) ->
+        {Modules, _} when is_list(Modules) ->
             % We have found a list of scripts, load them.
-            load_modules(Modules, Opts)
+            load_modules(MaybeBodyMod ++ Modules, Opts)
     end.
 
 %% @doc Load a list of modules for installation into the Lua VM.
@@ -110,7 +139,7 @@ load_modules([ModuleID | Rest], Opts, Acc) when ?IS_ID(ModuleID) ->
                 <<"body">> => <<"Lua module '", ModuleID/binary, "' not found.">>
             }}
     end;
-load_modules([Module | Rest], Opts, Acc) when is_map(Module) ->
+load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
     % We have found a message with a Lua module inside. Search for the binary
     % of the program in the body and the data.
     ModuleBin =
@@ -138,17 +167,13 @@ load_modules([Module | Rest], Opts, Acc) when is_map(Module) ->
         ModuleBin ->
             % Get the `name' key from the script message if it exists, or 
             % return the module ID as the module name.
-            Name =
-                hb_ao:get_first(
-                    [
-                        {Module, <<"name">>},
-                        {Module, <<"id">>}
-                    ],
-                    Module,
-                    Opts
-                ),
+            ModuleRef =
+                case hb_maps:find(<<"name">>, Module, Opts) of
+                    {ok, Name} -> Name;
+                    error -> hb_message:id(Module, all, Opts)
+                end,
             % Load the module into the Lua state.
-            load_modules(Rest, Opts, [{Name, ModuleBin}|Acc])
+            load_modules(Rest, Opts, [{ModuleRef, ModuleBin}|Acc])
     end.
 
 %% @doc Initialize a new Lua state with a given base message and module.
