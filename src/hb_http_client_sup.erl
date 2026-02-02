@@ -16,4 +16,7 @@ start_link(Opts) ->
 	supervisor:start_link({local, ?MODULE}, ?MODULE, Opts).
 
 init(Opts) ->
-	{ok, {{one_for_one, 5, 10}, [?CHILD(hb_http_client, worker, Opts)]}}.
+	{ok, {{one_for_one, 5, 10}, [
+		?CHILD(hb_http_client, worker, Opts),
+		?CHILD(hb_http_conn_monitor, worker, Opts)
+	]}}.

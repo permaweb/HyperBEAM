@@ -372,7 +372,6 @@ init(Opts) ->
             try
                 application:ensure_all_started([prometheus, prometheus_cowboy]),
                 init_prometheus(),
-                erlang:send_after(5000, self(), conn_mailbox_monitoring),
 	            {ok, #state{ opts = Opts }}
             catch
                 Type:Reason:Stack ->
@@ -461,11 +460,6 @@ init_prometheus() ->
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
-    prometheus_gauge:new([
-        {name, gun_mailbox_size},
-        {labels, [conn_id]},
-		{help, "Gun connection mailbox size"}
-    ]),
     ?event(started),
     ok.
 
@@ -512,12 +506,13 @@ handle_cast(Cast, State) ->
 	?event(warning, {unhandled_cast, {module, ?MODULE}, {cast, Cast}}),
 	{noreply, State}.
 
-handle_info({gun_up, PID, _Protocol}, State) ->
+handle_info({gun_up, PID, Protocol}, State) ->
 	case ets:lookup(?CONN_STATUS_ETS, PID) of
 		[] ->
 			%% A connection timeout should have occurred.
 			{noreply, State};
 		[{PID, {connecting, PendingRequests}, MonitorRef, ConnKey}] ->
+            ?event({gun_up, {protocol, Protocol}, {conn_key, ConnKey}}),
 			[gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
 			ets:insert(?CONN_STATUS_ETS, {PID, connected, MonitorRef, ConnKey}),
 			inc_prometheus_gauge(outbound_connections),
@@ -601,21 +596,6 @@ handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
 			{noreply, State}
 	end;
 
-handle_info(conn_mailbox_monitoring, State) ->
-    spawn(fun() ->
-        ets:foldl(
-            fun({ConnKey, ConnPID}, Acc) ->
-                sample_conn_pid(ConnKey, ConnPID),
-                Acc
-            end,
-            ok,
-            ?CONNECTIONS_ETS
-        )
-    end),
-    %% We should monitor for
-    erlang:send_after(5000, self(), conn_mailbox_monitoring),
-    {noreply, State};
-
 handle_info({clear_rate_limit, Peer, Path}, State) ->
 	clear_rate_limit(Peer, Path),
 	{noreply, State};
@@ -639,34 +619,6 @@ terminate(Reason, _State) ->
 %%% ==================================================================
 %%% Private functions.
 %%% ==================================================================
-
-sample_conn_pid(ConnKey, ConnPID) ->
-  %% Mailbox size
-  case process_info(ConnPID, message_queue_len) of
-    {message_queue_len, Len} ->
-        report(ConnKey, Len);
-    undefined ->
-          ok
-  end.
-
-%% Replace with prometheus_gauge:set/3 in real code
-report({Peer, ConnType, Index}, Value) ->
-    ConnId = iolist_to_binary([hb_util:bin(Peer), "_", atom_to_binary(ConnType), "_", integer_to_binary(Index)]),
-    prometheus_gauge:set(
-      gun_mailbox_size,
-      [ConnId],
-      Value);
-report({Peer, ConnType}, Value) ->
-    ConnId = iolist_to_binary([hb_util:bin(Peer), "_", atom_to_binary(ConnType)]),
-    prometheus_gauge:set(
-      gun_mailbox_size,
-      [ConnId],
-      Value);
-report(ConnKey, Value) ->
-    prometheus_gauge:set(
-      gun_mailbox_size,
-      [hb_util:bin(ConnKey)],
-      Value).
 
 %% @doc Safe wrapper for prometheus_gauge:inc/2.
 inc_prometheus_gauge(Name) ->
@@ -728,8 +680,13 @@ open_connection(#{ peer := Peer }, Opts) ->
     % Fallback through earlier HTTP versions if the protocol is not supported.
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
-            http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            _ -> BaseGunOpts
+            http3 -> 
+                BaseGunOpts#{protocols => [http3], transport => quic};
+            http1 ->
+                %% In some cases we might need HTTP1 for better reliability
+                BaseGunOpts#{protocols => [http]};
+            _ -> 
+                BaseGunOpts
         end,
     ?event(http_outbound,
         {gun_open,
