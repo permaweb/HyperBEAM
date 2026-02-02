@@ -76,11 +76,20 @@ start(Opts) ->
             host := Host,
             port := Port
         } ?= uri_string:parse(Endpoint),
-        HttpClientAtom = maps:get(<<"http_client">>, Opts, gun),
-        HttpClient = 
-            case HttpClientAtom of 
-                gun -> fun gun_request/6;
-                httpc -> httpc
+        HttpClient = maps:get(<<"http_client">>, Opts, gun),
+        Protocol = maps:get(<<"protocol">>, Opts, http2),
+        HttpClientFunction = 
+            case {HttpClient, Protocol} of 
+                {gun, http2} -> 
+                    fun gun_http2_request/6;
+                {gun, http1} -> 
+                    fun gun_http1_request/6;
+                {httpc, _} -> 
+                    %% This can also return atom httpc, but if 
+                    %% we want to use our integration we 
+                    %% return hb_http_client with the option 
+                    %% to use httpc http client.
+                    fun httpc_request/6
             end,
         BaseConfig = erlcloud_s3:new(AccessKey, SecretKey, hb_util:list(Host), Port),
         Config = BaseConfig#aws_config{
@@ -89,7 +98,7 @@ start(Opts) ->
             s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
             % Use `gun_pool` to define a connection pool. Default is `httpc`
-            http_client = HttpClient
+            http_client = HttpClientFunction
         },
         ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
@@ -97,7 +106,11 @@ start(Opts) ->
             StoreRef,
             #{bucket => Bucket, config => Config}
         ),
-        ?event(store_s3, {started, {bucket, Bucket}, {http_client, HttpClientAtom}}),
+        ?event(store_s3,
+            {started,
+                {bucket, Bucket},
+                {http_client, HttpClient},
+                {protocol, Protocol}}),
         {ok, #{module => ?MODULE, bucket => Bucket}}
     else
         Error ->
@@ -106,7 +119,30 @@ start(Opts) ->
     end.
 
 %% @doc Interface erlcloud_s3 with HB HTTP Client
-gun_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) ->
+gun_http2_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) ->
+    Opts = #{
+        connect_timeout => Timeout, 
+        http_client => gun, 
+        protocol => http2
+    },
+    http_request(URL, Method, Headers, Body, Opts).
+
+gun_http1_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) ->
+    Opts = #{
+        connect_timeout => Timeout, 
+        http_client => gun, 
+        protocol => http1
+    },
+    http_request(URL, Method, Headers, Body, Opts).
+
+httpc_request(URL, Method, Headers, Body, Timeout, _Config) ->
+    Opts = #{
+        connect_timeout => Timeout, 
+        http_client => httpc
+    },
+    http_request(URL, Method, Headers, Body, Opts).
+
+http_request(URL, Method, Headers, Body, Opts) when is_atom(Method) ->
     case uri_string:parse(URL) of
         #{port := Port, scheme := Scheme, host := Host} = ParsedURL ->
             Peer = uri_string:normalize(
@@ -128,7 +164,6 @@ gun_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) -
                 headers => HeadersMap,
                 body => Body
             },
-            Opts = #{connect_timeout => Timeout},
             Response = hb_http_client:request(Args, Opts),
             handle_gun_response(Response);
         Reason ->
@@ -136,6 +171,7 @@ gun_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) -
             {error, Reason}
     end.
 
+%% TODO: Add support for httpc handle response when using hb_http_client
 %% @doc Handle gun response and translate it to erlcloud_s3 expected types
 handle_gun_response({ok, Status, ResponseHeaders, Body}) ->
     {ok, {{Status, undefined}, header_str(ResponseHeaders), Body}};
