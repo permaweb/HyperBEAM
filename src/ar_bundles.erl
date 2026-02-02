@@ -3,7 +3,7 @@
 -export([id/1, id/2, hd/1, member/2, find/2]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
--export([serialize/1, deserialize/2, serialize_bundle/3]).
+-export([serialize/1, deserialize/1, deserialize/2, serialize_bundle/3]).
 -export([data_item_signature_data/1]).
 -export([bundle_header_size/1, decode_bundle_header/1]).
 -include("include/hb.hrl").
