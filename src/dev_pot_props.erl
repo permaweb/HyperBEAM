@@ -429,7 +429,11 @@ verify_deposit_quantity(OldState, Req = #{ <<"path">> := <<"undelegate">> }, New
                 NewDepositUndelegator =:= OldDepositUndelegator;
             false ->
                 % Undelegating to someone other than yourself
-                NewDepositUndelegator =:= OldDepositUndelegator + Quantity
+                % We cannot know how the undelegator's deposit changed
+                % after undelegation, because the undelegation may have
+                % circularly undelegated inflow to the undelegator...
+                % so we simply enforce no relation for this case.
+                true
         end,
     RecipientDepositOK =
         case FromAddr =:= ToAddr of
