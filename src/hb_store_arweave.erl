@@ -2,7 +2,7 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/2, read/2]).
+-export([scope/0, scope/1, type/2, read/2, read_with_type/2]).
 %%% Indexing API:
 -export([write_offset/5]).
 -include("include/hb.hrl").
@@ -71,6 +71,16 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                 {miss, {id, {explicit, ID}}}
             ),
             {error, not_found}
+    end.
+
+read_with_type(Opts, Key) when is_list(Key) ->
+    read_with_type(Opts, hb_store:join(Key));
+read_with_type(Opts, Key) ->
+    ?event({read_with_type, {key, Key}}),
+    case read(Opts, Key) of
+        {ok, Value} -> {simple, Value};
+        {error, not_found} -> not_found;
+        not_found -> not_found
     end.
 
 load_item(StartOffset, Length, Opts) ->
