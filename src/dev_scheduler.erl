@@ -1340,7 +1340,7 @@ find_target_id(Base, Req, Opts) ->
 %% 2. A key in `Req' with another value, present in that message.
 %% 3. The body of the message.
 %% 4. The message itself.
-find_message_to_schedule(_Base, Req, Opts) ->
+find_message_to_schedule(Base, Req, Opts) ->
     Subject =
         hb_ao:get(
             <<"subject">>,
@@ -1349,6 +1349,7 @@ find_message_to_schedule(_Base, Req, Opts) ->
             Opts#{ hashpath => ignore }
         ),
     case Subject of
+        <<"base">> -> Base;
         <<"self">> -> Req;
         not_found ->
             hb_ao:get(<<"body">>, Req, Req, Opts#{ hashpath => ignore });
