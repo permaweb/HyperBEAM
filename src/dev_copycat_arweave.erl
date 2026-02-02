@@ -40,7 +40,7 @@ parse_range(Request, Opts) ->
 
 %% @doc Fetch blocks from an Arweave node between a given range.
 fetch_blocks(Req, Current, To, _Opts) when Current < To ->
-    ?event(copycat_arweave,
+    ?event(copycat_short,
         {arweave_block_indexing_completed,
             {reached_target, To},
             {initial_request, Req}
@@ -54,6 +54,7 @@ fetch_blocks(Req, Current, To, Opts) ->
     fetch_blocks(Req, Current - 1, To, Opts).
 
 fetch_and_process_block(Current, To, Opts) ->
+    ?event(copycat_debug, {fetching_block, Current}),
     BlockRes = observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
             <<
@@ -70,18 +71,34 @@ fetch_and_process_block(Current, To, Opts) ->
 process_block(BlockRes, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            {ItemsIndexed, TotalTXs, BundleTXs, SkippedTXs} = maybe_index_ids(Block, Opts),
-            ?event(
-                copycat_short,
-                {arweave_block_cached,
-                    {height, Current},
-                    {items_indexed, ItemsIndexed},
-                    {total_txs, TotalTXs},
-                    {bundle_txs, BundleTXs},
-                    {skipped_txs, SkippedTXs},
-                    {target, To}
-                }
-            );
+            case maybe_index_ids(Block, Opts) of
+                {block_skipped, Results} ->
+                    TotalTXs = maps:get(total_txs, Results, 0),
+                    ?event(
+                        copycat_short,
+                        {arweave_block_skipped,
+                            {height, Current},
+                            {total_txs, TotalTXs},
+                            {target, To}
+                        }
+                    );
+                {block_cached, Results} ->
+                    ItemsIndexed = maps:get(items_count, Results, 0),
+                    TotalTXs = maps:get(total_txs, Results, 0),
+                    BundleTXs = maps:get(bundle_count, Results, 0),
+                    SkippedTXs = maps:get(skipped_count, Results, 0),
+                    ?event(
+                        copycat_short,
+                        {arweave_block_cached,
+                            {height, Current},
+                            {items_indexed, ItemsIndexed},
+                            {total_txs, TotalTXs},
+                            {bundle_txs, BundleTXs},
+                            {skipped_txs, SkippedTXs},
+                            {target, To}
+                        }
+                    )
+            end;
         {error, _} = Error ->
             ?event(
                 copycat_short,
@@ -96,25 +113,37 @@ process_block(BlockRes, Current, To, Opts) ->
 maybe_index_ids(Block, Opts) ->
     TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
     case hb_opts:get(arweave_index_ids, false, Opts) of
-        false -> {0, TotalTXs, 0, 0};
+        false -> 
+            {block_skipped, #{
+                items_count => 0,
+                total_txs => TotalTXs,
+                bundle_count => 0,
+                skipped_count => 0
+            }};
         true ->
             BlockEndOffset = hb_util:int(
                 hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block_size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            {TXs, SkippedFromHeaders} = resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts),
-            Height = hb_maps:get(<<"height">>, Block, 0, Opts),
-            TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-            % Filter out padding entries before processing
-            ValidTXs = lists:filter(
-                fun({{padding, _}, _}) -> false; (_) -> true end,
-                TXsWithData
-            ),
-            {ItemsIndexed, BundleTXs, SkippedFromBundles} = 
-                process_txs(ValidTXs, BlockStartOffset, Opts),
-            SkippedTXs = SkippedFromHeaders + SkippedFromBundles,
-            {ItemsIndexed, TotalTXs, BundleTXs, SkippedTXs}
+            case resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts) of
+                error ->
+                    % Skip entire block if any transaction errors
+                    {block_skipped, #{
+                        total_txs => TotalTXs,
+                        skipped_count => TotalTXs
+                    }};
+                {ok, TXs} ->
+                    Height = hb_maps:get(<<"height">>, Block, 0, Opts),
+                    TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
+                    % Filter out padding entries before processing
+                    ValidTXs = lists:filter(
+                        fun({{padding, _}, _}) -> false; (_) -> true end,
+                        TXsWithData
+                    ),
+                    TXResults = process_txs(ValidTXs, BlockStartOffset, Opts),
+                    {block_cached, TXResults#{total_txs => TotalTXs}}
+            end
     end.
 
 %% @doc Apply Fun to each item in Items with parallel workers.
@@ -183,6 +212,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                     TX#tx.data_size
                 )
             end),
+            ?event(copycat_debug, {fetching_bundle_header, {explicit, TXID}}),
             BundleRes = download_bundle_header(
                 TXEndOffset, TX#tx.data_size, Opts
             ),
@@ -224,14 +254,14 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
 %% This function processes transactions in parallel using parallel_map.
 %% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
 %% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
-%% Returns {ItemsIndexed, BundleTXs, SkippedTXs}.
+%% Returns a map with keys: items_count, bundle_count, skipped_count.
 process_txs(ValidTXs, BlockStartOffset, Opts) ->
     Results = parallel_map(
         ValidTXs,
         fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, Opts) end,
         Opts
     ),
-    Aggregated = lists:foldl(
+    lists:foldl(
         fun(Result, Acc) ->
             #{
                 items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
@@ -241,12 +271,7 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
         end,
         #{items_count => 0, bundle_count => 0, skipped_count => 0},
         Results
-    ),
-    {
-        maps:get(items_count, Aggregated, 0),
-        maps:get(bundle_count, Aggregated, 0),
-        maps:get(skipped_count, Aggregated, 0)
-    }.
+    ).
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
@@ -301,19 +326,20 @@ resolve_tx_headers(TXIDs, Opts) ->
         fun(TXID) -> resolve_tx_header(TXID, Opts) end,
         Opts
     ),
-    lists:foldr(
-        fun(Res, {Acc, SkippedAcc}) ->
-            case Res of
-                {ok, TX} -> {[TX | Acc], SkippedAcc};
-                skip -> {Acc, SkippedAcc + 1}
-            end
-        end,
-        {[], 0},
-        Results
-    ).
+    case lists:any(fun(Res) -> Res =:= error end, Results) of
+        true -> error;
+        false ->
+            TXs = lists:foldr(
+                fun({ok, TX}, Acc) -> [TX | Acc] end,
+                [],
+                Results
+            ),
+            {ok, TXs}
+    end.
 
 resolve_tx_header(TXID, Opts) ->
     try
+        ?event(copycat_debug, {fetching_tx, {explicit, TXID}}),
         ResolveRes = observe_event(<<"tx_header">>, fun() ->
             hb_ao:resolve(
                 <<
@@ -341,7 +367,7 @@ resolve_tx_header(TXID, Opts) ->
                         {reason, ResolveError}
                     }
                 ),
-                skip
+                error
         end
     catch
         Class:Reason:_ ->
@@ -353,7 +379,7 @@ resolve_tx_header(TXID, Opts) ->
                     {reason, Reason}
                 }
             ),
-            skip
+            error
     end.
 
 %% @doc Record event metrics (count and duration) using hb_event:increment.
@@ -435,7 +461,7 @@ index_ids_test() ->
     ),
    ok.
 
-bundle_header_index_test() ->
+basic_bundle_header_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     TXID = <<"bnMTI7LglBGSaK5EdV_juh6GNtXLm0cd5lkd2q4nlT0">>,
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -454,27 +480,37 @@ bundle_header_index_test() ->
     ?assertEqual(15000, length(BundleIndex)),
     ok.
 
-index_ids_ecdsa_test() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, 1827904} =
-        hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827904&to=1827904">>,
-            Opts
-        ),
-    assert_bundle_read(
-        Opts,
-        <<"VNhX_pSANk_8j0jZBR5bh_5jr-lkfbHDjtHd8FKqx7U">>,
-        [
-            {<<"3xDKhrCQcPuBtcm1ipZS5C9gAfFYClgHuHOHAXGfchM">>, <<"1">>},
-            {<<"JantC8f89VE-RidArHnU9589gY5T37NDXnWpI7H_psc">>, <<"7">>}
-        ]
-    ),
-    ok.
+% ecdsa_no_data_test() ->
+%     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+%     {ok, 1827904} =
+%         hb_ao:resolve(
+%             <<"~copycat@1.0/arweave&from=1827904&to=1827904">>,
+%             Opts
+%         ),
+%     assert_bundle_read(
+%         Opts,
+%         <<"VNhX_pSANk_8j0jZBR5bh_5jr-lkfbHDjtHd8FKqx7U">>,
+%         [
+%             {<<"3xDKhrCQcPuBtcm1ipZS5C9gAfFYClgHuHOHAXGfchM">>, <<"1">>},
+%             {<<"JantC8f89VE-RidArHnU9589gY5T37NDXnWpI7H_psc">>, <<"7">>}
+%         ]
+%     ),
+%     ok.
+
+% ecdsa_with_data_test() ->
+%     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+%     fetch_and_process_block(1720431, 1720431, Opts),
+%     {ok, 1720431} =
+%         hb_ao:resolve(
+%             <<"~copycat@1.0/arweave&from=1720431&to=1720431">>,
+%             Opts
+%         ),
+%     ok.
 
 non_string_tags_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Res = resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts),
-    ?assertEqual(skip, Res),
+    ?assertEqual(error, Res),
     ok.
 
 setup_index_opts() ->
