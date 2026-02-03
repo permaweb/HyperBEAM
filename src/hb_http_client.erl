@@ -290,7 +290,11 @@ record_duration(Details, Opts) ->
                                     <<"/hyperbeam", _/binary>> -> <<"S3">>;
                                     <<"/graphql">> -> <<"GraphQL">>;
                                     <<"/raw", _/binary>> -> <<"RAW">>;
-                                    _ -> <<"unknown">>
+                                    <<"/tx", _/binary>> -> <<"TX">>;
+                                    <<"/chunk", _/binary>> -> <<"Chunk">>;
+                                    <<"/block/height/", _/binary>> -> <<"Block Height">>;
+                                    _Path -> 
+                                        <<"unknown">>
                                 end;
                             (Key) -> 
                                 hb_util:list(maps:get(Key, Details)) 
