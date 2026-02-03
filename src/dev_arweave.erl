@@ -551,6 +551,39 @@ get_tx_basic_data_exclude_data_test() ->
     ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
     ok.
 
+get_tx_data_tag_exclude_data_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
+            <<"exclude-data">> => true
+        },
+        #{}
+    ),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"630923958">>,
+        <<"anchor">> => <<"CWJKkpdXEQO9sCWLFg8Cqby0d7wY0Gez5H95YG15g8pAYaXVatF9Ms1QBUpvZ-Ll">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>
+        },
+        #{}
+    ),
+    StructuredWithData = Structured#{ <<"data">> => Data },
+    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    DataHash = hb_util:encode(crypto:hash(sha256, Data)),
+    ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
+    ok.
+
 get_tx_rsa_nested_bundle_test() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9-pre/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
