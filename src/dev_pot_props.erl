@@ -42,8 +42,8 @@ generate_initial_state(Opts) ->
     MintCap = 21_000_000,
     PropN = 1,
     PropD = 1000,
-    StartWeight = 1,
-    StartQty = hb_invariant:int(1, 1_000_000),
+    StartWeight = hb_invariant:int(1, 100_000),
+    StartQty = hb_invariant:int(1, 100_000),
     StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
     StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     % Pick an address that's not our StartAddr for our initial delegatee
@@ -135,10 +135,10 @@ deposit_generator(_State, Opts) ->
                 <<"path">> => <<"deposit">>,
                 <<"body">> => #{
                     <<"address">> => hb_util:human_id(Wallet),
-                    <<"quantity">> => hb_invariant:int(1, 1_000_000),
+                    <<"quantity">> => hb_invariant:int(1, 100_000),
                     <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
                     <<"from">> => <<"foo">>, % TODO: What should this value be?
-                    <<"t">> => hb_invariant:int(100)
+                    <<"t">> => hb_invariant:int(100_000)
                 }
             },
             Opts#{ priv_wallet => Wallet }
@@ -170,7 +170,7 @@ withdraw_generator(State, Opts) ->
                             <<"quantity">> => hb_invariant:int(1, CurrentQty),
                             <<"resource">> => UserResourceID,
                             <<"from">> => <<"foo">>, % TODO: What should this value be?
-                            <<"t">> => hb_invariant:int(10)
+                            <<"t">> => hb_invariant:int(100_000)
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
@@ -206,7 +206,7 @@ delegate_generator(State, Opts) ->
                             <<"quantity">> => DelegatedQty,
                             <<"resource">> => UserResourceID,
                             <<"from">> => FromAddr, 
-                            <<"t">> => hb_invariant:int(10)
+                            <<"t">> => hb_invariant:int(100_000)
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
@@ -237,7 +237,7 @@ undelegate_generator(State, Opts) ->
                             <<"quantity">> => UndelegateQty,
                             <<"resource">> => ResourceID,
                             <<"from">> => FromAddr, 
-                            <<"t">> => hb_invariant:int(10)
+                            <<"t">> => hb_invariant:int(100_000)
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
