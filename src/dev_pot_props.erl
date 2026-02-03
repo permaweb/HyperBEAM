@@ -20,7 +20,7 @@ simulation_test() ->
                 fun verify_undistributed_mint/4
             ],
             runs => 3,
-            length => 5,
+            length => 50,
             next => fun next/4,
             users => ?USERS
         }
