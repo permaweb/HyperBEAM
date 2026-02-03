@@ -212,7 +212,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                     TX#tx.data_size
                 )
             end),
-            ?event(copycat_debug, {fetching_bundle_header, {explicit, TXID}}),
+            ?event(copycat_debug, {fetching_bundle_header, 
+                {tx_id, {explicit, TXID}},
+                {tx_end_offset, TXEndOffset},
+                {tx_data_size, TX#tx.data_size}
+            }),
             BundleRes = download_bundle_header(
                 TXEndOffset, TX#tx.data_size, Opts
             ),
@@ -499,13 +503,45 @@ basic_bundle_header_test() ->
 
 % ecdsa_with_data_test() ->
 %     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-%     fetch_and_process_block(1720431, 1720431, Opts),
-%     {ok, 1720431} =
+%     Block = 1720431,
+%     fetch_and_process_block(Block, Block, Opts),
+%     {ok, Block} =
 %         hb_ao:resolve(
-%             <<"~copycat@1.0/arweave&from=1720431&to=1720431">>,
+%             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
 %             Opts
 %         ),
 %     ok.
+
+tx_with_data_tag_test() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    Block = 1289677,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+            Opts
+        ),
+    ?assertException(
+        error,
+        {badmatch, unsupported_tx_format},
+        hb_store_arweave:read(
+            StoreOpts,
+            <<"ZwsFMXcwuakDuIhskokVHYiOPVcywDUAUTMLAJ72fgw">>)
+    ),
+    ?assertException(
+        error,
+        {badmatch, unsupported_tx_format},
+        hb_store_arweave:read(
+            StoreOpts,
+            <<"-8ikoQo3KZkp9Hz_7kNdiUw3Vmn7J2DFslL_rBz0OBY">>)
+    ),
+    assert_bundle_read(
+        Opts,
+        <<"0vvttUgGqSsMul8RKIPvBjlwTU5_0x68sZr4uJxgNF8">>,
+        [
+            {<<"7U7GRZ8cXtKezSQmQmGpJar6haz-uink46i6evxzDCI">>, <<"1">>}
+        ]
+    ),
+    ok.
 
 non_string_tags_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
@@ -569,7 +605,9 @@ assert_bundle_read(Opts, BundleID, ExpectedItems) ->
     ok.
 
 assert_item_read(Opts, ItemID) ->
-    {ok, Item} = hb_ao:resolve(ItemID, Opts),
+    Resolved = hb_ao:resolve(ItemID, Opts),
+    ?assertMatch({ok, _}, Resolved, ItemID),
+    {ok, Item} = Resolved,
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
