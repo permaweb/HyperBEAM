@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(USERS, 10).
--define(RESOURCES, 1).
+-define(RESOURCES, 10).
 
 simulation_test() ->
     hb:init(),
@@ -100,19 +100,29 @@ generate_initial_state(Opts) ->
                 }
             }
         },
-    % Register every resource we pre-generated for the scenario
-    % Resources = hb_maps:get(resources, Opts),
-    % S1 = lists:foldl(
-    %     fun(Resource, State) ->
-    %         dev_pot:register_resource(Resource, 1, State, Opts)
-    %     end,
-    %     S0,
-    %     Resources
-    % ),
+    % Register every resource we pre-generated for the scenario, not including
+    % StartResource which we've already registered in the hand-coded state above
+    RegisterableResources =
+        lists:delete(
+            StartResource,
+            hb_maps:get(resources, Opts)
+        ),
+    S1 = lists:foldl(
+        fun(Resource, State) ->
+            dev_pot:register_resource(
+                Resource,
+                hb_invariant:int(1, 100_000),
+                State,
+                Opts
+            )
+        end,
+        S0,
+        RegisterableResources
+    ),
     % Initialize the "originated deposits" helper table (see also: the 'next'
     % function clause for deposits)
     hb_private:set(
-        S0,
+        S1,
         <<"/users/", StartAddr/binary, "/deposits/", StartResource/binary>>,
         StartQty,
         Opts
