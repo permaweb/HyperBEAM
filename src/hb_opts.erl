@@ -21,7 +21,7 @@
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error]).
+-define(DEFAULT_PRINT_OPTS, [error, http_error, cron_error]).
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
