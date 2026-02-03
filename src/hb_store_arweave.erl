@@ -89,7 +89,7 @@ load_item(StartOffset, Length, Opts) ->
             {
                 ok,
                 hb_message:convert(
-                    ar_bundles:deserialize(SerializedItem),
+                    ar_bundles:deserialize(SerializedItem, Opts),
                     <<"structured@1.0">>,
                     <<"ans104@1.0">>,
                     Opts

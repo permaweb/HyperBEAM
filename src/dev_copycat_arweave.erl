@@ -335,6 +335,9 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                                    %InnerTXID = hb_util:encode(ItemID),
+                                %ok = file:write_file("txs.txt", <<InnerTXID/binary, $\n>>, [append, binary, raw]),
+
                                 hb_store_arweave:write_offset(
                                     IndexStore,
                                     hb_util:encode(ItemID),
