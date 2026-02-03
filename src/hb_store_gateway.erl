@@ -118,10 +118,10 @@ fetch_upstream(ID, StoreOpts) ->
     hb_trace:span(<<"gateway:fetch_upstream">>, fun() ->
         try hb_gateway_client:read(ID, StoreOpts) of
             {error, _} ->
-                ?event({read_not_found, {key, ID}}),
+                ?event(gateway, {read_not_found, {key, ID}}),
                 not_found;
             {ok, Message} ->
-                ?event({read_found, {key, ID}}),
+                ?event(gateway, {read_found, {key, ID}}),
                 hb_store_remote_node:maybe_cache_async(StoreOpts, Message),
                 {ok, Message}
         catch Class:Reason:Stacktrace ->
