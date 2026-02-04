@@ -5,7 +5,12 @@
 -define(USERS, 10).
 -define(RESOURCES, 10).
 
-simulation_test() ->
+simulation_test_() ->
+    [
+        {timeout, 30, fun do_simulation/0}
+    ].
+
+do_simulation() ->
     hb:init(),
     ok = hb_invariant:state_machine(
         #{
