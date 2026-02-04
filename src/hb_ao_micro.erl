@@ -132,24 +132,24 @@ stage_3(Base, ReqID, DeviceID, Opts) when ?IS_ID(ReqID) ->
         {ok, {link, LinkID, LinkOpts}} -> 
             {ok, Key} = hb_cache_micro:read(LinkID, Opts),
             ?event(ao_core, {stage_3, {path_read_link, {link, LinkID}, {key, Key}}}),
-            stage_1(Base, Key, Opts);
+            stage_4(Base, ReqID, DeviceID, Key, Opts);
         {ok, Key} -> 
             ?event(ao_core, {stage_3, {path_read_key, {key, Key}}}),
-            stage_1(Base, Key, Opts);
+            stage_4(Base, ReqID, DeviceID, Key, Opts);
         not_found -> throw({no_path_in_request, {base, Base}, {req, ReqID}})
     end;
 stage_3(Base, ReqKey, DeviceID, Opts) when is_binary(ReqKey) ->
     stage_4(Base, ReqKey, DeviceID, ReqKey, Opts);
 stage_3(Base, Req = #{ <<"path">> := Path }, DeviceID, Opts) when ?IS_LINK(Path) ->
     case hb_cache_micro:read(Path, Opts) of
-        {ok, ReqKey} -> stage_1(Base, ReqKey, Opts);
+        {ok, ReqKey} -> stage_4(Base, Req, DeviceID, ReqKey, Opts);
         _ -> throw({no_path_in_request, {base, Base}, {req, Req}})
     end;
 stage_3(Base, Req = #{ <<"path">> := ReqKey }, DeviceID, Opts) ->
-    stage_1(Base, ReqKey, Opts);
+    stage_4(Base, Req, DeviceID, ReqKey, Opts);
 stage_3(Base, Req, DeviceID, Opts) ->
     case value_or_device(Req, <<"path">>, Opts) of
-        {value, ReqKey} -> stage_1(Base, ReqKey, Opts);
+        {value, ReqKey} -> stage_4(Base, Req, DeviceID, ReqKey, Opts);
         _ -> throw({no_path_in_request, {base, Base}, {req, Req}})
     end.
 
