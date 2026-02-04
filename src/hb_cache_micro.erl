@@ -247,7 +247,8 @@ untype(<<"b:", Binary/binary>>) -> Binary;
 untype(<<"i:", Binary/binary>>) -> hb_util:int(Binary);
 untype(<<"f:", Binary/binary>>) -> hb_util:float(Binary);
 untype(<<"a:", Binary/binary>>) -> hb_util:atom(Binary);
-untype(<<"l:", Binary/binary>>) -> binary:split(Binary, <<",">>, [global]).
+untype(<<"l:", Binary/binary>>) -> binary:split(Binary, <<",">>, [global]);
+untype(Other) -> Other.
 
 %% @doc Generate a simple prefix (message ID) for a flat set of hashpath suffixes
 %% (keys) and type-tagged values. This function is deterministic and will return
