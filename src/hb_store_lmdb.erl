@@ -262,7 +262,7 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %% 
 %% Returns {ok, Value} or not_found.
-read_direct(Opts, Path) ->
+read_direct(Opts, Path) when is_binary(Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
@@ -560,7 +560,7 @@ add_path(Opts, Path1, Path2) when is_binary(Path1), is_list(Path2) ->
 %% @param StoreOpts Database configuration map
 %% @param Path The path to resolve (binary or list)
 %% @returns The resolved path as a binary
--spec resolve(map(), binary() | list()) -> binary().
+-spec resolve(map(), binary() | list()) -> binary() | not_found.
 resolve(Opts, Path) when is_binary(Path) ->
     resolve(Opts, binary:split(Path, <<"/">>, [global]));
 resolve(Opts, PathParts) when is_list(PathParts) ->
@@ -572,7 +572,9 @@ resolve(Opts, PathParts) when is_list(PathParts) ->
             % If resolution fails, return original path as binary
             to_path(PathParts)
     end;
-resolve(_,_) -> not_found.
+resolve(_, Path) ->
+    ?event(error, {unexpected_path, {path, Path}}),
+    not_found.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 find_env(Opts) -> hb_store:find(Opts).
