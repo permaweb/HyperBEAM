@@ -461,7 +461,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                     OldBody = maps:get(<<"body">>, AccMap, #{}),
                     AccMap#{ <<"body">> => OldBody#{ InlineKey => Value } };
                (Key, Value, AccMap) ->
-                    field_to_http(AccMap, {Key, Value}, #{})
+                    field_to_http(AccMap, {Key, Value}, Opts)
             end,
             % Add any inline field denotations to the HTTP message
             case lists:keyfind(inline, 1, FormatOpts) of
@@ -787,7 +787,7 @@ encode_http_flat_msg(Httpsig, Opts) ->
 %% to be further encoded later.
 field_to_http(Httpsig, {Name, {link, ID, LinkOpts}}, Opts) ->
     % TODO: This should not be necessary - figure out why this is needed
-    {ok, Value} = hb_cache_micro:read(ID, LinkOpts),
+    {ok, Value} = hb_cache_micro:read(ID, maps:merge(LinkOpts, Opts)),
     field_to_http(Httpsig, {Name, Value}, Opts);
 field_to_http(Httpsig, {Name, Value}, Opts) when is_map(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),

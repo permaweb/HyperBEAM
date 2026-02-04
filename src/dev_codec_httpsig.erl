@@ -117,16 +117,18 @@ verify(WrappedMsg, Req, RawOpts) ->
 %% parameter to determine the type of commitment to use. If the `type' parameter
 %% is `signed', we default to the rsa-pss-sha512 algorithm. If the `type'
 %% parameter is `unsigned', we default to the hmac-sha256 algorithm.
+-spec commit(any(), any(), any()) -> {ok, map()}.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"hmac-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha512">> }, Opts);
 commit(WrappedMsg, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
-    MsgToSign = hb_ao_micro:get(<<"...">>, WrappedMsg, RawOpts),
+    Opts = opts(RawOpts),
+    MsgToSign = hb_ao_micro:get(<<"...">>, WrappedMsg, Opts),
     ?event(
+        debug_httpsig,
         {generating_rsa_pss_sha512_commitment, {msg, MsgToSign}, {req, Req}}
     ),
-    Opts = opts(RawOpts),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     if Wallet =:= no_viable_wallet ->
         throw({cannot_commit, no_viable_wallet, MsgToSign});
@@ -178,7 +180,6 @@ commit(WrappedMsg, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         ok,
         UnsignedCommitment#{
             <<"...">> => MsgToSign,
-            <<"id">> => ID,
             <<"signature">> => hb_util:encode(Signature),
             <<"committed">> => ModCommittedKeys
         }
@@ -251,7 +252,6 @@ commit(WrappedMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
             UnauthedCommitment#{
                 <<"...">> => BaseMsgPath,
                 % TODO: What should this be?
-                <<"id">> => HMac,
                 <<"signature">> => HMac,
                 <<"committed">> => ModCommittedKeys
             }

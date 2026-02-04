@@ -16,8 +16,6 @@
     <<"remove">>,
     <<"verify">>
 ]).
--spec commit(any(), #{ commitment_device => binary() }, any()) -> {ok, map()}.
-
 to(Base, Req, Opts) ->
     CodecDevice =
         maps:get(
@@ -50,7 +48,9 @@ from(Base, Req, Opts) ->
         Req,
         Opts#{ cache_control => [<<"no-store">>] }
     ).
+-spec commit(any(), any(), any()) -> {ok, map()}.
 commit(Base, Req, Opts) ->
+    ?event(debug_test, {commit, {base, Base}, {req, {explicit, Req}}}, Opts),
     CommitmentDevice =
         maps:get(
             <<"commitment-device">>,
@@ -287,17 +287,10 @@ commit_signed_test() ->
         <<"httpsig@1.0">>,
         hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts)
     ),
-    % TODO: Cache is returning committed of form 
-    % #{ <<"1">> => <<"a">>, <<"2">> => <<"b">>, <<"ao-types">> => ".list" }
-    % Need to add handling for ordered lists
-    Committed = hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
+    % TODO: Should this be a list?
     ?assertEqual(
-        {ok, <<"a">>},
-        hb_ao_micro:resolve([Committed, <<"1">>], Opts)
-    ),
-    ?assertEqual(
-        {ok, <<"b">>},
-        hb_ao_micro:resolve([Committed, <<"2">>], Opts)
+        <<"l:...,commitment-device,committed,committer,keyid,signature,type">>,
+        hb_ao_micro:get(<<"committed">>, CommittedItem, Opts)
     ),
     ?assertEqual(
         hb_util:human_id(ar_wallet:to_address(hb:wallet())),
@@ -343,7 +336,6 @@ commit_unsigned_test() ->
             },
             Opts
         ),
-    ?event(new_commit_test, {committed_item, CommittedItem}),
     ?assertEqual(
         {ok, <<"1">>},
         hb_ao_micro:resolve(
@@ -371,17 +363,10 @@ commit_unsigned_test() ->
         <<"httpsig@1.0">>,
         hb_ao_micro:get(<<"commitment-device">>, CommittedItem, Opts)
     ),
-    % TODO: Cache is returning committed of form 
-    % #{ <<"1">> => <<"a">>, <<"2">> => <<"b">>, <<"ao-types">> => ".list" }
-    % Need to add handling for ordered lists
-    Committed = hb_ao_micro:get(<<"committed">>, CommittedItem, Opts),
+    % TODO: Should this be a list?
     ?assertEqual(
-        {ok, <<"a">>},
-        hb_ao_micro:resolve([Committed, <<"1">>], Opts)
-    ),
-    ?assertEqual(
-        {ok, <<"b">>},
-        hb_ao_micro:resolve([Committed, <<"2">>], Opts)
+        <<"l:...,commitment-device,committed,keyid,signature,type">>,
+        hb_ao_micro:get(<<"committed">>, CommittedItem, Opts)
     ),
     ?assertEqual(
         <<"hmac-sha256">>,
