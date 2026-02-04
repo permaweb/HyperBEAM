@@ -293,7 +293,7 @@ count_nodes(TrieNode, Opts) ->
 
 verify_nodes(TrieNode, Opts) when not is_map(TrieNode) -> true;
 verify_nodes(TrieNode, Opts) ->
-    ThisNode = hb_message:verify(TrieNode),
+    ThisNode = hb_message:verify(TrieNode, all, Opts),
     EdgeLabels = edges(TrieNode, Opts),
     ChildResults =
         [
@@ -304,6 +304,7 @@ verify_nodes(TrieNode, Opts) ->
     lists:all(fun(X) -> X =:= true end, [ThisNode] ++ ChildResults).
 
 node_count_forwards_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -314,14 +315,15 @@ node_count_forwards_test() ->
             <<"camshaft">> => 777,
             <<"zebra">> => 0
          },
-         #{}
+         Opts
     ),
     ?assertEqual(
         4,
-        count_nodes(Trie, #{})
+        count_nodes(Trie, Opts)
     ).
 
 node_count_backwards_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -332,14 +334,15 @@ node_count_backwards_test() ->
             <<"card">> => 90210,
             <<"car">> => 31337
          },
-         #{}
+         Opts
     ),
     ?assertEqual(
         4,
-        count_nodes(Trie, #{})
+        count_nodes(Trie, Opts)
     ).
 
 basic_topology_forwards_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -350,7 +353,7 @@ basic_topology_forwards_test() ->
             <<"camshaft">> => 777,
             <<"zebra">> => 0
          },
-         #{}
+         Opts
     ),
     ?assert(
         hb_message:match(
@@ -369,11 +372,13 @@ basic_topology_forwards_test() ->
                 }
             },
             Trie,
-            primary
+            primary,
+            Opts
        )
     ).
 
 basic_topology_backwards_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -384,7 +389,7 @@ basic_topology_backwards_test() ->
             <<"card">> => 90210,
             <<"car">> => 31337
          },
-         #{}
+         Opts
     ),
     ?assert(
         hb_message:match(
@@ -403,7 +408,8 @@ basic_topology_backwards_test() ->
                 }
             },
             Trie,
-            primary
+            primary,
+            Opts
        )
     ).
 
@@ -422,13 +428,7 @@ basic_retrievability_test() ->
          Opts
     ),
     {ok, Path} = hb_cache:write(Trie, Opts),
-    {ok, ReadTrie} = hb_cache:read(Path, Opts),
-    ?event(debug_trie, {basic_retrievability_test, 
-            {trie, {explicit, Trie}},
-            {loaded_trie, {explicit, hb_cache:ensure_all_loaded(Trie, Opts)}},
-            {read_trie, {explicit, ReadTrie}},
-            {loaded_read_trie, {explicit, hb_cache:ensure_all_loaded(ReadTrie, Opts)}}
-        }),
+    ?event(debug_trie, {basic_retrievability_test, {trie, Trie}}),
     ?assertEqual(31337, hb_ao:get(<<"car">>, Trie, Opts)),
     ?assertEqual(90210, hb_ao:get(<<"card">>, Trie, Opts)),
     ?assertEqual(666, hb_ao:get(<<"cardano">>, Trie, Opts)),
@@ -445,6 +445,7 @@ basic_retrievability_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, Opts)).
 
 basic_key_collection_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -455,7 +456,7 @@ basic_key_collection_test() ->
             <<"camshaft">> => 777,
             <<"zebra">> => 0
          },
-         #{}
+         Opts
     ),
     ?assertEqual(
         [
@@ -466,10 +467,11 @@ basic_key_collection_test() ->
             <<"car">>,
             <<"camshaft">>
         ],
-        keys(Trie, #{})
+        keys(Trie, Opts)
     ).
 
 verify_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -480,11 +482,12 @@ verify_test() ->
             <<"camshaft">> => 777,
             <<"zebra">> => 0
          },
-         #{}
+         Opts
     ),
-    ?assert(verify_nodes(Trie, #{})).
+    ?assert(verify_nodes(Trie, Opts)).
 
 large_balance_table_test() ->
+    Opts = test_opts(),
     TotalBalances = 3_000,
     Balances =
         maps:from_list(
@@ -501,7 +504,7 @@ large_balance_table_test() ->
         hb_ao:resolve(
             #{ <<"device">> => <<"trie@1.0">> },
             Balances#{ <<"path">> => <<"set">> },
-            #{}
+            Opts
         ),
     UpdateBalanceA =
         lists:nth(
@@ -520,48 +523,51 @@ large_balance_table_test() ->
                 UpdateBalanceA => <<"0">>,
                 UpdateBalanceB => <<"0">>
             },
-            #{}
+            Opts
         ),
     ?assertEqual(
         <<"0">>,
-        hb_ao:get(UpdateBalanceA, UpdatedTrie, #{})
+        hb_ao:get(UpdateBalanceA, UpdatedTrie, Opts)
     ),
     ?event(debug_trie, {checked_update, UpdateBalanceA}),
     ?assertEqual(
         <<"0">>,
-        hb_ao:get(UpdateBalanceB, UpdatedTrie, #{})
+        hb_ao:get(UpdateBalanceB, UpdatedTrie, Opts)
     ),
     ?event(debug_trie, {checked_update, UpdateBalanceB}).
 
 insertion_cases_test() ->
+    Opts = test_opts(),
     Trie1 = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{<<"toronto">> => 1},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
             #{<<"toronto">> => 1},
             Trie1,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie2 = hb_ao:set(
         Trie1,
         #{<<"to">> => 2},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
             #{<<"to">> => #{<<"node-value">> => 2, <<"ronto">> => 1}},
             Trie2,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie3 = hb_ao:set(
         Trie2,
         #{<<"apple">> => 3},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -570,13 +576,14 @@ insertion_cases_test() ->
                 <<"to">> => #{<<"node-value">> => 2, <<"ronto">> => 1}
             },
             Trie3,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie4 = hb_ao:set(
         Trie3,
         #{<<"town">> => 4},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -589,13 +596,14 @@ insertion_cases_test() ->
                 }
             },
             Trie4,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie5 = hb_ao:set(
         Trie4,
         #{<<"torrent">> => 5},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -608,13 +616,14 @@ insertion_cases_test() ->
                 }
             },
             Trie5,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie6 = hb_ao:set(
         Trie5,
         #{<<"tor">> => 6},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -631,13 +640,14 @@ insertion_cases_test() ->
                 }
             },
             Trie6,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie7 = hb_ao:set(
         Trie6,
         #{<<"a">> => 7},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -654,13 +664,14 @@ insertion_cases_test() ->
                 }
             },
             Trie7,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie8 = hb_ao:set(
         Trie7,
         #{<<"app">> => 8},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -680,13 +691,14 @@ insertion_cases_test() ->
                 }
             },
             Trie8,
-            primary
+            primary,
+            Opts
         )
     ),
     Trie9 = hb_ao:set(
         Trie8,
         #{<<"t">> => 9},
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -709,13 +721,15 @@ insertion_cases_test() ->
                 }
             },
             Trie9,
-            primary
+            primary,
+            Opts
         )
     ).
 
 % In insertion_cases_test(), we constructed a complex trie, one key at a time.
 % Here we compare the resultant topology to the same trie constructed *in bulk*.
 forwards_bulk_insertion_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -729,7 +743,7 @@ forwards_bulk_insertion_test() ->
             <<"app">> => 8,
             <<"t">> => 9
         },
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -752,13 +766,15 @@ forwards_bulk_insertion_test() ->
                 }
             },
             Trie,
-            primary
+            primary,
+            Opts
         )
     ).
 
 % Same as fowards_bulk_insertion_test(), except we bulk load the trie with the
 % keys reversed.
 backwards_bulk_insertion_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -772,7 +788,7 @@ backwards_bulk_insertion_test() ->
             <<"to">> => 2,
             <<"toronto">> => 1
         },
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -795,11 +811,13 @@ backwards_bulk_insertion_test() ->
                 }
             },
             Trie,
-            primary
+            primary,
+            Opts
         )
     ).
 
 bulk_update_cases_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -813,7 +831,7 @@ bulk_update_cases_test() ->
             <<"app">> => 8,
             <<"t">> => 9
         },
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -836,7 +854,8 @@ bulk_update_cases_test() ->
                 }
             },
             Trie,
-            primary
+            primary,
+            Opts
         )
     ),
     UpdatedTrie = hb_ao:set(
@@ -852,7 +871,7 @@ bulk_update_cases_test() ->
             <<"app">> => 110,
             <<"t">> => 120
         },
-        #{}
+        Opts
     ),
     ?assert(
         hb_message:match(
@@ -875,23 +894,24 @@ bulk_update_cases_test() ->
                 }
             },
             UpdatedTrie,
-            primary
+            primary,
+            Opts
         )
     ),
-    ?assertEqual(40, hb_ao:get(<<"toronto">>, UpdatedTrie, #{})),
-    ?assertEqual(50, hb_ao:get(<<"to">>, UpdatedTrie, #{})),
-    ?assertEqual(60, hb_ao:get(<<"apple">>, UpdatedTrie, #{})),
-    ?assertEqual(70, hb_ao:get(<<"town">>, UpdatedTrie, #{})),
-    ?assertEqual(80, hb_ao:get(<<"torrent">>, UpdatedTrie, #{})),
-    ?assertEqual(90, hb_ao:get(<<"tor">>, UpdatedTrie, #{})),
-    ?assertEqual(100, hb_ao:get(<<"a">>, UpdatedTrie, #{})),
-    ?assertEqual(110, hb_ao:get(<<"app">>, UpdatedTrie, #{})),
-    ?assertEqual(120, hb_ao:get(<<"t">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"ap">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"appple">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"top">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"torontor">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"townn">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, #{})).
+    ?assertEqual(40, hb_ao:get(<<"toronto">>, UpdatedTrie, Opts)),
+    ?assertEqual(50, hb_ao:get(<<"to">>, UpdatedTrie, Opts)),
+    ?assertEqual(60, hb_ao:get(<<"apple">>, UpdatedTrie, Opts)),
+    ?assertEqual(70, hb_ao:get(<<"town">>, UpdatedTrie, Opts)),
+    ?assertEqual(80, hb_ao:get(<<"torrent">>, UpdatedTrie, Opts)),
+    ?assertEqual(90, hb_ao:get(<<"tor">>, UpdatedTrie, Opts)),
+    ?assertEqual(100, hb_ao:get(<<"a">>, UpdatedTrie, Opts)),
+    ?assertEqual(110, hb_ao:get(<<"app">>, UpdatedTrie, Opts)),
+    ?assertEqual(120, hb_ao:get(<<"t">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"ap">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"appple">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"top">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"torontor">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"townn">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, Opts)).
