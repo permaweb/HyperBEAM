@@ -69,8 +69,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             ?event(
                 arweave_offsets,
                 {miss, {id, {explicit, ID}}}
-            ),
-            {error, not_found}
+            )
     end.
 
 read_with_type(Opts, Key) when is_list(Key) ->
