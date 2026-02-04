@@ -225,6 +225,8 @@ check_type([], Value) ->
 check_type(integer, Value) ->
     is_integer(Value);
 check_type(any, _) -> true;
+check_type(binary, Value) ->
+    is_binary(Value);
 check_type(_, _) -> false.
 
 %%% Tests
