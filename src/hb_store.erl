@@ -288,6 +288,8 @@ type(Modules, Path) -> call_function(Modules, type, [Path]).
 %% This avoids the double-fetch that occurs when calling type() then read().
 %% Returns {simple, Data} | {composite, Keys} | not_found | failure.
 %% For stores that don't implement this natively, falls back to type() + read()/list().
+read_with_type(_, not_found) ->
+    not_found;
 read_with_type(no_viable_store, _Path) ->
     not_found;
 read_with_type(X, Path) when not is_list(X) ->
