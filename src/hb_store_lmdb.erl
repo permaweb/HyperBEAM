@@ -267,7 +267,11 @@ read_direct(Opts, Path) when is_binary(Path) ->
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;  % Normalize error format
-        not_found -> not_found  % Handle both old and new format
+        not_found -> not_found;  % Handle both old and new format
+        {error, database_error, ErrorMessage} ->
+            ?event(lmdb_store, {database_error, {msg, ErrorMessage}}),
+            %% TODO: Create a proper solution
+            read_direct(Opts, Path)
     end.
 
 %% @doc Read a value directly from the database with link resolution.
@@ -570,7 +574,10 @@ resolve(Opts, PathParts) when is_list(PathParts) ->
             to_path(ResolvedParts);
         {error, _} ->
             % If resolution fails, return original path as binary
-            to_path(PathParts)
+            to_path(PathParts);
+        database_error ->
+		    ?event(lmdb_store, {datasbase_error, resolve}),
+		    resolve(Opts, PathParts)
     end;
 resolve(_, Path) ->
     ?event(error, {unexpected_path, {path, Path}}),

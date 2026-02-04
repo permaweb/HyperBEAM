@@ -203,7 +203,8 @@ handle_events() ->
                                     prometheus_event_queue_terminating_on_memory_overload,
                                     {queue, Len},
                                     {memory_bytes, MemorySize},
-                                    {current_message, EventName}
+                                    {current_message, EventName},
+                                    {pid, self()}
                                 }
                             ),
                             exit(memory_overload);
