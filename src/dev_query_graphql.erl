@@ -96,7 +96,7 @@ handle(_Base, RawReq, Opts) ->
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
     OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
     Vars = 
-        hb_message:remove_all_commitments(
+        hb_message:uncommitted_deep(
             hb_maps:get(<<"variables">>, Req, #{}, Opts),
             Opts
         ),

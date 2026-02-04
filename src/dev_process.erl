@@ -400,6 +400,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {prep_ms, PrepTimeMicroSecs div 1000},
                     {execution_ms, RuntimeMicroSecs div 1000},
                     {store_ms, StoreTimeMicroSecs div 1000},
+                    {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
                         hb_ao:get(
                             <<"body/action">>,
@@ -694,8 +695,8 @@ ensure_loaded(Base, Req, Opts) ->
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
                     ?event(compute,
                         {found_state_checkpoint,
-                            {proc_id,ProcID, LoadedSnapshotReq},
-                            {loaded_snapshot_req, LoadedSnapshotReq}
+                            {proc_id, ProcID},
+                            {slot, LoadedSlot}
                         },
                         Opts
                     ),

@@ -79,7 +79,9 @@ set(Trie, Req, Opts) ->
     KeyVals = hb_maps:to_list(Insertable, Opts),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
-    hb_message:normalize_commitments(Trie, Opts, verify);
+    Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
+    {ok, Path} = hb_cache:write(Uncommitted, Opts),
+    {link, Path, Opts};
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
     do_set(NewTrie, KeyVals, Opts).
@@ -273,7 +275,11 @@ longest_prefix_match({BestLabel, BestSize}, Key, [EdgeLabel | EdgeLabels], N) ->
     end.
 
 %%% Tests
-
+test_opts() ->
+    #{
+        store => [hb_test_utils:test_store(hb_store_lmdb)],
+        priv_wallet => hb:wallet()
+    }.
 count_nodes(TrieNode, Opts) when not is_map(TrieNode) -> 0;
 count_nodes(TrieNode, Opts) ->
     EdgeLabels = edges(TrieNode, Opts),
@@ -402,6 +408,7 @@ basic_topology_backwards_test() ->
     ).
 
 basic_retrievability_test() ->
+    Opts = test_opts(),
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
         #{
@@ -412,22 +419,30 @@ basic_retrievability_test() ->
             <<"camshaft">> => 777,
             <<"zebra">> => 0
          },
-         #{}
+         Opts
     ),
-    ?assertEqual(31337, hb_ao:get(<<"car">>, Trie, #{})),
-    ?assertEqual(90210, hb_ao:get(<<"card">>, Trie, #{})),
-    ?assertEqual(666, hb_ao:get(<<"cardano">>, Trie, #{})),
-    ?assertEqual(8675309, hb_ao:get(<<"carmex">>, Trie, #{})),
-    ?assertEqual(777, hb_ao:get(<<"camshaft">>, Trie, #{})),
-    ?assertEqual(0, hb_ao:get(<<"zebra">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"cardd">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"ca">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"c">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"zebraa">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"z">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, #{})).
+    {ok, Path} = hb_cache:write(Trie, Opts),
+    {ok, ReadTrie} = hb_cache:read(Path, Opts),
+    ?event(debug_trie, {basic_retrievability_test, 
+            {trie, {explicit, Trie}},
+            {loaded_trie, {explicit, hb_cache:ensure_all_loaded(Trie, Opts)}},
+            {read_trie, {explicit, ReadTrie}},
+            {loaded_read_trie, {explicit, hb_cache:ensure_all_loaded(ReadTrie, Opts)}}
+        }),
+    ?assertEqual(31337, hb_ao:get(<<"car">>, Trie, Opts)),
+    ?assertEqual(90210, hb_ao:get(<<"card">>, Trie, Opts)),
+    ?assertEqual(666, hb_ao:get(<<"cardano">>, Trie, Opts)),
+    ?assertEqual(8675309, hb_ao:get(<<"carmex">>, Trie, Opts)),
+    ?assertEqual(777, hb_ao:get(<<"camshaft">>, Trie, Opts)),
+    ?assertEqual(0, hb_ao:get(<<"zebra">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"cardd">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"ca">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"c">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"zebraa">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"z">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, Opts)),
+    ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, Opts)).
 
 basic_key_collection_test() ->
     Trie = hb_ao:set(
