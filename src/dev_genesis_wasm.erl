@@ -128,8 +128,7 @@ do_compute(State, Req, Opts) ->
             ),
             {error, State};
         {skip, ExitState} ->
-            ReqWithoutCommitments =
-                hb_message:remove_all_commitments(Req, Opts),
+            ReqWithoutCommitments = hb_message:uncommitted_deep(Req, Opts),
             Req2 =
                 hb_message:commit(
                     ReqWithoutCommitments#{
