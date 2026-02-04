@@ -74,6 +74,7 @@ terminate(_Reason, _State) ->
 %%% ==================================================================
 
 init_prometheus() ->
+    application:ensure_all_started([prometheus]),
     case application:get_application(prometheus) of
         undefined ->
             ok;
@@ -83,7 +84,8 @@ init_prometheus() ->
                     {name, gun_mailbox_size},
                     {labels, [conn_id]},
                     {help, "Gun connection mailbox size"}
-                ])
+                ]),
+                ok
             catch
                 error:{mf_already_exists, _, _} ->
                     %% Metric already registered, this is fine
