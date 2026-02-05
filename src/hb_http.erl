@@ -478,7 +478,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
     {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
     {Status, HeadersBeforeCors, EncodedBody} =
-        encode_reply(
+        encode_reply_filter_bundles(
             RawStatus,
             TABMReq,
             Message,
@@ -597,6 +597,19 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
     % included, due to `hb_maps:merge''s precidence order.
     hb_maps:merge(WithAllowHeaders, Msg, Opts).
 
+encode_reply_filter_bundles(Status, TABMReq, Message, Opts) ->
+    case TABMReq of
+        #{<<"path">> := <<"/", TXID/binary>>} ->
+            case maps:get(TXID, maps:get(<<"commitments">>, Message, #{}), not_found) of 
+                #{<<"bundle">> := <<"true">>} ->
+                    {404, #{}, <<>>};
+                _ ->
+                    encode_reply(Status, TABMReq, Message, Opts)
+            end;
+        _ ->
+            encode_reply(Status, TABMReq, Message, Opts)
+    end.
+
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
     Codec = accept_to_codec(TABMReq, Message, Opts),
@@ -636,7 +649,6 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     {bundle, AcceptBundle}
                 }
             ),
-            %% TODO: This is causing some error.
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_error(Message, Opts),
             {Status,
@@ -670,6 +682,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                 <<"path">> => <<"to">>,
                                 <<"bundle">> => true
                             };
+                        %% TODO: Convert here?
                         false ->
                             TABMReq#{
                                 <<"path">> => <<"to">>,
