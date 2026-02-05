@@ -126,6 +126,700 @@ paid_wasm() ->
     {ok, Res2} = hb_http:get(HostNode, ClientRequest, Opts),
     ?assertMatch(60, Res2).
 
+%% @doc Simulate a full Mysticeti network with isolated stores and HTTP gossip.
+%% Validates multi-node consensus over AO-Core HTTP, using scheduler-location
+%% records to resolve peers.
+mysticeti_network_test_() ->
+    {timeout, 240, fun() -> run_mysticeti_network(5, lists:seq(0, 5), [0]) end}.
+
+%% @doc Larger network run to stress peer gossip and quorum behavior.
+mysticeti_network_many_nodes_test_() ->
+    {timeout, 300, fun() -> run_mysticeti_network(7, lists:seq(0, 3), [0]) end}.
+
+%% @doc End-to-end Mysticeti-C network execution over HTTP.
+%% Validates direct decision and total-order properties (Algorithms 2–3,
+%% mysticeti-paper/algorithms/*.tex) under multi-node gossip.
+run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
+    {Nodes, Validators} = start_mysticeti_nodes(NodeCount),
+    case wait_for_nodes_ready(Nodes, 10000) of
+        true -> ok;
+        {error, MissingNodes} -> erlang:error({nodes_not_ready, MissingNodes})
+    end,
+    Locations =
+        lists:map(
+            fun(#{ url := Node, opts := Opts }) ->
+                {ok, Location} = register_scheduler_location(Node, Opts),
+                #{ location => Location, opts => Opts }
+            end,
+            Nodes
+        ),
+    PeerUrls =
+        [
+            Url
+        || #{ location := Location, opts := Opts } <- Locations,
+           (Url = hb_ao:get(<<"url">>, Location, not_found, Opts)) =/= not_found
+        ],
+    lists:foreach(
+        fun(#{ location := Location, opts := SenderOpts }) ->
+            lists:foreach(
+                fun(#{ url := Node }) ->
+                    case post_scheduler_location(Node, Location, SenderOpts, 10000) of
+                        {ok, _} -> ok;
+                        {error, Reason} ->
+                            erlang:error(
+                                {scheduler_location_post_failed, Node, Reason}
+                            )
+                    end
+                end,
+                Nodes
+            )
+        end,
+        Locations
+    ),
+    timer:sleep(200),
+    case wait_for_scheduler_locations(Nodes, Validators, 20000) of
+        true -> ok;
+        {error, MissingLocations} ->
+            erlang:error({scheduler_locations_missing, MissingLocations})
+    end,
+    ProcBase =
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"mysticeti@1.0">>,
+            <<"scheduler-location">> => Validators,
+            <<"mysticeti">> => #{
+                <<"validators">> => Validators,
+                <<"stakers">> =>
+                    [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
+                <<"peers">> => PeerUrls,
+                <<"wave-length">> => 3,
+                <<"proposer-offset">> => 0,
+                <<"num-proposers">> => length(Validators)
+            },
+            <<"type">> => <<"Process">>
+        },
+    #{ opts := FirstOpts } = hd(Nodes),
+    Proc = hb_message:commit(ProcBase, FirstOpts),
+    ProcID = hb_message:id(Proc, all, FirstOpts),
+    ProcLoaded = hb_cache:ensure_all_loaded(Proc, FirstOpts),
+    lists:foreach(
+        fun(#{ opts := Opts }) ->
+            {ok, _} = hb_cache:write(ProcLoaded, Opts)
+        end,
+        Nodes
+    ),
+    NodesWithProc = [Node#{ proc => ProcLoaded, proc_id => ProcID } || Node <- Nodes],
+    lists:foreach(
+        fun(#{ opts := Opts }) ->
+            Pid = dev_mysticeti_registry:find(ProcID, ProcLoaded, Opts),
+            Info = dev_mysticeti_server:info(Pid),
+            Peers = maps:get(peers, Info, []),
+            ?assert(length(Peers) >= 1),
+            ValidatorsInfo = maps:get(validators, Info, []),
+            ?assertEqual(NodeCount, length(ValidatorsInfo)),
+            ?assert(lists:member(maps:get(local_author, Info), ValidatorsInfo))
+        end,
+        NodesWithProc
+    ),
+    lists:foreach(
+        fun(Round) ->
+            lists:foreach(
+                fun(#{ index := Index } = Node) ->
+                    schedule_round_messages(Node, Index, [Round])
+                end,
+                NodesWithProc
+            ),
+            timer:sleep(200)
+        end,
+        Rounds
+    ),
+    ExpectedBodies =
+        [
+            << "r", (integer_to_binary(Round))/binary, "-",
+               (integer_to_binary(Index))/binary >>
+        || Round <- ExpectedRounds, Index <- lists:seq(1, NodeCount)],
+    MaxSlots = length(Validators) * length(Rounds),
+    lists:foreach(
+        fun(Node) ->
+            case wait_for_expected_bodies_http(
+                Node,
+                ProcID,
+                ExpectedBodies,
+                MaxSlots,
+                120000
+            ) of
+                true ->
+                    ok;
+                false ->
+                    #{ url := NodeUrl, opts := NodeOpts } = Node,
+                    Assignments =
+                        fetch_assignments_http(
+                            NodeUrl,
+                            ProcID,
+                            0,
+                            MaxSlots + 2,
+                            NodeOpts
+                        ),
+                    Bodies = assignment_bodies(Assignments, NodeOpts),
+                    Resp =
+                        catch hb_http:get(
+                            NodeUrl,
+                            <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
+                              "&from=0&to=", (integer_to_binary(MaxSlots + 2))/binary>>,
+                            NodeOpts#{ http_only_result => false }
+                        ),
+                    Info =
+                        case dev_mysticeti_registry:find(ProcID, ProcLoaded, NodeOpts) of
+                            not_found -> not_found;
+                            Pid -> dev_mysticeti_server:info(Pid)
+                        end,
+                    erlang:error(
+                        {expected_bodies_missing,
+                            {node, NodeUrl},
+                            {expected, ExpectedBodies},
+                            {found, Bodies},
+                            {response, Resp},
+                            {info, Info}}
+                    )
+            end
+        end,
+        NodesWithProc
+    ),
+    {RefSlots, _} =
+        lists:foldl(
+        fun(#{ url := Node, opts := Opts }, {Ref, Index}) ->
+            Assignments =
+                fetch_assignments_http(Node, ProcID, 0, MaxSlots + 2, Opts),
+            Bodies = assignment_bodies(Assignments, Opts),
+            ?assertEqual([], ExpectedBodies -- Bodies),
+            Slots = assignment_body_slots(Assignments, ExpectedBodies, Opts),
+                case Index of
+                    0 ->
+                        ?assert(
+                            hb_message:verify(
+                                hb_ao:get(
+                                    <<"body">>,
+                                    hd(hb_maps:values(Assignments, Opts)),
+                                    Opts
+                                ),
+                                all,
+                                Opts
+                            )
+                        ),
+                        {Slots, 1};
+                    _ ->
+                        ?assertEqual(Ref, Slots),
+                        {Ref, Index + 1}
+                end
+            end,
+            {#{}, 0},
+            NodesWithProc
+        ),
+    ?assert(hb_maps:size(RefSlots, FirstOpts) == length(ExpectedBodies)).
+
+start_mysticeti_nodes(NodeCount) ->
+    Wallets = [ar_wallet:new() || _ <- lists:seq(1, NodeCount)],
+    Validators = [hb_util:human_id(ar_wallet:to_address(W)) || W <- Wallets],
+    Triples =
+        lists:zip3(lists:zip(Wallets, Validators), lists:seq(1, NodeCount), lists:seq(1, NodeCount)),
+    Nodes =
+        lists:map(
+            fun({{Wallet, Author}, _UnusedPort, Index}) ->
+                LocalStore = hb_test_utils:test_store(),
+                ok = hb_store:reset(LocalStore),
+                ok = hb_store:start(LocalStore),
+                Port = random_port(),
+                Opts =
+                    #{
+                        store => [LocalStore],
+                        priv_wallet => Wallet,
+                        mysticeti_author => Author,
+                        mysticeti_registry_namespace => Author,
+                        cache_writers => Validators,
+                        port => Port,
+                        host => <<"localhost">>,
+                        gateway => <<"http://localhost:1">>,
+                        http_connect_timeout => 2000,
+                        http_request_send_timeout => 2000
+                    },
+                {Url, FinalPort} = start_node_with_retry(Opts, 10),
+                FinalOpts = Opts#{ port => FinalPort },
+                #{ url => Url, addr => Author, opts => FinalOpts, index => Index }
+            end,
+            Triples
+        ),
+    {Nodes, Validators}.
+
+random_port() ->
+    20000 + rand:uniform(40000).
+
+start_node_with_retry(Opts, 0) ->
+    erlang:error({start_node_failed, retries_exhausted});
+start_node_with_retry(Opts, Attempts) ->
+    Port = hb_opts:get(port, undefined, Opts),
+    case catch hb_http_server:start_node(Opts) of
+        Url when is_binary(Url) ->
+            {trim_trailing_slash(Url), Port};
+        {'EXIT', {case_clause, {error, eaddrinuse}}} ->
+            start_node_with_retry(Opts#{ port => random_port() }, Attempts - 1);
+        {'EXIT', Reason} ->
+            erlang:error({start_node_failed, Reason})
+    end.
+
+trim_trailing_slash(<<>>) -> <<>>;
+trim_trailing_slash(Url) when is_binary(Url) ->
+    case binary:last(Url) of
+        $/ -> binary:part(Url, 0, byte_size(Url) - 1);
+        _ -> Url
+    end.
+
+register_scheduler_location(Node, Opts) ->
+    Req0 = #{
+        <<"path">> => <<"/~scheduler@1.0/location">>,
+        <<"method">> => <<"POST">>
+    },
+    Req = hb_message:commit(Req0, Opts),
+    ReqOpts =
+        Opts#{
+            http_only_result => false,
+            http_connect_timeout => 2000,
+            http_request_send_timeout => 10000
+        },
+    case hb_http:post(Node, Req, ReqOpts) of
+        {ok, Response} ->
+            case scheduler_location_from_response(Response, Opts) of
+                {ok, Location} ->
+                    {ok, hb_cache:ensure_all_loaded(Location, Opts)};
+                Error ->
+                    Error
+            end;
+        Error ->
+            Error
+    end.
+
+wait_for_scheduler_locations(Nodes, Addresses, Timeout) ->
+    _Ready =
+        hb_util:wait_until(
+            fun() ->
+                missing_scheduler_locations(Nodes, Addresses) == []
+            end,
+            Timeout
+        ),
+    case missing_scheduler_locations(Nodes, Addresses) of
+        [] -> true;
+        Missing -> {error, Missing}
+    end.
+
+missing_scheduler_locations(Nodes, Addresses) ->
+    lists:foldl(
+        fun(#{ url := Node, opts := Opts }, Acc0) ->
+            lists:foldl(
+                fun(Address, Acc1) ->
+                    ReqOpts =
+                        Opts#{
+                            http_only_result => false,
+                            http_connect_timeout => 2000,
+                            http_request_send_timeout => 10000
+                        },
+                    case catch hb_http:get(
+                        Node,
+                        <<"/~scheduler@1.0/location?address=", Address/binary>>,
+                        ReqOpts
+                    ) of
+                        {ok, Response} ->
+                            Status = hb_ao:get(<<"status">>, Response, 200, ReqOpts),
+                            case Status >= 400 of
+                                true ->
+                                    [{Node, Address, {status, Status}} | Acc1];
+                                false ->
+                                    case scheduler_location_from_response(Response, ReqOpts) of
+                                        {ok, _} -> Acc1;
+                                        {error, Reason} ->
+                                            [{Node, Address, {invalid, Reason}} | Acc1]
+                                    end
+                            end;
+                        Error ->
+                            [{Node, Address, {request_error, Error}} | Acc1]
+                    end
+                end,
+                Acc0,
+                Addresses
+            )
+        end,
+        [],
+        Nodes
+    ).
+
+schedule_round_messages(
+    #{ url := Node, opts := Opts, proc := Proc, proc_id := ProcID },
+    Index,
+    Rounds
+) ->
+    lists:foreach(
+        fun(Round) ->
+            Body =
+                << "r", (integer_to_binary(Round))/binary, "-",
+                   (integer_to_binary(Index))/binary >>,
+            Msg =
+                hb_message:commit(
+                    #{
+                        <<"target">> => ProcID,
+                        <<"body">> => Body,
+                        <<"type">> => <<"Message">>
+                    },
+                    Opts
+                ),
+            Req = #{
+                <<"path">> => <<"/~mysticeti@1.0/schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => Msg,
+                <<"process">> => Proc
+            },
+            {ok, Res} = hb_http:post(Node, Req, Opts),
+            case hb_ao:get(<<"status">>, Res, 200, Opts) of
+                Status when Status >= 400 ->
+                    erlang:error({schedule_failed, Status, Res});
+                _ ->
+                    ok
+            end,
+            ok
+        end,
+        Rounds
+    ).
+
+wait_for_expected_bodies_http(
+    #{ url := Node, opts := Opts },
+    ProcID,
+    ExpectedBodies,
+    MaxSlots,
+    Timeout
+) ->
+    hb_util:wait_until(
+        fun() ->
+            Assignments = fetch_assignments_http(Node, ProcID, 0, MaxSlots + 2, Opts),
+            Bodies = assignment_bodies(Assignments, Opts),
+            ExpectedBodies -- Bodies =:= []
+        end,
+        Timeout
+    ).
+
+fetch_assignments_http(Node, ProcID, From, To, Opts) ->
+    ReqOpts = Opts#{ http_only_result => false },
+    case catch hb_http:get(
+        Node,
+        <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
+          "&from=", (integer_to_binary(From))/binary,
+          "&to=", (integer_to_binary(To))/binary>>,
+        ReqOpts
+    ) of
+        {ok, Response} ->
+            Assignments0 = extract_assignments(Response, ReqOpts),
+            Assignments =
+                case hb_maps:size(Assignments0, ReqOpts) of
+                    0 ->
+                        Schedule = hb_maps:get(<<"body">>, Response, Response, ReqOpts),
+                        extract_assignments(Schedule, ReqOpts);
+                    _ ->
+                        Assignments0
+                end,
+            hb_private:reset(Assignments);
+        _ ->
+            #{}
+    end.
+
+extract_assignments(Schedule, Opts) ->
+    case hb_maps:get(<<"assignments">>, Schedule, not_found, Opts) of
+        not_found ->
+            case hb_ao:get(<<"assignments">>, Schedule, not_found, Opts) of
+                not_found ->
+                    case hb_maps:get(<<"slot">>, Schedule, not_found, Opts) of
+                        not_found ->
+                            case hb_maps:get(<<"body">>, Schedule, not_found, Opts) of
+                                Body when is_map(Body) ->
+                                    extract_assignments(Body, Opts);
+                                _ ->
+                                    #{}
+                            end;
+                        _Slot ->
+                            normalize_assignments(Schedule, Opts)
+                    end;
+                Assignments ->
+                    normalize_assignments(Assignments, Opts)
+            end;
+        Assignments ->
+            normalize_assignments(Assignments, Opts)
+    end.
+
+normalize_assignments(Map, Opts) when is_map(Map) ->
+    case hb_maps:get(<<"slot">>, Map, not_found, Opts) of
+        not_found ->
+            Numeric = numeric_assignment_map(Map, Opts),
+            case hb_maps:size(Numeric, Opts) of
+                0 -> #{};
+                _ -> Numeric
+            end;
+        Slot ->
+            #{ Slot => Map }
+    end;
+normalize_assignments(List, Opts) when is_list(List) ->
+    lists:foldl(
+        fun(Item, Acc) ->
+            case hb_maps:get(<<"slot">>, Item, not_found, Opts) of
+                not_found -> Acc;
+                Slot -> hb_maps:put(Slot, Item, Acc, Opts)
+            end
+        end,
+        #{},
+        List
+    );
+normalize_assignments(_, _Opts) ->
+    #{}.
+
+numeric_assignment_map(Map, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            case hb_util:safe_int(Key) of
+                {ok, IntKey} ->
+                    Value = hb_maps:get(Key, Map, undefined, Opts),
+                    hb_maps:put(IntKey, Value, Acc, Opts);
+                {error, _} ->
+                    Acc
+            end
+        end,
+        #{},
+        hb_maps:keys(Map, Opts)
+    ).
+
+assignment_bodies(Assignments, Opts) ->
+    lists:map(
+        fun({_Slot, Assignment}) ->
+            hb_ao:get(<<"body/body">>, Assignment, Opts)
+        end,
+        hb_util:to_sorted_list(Assignments, Opts)
+    ).
+
+assignment_body_slots(Assignments, ExpectedBodies, Opts) ->
+    lists:foldl(
+        fun({Slot, Assignment}, Acc) ->
+            Body = hb_ao:get(<<"body/body">>, Assignment, Opts),
+            case lists:member(Body, ExpectedBodies) of
+                true ->
+                    case hb_maps:is_key(Body, Acc, Opts) of
+                        true -> Acc;
+                        false -> hb_maps:put(Body, Slot, Acc, Opts)
+                    end;
+                false -> Acc
+            end
+        end,
+        #{},
+        hb_util:to_sorted_list(Assignments, Opts)
+    ).
+
+scheduler_location_from_response(Response, Opts) ->
+    case scheduler_location_candidate(Response, Opts) of
+        {ok, Location0} ->
+            case hb_message:with_only_committed(Location0, Opts) of
+                {ok, Location} -> {ok, Location};
+                {error, _} -> {ok, Location0}
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+scheduler_location_candidate(Response, Opts) ->
+    case direct_scheduler_location(Response, Opts) of
+        {ok, _} = Ok -> Ok;
+        {error, _} ->
+            decode_scheduler_location(Response, Opts)
+    end.
+
+decode_scheduler_location(Response, Opts) ->
+    try hb_message:convert(Response, <<"structured@1.0">>, <<"httpsig@1.0">>, Opts) of
+        Decoded ->
+            case direct_scheduler_location(Decoded, Opts) of
+                {ok, _} = Ok -> Ok;
+                {error, _} -> {error, {invalid_scheduler_location_response, Response}}
+            end
+    catch
+        _:_ ->
+            {error, {invalid_scheduler_location_response, Response}}
+    end.
+
+direct_scheduler_location(Response, Opts) ->
+    case hb_maps:get(<<"type">>, Response, undefined, Opts) of
+        <<"scheduler-location">> ->
+            {ok, Response};
+        _ ->
+            case hb_maps:get(<<"body">>, Response, not_found, Opts) of
+                Body when is_map(Body) ->
+                    case hb_maps:get(<<"type">>, Body, undefined, Opts) of
+                        <<"scheduler-location">> -> {ok, Body};
+                        _ -> {error, not_found}
+                    end;
+                _ ->
+                    {error, not_found}
+            end
+    end.
+
+post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
+    Deadline = erlang:system_time(millisecond) + Timeout,
+    post_scheduler_location(Node, Location, SenderOpts, Deadline, none).
+
+post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
+    ReqOpts =
+        SenderOpts#{
+            http_only_result => false,
+            http_connect_timeout => 2000,
+            http_request_send_timeout => 10000
+        },
+    Attempt =
+        case catch hb_http:post(
+            Node,
+            <<"/~scheduler@1.0/location">>,
+            Location,
+            ReqOpts
+        ) of
+            {ok, Res} ->
+                Status = hb_ao:get(<<"status">>, Res, 200, ReqOpts),
+                case Status < 400 of
+                    true -> {ok, Res};
+                    false -> {error, {status, Status, Res}}
+                end;
+            Error ->
+                {error, {request_error, Error}}
+        end,
+    case Attempt of
+        {ok, _} = Ok ->
+            Ok;
+        {error, Reason} ->
+            Now = erlang:system_time(millisecond),
+            case Now >= Deadline of
+                true -> {error, {timeout, Reason, LastError}};
+                false ->
+                    timer:sleep(100),
+                    post_scheduler_location(
+                        Node,
+                        Location,
+                        SenderOpts,
+                        Deadline,
+                        Reason
+                    )
+            end
+    end.
+
+wait_for_nodes_ready(Nodes, Timeout) ->
+    _Ready =
+        hb_util:wait_until(
+            fun() ->
+                missing_ready_nodes(Nodes) == []
+            end,
+            Timeout
+        ),
+    case missing_ready_nodes(Nodes) of
+        [] -> true;
+        Missing -> {error, Missing}
+    end.
+
+missing_ready_nodes(Nodes) ->
+    lists:foldl(
+        fun(#{ url := Node, opts := Opts }, Acc) ->
+            ReqOpts =
+                Opts#{
+                    http_only_result => false,
+                    http_connect_timeout => 2000,
+                    http_request_send_timeout => 10000
+                },
+            case catch hb_http:get(Node, <<"/~scheduler@1.0/status">>, ReqOpts) of
+                {ok, Res} ->
+                    Status = hb_ao:get(<<"status">>, Res, 200, ReqOpts),
+                    case Status < 400 of
+                        true -> Acc;
+                        false -> [{Node, {status, Status}} | Acc]
+                    end;
+                Error ->
+                    [{Node, {request_error, Error}} | Acc]
+            end
+        end,
+        [],
+        Nodes
+    ).
+
+ensure_block_id(Block, Opts) ->
+    BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
+    BlockId = hb_message:id(BlockNoId, all, Opts),
+    case hb_maps:get(<<"id">>, Block, undefined, Opts) of
+        undefined -> BlockNoId#{ <<"id">> => BlockId };
+        BlockId -> BlockNoId#{ <<"id">> => BlockId };
+        _ -> erlang:error({block_id_mismatch, BlockId})
+    end.
+
+block_ids_by_author(BlocksByAuthor, OptsByAuthor) ->
+    lists:foldl(
+        fun({Author, Block}, Acc) ->
+            AuthorOpts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
+            BlockId = hb_maps:get(<<"id">>, Block, undefined, AuthorOpts),
+            hb_maps:put(Author, BlockId, Acc, #{})
+        end,
+        #{},
+        hb_maps:to_list(BlocksByAuthor, #{})
+    ).
+
+parents_for_author(PrevRoundByAuthor, Author) ->
+    Ordered = lists:sort(hb_maps:to_list(PrevRoundByAuthor, #{})),
+    OwnPrev = hb_maps:get(Author, PrevRoundByAuthor, undefined, #{}),
+    Others = [Id || {A, Id} <- Ordered, A =/= Author],
+    [OwnPrev | Others].
+
+make_round_blocks(ProcID, Round, Authors, PrevByAuthor, Payloads, OptsByAuthor) ->
+    lists:foldl(
+        fun(Author, Acc) ->
+            Parents =
+                case Round of
+                    0 -> [];
+                    _ -> parents_for_author(PrevByAuthor, Author)
+                end,
+            Payload = hb_maps:get(Author, Payloads, undefined, #{}),
+            Opts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
+            Block0 =
+                #{
+                    <<"type">> => <<"MysticetiBlock">>,
+                    <<"process">> => ProcID,
+                    <<"author">> => Author,
+                    <<"round">> => Round,
+                    <<"parents">> => Parents,
+                    <<"timestamp">> => erlang:system_time(millisecond),
+                    <<"body">> => Payload
+                },
+            Signed = hb_message:commit(Block0, Opts),
+            Block = ensure_block_id(Signed, Opts),
+            hb_maps:put(Author, Block, Acc, #{})
+        end,
+        #{},
+        Authors
+    ).
+
+post_blocks_http(Nodes, BlocksByAuthor, OptsByAuthor, Proc) ->
+    lists:foreach(
+        fun({Author, Block}) ->
+            Opts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
+            lists:foreach(
+                fun(#{ url := Node }) ->
+                    Req =
+                        #{
+                            <<"path">> => <<"/~mysticeti@1.0/block">>,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => Block,
+                            <<"process">> => Proc
+                        },
+                    {ok, _} = hb_http:post(Node, Req, Opts)
+                end,
+                Nodes
+            )
+        end,
+        hb_maps:to_list(BlocksByAuthor, #{})
+    ),
+    ok.
+
 create_schedule_aos2_test_disabled() ->
     % The legacy process format, according to the ao.tn.1 spec:
     % Data-Protocol	The name of the Data-Protocol for this data-item	1-1	ao

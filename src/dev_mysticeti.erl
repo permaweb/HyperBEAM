@@ -1,19 +1,21 @@
-%%% @doc Mysticeti consensus scheduler device.
+%%% @doc Mysticeti-C scheduler device (AO-Core HTTP surface).
 %%%
-%%% This device exposes an AO-Core scheduler interface backed by the
-%%% Mysticeti-style consensus server:
-%%% - `POST /~mysticeti@1.0/schedule` schedules a message (creates a proposer
-%%%   block and returns pending status until it is committed).
-%%% - `GET /~mysticeti@1.0/schedule` returns committed assignments.
-%%% - `GET /~mysticeti@1.0/slot` returns the latest committed slot.
-%%% - `POST /~mysticeti@1.0/block` ingests a consensus block from peers.
+%%% This module exposes the `process@1.0` scheduler interface and delegates
+%%% consensus to `dev_mysticeti_server`. It is intentionally thin: parse the
+%%% request, locate the per-process server, and translate results into the
+%%% canonical schedule/assignment formats.
 %%%
-%%% The consensus logic itself lives in `dev_mysticeti_server`. This device is
-%%% a thin routing and formatting layer that maintains compatibility with the
-%%% `process@1.0` scheduler expectations.
+%%% Endpoints:
+%%% - `POST /~mysticeti@1.0/schedule`: enqueue a message. The server creates a
+%%%   proposer block and returns `pending` until the block is committed.
+%%% - `GET /~mysticeti@1.0/schedule`: return committed assignments.
+%%% - `GET /~mysticeti@1.0/slot`: return the latest committed slot index.
+%%% - `POST /~mysticeti@1.0/block`: ingest a consensus block from peers.
 %%%
-%%% Reference: "Mysticeti: Reaching the Limits of Latency with Uncertified DAGs"
-%%% (Babel et al., arXiv:2310.14821).
+%%% Paper reference for the consensus logic: mysticeti-paper/algorithms/
+%%% consensus_utils.tex (Alg. 1 helper predicates) and
+%%% mysticeti-paper/algorithms/universal_committer.tex (Alg. 3).
+%%% See also mysticeti-paper/sections/consensus.tex for narrative context.
 -module(dev_mysticeti).
 -export([info/0]).
 -export([start/0, router/4]).
@@ -188,12 +190,29 @@ block(Base, Req, Opts) ->
             Opts#{ hashpath => ignore }
         ),
     % Avoid AO-Core resolve here (block messages are not necessarily verified).
+    ProcRes =
+        hb_ao:get(
+            <<"process">>,
+            BlockMsg,
+            not_found,
+            Opts#{ hashpath => ignore }
+        ),
     ProcID =
-        case hb_maps:find(<<"process">>, BlockMsg, Opts) of
-            error -> find_target_id(Base, Req, Opts);
-            {ok, P} -> P
+        case ProcRes of
+            not_found -> find_target_id(Base, Req, Opts);
+            P when is_map(P) -> dev_process_lib:process_id(P, #{}, Opts);
+            P -> hb_util:human_id(P)
         end,
-    ProcMsg = find_process_message(Base, BlockMsg, Opts),
+    ProcMsg0 =
+        case ProcRes of
+            ProcMap when is_map(ProcMap) -> ProcMap;
+            _ -> find_process_message(Base, BlockMsg, Opts)
+        end,
+    ProcMsg =
+        case hb_ao:get(<<"type">>, ProcMsg0, not_found, Opts#{ hashpath => ignore }) of
+            <<"Process">> -> ProcMsg0;
+            _ -> ProcID
+        end,
     case dev_mysticeti_registry:find(ProcID, ProcMsg, Opts) of
         not_found ->
             {error, #{ <<"status">> => 404, <<"body">> => <<"No local scheduler">> }};
@@ -267,7 +286,10 @@ find_process_message(Base, ToSched, Opts) ->
             case hb_ao:get(<<"type">>, Base, not_found, Opts#{ hashpath => ignore }) of
                 <<"Process">> -> Base;
                 _ ->
-                    hb_ao:get(<<"process">>, Base, Base, Opts#{ hashpath => ignore })
+                    case hb_maps:find(<<"process">>, Base, Opts) of
+                        {ok, ProcMsg} -> ProcMsg;
+                        error -> Base
+                    end
             end
     end.
 

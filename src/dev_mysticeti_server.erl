@@ -1,42 +1,54 @@
-%%% @doc Mysticeti-style consensus scheduler server.
+%%% @doc Mysticeti-C consensus scheduler server.
 %%%
-%%% This server maintains a per-process DAG of blocks and turns committed blocks
-%%% into a total order of assignments. It implements both the direct and
-%%% indirect decision rules from Mysticeti-C (Algorithms 1–3).
+%%% This server maintains a per-process block DAG and produces a single,
+%%% deterministic assignment order for `process@1.0`. The implementation
+%%% follows the paper’s helper predicates and universal committer.
 %%%
-%%% Plain-English overview (aimed at readers familiar with Bitcoin):
-%%% - Bitcoin builds a single chain by choosing the longest valid chain. Here we
-%%%   allow multiple blocks per round (a DAG), but we still need a single,
-%%%   deterministic order for process execution.
-%%% - Time is divided into rounds. For each round, there is a deterministic
-%%%   proposer (round-robin over validators).
-%%% - A "wave" is a small fixed number of rounds (default 3):
-%%%   proposer round, voting round, and decision round.
-%%% - In the voting round, validators are expected to build blocks that reference
-%%%   the proposer block as a parent. In the decision round, validators build
-%%%   blocks whose parents include enough voting blocks. These decision blocks
-%%%   act like a certificate.
-%%% - If there are at least 2f+1 decision blocks that each reference at least
-%%%   2f+1 voting blocks that (directly or indirectly) point to the proposer,
-%%%   the proposer is committed. If at least 2f+1 voting blocks *omit* the
-%%%   proposer as a parent, the proposer is skipped for that wave.
-%%% - If the direct rule cannot decide a wave, the indirect rule uses a later
-%%%   decided wave (an "anchor") to decide the earlier one. If the anchor is a
-%%%   commit and there is a certified link between the anchor and the proposer,
-%%%   the proposer is committed; otherwise it is skipped.
-%%% - Once a proposer is committed, we take the committed past of that proposer,
-%%%   order it deterministically, and emit assignments in that order. This
-%%%   produces the single total order required by `process@1.0`.
+%%% Algorithm sketch (paper references inline):
+%%% 1. Block validity and DAG model.
+%%%    - Each validator authors at most one block per round.
+%%%    - A block carries `{round, author, proposer_slot, parents, body}` and is
+%%%      signature-verified.
+%%%    - Parents must be from earlier rounds and satisfy the parent selection
+%%%      rules; the DAG is indexed by `(round, author)`.
+%%%    (mysticeti-paper/sections/overview.tex, "Block correctness")
 %%%
-%%% Implementation notes:
-%%% - Validators are derived from the staker set in the process state; f =
-%%%   floor((n-1)/3), quorum = 2f+1.
-%%% - Blocks are signature-verified and validated against Mysticeti-C's
-%%%   structure and parent rules (mysticeti-paper/sections/overview.tex,
-%%%   "Block correctness").
-%%% - The decision rules implement Algorithms 1–3 from the paper as written.
+%%% 2. Proposer selection.
+%%%    - For each round and proposer slot `l ∈ [0, num_proposers)`, compute a
+%%%      deterministic proposer (round-robin with offset).
+%%%    (mysticeti-paper/algorithms/consensus_utils.tex)
 %%%
-%%% Reference: "Mysticeti: Reaching the Limits of Latency with Uncertified DAGs"
+%%% 3. Direct decision per wave.
+%%%    - A wave is `wave_length` rounds (default 3):
+%%%      proposer round r, voting round r+1, decision round r+2.
+%%%    - A vote is a voting-round block whose parent chain (checked round by
+%%%      round) reaches the proposer block.
+%%%    - A certificate is a decision-round block whose parents include ≥ 2f+1
+%%%      votes for that proposer.
+%%%    - Commit if ≥ 2f+1 decision blocks each form a certificate.
+%%%    - Skip if ≥ 2f+1 voting blocks omit the proposer as a parent.
+%%%    (mysticeti-paper/algorithms/consensus_utils.tex; Alg. 1)
+%%%
+%%% 4. Indirect decision.
+%%%    - Scan later decided waves as anchors.
+%%%    - If an anchor is committed and there exists a certified link from the
+%%%      proposer’s decision round to that anchor, commit; otherwise skip.
+%%%      If no anchor, remain undecided.
+%%%    (mysticeti-paper/algorithms/universal_committer.tex; Alg. 3)
+%%%
+%%% 5. Total order and assignments.
+%%%    - When a proposer is committed, collect its committed past and order
+%%%      blocks deterministically by `(round, author, block_id)`.
+%%%    - Emit assignments for blocks with payloads and append them to the
+%%%      scheduler cache.
+%%%
+%%% Notes:
+%%% - Validators are derived from the process staker set; `f = floor((n-1)/3)`,
+%%%   quorum is `2f+1`.
+%%% - The committer iterates proposer slots (`num_proposers`) exactly as in the
+%%%   universal committer’s inner loop.
+%%%
+%%% Paper: "Mysticeti: Reaching the Limits of Latency with Uncertified DAGs"
 %%% (Babel et al., arXiv:2310.14821).
 -module(dev_mysticeti_server).
 -export([start/3, schedule/2, ingest_block/2, info/1, stop/1]).
@@ -51,11 +63,13 @@ start(ProcID, Proc, Opts) ->
     ?event(mysticeti, {starting_server, {proc_id, ProcID}}),
     spawn_link(
         fun() ->
-            case hb_name:register({<<"mysticeti@1.0">>, ProcID}) of
+            RegKey = dev_mysticeti_registry:registry_key(ProcID, Opts),
+            case hb_name:register(RegKey) of
                 ok -> ok;
                 error ->
                     throw({another_mysticeti_scheduler_is_already_registered,
-                        {proc_id, ProcID}})
+                        {proc_id, ProcID},
+                        {registry_key, RegKey}})
             end,
             % Ensure the process is cached for later reference.
             dev_scheduler_cache:write_spawn(Proc, Opts),
@@ -207,33 +221,92 @@ make_block(State, Payload) ->
     Round = next_round(State),
     case parent_set(State, Round) of
         {ok, Parents} ->
-            Block0 =
-                #{
-                    <<"type">> => <<"MysticetiBlock">>,
-                    <<"process">> => maps:get(id, State),
-                    <<"author">> => maps:get(local_author, State),
-                    <<"round">> => Round,
-                    <<"parents">> => Parents,
-                    <<"timestamp">> => scheduler_time(),
-                    <<"body">> => Payload
-                },
             Opts = maps:get(opts, State),
-            Signed = hb_message:commit(Block0, Opts),
-            case ensure_block_id(Signed, Opts) of
+            PayloadRes =
+                case Payload of
+                    Msg when is_map(Msg) ->
+                        case hb_cache:write(Msg, Opts) of
+                            {ok, _} -> ok;
+                            {error, Reason} ->
+                                {error, {payload_cache_failed, Reason}}
+                        end;
+                    _ ->
+                        ok
+                end,
+            case PayloadRes of
                 {error, _} = Err -> Err;
-                Block ->
-                    BlockNoId = maps:remove(<<"id">>, Block),
-                    case verify_block_signature(BlockNoId, Opts) of
-                        {ok, Signer} ->
-                            case hb_maps:get(<<"author">>, Block, undefined, Opts) of
-                                Signer -> {ok, Block};
-                                _ -> {error, signer_mismatch}
-                            end;
-                        {error, _} = Err -> Err
+                ok ->
+                    Block0 =
+                        #{
+                            <<"type">> => <<"MysticetiBlock">>,
+                            <<"process">> => maps:get(id, State),
+                            <<"author">> => maps:get(local_author, State),
+                            <<"round">> => Round,
+                            <<"parents">> => Parents,
+                            <<"timestamp">> => scheduler_time(),
+                            <<"body">> => Payload
+                        },
+                    Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
+                    case ensure_payload_cached(Payload, Signed, Opts) of
+                        {error, _} = Err -> Err;
+                        ok ->
+                            case ensure_block_id(Signed, Opts) of
+                                {error, _} = Err -> Err;
+                                Block ->
+                                    BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
+                                    case verify_block_signature(BlockNoId, Opts) of
+                                        {ok, Signer} ->
+                                            case hb_maps:get(<<"author">>, Block, undefined, Opts) of
+                                                Signer -> {ok, Block};
+                                                _ -> {error, signer_mismatch}
+                                            end;
+                                        {error, _} = Err -> Err
+                                    end
+                            end
                     end
             end;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% @doc Ensure the block payload is resolvable from the local cache.
+%% Required for HTTP bundling to succeed when broadcasting blocks.
+ensure_payload_cached(Payload, Block, Opts) ->
+    case hb_maps:get(<<"body">>, Block, undefined, Opts) of
+        {link, LinkId, _} ->
+            case Payload of
+                Msg when is_map(Msg) ->
+                    PayloadId = hb_message:id(Msg, all, Opts),
+                    ensure_message_id_cached(PayloadId, Msg, Opts),
+                    maybe_link_payload(PayloadId, LinkId, Opts),
+                    case hb_cache:read(LinkId, Opts) of
+                        {ok, _} -> ok;
+                        _ -> {error, payload_cache_missing}
+                    end;
+                _ ->
+                    case hb_cache:read(LinkId, Opts) of
+                        {ok, _} -> ok;
+                        _ -> {error, payload_cache_missing}
+                    end
+            end;
+        _ ->
+            ok
+    end.
+
+maybe_link_payload(PayloadId, LinkId, Opts) ->
+    case PayloadId =:= LinkId of
+        true -> ok;
+        false ->
+            Store = hb_opts:get(store, no_viable_store, Opts),
+            hb_store:make_link(Store, PayloadId, LinkId)
+    end.
+
+ensure_message_id_cached(MessageId, Message, Opts) ->
+    case hb_cache:read(MessageId, Opts) of
+        {ok, _} -> ok;
+        _ ->
+            _ = hb_cache:write(Message, Opts),
+            ok
     end.
 
 %% @doc Determine the next round for the local author.
@@ -243,6 +316,8 @@ next_round(State) ->
     maps:get(LocalAuthor, AuthorRounds, -1) + 1.
 
 %% @doc Select parent blocks for a new round.
+%% Block correctness: first parent is author's previous block and there must be
+%% at least 2f+1 parents from the previous round (mysticeti-paper/sections/overview.tex, sec:dag).
 parent_set(_State, Round) when Round < 0 ->
     {error, invalid_round};
 parent_set(_State, 0) ->
@@ -254,6 +329,7 @@ parent_set(State, Round) ->
         undefined -> {error, missing_prev_round};
         ByAuthor ->
             Quorum = maps:get(quorum, State),
+            % Block correctness: require at least 2f+1 distinct parents from round r-1.
             case maps:size(ByAuthor) < Quorum of
                 true -> {error, not_enough_parents};
                 false ->
@@ -313,7 +389,7 @@ add_block(State, Block) ->
 
 %% @doc Ensure a block has a deterministic id (not part of the signed payload).
 ensure_block_id(Block, Opts) ->
-    BlockNoId = maps:remove(<<"id">>, Block),
+    BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
     BlockId = hb_message:id(BlockNoId, all, Opts),
     case hb_maps:get(<<"id">>, Block, undefined, Opts) of
         undefined -> BlockNoId#{ <<"id">> => BlockId };
@@ -982,7 +1058,7 @@ validate_block(State, Block0) ->
     case ensure_block_id(Block0, Opts) of
         {error, _} = Err -> Err;
         Block ->
-            BlockNoId = maps:remove(<<"id">>, Block),
+            BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
             Validators = maps:get(validators, State),
             AuthorField = hb_maps:get(<<"author">>, Block, undefined, Opts),
             Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
@@ -1083,6 +1159,7 @@ validate_block_parent_shape(State, Block, ParentBlocks) ->
                             case {hb_maps:get(<<"author">>, FirstParent, undefined, Opts),
                                   hb_maps:get(<<"round">>, FirstParent, undefined, Opts)} of
                                 {Author, PrevRound} ->
+                                    % Block correctness: require 2f+1 parents from round r-1.
                                     PrevRoundParents =
                                         [Id || {Id, PB} <- ParentBlocks,
                                             hb_maps:get(<<"round">>, PB, -1, Opts) =:= Round - 1],
@@ -1109,7 +1186,9 @@ summarize(State) ->
         quorum => maps:get(quorum, State),
         wave_length => maps:get(wave_length, State),
         num_proposers => maps:get(num_proposers, State),
-        last_decided_round => maps:get(last_decided_round, State)
+        last_decided_round => maps:get(last_decided_round, State),
+        local_author => maps:get(local_author, State),
+        peers => maps:get(peers, State, [])
     }.
 
 %% @doc Extract wave length (Algorithm 2) from the process config.
@@ -1335,10 +1414,30 @@ is_url(_) -> false.
 broadcast_block(State, Block) ->
     Peers = maps:get(peers, State, []),
     Opts = maps:get(opts, State),
+    BlockId = hb_message:id(Block, all, Opts),
+    ensure_message_id_cached(BlockId, Block, Opts),
+    BlockLoaded = hb_cache:ensure_all_loaded(Block, Opts),
+    Req0 =
+        #{
+            <<"path">> => <<"/~mysticeti@1.0/block">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => BlockLoaded
+        },
+    Req = hb_message:commit(Req0, Opts),
     lists:foreach(
         fun(Node) ->
             spawn(fun() ->
-                hb_http:post(Node, <<"/~mysticeti@1.0/block">>, Block, Opts)
+                case catch hb_http:post(Node, Req, Opts) of
+                    {ok, _} ->
+                        ok;
+                    Error ->
+                        ?event(error,
+                            {mysticeti_broadcast_failed,
+                                {peer, Node},
+                                {error, Error}
+                            }
+                        )
+                end
             end)
         end,
         Peers
@@ -1403,7 +1502,7 @@ test_block(ProcID, Author, Round, Parents, Payload, Opts) ->
             <<"timestamp">> => scheduler_time(),
             <<"body">> => Payload
         },
-    Signed = hb_message:commit(Block0, Opts),
+    Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
     ensure_block_id(Signed, Opts).
 
 http_post_mysticeti_schedule(Node, ProcMsg, Msg, Opts) ->
@@ -1517,7 +1616,7 @@ proposer_for_round(Validators, Round, Proc, Opts) ->
 
 %% @doc Build an author->block_id map from a list of blocks.
 blocks_by_author(Blocks, Opts) ->
-    maps:from_list(
+    hb_maps:from_list(
         lists:map(
             fun(Block) ->
                 {hb_maps:get(<<"author">>, Block, undefined, Opts),
@@ -1528,9 +1627,9 @@ blocks_by_author(Blocks, Opts) ->
     ).
 
 %% @doc Build parent list with the author's previous block first.
-parents_for_author(PrevRoundByAuthor, Author) ->
-    Ordered = lists:sort(maps:to_list(PrevRoundByAuthor)),
-    OwnPrev = maps:get(Author, PrevRoundByAuthor),
+parents_for_author(PrevRoundByAuthor, Author, Opts) ->
+    Ordered = lists:sort(hb_maps:to_list(PrevRoundByAuthor, Opts)),
+    OwnPrev = hb_maps:get(Author, PrevRoundByAuthor, undefined, Opts),
     Others = [Id || {A, Id} <- Ordered, A =/= Author],
     [OwnPrev | Others].
 
@@ -1538,13 +1637,13 @@ parents_for_author(PrevRoundByAuthor, Author) ->
 make_round_blocks(ProcID, Round, Authors, PrevRoundByAuthor, Payloads, OptsByAuthor) ->
     lists:map(
         fun(Author) ->
+            Opts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
             Parents =
                 case Round of
                     0 -> [];
-                    _ -> parents_for_author(PrevRoundByAuthor, Author)
+                    _ -> parents_for_author(PrevRoundByAuthor, Author, Opts)
                 end,
-            Payload = maps:get(Author, Payloads, undefined),
-            Opts = maps:get(Author, OptsByAuthor),
+            Payload = hb_maps:get(Author, Payloads, undefined, Opts),
             test_block(ProcID, Author, Round, Parents, Payload, Opts)
         end,
         Authors
@@ -1837,8 +1936,14 @@ mysticeti_two_wave_order() ->
     DecisionByAuthor0 = blocks_by_author(DecisionBlocks0, N1Opts),
     {ProposerRound1, VotingRound1, DecisionRound1} = wave_rounds(1, Proc, N1Opts),
     Proposer1 = proposer_for_round(Validators, ProposerRound1, Proc, N1Opts),
-    Msg1 = test_message(ProcID, <<"m1">>, maps:get(Proposer1, OptsByAuthor)),
-    {ok, _} = hb_cache:write(Msg1, maps:get(Proposer1, OptsByAuthor)),
+    Msg1 =
+        test_message(
+            ProcID,
+            <<"m1">>,
+            hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})
+        ),
+    {ok, _} =
+        hb_cache:write(Msg1, hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})),
     Payloads1 = #{ Proposer1 => Msg1 },
     Round3Blocks = make_round_blocks(
         ProcID,
@@ -1937,9 +2042,13 @@ mysticeti_indirect_commit() ->
             ProcID,
             A4,
             1,
-            parents_for_author(R0ByAuthorNoA1, A4),
+            parents_for_author(
+                R0ByAuthorNoA1,
+                A4,
+                hb_maps:get(A4, OptsByAuthor, #{}, #{})
+            ),
             undefined,
-            maps:get(A4, OptsByAuthor)
+            hb_maps:get(A4, OptsByAuthor, #{}, #{})
         ),
     VoteBlocks0 = VoteBlocksA2A3 ++ [VoteBlockA4],
     post_blocks(Node, VoteBlocks0, N2Opts),
@@ -1959,8 +2068,14 @@ mysticeti_indirect_commit() ->
     DecisionByAuthor0 = blocks_by_author(DecisionBlocks0, N1Opts),
     {ProposerRound1, VotingRound1, DecisionRound1} = wave_rounds(1, Proc, N1Opts),
     Proposer1 = proposer_for_round(Validators, ProposerRound1, Proc, N1Opts),
-    Msg1 = test_message(ProcID, <<"m1">>, maps:get(Proposer1, OptsByAuthor)),
-    {ok, _} = hb_cache:write(Msg1, maps:get(Proposer1, OptsByAuthor)),
+    Msg1 =
+        test_message(
+            ProcID,
+            <<"m1">>,
+            hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})
+        ),
+    {ok, _} =
+        hb_cache:write(Msg1, hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})),
     Payloads1 = #{ Proposer1 => Msg1 },
     Round3Blocks = make_round_blocks(
         ProcID,
@@ -2135,7 +2250,11 @@ mysticeti_invalid_signature_rejected() ->
             ProcID,
             A2,
             1,
-            parents_for_author(R0ByAuthor, A2),
+            parents_for_author(
+                R0ByAuthor,
+                A2,
+                hb_maps:get(A2, OptsByAuthor, #{}, #{})
+            ),
             undefined,
             N3Opts
         ),
