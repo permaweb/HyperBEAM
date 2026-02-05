@@ -319,7 +319,10 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         )
     end),
     case is_bundle_tx(TX, Opts) of
-        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        false -> 
+            %InnerTXID = hb_util:encode(TX#tx.id),
+            %ok = file:write_file("block_txs.txt", <<InnerTXID/binary, $\n>>, [append, binary, raw]),
+            #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
             ?event(copycat_debug, {fetching_bundle_header, 
                 {tx_id, {explicit, TXID}},
@@ -336,7 +339,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
                                     %InnerTXID = hb_util:encode(ItemID),
-                                %ok = file:write_file("txs.txt", <<InnerTXID/binary, $\n>>, [append, binary, raw]),
+                                %ok = file:write_file("block_txs.txt", <<InnerTXID/binary, $\n>>, [append, binary, raw]),
 
                                 hb_store_arweave:write_offset(
                                     IndexStore,
