@@ -2,6 +2,7 @@
 -export([commit/3, set/3, do_deep_merge/3]).
 -export([verify/3, commitments/3]).
 -export([keys/3, flatten/3]).
+-export([committed/3]).
 -export([match/2, match/3, match/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -161,6 +162,107 @@ verify(Base, Req, Opts) ->
         Req,
         Opts#{ cache_control => [<<"no-store">>] }
     ).
+
+committed(Base, Req, Opts) ->
+    {ok, ReqType} = 
+        case hb_ao_micro:resolve(Req, <<"type">>, Opts) of
+            {ok, Type} ->
+                {ok, Type};
+            {error, not_found} ->
+                {ok, <<"normal">>}
+        end,
+    {ok, Committed} = 
+        case ReqType of 
+            <<"extended">> ->
+                case hb_ao_micro:resolve(Base, <<"...">>, Opts) of
+                    {ok, Outer} ->
+                        OuterCommitted =
+                            remove_extension(
+                                hb_util:ok(
+                                    hb_ao_micro:resolve(
+                                        Outer,
+                                        #{ 
+                                            <<"path">> => <<"committed">>,
+                                            <<"type">> => <<"extended">>
+                                        },
+                                        Opts
+                                    )
+                                )
+                            ),
+                        InnerCommitted = 
+                            remove_extension(
+                                hb_util:ok(
+                                    hb_ao_micro:resolve(
+                                        Base,
+                                        #{ <<"path">> => <<"committed">> },
+                                        Opts
+                                    )
+                                )
+                            ),
+                        {ok, lists:sort(OuterCommitted ++ InnerCommitted)};
+                    {error, not_found} ->
+                        hb_ao_micro:resolve(Base, <<"committed">>, Opts)
+                end;
+            <<"signed">> ->
+                case maps:get(<<"committer">>, Base, not_found) of
+                    not_found ->
+                        case hb_ao_micro:resolve(Base, <<"...">>, Opts) of
+                            {ok, Outer} ->
+                                hb_ao_micro:resolve(
+                                    Outer, 
+                                    #{ 
+                                        <<"path">> => <<"committed">>,
+                                        <<"type">> => <<"signed">>
+                                    },
+                                    Opts
+                                );
+                            {error, not_found} ->
+                                {ok, []}
+                        end;
+                    _Committer ->
+                        hb_ao_micro:resolve(Base, <<"committed">>, Opts)
+                end;
+            <<"signed-extended">> ->
+                case maps:get(<<"committer">>, Base, not_found) of
+                    not_found ->
+                        case hb_ao_micro:resolve(Base, <<"...">>, Opts) of
+                            {ok, Outer} ->
+                                hb_ao_micro:resolve(
+                                    Outer,
+                                    #{
+                                        <<"path">> => <<"committed">>,
+                                        <<"type">> => <<"signed-extended">>
+                                    },
+                                    Opts
+                                );
+                            {error, not_found} ->
+                                {ok, []}
+                        end;
+                    _Committer ->
+                        hb_ao_micro:resolve(
+                            Base,
+                            #{ 
+                                <<"path">> => <<"committed">>,
+                                <<"type">> => <<"extended">>
+                            },
+                            Opts
+                        )
+                end;
+            _ -> hb_ao_micro:resolve(Base, <<"committed">>, Opts)
+        end,
+    committed_to_list(Committed).
+
+committed_to_list(Committed) ->
+    case Committed of 
+        CommList when is_list(CommList) ->
+            {ok, CommList};
+        <<"l:", CommBin/binary>> ->
+            {ok, binary:split(CommBin, <<",">>, [global])};
+        _ ->
+            {error, not_found}
+    end.
+remove_extension(Committed) ->
+    lists:delete(<<"...">>, Committed).
 
 flatten(Base, Req, Opts) -> 
     ?event({flattening, {base, Base}, {req, Req}}),
@@ -419,7 +521,316 @@ list_commitments_test() ->
         ),
     ?event(list_commitments, {comms, Commitments}),
     ok.
-
+full_commitments_test() ->
+    Opts = test_opts(),
+    DeepInnerItem = #{ <<"e">> => <<"5">>, <<"f">> => <<"6">> },
+    {ok, DeepInnerPath} = hb_cache_micro:write(DeepInnerItem, Opts),
+    InnerItem = #{ <<"c">> => <<"3">>, <<"d">> => <<"4">>, <<"...">> => DeepInnerItem },
+    {ok, InnerPath} = hb_cache_micro:write(InnerItem, Opts),
+    OuterItem = 
+        #{ 
+            <<"a">> => <<"1">>,
+            <<"b">> => <<"2">>,
+            <<"...">> => InnerPath
+        },
+    {ok, OuterPath} = hb_cache_micro:write(OuterItem, Opts),
+    {ok, CommittedItem} = hb_ao_micro:resolve(
+        OuterPath,
+        #{
+            <<"commitment-device">> => <<"httpsig@1.0">>,
+            <<"device">> => <<"message@1.0">>,
+            <<"type">> => <<"signed">>,
+            <<"path">> => <<"commit">>
+        },
+        Opts
+    ),
+    NestedSignedItem = #{ <<"g">> => <<"7">>, <<"...">> => CommittedItem },
+    {ok, NestedSignedPath} = hb_cache_micro:write(NestedSignedItem, Opts),
+    {ok, DeepInnerItemCommitted} = 
+        hb_ao_micro:resolve(
+            DeepInnerPath,
+            #{ <<"path">> => <<"committed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [<<"e">>, <<"f">>],
+        DeepInnerItemCommitted
+    ),
+    {ok, InnerItemCommitted} = 
+        hb_ao_micro:resolve(
+            InnerPath,
+            #{ <<"path">> => <<"committed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [<<"...">>, <<"c">>, <<"d">>],
+        InnerItemCommitted
+    ),
+    ?event(debug_full_commitments_test, {inner_item_committed, InnerItemCommitted}),
+    {ok, OuterItemCommitted} = 
+        hb_ao_micro:resolve(
+            OuterPath,
+            #{ <<"path">> => <<"committed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [<<"...">>, <<"a">>, <<"b">>],
+        OuterItemCommitted
+    ),
+    {ok, SignedItemCommitted} = 
+        hb_ao_micro:resolve(
+            CommittedItem,
+            #{ <<"path">> => <<"committed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"...">>,
+            <<"commitment-device">>,
+            <<"committed">>,
+            <<"committer">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        SignedItemCommitted
+    ),
+    {ok, NestedSignedItemCommitted} = 
+        hb_ao_micro:resolve(
+            NestedSignedPath,
+            #{ <<"path">> => <<"committed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"...">>,
+            <<"g">>
+        ],
+        NestedSignedItemCommitted
+    ),
+    {ok, DeepInnerItemExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            DeepInnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"extended">>},
+            Opts
+        ),
+    ?assertEqual(
+        [<<"e">>, <<"f">>],
+        DeepInnerItemExtendedCommitted
+    ),
+    {ok, InnerItemExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            InnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"extended">>},
+            Opts
+        ),
+    ?assertEqual(
+        [<<"c">>, <<"d">>, <<"e">>, <<"f">>],
+        InnerItemExtendedCommitted
+    ),
+    {ok, OuterItemExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            OuterPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"extended">>},
+            Opts
+        ),
+    ?assertEqual(
+        [<<"a">>, <<"b">>, <<"c">>, <<"d">>, <<"e">>, <<"f">>],
+        OuterItemExtendedCommitted
+    ),
+    {ok, CommittedItemExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            CommittedItem,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"a">>,
+            <<"b">>,
+            <<"c">>,
+            <<"commitment-device">>,
+            <<"committed">>,
+            <<"committer">>,
+            <<"d">>,
+            <<"e">>,
+            <<"f">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        CommittedItemExtendedCommitted
+    ),
+    {ok, NestedSignedItemExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            NestedSignedPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"a">>,
+            <<"b">>,
+            <<"c">>,
+            <<"commitment-device">>,
+            <<"committed">>,
+            <<"committer">>,
+            <<"d">>,
+            <<"e">>,
+            <<"f">>,
+            <<"g">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        NestedSignedItemExtendedCommitted
+    ),
+    {ok, DeepInnerItemSignedCommitted} = 
+        hb_ao_micro:resolve(
+            DeepInnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed">>},
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        DeepInnerItemSignedCommitted
+    ),
+    {ok, InnerItemSignedCommitted} = 
+        hb_ao_micro:resolve(
+            InnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed">>},
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        InnerItemSignedCommitted
+    ),
+    {ok, OuterItemSignedCommitted} = 
+        hb_ao_micro:resolve(
+            OuterPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed">>},
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        OuterItemSignedCommitted
+    ),
+    {ok, CommittedItemSignedCommitted} = 
+        hb_ao_micro:resolve(
+            CommittedItem,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed">>},
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"...">>,
+            <<"commitment-device">>,
+            % TODO: Committed should probably not be here. Remove from codecs.
+            <<"committed">>,
+            <<"committer">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        CommittedItemSignedCommitted
+    ),
+    {ok, NestedSignedItemSignedCommitted} = 
+        hb_ao_micro:resolve(
+            NestedSignedPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"...">>,
+            <<"commitment-device">>,
+            % TODO: Committed should probably not be here. Remove from codecs.
+            <<"committed">>,
+            <<"committer">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        NestedSignedItemSignedCommitted
+    ),
+    {ok, DeepInnerItemSignedExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            DeepInnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed-extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        DeepInnerItemSignedExtendedCommitted
+    ),
+    {ok, InnerItemSignedExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            InnerPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed-extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        InnerItemSignedExtendedCommitted
+    ),
+    {ok, OuterItemSignedExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            OuterPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed-extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [],
+        OuterItemSignedExtendedCommitted
+    ),
+    {ok, CommittedItemSignedExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            CommittedItem,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed-extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"a">>,
+            <<"b">>,
+            <<"c">>,
+            <<"commitment-device">>,
+            % TODO: Committed should probably not be here. Remove from codecs.
+            <<"committed">>,
+            <<"committer">>,
+            <<"d">>,
+            <<"e">>,
+            <<"f">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        CommittedItemSignedExtendedCommitted
+    ),
+    {ok, NestedSignedItemSignedExtendedCommitted} = 
+        hb_ao_micro:resolve(
+            NestedSignedPath,
+            #{ <<"path">> => <<"committed">>, <<"type">> => <<"signed-extended">> },
+            Opts
+        ),
+    ?assertEqual(
+        [
+            <<"a">>,
+            <<"b">>,
+            <<"c">>,
+            <<"commitment-device">>,
+            % TODO: Committed should probably not be here. Remove from codecs.
+            <<"committed">>,
+            <<"committer">>,
+            <<"d">>,
+            <<"e">>,
+            <<"f">>,
+            <<"keyid">>,
+            <<"signature">>,
+            <<"type">>
+        ],
+        NestedSignedItemSignedExtendedCommitted
+    ).
 flatten_test() ->
     Opts = test_opts(),
     Item = 
