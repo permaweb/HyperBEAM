@@ -1262,20 +1262,74 @@ peers(Proc, Opts) ->
         hb_ao:get(
             <<"mysticeti/peers">>,
             Proc,
-            hb_opts:get(mysticeti_peers, [], Opts),
+            not_found,
             Opts#{ hashpath => ignore }
         ),
-    normalize_peers(Raw).
+    Candidates =
+        case Raw of
+            not_found ->
+                hb_ao:get(
+                    <<"scheduler-location">>,
+                    Proc,
+                    hb_opts:get(mysticeti_peers, [], Opts),
+                    Opts#{ hashpath => ignore }
+                );
+            _ ->
+                Raw
+        end,
+    normalize_peers(Candidates, Opts).
 
-normalize_peers(Peers) when is_list(Peers) ->
-    lists:map(fun hb_util:bin/1, Peers);
-normalize_peers(Peers) when is_binary(Peers) ->
-    binary:split(
-        binary:replace(Peers, <<"\"">>, <<"">>, [global]),
-        <<",">>,
-        [global, trim_all]
+normalize_peers(Peers, Opts) when is_list(Peers) ->
+    Loaded = hb_cache:ensure_loaded(Peers, Opts),
+    lists:usort(
+        lists:filtermap(
+            fun(Peer) -> resolve_peer(Peer, Opts) end,
+            Loaded
+        )
     );
-normalize_peers(_) -> [].
+normalize_peers(Peers, Opts) when is_binary(Peers) ->
+    normalize_peers(dev_scheduler:parse_schedulers(Peers), Opts);
+normalize_peers(Peers, Opts) when is_map(Peers) ->
+    normalize_peers([Peers], Opts);
+normalize_peers(_, _Opts) ->
+    [].
+
+resolve_peer(Peer, Opts) when is_binary(Peer) ->
+    case is_url(Peer) of
+        true -> {true, Peer};
+        false -> resolve_peer_location(Peer, Opts)
+    end;
+resolve_peer(Peer, Opts) when is_map(Peer) ->
+    case hb_ao:get(<<"url">>, Peer, not_found, Opts) of
+        not_found -> false;
+        Url -> resolve_peer(Url, Opts)
+    end;
+resolve_peer(Peer, Opts) ->
+    resolve_peer(hb_util:bin(Peer), Opts).
+
+resolve_peer_location(Address, Opts) ->
+    case dev_scheduler_cache:read_location(Address, Opts) of
+        {ok, Location} ->
+            case hb_ao:get(<<"url">>, Location, not_found, Opts) of
+                not_found -> false;
+                Url -> resolve_peer(Url, Opts)
+            end;
+        not_found ->
+            case hb_gateway_client:scheduler_location(Address, Opts) of
+                {ok, Location} ->
+                    _ = dev_scheduler_cache:write_location(Location, Opts),
+                    case hb_ao:get(<<"url">>, Location, not_found, Opts) of
+                        not_found -> false;
+                        Url -> resolve_peer(Url, Opts)
+                    end;
+                {error, _} ->
+                    false
+            end
+    end.
+
+is_url(<<"http://", _/binary>>) -> true;
+is_url(<<"https://", _/binary>>) -> true;
+is_url(_) -> false.
 
 %% @doc Broadcast a block to configured peers.
 broadcast_block(State, Block) ->
