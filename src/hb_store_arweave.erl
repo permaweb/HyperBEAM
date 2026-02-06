@@ -79,6 +79,9 @@ read_with_type(Opts, Key) ->
     case read(Opts, Key) of
         {ok, Value} -> {simple, Value};
         {error, not_found} -> not_found;
+        {error, Error} ->
+            ?event(store_error, {arweave_unexpected, {key, Key}, {error, Error}}),
+            not_found;
         not_found -> not_found
     end.
 
