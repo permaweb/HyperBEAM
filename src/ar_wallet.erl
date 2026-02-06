@@ -186,6 +186,7 @@ to_address({{_, _, PubKey}, {_, PubKey}}, _) ->
     to_address(PubKey);
 to_address(PubKey, {rsa, 65537}) ->
     to_rsa_address(PubKey);
+
 to_address(PubKey, {?ECDSA_SIGN_ALG, secp256k1}) ->
 	%% For Arweave L1 ECDSA transactions, address is SHA256 hash of public key
 	%% (same as RSA). The keccak-based Ethereum address is used elsewhere.
