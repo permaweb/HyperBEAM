@@ -257,6 +257,7 @@ result_to_message(ExpectedID, Item, Opts) ->
         ),
 	SignatureType =
         case byte_size(Signature) of
+            64 -> {eddsa, ed25519};
             65 -> {ecdsa, 256};
             512 -> {rsa, 65537};
             _ -> unsupported_tx_signature_type
@@ -424,10 +425,43 @@ l1_transaction_test() ->
 %% @doc Test l2 message from graphql
 l2_dataitem_test() ->
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
+    {ok, Res} = read(ID = <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
+    Opts = #{},
+    CommitmentType = hb_util:deep_get(
+        [<<"commitments">>, ID, <<"type">>],
+        Res,
+        not_found,
+        Opts
+    ),
+    ?assertEqual(<<"rsa-pss-sha256">>, CommitmentType),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
+
+%% @doc ed25519 L2 Transaction test
+l2_dataitem_ed25519_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    ID = <<"AwrAs-HaBlc8xeI8sw6Wpbi7A0weQWeXYwW20CpX5oM">>,
+    {ok, Res} = read(ID, #{}),
+    ?event(gateway, {l2_dataitem, Res}),
+    Opts = #{},
+    CommitmentType = hb_util:deep_get(
+        [<<"commitments">>, ID, <<"type">>],
+        Res,
+        not_found,
+        Opts
+    ),
+    ?assertEqual(<<"ed25519">>, CommitmentType),
+    CommitmentCommitter = hb_util:deep_get(
+        [<<"commitments">>, ID, <<"committer">>],
+        Res,
+        not_found,
+        Opts
+    ),
+    ?assertEqual(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>, CommitmentCommitter),
+    %% Check Data
+    Data = maps:get(<<"data">>, Res),
+    ?assertEqual(<<"{\"displayName\":\"Test Hub\",\"description\":\"This is a test hub created in the test suite\",\"externalurl\":\"\",\"image\":\"\"}">>, Data).
 
 %% @doc Test optimistic index
 ao_dataitem_test() ->

@@ -203,13 +203,17 @@ with_unsigned_commitment(
 with_signed_commitment(
         Item, Device, FieldCommitments, Tags, 
         UncommittedMessage, CommittedKeys, Opts) ->
-    Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
+    Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner, Item#tx.signature_type)),
     ID = hb_util:human_id(Item#tx.id),
     ExtraCommitments = hb_maps:merge(
         FieldCommitments,
         hb_maps:with(?BUNDLE_KEYS, Tags),
         Opts
     ),
+    Type = case Item#tx.signature_type of
+        ?RSA_KEY_TYPE -> <<"rsa-pss-sha256">>;
+        ?EDDSA_KEY_TYPE -> <<"ed25519">>
+    end,
     Commitment =
         filter_unset(
             hb_maps:merge(
@@ -221,7 +225,7 @@ with_signed_commitment(
                     <<"signature">> => hb_util:encode(Item#tx.signature),
                     <<"keyid">> =>
                         <<"publickey:", (hb_util:encode(Item#tx.owner))/binary>>,
-                    <<"type">> => <<"rsa-pss-sha256">>,
+                    <<"type">> => Type,
                     <<"bundle">> => bundle_commitment_key(Tags, Opts),
                     <<"original-tags">> => original_tags(Item, Opts)
                 },
