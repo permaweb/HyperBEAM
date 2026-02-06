@@ -1,8 +1,8 @@
 %%% @doc Invariant-based network tests for Mysticeti-C scheduling.
 %%%
 %%% This suite spins up multiple isolated nodes (distinct stores), discovers
-%%% peers via scheduler-location, and drives consensus through the AO-Core HTTP
-%%% API. It enforces network-wide properties implied by the committer:
+%%% peers via scheduler-location, and drives consensus through the AO-Core
+%%% process HTTP API. It enforces network-wide properties implied by the committer:
 %%% - assignments are contiguous and unique per node,
 %%% - assignments are a subset of scheduled messages,
 %%% - all nodes share a common assignment prefix (no conflicting order).
@@ -99,7 +99,7 @@ init_state(_Opts) ->
         },
     #{ opts := FirstOpts } = hd(Nodes0),
     Proc = hb_message:commit(ProcBase, FirstOpts),
-    ProcID = hb_message:id(Proc, all, FirstOpts),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all, FirstOpts)),
     ProcLoaded = hb_cache:ensure_all_loaded(Proc, FirstOpts),
     lists:foreach(
         fun(#{ opts := Opts }) ->
@@ -127,7 +127,6 @@ schedule_request(State, _Opts) ->
 schedule_and_update(State, NodeInfo, Body) ->
     Opts = hb_maps:get(opts, NodeInfo, #{}, #{}),
     Node = hb_maps:get(url, NodeInfo, undefined, Opts),
-    Proc = hb_maps:get(proc, NodeInfo, hb_maps:get(proc, State, undefined, Opts), Opts),
     ProcID = hb_maps:get(proc_id, NodeInfo, hb_maps:get(proc_id, State, undefined, Opts), Opts),
     Msg =
         hb_message:commit(
@@ -138,14 +137,8 @@ schedule_and_update(State, NodeInfo, Body) ->
             },
             Opts
         ),
-    Req = #{
-        <<"path">> => <<"/~mysticeti@1.0/schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Msg,
-        <<"process">> => Proc
-    },
-    {ok, Res} = hb_http:post(Node, Req, Opts),
-    case hb_ao:get(<<"status">>, Res, 200, Opts) of
+    {ok, Res} = dev_mysticeti_test_utils:post_process_schedule(Node, ProcID, Msg, Opts),
+    case hb_maps:get(<<"status">>, Res, 200, Opts) of
         Status when Status >= 400 ->
             erlang:error({schedule_failed, Status, Res});
         _ -> ok
@@ -292,41 +285,51 @@ next_state(_Old, _Req, New, _Opts) ->
 
 %% @doc Extract message ids from assignments in slot order.
 assignment_ids(Assignments, Opts) ->
-    case lists:foldl(
-        fun({_Slot, Assignment}, {ok, Acc}) ->
-            Msg = hb_ao:get(<<"body">>, Assignment, Opts),
-            case catch hb_message:id(Msg, all, Opts) of
-                {'EXIT', Reason} ->
-                    {error, {invalid_assignment_body, Reason}};
-                Id ->
-                    {ok, [Id | Acc]}
+    case ordered_assignments(Assignments, Opts) of
+        {ok, Ordered} ->
+            case lists:foldl(
+                fun({_Slot, Assignment}, {ok, Acc}) ->
+                    case dev_mysticeti_test_utils:assignment_message_id(Assignment, Opts) of
+                        {ok, Id} -> {ok, [Id | Acc]};
+                        {error, Reason} -> {error, {invalid_assignment_body, Reason}}
+                    end;
+                (_Item, {error, _} = Err) ->
+                    Err
+                end,
+                {ok, []},
+                Ordered
+            ) of
+                {ok, MsgIds} -> {ok, lists:reverse(MsgIds)};
+                {error, Reason} -> {error, Reason}
             end;
-        (_Item, {error, _} = Err) ->
-            Err
-        end,
-        {ok, []},
-        hb_util:to_sorted_list(Assignments, Opts)
-    ) of
-        {ok, MsgIds} -> {ok, lists:reverse(MsgIds)};
-        {error, Reason} -> {error, Reason}
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Convert assignment slot keys to integers.
 slots_to_ints(Assignments, Opts) ->
+    case ordered_assignments(Assignments, Opts) of
+        {ok, Ordered} -> {ok, [Slot || {Slot, _} <- Ordered]};
+        {error, Reason} -> {error, Reason}
+    end.
+
+ordered_assignments(Assignments, Opts) ->
     case lists:foldl(
-        fun({Slot, _}, {ok, Acc}) ->
+        fun({Slot, Assignment}, {ok, Acc}) ->
             case hb_util:safe_int(Slot) of
-                {ok, Int} -> {ok, [Int | Acc]};
+                {ok, Int} -> {ok, [{Int, Assignment} | Acc]};
                 {error, _} -> {error, {invalid_slot, Slot}}
             end;
         (_Item, {error, _} = Err) ->
             Err
         end,
         {ok, []},
-        hb_util:to_sorted_list(Assignments, Opts)
+        hb_maps:to_list(Assignments, Opts)
     ) of
-        {ok, Slots} -> {ok, lists:reverse(Slots)};
-        {error, Reason} -> {error, Reason}
+        {ok, Pairs} ->
+            {ok, lists:sort(fun({A, _}, {B, _}) -> A < B end, Pairs)};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Collect assignments from all nodes over a slot range.
@@ -335,102 +338,12 @@ collect_assignments(Nodes, ProcID, From, To) ->
         fun(NodeInfo, Acc) ->
             Opts = hb_maps:get(opts, NodeInfo, #{}, #{}),
             Node = hb_maps:get(url, NodeInfo, undefined, Opts),
-            Assignments = fetch_assignments_http(Node, ProcID, From, To, Opts),
+            Assignments =
+                dev_mysticeti_test_utils:fetch_assignments_http(Node, ProcID, From, To, Opts),
             Acc#{ Node => Assignments }
         end,
         #{},
         Nodes
-    ).
-
-%% @doc Fetch assignments for a node via the Mysticeti HTTP API.
-fetch_assignments_http(Node, ProcID, From, To, Opts) ->
-    ReqOpts = Opts#{ http_only_result => false },
-    case catch hb_http:get(
-        Node,
-        <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
-          "&from=", (integer_to_binary(From))/binary,
-          "&to=", (integer_to_binary(To))/binary>>,
-        ReqOpts
-    ) of
-        {ok, Response} ->
-            Assignments0 = extract_assignments(Response, ReqOpts),
-            Assignments =
-                case hb_maps:size(Assignments0, ReqOpts) of
-                    0 ->
-                        Schedule = hb_maps:get(<<"body">>, Response, Response, ReqOpts),
-                        extract_assignments(Schedule, ReqOpts);
-                    _ ->
-                        Assignments0
-                end,
-            hb_private:reset(Assignments);
-        _ ->
-            #{}
-    end.
-
-%% @doc Extract assignments from a scheduler response or nested body.
-extract_assignments(Schedule, Opts) ->
-    case hb_maps:get(<<"assignments">>, Schedule, not_found, Opts) of
-        not_found ->
-            case hb_ao:get(<<"assignments">>, Schedule, not_found, Opts) of
-                not_found ->
-                    case hb_maps:get(<<"slot">>, Schedule, not_found, Opts) of
-                        not_found ->
-                            case hb_maps:get(<<"body">>, Schedule, not_found, Opts) of
-                                Body when is_map(Body) ->
-                                    extract_assignments(Body, Opts);
-                                _ ->
-                                    #{}
-                            end;
-                        _Slot ->
-                            normalize_assignments(Schedule, Opts)
-                    end;
-                Assignments ->
-                    normalize_assignments(Assignments, Opts)
-            end;
-        Assignments ->
-            normalize_assignments(Assignments, Opts)
-    end.
-
-%% @doc Normalize assignments into a slot-indexed map.
-normalize_assignments(Map, Opts) when is_map(Map) ->
-    case hb_maps:get(<<"slot">>, Map, not_found, Opts) of
-        not_found ->
-            Numeric = numeric_assignment_map(Map, Opts),
-            case hb_maps:size(Numeric, Opts) of
-                0 -> #{};
-                _ -> Numeric
-            end;
-        Slot ->
-            #{ Slot => Map }
-    end;
-normalize_assignments(List, Opts) when is_list(List) ->
-    lists:foldl(
-        fun(Item, Acc) ->
-            case hb_maps:get(<<"slot">>, Item, not_found, Opts) of
-                not_found -> Acc;
-                Slot -> hb_maps:put(Slot, Item, Acc, Opts)
-            end
-        end,
-        #{},
-        List
-    );
-normalize_assignments(_, _Opts) ->
-    #{}.
-
-%% @doc Convert assignment map keys to integers when possible.
-numeric_assignment_map(Map, Opts) ->
-    lists:foldl(
-        fun(Key, Acc) ->
-            case hb_util:safe_int(Key) of
-                {ok, IntKey} ->
-                    Value = hb_maps:get(Key, Map, undefined, Opts),
-                    hb_maps:put(IntKey, Value, Acc, Opts);
-                {error, _} ->
-                    Acc
-            end
-        end,
-        #{},
-        hb_maps:keys(Map, Opts)
     ).
 
 %% @doc Start N isolated Mysticeti nodes with separate stores.
@@ -495,13 +408,12 @@ missing_ready_nodes(Nodes) ->
         fun(#{ url := Node, opts := Opts }, Acc) ->
             ReqOpts =
                 Opts#{
-                    http_only_result => false,
                     http_connect_timeout => 2000,
                     http_request_send_timeout => 10000
                 },
             case catch hb_http:get(Node, <<"/~scheduler@1.0/status">>, ReqOpts) of
                 {ok, Res} ->
-                    Status = hb_ao:get(<<"status">>, Res, 200, ReqOpts),
+                    Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
                     case Status < 400 of
                         true -> Acc;
                         false -> [{Node, {status, Status}} | Acc]
@@ -523,7 +435,6 @@ register_scheduler_location(Node, Opts) ->
     Req = hb_message:commit(Req0, Opts),
     ReqOpts =
         Opts#{
-            http_only_result => false,
             http_connect_timeout => 2000,
             http_request_send_timeout => 10000
         },
@@ -548,7 +459,6 @@ post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
 post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
     ReqOpts =
         SenderOpts#{
-            http_only_result => false,
             http_connect_timeout => 2000,
             http_request_send_timeout => 10000
         },
@@ -560,7 +470,7 @@ post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
             ReqOpts
         ) of
             {ok, Res} ->
-                Status = hb_ao:get(<<"status">>, Res, 200, ReqOpts),
+                Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
                 case Status < 400 of
                     true -> {ok, Res};
                     false -> {error, {status, Status, Res}}
@@ -609,7 +519,6 @@ missing_scheduler_locations(Nodes, Addresses) ->
                 fun(Address, Acc1) ->
                     ReqOpts =
                         Opts#{
-                            http_only_result => false,
                             http_connect_timeout => 2000,
                             http_request_send_timeout => 10000
                         },
@@ -619,7 +528,7 @@ missing_scheduler_locations(Nodes, Addresses) ->
                         ReqOpts
                     ) of
                         {ok, Response} ->
-                            Status = hb_ao:get(<<"status">>, Response, 200, ReqOpts),
+                            Status = hb_maps:get(<<"status">>, Response, 200, ReqOpts),
                             case Status >= 400 of
                                 true ->
                                     [{Node, Address, {status, Status}} | Acc1];

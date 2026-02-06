@@ -1,6 +1,6 @@
 %%% @doc Invariant-based tests for Mysticeti-C scheduling.
 %%%
-%%% These tests drive the AO-Core HTTP surface (`/schedule`) and check the
+%%% These tests drive the AO-Core process HTTP surface (`/ID/schedule`) and check the
 %%% minimal safety properties implied by the consensus design:
 %%% - slots are contiguous and monotonic,
 %%% - assignments are unique,
@@ -69,7 +69,7 @@ init_state(_Opts) ->
             <<"type">> => <<"Process">>
         },
     Proc = hb_message:commit(ProcBase, Opts),
-    ProcID = hb_message:id(Proc, all, Opts),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
     ProcLoaded = hb_cache:ensure_all_loaded(Proc, Opts),
     {ok, _} = hb_cache:write(ProcLoaded, Opts),
     #{
@@ -91,7 +91,6 @@ schedule_request(_State, _Opts) ->
 schedule_and_update(State, Body) ->
     Opts = hb_maps:get(opts, State, #{}, #{}),
     ProcID = hb_maps:get(proc_id, State, undefined, Opts),
-    Proc = hb_maps:get(proc, State, undefined, Opts),
     Node = hb_maps:get(node, State, undefined, Opts),
     Msg =
         hb_message:commit(
@@ -102,21 +101,15 @@ schedule_and_update(State, Body) ->
             },
             Opts
         ),
-    Req = #{
-        <<"path">> => <<"/~mysticeti@1.0/schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Msg,
-        <<"process">> => Proc
-    },
-    {ok, Res} = hb_http:post(Node, Req, Opts),
-    case hb_ao:get(<<"status">>, Res, 200, Opts) of
+    {ok, Res} = dev_mysticeti_test_utils:post_process_schedule(Node, ProcID, Msg, Opts),
+    case hb_maps:get(<<"status">>, Res, 200, Opts) of
         Status when Status >= 400 ->
             erlang:error({schedule_failed, Status, Res});
         _ -> ok
     end,
     timer:sleep(50),
     Assignments =
-        fetch_assignments_http(
+        dev_mysticeti_test_utils:fetch_assignments_http(
             Node,
             ProcID,
             0,
@@ -131,102 +124,12 @@ schedule_and_update(State, Body) ->
         assignments := Assignments
     }}.
 
-%% @doc Fetch assignments over HTTP and normalize them.
-fetch_assignments_http(Node, ProcID, From, To, Opts) ->
-    ReqOpts = Opts#{ http_only_result => false },
-    case catch hb_http:get(
-        Node,
-        <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
-          "&from=", (integer_to_binary(From))/binary,
-          "&to=", (integer_to_binary(To))/binary>>,
-        ReqOpts
-    ) of
-        {ok, Response} ->
-            Assignments0 = extract_assignments(Response, ReqOpts),
-            Assignments =
-                case hb_maps:size(Assignments0, ReqOpts) of
-                    0 ->
-                        Schedule = hb_maps:get(<<"body">>, Response, Response, ReqOpts),
-                        extract_assignments(Schedule, ReqOpts);
-                    _ ->
-                        Assignments0
-                end,
-            hb_private:reset(Assignments);
-        _ ->
-            #{}
-    end.
-
-%% @doc Extract assignments from a scheduler response or nested body.
-extract_assignments(Schedule, Opts) ->
-    case hb_maps:get(<<"assignments">>, Schedule, not_found, Opts) of
-        not_found ->
-            case hb_ao:get(<<"assignments">>, Schedule, not_found, Opts) of
-                not_found ->
-                    case hb_maps:get(<<"slot">>, Schedule, not_found, Opts) of
-                        not_found ->
-                            case hb_maps:get(<<"body">>, Schedule, not_found, Opts) of
-                                Body when is_map(Body) ->
-                                    extract_assignments(Body, Opts);
-                                _ ->
-                                    #{}
-                            end;
-                        _Slot ->
-                            normalize_assignments(Schedule, Opts)
-                    end;
-                Assignments ->
-                    normalize_assignments(Assignments, Opts)
-            end;
-        Assignments ->
-            normalize_assignments(Assignments, Opts)
-    end.
-
-%% @doc Normalize assignments into a slot-indexed map.
-normalize_assignments(Map, Opts) when is_map(Map) ->
-    case hb_maps:get(<<"slot">>, Map, not_found, Opts) of
-        not_found ->
-            Numeric = numeric_assignment_map(Map, Opts),
-            case hb_maps:size(Numeric, Opts) of
-                0 -> #{};
-                _ -> Numeric
-            end;
-        Slot ->
-            #{ Slot => Map }
-    end;
-normalize_assignments(List, Opts) when is_list(List) ->
-    lists:foldl(
-        fun(Item, Acc) ->
-            case hb_maps:get(<<"slot">>, Item, not_found, Opts) of
-                not_found -> Acc;
-                Slot -> hb_maps:put(Slot, Item, Acc, Opts)
-            end
-        end,
-        #{},
-        List
-    );
-normalize_assignments(_, _Opts) ->
-    #{}.
-
-%% @doc Convert assignment map keys to integers when possible.
-numeric_assignment_map(Map, Opts) ->
-    lists:foldl(
-        fun(Key, Acc) ->
-            case hb_util:safe_int(Key) of
-                {ok, IntKey} ->
-                    Value = hb_maps:get(Key, Map, undefined, Opts),
-                    hb_maps:put(IntKey, Value, Acc, Opts);
-                {error, _} ->
-                    Acc
-            end
-        end,
-        #{},
-        hb_maps:keys(Map, Opts)
-    ).
-
 %% @doc Ensure assignment slots are contiguous starting at 0.
 verify_assignment_slots(_Old, _Req, #{ assignments := Assignments }, Opts) ->
     Slots =
-        [hb_util:int(Slot)
-         || {Slot, _} <- hb_util:to_sorted_list(Assignments, Opts)],
+        lists:sort(
+            [hb_util:int(Slot) || Slot <- hb_maps:keys(Assignments, Opts)]
+        ),
     Expected =
         case Slots of
             [] -> [];
@@ -254,8 +157,10 @@ next_state(_Old, _Req, New, _Opts) ->
 assignment_ids(Assignments, Opts) ->
     lists:map(
         fun({_Slot, Assignment}) ->
-            Msg = hb_ao:get(<<"body">>, Assignment, Opts),
-            hb_message:id(Msg, all, Opts)
+            case dev_mysticeti_test_utils:assignment_message_id(Assignment, Opts) of
+                {ok, Id} -> Id;
+                {error, Reason} -> erlang:error({invalid_assignment, Reason})
+            end
         end,
         hb_util:to_sorted_list(Assignments, Opts)
     ).

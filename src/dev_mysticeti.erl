@@ -1,7 +1,9 @@
 %%% @doc Mysticeti-C scheduler device (AO-Core HTTP surface).
 %%%
 %%% This module exposes the `process@1.0` scheduler interface and delegates
-%%% consensus to `dev_mysticeti_server`. It is intentionally thin: parse the
+%%% consensus to `dev_mysticeti_server`. User-facing clients are expected to
+%%% interact through `process@1.0` (e.g. `/ID/schedule`), with this device
+%%% operating as the configured scheduler. It is intentionally thin: parse the
 %%% request, locate the per-process server, and translate results into the
 %%% canonical schedule/assignment formats. The schedule returned is a total
 %%% order of user messages (assignments), derived from the consensus decision

@@ -1,6 +1,6 @@
 %%% @doc Mysticeti-C test vectors and unit tests.
 %%%
-%%% These tests drive the AO-Core HTTP surface (`/~mysticeti@1.0`) and
+%%% These tests drive the AO-Core process HTTP surface (`/ID/schedule`) and
 %%% construct DAGs that exercise the commit rules described in the paper:
 %%% - mysticeti-paper/algorithms/consensus_utils.tex (Alg. 1 predicates),
 %%% - mysticeti-paper/algorithms/universal_committer.tex (Alg. 3 committer),
@@ -66,7 +66,7 @@ test_context(Count, Overrides) ->
     PrimaryOpts = hb_maps:get(opts, Primary, #{}, #{}),
     Node = hb_http_server:start_node(PrimaryOpts),
     Proc = mysticeti_test_process(AuthorIds, Overrides, PrimaryOpts),
-    ProcID = hb_message:id(Proc, all, PrimaryOpts),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all, PrimaryOpts)),
     lists:foreach(
         fun(#{ opts := Opts }) -> {ok, _} = hb_cache:write(Proc, Opts) end,
         Authors
@@ -106,45 +106,15 @@ test_block(ProcID, Author, Round, Parents, Payload, Opts) ->
             <<"timestamp">> => scheduler_time(),
             <<"body">> => Payload
         },
-    Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
+    Signed = hb_message:commit(Block0, Opts),
     case ensure_block_id(Signed, Opts) of
         {error, _} = Err -> erlang:error(Err);
         Block -> Block
     end.
 
-%% @doc Post a Mysticeti HTTP request with the given payload.
-http_post_mysticeti(Node, Path, Body, Extra, Opts) ->
-    BaseMap = #{
-        <<"path">> => Path,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Body
-    },
-    Base = hb_message:commit(hb_maps:merge(BaseMap, Extra, Opts), Opts),
-    hb_http:post(Node, Base, Opts).
-
-%% @doc Post /schedule with the process in the request.
-http_post_mysticeti_schedule(Node, ProcMsg, Msg, Opts) ->
-    http_post_mysticeti(
-        Node,
-        <<"/~mysticeti@1.0/schedule">>,
-        Msg,
-        #{ <<"process">> => ProcMsg },
-        Opts
-    ).
-
-%% @doc Post /block to ingest a block from peers.
-http_post_mysticeti_block(Node, Block, Opts) ->
-    http_post_mysticeti(Node, <<"/~mysticeti@1.0/block">>, Block, #{}, Opts).
-
-%% @doc Get schedule assignments for a process.
-http_get_mysticeti_schedule(Node, ProcID, From, To, Opts) ->
-    hb_http:get(
-        Node,
-        <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
-          "&from=", (integer_to_binary(From))/binary,
-          "&to=", (integer_to_binary(To))/binary>>,
-        Opts
-    ).
+%% @doc Post /<process>/schedule with a signed message.
+post_process_schedule(Node, ProcID, Msg, Opts) ->
+    dev_mysticeti_test_utils:post_process_schedule(Node, ProcID, Msg, Opts).
 
 %% @doc Build a process configured for Mysticeti tests with overrides.
 mysticeti_test_process(Validators, Overrides, Opts) ->
@@ -184,18 +154,19 @@ test_message(ProcID, Body, Opts) ->
 %% @doc Schedule a test body and return {Message, ProposerBlockId}.
 schedule_body(Ctx, Body) ->
     Opts = ctx_get(primary_opts, Ctx, #{}),
-    Proc = ctx_get(proc, Ctx),
     ProcID = ctx_get(proc_id, Ctx),
     Msg = test_message(ProcID, Body, Opts),
     {ok, _} = hb_cache:write(Msg, Opts),
-    {ok, Res} = http_post_mysticeti_schedule(ctx_get(node, Ctx), Proc, Msg, Opts),
-    {Msg, hb_ao:get(<<"pending/block">>, Res, undefined, Opts)}.
+    {ok, Res} = post_process_schedule(ctx_get(node, Ctx), ProcID, Msg, Opts),
+    Pending = hb_maps:get(<<"pending">>, Res, #{}, Opts),
+    BlockId = hb_maps:get(<<"block">>, Pending, undefined, Opts),
+    {Msg, BlockId}.
 
 %% @doc Post a list of blocks to the local node.
-post_blocks(Node, Blocks, Opts) ->
+post_blocks(Pid, Blocks) ->
     lists:foreach(
         fun(Block) ->
-            {ok, _} = http_post_mysticeti_block(Node, Block, Opts)
+            ok = dev_mysticeti_server:ingest_block(Pid, Block)
         end,
         Blocks
     ).
@@ -240,19 +211,14 @@ post_round(Ctx, Round, Authors, PrevRoundByAuthor, Payloads) ->
     ProcID = ctx_get(proc_id, Ctx),
     OptsByAuthor = ctx_get(opts_by_author, Ctx, #{}),
     Blocks = make_round_blocks(ProcID, Round, Authors, PrevRoundByAuthor, Payloads, OptsByAuthor),
-    post_blocks(ctx_get(node, Ctx), Blocks, ctx_get(primary_opts, Ctx, #{})),
+    post_blocks(ctx_get(pid, Ctx), Blocks),
     {Blocks, blocks_by_author(Blocks, ctx_get(primary_opts, Ctx, #{}))}.
 
 %% @doc Fetch assignments for a slot range and normalize numeric keys.
 fetch_assignments(Ctx, From, To) ->
     Opts = ctx_get(primary_opts, Ctx, #{}),
     ProcID = ctx_get(proc_id, Ctx),
-    {ok, Schedule} = http_get_mysticeti_schedule(ctx_get(node, Ctx), ProcID, From, To, Opts),
-    Assignments0 =
-        hb_private:reset(
-            hb_ao:get(<<"assignments">>, Schedule, Opts)
-        ),
-    numeric_assignment_map(Assignments0, Opts).
+    dev_mysticeti_test_utils:fetch_assignments_http(ctx_get(node, Ctx), ProcID, From, To, Opts).
 
 %% @doc Wait until a minimum number of assignments is available.
 wait_for_assignments(Ctx, From, To, Expected) ->
@@ -264,22 +230,6 @@ wait_for_assignments(Ctx, From, To, Expected) ->
         5000
     ),
     fetch_assignments(Ctx, From, To).
-
-%% @doc Convert assignment map keys to integers.
-numeric_assignment_map(Assignments, Opts) ->
-    lists:foldl(
-        fun(Key, Acc) ->
-            case hb_util:safe_int(Key) of
-                {ok, IntKey} ->
-                    Value = hb_maps:get(Key, Assignments, undefined, Opts),
-                    hb_maps:put(IntKey, Value, Acc, Opts);
-                {error, _} ->
-                    Acc
-            end
-        end,
-        #{},
-        hb_maps:keys(Assignments, Opts)
-    ).
 
 %% @doc Compute proposer/voting/decision rounds for a wave.
 %% Mysticeti-C Algorithm 2: ProposerRound and DecisionRound.
@@ -307,9 +257,14 @@ proposer_offset(Proc, Opts) ->
 
 %% @doc Read a required mysticeti config key.
 mysticeti_required(Proc, Key, Opts) ->
-    case hb_ao:get(<<"mysticeti/", Key/binary>>, Proc, not_found, Opts#{ hashpath => ignore }) of
+    Mysticeti = hb_maps:get(<<"mysticeti">>, Proc, not_found, Opts),
+    case Mysticeti of
         not_found -> erlang:error({missing_mysticeti_config, Key});
-        Value -> Value
+        _ ->
+            case hb_maps:get(Key, Mysticeti, not_found, Opts) of
+                not_found -> erlang:error({missing_mysticeti_config, Key});
+                Value -> Value
+            end
     end.
 
 %% @doc Build vote parents with a specific proposer ordering.
@@ -343,8 +298,8 @@ mysticeti_quorum_commit() ->
     Assignments = wait_for_assignments(Ctx, 0, 1, 1),
     Opts = ctx_get(primary_opts, Ctx, #{}),
     [{Slot, Assignment} | _] = hb_util:to_sorted_list(Assignments, Opts),
-    ?assertEqual(0, Slot),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, Assignment, Opts)).
+    ?assertEqual(0, hb_util:int(Slot)),
+    ?assertEqual(<<"m0">>, dev_mysticeti_test_utils:assignment_body(Assignment, Opts)).
 
 mysticeti_no_quorum_commit_test_() ->
     {timeout, 60, fun mysticeti_no_quorum_commit/0}.
@@ -424,10 +379,10 @@ mysticeti_two_wave_order() ->
     Assignments = wait_for_assignments(Ctx, 0, 1, 2),
     Sorted = hb_util:to_sorted_list(Assignments, Opts),
     [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, Slot0),
-    ?assertEqual(1, Slot1),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, Opts)).
+    ?assertEqual(0, hb_util:int(Slot0)),
+    ?assertEqual(1, hb_util:int(Slot1)),
+    ?assertEqual(<<"m0">>, dev_mysticeti_test_utils:assignment_body(A0, Opts)),
+    ?assertEqual(<<"m1">>, dev_mysticeti_test_utils:assignment_body(A1Assignment, Opts)).
 
 %% @doc Test indirect commit via a later anchor.
 mysticeti_indirect_commit_test_() ->
@@ -461,7 +416,7 @@ mysticeti_indirect_commit() ->
             opts_for(Ctx, A4)
         ),
     VoteBlocks0 = VoteBlocksA2A3 ++ [VoteBlockA4],
-    post_blocks(ctx_get(node, Ctx), VoteBlocks0, ctx_get(primary_opts, Ctx, #{})),
+    post_blocks(ctx_get(pid, Ctx), VoteBlocks0),
     VoteByAuthor0 = blocks_by_author(VoteBlocks0, ctx_get(primary_opts, Ctx, #{})),
     {_, DecisionByAuthor0} = post_round(Ctx, 2, [A2, A3, A4], VoteByAuthor0, #{}),
     ?assertEqual(0, hb_maps:size(fetch_assignments(Ctx, 0, 0), ctx_get(primary_opts, Ctx, #{}))),
@@ -486,10 +441,10 @@ mysticeti_indirect_commit() ->
     Assignments = wait_for_assignments(Ctx, 0, 1, 2),
     Sorted = hb_util:to_sorted_list(Assignments, Opts),
     [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, Slot0),
-    ?assertEqual(1, Slot1),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, Opts)).
+    ?assertEqual(0, hb_util:int(Slot0)),
+    ?assertEqual(1, hb_util:int(Slot1)),
+    ?assertEqual(<<"m0">>, dev_mysticeti_test_utils:assignment_body(A0, Opts)),
+    ?assertEqual(<<"m1">>, dev_mysticeti_test_utils:assignment_body(A1Assignment, Opts)).
 
 %% @doc Validate that parent order determines support in votes.
 mysticeti_supported_block_dfs_test_() ->
@@ -515,7 +470,7 @@ mysticeti_supported_block_dfs() ->
             #{},
             ctx_get(opts_by_author, Ctx, #{})
         ),
-    post_blocks(ctx_get(node, Ctx), [EquivBlock | R0Others], Opts),
+    post_blocks(ctx_get(pid, Ctx), [EquivBlock | R0Others]),
     R0ByAuthor0 = blocks_by_author(R0Others, Opts),
     R0ByAuthor = hb_maps:put(Primary, ProposerBlock0, R0ByAuthor0, Opts),
     AllRound0 = [ProposerBlock0, hb_maps:get(<<"id">>, EquivBlock, undefined, Opts)
@@ -552,7 +507,7 @@ mysticeti_supported_block_dfs() ->
             opts_for(Ctx, A4)
         ),
     VoteBlocks = [VoteA2, VoteA3, VoteA4],
-    post_blocks(ctx_get(node, Ctx), VoteBlocks, Opts),
+    post_blocks(ctx_get(pid, Ctx), VoteBlocks),
     VoteByAuthor = blocks_by_author(VoteBlocks, Opts),
     _ = post_round(Ctx, 2, [A2, A3, A4], VoteByAuthor, #{}),
     Assignments = fetch_assignments(Ctx, 0, 0),
@@ -582,7 +537,7 @@ mysticeti_certificate_distinct_authors() ->
             #{},
             ctx_get(opts_by_author, Ctx, #{})
         ),
-    post_blocks(ctx_get(node, Ctx), [EquivBlock | R0Others], Opts),
+    post_blocks(ctx_get(pid, Ctx), [EquivBlock | R0Others]),
     R0ByAuthor0 = blocks_by_author(R0Others, Opts),
     R0ByAuthor = hb_maps:put(Primary, ProposerBlock0, R0ByAuthor0, Opts),
     AllRound0 = [ProposerBlock0, hb_maps:get(<<"id">>, EquivBlock, undefined, Opts)
@@ -627,7 +582,7 @@ mysticeti_certificate_distinct_authors() ->
             undefined,
             opts_for(Ctx, A4)
         ),
-    post_blocks(ctx_get(node, Ctx), [V1a, V1b, V1c, V1d], Opts),
+    post_blocks(ctx_get(pid, Ctx), [V1a, V1b, V1c, V1d]),
     V1aId = hb_maps:get(<<"id">>, V1a, undefined, Opts),
     V1bId = hb_maps:get(<<"id">>, V1b, undefined, Opts),
     V1cId = hb_maps:get(<<"id">>, V1c, undefined, Opts),
@@ -659,7 +614,7 @@ mysticeti_certificate_distinct_authors() ->
             undefined,
             opts_for(Ctx, A4)
         ),
-    post_blocks(ctx_get(node, Ctx), [D2A2, D2A3, D2A4], Opts),
+    post_blocks(ctx_get(pid, Ctx), [D2A2, D2A3, D2A4]),
     Assignments = fetch_assignments(Ctx, 0, 0),
     ?assertEqual(0, hb_maps:size(Assignments, Opts)).
 
@@ -693,14 +648,14 @@ mysticeti_equivocation_commit() ->
             #{},
             ctx_get(opts_by_author, Ctx, #{})
         ),
-    post_blocks(ctx_get(node, Ctx), [EquivBlock | R0Others], Opts),
+    post_blocks(ctx_get(pid, Ctx), [EquivBlock | R0Others]),
     R0ByAuthor0 = blocks_by_author(R0Others, Opts),
     R0ByAuthor = hb_maps:put(ctx_get(primary, Ctx), ProposerBlock0, R0ByAuthor0, Opts),
     {_, VoteByAuthor} = post_round(Ctx, 1, other_authors(Ctx), R0ByAuthor, #{}),
     _ = post_round(Ctx, 2, other_authors(Ctx), VoteByAuthor, #{}),
     Assignments = wait_for_assignments(Ctx, 0, 0, 1),
     Bodies =
-        [hb_ao:get(<<"body/body">>, A, Opts)
+        [dev_mysticeti_test_utils:assignment_body(A, Opts)
          || {_Slot, A} <- hb_util:to_sorted_list(Assignments, Opts)],
     ?assertEqual([<<"m0">>], Bodies).
 
@@ -733,7 +688,7 @@ mysticeti_prev_block_skip_round() ->
             undefined,
             ctx_get(primary_opts, Ctx, #{})
         ),
-    post_blocks(ctx_get(node, Ctx), [A1Round2], ctx_get(primary_opts, Ctx, #{})),
+    post_blocks(ctx_get(pid, Ctx), [A1Round2]),
     Info = dev_mysticeti_server:info(ctx_get(pid, Ctx)),
     ?assert(hb_maps:get(max_round, Info, -1, #{}) >= 2).
 
@@ -761,11 +716,7 @@ mysticeti_multi_proposer_commit() ->
             #{},
             ctx_get(opts_by_author, Ctx, #{})
         ),
-    post_blocks(
-        ctx_get(node, Ctx),
-        [ProposerBlock1 | R0Blocks],
-        ctx_get(primary_opts, Ctx, #{})
-    ),
+    post_blocks(ctx_get(pid, Ctx), [ProposerBlock1 | R0Blocks]),
     R0ByAuthor0 =
         blocks_by_author([ProposerBlock1 | R0Blocks], ctx_get(primary_opts, Ctx, #{})),
     R0ByAuthor =
@@ -781,10 +732,10 @@ mysticeti_multi_proposer_commit() ->
     Opts = ctx_get(primary_opts, Ctx, #{}),
     Sorted = hb_util:to_sorted_list(Assignments, Opts),
     [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, Slot0),
-    ?assertEqual(1, Slot1),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, Opts)).
+    ?assertEqual(0, hb_util:int(Slot0)),
+    ?assertEqual(1, hb_util:int(Slot1)),
+    ?assertEqual(<<"m0">>, dev_mysticeti_test_utils:assignment_body(A0, Opts)),
+    ?assertEqual(<<"m1">>, dev_mysticeti_test_utils:assignment_body(A1Assignment, Opts)).
 
 %% @doc Test rejection of invalidly signed blocks.
 mysticeti_invalid_signature_rejected_test_() ->
@@ -809,7 +760,7 @@ mysticeti_invalid_signature_rejected() ->
             undefined,
             opts_for(Ctx, A3)
         ),
-    post_blocks(ctx_get(node, Ctx), [InvalidVote], ctx_get(primary_opts, Ctx, #{})),
+    post_blocks(ctx_get(pid, Ctx), [InvalidVote]),
     VoteByAuthor0 = blocks_by_author(VoteBlocksValid, ctx_get(primary_opts, Ctx, #{})),
     InvalidVoteId =
         hb_maps:get(<<"id">>, InvalidVote, undefined, ctx_get(primary_opts, Ctx, #{})),
