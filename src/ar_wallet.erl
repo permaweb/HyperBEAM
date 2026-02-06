@@ -17,7 +17,7 @@
 
 new() ->
     new({rsa, 65537}).
-new(KeyType = {rsa, 65537}) ->
+new(KeyType) when KeyType =:= {rsa, 65537} orelse KeyType =:= {eddsa, ed25519} ->
     case request_pooled_wallet(KeyType) of
         {ok, Wallet} -> Wallet;
         timeout -> generate_wallet(KeyType)
@@ -38,6 +38,9 @@ generate_wallet(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} -
 generate_wallet(KeyType = {KeyAlg, KeyCrv}) when KeyAlg =:= ?ECDSA_SIGN_ALG andalso KeyCrv =:= secp256k1 ->
     {OrigPub, Priv} = crypto:generate_key(ecdh, KeyCrv),
     Pub = compress_ecdsa_pubkey(OrigPub),
+    {{KeyType, Priv, Pub}, {KeyType, Pub}};
+generate_wallet(KeyType = {KeyAlg, Curve}) when KeyType =:= {?EDDSA_SIGN_ALG, ed25519} ->
+    {Pub, Priv} = crypto:generate_key(KeyAlg, Curve),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
 
 request_pooled_wallet(KeyType) ->
@@ -99,6 +102,8 @@ maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight) ->
 
 wallet_pool_name({rsa, 65537}) ->
     ar_wallet_pool_rsa_65537;
+wallet_pool_name({?EDDSA_SIGN_ALG, ed25519}) ->
+    ar_wallet_pool_ed25519;
 wallet_pool_name({?ECDSA_SIGN_ALG, secp256k1}) ->
     ar_wallet_pool_ecdsa_secp256k1.
 
@@ -121,6 +126,8 @@ sign({{rsa, PublicExpnt}, Priv, Pub}, Data, DigestType) when PublicExpnt =:= 655
 sign({{KeyAlg, KeyCrv}, Priv, _Pub}, Data, _DigestType)
         when KeyAlg =:= ?ECDSA_SIGN_ALG andalso KeyCrv =:= secp256k1 ->
     secp256k1_nif:sign(Data, Priv);
+sign({KeyType = {KeyAlg, Curve}, Priv, _Pub}, Data, _DigestType) when KeyType =:= {?EDDSA_SIGN_ALG, ed25519} ->
+    crypto:sign(KeyAlg, none, Data, [Priv, Curve]);
 sign({{KeyType, Priv, Pub}, {KeyType, Pub}}, Data, DigestType) ->
     sign({KeyType, Priv, Pub}, Data, DigestType).
 
@@ -149,7 +156,10 @@ verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65
 verify({{KeyAlg, KeyCrv}, Pub}, Data, Sig, _DigestType)
         when KeyAlg =:= ?ECDSA_SIGN_ALG andalso KeyCrv =:= secp256k1 ->
     {Pass, PubExtracted} = secp256k1_nif:ecrecover(Data, Sig),
-    Pass andalso PubExtracted =:= Pub.
+    Pass andalso PubExtracted =:= Pub;
+verify({{KeyAlg, Curve}, Pub}, Data, Sig, _DigestType) when
+      byte_size(Pub) == 32 andalso byte_size(Sig) == 64 andalso Curve =:= ed25519 andalso KeyAlg =:= ?EDDSA_SIGN_ALG ->
+    crypto:verify(eddsa, none, Data, Sig, [Pub, Curve]).
 
 %% @doc Find a public key from a wallet.
 to_pubkey(Pubkey) ->
@@ -177,7 +187,9 @@ to_address(PubKey, {?ECDSA_SIGN_ALG, 256}) ->
 to_address(PubKey, {?ECDSA_SIGN_ALG, secp256k1}) ->
 	%% For Arweave L1 ECDSA transactions, address is SHA256 hash of public key
 	%% (same as RSA). The keccak-based Ethereum address is used elsewhere.
-	hash_address(PubKey).
+	hash_address(PubKey);
+to_address(PubKey, {?EDDSA_SIGN_ALG, ed25519}) ->
+    to_eddsa_address(PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.
@@ -335,6 +347,9 @@ hash_address(PubKey) ->
 
 to_ecdsa_address(PubKey) ->
 	hb_keccak:key_to_ethereum_address(PubKey).
+
+to_eddsa_address(PubKey) ->
+    hash_address(PubKey).
 
 %%%===================================================================
 %%% Private functions.
