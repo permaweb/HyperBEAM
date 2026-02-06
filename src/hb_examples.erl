@@ -148,64 +148,8 @@ mysticeti_lua_process_http_test_() ->
 %% Validates direct decision and total-order properties (Algorithms 2–3,
 %% mysticeti-paper/algorithms/*.tex) under multi-node gossip.
 run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
-    {Nodes, Validators} = start_mysticeti_nodes(NodeCount),
-    case wait_for_nodes_ready(Nodes, 10000) of
-        true -> ok;
-        {error, MissingNodes} -> erlang:error({nodes_not_ready, MissingNodes})
-    end,
-    Locations =
-        lists:map(
-            fun(#{ url := Node, opts := Opts }) ->
-                {ok, Location} = register_scheduler_location(Node, Opts),
-                #{ location => Location, opts => Opts }
-            end,
-            Nodes
-        ),
-    PeerUrls =
-        [
-            Url
-        || #{ location := Location, opts := Opts } <- Locations,
-           (Url = hb_ao:get(<<"url">>, Location, not_found, Opts)) =/= not_found
-        ],
-    lists:foreach(
-        fun(#{ location := Location, opts := SenderOpts }) ->
-            lists:foreach(
-                fun(#{ url := Node }) ->
-                    case post_scheduler_location(Node, Location, SenderOpts, 10000) of
-                        {ok, _} -> ok;
-                        {error, Reason} ->
-                            erlang:error(
-                                {scheduler_location_post_failed, Node, Reason}
-                            )
-                    end
-                end,
-                Nodes
-            )
-        end,
-        Locations
-    ),
-    timer:sleep(200),
-    case wait_for_scheduler_locations(Nodes, Validators, 20000) of
-        true -> ok;
-        {error, MissingLocations} ->
-            erlang:error({scheduler_locations_missing, MissingLocations})
-    end,
-    ProcBase =
-        #{
-            <<"device">> => <<"process@1.0">>,
-            <<"scheduler-device">> => <<"mysticeti@1.0">>,
-            <<"scheduler-location">> => Validators,
-            <<"mysticeti">> => #{
-                <<"validators">> => Validators,
-                <<"stakers">> =>
-                    [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
-                <<"peers">> => PeerUrls,
-                <<"wave-length">> => 3,
-                <<"proposer-offset">> => 0,
-                <<"num-proposers">> => length(Validators)
-            },
-            <<"type">> => <<"Process">>
-        },
+    {Nodes, Validators, PeerUrls} = setup_mysticeti_http_network(NodeCount),
+    ProcBase = mysticeti_proc_base(Validators, PeerUrls),
     #{ opts := FirstOpts } = hd(Nodes),
     Proc = hb_message:commit(ProcBase, FirstOpts),
     ProcID = hb_message:id(Proc, all, FirstOpts),
@@ -221,11 +165,11 @@ run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
         fun(#{ opts := Opts }) ->
             Pid = dev_mysticeti_registry:find(ProcID, ProcLoaded, Opts),
             Info = dev_mysticeti_server:info(Pid),
-            Peers = maps:get(peers, Info, []),
+            Peers = hb_maps:get(peers, Info, [], Opts),
             ?assert(length(Peers) >= 1),
-            ValidatorsInfo = maps:get(validators, Info, []),
+            ValidatorsInfo = hb_maps:get(validators, Info, [], Opts),
             ?assertEqual(NodeCount, length(ValidatorsInfo)),
-            ?assert(lists:member(maps:get(local_author, Info), ValidatorsInfo))
+            ?assert(lists:member(hb_maps:get(local_author, Info, undefined, Opts), ValidatorsInfo))
         end,
         NodesWithProc
     ),
@@ -325,6 +269,23 @@ run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
         ),
     ?assert(hb_maps:size(RefSlots, FirstOpts) == length(ExpectedBodies)).
 
+%% @doc Build a Mysticeti process base message for tests.
+mysticeti_proc_base(Validators, PeerUrls) ->
+    #{
+        <<"device">> => <<"process@1.0">>,
+        <<"scheduler-device">> => <<"mysticeti@1.0">>,
+        <<"scheduler-location">> => Validators,
+        <<"mysticeti">> => #{
+            <<"validators">> => Validators,
+            <<"stakers">> => [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
+            <<"peers">> => PeerUrls,
+            <<"wave-length">> => 3,
+            <<"proposer-offset">> => 0,
+            <<"num-proposers">> => length(Validators)
+        },
+        <<"type">> => <<"Process">>
+    }.
+
 mysticeti_wasm_process_http() ->
     mysticeti_exec_process_http(wasm).
 
@@ -336,22 +297,7 @@ mysticeti_exec_process_http(Kind) ->
     NodeCount = 4,
     {Nodes, Validators, PeerUrls} = setup_mysticeti_http_network(NodeCount),
     {ProcExtra, MsgSpecs, MsgBuilder, ExpectedFun, OutputPath} = exec_spec(Kind, Nodes),
-    ProcBase =
-        #{
-            <<"device">> => <<"process@1.0">>,
-            <<"scheduler-device">> => <<"mysticeti@1.0">>,
-            <<"scheduler-location">> => Validators,
-            <<"mysticeti">> => #{
-                <<"validators">> => Validators,
-                <<"stakers">> =>
-                    [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
-                <<"peers">> => PeerUrls,
-                <<"wave-length">> => 3,
-                <<"proposer-offset">> => 0,
-                <<"num-proposers">> => length(Validators)
-            },
-            <<"type">> => <<"Process">>
-        },
+    ProcBase = mysticeti_proc_base(Validators, PeerUrls),
     #{ url := _FirstNode, opts := FirstOpts } = hd(Nodes),
     Proc = hb_message:commit(hb_maps:merge(ProcBase, ProcExtra, FirstOpts), FirstOpts),
     ProcMsgId = hb_message:id(Proc, all, FirstOpts),

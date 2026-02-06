@@ -14,6 +14,10 @@
 %%% - `GET /~mysticeti@1.0/slot`: return the latest committed slot index.
 %%% - `POST /~mysticeti@1.0/block`: ingest a consensus block from peers.
 %%%
+%%% Process configuration (strict):
+%%% - The process message must include a `mysticeti` map containing
+%%%   `stakers`, `peers`, `wave-length`, `proposer-offset`, and `num-proposers`.
+%%%
 %%% Paper reference for the consensus logic: mysticeti-paper/algorithms/
 %%% consensus_utils.tex (Alg. 1 helper predicates) and
 %%% mysticeti-paper/algorithms/universal_committer.tex (Alg. 3).
@@ -98,6 +102,7 @@ post_schedule(Base, Req, Opts) ->
             }}
     end.
 
+%% @doc Format the POST /schedule response.
 format_post_schedule_result({committed, Assignment}) ->
     {ok, Assignment};
 format_post_schedule_result({pending, Info}) ->
@@ -163,7 +168,7 @@ slot(Base, Req, Opts) ->
                 end;
             PID ->
                 Info = dev_mysticeti_server:info(PID),
-                maps:get(current, Info, -1)
+                hb_maps:get(current, Info, -1, Opts)
         end,
     {ok, #{
         <<"process">> => ProcID,
@@ -324,6 +329,7 @@ get_local_assignments(ProcID, From, RequestedTo, Opts) ->
         ComputedTo < RequestedTo
     }.
 
+%% @doc Read assignments for a slot range from the local cache.
 read_local_assignments(_ProcID, From, To, _Opts) when From > To ->
     [];
 read_local_assignments(ProcID, CurrentSlot, To, Opts) ->

@@ -17,6 +17,7 @@
 mysticeti_invariant_test_() ->
     {timeout, 180, fun mysticeti_invariant/0}.
 
+%% @doc Run the invariant state machine for a single-node Mysticeti instance.
 mysticeti_invariant() ->
     ok = hb_invariant:state_machine(
         #{
@@ -34,6 +35,7 @@ mysticeti_invariant() ->
         }
     ).
 
+%% @doc Build the initial invariant state with a single node and process.
 init_state(_Opts) ->
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -80,10 +82,12 @@ init_state(_Opts) ->
         max_slots => 120
     }.
 
+%% @doc Generate a randomized schedule request for invariants.
 schedule_request(_State, _Opts) ->
     Body = hb_util:bin(hb_invariant:string(8)),
     fun(S, _SOpts) -> schedule_and_update(S, Body) end.
 
+%% @doc Schedule a message and update assignments in state.
 schedule_and_update(State, Body) ->
     Opts = hb_maps:get(opts, State, #{}, #{}),
     ProcID = hb_maps:get(proc_id, State, undefined, Opts),
@@ -127,6 +131,7 @@ schedule_and_update(State, Body) ->
         assignments := Assignments
     }}.
 
+%% @doc Fetch assignments over HTTP and normalize them.
 fetch_assignments_http(Node, ProcID, From, To, Opts) ->
     ReqOpts = Opts#{ http_only_result => false },
     case catch hb_http:get(
@@ -151,6 +156,7 @@ fetch_assignments_http(Node, ProcID, From, To, Opts) ->
             #{}
     end.
 
+%% @doc Extract assignments from a scheduler response or nested body.
 extract_assignments(Schedule, Opts) ->
     case hb_maps:get(<<"assignments">>, Schedule, not_found, Opts) of
         not_found ->
@@ -174,6 +180,7 @@ extract_assignments(Schedule, Opts) ->
             normalize_assignments(Assignments, Opts)
     end.
 
+%% @doc Normalize assignments into a slot-indexed map.
 normalize_assignments(Map, Opts) when is_map(Map) ->
     case hb_maps:get(<<"slot">>, Map, not_found, Opts) of
         not_found ->
@@ -199,6 +206,7 @@ normalize_assignments(List, Opts) when is_list(List) ->
 normalize_assignments(_, _Opts) ->
     #{}.
 
+%% @doc Convert assignment map keys to integers when possible.
 numeric_assignment_map(Map, Opts) ->
     lists:foldl(
         fun(Key, Acc) ->
@@ -214,6 +222,7 @@ numeric_assignment_map(Map, Opts) ->
         hb_maps:keys(Map, Opts)
     ).
 
+%% @doc Ensure assignment slots are contiguous starting at 0.
 verify_assignment_slots(_Old, _Req, #{ assignments := Assignments }, Opts) ->
     Slots =
         [hb_util:int(Slot)
@@ -225,19 +234,23 @@ verify_assignment_slots(_Old, _Req, #{ assignments := Assignments }, Opts) ->
         end,
     (Slots == Expected) orelse {non_contiguous_slots, {slots, Slots}}.
 
+%% @doc Ensure each assignment was previously scheduled.
 verify_assignment_subset(_Old, _Req, #{ assignments := Assignments, scheduled := Scheduled }, Opts) ->
     MsgIds = assignment_ids(Assignments, Opts),
     (lists:all(fun(Id) -> hb_maps:is_key(Id, Scheduled, Opts) end, MsgIds)) orelse
         {assignment_not_scheduled, {assigned, MsgIds}}.
 
+%% @doc Ensure no message id is assigned more than once.
 verify_assignment_unique(_Old, _Req, #{ assignments := Assignments }, Opts) ->
     MsgIds = assignment_ids(Assignments, Opts),
     (length(lists:usort(MsgIds)) =:= length(MsgIds)) orelse
         {duplicate_assignments, {msg_ids, MsgIds}}.
 
+%% @doc Advance the invariant state machine to the next state.
 next_state(_Old, _Req, New, _Opts) ->
     New.
 
+%% @doc Extract message ids from assignments in slot order.
 assignment_ids(Assignments, Opts) ->
     lists:map(
         fun({_Slot, Assignment}) ->
@@ -247,5 +260,6 @@ assignment_ids(Assignments, Opts) ->
         hb_util:to_sorted_list(Assignments, Opts)
     ).
 
+%% @doc Build a local node URL for a port.
 node_url(Port) ->
     <<"http://localhost:", (integer_to_binary(Port))/binary>>.

@@ -11,15 +11,16 @@
 %%% - mysticeti-paper/algorithms/consensus_utils.tex (Alg. 1 predicates),
 %%% - mysticeti-paper/algorithms/universal_committer.tex (Alg. 3 committer),
 %%% - mysticeti-paper/sections/overview.tex (block correctness narrative).
--module(dev_mysticeti_invariants).
+-module(dev_mysticeti_test_networks).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Run invariant checks over a multi-node Mysticeti network.
-mysticeti_network_invariant_test_() ->
-    {timeout, 240, fun mysticeti_network_invariant/0}.
+simulate_test_() ->
+    {timeout, 240, fun simulate/0}.
 
-mysticeti_network_invariant() ->
+%% @doc Run the invariant state machine over a Mysticeti network.
+simulate() ->
     ok = hb_invariant:state_machine(
         #{
             states => [fun init_state/1],
@@ -37,6 +38,7 @@ mysticeti_network_invariant() ->
         }
     ).
 
+%% @doc Build the initial invariant state with nodes and a process.
 init_state(_Opts) ->
     NodeCount = 4,
     {Nodes0, Validators} = start_mysticeti_nodes(NodeCount),
@@ -115,11 +117,13 @@ init_state(_Opts) ->
         max_slots => 120
     }.
 
+%% @doc Submit a randomized schedule request and record it in state.
 schedule_request(State, _Opts) ->
     Node = hb_invariant:pick(hb_maps:get(nodes, State, [], #{})),
     Body = hb_util:bin(hb_invariant:string(8)),
     fun(S, _SOpts) -> schedule_and_update(S, Node, Body) end.
 
+%% @doc Schedule a message on a specific node and update the state.
 schedule_and_update(State, NodeInfo, Body) ->
     Opts = hb_maps:get(opts, NodeInfo, #{}, #{}),
     Node = hb_maps:get(url, NodeInfo, undefined, Opts),
@@ -159,6 +163,7 @@ schedule_and_update(State, NodeInfo, Body) ->
         ),
     {ok, State#{ scheduled := Scheduled, assignments := Assignments }}.
 
+%% @doc Ensure each node's assignments have contiguous slot indices.
 verify_contiguous_slots(_Old, _Req, #{ nodes := Nodes, assignments := AssignmentsByNode }, _Opts) ->
     lists:foldl(
         fun(NodeInfo, Acc) ->
@@ -187,8 +192,13 @@ verify_contiguous_slots(_Old, _Req, #{ nodes := Nodes, assignments := Assignment
         Nodes
     ).
 
-verify_assignment_subset(_Old, _Req, #{ nodes := Nodes, assignments := AssignmentsByNode,
-        scheduled := Scheduled }, _Opts) ->
+%% @doc Ensure assigned message ids are a subset of scheduled ids.
+verify_assignment_subset(
+    _Old,
+    _Req,
+    #{ nodes := Nodes, assignments := AssignmentsByNode, scheduled := Scheduled },
+    _Opts
+) ->
     lists:foldl(
         fun(NodeInfo, Acc) ->
             case Acc of
@@ -214,6 +224,7 @@ verify_assignment_subset(_Old, _Req, #{ nodes := Nodes, assignments := Assignmen
         Nodes
     ).
 
+%% @doc Ensure each node assigns any message id at most once.
 verify_assignment_unique(_Old, _Req, #{ nodes := Nodes, assignments := AssignmentsByNode }, _Opts) ->
     lists:foldl(
         fun(NodeInfo, Acc) ->
@@ -237,6 +248,7 @@ verify_assignment_unique(_Old, _Req, #{ nodes := Nodes, assignments := Assignmen
         Nodes
     ).
 
+%% @doc Ensure all nodes share a common assignment prefix.
 verify_prefix_consistency(_Old, _Req, #{ nodes := Nodes, assignments := AssignmentsByNode }, _Opts) ->
     case Nodes of
         [] -> true;
@@ -274,9 +286,11 @@ verify_prefix_consistency(_Old, _Req, #{ nodes := Nodes, assignments := Assignme
             end
     end.
 
+%% @doc Advance the invariant state machine to the next state.
 next_state(_Old, _Req, New, _Opts) ->
     New.
 
+%% @doc Extract message ids from assignments in slot order.
 assignment_ids(Assignments, Opts) ->
     case lists:foldl(
         fun({_Slot, Assignment}, {ok, Acc}) ->
@@ -297,6 +311,7 @@ assignment_ids(Assignments, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+%% @doc Convert assignment slot keys to integers.
 slots_to_ints(Assignments, Opts) ->
     case lists:foldl(
         fun({Slot, _}, {ok, Acc}) ->
@@ -314,6 +329,7 @@ slots_to_ints(Assignments, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+%% @doc Collect assignments from all nodes over a slot range.
 collect_assignments(Nodes, ProcID, From, To) ->
     lists:foldl(
         fun(NodeInfo, Acc) ->
@@ -326,6 +342,7 @@ collect_assignments(Nodes, ProcID, From, To) ->
         Nodes
     ).
 
+%% @doc Fetch assignments for a node via the Mysticeti HTTP API.
 fetch_assignments_http(Node, ProcID, From, To, Opts) ->
     ReqOpts = Opts#{ http_only_result => false },
     case catch hb_http:get(
@@ -350,6 +367,7 @@ fetch_assignments_http(Node, ProcID, From, To, Opts) ->
             #{}
     end.
 
+%% @doc Extract assignments from a scheduler response or nested body.
 extract_assignments(Schedule, Opts) ->
     case hb_maps:get(<<"assignments">>, Schedule, not_found, Opts) of
         not_found ->
@@ -373,6 +391,7 @@ extract_assignments(Schedule, Opts) ->
             normalize_assignments(Assignments, Opts)
     end.
 
+%% @doc Normalize assignments into a slot-indexed map.
 normalize_assignments(Map, Opts) when is_map(Map) ->
     case hb_maps:get(<<"slot">>, Map, not_found, Opts) of
         not_found ->
@@ -398,6 +417,7 @@ normalize_assignments(List, Opts) when is_list(List) ->
 normalize_assignments(_, _Opts) ->
     #{}.
 
+%% @doc Convert assignment map keys to integers when possible.
 numeric_assignment_map(Map, Opts) ->
     lists:foldl(
         fun(Key, Acc) ->
@@ -413,6 +433,7 @@ numeric_assignment_map(Map, Opts) ->
         hb_maps:keys(Map, Opts)
     ).
 
+%% @doc Start N isolated Mysticeti nodes with separate stores.
 start_mysticeti_nodes(NodeCount) ->
     Wallets = [ar_wallet:new() || _ <- lists:seq(1, NodeCount)],
     Validators = [hb_util:human_id(ar_wallet:to_address(W)) || W <- Wallets],
@@ -446,6 +467,7 @@ start_mysticeti_nodes(NodeCount) ->
         ),
     {Nodes, Validators}.
 
+%% @doc Trim a trailing slash from a URL.
 trim_trailing_slash(<<>>) -> <<>>;
 trim_trailing_slash(Url) when is_binary(Url) ->
     case binary:last(Url) of
@@ -453,6 +475,7 @@ trim_trailing_slash(Url) when is_binary(Url) ->
         _ -> Url
     end.
 
+%% @doc Wait until all nodes respond to scheduler status.
 wait_for_nodes_ready(Nodes, Timeout) ->
     _Ready =
         hb_util:wait_until(
@@ -466,6 +489,7 @@ wait_for_nodes_ready(Nodes, Timeout) ->
         Missing -> {error, Missing}
     end.
 
+%% @doc Return any nodes that do not report ready status.
 missing_ready_nodes(Nodes) ->
     lists:foldl(
         fun(#{ url := Node, opts := Opts }, Acc) ->
@@ -490,6 +514,7 @@ missing_ready_nodes(Nodes) ->
         Nodes
     ).
 
+%% @doc Register the local scheduler location via HTTP.
 register_scheduler_location(Node, Opts) ->
     Req0 = #{
         <<"path">> => <<"/~scheduler@1.0/location">>,
@@ -514,10 +539,12 @@ register_scheduler_location(Node, Opts) ->
             Error
     end.
 
+%% @doc Post a scheduler-location record to a peer node.
 post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
     Deadline = erlang:system_time(millisecond) + Timeout,
     post_scheduler_location(Node, Location, SenderOpts, Deadline, none).
 
+%% @doc Retry posting a scheduler-location until success or timeout.
 post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
     ReqOpts =
         SenderOpts#{
@@ -560,6 +587,7 @@ post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
             end
     end.
 
+%% @doc Wait until all nodes have locations for all addresses.
 wait_for_scheduler_locations(Nodes, Addresses, Timeout) ->
     _Ready =
         hb_util:wait_until(
@@ -573,6 +601,7 @@ wait_for_scheduler_locations(Nodes, Addresses, Timeout) ->
         Missing -> {error, Missing}
     end.
 
+%% @doc Return any missing scheduler locations across nodes.
 missing_scheduler_locations(Nodes, Addresses) ->
     lists:foldl(
         fun(#{ url := Node, opts := Opts }, Acc0) ->
@@ -613,6 +642,7 @@ missing_scheduler_locations(Nodes, Addresses) ->
         Nodes
     ).
 
+%% @doc Extract a scheduler-location from a response message.
 scheduler_location_from_response(Response, Opts) ->
     case scheduler_location_candidate(Response, Opts) of
         {ok, Location0} ->
@@ -624,6 +654,7 @@ scheduler_location_from_response(Response, Opts) ->
             Error
     end.
 
+%% @doc Find a scheduler-location candidate in a response.
 scheduler_location_candidate(Response, Opts) ->
     case direct_scheduler_location(Response, Opts) of
         {ok, _} = Ok -> Ok;
@@ -631,6 +662,7 @@ scheduler_location_candidate(Response, Opts) ->
             decode_scheduler_location(Response, Opts)
     end.
 
+%% @doc Decode a structured scheduler-location response if needed.
 decode_scheduler_location(Response, Opts) ->
     try hb_message:convert(Response, <<"structured@1.0">>, <<"httpsig@1.0">>, Opts) of
         Decoded ->
@@ -643,6 +675,7 @@ decode_scheduler_location(Response, Opts) ->
             {error, {invalid_scheduler_location_response, Response}}
     end.
 
+%% @doc Extract a scheduler-location when it is already embedded.
 direct_scheduler_location(Response, Opts) ->
     case hb_maps:get(<<"type">>, Response, undefined, Opts) of
         <<"scheduler-location">> ->

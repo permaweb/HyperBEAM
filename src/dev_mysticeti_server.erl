@@ -6,57 +6,71 @@
 %%% committer; the final message ordering step is AO-Core-specific.
 %%%
 %%% Algorithm sketch (paper references inline):
-%%% 1. Block validity and DAG model (mysticeti-paper/sections/overview.tex).
+%%% 1. Block validity + DAG model (mysticeti-paper/sections/overview.tex).
 %%%    - A block includes `{author, round, parents, body}` and a valid signature.
 %%%    - Parents are distinct, from earlier rounds; the first parent is the
 %%%      author’s most recent block (latest round < r).
 %%%    - The parent list includes ≥ 2f+1 blocks from round r-1.
-%%%    - Byzantine equivocations are stored; the DAG index is
-%%%      `round -> author -> [block_id]`.
+%%%    - Equivocations are retained; duplicate sequence numbers are removed
+%%%      during delivery (mysticeti-paper/sections/security.tex, Integrity).
 %%%
-%%% 2. Support / vote predicates (mysticeti-paper/algorithms/consensus_utils.tex;
-%%%    overview.tex “support” definition).
-%%%    - `SupportedBlock` performs a depth-first search over parent lists and
-%%%      returns the first block encountered for (author, round).
+%%% 2. Support / vote predicates (mysticeti-paper/algorithms/consensus_utils.tex).
+%%%    - `SupportedBlock` is a depth-first walk over parent lists: it returns
+%%%      the first block encountered for (author, round).
 %%%    - `IsVote` holds when a voting-round block supports the proposer block.
 %%%
-%%% 3. Direct decision per slot (mysticeti-paper/algorithms/baseline_committer.tex
+%%% 3. Direct decision per proposer slot (mysticeti-paper/algorithms/baseline_committer.tex
 %%%    + consensus_utils.tex).
+%%%    - A proposer slot is a pair (author, round). Waves (length = waveLength)
+%%%      define proposer and decision rounds for each slot.
 %%%    - For each round and proposer slot `l ∈ [0, num_proposers)`, select the
 %%%      proposer via `PredefinedProposer(r + l + proposer_offset)`.
-%%%    - `SupportedProposer` holds if ≥ 2f+1 decision-round blocks are
-%%%      certificates for the proposer.
-%%%    - `SkippedProposer` holds if ≥ 2f+1 voting-round blocks have no parent
-%%%      authored by the proposer.
+%%%    - `SupportedProposer` holds if ≥ 2f+1 *distinct authors* in the decision
+%%%      round certify the proposer.
+%%%    - `SkippedProposer` holds if ≥ 2f+1 *distinct authors* in the voting
+%%%      round have no parent authored by the proposer.
 %%%
 %%% 4. Indirect decision (mysticeti-paper/algorithms/universal_committer.tex).
-%%%    - Anchors are later slots in the decision sequence with round >
-%%%      decision round.
-%%%    - If the first such anchor is undecided, remain undecided.
-%%%    - If the anchor is committed and there is a certified link, commit;
-%%%      otherwise skip.
+%%%    - If direct decision is undecided, look for later slots (anchors) with
+%%%      round > decision round.
+%%%    - If the first anchor is undecided, remain undecided.
+%%%    - If the anchor is committed and has a certified link, commit; else skip.
 %%%
-%%% 5. AO-Core ordering.
-%%%    - When a proposer is committed, collect its committed past and order
-%%%      blocks deterministically by `(round, author, block_id)`.
-%%%    - Emit assignments for payload messages; this total order is what
-%%%      `process@1.0` consumes (not specified by the paper).
+%%% 5. Commit sequence + AO total order.
+%%%    - Slots are ordered deterministically (round, slot) and committed until
+%%%      the first undecided slot (mysticeti-paper/sections/consensus.tex).
+%%%    - AO-Core then linearizes the committed proposer’s causal history,
+%%%      removes duplicate (author, round) sequence numbers, and orders by
+%%%      `(round, author, block_id)` to produce the total order of user messages.
 %%%
 %%% Notes:
 %%% - Validators are derived from the process staker set; `f = floor((n-1)/3)`,
 %%%   quorum is `2f+1`.
 %%% - The committer iterates proposer slots (`num_proposers`) exactly as in the
 %%%   universal committer’s inner loop.
+%%% - Consensus parameters are read from the process `mysticeti` map (strict).
 %%%
 %%% Paper: "Mysticeti: Reaching the Limits of Latency with Uncertified DAGs"
 %%% (Babel et al., arXiv:2310.14821).
 -module(dev_mysticeti_server).
 -export([start/3, schedule/2, ingest_block/2, info/1, stop/1]).
 -include("include/hb.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %%% Default schedule timeout (ms)
 -define(DEFAULT_TIMEOUT, 10000).
+
+%% @doc Return the Opts map stored in server state.
+state_opts(State) ->
+    hb_maps:get(opts, State, #{}, #{}).
+
+%% @doc Read a value from server state using hb_maps.
+state_get(Key, State, Default) ->
+    Opts = state_opts(State),
+    hb_maps:get(Key, State, Default, Opts).
+
+%% @doc Read a value from server state with default `undefined`.
+state_get(Key, State) ->
+    state_get(Key, State, undefined).
 
 %% @doc Start a consensus scheduling server for a given process.
 start(ProcID, Proc, Opts) ->
@@ -106,6 +120,7 @@ info(ProcID) ->
     ProcID ! {info, self()},
     receive {info, Info} -> Info end.
 
+%% @doc Stop the scheduling server.
 stop(ProcID) ->
     ProcID ! stop.
 
@@ -171,7 +186,7 @@ server(State) ->
 
 %% @doc Handle local schedule requests.
 handle_schedule(State, Message) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Message, Opts),
     case make_block(State, OnlyCommitted) of
         {ok, Block} ->
@@ -221,7 +236,7 @@ make_block(State, Payload) ->
     Round = next_round(State),
     case parent_set(State, Round) of
         {ok, Parents} ->
-            Opts = maps:get(opts, State),
+            Opts = state_opts(State),
             PayloadRes =
                 case Payload of
                     Msg when is_map(Msg) ->
@@ -239,8 +254,8 @@ make_block(State, Payload) ->
                     Block0 =
                         #{
                             <<"type">> => <<"MysticetiBlock">>,
-                            <<"process">> => maps:get(id, State),
-                            <<"author">> => maps:get(local_author, State),
+                            <<"process">> => state_get(id, State),
+                            <<"author">> => state_get(local_author, State),
                             <<"round">> => Round,
                             <<"parents">> => Parents,
                             <<"timestamp">> => scheduler_time(),
@@ -293,6 +308,7 @@ ensure_payload_cached(Payload, Block, Opts) ->
             ok
     end.
 
+%% @doc Link a payload id to an expected link id when they differ.
 maybe_link_payload(PayloadId, LinkId, Opts) ->
     case PayloadId =:= LinkId of
         true -> ok;
@@ -301,6 +317,7 @@ maybe_link_payload(PayloadId, LinkId, Opts) ->
             hb_store:make_link(Store, PayloadId, LinkId)
     end.
 
+%% @doc Cache a message by id if it is not already present locally.
 ensure_message_id_cached(MessageId, Message, Opts) ->
     case hb_cache:read(MessageId, Opts) of
         {ok, _} -> ok;
@@ -311,13 +328,14 @@ ensure_message_id_cached(MessageId, Message, Opts) ->
 
 %% @doc Determine the next round for the local author.
 next_round(State) ->
-    LocalAuthor = maps:get(local_author, State),
-    AuthorRounds = maps:get(author_rounds, State, #{}),
-    maps:get(LocalAuthor, AuthorRounds, -1) + 1.
+    Opts = state_opts(State),
+    LocalAuthor = hb_maps:get(local_author, State, undefined, Opts),
+    AuthorRounds = hb_maps:get(author_rounds, State, #{}, Opts),
+    hb_maps:get(LocalAuthor, AuthorRounds, -1, Opts) + 1.
 
 %% @doc Select parent blocks for a new round.
 %% Block correctness: first parent is author's previous block (latest round < r)
-%% and there must be at least 2f+1 parents from the previous round
+%% and there must be at least 2f+1 distinct authors from the previous round
 %% (mysticeti-paper/sections/overview.tex, sec:dag).
 parent_set(_State, Round) when Round < 0 ->
     {error, invalid_round};
@@ -326,7 +344,7 @@ parent_set(_State, 0) ->
 parent_set(State, Round) ->
     PrevRound = Round - 1,
     PrevRoundIds = round_block_ids(State, PrevRound),
-    Quorum = maps:get(quorum, State),
+    Quorum = state_get(quorum, State),
     case PrevRoundIds of
         [] -> {error, missing_prev_round};
         _ ->
@@ -334,7 +352,7 @@ parent_set(State, Round) ->
             case length(PrevRoundIds) < Quorum of
                 true -> {error, not_enough_parents};
                 false ->
-                    LocalAuthor = maps:get(local_author, State),
+                    LocalAuthor = state_get(local_author, State),
                     case latest_author_blocks(State, LocalAuthor, Round) of
                         [] ->
                             {error, missing_local_prev};
@@ -349,79 +367,80 @@ parent_set(State, Round) ->
 
 %% @doc Return all block ids for a round.
 round_block_ids(State, Round) ->
-    RoundIndex = maps:get(round_index, State, #{}),
-    case maps:get(Round, RoundIndex, undefined) of
+    Opts = state_opts(State),
+    RoundIndex = hb_maps:get(round_index, State, #{}, Opts),
+    case hb_maps:get(Round, RoundIndex, undefined, Opts) of
         undefined -> [];
         ByAuthor ->
             lists:sort(
                 lists:usort(
-                    lists:flatten(maps:values(ByAuthor))
+                    lists:flatten(hb_maps:values(ByAuthor, Opts))
                 )
             )
     end.
 
 %% @doc Return block ids for an author in a round.
 author_blocks_in_round(State, Author, Round) ->
-    RoundIndex = maps:get(round_index, State, #{}),
-    case maps:get(Round, RoundIndex, undefined) of
+    Opts = state_opts(State),
+    RoundIndex = hb_maps:get(round_index, State, #{}, Opts),
+    case hb_maps:get(Round, RoundIndex, undefined, Opts) of
         undefined -> [];
         ByAuthor ->
-            lists:sort(maps:get(Author, ByAuthor, []))
+            lists:sort(hb_maps:get(Author, ByAuthor, [], Opts))
     end.
 
 %% @doc Return the most recent blocks by author before a round.
 latest_author_blocks(State, Author, Round) ->
-    RoundIndex = maps:get(round_index, State, #{}),
-    Rounds = maps:keys(RoundIndex),
+    Opts = state_opts(State),
+    RoundIndex = hb_maps:get(round_index, State, #{}, Opts),
+    Rounds = hb_maps:keys(RoundIndex, Opts),
     PrevRounds =
         [R || R <- Rounds,
               R < Round,
-              maps:is_key(Author, maps:get(R, RoundIndex, #{}))],
+              hb_maps:is_key(Author, hb_maps:get(R, RoundIndex, #{}, Opts), Opts)],
     case PrevRounds of
         [] -> [];
         _ ->
             PrevRound = lists:max(PrevRounds),
-            lists:sort(maps:get(Author, maps:get(PrevRound, RoundIndex, #{}), []))
+            lists:sort(
+                hb_maps:get(
+                    Author,
+                    hb_maps:get(PrevRound, RoundIndex, #{}, Opts),
+                    [],
+                    Opts
+                )
+            )
     end.
 
+%% @doc Pick a deterministic block id from a non-empty list.
 pick_block_id([Id | _]) -> Id.
 
 %% @doc Insert a block into the DAG.
 add_block(State, Block) ->
-    Dag = maps:get(dag, State),
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
+    Dag = hb_maps:get(dag, State, #{}, Opts),
     BlockId = hb_maps:get(<<"id">>, Block, undefined, Opts),
-    case maps:is_key(BlockId, Dag) of
+    case hb_maps:is_key(BlockId, Dag, Opts) of
         true -> {State, exists};
         false ->
             Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
             Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
-            RoundIndex0 = maps:get(round_index, State, #{}),
-            ByAuthor0 = maps:get(Round, RoundIndex0, #{}),
-            Existing = maps:get(Author, ByAuthor0, []),
-            case lists:member(BlockId, Existing) of
-                true ->
-                    {State, exists};
-                false ->
-                    RoundIndex1 =
-                        RoundIndex0#{
-                            Round =>
-                                ByAuthor0#{
-                                    Author => [BlockId | Existing]
-                                }
-                        },
-                    AuthorRounds0 = maps:get(author_rounds, State, #{}),
-                    PrevRound = maps:get(Author, AuthorRounds0, -1),
-                    AuthorRounds1 = AuthorRounds0#{ Author => max(PrevRound, Round) },
-                    MaxRound = max(maps:get(max_round, State), Round),
-                    State1 = State#{
-                        dag := Dag#{ BlockId => Block },
-                        round_index := RoundIndex1,
-                        author_rounds := AuthorRounds1,
-                        max_round := MaxRound
-                    },
-                    {State1, added}
-            end
+            RoundIndex0 = hb_maps:get(round_index, State, #{}, Opts),
+            ByAuthor0 = hb_maps:get(Round, RoundIndex0, #{}, Opts),
+            Existing = hb_maps:get(Author, ByAuthor0, [], Opts),
+            ByAuthor1 = ByAuthor0#{ Author => lists:usort([BlockId | Existing]) },
+            RoundIndex1 = RoundIndex0#{ Round => ByAuthor1 },
+            AuthorRounds0 = hb_maps:get(author_rounds, State, #{}, Opts),
+            PrevRound = hb_maps:get(Author, AuthorRounds0, -1, Opts),
+            AuthorRounds1 = AuthorRounds0#{ Author => max(PrevRound, Round) },
+            MaxRound = max(hb_maps:get(max_round, State, -1, Opts), Round),
+            State1 = State#{
+                dag := Dag#{ BlockId => Block },
+                round_index := RoundIndex1,
+                author_rounds := AuthorRounds1,
+                max_round := MaxRound
+            },
+            {State1, added}
     end.
 
 %% @doc Ensure a block has a deterministic id (not part of the signed payload).
@@ -436,11 +455,11 @@ ensure_block_id(Block, Opts) ->
 
 %% @doc Store a block awaiting missing parents.
 store_pending_block(State, Block) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     case ensure_block_id(Block, Opts) of
         {error, _} = Err -> {State, Err};
         Canon ->
-            Pending0 = maps:get(pending_blocks, State, #{}),
+            Pending0 = state_get(pending_blocks, State, #{}),
             BlockId = hb_maps:get(<<"id">>, Canon, undefined, Opts),
             {State#{ pending_blocks := Pending0#{ BlockId => Canon } }, BlockId}
     end.
@@ -449,16 +468,18 @@ store_pending_block(State, Block) ->
 drain_pending_blocks(State) ->
     drain_pending_blocks(State, 0).
 
+%% @doc Promote any pending blocks whose parents are now available.
 drain_pending_blocks(State, AddedTotal) ->
-    Pending = maps:get(pending_blocks, State, #{}),
+    Pending = state_get(pending_blocks, State, #{}),
     {State1, PendingLeft, AddedNow} =
-        promote_pending_blocks(State, maps:to_list(Pending), #{} , 0),
+        promote_pending_blocks(State, hb_maps:to_list(Pending, state_opts(State)), #{}, 0),
     State2 = State1#{ pending_blocks := PendingLeft },
     case AddedNow of
         0 -> {State2, AddedTotal};
         _ -> drain_pending_blocks(State2, AddedTotal + AddedNow)
     end.
 
+%% @doc Internal helper to promote pending blocks.
 promote_pending_blocks(State, [], PendingLeft, AddedNow) ->
     {State, PendingLeft, AddedNow};
 promote_pending_blocks(State, [{Id, Block} | Rest], PendingLeft, AddedNow) ->
@@ -478,7 +499,7 @@ promote_pending_blocks(State, [{Id, Block} | Rest], PendingLeft, AddedNow) ->
 
 %% @doc Enqueue a pending payload when we cannot yet build a valid block.
 enqueue_pending_message(State, Message) ->
-    Pending0 = maps:get(pending_msgs, State, []),
+    Pending0 = state_get(pending_msgs, State, []),
     {State#{ pending_msgs := Pending0 ++ [Message] }, length(Pending0) + 1}.
 
 %% @doc Drain pending messages, producing local blocks when possible.
@@ -486,7 +507,7 @@ drain_pending_messages(State) ->
     drain_pending_messages(State, []).
 
 drain_pending_messages(State, Acc) ->
-    Pending = maps:get(pending_msgs, State, []),
+    Pending = state_get(pending_msgs, State, []),
     case Pending of
         [] -> {State, lists:reverse(Acc)};
         [Message | Rest] ->
@@ -516,8 +537,8 @@ broadcast_blocks(State, Blocks) ->
 %% @doc Attempt to decide slots in order, returning newly created assignments.
 %% Mysticeti-C Algorithm 3: TryDecide (mysticeti-paper/algorithms/universal_committer.tex).
 try_commit(State) ->
-    MaxRound = maps:get(max_round, State),
-    LastRound = maps:get(last_decided_round, State),
+    MaxRound = state_get(max_round, State, -1),
+    LastRound = state_get(last_decided_round, State, -1),
     case MaxRound =< LastRound of
         true -> {State, []};
         false ->
@@ -529,8 +550,8 @@ try_commit(State) ->
 
 %% @doc Build the decision sequence for rounds [MinRound, MaxRound].
 build_decision_sequence(State, MaxRound, MinRound) ->
-    WaveLength = maps:get(wave_length, State),
-    NumProposers = maps:get(num_proposers, State),
+    WaveLength = state_get(wave_length, State),
+    NumProposers = state_get(num_proposers, State),
     lists:foldl(
         fun(Round, SeqAcc0) ->
             lists:foldl(
@@ -558,7 +579,7 @@ build_decision_sequence(State, MaxRound, MinRound) ->
 %% @doc Take the decided prefix until the first undecided slot.
 decided_prefix([]) -> [];
 decided_prefix([Status | Rest]) ->
-    case maps:get(status, Status) of
+    case hb_maps:get(status, Status, undefined, #{}) of
         undecided -> [];
         _ -> [Status | decided_prefix(Rest)]
     end.
@@ -567,15 +588,15 @@ decided_prefix([Status | Rest]) ->
 apply_decisions(State, [], Acc) ->
     {State, lists:reverse(Acc)};
 apply_decisions(State, [Status | Rest], Acc) ->
-    Round = maps:get(round, Status),
-    Slot = maps:get(slot, Status),
+    Round = hb_maps:get(round, Status, undefined, #{}),
+    Slot = hb_maps:get(slot, Status, undefined, #{}),
     Key = {Round, Slot},
-    DecidedSlots0 = maps:get(decided_slots, State, #{}),
-    case maps:get(Key, DecidedSlots0, undefined) of
+    DecidedSlots0 = state_get(decided_slots, State, #{}),
+    case hb_maps:get(Key, DecidedSlots0, undefined, state_opts(State)) of
         undefined ->
-            case maps:get(status, Status) of
+            case hb_maps:get(status, Status, undefined, #{}) of
                 commit ->
-                    ProposerBlock = maps:get(block, Status),
+                    ProposerBlock = hb_maps:get(block, Status, undefined, #{}),
                     {State1, NewAssignments} = commit_proposer(State, ProposerBlock),
                     DecidedSlots1 = DecidedSlots0#{ Key => commit },
                     apply_decisions(
@@ -593,9 +614,9 @@ apply_decisions(State, [Status | Rest], Acc) ->
 
 %% @doc Advance the last fully decided round boundary.
 advance_last_decided_round(State) ->
-    NumProposers = maps:get(num_proposers, State),
-    DecidedSlots = maps:get(decided_slots, State, #{}),
-    LastRound = maps:get(last_decided_round, State),
+    NumProposers = state_get(num_proposers, State),
+    DecidedSlots = state_get(decided_slots, State, #{}),
+    LastRound = state_get(last_decided_round, State, -1),
     advance_last_decided_round(LastRound + 1, LastRound, NumProposers, DecidedSlots, State).
 
 advance_last_decided_round(Round, Last, NumProposers, DecidedSlots, State) ->
@@ -608,9 +629,10 @@ advance_last_decided_round(Round, Last, NumProposers, DecidedSlots, State) ->
 
 all_slots_decided(_Round, NumProposers, _DecidedSlots) when NumProposers =< 0 ->
     false;
+%% @doc True when all proposer slots in a round are decided.
 all_slots_decided(Round, NumProposers, DecidedSlots) ->
     lists:all(
-        fun(Slot) -> maps:is_key({Round, Slot}, DecidedSlots) end,
+        fun(Slot) -> hb_maps:is_key({Round, Slot}, DecidedSlots, #{}) end,
         lists:seq(0, NumProposers - 1)
     ).
 
@@ -632,16 +654,18 @@ skipped_proposer(State, Decider, Wave) ->
     ProposerRound = proposer_round(Wave, Decider),
     ProposerId = get_predefined_proposer(State, Decider, Wave),
     VotingRound = ProposerRound + 1,
-    Quorum = maps:get(quorum, State),
+    Quorum = state_get(quorum, State),
+    Opts = state_opts(State),
     VotingBlocks = round_blocks(State, VotingRound),
     Skipped =
-        length(
+        count_distinct_authors(
             lists:filter(
                 fun(Block) ->
                     no_parent_from_author(State, Block, ProposerId)
                 end,
                 VotingBlocks
-            )
+            ),
+            Opts
         ),
     Skipped >= Quorum.
 
@@ -654,19 +678,20 @@ supported_proposer(State, Decider, Wave) ->
         _ ->
             DecisionRound = decision_round(Wave, Decider),
             DecisionBlocks = round_blocks(State, DecisionRound),
-            Quorum = maps:get(quorum, State),
+            Quorum = state_get(quorum, State),
+            Opts = state_opts(State),
             lists:foldl(
                 fun(BlockId, Acc) ->
                     case Acc of
                         undefined ->
-                            Certs =
+                            CertBlocks =
                                 lists:filter(
                                     fun(Block) ->
                                         is_certificate(State, Block, BlockId)
                                     end,
                                     DecisionBlocks
                                 ),
-                            case length(Certs) >= Quorum of
+                            case count_distinct_authors(CertBlocks, Opts) >= Quorum of
                                 true -> BlockId;
                                 false -> undefined
                             end;
@@ -681,25 +706,41 @@ supported_proposer(State, Decider, Wave) ->
 %% @doc Determine if a block is a certificate for the proposer.
 %% Mysticeti-C Algorithm 1: IsCert (mysticeti-paper/algorithms/consensus_utils.tex).
 is_certificate(State, Block, ProposerBlockId) ->
-    Quorum = maps:get(quorum, State),
-    Opts = maps:get(opts, State),
+    Quorum = state_get(quorum, State),
+    Opts = state_opts(State),
     Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
-    Votes =
-        lists:filter(
-            fun(ParentId) ->
-                is_vote(State, ParentId, ProposerBlockId)
+    Dag = state_get(dag, State, #{}),
+    VoteAuthors =
+        lists:foldl(
+            fun(ParentId, Acc) ->
+                case is_vote(State, ParentId, ProposerBlockId) of
+                    true ->
+                        case hb_maps:get(ParentId, Dag, undefined, Opts) of
+                            undefined -> Acc;
+                            Parent ->
+                                Author = hb_maps:get(<<"author">>, Parent, undefined, Opts),
+                                case Author of
+                                    undefined -> Acc;
+                                    _ -> hb_maps:put(Author, true, Acc, Opts)
+                                end
+                        end;
+                    false ->
+                        Acc
+                end
             end,
+            #{},
             Parents
         ),
-    length(Votes) >= Quorum.
+    hb_maps:size(VoteAuthors, Opts) >= Quorum.
 
 %% @doc A parent votes for a proposer if it supports that proposer block.
 %% Mysticeti-C Algorithm 1: IsVote + SupportedBlock (mysticeti-paper/algorithms/consensus_utils.tex).
 is_vote(State, VoteBlockId, ProposerBlockId) ->
-    case maps:get(ProposerBlockId, maps:get(dag, State), undefined) of
+    Dag = state_get(dag, State, #{}),
+    case hb_maps:get(ProposerBlockId, Dag, undefined, state_opts(State)) of
         undefined -> false;
         ProposerBlock ->
-            Opts = maps:get(opts, State),
+            Opts = state_opts(State),
             Author = hb_maps:get(<<"author">>, ProposerBlock, undefined, Opts),
             Round = hb_maps:get(<<"round">>, ProposerBlock, undefined, Opts),
             supported_block(State, VoteBlockId, Author, Round) =:= ProposerBlockId
@@ -708,10 +749,11 @@ is_vote(State, VoteBlockId, ProposerBlockId) ->
 %% @doc Compute the supported block for (author, round) in b's ancestry.
 %% Mysticeti-C Algorithm 1: SupportedBlock (mysticeti-paper/algorithms/consensus_utils.tex).
 supported_block(State, BlockId, Author, Round) ->
-    case maps:get(BlockId, maps:get(dag, State), undefined) of
+    Dag = state_get(dag, State, #{}),
+    case hb_maps:get(BlockId, Dag, undefined, state_opts(State)) of
         undefined -> undefined;
         Block ->
-            Opts = maps:get(opts, State),
+            Opts = state_opts(State),
             case Round >= hb_maps:get(<<"round">>, Block, -1, Opts) of
                 true -> undefined;
                 false ->
@@ -720,13 +762,15 @@ supported_block(State, BlockId, Author, Round) ->
             end
     end.
 
+%% @doc Walk parents to find the first supported block for (author, round).
 supported_block_parents(_State, [], _Author, _Round) -> undefined;
 supported_block_parents(State, [ParentId | Rest], Author, Round) ->
-    case maps:get(ParentId, maps:get(dag, State), undefined) of
+    Dag = state_get(dag, State, #{}),
+    case hb_maps:get(ParentId, Dag, undefined, state_opts(State)) of
         undefined ->
             supported_block_parents(State, Rest, Author, Round);
         Parent ->
-            Opts = maps:get(opts, State),
+            Opts = state_opts(State),
             case {hb_maps:get(<<"author">>, Parent, undefined, Opts),
                   hb_maps:get(<<"round">>, Parent, undefined, Opts)} of
                 {Author, Round} -> ParentId;
@@ -743,21 +787,22 @@ supported_block_parents(State, [ParentId | Rest], Author, Round) ->
 link(State, OldId, NewId) ->
     has_ancestor(State, NewId, OldId).
 
+%% @doc Check if a block has a specific ancestor via parent traversal.
 has_ancestor(State, StartId, TargetId) ->
     case StartId == TargetId of
         true -> true;
         false ->
-            Dag = maps:get(dag, State),
-            Opts = maps:get(opts, State),
+            Dag = state_get(dag, State, #{}),
+            Opts = state_opts(State),
             has_ancestor(Dag, [StartId], TargetId, #{}, Opts)
     end.
 
 has_ancestor(_Dag, [], _TargetId, _Visited, _Opts) -> false;
 has_ancestor(Dag, [Id | Rest], TargetId, Visited, Opts) ->
-    case maps:is_key(Id, Visited) of
+    case hb_maps:is_key(Id, Visited, Opts) of
         true -> has_ancestor(Dag, Rest, TargetId, Visited, Opts);
         false ->
-            case maps:get(Id, Dag, undefined) of
+            case hb_maps:get(Id, Dag, undefined, Opts) of
                 undefined ->
                     has_ancestor(Dag, Rest, TargetId, Visited#{ Id => true}, Opts);
                 Block ->
@@ -787,10 +832,11 @@ try_indirect_decide(State, Decider, Wave, Sequence) ->
         ),
     try_indirect_anchors(State, Decider, Wave, Anchors).
 
+%% @doc Walk anchors for TryIndirectDecide, returning commit/skip/undecided.
 try_indirect_anchors(_State, _Decider, _Wave, []) ->
     undecided;
 try_indirect_anchors(State, Decider, Wave, [Anchor | Rest]) ->
-    case maps:get(status, Anchor) of
+    case hb_maps:get(status, Anchor, undefined, #{}) of
         undecided -> undecided;
         skip -> try_indirect_anchors(State, Decider, Wave, Rest);
         commit ->
@@ -798,7 +844,7 @@ try_indirect_anchors(State, Decider, Wave, [Anchor | Rest]) ->
             case ProposerBlocks of
                 [] -> undecided;
                 _ ->
-                    AnchorBlockId = maps:get(block, Anchor),
+                    AnchorBlockId = hb_maps:get(block, Anchor, undefined, #{}),
                     case certified_link_any(State, Decider, AnchorBlockId, ProposerBlocks) of
                         undefined -> skip;
                         BlockId -> {commit, BlockId}
@@ -806,6 +852,7 @@ try_indirect_anchors(State, Decider, Wave, [Anchor | Rest]) ->
             end
     end.
 
+%% @doc Return the first proposer block with a certified link to the anchor.
 certified_link_any(_State, _Decider, _AnchorBlockId, []) ->
     undefined;
 certified_link_any(State, Decider, AnchorBlockId, [BlockId | Rest]) ->
@@ -817,8 +864,9 @@ certified_link_any(State, Decider, AnchorBlockId, [BlockId | Rest]) ->
 %% @doc Check if there is a certified link between the anchor and the proposer.
 %% Mysticeti-C Algorithm 1: CertifiedLink (mysticeti-paper/algorithms/consensus_utils.tex).
 certified_link(State, Decider, AnchorBlockId, ProposerBlockId) ->
-    ProposerBlock = maps:get(ProposerBlockId, maps:get(dag, State)),
-    Opts = maps:get(opts, State),
+    Dag = state_get(dag, State, #{}),
+    Opts = state_opts(State),
+    ProposerBlock = hb_maps:get(ProposerBlockId, Dag, undefined, Opts),
     Wave = wave_number(hb_maps:get(<<"round">>, ProposerBlock, undefined, Opts), Decider),
     DecisionRound = decision_round(Wave, Decider),
     DecisionBlocks = round_blocks(State, DecisionRound),
@@ -831,57 +879,89 @@ certified_link(State, Decider, AnchorBlockId, ProposerBlockId) ->
     ).
 
 %% @doc Commit a proposer block and produce assignments for new blocks.
-%% Uses the committed past of the proposer and then a deterministic total
-%% order to issue assignments (required by process@1.0).
+%% Uses the committed past and a deterministic linearization that removes
+%% duplicate sequence numbers (mysticeti-paper/sections/security.tex).
 commit_proposer(State, ProposerBlockId) ->
     Past = collect_ancestors(State, ProposerBlockId),
-    Ordered = maps:get(ordered, State),
-    NewBlockIds = [Id || Id <- Past, not maps:is_key(Id, Ordered)],
+    Opts = state_opts(State),
+    Dag = state_get(dag, State, #{}),
+    Ordered = state_get(ordered, State, #{}),
+    NewBlockIds =
+        lists:filter(
+            fun(Id) ->
+                case hb_maps:get(Id, Dag, undefined, Opts) of
+                    undefined ->
+                        false;
+                    Block ->
+                        Key =
+                            {hb_maps:get(<<"author">>, Block, undefined, Opts),
+                             hb_maps:get(<<"round">>, Block, undefined, Opts)},
+                        not hb_maps:is_key(Key, Ordered, Opts)
+                end
+            end,
+            Past
+        ),
     OrderedBlocks = order_blocks(State, NewBlockIds),
     {State1, Assignments} = assign_blocks(State, OrderedBlocks, []),
     Ordered1 =
         lists:foldl(
-            fun(Id, Acc) -> Acc#{ Id => true } end,
+            fun(Id, Acc) ->
+                case hb_maps:get(Id, Dag, undefined, Opts) of
+                    undefined -> Acc;
+                    Block ->
+                        Key =
+                            {hb_maps:get(<<"author">>, Block, undefined, Opts),
+                             hb_maps:get(<<"round">>, Block, undefined, Opts)},
+                        hb_maps:put(Key, true, Acc, Opts)
+                end
+            end,
             Ordered,
-            NewBlockIds
+            OrderedBlocks
         ),
     {State1#{ ordered := Ordered1 }, Assignments}.
 
 %% @doc Collect all ancestors (including the block itself).
 collect_ancestors(State, RootId) ->
-    Dag = maps:get(dag, State),
-    Opts = maps:get(opts, State),
+    Dag = state_get(dag, State, #{}),
+    Opts = state_opts(State),
     collect_ancestors(Dag, [RootId], #{}, [], Opts).
 
 collect_ancestors(_Dag, [], _Visited, Acc, _Opts) -> Acc;
 collect_ancestors(Dag, [Id | Rest], Visited, Acc, Opts) ->
-    case maps:is_key(Id, Visited) of
+    case hb_maps:is_key(Id, Visited, Opts) of
         true -> collect_ancestors(Dag, Rest, Visited, Acc, Opts);
         false ->
-            case maps:get(Id, Dag, undefined) of
+            case hb_maps:get(Id, Dag, undefined, Opts) of
                 undefined ->
-                    collect_ancestors(Dag, Rest, Visited#{ Id => true }, Acc, Opts);
+                    collect_ancestors(
+                        Dag,
+                        Rest,
+                        hb_maps:put(Id, true, Visited, Opts),
+                        Acc,
+                        Opts
+                    );
                 Block ->
                     Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
                     collect_ancestors(
                         Dag,
                         Parents ++ Rest,
-                        Visited#{ Id => true },
+                        hb_maps:put(Id, true, Visited, Opts),
                         [Id | Acc],
                         Opts
                     )
             end
     end.
 
-%% @doc Order blocks deterministically by (round, author, id).
-%% This provides a stable total order for process@1.0.
+%% @doc Order blocks deterministically by (round, author, id), after
+%% removing equivocations for the same (author, round).
 order_blocks(State, BlockIds) ->
-    Dag = maps:get(dag, State),
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
+    Dag = state_get(dag, State, #{}),
+    UniqueIds = dedupe_blocks_by_author_round(State, BlockIds),
     lists:sort(
         fun(A, B) ->
-            BA = maps:get(A, Dag),
-            BB = maps:get(B, Dag),
+            BA = hb_maps:get(A, Dag, undefined, Opts),
+            BB = hb_maps:get(B, Dag, undefined, Opts),
             {hb_maps:get(<<"round">>, BA, undefined, Opts),
              hb_maps:get(<<"author">>, BA, undefined, Opts),
              A}
@@ -889,40 +969,89 @@ order_blocks(State, BlockIds) ->
                    hb_maps:get(<<"author">>, BB, undefined, Opts),
                    B}
         end,
-        BlockIds
+        UniqueIds
     ).
+
+%% @doc Choose a deterministic block id among equivocations.
+pick_deterministic_block_id(IdA, IdB) when IdA =< IdB -> IdA;
+pick_deterministic_block_id(_IdA, IdB) -> IdB.
+
+%% @doc Remove multiple blocks for the same (author, round) by choosing the
+%% smallest id, matching the paper’s “remove duplicate sequence numbers” rule.
+dedupe_blocks_by_author_round(State, BlockIds) ->
+    Opts = state_opts(State),
+    Dag = state_get(dag, State, #{}),
+    Chosen =
+        lists:foldl(
+            fun(Id, Acc) ->
+                case hb_maps:get(Id, Dag, undefined, Opts) of
+                    undefined -> Acc;
+                    Block ->
+                        Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
+                        Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
+                        Key = {Author, Round},
+                        case hb_maps:get(Key, Acc, undefined, Opts) of
+                            undefined ->
+                                hb_maps:put(Key, Id, Acc, Opts);
+                            Existing ->
+                                hb_maps:put(
+                                    Key,
+                                    pick_deterministic_block_id(Id, Existing),
+                                    Acc,
+                                    Opts
+                                )
+                        end
+                end
+            end,
+            #{},
+            BlockIds
+        ),
+    hb_maps:values(Chosen, Opts).
 
 %% @doc Create assignments for ordered blocks.
 %% Only blocks with a payload (body) produce assignments.
 assign_blocks(State, [], Acc) -> {State, lists:reverse(Acc)};
 assign_blocks(State, [Id | Rest], Acc) ->
-    Dag = maps:get(dag, State),
-    Block = maps:get(Id, Dag),
-    Opts = maps:get(opts, State),
-    Payload = hb_maps:get(<<"body">>, Block, undefined, Opts),
-    case Payload of
+    Opts = state_opts(State),
+    Dag = state_get(dag, State, #{}),
+    case hb_maps:get(Id, Dag, undefined, Opts) of
         undefined ->
             assign_blocks(State, Rest, Acc);
-        _ ->
-            MsgId = hb_message:id(Payload, all, Opts),
-            case maps:is_key(MsgId, maps:get(assigned, State)) of
-                true ->
+        Block ->
+            Payload = hb_maps:get(<<"body">>, Block, undefined, Opts),
+            case Payload of
+                undefined ->
                     assign_blocks(State, Rest, Acc);
-                false ->
-                    {Assignment, State1} = make_assignment(State, Payload),
-                    assign_blocks(
-                        State1#{ assigned := (maps:get(assigned, State1))#{ MsgId => true }},
-                        Rest,
-                        [{MsgId, Assignment} | Acc]
-                    )
+                _ ->
+                    MsgId = hb_message:id(Payload, all, Opts),
+                    Assigned0 = state_get(assigned, State, #{}),
+                    case hb_maps:is_key(MsgId, Assigned0, Opts) of
+                        true ->
+                            assign_blocks(State, Rest, Acc);
+                        false ->
+                            {Assignment, State1} = make_assignment(State, Payload),
+                            assign_blocks(
+                                State1#{
+                                    assigned :=
+                                        hb_maps:put(
+                                            MsgId,
+                                            true,
+                                            state_get(assigned, State1, #{}),
+                                            Opts
+                                        )
+                                },
+                                Rest,
+                                [{MsgId, Assignment} | Acc]
+                            )
+                    end
             end
     end.
 
 %% @doc Generate an assignment for a payload message.
 make_assignment(State, Message) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     BaseStateHashpath = base_state(State),
-    NextSlot = maps:get(current_slot, State) + 1,
+    NextSlot = state_get(current_slot, State, -1) + 1,
     {Timestamp, Height, Hash} = ar_timestamp:get(),
     Path =
         case hb_path:from_message(request, Message, Opts) of
@@ -934,7 +1063,7 @@ make_assignment(State, Message) ->
             <<"path">> => Path,
             <<"data-protocol">> => <<"ao">>,
             <<"variant">> => <<"ao.N.1">>,
-            <<"process">> => hb_util:id(maps:get(id, State)),
+            <<"process">> => hb_util:id(state_get(id, State)),
             <<"epoch">> => <<"0">>,
             <<"slot">> => NextSlot,
             <<"block-height">> => Height,
@@ -958,9 +1087,9 @@ make_assignment(State, Message) ->
 
 %% @doc Commit to the assignment using all appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
-    Wallets = maps:get(wallets, State),
-    Opts = maps:get(opts, State),
-    CommitmentSpec = maps:get(commitment_spec, State),
+    Wallets = state_get(wallets, State, []),
+    Opts = state_opts(State),
+    CommitmentSpec = state_get(commitment_spec, State),
     lists:foldr(
         fun(Wallet, Assignment) ->
             hb_message:commit(
@@ -975,13 +1104,13 @@ commit_assignment(BaseAssignment, State) ->
 
 %% @doc Return the base state hashpath.
 base_state(S = #{ base_state_hashpath := undefined }) ->
-    hb_util:id(maps:get(id, S));
+    hb_util:id(state_get(id, S));
 base_state(#{ base_state_hashpath := BaseStateHashpath }) ->
     BaseStateHashpath.
 
 %% @doc Generate the next hashpath for a new assignment.
 next_hashpath(BaseStateHashpath, NewAssignment, State) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     HashpathAlg = hb_path:hashpath_alg(NewAssignment, Opts),
     hb_path:hashpath(
         BaseStateHashpath,
@@ -1017,15 +1146,15 @@ decision_round(Wave, #{ wave_length := WaveLength, round_offset := RoundOffset }
 %% @doc Select a proposer deterministically (round-robin).
 %% Mysticeti-C Algorithm 2: PredefinedProposer (mysticeti-paper/algorithms/baseline_committer.tex).
 predefined_proposer(State, Index) ->
-    Validators = maps:get(validators, State),
-    BaseOffset = maps:get(proposer_offset, State),
+    Validators = state_get(validators, State, []),
+    BaseOffset = state_get(proposer_offset, State, 0),
     SlotIndex = (Index + BaseOffset) rem length(Validators),
     lists:nth(SlotIndex + 1, Validators).
 
 %% @doc Get the predefined proposer for a slot (Algorithm 2).
 get_predefined_proposer(State, Decider, Wave) ->
     ProposerRound = proposer_round(Wave, Decider),
-    SlotOffset = maps:get(slot_offset, Decider),
+    SlotOffset = hb_maps:get(slot_offset, Decider, 0, #{}),
     predefined_proposer(State, ProposerRound + SlotOffset).
 
 %% @doc Lookup proposer blocks for a slot (Algorithm 1).
@@ -1051,10 +1180,11 @@ block_by_author_round(State, Author, Round) ->
 
 %% @doc Get all blocks for a round.
 round_blocks(State, Round) ->
-    Dag = maps:get(dag, State),
+    Opts = state_opts(State),
+    Dag = state_get(dag, State, #{}),
     lists:filtermap(
         fun(Id) ->
-            case maps:get(Id, Dag, undefined) of
+            case hb_maps:get(Id, Dag, undefined, Opts) of
                 undefined -> false;
                 Block -> {true, Block}
             end
@@ -1062,14 +1192,30 @@ round_blocks(State, Round) ->
         round_block_ids(State, Round)
     ).
 
+%% @doc Count distinct authors in a list of blocks.
+count_distinct_authors(Blocks, Opts) ->
+    Authors =
+        lists:foldl(
+            fun(Block, Acc) ->
+                Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
+                case Author of
+                    undefined -> Acc;
+                    _ -> hb_maps:put(Author, true, Acc, Opts)
+                end
+            end,
+            #{},
+            Blocks
+        ),
+    hb_maps:size(Authors, Opts).
+
 %% @doc True if no parent is authored by the given id.
 no_parent_from_author(State, Block, AuthorId) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
-    Dag = maps:get(dag, State),
+    Dag = state_get(dag, State, #{}),
     lists:all(
         fun(ParentId) ->
-            case maps:get(ParentId, Dag, undefined) of
+            case hb_maps:get(ParentId, Dag, undefined, Opts) of
                 undefined -> true;
                 Parent ->
                     hb_maps:get(<<"author">>, Parent, undefined, Opts) =/= AuthorId
@@ -1081,12 +1227,12 @@ no_parent_from_author(State, Block, AuthorId) ->
 %% @doc Validate a received block.
 %% Block correctness rules: mysticeti-paper/sections/overview.tex (sec:dag).
 validate_block(State, Block0) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     case ensure_block_id(Block0, Opts) of
         {error, _} = Err -> Err;
         Block ->
             BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
-            Validators = maps:get(validators, State),
+            Validators = state_get(validators, State, []),
             AuthorField = hb_maps:get(<<"author">>, Block, undefined, Opts),
             Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
             Parents = hb_maps:get(<<"parents">>, Block, undefined, Opts),
@@ -1095,7 +1241,7 @@ validate_block(State, Block0) ->
                     case AuthorField of
                         Signer ->
                             Author = Signer,
-                            case {hb_maps:get(<<"process">>, Block, undefined, Opts) =:= maps:get(id, State),
+                            case {hb_maps:get(<<"process">>, Block, undefined, Opts) =:= state_get(id, State),
                                   hb_maps:get(<<"type">>, Block, undefined, Opts) =:= <<"MysticetiBlock">>,
                                   lists:member(Author, Validators),
                                   is_integer(Round),
@@ -1136,16 +1282,16 @@ verify_block_signature(BlockNoId, Opts) ->
     end.
 
 validate_block_parents(State, Block) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
     Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
-    Dag = maps:get(dag, State),
+    Dag = state_get(dag, State, #{}),
     case length(Parents) =:= length(lists:usort(Parents)) of
         false -> {error, duplicate_parents};
         true ->
             ParentBlocks =
                 lists:map(
-                    fun(ParentId) -> {ParentId, maps:get(ParentId, Dag, undefined)} end,
+                    fun(ParentId) -> {ParentId, hb_maps:get(ParentId, Dag, undefined, Opts)} end,
                     Parents
                 ),
             case lists:any(fun({_, B}) -> B =:= undefined end, ParentBlocks) of
@@ -1164,7 +1310,7 @@ validate_block_parents(State, Block) ->
     end.
 
 validate_block_parent_shape(State, Block, ParentBlocks) ->
-    Opts = maps:get(opts, State),
+    Opts = state_opts(State),
     Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
     case Round of
         0 ->
@@ -1174,59 +1320,96 @@ validate_block_parent_shape(State, Block, ParentBlocks) ->
             end;
         _ ->
             Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
-            Quorum = maps:get(quorum, State),
-            [FirstParentId | _] = hb_maps:get(<<"parents">>, Block, [], Opts),
-            PrevIds = latest_author_blocks(State, Author, Round),
-            case lists:member(FirstParentId, PrevIds) of
-                false -> {error, invalid_prev_parent};
-                true ->
-                    case lists:keyfind(FirstParentId, 1, ParentBlocks) of
-                        {_, FirstParent} ->
-                            case hb_maps:get(<<"author">>, FirstParent, undefined, Opts) of
-                                Author ->
-                                    % Block correctness: require 2f+1 parents from round r-1.
-                                    PrevRoundParents =
-                                        [Id || {Id, PB} <- ParentBlocks,
-                                            hb_maps:get(<<"round">>, PB, -1, Opts) =:= Round - 1],
-                                    case length(PrevRoundParents) >= Quorum of
-                                        true -> {ok, Block};
-                                        false -> {error, not_enough_prev_round_parents}
+            Quorum = state_get(quorum, State),
+            Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
+            case Parents of
+                [] ->
+                    {error, missing_parents};
+                [FirstParentId | _] ->
+                    PrevIds = latest_author_blocks(State, Author, Round),
+                    case lists:member(FirstParentId, PrevIds) of
+                        false -> {error, invalid_prev_parent};
+                        true ->
+                            case lists:keyfind(FirstParentId, 1, ParentBlocks) of
+                                {_, FirstParent} ->
+                                    case hb_maps:get(<<"author">>, FirstParent, undefined, Opts) of
+                                        Author ->
+                                            % Block correctness: require 2f+1 distinct authors from round r-1.
+                                            PrevRoundAuthors =
+                                                lists:foldl(
+                                                    fun({_, PB}, Acc) ->
+                                                        case hb_maps:get(<<"round">>, PB, -1, Opts) of
+                                                            R when R =:= Round - 1 ->
+                                                                AuthorId =
+                                                                    hb_maps:get(
+                                                                        <<"author">>,
+                                                                        PB,
+                                                                        undefined,
+                                                                        Opts
+                                                                    ),
+                                                                case AuthorId of
+                                                                    undefined -> Acc;
+                                                                    _ ->
+                                                                        hb_maps:put(
+                                                                            AuthorId,
+                                                                            true,
+                                                                            Acc,
+                                                                            Opts
+                                                                        )
+                                                                end;
+                                                            _ ->
+                                                                Acc
+                                                        end
+                                                    end,
+                                                    #{},
+                                                    ParentBlocks
+                                                ),
+                                            case hb_maps:size(PrevRoundAuthors, Opts) >= Quorum of
+                                                true -> {ok, Block};
+                                                false -> {error, not_enough_prev_round_parents}
+                                            end;
+                                        _ ->
+                                            {error, invalid_prev_parent}
                                     end;
-                                _ ->
+                                false ->
                                     {error, invalid_prev_parent}
-                            end;
-                        false ->
-                            {error, invalid_prev_parent}
+                            end
                     end
             end
     end.
 
 %% @doc Summarize the server state for info.
 summarize(State) ->
+    Opts = state_opts(State),
     #{
-        current => maps:get(current_slot, State),
-        max_round => maps:get(max_round, State),
-        stakers => maps:get(stakers, State, []),
-        validators => maps:get(validators, State),
-        quorum => maps:get(quorum, State),
-        wave_length => maps:get(wave_length, State),
-        num_proposers => maps:get(num_proposers, State),
-        last_decided_round => maps:get(last_decided_round, State),
-        local_author => maps:get(local_author, State),
-        peers => maps:get(peers, State, [])
+        current => hb_maps:get(current_slot, State, -1, Opts),
+        max_round => hb_maps:get(max_round, State, -1, Opts),
+        stakers => hb_maps:get(stakers, State, [], Opts),
+        validators => hb_maps:get(validators, State, [], Opts),
+        quorum => hb_maps:get(quorum, State, 0, Opts),
+        wave_length => hb_maps:get(wave_length, State, 0, Opts),
+        num_proposers => hb_maps:get(num_proposers, State, 0, Opts),
+        last_decided_round => hb_maps:get(last_decided_round, State, -1, Opts),
+        local_author => hb_maps:get(local_author, State, undefined, Opts),
+        peers => hb_maps:get(peers, State, [], Opts)
     }.
+
+%% @doc Resolve a required Mysticeti config key (strict mode).
+mysticeti_required(Proc, Key, Opts) ->
+    case hb_ao:get(
+        << "mysticeti/", Key/binary >>,
+        Proc,
+        not_found,
+        Opts#{ hashpath => ignore }
+    ) of
+        not_found -> throw({missing_mysticeti_config, Key});
+        Value -> Value
+    end.
 
 %% @doc Extract wave length (Algorithm 2) from the process config.
 %% Mysticeti-C Algorithm 2: waveLength (mysticeti-paper/algorithms/baseline_committer.tex).
 wave_length(Proc, Opts) ->
-    Raw =
-        hb_ao:get(
-            <<"mysticeti/wave-length">>,
-            Proc,
-            hb_opts:get(mysticeti_wave_length, 3, Opts),
-            Opts#{ hashpath => ignore }
-        ),
-    WaveLength = hb_util:int(Raw),
+    WaveLength = hb_util:int(mysticeti_required(Proc, <<"wave-length">>, Opts)),
     case WaveLength >= 1 of
         true -> WaveLength;
         false -> throw({invalid_wave_length, WaveLength})
@@ -1235,52 +1418,22 @@ wave_length(Proc, Opts) ->
 %% @doc Extract proposer offset (Algorithm 2) from the process config.
 %% Mysticeti-C Algorithm 2: PredefinedProposer offset (mysticeti-paper/algorithms/baseline_committer.tex).
 proposer_offset(Proc, Opts) ->
-    Raw =
-        hb_ao:get(
-            <<"mysticeti/proposer-offset">>,
-            Proc,
-            hb_opts:get(mysticeti_proposer_offset, 0, Opts),
-            Opts#{ hashpath => ignore }
-        ),
-    Offset = hb_util:int(Raw),
+    Offset = hb_util:int(mysticeti_required(Proc, <<"proposer-offset">>, Opts)),
     case Offset >= 0 of
         true -> Offset;
         false -> throw({invalid_proposer_offset, Offset})
     end.
 
-%% @doc Extract stakers (validator + stake) from process config or opts.
-%% Preferred config: mysticeti/stakers or stakers. Fallback: mysticeti/validators.
+%% @doc Extract stakers (validator + stake) from `mysticeti/stakers`.
 stakers(Proc, Opts) ->
-    Raw =
-        hb_ao:get(
-            <<"mysticeti/stakers">>,
-            Proc,
-            hb_ao:get(
-                <<"stakers">>,
-                Proc,
-                hb_ao:get(
-                    <<"mysticeti/validators">>,
-                    Proc,
-                    hb_ao:get(<<"validators">>, Proc, not_found, Opts#{ hashpath => ignore }),
-                    Opts#{ hashpath => ignore }
-                ),
-                Opts#{ hashpath => ignore }
-            ),
-            Opts#{ hashpath => ignore }
-        ),
-    case Raw of
-        not_found ->
-            normalize_stakers(
-                hb_opts:get(mysticeti_validators, [hb:address()], Opts),
-                Opts
-            );
-        _ ->
-            normalize_stakers(hb_cache:ensure_all_loaded(Raw, Opts), Opts)
-    end.
+    Raw = mysticeti_required(Proc, <<"stakers">>, Opts),
+    normalize_stakers(hb_cache:ensure_all_loaded(Raw, Opts), Opts).
 
+%% @doc Extract validator ids from normalized stakers.
 validators_from_stakers(Stakers) ->
     [Id || #{ id := Id } <- Stakers].
 
+%% @doc Normalize stakers into a list of #{id, stake} maps.
 normalize_stakers(Stakers, Opts) when is_map(Stakers) ->
     normalize_stakers(
         [#{ id => Id, stake => Stake }
@@ -1294,9 +1447,10 @@ normalize_stakers(Stakers, Opts) when is_list(Stakers) ->
             fun(Item, {Seen, Acc}) ->
                 case normalize_staker(Item, Opts) of
                     {ok, #{ id := Id } = Staker} ->
-                        case maps:is_key(Id, Seen) of
+                        case hb_maps:is_key(Id, Seen, Opts) of
                             true -> {Seen, Acc};
-                            false -> {Seen#{ Id => true }, Acc ++ [Staker]}
+                            false ->
+                                {hb_maps:put(Id, true, Seen, Opts), Acc ++ [Staker]}
                         end;
                     error ->
                         {Seen, Acc}
@@ -1306,18 +1460,10 @@ normalize_stakers(Stakers, Opts) when is_list(Stakers) ->
             Loaded
         ),
     Normalized;
-normalize_stakers(Stakers, Opts) when is_binary(Stakers) ->
-    normalize_stakers(
-        binary:split(
-            binary:replace(Stakers, <<"\"">>, <<"">>, [global]),
-            <<",">>,
-            [global, trim_all]
-        ),
-        Opts
-    );
 normalize_stakers(Stakers, Opts) ->
     normalize_stakers([Stakers], Opts).
 
+%% @doc Normalize a single staker entry into #{id, stake}.
 normalize_staker(Map, Opts) when is_map(Map) ->
     Id0 = hb_maps:get(<<"id">>, Map, hb_maps:get(id, Map, undefined, Opts), Opts),
     case Id0 of
@@ -1333,56 +1479,31 @@ normalize_staker(Id, Opts) ->
     CleanId = hb_cache:ensure_loaded(Id, Opts),
     {ok, #{ id => hb_util:bin(CleanId), stake => 1 }}.
 
+%% @doc Resolve the local author identity from opts.
 local_author(_Validators, Opts) ->
     hb_opts:get(mysticeti_author, hb:address(), Opts).
 
+%% @doc Ensure the local author is in the validator set.
 ensure_local_author(Validators, LocalAuthor) ->
     case lists:member(LocalAuthor, Validators) of
         true -> ok;
         false -> throw({local_author_not_in_staker_set, LocalAuthor})
     end.
 
+%% @doc Determine the number of proposer slots per round.
 num_proposers(Proc, Validators, Opts) ->
-    Raw =
-        hb_ao:get(
-            <<"mysticeti/num-proposers">>,
-            Proc,
-            hb_opts:get(mysticeti_num_proposers, not_found, Opts),
-            Opts#{ hashpath => ignore }
-        ),
-    Num =
-        case Raw of
-            not_found -> length(Validators);
-            _ -> hb_util:int(Raw)
-        end,
+    Num = hb_util:int(mysticeti_required(Proc, <<"num-proposers">>, Opts)),
     case Num >= 1 andalso Num =< length(Validators) of
         true -> Num;
         false -> throw({invalid_num_proposers, Num})
     end.
 
-%% @doc Extract peer nodes for gossip.
+%% @doc Extract peer nodes for gossip from `mysticeti/peers`.
 peers(Proc, Opts) ->
-    Raw =
-        hb_ao:get(
-            <<"mysticeti/peers">>,
-            Proc,
-            not_found,
-            Opts#{ hashpath => ignore }
-        ),
-    Candidates =
-        case Raw of
-            not_found ->
-                hb_ao:get(
-                    <<"scheduler-location">>,
-                    Proc,
-                    hb_opts:get(mysticeti_peers, [], Opts),
-                    Opts#{ hashpath => ignore }
-                );
-            _ ->
-                Raw
-        end,
-    normalize_peers(Candidates, Opts).
+    Raw = mysticeti_required(Proc, <<"peers">>, Opts),
+    normalize_peers(Raw, Opts).
 
+%% @doc Normalize peer inputs into a list of URLs.
 normalize_peers(Peers, Opts) when is_list(Peers) ->
     Loaded = hb_cache:ensure_loaded(Peers, Opts),
     lists:usort(
@@ -1398,6 +1519,7 @@ normalize_peers(Peers, Opts) when is_map(Peers) ->
 normalize_peers(_, _Opts) ->
     [].
 
+%% @doc Resolve a peer descriptor to a URL or return false.
 resolve_peer(Peer, Opts) when is_binary(Peer) ->
     case is_url(Peer) of
         true -> {true, Peer};
@@ -1411,6 +1533,7 @@ resolve_peer(Peer, Opts) when is_map(Peer) ->
 resolve_peer(Peer, Opts) ->
     resolve_peer(hb_util:bin(Peer), Opts).
 
+%% @doc Resolve a peer address via cached or gateway scheduler-location data.
 resolve_peer_location(Address, Opts) ->
     case dev_scheduler_cache:read_location(Address, Opts) of
         {ok, Location} ->
@@ -1431,14 +1554,15 @@ resolve_peer_location(Address, Opts) ->
             end
     end.
 
+%% @doc True when a binary is an HTTP or HTTPS URL.
 is_url(<<"http://", _/binary>>) -> true;
 is_url(<<"https://", _/binary>>) -> true;
 is_url(_) -> false.
 
 %% @doc Broadcast a block to configured peers.
 broadcast_block(State, Block) ->
-    Peers = maps:get(peers, State, []),
-    Opts = maps:get(opts, State),
+    Peers = state_get(peers, State, []),
+    Opts = state_opts(State),
     BlockId = hb_message:id(Block, all, Opts),
     ensure_message_id_cached(BlockId, Block, Opts),
     BlockLoaded = hb_cache:ensure_all_loaded(Block, Opts),
@@ -1506,948 +1630,3 @@ commitment_spec(Proc, Opts) ->
 %% @doc Return current time in milliseconds.
 scheduler_time() ->
     erlang:system_time(millisecond).
-
-%%% Tests
-
-test_node_opts(Wallet, Author, Store) ->
-    #{
-        store => [Store],
-        priv_wallet => Wallet,
-        mysticeti_author => Author
-    }.
-
-test_block(ProcID, Author, Round, Parents, Payload, Opts) ->
-    Block0 =
-        #{
-            <<"type">> => <<"MysticetiBlock">>,
-            <<"process">> => ProcID,
-            <<"author">> => Author,
-            <<"round">> => Round,
-            <<"parents">> => Parents,
-            <<"timestamp">> => scheduler_time(),
-            <<"body">> => Payload
-        },
-    Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
-    ensure_block_id(Signed, Opts).
-
-http_post_mysticeti_schedule(Node, ProcMsg, Msg, Opts) ->
-    Base = hb_message:commit(#{
-        <<"path">> => <<"/~mysticeti@1.0/schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Msg,
-        <<"process">> => ProcMsg
-    }, Opts),
-    hb_http:post(Node, Base, Opts).
-
-http_post_mysticeti_block(Node, Block, Opts) ->
-    Base = hb_message:commit(#{
-        <<"path">> => <<"/~mysticeti@1.0/block">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Block
-    }, Opts),
-    hb_http:post(Node, Base, Opts).
-
-http_get_mysticeti_schedule(Node, ProcID, From, To, Opts) ->
-    hb_http:get(
-        Node,
-        <<"/~mysticeti@1.0/schedule&target=", ProcID/binary,
-          "&from=", (integer_to_binary(From))/binary,
-          "&to=", (integer_to_binary(To))/binary>>,
-        Opts
-    ).
-
-mysticeti_test_process(Validators, Opts) ->
-    mysticeti_test_process(Validators, #{}, Opts).
-
-mysticeti_test_process(Validators, Overrides, Opts) ->
-    Stakers = [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
-    Mysticeti0 = #{
-        <<"validators">> => Validators,
-        <<"stakers">> => Stakers,
-        <<"wave-length">> => 3,
-        <<"proposer-offset">> => 0,
-        <<"num-proposers">> => length(Validators)
-    },
-    Mysticeti = hb_maps:merge(Mysticeti0, Overrides, Opts),
-    hb_message:commit(
-        #{
-            <<"device">> => <<"process@1.0">>,
-            <<"scheduler-device">> => <<"mysticeti@1.0">>,
-            <<"scheduler-location">> => Validators,
-            <<"mysticeti">> => Mysticeti,
-            <<"type">> => <<"Process">>,
-            <<"test-random-seed">> => rand:uniform(1000000)
-        },
-        Opts
-    ).
-
-test_message(ProcID, Body, Opts) ->
-    hb_message:commit(
-        #{
-            <<"target">> => ProcID,
-            <<"body">> => Body,
-            <<"type">> => <<"Message">>
-        },
-        Opts
-    ).
-
-post_blocks(Node, Blocks, Opts) ->
-    lists:foreach(
-        fun(Block) ->
-            {ok, _} = http_post_mysticeti_block(Node, Block, Opts)
-        end,
-        Blocks
-    ).
-
-fetch_assignments(Node, ProcID, From, To, Opts) ->
-    {ok, Schedule} = http_get_mysticeti_schedule(Node, ProcID, From, To, Opts),
-    Assignments0 =
-        hb_private:reset(
-            hb_ao:get(<<"assignments">>, Schedule, Opts)
-        ),
-    numeric_assignment_map(Assignments0, Opts).
-
-wait_for_assignments(Node, ProcID, From, To, Expected, Opts) ->
-    _ = hb_util:wait_until(
-        fun() ->
-            case http_get_mysticeti_schedule(Node, ProcID, From, To, Opts) of
-                {ok, Schedule} ->
-                    Assignments =
-                        hb_private:reset(
-                            hb_ao:get(<<"assignments">>, Schedule, Opts)
-                        ),
-                    hb_maps:size(numeric_assignment_map(Assignments, Opts), Opts) >= Expected;
-                _ -> false
-            end
-        end,
-        5000
-    ),
-    fetch_assignments(Node, ProcID, From, To, Opts).
-
-numeric_assignment_map(Assignments, Opts) ->
-    lists:foldl(
-        fun(Key, Acc) ->
-            case hb_util:safe_int(Key) of
-                {ok, IntKey} ->
-                    Value = hb_maps:get(Key, Assignments, undefined, Opts),
-                    hb_maps:put(IntKey, Value, Acc, Opts);
-                {error, _} ->
-                    Acc
-            end
-        end,
-        #{},
-        hb_maps:keys(Assignments, Opts)
-    ).
-
-%% @doc Compute proposer/voting/decision rounds for a wave.
-%% Mysticeti-C Algorithm 2: ProposerRound and DecisionRound.
-wave_rounds(Wave, Proc, Opts) ->
-    WaveLength = wave_length(Proc, Opts),
-    Decider = decider(WaveLength, 0, 0),
-    ProposerRound = proposer_round(Wave, Decider),
-    VotingRound = ProposerRound + 1,
-    DecisionRound = decision_round(Wave, Decider),
-    {ProposerRound, VotingRound, DecisionRound}.
-
-%% @doc Deterministic leader selection (round-robin).
-%% Mysticeti-C Algorithm 2: PredefinedProposer.
-proposer_for_round(Validators, Round, Proc, Opts) ->
-    Offset = proposer_offset(Proc, Opts),
-    Index = (Round + Offset) rem length(Validators),
-    lists:nth(Index + 1, Validators).
-
-%% @doc Build an author->block_id map from a list of blocks.
-blocks_by_author(Blocks, Opts) ->
-    hb_maps:from_list(
-        lists:map(
-            fun(Block) ->
-                {hb_maps:get(<<"author">>, Block, undefined, Opts),
-                 hb_maps:get(<<"id">>, Block, undefined, Opts)}
-            end,
-            Blocks
-        )
-    ).
-
-%% @doc Build parent list with the author's previous block first.
-parents_for_author(PrevRoundByAuthor, Author, Opts) ->
-    Ordered = lists:sort(hb_maps:to_list(PrevRoundByAuthor, Opts)),
-    OwnPrev = hb_maps:get(Author, PrevRoundByAuthor, undefined, Opts),
-    Others = [Id || {A, Id} <- Ordered, A =/= Author],
-    [OwnPrev | Others].
-
-%% @doc Generate a full round of valid blocks.
-make_round_blocks(ProcID, Round, Authors, PrevRoundByAuthor, Payloads, OptsByAuthor) ->
-    lists:map(
-        fun(Author) ->
-            Opts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
-            Parents =
-                case Round of
-                    0 -> [];
-                    _ -> parents_for_author(PrevRoundByAuthor, Author, Opts)
-                end,
-            Payload = hb_maps:get(Author, Payloads, undefined, Opts),
-            test_block(ProcID, Author, Round, Parents, Payload, Opts)
-        end,
-        Authors
-    ).
-
-mysticeti_quorum_commit_test_() ->
-    {timeout, 60, fun mysticeti_quorum_commit/0}.
-
-%% @doc Validate direct commit (Algorithm 2: SupportedProposer + IsCert).
-mysticeti_quorum_commit() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    N1 = hb_http_server:start_node(N1Opts),
-    _N2 = hb_http_server:start_node(N2Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N2Opts),
-    Pid = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    #{ current := InitialSlot } = dev_mysticeti_server:info(Pid),
-    Msg0 =
-        hb_message:commit(
-            #{
-                <<"target">> => ProcID,
-                <<"body">> => <<"m0">>,
-                <<"type">> => <<"Message">>
-            },
-            N1Opts
-        ),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(N1, Proc, Msg0, N1Opts),
-    ProposerBlockId =
-        hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    ?assert(is_binary(ProposerBlockId)),
-    #{ current := AfterScheduleSlot } = dev_mysticeti_server:info(Pid),
-    ?assertEqual(InitialSlot, AfterScheduleSlot),
-    NextSlot = InitialSlot + 1,
-    {ok, EmptySchedule} =
-        http_get_mysticeti_schedule(N1, ProcID, NextSlot, NextSlot, N1Opts),
-    Assignments0 =
-        hb_private:reset(
-            hb_ao:get(<<"assignments">>, EmptySchedule, N1Opts)
-        ),
-    ?assertEqual(0, hb_maps:size(Assignments0, N1Opts)),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(N1, R0Others, N2Opts),
-    R0ByAuthor = (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlockId },
-    VoteBlocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(N1, VoteBlocks, N2Opts),
-    VoteByAuthor = blocks_by_author(VoteBlocks, N1Opts),
-    DecisionBlocks = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(N1, DecisionBlocks, N2Opts),
-    ?debug_wait(1000),
-    {ok, Schedule} = http_get_mysticeti_schedule(N1, ProcID, 0, 1, N1Opts),
-    Assignments = hb_ao:get(<<"assignments">>, Schedule, N1Opts),
-    ?assert(hb_maps:size(Assignments, N1Opts) >= 1),
-    [{Slot, Assignment} | _] = hb_util:to_sorted_list(Assignments, N1Opts),
-    ?assertEqual(0, hb_util:int(Slot)),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, Assignment, N1Opts)).
-
-mysticeti_no_quorum_commit_test_() ->
-    {timeout, 60, fun mysticeti_no_quorum_commit/0}.
-
-%% @doc Ensure insufficient certificates do not commit (Algorithm 1: IsCert).
-mysticeti_no_quorum_commit() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg, N1Opts),
-    ProposerBlockId = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Others, N2Opts),
-    R0ByAuthor = (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlockId },
-    VoteBlocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks, N2Opts),
-    VoteByAuthor = blocks_by_author(VoteBlocks, N1Opts),
-    DecisionBlocks = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3],
-        VoteByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks, N2Opts),
-    ?debug_wait(500),
-    Assignments = fetch_assignments(Node, ProcID, 0, 0, N1Opts),
-    ?assertEqual(0, hb_maps:size(Assignments, N1Opts)).
-
-mysticeti_skip_wave_test_() ->
-    {timeout, 60, fun mysticeti_skip_wave/0}.
-
-%% @doc Validate SkippedProposer behavior (Algorithm 2: SkippedProposer).
-mysticeti_skip_wave() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg = test_message(ProcID, <<"m-skip">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg, N1Opts),
-    _ProposerBlockId = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Others, N2Opts),
-    R0ByAuthorNoA1 = blocks_by_author(R0Others, N1Opts),
-    VoteBlocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthorNoA1,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks, N2Opts),
-    ?debug_wait(500),
-    Assignments = fetch_assignments(Node, ProcID, 0, 0, N1Opts),
-    ?assertEqual(0, hb_maps:size(Assignments, N1Opts)).
-
-mysticeti_two_wave_order_test_() ->
-    {timeout, 60, fun mysticeti_two_wave_order/0}.
-
-%% @doc Validate two-wave ordering and total order stability.
-%% Mysticeti-C Algorithm 3: TryDecide ordering across waves
-%% (mysticeti-paper/algorithms/universal_committer.tex).
-mysticeti_two_wave_order() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg0 = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg0, N1Opts),
-    ProposerBlock0 = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Others, N2Opts),
-    R0ByAuthor = (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlock0 },
-    VoteBlocks0 = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks0, N2Opts),
-    VoteByAuthor0 = blocks_by_author(VoteBlocks0, N1Opts),
-    DecisionBlocks0 = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor0,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks0, N2Opts),
-    _ = wait_for_assignments(Node, ProcID, 0, 0, 1, N1Opts),
-    DecisionByAuthor0 = blocks_by_author(DecisionBlocks0, N1Opts),
-    {ProposerRound1, VotingRound1, DecisionRound1} = wave_rounds(1, Proc, N1Opts),
-    Proposer1 = proposer_for_round(Validators, ProposerRound1, Proc, N1Opts),
-    Msg1 =
-        test_message(
-            ProcID,
-            <<"m1">>,
-            hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})
-        ),
-    {ok, _} =
-        hb_cache:write(Msg1, hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})),
-    Payloads1 = #{ Proposer1 => Msg1 },
-    Round3Blocks = make_round_blocks(
-        ProcID,
-        ProposerRound1,
-        [A2, A3, A4],
-        DecisionByAuthor0,
-        Payloads1,
-        OptsByAuthor
-    ),
-    post_blocks(Node, Round3Blocks, N2Opts),
-    Round3ByAuthor = blocks_by_author(Round3Blocks, N1Opts),
-    VoteBlocks1 = make_round_blocks(
-        ProcID,
-        VotingRound1,
-        [A2, A3, A4],
-        Round3ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks1, N2Opts),
-    VoteByAuthor1 = blocks_by_author(VoteBlocks1, N1Opts),
-    DecisionBlocks1 = make_round_blocks(
-        ProcID,
-        DecisionRound1,
-        [A2, A3, A4],
-        VoteByAuthor1,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks1, N2Opts),
-    Assignments = wait_for_assignments(Node, ProcID, 0, 1, 2, N1Opts),
-    Sorted = hb_util:to_sorted_list(Assignments, N1Opts),
-    [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, hb_util:int(Slot0)),
-    ?assertEqual(1, hb_util:int(Slot1)),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, N1Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, N1Opts)).
-
-mysticeti_indirect_commit_test_() ->
-    {timeout, 60, fun mysticeti_indirect_commit/0}.
-
-%% @doc Validate TryIndirectDecide (Algorithm 3) via a later committed anchor.
-%% Mysticeti-C Algorithm 3: TryIndirectDecide + CertifiedLink behavior
-%% (mysticeti-paper/algorithms/universal_committer.tex).
-mysticeti_indirect_commit() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg0 = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg0, N1Opts),
-    ProposerBlock0 = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Others, N2Opts),
-    R0ByAuthor = (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlock0 },
-    VoteBlocksA2A3 = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    R0ByAuthorNoA1 = maps:remove(A1, R0ByAuthor),
-    VoteBlockA4 =
-        test_block(
-            ProcID,
-            A4,
-            1,
-            parents_for_author(
-                R0ByAuthorNoA1,
-                A4,
-                hb_maps:get(A4, OptsByAuthor, #{}, #{})
-            ),
-            undefined,
-            hb_maps:get(A4, OptsByAuthor, #{}, #{})
-        ),
-    VoteBlocks0 = VoteBlocksA2A3 ++ [VoteBlockA4],
-    post_blocks(Node, VoteBlocks0, N2Opts),
-    VoteByAuthor0 = blocks_by_author(VoteBlocks0, N1Opts),
-    DecisionBlocks0 = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor0,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks0, N2Opts),
-    ?debug_wait(500),
-    Assignments0 = fetch_assignments(Node, ProcID, 0, 0, N1Opts),
-    ?assertEqual(0, hb_maps:size(Assignments0, N1Opts)),
-    DecisionByAuthor0 = blocks_by_author(DecisionBlocks0, N1Opts),
-    {ProposerRound1, VotingRound1, DecisionRound1} = wave_rounds(1, Proc, N1Opts),
-    Proposer1 = proposer_for_round(Validators, ProposerRound1, Proc, N1Opts),
-    Msg1 =
-        test_message(
-            ProcID,
-            <<"m1">>,
-            hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})
-        ),
-    {ok, _} =
-        hb_cache:write(Msg1, hb_maps:get(Proposer1, OptsByAuthor, #{}, #{})),
-    Payloads1 = #{ Proposer1 => Msg1 },
-    Round3Blocks = make_round_blocks(
-        ProcID,
-        ProposerRound1,
-        [A2, A3, A4],
-        DecisionByAuthor0,
-        Payloads1,
-        OptsByAuthor
-    ),
-    post_blocks(Node, Round3Blocks, N2Opts),
-    Round3ByAuthor = blocks_by_author(Round3Blocks, N1Opts),
-    VoteBlocks1 = make_round_blocks(
-        ProcID,
-        VotingRound1,
-        [A2, A3, A4],
-        Round3ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks1, N2Opts),
-    VoteByAuthor1 = blocks_by_author(VoteBlocks1, N1Opts),
-    DecisionBlocks1 = make_round_blocks(
-        ProcID,
-        DecisionRound1,
-        [A2, A3, A4],
-        VoteByAuthor1,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks1, N2Opts),
-    Assignments = wait_for_assignments(Node, ProcID, 0, 1, 2, N1Opts),
-    Sorted = hb_util:to_sorted_list(Assignments, N1Opts),
-    [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, hb_util:int(Slot0)),
-    ?assertEqual(1, hb_util:int(Slot1)),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, N1Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, N1Opts)).
-
-mysticeti_equivocation_commit_test_() ->
-    {timeout, 60, fun mysticeti_equivocation_commit/0}.
-
-%% @doc Accept equivocation but commit only the certified proposer block.
-%% Mysticeti-C Algorithm 1: SupportedProposer + IsCert under equivocation.
-mysticeti_equivocation_commit() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg0 = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg0, N1Opts),
-    ProposerBlock0 = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    Msg0b = test_message(ProcID, <<"m0b">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0b, N1Opts),
-    EquivBlock = test_block(ProcID, A1, 0, [], Msg0b, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, [EquivBlock | R0Others], N2Opts),
-    R0ByAuthor =
-        (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlock0 },
-    VoteBlocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks, N2Opts),
-    VoteByAuthor = blocks_by_author(VoteBlocks, N1Opts),
-    DecisionBlocks = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks, N2Opts),
-    Assignments = wait_for_assignments(Node, ProcID, 0, 0, 1, N1Opts),
-    Bodies =
-        [hb_ao:get(<<"body/body">>, A, N1Opts)
-         || {_Slot, A} <- hb_util:to_sorted_list(Assignments, N1Opts)],
-    ?assertEqual([<<"m0">>], Bodies).
-
-mysticeti_prev_block_skip_round_test_() ->
-    {timeout, 60, fun mysticeti_prev_block_skip_round/0}.
-
-%% @doc Allow first parent to be the author's previous block even if it is not
-%% from the previous round (block correctness).
-mysticeti_prev_block_skip_round() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    R0Blocks = make_round_blocks(
-        ProcID,
-        0,
-        [A1, A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Blocks, N1Opts),
-    R0ByAuthor = blocks_by_author(R0Blocks, N1Opts),
-    R1Blocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R1Blocks, N2Opts),
-    R1ByAuthor = blocks_by_author(R1Blocks, N1Opts),
-    A1Prev = hb_maps:get(A1, R0ByAuthor, undefined, N1Opts),
-    Parents =
-        [A1Prev
-         | [Id || {_A, Id} <- hb_maps:to_list(R1ByAuthor, N1Opts)]],
-    A1Round2 = test_block(ProcID, A1, 2, Parents, undefined, N1Opts),
-    post_blocks(Node, [A1Round2], N1Opts),
-    Pid = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Info = dev_mysticeti_server:info(Pid),
-    ?assert(maps:get(max_round, Info) >= 2).
-
-mysticeti_multi_proposer_commit_test_() ->
-    {timeout, 60, fun mysticeti_multi_proposer_commit/0}.
-
-%% @doc Validate multi-proposer slots per round (Algorithm 3 l-loop).
-%% Mysticeti-C Algorithm 3: TryDecide over numOfProposers
-%% (mysticeti-paper/algorithms/universal_committer.tex).
-mysticeti_multi_proposer_commit() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, #{ <<"num-proposers">> => 2 }, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg0 = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg0, N1Opts),
-    ProposerBlock0 = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    Msg1 = test_message(ProcID, <<"m1">>, N2Opts),
-    {ok, _} = hb_cache:write(Msg1, N2Opts),
-    ProposerBlock1 = test_block(ProcID, A2, 0, [], Msg1, N2Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, [ProposerBlock1 | R0Others], N2Opts),
-    R0ByAuthor =
-        (blocks_by_author([ProposerBlock1 | R0Others], N1Opts))#{ A1 => ProposerBlock0 },
-    VoteBlocks = make_round_blocks(
-        ProcID,
-        1,
-        [A2, A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, VoteBlocks, N2Opts),
-    VoteByAuthor = blocks_by_author(VoteBlocks, N1Opts),
-    DecisionBlocks = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks, N2Opts),
-    Assignments = wait_for_assignments(Node, ProcID, 0, 1, 2, N1Opts),
-    Sorted = hb_util:to_sorted_list(Assignments, N1Opts),
-    [{Slot0, A0}, {Slot1, A1Assignment} | _] = Sorted,
-    ?assertEqual(0, hb_util:int(Slot0)),
-    ?assertEqual(1, hb_util:int(Slot1)),
-    ?assertEqual(<<"m0">>, hb_ao:get(<<"body/body">>, A0, N1Opts)),
-    ?assertEqual(<<"m1">>, hb_ao:get(<<"body/body">>, A1Assignment, N1Opts)).
-
-mysticeti_invalid_signature_rejected_test_() ->
-    {timeout, 60, fun mysticeti_invalid_signature_rejected/0}.
-
-%% @doc Reject blocks with invalid signatures (block correctness).
-%% Mysticeti-C Block correctness: signature verification
-%% (mysticeti-paper/sections/overview.tex).
-mysticeti_invalid_signature_rejected() ->
-    W1 = ar_wallet:new(),
-    W2 = ar_wallet:new(),
-    W3 = ar_wallet:new(),
-    W4 = ar_wallet:new(),
-    A1 = hb_util:human_id(ar_wallet:to_address(W1)),
-    A2 = hb_util:human_id(ar_wallet:to_address(W2)),
-    A3 = hb_util:human_id(ar_wallet:to_address(W3)),
-    A4 = hb_util:human_id(ar_wallet:to_address(W4)),
-    Validators = [A1, A2, A3, A4],
-    Store = hb_test_utils:test_store(),
-    N1Opts = test_node_opts(W1, A1, Store),
-    N2Opts = test_node_opts(W2, A2, Store),
-    N3Opts = test_node_opts(W3, A3, Store),
-    N4Opts = test_node_opts(W4, A4, Store),
-    OptsByAuthor = #{
-        A1 => N1Opts,
-        A2 => N2Opts,
-        A3 => N3Opts,
-        A4 => N4Opts
-    },
-    Node = hb_http_server:start_node(N1Opts),
-    Proc = mysticeti_test_process(Validators, N1Opts),
-    ProcID = hb_message:id(Proc, all, N1Opts),
-    {ok, _} = hb_cache:write(Proc, N1Opts),
-    _ = dev_mysticeti_registry:find(ProcID, Proc, N1Opts),
-    Msg0 = test_message(ProcID, <<"m0">>, N1Opts),
-    {ok, _} = hb_cache:write(Msg0, N1Opts),
-    {ok, Res0} = http_post_mysticeti_schedule(Node, Proc, Msg0, N1Opts),
-    ProposerBlock0 = hb_ao:get(<<"pending/block">>, Res0, undefined, N1Opts),
-    R0Others = make_round_blocks(
-        ProcID,
-        0,
-        [A2, A3, A4],
-        #{},
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, R0Others, N2Opts),
-    R0ByAuthor = (blocks_by_author(R0Others, N1Opts))#{ A1 => ProposerBlock0 },
-    VoteBlocksValid = make_round_blocks(
-        ProcID,
-        1,
-        [A3, A4],
-        R0ByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    InvalidVote =
-        test_block(
-            ProcID,
-            A2,
-            1,
-            parents_for_author(
-                R0ByAuthor,
-                A2,
-                hb_maps:get(A2, OptsByAuthor, #{}, #{})
-            ),
-            undefined,
-            N3Opts
-        ),
-    post_blocks(Node, VoteBlocksValid ++ [InvalidVote], N2Opts),
-    VoteByAuthor0 = blocks_by_author(VoteBlocksValid, N1Opts),
-    InvalidVoteId = hb_maps:get(<<"id">>, InvalidVote, undefined, N1Opts),
-    VoteByAuthor = VoteByAuthor0#{ A2 => InvalidVoteId },
-    DecisionBlocks = make_round_blocks(
-        ProcID,
-        2,
-        [A2, A3, A4],
-        VoteByAuthor,
-        #{},
-        OptsByAuthor
-    ),
-    post_blocks(Node, DecisionBlocks, N2Opts),
-    ?debug_wait(500),
-    Assignments = fetch_assignments(Node, ProcID, 0, 0, N1Opts),
-    ?assertEqual(0, hb_maps:size(Assignments, N1Opts)).
