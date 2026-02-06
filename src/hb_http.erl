@@ -602,6 +602,7 @@ encode_reply_filter_bundles(Status, TABMReq, Message, Opts) ->
         #{<<"path">> := <<"/", TXID/binary>>} ->
             case maps:get(TXID, maps:get(<<"commitments">>, Message, #{}), not_found) of 
                 #{<<"bundle">> := <<"true">>} ->
+                    ?event(http, {bundle_404, {txid, TXID}}),
                     {404, #{}, <<>>};
                 _ ->
                     encode_reply(Status, TABMReq, Message, Opts)
