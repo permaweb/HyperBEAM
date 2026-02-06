@@ -98,10 +98,11 @@
 
 -define(ECDSA_SIGN_ALG, ecdsa).
 -define(ECDSA_TYPE_BYTE, <<2>>).
+-define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
 
 -define(EDDSA_SIGN_ALG, eddsa).
 -define(EDDSA_TYPE_BYTE, <<3>>).
--define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
+-define(EDDSA_KEY_TYPE, {?EDDSA_SIGN_ALG, ed25519}).
 
 %% The default key type used by transactions that do not specify a signature type.
 -define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
