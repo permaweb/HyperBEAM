@@ -136,6 +136,14 @@ mysticeti_network_test_() ->
 mysticeti_network_many_nodes_test_() ->
     {timeout, 300, fun() -> run_mysticeti_network(7, lists:seq(0, 3), [0]) end}.
 
+%% @doc End-to-end wasm execution over Mysticeti scheduling and HTTP.
+mysticeti_wasm_process_http_test_() ->
+    {timeout, 360, fun mysticeti_wasm_process_http/0}.
+
+%% @doc End-to-end lua execution over Mysticeti scheduling and HTTP.
+mysticeti_lua_process_http_test_() ->
+    {timeout, 360, fun mysticeti_lua_process_http/0}.
+
 %% @doc End-to-end Mysticeti-C network execution over HTTP.
 %% Validates direct decision and total-order properties (Algorithms 2–3,
 %% mysticeti-paper/algorithms/*.tex) under multi-node gossip.
@@ -317,6 +325,367 @@ run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
         ),
     ?assert(hb_maps:size(RefSlots, FirstOpts) == length(ExpectedBodies)).
 
+mysticeti_wasm_process_http() ->
+    mysticeti_exec_process_http(wasm).
+
+mysticeti_lua_process_http() ->
+    mysticeti_exec_process_http(lua).
+
+%% @doc Execute a full Mysticeti-C HTTP workflow with a configured executor.
+mysticeti_exec_process_http(Kind) ->
+    NodeCount = 4,
+    {Nodes, Validators, PeerUrls} = setup_mysticeti_http_network(NodeCount),
+    {ProcExtra, MsgSpecs, MsgBuilder, ExpectedFun, OutputPath} = exec_spec(Kind, Nodes),
+    ProcBase =
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"mysticeti@1.0">>,
+            <<"scheduler-location">> => Validators,
+            <<"mysticeti">> => #{
+                <<"validators">> => Validators,
+                <<"stakers">> =>
+                    [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
+                <<"peers">> => PeerUrls,
+                <<"wave-length">> => 3,
+                <<"proposer-offset">> => 0,
+                <<"num-proposers">> => length(Validators)
+            },
+            <<"type">> => <<"Process">>
+        },
+    #{ url := _FirstNode, opts := FirstOpts } = hd(Nodes),
+    Proc = hb_message:commit(hb_maps:merge(ProcBase, ProcExtra, FirstOpts), FirstOpts),
+    ProcMsgId = hb_message:id(Proc, all, FirstOpts),
+    ProcID = hb_util:human_id(ProcMsgId),
+    ProcLoaded = hb_cache:ensure_all_loaded(Proc, FirstOpts),
+    lists:foreach(
+        fun(#{ opts := Opts }) ->
+            {ok, _} = hb_cache:write(ProcLoaded, Opts)
+        end,
+        Nodes
+    ),
+    ProcReq = #{
+        <<"path">> => <<"/~mysticeti@1.0/schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"body">> => ProcLoaded
+    },
+    NodesWithProc = [Node#{ proc => ProcLoaded, proc_id => ProcMsgId } || Node <- Nodes],
+    MsgInfos =
+        lists:map(
+            fun(Spec) ->
+                NodeIndex = hb_maps:get(node_index, Spec, 1, #{}),
+                Arg = hb_maps:get(arg, Spec, undefined, #{}),
+                NodeInfo = lists:nth(NodeIndex, Nodes),
+                NodeOpts = hb_maps:get(opts, NodeInfo, #{}, #{}),
+                Msg = MsgBuilder(ProcID, Arg, NodeOpts),
+                MsgId = hb_message:id(Msg, all, NodeOpts),
+                Expected = ExpectedFun(Arg, Msg, NodeOpts),
+                {NodeInfo, Msg, MsgId, Expected}
+            end,
+            MsgSpecs
+        ),
+    MsgByIndex =
+        lists:foldl(
+            fun({NodeInfo, Msg, MsgId, Expected}, Acc) ->
+                Index = hb_maps:get(index, NodeInfo, 0, #{}),
+                hb_maps:put(
+                    Index,
+                    #{ msg => Msg, msg_id => MsgId, expected => Expected },
+                    Acc,
+                    #{}
+                )
+            end,
+            #{},
+            MsgInfos
+        ),
+    ProcessRound = 0,
+    ExecRound = 2,
+    RoundPlan = lists:seq(0, 7),
+    lists:foreach(
+        fun(Round) ->
+            lists:foreach(
+                fun(NodeInfo) ->
+                    Index = hb_maps:get(index, NodeInfo, 0, #{}),
+                    NodeUrl = hb_maps:get(url, NodeInfo, undefined, #{}),
+                    NodeOpts = hb_maps:get(opts, NodeInfo, #{}, #{}),
+                    case {Round, Index} of
+                        {ProcessRound, 1} ->
+                            {ok, _} = hb_http:post(NodeUrl, ProcReq, NodeOpts);
+                        {ExecRound, _} ->
+                            case hb_maps:is_key(Index, MsgByIndex, #{}) of
+                                true ->
+                                    Exec = hb_maps:get(Index, MsgByIndex, #{}, #{}),
+                                    ExecMsg = hb_maps:get(msg, Exec, undefined, #{}),
+                                    {ok, _} =
+                                        hb_http:post(
+                                            NodeUrl,
+                                            << ProcID/binary, "/schedule" >>,
+                                            ExecMsg,
+                                            NodeOpts
+                                        );
+                                false ->
+                                    schedule_drive_message(NodeInfo, Round)
+                            end;
+                        _ ->
+                            schedule_drive_message(NodeInfo, Round)
+                    end
+                end,
+                NodesWithProc
+            ),
+            timer:sleep(200)
+        end,
+        RoundPlan
+    ),
+    MaxSlots = length(RoundPlan) * length(NodesWithProc) + 10,
+    MsgIds = [MsgId || {_NodeInfo, _Msg, MsgId, _Expected} <- MsgInfos],
+    AllMsgIds = [ProcMsgId | MsgIds],
+    lists:foreach(
+        fun(Node) ->
+            case wait_for_message_ids_http(Node, ProcMsgId, AllMsgIds, MaxSlots, 180000) of
+                true -> ok;
+                false -> erlang:error({messages_not_committed, Node})
+            end
+        end,
+        Nodes
+    ),
+    RefNode = hd(Nodes),
+    RefOpts = hb_maps:get(opts, RefNode, #{}, #{}),
+    RefAssignments =
+        fetch_assignments_http(
+            hb_maps:get(url, RefNode, undefined, #{}),
+            ProcMsgId,
+            0,
+            MaxSlots,
+            RefOpts
+        ),
+    RefSlots = message_slots_for_ids(RefAssignments, MsgIds, RefOpts),
+    ?assertEqual(length(MsgIds), hb_maps:size(RefSlots, RefOpts)),
+    lists:foreach(
+        fun(Node) ->
+            Assignments =
+                fetch_assignments_http(
+                    hb_maps:get(url, Node, undefined, #{}),
+                    ProcMsgId,
+                    0,
+                    MaxSlots,
+                    hb_maps:get(opts, Node, #{}, #{})
+                ),
+            Slots = message_slots_for_ids(Assignments, MsgIds, hb_maps:get(opts, Node, #{}, #{})),
+            ?assertEqual(RefSlots, Slots)
+        end,
+        Nodes
+    ),
+    ExpectedById =
+        lists:foldl(
+            fun({_NodeInfo, _Msg, MsgId, Expected}, Acc) ->
+                hb_maps:put(MsgId, Expected, Acc, RefOpts)
+            end,
+            #{},
+            MsgInfos
+        ),
+    lists:foreach(
+        fun(Node) ->
+            NodeOpts = hb_maps:get(opts, Node, #{}, #{}),
+            NodeUrl = hb_maps:get(url, Node, undefined, #{}),
+            lists:foreach(
+                fun({MsgId, Slot}) ->
+                    Req =
+                        case OutputPath of
+                            <<"results/output/body">> ->
+                                #{
+                                    <<"path">> => << ProcID/binary, "/compute" >>,
+                                    <<"slot">> => Slot,
+                                    <<"accept">> => <<"application/httpsig@1.0">>,
+                                    <<"require-codec">> => <<"httpsig@1.0">>,
+                                    <<"accept-bundle">> => false
+                                };
+                            _ ->
+                                #{
+                                    <<"path">> => << ProcID/binary, "/compute" >>,
+                                    <<"slot">> => Slot
+                                }
+                        end,
+                    {ok, Res} =
+                        hb_http:get(
+                            NodeUrl,
+                            Req,
+                            NodeOpts#{ cache_control => <<"always">> }
+                        ),
+                    Expected = hb_maps:get(MsgId, ExpectedById, undefined, NodeOpts),
+                    ?assertEqual(Expected, hb_ao:get(OutputPath, Res, NodeOpts))
+                end,
+                hb_maps:to_list(RefSlots, RefOpts)
+            )
+        end,
+        Nodes
+    ).
+
+exec_spec(wasm, Nodes) ->
+    WasmImageId = cache_wasm_image_all_nodes(<<"test/test-64.wasm">>, Nodes),
+    {
+        #{
+            <<"execution-device">> => <<"stack@1.0">>,
+            <<"device-stack">> => [<<"wasm-64@1.0">>],
+            <<"image">> => WasmImageId
+        },
+        [
+            #{ node_index => 1, arg => 5.0 },
+            #{ node_index => 2, arg => 6.0 }
+        ],
+        fun wasm_exec_message/3,
+        fun(Arg, _Msg, _Opts) -> wasm_expected_output(Arg) end,
+        <<"results/output">>
+    };
+exec_spec(lua, _Nodes) ->
+    {ok, Module} = file:read_file("test/test.lua"),
+    {
+        #{
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Module
+            }
+        },
+        [
+            #{ node_index => 1, arg => <<"lua-1">> },
+            #{ node_index => 2, arg => <<"lua-2">> }
+        ],
+        fun lua_exec_message/3,
+        fun(_Arg, _Msg, _Opts) -> lua_expected_output() end,
+        <<"results/output/body">>
+    }.
+
+setup_mysticeti_http_network(NodeCount) ->
+    {Nodes, Validators} = start_mysticeti_nodes(NodeCount),
+    case wait_for_nodes_ready(Nodes, 10000) of
+        true -> ok;
+        {error, MissingNodes} -> erlang:error({nodes_not_ready, MissingNodes})
+    end,
+    Locations =
+        lists:map(
+            fun(#{ url := Node, opts := Opts }) ->
+                {ok, Location} = register_scheduler_location(Node, Opts),
+                #{ location => Location, opts => Opts }
+            end,
+            Nodes
+        ),
+    PeerUrls =
+        [
+            Url
+        || #{ location := Location, opts := Opts } <- Locations,
+           (Url = hb_ao:get(<<"url">>, Location, not_found, Opts)) =/= not_found
+        ],
+    lists:foreach(
+        fun(#{ location := Location, opts := SenderOpts }) ->
+            lists:foreach(
+                fun(#{ url := Node }) ->
+                    case post_scheduler_location(Node, Location, SenderOpts, 10000) of
+                        {ok, _} -> ok;
+                        {error, Reason} ->
+                            erlang:error({scheduler_location_post_failed, Node, Reason})
+                    end
+                end,
+                Nodes
+            )
+        end,
+        Locations
+    ),
+    timer:sleep(200),
+    case wait_for_scheduler_locations(Nodes, Validators, 20000) of
+        true -> ok;
+        {error, MissingLocations} ->
+            erlang:error({scheduler_locations_missing, MissingLocations})
+    end,
+    {Nodes, Validators, PeerUrls}.
+
+cache_wasm_image_all_nodes(Image, Nodes) ->
+    [First | Rest] = Nodes,
+    FirstOpts = hb_maps:get(opts, First, #{}, #{}),
+    #{ <<"image">> := ImageId } = dev_wasm:cache_wasm_image(Image, FirstOpts),
+    lists:foreach(
+        fun(Node) ->
+            NodeOpts = hb_maps:get(opts, Node, #{}, #{}),
+            #{ <<"image">> := Other } = dev_wasm:cache_wasm_image(Image, NodeOpts),
+            ?assertEqual(ImageId, Other)
+        end,
+        Rest
+    ),
+    ImageId.
+
+wait_for_message_ids_http(#{ url := Node, opts := Opts }, ProcID, MsgIds, MaxSlots, Timeout) ->
+    hb_util:wait_until(
+        fun() ->
+            Assignments = fetch_assignments_http(Node, ProcID, 0, MaxSlots, Opts),
+            Slots = message_slots_for_ids(Assignments, MsgIds, Opts),
+            hb_maps:size(Slots, Opts) >= length(MsgIds)
+        end,
+        Timeout
+    ).
+
+message_slots_for_ids(Assignments, MsgIds, Opts) ->
+    lists:foldl(
+        fun({Slot, Assignment}, Acc) ->
+            case assignment_message_id(Assignment, Opts) of
+                {ok, MsgId} ->
+                    case lists:member(MsgId, MsgIds) andalso
+                        not hb_maps:is_key(MsgId, Acc, Opts) of
+                        true -> hb_maps:put(MsgId, Slot, Acc, Opts);
+                        false -> Acc
+                    end;
+                _ ->
+                    Acc
+            end
+        end,
+        #{},
+        hb_util:to_sorted_list(Assignments, Opts)
+    ).
+
+assignment_message_id(Assignment, Opts) ->
+    case hb_maps:get(<<"body">>, Assignment, not_found, Opts) of
+        not_found -> {error, no_body};
+        Msg when is_map(Msg) ->
+            try {ok, hb_message:id(Msg, all, Opts)} catch _:_ -> {error, invalid_body} end;
+        _ ->
+            {error, invalid_body}
+    end.
+
+wasm_exec_message(ProcID, Param, Opts) ->
+    hb_message:commit(
+        #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"function">> => <<"fac">>,
+            <<"parameters">> => [Param]
+        },
+        Opts
+    ).
+
+lua_exec_message(ProcID, Label, Opts) ->
+    hb_message:commit(
+        #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"function">> => <<"compute">>,
+            <<"label">> => Label
+        },
+        Opts
+    ).
+
+wasm_expected_output(Param) ->
+    [factorial(Param)].
+
+lua_expected_output() ->
+    42.
+
+factorial(Value) when is_float(Value) ->
+    factorial(trunc(Value), 1.0);
+factorial(Value) when is_integer(Value) ->
+    factorial(Value, 1.0);
+factorial(Value) ->
+    factorial(trunc(Value), 1.0).
+
+factorial(N, Acc) when N =< 1 -> Acc;
+factorial(N, Acc) -> factorial(N - 1, Acc * N).
+
 start_mysticeti_nodes(NodeCount) ->
     Wallets = [ar_wallet:new() || _ <- lists:seq(1, NodeCount)],
     Validators = [hb_util:human_id(ar_wallet:to_address(W)) || W <- Wallets],
@@ -486,6 +855,36 @@ schedule_round_messages(
         end,
         Rounds
     ).
+
+schedule_drive_message(
+    #{ url := Node, opts := Opts, proc := Proc, proc_id := ProcID, index := Index },
+    Round
+) ->
+    Body =
+        << "r", (integer_to_binary(Round))/binary, "-",
+           (integer_to_binary(Index))/binary >>,
+    Msg =
+        hb_message:commit(
+            #{
+                <<"target">> => ProcID,
+                <<"body">> => Body,
+                <<"type">> => <<"Message">>
+            },
+            Opts
+        ),
+    Req = #{
+        <<"path">> => <<"/~mysticeti@1.0/schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"body">> => Msg,
+        <<"process">> => Proc
+    },
+    {ok, Res} = hb_http:post(Node, Req, Opts),
+    case hb_ao:get(<<"status">>, Res, 200, Opts) of
+        Status when Status >= 400 ->
+            erlang:error({schedule_failed, Status, Res});
+        _ ->
+            ok
+    end.
 
 wait_for_expected_bodies_http(
     #{ url := Node, opts := Opts },

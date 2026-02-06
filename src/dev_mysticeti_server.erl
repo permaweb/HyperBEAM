@@ -1,47 +1,46 @@
 %%% @doc Mysticeti-C consensus scheduler server.
 %%%
-%%% This server maintains a per-process block DAG and produces a single,
-%%% deterministic assignment order for `process@1.0`. The implementation
-%%% follows the paper’s helper predicates and universal committer.
+%%% This server maintains a per-process block DAG, evaluates the Mysticeti-C
+%%% decision sequence, and emits AO-Core assignments for user messages. The
+%%% consensus logic follows the paper’s helper predicates and universal
+%%% committer; the final message ordering step is AO-Core-specific.
 %%%
 %%% Algorithm sketch (paper references inline):
-%%% 1. Block validity and DAG model.
-%%%    - Honest validators author at most one block per round; Byzantine
-%%%      validators may equivocate, and the DAG stores all such blocks.
-%%%    - A block carries `{round, author, proposer_slot, parents, body}` and is
-%%%      signature-verified.
-%%%    - Parents must be from earlier rounds and satisfy the parent selection
-%%%      rules; the DAG is indexed by `(round, author)`.
-%%%    (mysticeti-paper/sections/overview.tex, "Block correctness")
+%%% 1. Block validity and DAG model (mysticeti-paper/sections/overview.tex).
+%%%    - A block includes `{author, round, parents, body}` and a valid signature.
+%%%    - Parents are distinct, from earlier rounds; the first parent is the
+%%%      author’s most recent block (latest round < r).
+%%%    - The parent list includes ≥ 2f+1 blocks from round r-1.
+%%%    - Byzantine equivocations are stored; the DAG index is
+%%%      `round -> author -> [block_id]`.
 %%%
-%%% 2. Proposer selection.
-%%%    - For each round and proposer slot `l ∈ [0, num_proposers)`, compute a
-%%%      deterministic proposer (round-robin with offset).
-%%%    (mysticeti-paper/algorithms/consensus_utils.tex)
+%%% 2. Support / vote predicates (mysticeti-paper/algorithms/consensus_utils.tex;
+%%%    overview.tex “support” definition).
+%%%    - `SupportedBlock` performs a depth-first search over parent lists and
+%%%      returns the first block encountered for (author, round).
+%%%    - `IsVote` holds when a voting-round block supports the proposer block.
 %%%
-%%% 3. Direct decision per wave.
-%%%    - A wave is `wave_length` rounds (default 3):
-%%%      proposer round r, voting round r+1, decision round r+2.
-%%%    - A vote is a voting-round block whose parent chain (checked round by
-%%%      round) reaches the proposer block.
-%%%    - A certificate is a decision-round block whose parents include ≥ 2f+1
-%%%      votes for that proposer.
-%%%    - Commit if ≥ 2f+1 decision blocks each form a certificate.
-%%%    - Skip if ≥ 2f+1 voting blocks omit the proposer as a parent.
-%%%    (mysticeti-paper/algorithms/consensus_utils.tex; Alg. 1)
+%%% 3. Direct decision per slot (mysticeti-paper/algorithms/baseline_committer.tex
+%%%    + consensus_utils.tex).
+%%%    - For each round and proposer slot `l ∈ [0, num_proposers)`, select the
+%%%      proposer via `PredefinedProposer(r + l + proposer_offset)`.
+%%%    - `SupportedProposer` holds if ≥ 2f+1 decision-round blocks are
+%%%      certificates for the proposer.
+%%%    - `SkippedProposer` holds if ≥ 2f+1 voting-round blocks have no parent
+%%%      authored by the proposer.
 %%%
-%%% 4. Indirect decision.
-%%%    - Scan later decided waves as anchors.
-%%%    - If an anchor is committed and there exists a certified link from the
-%%%      proposer’s decision round to that anchor, commit; otherwise skip.
-%%%      If no anchor, remain undecided.
-%%%    (mysticeti-paper/algorithms/universal_committer.tex; Alg. 3)
+%%% 4. Indirect decision (mysticeti-paper/algorithms/universal_committer.tex).
+%%%    - Anchors are later slots in the decision sequence with round >
+%%%      decision round.
+%%%    - If the first such anchor is undecided, remain undecided.
+%%%    - If the anchor is committed and there is a certified link, commit;
+%%%      otherwise skip.
 %%%
-%%% 5. Total order and assignments.
+%%% 5. AO-Core ordering.
 %%%    - When a proposer is committed, collect its committed past and order
 %%%      blocks deterministically by `(round, author, block_id)`.
-%%%    - Emit assignments for blocks with payloads and append them to the
-%%%      scheduler cache.
+%%%    - Emit assignments for payload messages; this total order is what
+%%%      `process@1.0` consumes (not specified by the paper).
 %%%
 %%% Notes:
 %%% - Validators are derived from the process staker set; `f = floor((n-1)/3)`,

@@ -3,7 +3,9 @@
 %%% This module exposes the `process@1.0` scheduler interface and delegates
 %%% consensus to `dev_mysticeti_server`. It is intentionally thin: parse the
 %%% request, locate the per-process server, and translate results into the
-%%% canonical schedule/assignment formats.
+%%% canonical schedule/assignment formats. The schedule returned is a total
+%%% order of user messages (assignments), derived from the consensus decision
+%%% sequence and not from any direct “block order” API.
 %%%
 %%% Endpoints:
 %%% - `POST /~mysticeti@1.0/schedule`: enqueue a message. The server creates a
@@ -75,7 +77,7 @@ post_schedule(Base, Req, Opts) ->
                         {ok, OnlyCommitted} ->
                             case hb_ao:get(<<"type">>, OnlyCommitted, Opts) of
                                 <<"Process">> ->
-                                    ok = hb_cache:write(OnlyCommitted, Opts);
+                                    {ok, _} = hb_cache:write(OnlyCommitted, Opts);
                                 _ -> ok
                             end,
                             Res = dev_mysticeti_server:schedule(PID, OnlyCommitted),
