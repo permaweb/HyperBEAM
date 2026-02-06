@@ -224,12 +224,14 @@ normalize_data_root(Item) -> Item.
 
 serialize_sig_type({rsa, 65537}) -> <<"rsa-pss-sha256">>;
 serialize_sig_type({ecdsa, secp256k1}) -> <<"ecdsa-secp256k1-sha256">>;
+serialize_sig_type(?EDDSA_KEY_TYPE) -> <<"ed25519-sha512">>;
 serialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
     throw({invalid_signature_type, Type}).
 
 deserialize_sig_type(<<"rsa-pss-sha256">>) -> {rsa, 65537};
 deserialize_sig_type(<<"ecdsa-secp256k1-sha256">>) -> {ecdsa, secp256k1};
+deserialize_sig_type(<<"ed25519-sha512">>) -> ?EDDSA_KEY_TYPE;
 deserialize_sig_type(<<"unsigned-sha256">>) -> {rsa, 65537};
 deserialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
