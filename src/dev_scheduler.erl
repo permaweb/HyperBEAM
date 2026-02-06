@@ -235,12 +235,13 @@ find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
             {
                 ok,
                 hb_util:message_to_ordered_list(
-                    maps:filter(
+                    hb_maps:filter(
                         fun(<<"priv">>, _) -> false;
                             (<<"commitments">>, _) -> false;
                             (Slot, _) -> hb_util:int(Slot) > LastSlot
                         end,
-                        RecvdAssignments
+                        RecvdAssignments,
+                        Opts
                     )
                 ),
                 undefined
