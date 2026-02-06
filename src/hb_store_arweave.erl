@@ -4,7 +4,7 @@
 %%% Store API:
 -export([type/2, read/2]).
 %%% Indexing API:
--export([write_offset/5]).
+-export([write_offset/5, path/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -29,14 +29,31 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     case hb_store:read(IndexStore, path(ID)) of
         {ok, Binary} ->
             [IsTX, StartOffset, Length] = binary:split(Binary, <<":">>, [global]),
-            case hb_util:bool(IsTX) of
+            Loaded = case hb_util:bool(IsTX) of
                 true ->
                     load_bundle(ID,
                         hb_util:int(StartOffset), hb_util:int(Length), StoreOpts);
                 false ->
                     load_item(
                         hb_util:int(StartOffset), hb_util:int(Length), StoreOpts)
-            end;
+            end,
+            case Loaded of
+                {ok, Message} ->
+                    ?event({{read, ok},
+                        {id, {explicit, ID}},
+                        {is_tx, IsTX},
+                        {start_offset, StartOffset},
+                        {length, Length},
+                        {message, Message}});
+                {error, Reason} ->
+                    ?event({{read, error}, 
+                        {id, {explicit, ID}}, 
+                        {is_tx, IsTX},
+                        {start_offset, StartOffset},
+                        {length, Length},
+                        {reason, Reason}})
+            end,
+            Loaded;
         not_found ->
             {error, not_found}
     end.

@@ -17,7 +17,13 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     {From, To} = parse_range(Request, Opts),
-    fetch_blocks(Request, From, To, Opts).
+    Mode = hb_maps:get(<<"mode">>, Request, <<"write">>, Opts),
+    case Mode of
+        <<"write">> -> fetch_blocks(Request, From, To, Opts);
+        <<"list">>  -> list_index(From, To, Opts);
+        _ ->
+            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    end.
 
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
@@ -36,7 +42,66 @@ parse_range(Request, Opts) ->
     To = hb_maps:get(<<"to">>, Request, 0, Opts),
     {hb_util:int(From), hb_util:int(To)}.
 
+%% @doc Check if a transaction ID is indexed in the arweave index store.
+is_tx_indexed(TXID, Opts) ->
+    IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+    case IndexStore of
+        no_store -> false;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, hb_store_arweave:path(TXID)) of
+                {ok, _} -> true;
+                not_found -> false
+            end
+    end.
 
+%% @doc List indexed blocks and transactions in the given range.
+%% Returns JSON with block heights as keys, each containing indexed and not_indexed lists.
+list_index(From, To, _Opts) when From < To ->
+    {ok, #{
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => hb_json:encode(#{})
+    }};
+list_index(From, To, Opts) ->
+    Result = list_index_blocks(From, To, Opts, #{}),
+    JSON = hb_json:encode(Result),
+    {ok, #{
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => JSON
+    }}.
+
+%% @doc Iterate through blocks and check index status for each transaction.
+list_index_blocks(Current, To, _Opts, Acc) when Current < To ->
+    Acc;
+list_index_blocks(Current, To, Opts, Acc) ->
+    case dev_arweave_block_cache:read(Current, Opts) of
+        {ok, Block} ->
+            TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+            {IndexedTXs, NotIndexedTXs} = classify_txs(TXIDs, Opts),
+            BlockKey = hb_util:bin(Current),
+            NewAcc = Acc#{
+                BlockKey => #{
+                    <<"indexed">> => IndexedTXs,
+                    <<"not_indexed">> => NotIndexedTXs
+                }
+            },
+            list_index_blocks(Current - 1, To, Opts, NewAcc);
+        not_found ->
+            % Block not in cache, skip it
+            list_index_blocks(Current - 1, To, Opts, Acc)
+    end.
+
+%% @doc Classify transactions as indexed or not_indexed.
+classify_txs(TXIDs, Opts) ->
+    lists:foldl(
+        fun(TXID, {IndexedAcc, NotIndexedAcc}) ->
+            case is_tx_indexed(TXID, Opts) of
+                true -> {[TXID | IndexedAcc], NotIndexedAcc};
+                false -> {IndexedAcc, [TXID | NotIndexedAcc]}
+            end
+        end,
+        {[], []},
+        TXIDs
+    ).
 
 %% @doc Fetch blocks from an Arweave node between a given range.
 fetch_blocks(Req, Current, To, _Opts) when Current < To ->
@@ -547,6 +612,44 @@ non_string_tags_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Res = resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts),
     ?assertEqual(error, Res),
+    ok.
+
+list_index_test() ->
+    %% Test block: https://viewblock.io/arweave/block/1827942
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    %% First index the block using write mode
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=write">>,
+            Opts
+        ),
+    %% Now list the index using list mode
+    {ok, Response} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=list">>,
+            Opts
+        ),
+    %% Verify content-type is application/json
+    ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Response)),
+    ?event(debug_test, {response, Response}),
+    %% Decode the JSON body
+    JSONBody = maps:get(<<"body">>, Response),
+    IndexData = hb_json:decode(JSONBody),
+    %% Verify the block height is present as a key
+    BlockKey = <<"1827942">>,
+    ?assert(maps:is_key(BlockKey, IndexData)),
+    BlockInfo = maps:get(BlockKey, IndexData),
+    %% Verify indexed and not_indexed keys exist
+    ?assert(maps:is_key(<<"indexed">>, BlockInfo)),
+    ?assert(maps:is_key(<<"not_indexed">>, BlockInfo)),
+    IndexedTXs = maps:get(<<"indexed">>, BlockInfo),
+    NotIndexedTXs = maps:get(<<"not_indexed">>, BlockInfo),
+    %% Verify that bundle TXs are in indexed
+    %% T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs is a bundle that should be indexed
+    ?assert(lists:member(<<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>, IndexedTXs)),
+    %% Verify that non-bundle TXs are in not_indexed
+    %% bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8 is a non-ans104 transaction that should not be indexed
+    ?assert(lists:member(<<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>, NotIndexedTXs)),
     ok.
 
 setup_index_opts() ->
