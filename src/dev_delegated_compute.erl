@@ -188,7 +188,16 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
             ),
             {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
             Raw = hb_json:decode(JSONRes, Opts),
-            {ok,
+            ?event(
+                {compute_lite_res_raw,
+                    {process_id, ProcessID},
+                    {slot, Slot},
+                    {output_prefix, OutputPrefix},
+                    {msg, {explicit, Msg}},
+                    {raw, {explicit, Raw}}
+                }
+            ),
+            SetResult = 
                 hb_ao:set(
                     Base,
                     #{
@@ -196,7 +205,17 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
                         <<OutputPrefix/binary, "/results/raw">> => Raw
                     },
                     Opts
-                )
+                ),
+
+            ?event(
+                {compute_lite_res_set,
+                    {process_id, ProcessID},
+                    {slot, Slot},
+                    {set_result, set_done}
+                }
+            ),
+            {ok,
+                SetResult
             };
         {error, Error} ->
             {error, Error}
@@ -207,6 +226,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
     ProcID = dev_process_lib:process_id(Msg, #{}, Opts),
+    ?event(debug_snap, {before_snapshot_resolve}),
     Res = 
         hb_ao:resolve(
             #{
@@ -225,6 +245,7 @@ snapshot(Msg, Req, Opts) ->
                 cache_control => [<<"no-store">>, <<"no-cache">>]
             }
         ),
+    ?event(debug_snap, {after_snapshot_resolve}),
     ?event({snapshotting_result, Res}),
     case Res of
         {ok, Response} ->

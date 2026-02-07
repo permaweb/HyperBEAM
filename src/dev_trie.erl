@@ -75,9 +75,16 @@ get(TrieNode, Req, Opts) ->
 
 %% @doc Set keys and their values in the trie.
 set(Trie, Req, Opts) ->
+    io:format("START====================~n", []),
+    io:format("Trie: ~p~n", [Trie]),
+    io:format("Req: ~p~n", [Req]),
+    ?event(debug_test, {setting_trie}),
     Insertable = hb_maps:without([<<"path">>], Req, Opts),
     KeyVals = hb_maps:to_list(Insertable, Opts),
-    {ok, do_set(Trie, KeyVals, Opts)}.
+    Ret = {ok, do_set(Trie, KeyVals, Opts)},
+    ?event(debug_test, {done_setting_trie}),
+    io:format("done_setting_trie~n~p~n", [Ret]),
+    Ret.
 do_set(Trie, [], Opts) ->
     Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
     {ok, Path} = hb_cache:write(Uncommitted, Opts),
@@ -915,3 +922,121 @@ bulk_update_cases_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, Opts)).
+
+trie_test() ->
+    {Trie, Req} = dev_test_trie:test(),
+    ?event(debug_jack, {trie_test, {req, Req}}),
+    {ok, Res} = set(Trie, Req, #{}),
+    ?event(debug_jack, {trie_test, {res, Res}}).
+reproduce_missing_balances_test_() ->
+    {timeout, 500, fun reproduce_missing_balances/0}.
+reproduce_missing_balances() ->
+    application:ensure_all_started(hb),
+    Opts =
+        #{
+            priv_wallet => hb:wallet(),
+            store => hb_opts:get(store)
+        },
+    ?event(debug_test, {reproduce_missing_balances_test, {opts, Opts}}),
+    Base = dev_genesis_wasm:test_genesis_wasm_process(Opts),
+    hb_cache:write(Base, Opts),
+    {ok, _SchedInit} = 
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            Opts
+        ),
+    {ok, FirstNow} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    ?event(debug_test, {reproduce_missing_balances_test, {first_now, FirstNow}}),
+    TotalBalances = 100_000,
+    BatchSize = 5_000,
+    AllBalances =
+        maps:from_list(
+            [
+                {
+                    hb_util:human_id(crypto:strong_rand_bytes(32)),
+                    hb_util:bin(rand:uniform(1_000_000_000_000))
+                }
+            ||
+                _ <- lists:seq(1, TotalBalances)
+            ]
+        ),
+    Chunks = n_length_chunks_fast(maps:to_list(AllBalances), BatchSize),
+    FirstChunk = hd(Chunks),
+    % ?event(debug_test, {reproduce_missing_balances_test, {chunks, length(Chunks)}}),
+    % ?event(debug_test, {reproduce_missing_balances_test, {first_chunk_len, length(FirstChunk)}, {first_chunk, FirstChunk}}),
+    {ok, _} =
+        dev_genesis_wasm:schedule_aos_call(
+            Base,
+            <<"
+                Balances = Balances or {};\n
+                Send({ 
+                    device = \"patch@1.0\",
+                    balances = { device = \"trie@1.0\" }
+                })
+            ">>,
+            <<"Eval">>,
+            Opts
+        ),
+    ProcessId = dev_process_lib:process_id(Base, #{}, Opts),
+    ?event(debug_test, {reproduce_missing_balances_test, {process_id, {string, ProcessId}}}),
+    lists:foreach(
+        fun(Chunk) ->
+            LuaString = generate_lua_balance_data(Chunk),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, LuaString, <<"Eval">>, Opts)
+        end,
+        Chunks
+    ),
+    {ok, _} =
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"now">> },
+            Opts
+        ),
+    maps:map(
+        fun(Address, Amount) ->
+            {ok, Result} = hb_ao:resolve_many(
+                [
+                    Base, 
+                    #{ <<"path">> => <<"now">>},
+                    #{ <<"path">> => <<"balances">> }, 
+                    #{ <<"path">> => Address }
+                ],
+            Opts),
+            ?event(debug_test, {reproduce_missing_balances_test, {result, {address, Address}, {amount, Amount}, {explicit, Result}}}),
+            ?assertEqual(hb_util:bin(Amount), hb_util:bin(Result))
+        end,
+        AllBalances
+    ).
+
+generate_lua_balance_data(Chunk) ->
+    BalanceUpdates = 
+        lists:foldl(
+            fun({Key, Value}, Acc) ->
+                <<Acc/binary, "Balances['", Key/binary, "'] = ", Value/binary, ";\n">>
+            end,
+            <<"">>,
+            Chunk
+        ),
+    <<BalanceUpdates/binary, "Send({ device = \"patch@1.0\", balances = Balances })">>.
+        
+
+n_length_chunks_fast(List,Len) ->
+  LeaderLength = case length(List) rem Len of
+      0 -> 0;
+      N -> Len - N
+  end,
+  Leader = lists:duplicate(LeaderLength,undefined),
+  n_length_chunks_fast(Leader ++ lists:reverse(List),[],0,Len).
+
+n_length_chunks_fast([],Acc,_,_) -> Acc;
+n_length_chunks_fast([H|T],Acc,Pos,Max) when Pos==Max ->
+    n_length_chunks_fast(T,[[H] | Acc],1,Max);
+n_length_chunks_fast([H|T],[HAcc | TAcc],Pos,Max) ->
+    n_length_chunks_fast(T,[[H | HAcc] | TAcc],Pos+1,Max);
+n_length_chunks_fast([H|T],[],Pos,Max) ->
+    n_length_chunks_fast(T,[[H]],Pos+1,Max).

@@ -47,6 +47,7 @@ patches(Base, Req, Opts) ->
 
 %% @doc Unified executor for the `all' and `patches' modes.
 move(Mode, Base, Req, Opts) ->
+    ?event(debug_test, {move_started}),
     maybe
         % Find the input paths.
         % For `from' we parse the path to see if it is relative to the request
@@ -63,6 +64,7 @@ move(Mode, Base, Req, Opts) ->
                 <<"/">>,
                 Opts
             ),
+        ?event(debug_test, {move_1}),
         {FromMsg, PatchFromParts} =
             case hb_path:term_to_path_parts(RawPatchFrom) of
                 [BinKey|RestKeys] ->
@@ -77,6 +79,7 @@ move(Mode, Base, Req, Opts) ->
                 _ ->
                     {Base, RawPatchFrom}
             end,
+        ?event(debug_test, {move_2}),
         ?event({patch_from_parts, {explicit, PatchFromParts}}),
         PatchFrom =
             case hb_path:to_binary(PatchFromParts) of
@@ -84,6 +87,7 @@ move(Mode, Base, Req, Opts) ->
                 Path -> Path
             end,
         ?event({patch_from, PatchFrom}),
+        ?event(debug_test, {move_3}),
         PatchTo =
             hb_ao:get_first(
                 [
@@ -95,12 +99,14 @@ move(Mode, Base, Req, Opts) ->
                 <<"/">>,
                 Opts
             ),
+        ?event(debug_test, {move_4}),
         ?event({patch_from, PatchFrom}),
         ?event({patch_to, PatchTo}),
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
         {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),
         ?event({source, Source}),
+        ?event(debug_test, {move_5}),
         % Find all messages with the PATCH request.
         {ToWrite, NewSourceValue} =
             case Mode of
@@ -133,6 +139,7 @@ move(Mode, Base, Req, Opts) ->
                 all ->
                     {Source, unset}
             end,
+        ?event(debug_test, {move_6}),
         ?event({source_data, ToWrite}),
         ?event({new_data_for_source_path, NewSourceValue}),
         % Remove the source from the message and set the new source.
@@ -149,6 +156,7 @@ move(Mode, Base, Req, Opts) ->
                 #{ PatchFrom => NewSourceValue },
                 Opts
             ),
+        ?event(debug_test, {move_7}),
         % If the `mode` is `patches`, we need to remove the `method` key from
         % them, if present.
         ToWriteMod =
@@ -171,8 +179,10 @@ move(Mode, Base, Req, Opts) ->
                         ToWrite
                     )
             end,
+        ?event(debug_test, {move_8}),
         ?event({to_write, ToWriteMod}),
         % Find the target to apply the patches to, and apply them.
+        ?event(debug_test, {setting, {patch_to, PatchTo}, {to_write_mod, ToWriteMod}}),
         PatchedResult =
             hb_ao:set(
                 FromMsgWithNewSource,
@@ -180,6 +190,7 @@ move(Mode, Base, Req, Opts) ->
                 ToWriteMod,
                 Opts
             ),
+        ?event(debug_test, {move_9}),
         % Return the patched message and the source, less the patches.
         ?event({patch_result, PatchedResult}),
         {ok, PatchedResult}

@@ -4,6 +4,8 @@
 -module(dev_genesis_wasm).
 -export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
 -export([latest_checkpoint/2]).
+-export([test_genesis_wasm_process/0, test_genesis_wasm_process/1]).
+-export([schedule_aos_call/2, schedule_aos_call/3, schedule_aos_call/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -77,7 +79,6 @@ delegate_request(Msg, Req, Opts) ->
 
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(State, Req, Opts) ->
-    ?event(debug_test, {do_compute, {state, State}, {req, Req}}),
     maybe
         {ok, State2} ?=
             hb_ao:resolve(
@@ -99,6 +100,7 @@ do_compute(State, Req, Opts) ->
                 {as, <<"delegated-compute@1.0">>, Req},
                 Opts
             ),
+        ?event(debug_test, {delegated_compute_done_gw}),
         {ok, State4} ?=
             hb_ao:resolve(
                 State3,
@@ -109,10 +111,10 @@ do_compute(State, Req, Opts) ->
                 },
                 Opts
             ),
+        ?event(debug_test, {patch_done_gw}), 
         ?event(dedup_short,
             {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
         ),
-        ?event(debug_test, {do_compute, patched_message}),
         {ok, State4}
     else
         {error, Error} ->
@@ -643,7 +645,7 @@ test_wasm_process(WASMImage) ->
 test_wasm_process(WASMImage, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     #{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
-    hb_message:commit(
+    Merged = 
         maps:merge(
             hb_message:uncommitted(test_base_process(Opts)),
             #{
@@ -652,7 +654,10 @@ test_wasm_process(WASMImage, Opts) ->
                 <<"image">> => WASMImageID
             }
         ),
-        #{ priv_wallet => Wallet }
+    ?event(debug_test, {test_wasm_process, {merged, Merged}}),
+    hb_message:commit(
+        Merged,
+        Opts
     ).
 
 test_wasm_stack_process(Opts, Stack) ->
@@ -687,19 +692,22 @@ test_wasm_stack_process(Opts, Stack) ->
     ).
 
 test_genesis_wasm_process() ->
-    Opts = #{
+    test_genesis_wasm_process(#{}).
+test_genesis_wasm_process(RawOpts) ->
+    Opts = RawOpts#{
         genesis_wasm_db_dir => "cache-mainnet-test/genesis-wasm",
         genesis_wasm_checkpoints_dir => "cache-mainnet-test/genesis-wasm/checkpoints",
         genesis_wasm_log_level => "error",
         genesis_wasm_port => 6363,
         execution_device => <<"genesis-wasm@1.0">>
     },
+    ?event(debug_test, {test_genesis_wasm_process, {opts, Opts}}),
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
     hb_message:commit(
         maps:merge(
-            hb_message:uncommitted(WASMProc),
+            hb_message:uncommitted(WASMProc, Opts),
             #{
                 <<"execution-device">> => <<"genesis-wasm@1.0">>,
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
@@ -718,8 +726,10 @@ test_genesis_wasm_process() ->
 schedule_test_message(Base, Text) ->
     schedule_test_message(Base, Text, #{}).
 schedule_test_message(Base, Text, MsgBase) ->
-    Wallet = hb:wallet(),
-    UncommittedBase = hb_message:uncommitted(MsgBase),
+    schedule_test_message(Base, Text, MsgBase, #{}).
+schedule_test_message(Base, Text, MsgBase, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    UncommittedBase = hb_message:uncommitted(MsgBase, Opts),
     Req =
         hb_message:commit(#{
                 <<"path">> => <<"schedule">>,
@@ -730,12 +740,12 @@ schedule_test_message(Base, Text, MsgBase) ->
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
                         },
-                        #{ priv_wallet => Wallet }
+                        Opts#{ priv_wallet => Wallet }
                     )
             },
-            #{ priv_wallet => Wallet }
+            Opts#{ priv_wallet => Wallet }
         ),
-    hb_ao:resolve(Base, Req, #{}).
+    hb_ao:resolve(Base, Req, Opts).
 
 schedule_aos_call(Base, Code) ->
     schedule_aos_call(Base, Code, <<"Eval">>, #{}).
@@ -743,7 +753,7 @@ schedule_aos_call(Base, Code, Action) ->
     schedule_aos_call(Base, Code, Action, #{}).
 schedule_aos_call(Base, Code, Action, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    ProcID = hb_message:id(Base, all),
+    ProcID = hb_message:id(Base, all, Opts),
     Req =
         hb_message:commit(
             #{
@@ -752,9 +762,9 @@ schedule_aos_call(Base, Code, Action, Opts) ->
                 <<"target">> => ProcID,
                 <<"timestamp">> => os:system_time(millisecond)
             },
-            #{ priv_wallet => Wallet }
+            Opts#{ priv_wallet => Wallet }
         ),
-    schedule_test_message(Base, <<"TEST MSG">>, Req).
+    schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
 dedup_test() ->
     application:ensure_all_started(hb),
@@ -851,7 +861,7 @@ spawn_and_execute_slot() ->
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
-    Base = test_genesis_wasm_process(),
+    Base = test_genesis_wasm_process(Opts),
     hb_cache:write(Base, Opts),
     {ok, _SchedInit} = 
         hb_ao:resolve(
@@ -863,8 +873,8 @@ spawn_and_execute_slot() ->
             },
             Opts
         ),
-    {ok, _} = schedule_aos_call(Base, <<"return 1+1">>),
-    {ok, _} = schedule_aos_call(Base, <<"return 2+2">>),
+    {ok, _} = schedule_aos_call(Base, <<"return 1+1">>, <<"Eval">>, Opts),
+    {ok, _} = schedule_aos_call(Base, <<"return 2+2">>, <<"Eval">>, Opts),
     {ok, SchedulerRes} =
         hb_ao:resolve(Base, #{
             <<"method">> => <<"GET">>,
