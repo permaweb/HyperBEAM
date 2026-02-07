@@ -651,13 +651,13 @@ expire_pending_replies(State) ->
             State#{ pending_replies := Active }
     end.
 
-%% @doc True when there is work that could benefit from round advancement:
-%% blocks beyond the last decided round, queued messages, or callers
-%% awaiting commitment.
+%% @doc True when there are callers awaiting commitment or queued messages
+%% that haven't been turned into blocks yet. Deliberately does NOT check
+%% max_round > last_decided_round, as that creates a feedback loop where
+%% advance blocks push max_round forward indefinitely.
 has_undecided_work(State) ->
-    state_get(max_round, State, -1) > state_get(last_decided_round, State, -1)
-        orelse state_get(pending_msgs, State, []) =/= []
-        orelse state_get(pending_replies, State, []) =/= [].
+    state_get(pending_replies, State, []) =/= []
+        orelse state_get(pending_msgs, State, []) =/= [].
 
 %% @doc Create empty blocks to advance rounds toward decision.
 %% After each event, try to create blocks for the voting and decision rounds
