@@ -279,14 +279,12 @@ mysticeti_proc_base(Validators, PeerUrls) ->
         <<"device">> => <<"process@1.0">>,
         <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
         <<"scheduler-location">> => Validators,
-        <<"mysticeti">> => #{
-            <<"validators">> => Validators,
-            <<"stakers">> => [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
-            <<"peers">> => PeerUrls,
-            <<"wave-length">> => 3,
-            <<"proposer-offset">> => 0,
-            <<"num-proposers">> => length(Validators)
-        },
+        <<"mysticeti-stakers">> =>
+            [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
+        <<"mysticeti-peers">> => PeerUrls,
+        <<"mysticeti-wave-length">> => 3,
+        <<"mysticeti-proposer-offset">> => 0,
+        <<"mysticeti-num-proposers">> => length(Validators),
         <<"type">> => <<"Process">>
     }.
 

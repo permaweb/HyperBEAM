@@ -147,8 +147,26 @@ next(Base, Req, Opts) ->
     NextSlot = LastProcessed + 1,
     case dev_scheduler_cache:read(ProcID, NextSlot, Opts) of
         {ok, Assignment} ->
+            ?event(
+                next,
+                {mysticeti_next,
+                    {proc_id, ProcID},
+                    {last_processed, LastProcessed},
+                    {next_slot, NextSlot},
+                    {assignment, Assignment}
+                },
+                Opts
+            ),
             {ok, #{ <<"body">> => Assignment, <<"state">> => Base }};
         not_found ->
+            ?event(
+                next,
+                {mysticeti_next_not_found,
+                    {proc_id, ProcID},
+                    {slot, NextSlot}
+                },
+                Opts
+            ),
             {error, #{
                 <<"status">> => 404,
                 <<"reason">> =>

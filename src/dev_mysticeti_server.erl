@@ -57,7 +57,10 @@
 -include("include/hb.hrl").
 
 %%% Default schedule timeout (ms)
--define(DEFAULT_TIMEOUT, 10000).
+-define(DEFAULT_TIMEOUT, 100_000).
+
+%%% Default interval (ms) between round-advancement timer ticks.
+-define(DEFAULT_ADVANCE_INTERVAL, 100).
 
 %% @doc Return the Opts map stored in server state.
 state_opts(State) ->
@@ -74,7 +77,7 @@ state_get(Key, State) ->
 
 %% @doc Start a consensus scheduling server for a given process.
 start(ProcID, Proc, Opts) ->
-    ?event(mysticeti, {starting_server, {proc_id, ProcID}}),
+    ?event(mysticeti, {starting_server, {proc_id, {string, ProcID}}}, Opts),
     spawn_link(
         fun() ->
             RegKey = dev_mysticeti_registry:registry_key(ProcID, Opts),
@@ -127,15 +130,15 @@ stop(ProcID) ->
 %% @doc Initialize the server state.
 init_state(ProcID, Proc, CurrentSlot, BaseStateHashpath, Opts) ->
     Stakers = stakers(Proc, Opts),
-    Validators = validators_from_stakers(Stakers),
-    LocalAuthor = local_author(Validators, Opts),
-    ok = ensure_local_author(Validators, LocalAuthor),
+    Validators = validators_from_stakers(Stakers, Opts),
+    ok = ensure_local_author(Validators, LocalAuthor = local_author(Opts)),
     F = (length(Validators) - 1) div 3,
     Quorum = (2 * F) + 1,
     WaveLength = wave_length(Proc, Opts),
     ProposerOffset = proposer_offset(Proc, Opts),
     NumProposers = num_proposers(Proc, Validators, Opts),
-    Peers = peers(Proc, Opts),
+    Peers = peers(Proc, Validators, LocalAuthor, Opts),
+    AdvanceInterval = advance_interval(Proc, Opts),
     #{
         id => ProcID,
         opts => Opts,
@@ -160,11 +163,15 @@ init_state(ProcID, Proc, CurrentSlot, BaseStateHashpath, Opts) ->
         current_slot => CurrentSlot,
         base_state_hashpath => BaseStateHashpath,
         wallets => commitment_wallets(Proc, Opts),
-        commitment_spec => commitment_spec(Proc, Opts)
+        commitment_spec => commitment_spec(Proc, Opts),
+        advance_interval => AdvanceInterval,
+        advance_timer => undefined,
+        pending_replies => []
     }.
 
 %% @doc Main server loop.
-server(State) ->
+server(State0) ->
+    State = expire_pending_replies(State0),
     receive
         {schedule, Message, Reply, AbortTime} ->
             case scheduler_time() > AbortTime of
@@ -175,15 +182,26 @@ server(State) ->
                     server(State);
                 false ->
                     {NextState, Result} = handle_schedule(State, Message),
-                    Reply ! {scheduled, Message, Result},
-                    server(NextState)
+                    case Result of
+                        {committed, _} ->
+                            Reply ! {scheduled, Message, Result},
+                            server(maybe_schedule_advance(NextState));
+                        {pending, MessageId} ->
+                            NextState1 = add_pending_reply(
+                                NextState, Reply, Message, MessageId, AbortTime
+                            ),
+                            server(maybe_schedule_advance(NextState1))
+                    end
             end;
         {block, Block} ->
-            server(handle_block(State, Block));
+            server(maybe_schedule_advance(handle_block(State, Block)));
+        advance ->
+            server(handle_advance(State#{ advance_timer := undefined }));
         {info, Reply} ->
             Reply ! {info, summarize(State)},
             server(State);
         stop ->
+            cancel_advance_timer(State),
             ?event(mysticeti,
                 {stopping_server, {proc_id, state_get(id, State)}}),
             ok
@@ -211,7 +229,8 @@ handle_schedule(State, Message) ->
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
             {State4, _} = drain_pending_blocks(State3),
             {State5, NewAssignments} = try_commit(State4),
-            broadcast_blocks(State5, [Block | NewLocalBlocks]),
+            State6 = fulfill_pending_replies(State5, NewAssignments),
+            broadcast_blocks(State6, [Block | NewLocalBlocks]),
             Result =
                 case lists:keyfind(MessageId, 1, NewAssignments) of
                     {MessageId, Assignment} ->
@@ -229,20 +248,16 @@ handle_schedule(State, Message) ->
                                 {message_id, MessageId},
                                 {block_id, BlockId},
                                 {round, Round}}),
-                        {pending, #{
-                            <<"block">> => BlockId,
-                            <<"author">> => hb_maps:get(<<"author">>, Block, Opts),
-                            <<"round">> => Round
-                        }}
+                        {pending, MessageId}
                 end,
-            {State5, Result};
+            {State6, Result};
         {error, Reason} ->
             ?event(mysticeti,
                 {schedule_enqueued,
                     {message_id, MessageId},
                     {reason, Reason}}),
             {State1, _Queued} = enqueue_pending_message(State, OnlyCommitted),
-            {State1, {pending, #{ <<"reason">> => Reason }}}
+            {State1, {pending, MessageId}}
     end.
 
 %% @doc Handle an inbound block from a peer.
@@ -259,9 +274,10 @@ handle_block(State, Block) ->
             {State2, _} = drain_pending_blocks(State1),
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
             {State4, _} = drain_pending_blocks(State3),
-            {State5, _} = try_commit(State4),
-            broadcast_blocks(State5, NewLocalBlocks),
-            State5;
+            {State5, NewAssignments} = try_commit(State4),
+            State6 = fulfill_pending_replies(State5, NewAssignments),
+            broadcast_blocks(State6, NewLocalBlocks),
+            State6;
         {error, missing_parents} ->
             ?event(mysticeti,
                 {block_pending_parents,
@@ -323,7 +339,6 @@ ensure_payload_cached(Payload, Block, Opts) ->
             case Payload of
                 Msg when is_map(Msg) ->
                     PayloadId = hb_message:id(Msg, all, Opts),
-                    ensure_message_id_cached(PayloadId, Msg, Opts),
                     maybe_link_payload(PayloadId, LinkId, Opts);
                 _ ->
                     ok
@@ -343,15 +358,6 @@ maybe_link_payload(PayloadId, LinkId, Opts) ->
         false ->
             Store = hb_opts:get(store, no_viable_store, Opts),
             hb_store:make_link(Store, PayloadId, LinkId)
-    end.
-
-%% @doc Cache a message by id if it is not already present locally.
-ensure_message_id_cached(MessageId, Message, Opts) ->
-    case hb_cache:read(MessageId, Opts) of
-        {ok, _} -> ok;
-        _ ->
-            _ = hb_cache:write(Message, Opts),
-            ok
     end.
 
 %% @doc Determine the next round for the local author.
@@ -564,11 +570,145 @@ broadcast_blocks(_State, []) ->
 broadcast_blocks(State, Blocks) ->
     Peers = state_get(peers, State, []),
     ?event(mysticeti,
-        {broadcasting,
+        {starting_to_broadcast,
             {block_count, length(Blocks)},
             {peer_count, length(Peers)}}),
     lists:foreach(fun(Block) -> broadcast_block(State, Block) end, Blocks),
     ok.
+
+%% @doc Handle the advance timer tick: if undecided work remains, create empty
+%% blocks to push consensus forward. If a peer already advanced rounds
+%% between scheduling and firing, this is a no-op.
+handle_advance(State) ->
+    case has_undecided_work(State) of
+        false -> State;
+        true ->
+            {State1, AdvanceBlocks} = try_advance_rounds(State),
+            {State2, NewAssignments} = try_commit(State1),
+            State3 = fulfill_pending_replies(State2, NewAssignments),
+            broadcast_blocks(State3, AdvanceBlocks),
+            maybe_schedule_advance(State3)
+    end.
+
+%% @doc Schedule a round-advancement timer if there is undecided work and no
+%% timer is already pending.
+maybe_schedule_advance(#{ advance_timer := Ref } = State) when Ref =/= undefined ->
+    State;
+maybe_schedule_advance(State) ->
+    case has_undecided_work(State) of
+        false -> State;
+        true ->
+            Interval = state_get(advance_interval, State, ?DEFAULT_ADVANCE_INTERVAL),
+            Ref = erlang:send_after(Interval, self(), advance),
+            State#{ advance_timer := Ref }
+    end.
+
+%% @doc Cancel any pending advance timer.
+cancel_advance_timer(#{ advance_timer := Ref }) when Ref =/= undefined ->
+    erlang:cancel_timer(Ref),
+    ok;
+cancel_advance_timer(_) ->
+    ok.
+
+%% @doc Store a caller that is awaiting commitment of a scheduled message.
+add_pending_reply(State, Reply, Message, MessageId, AbortTime) ->
+    Pending = state_get(pending_replies, State, []),
+    State#{ pending_replies :=
+        [{Reply, Message, MessageId, AbortTime} | Pending] }.
+
+%% @doc Reply to callers whose messages appear in the new assignments.
+fulfill_pending_replies(State, []) ->
+    State;
+fulfill_pending_replies(State, NewAssignments) ->
+    Pending = state_get(pending_replies, State, []),
+    {Fulfilled, Remaining} = lists:partition(
+        fun({_Reply, _Message, MsgId, _AbortTime}) ->
+            lists:keymember(MsgId, 1, NewAssignments)
+        end,
+        Pending
+    ),
+    lists:foreach(
+        fun({Reply, Message, MsgId, _AbortTime}) ->
+            {MsgId, Assignment} = lists:keyfind(MsgId, 1, NewAssignments),
+            Reply ! {scheduled, Message, {committed, Assignment}}
+        end,
+        Fulfilled
+    ),
+    State#{ pending_replies := Remaining }.
+
+%% @doc Drop replies whose abort time has passed (caller already timed out).
+expire_pending_replies(State) ->
+    case state_get(pending_replies, State, []) of
+        [] -> State;
+        Pending ->
+            Now = scheduler_time(),
+            Active = lists:filter(
+                fun({_Reply, _Message, _MsgId, AbortTime}) ->
+                    Now =< AbortTime
+                end,
+                Pending
+            ),
+            State#{ pending_replies := Active }
+    end.
+
+%% @doc True when there is work that could benefit from round advancement:
+%% blocks beyond the last decided round, queued messages, or callers
+%% awaiting commitment.
+has_undecided_work(State) ->
+    state_get(max_round, State, -1) > state_get(last_decided_round, State, -1)
+        orelse state_get(pending_msgs, State, []) =/= []
+        orelse state_get(pending_replies, State, []) =/= [].
+
+%% @doc Create empty blocks to advance rounds toward decision.
+%% After each event, try to create blocks for the voting and decision rounds
+%% so that the consensus decision sequence can progress. Bounded to avoid
+%% unbounded block creation; stops when parent requirements aren't met
+%% (i.e., blocks from other validators are needed).
+try_advance_rounds(State) ->
+    MaxAdvance = state_get(wave_length, State) * 2,
+    try_advance_rounds(State, [], MaxAdvance).
+
+try_advance_rounds(State, Acc, 0) ->
+    {State, lists:reverse(Acc)};
+try_advance_rounds(State, Acc, Remaining) ->
+    case make_advance_block(State) of
+        {ok, Block} ->
+            {State1, Status} = add_block(State, Block),
+            case Status of
+                added ->
+                    try_advance_rounds(State1, [Block | Acc], Remaining - 1);
+                exists ->
+                    {State1, lists:reverse(Acc)}
+            end;
+        {error, _} ->
+            {State, lists:reverse(Acc)}
+    end.
+
+%% @doc Create an empty block (no payload) to advance rounds.
+make_advance_block(State) ->
+    Opts = state_opts(State),
+    Round = next_round(State),
+    maybe
+        {ok, Parents} ?= parent_set(State, Round),
+        Block0 =
+            #{
+                <<"type">> => <<"MysticetiBlock">>,
+                <<"process">> => state_get(id, State),
+                <<"author">> => state_get(local_author, State),
+                <<"round">> => Round,
+                <<"parents">> => Parents,
+                <<"timestamp">> => scheduler_time()
+            },
+        Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
+        {ok, Block} ?= ensure_block_id(Signed, Opts),
+        BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
+        {ok, Signer} ?= verify_block_signature(BlockNoId, Opts),
+        true ?= (hb_maps:get(<<"author">>, Block, undefined, Opts) =:= Signer),
+        {ok, Block}
+    else
+        {error, _} = Err -> Err;
+        false -> {error, signer_mismatch}
+    end.
 
 %% @doc Attempt to decide slots in order, returning newly created assignments.
 %% Mysticeti-C Algorithm 3: TryDecide (mysticeti-paper/algorithms/universal_committer.tex).
@@ -1213,7 +1353,7 @@ get_predefined_proposer(State, Decider, Wave) ->
 get_proposer_blocks(State, Decider, Wave) ->
     ProposerRound = proposer_round(Wave, Decider),
     ProposerId = get_predefined_proposer(State, Decider, Wave),
-    lists:sort(block_by_author_round(State, ProposerId, ProposerRound)).
+    lists:sort(author_blocks_in_round(State, ProposerId, ProposerRound)).
 
 %% @doc Build a status record for a slot.
 slot_status(Round, Slot, Wave, Decision) ->
@@ -1225,10 +1365,6 @@ slot_status(Round, Slot, Wave, Decision) ->
         {commit, BlockId} ->
             #{ round => Round, slot => Slot, wave => Wave, status => commit, block => BlockId }
     end.
-
-%% @doc Lookup blocks by author and round.
-block_by_author_round(State, Author, Round) ->
-    author_blocks_in_round(State, Author, Round).
 
 %% @doc Get all blocks for a round.
 round_blocks(State, Round) ->
@@ -1462,94 +1598,108 @@ summarize(State) ->
         peers => hb_maps:get(peers, State, [], Opts)
     }.
 
-%% @doc Resolve a required Mysticeti config key (strict mode).
-mysticeti_required(Proc, Key, Opts) ->
+%% @doc Resolve a Mysticeti config key. Throws if no default and key is absent.
+mysticeti_required(Proc, Key, Default, Opts) ->
     case hb_ao:get(
-        << "mysticeti/", Key/binary >>,
+        << "mysticeti-", Key/binary >>,
         Proc,
         not_found,
         Opts#{ hashpath => ignore }
     ) of
-        not_found -> throw({missing_mysticeti_config, Key});
+        not_found when Default =:= undefined ->
+            throw({missing_mysticeti_config, Key});
+        not_found -> Default;
         Value -> Value
     end.
 
 %% @doc Extract wave length (Algorithm 2) from the process config.
 %% Mysticeti-C Algorithm 2: waveLength (mysticeti-paper/algorithms/baseline_committer.tex).
 wave_length(Proc, Opts) ->
-    WaveLength = hb_util:int(mysticeti_required(Proc, <<"wave-length">>, Opts)),
+    WaveLength = hb_util:int(mysticeti_required(Proc, <<"wave-length">>, 3, Opts)),
     case WaveLength >= 1 of
         true -> WaveLength;
         false -> throw({invalid_wave_length, WaveLength})
     end.
 
+%% @doc Extract the round-advancement timer interval (ms) from config.
+advance_interval(Proc, Opts) ->
+    hb_util:int(
+        mysticeti_required(Proc, <<"advance-interval">>, ?DEFAULT_ADVANCE_INTERVAL, Opts)
+    ).
+
 %% @doc Extract proposer offset (Algorithm 2) from the process config.
 %% Mysticeti-C Algorithm 2: PredefinedProposer offset (mysticeti-paper/algorithms/baseline_committer.tex).
 proposer_offset(Proc, Opts) ->
-    Offset = hb_util:int(mysticeti_required(Proc, <<"proposer-offset">>, Opts)),
+    Offset = hb_util:int(mysticeti_required(Proc, <<"proposer-offset">>, 0, Opts)),
     case Offset >= 0 of
         true -> Offset;
         false -> throw({invalid_proposer_offset, Offset})
     end.
 
 %% @doc Extract stakers (validator + stake) from `mysticeti/stakers`.
+%% Returns #{ ValidatorID => Stake }.
 stakers(Proc, Opts) ->
-    Raw = mysticeti_required(Proc, <<"stakers">>, Opts),
+    Raw =
+        mysticeti_required(
+            Proc,
+            <<"stakers">>,
+            hb_maps:get(<<"scheduler">>, Proc, undefined, Opts),
+            Opts
+        ),
     normalize_stakers(hb_cache:ensure_all_loaded(Raw, Opts), Opts).
 
-%% @doc Extract validator ids from normalized stakers.
-validators_from_stakers(Stakers) ->
-    [Id || #{ id := Id } <- Stakers].
+%% @doc Extract a sorted validator id list from the staker map.
+validators_from_stakers(Stakers, Opts) ->
+    lists:sort(hb_maps:keys(Stakers, Opts)).
 
-%% @doc Normalize stakers into a list of #{id, stake} maps.
+%% @doc Normalize stakers into #{ ValidatorID => Stake }.
+normalize_stakers(Binary, Opts) when is_binary(Binary) ->
+    normalize_stakers(dev_scheduler:parse_schedulers(Binary), Opts);
 normalize_stakers(Stakers, Opts) when is_map(Stakers) ->
-    normalize_stakers(
-        [#{ id => Id, stake => Stake }
-         || {Id, Stake} <- lists:sort(hb_maps:to_list(Stakers, Opts))],
-        Opts
+    lists:foldl(
+        fun({Id, Stake}, Acc) ->
+            hb_maps:put(hb_util:bin(Id), hb_util:int(Stake), Acc, Opts)
+        end,
+        #{},
+        lists:sort(hb_maps:to_list(Stakers, Opts))
     );
 normalize_stakers(Stakers, Opts) when is_list(Stakers) ->
     Loaded = hb_cache:ensure_loaded(Stakers, Opts),
-    {_, Normalized} =
-        lists:foldl(
-            fun(Item, {Seen, Acc}) ->
-                case normalize_staker(Item, Opts) of
-                    {ok, #{ id := Id } = Staker} ->
-                        case hb_maps:is_key(Id, Seen, Opts) of
-                            true -> {Seen, Acc};
-                            false ->
-                                {hb_maps:put(Id, true, Seen, Opts), Acc ++ [Staker]}
-                        end;
-                    error ->
-                        {Seen, Acc}
-                end
-            end,
-            {#{}, []},
-            Loaded
-        ),
-    Normalized;
+    lists:foldl(
+        fun(Item, Acc) ->
+            case parse_staker(Item, Opts) of
+                {ok, Id, Stake} ->
+                    case hb_maps:is_key(Id, Acc, Opts) of
+                        true -> Acc;
+                        false -> hb_maps:put(Id, Stake, Acc, Opts)
+                    end;
+                error ->
+                    Acc
+            end
+        end,
+        #{},
+        Loaded
+    );
 normalize_stakers(Stakers, Opts) ->
     normalize_stakers([Stakers], Opts).
 
-%% @doc Normalize a single staker entry into #{id, stake}.
-normalize_staker(Map, Opts) when is_map(Map) ->
+%% @doc Parse a single staker entry into {ok, Id, Stake} | error.
+parse_staker(Map, Opts) when is_map(Map) ->
     Id0 = hb_maps:get(<<"id">>, Map, hb_maps:get(id, Map, undefined, Opts), Opts),
     case Id0 of
         undefined -> error;
         _ ->
             Stake0 = hb_maps:get(<<"stake">>, Map, hb_maps:get(stake, Map, 1, Opts), Opts),
-            {ok, #{ id => hb_util:bin(Id0), stake => hb_util:int(Stake0) }}
+            {ok, hb_util:bin(Id0), hb_util:int(Stake0)}
     end;
-normalize_staker({Id, Stake}, Opts) ->
-    CleanId = hb_cache:ensure_loaded(Id, Opts),
-    {ok, #{ id => hb_util:bin(CleanId), stake => hb_util:int(Stake) }};
-normalize_staker(Id, Opts) ->
-    CleanId = hb_cache:ensure_loaded(Id, Opts),
-    {ok, #{ id => hb_util:bin(CleanId), stake => 1 }}.
+parse_staker({Id, Stake}, Opts) ->
+    {ok, hb_util:bin(hb_cache:ensure_loaded(Id, Opts)), hb_util:int(Stake)};
+parse_staker(Id, Opts) ->
+    {ok, hb_util:bin(hb_cache:ensure_loaded(Id, Opts)), 1}.
 
 %% @doc Resolve the local author identity from opts.
-local_author(_Validators, Opts) ->
-    hb_opts:get(mysticeti_author, hb:address(), Opts).
+local_author(Opts) ->
+    hb_util:human_id(hb_opts:get(priv_wallet, no_wallet, Opts)).
 
 %% @doc Ensure the local author is in the validator set.
 ensure_local_author(Validators, LocalAuthor) ->
@@ -1560,16 +1710,25 @@ ensure_local_author(Validators, LocalAuthor) ->
 
 %% @doc Determine the number of proposer slots per round.
 num_proposers(Proc, Validators, Opts) ->
-    Num = hb_util:int(mysticeti_required(Proc, <<"num-proposers">>, Opts)),
+    Num = hb_util:int(mysticeti_required(Proc, <<"num-proposers">>, length(Validators), Opts)),
     case Num >= 1 andalso Num =< length(Validators) of
         true -> Num;
         false -> throw({invalid_num_proposers, Num})
     end.
 
-%% @doc Extract peer nodes for gossip from `mysticeti/peers`.
-peers(Proc, Opts) ->
-    Raw = mysticeti_required(Proc, <<"peers">>, Opts),
-    normalize_peers(Raw, Opts).
+%% @doc Determine peer nodes for gossip.
+%% If `mysticeti-peers` is configured, use it directly. Otherwise, derive
+%% peers from the staker addresses (minus self) via scheduler-location.
+peers(Proc, Validators, LocalAuthor, Opts) ->
+    case mysticeti_required(Proc, <<"peers">>, not_configured, Opts) of
+        not_configured ->
+            normalize_peers(
+                [V || V <- Validators, V =/= LocalAuthor],
+                Opts
+            );
+        Raw ->
+            normalize_peers(Raw, Opts)
+    end.
 
 %% @doc Normalize peer inputs into a list of URLs.
 normalize_peers(Peers, Opts) when is_list(Peers) ->
@@ -1636,7 +1795,7 @@ broadcast_block(State, Block) ->
     Peers = state_get(peers, State, []),
     Opts = state_opts(State),
     BlockId = hb_message:id(Block, all, Opts),
-    ensure_message_id_cached(BlockId, Block, Opts),
+    %ensure_message_id_cached(BlockId, Block, Opts),
     BlockLoaded = hb_cache:ensure_all_loaded(Block, Opts),
     Req0 =
         #{

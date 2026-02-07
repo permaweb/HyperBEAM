@@ -57,14 +57,11 @@ init_state(_Opts) ->
             <<"device">> => <<"process@1.0">>,
             <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
             <<"scheduler-location">> => [Address],
-            <<"mysticeti">> => #{
-                <<"validators">> => [Address],
-                <<"stakers">> => [#{ <<"id">> => Address, <<"stake">> => 1 }],
-                <<"peers">> => [],
-                <<"wave-length">> => 3,
-                <<"proposer-offset">> => 0,
-                <<"num-proposers">> => 1
-            },
+            <<"mysticeti-stakers">> => [#{ <<"id">> => Address, <<"stake">> => 1 }],
+            <<"mysticeti-peers">> => [],
+            <<"mysticeti-wave-length">> => 3,
+            <<"mysticeti-proposer-offset">> => 0,
+            <<"mysticeti-num-proposers">> => 1,
             <<"type">> => <<"Process">>
         },
     Proc = hb_message:commit(ProcBase, Opts),

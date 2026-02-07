@@ -56,13 +56,22 @@ test_author(Store) ->
 test_context(Count, Overrides) ->
     Store = hb_test_utils:test_store(),
     Authors = [test_author(Store) || _ <- lists:seq(1, Count)],
-    AuthorIds = [hb_maps:get(author, A, undefined, #{}) || A <- Authors],
+    %% Sort authors by ID so the primary (first) is always the proposer
+    %% for round 0 with offset 0, matching the server's sorted validators.
+    SortedAuthors = lists:sort(
+        fun(A, B) ->
+            hb_maps:get(author, A, undefined, #{}) <
+                hb_maps:get(author, B, undefined, #{})
+        end,
+        Authors
+    ),
+    AuthorIds = [hb_maps:get(author, A, undefined, #{}) || A <- SortedAuthors],
     OptsByAuthor =
         hb_maps:from_list(
             [{hb_maps:get(author, A, undefined, #{}), hb_maps:get(opts, A, #{}, #{})}
-             || A <- Authors]
+             || A <- SortedAuthors]
         ),
-    Primary = hd(Authors),
+    Primary = hd(SortedAuthors),
     PrimaryOpts = hb_maps:get(opts, Primary, #{}, #{}),
     Node = hb_http_server:start_node(PrimaryOpts),
     Proc = mysticeti_test_process(AuthorIds, Overrides, PrimaryOpts),
@@ -119,21 +128,21 @@ post_process_schedule(Node, ProcID, Msg, Opts) ->
 %% @doc Build a process configured for Mysticeti tests with overrides.
 mysticeti_test_process(Validators, Overrides, Opts) ->
     Stakers = [#{ <<"id">> => V, <<"stake">> => 1 } || V <- Validators],
-    Mysticeti0 = #{
-        <<"validators">> => Validators,
-        <<"stakers">> => Stakers,
-        <<"peers">> => [],
-        <<"wave-length">> => 3,
-        <<"proposer-offset">> => 0,
-        <<"num-proposers">> => length(Validators)
+    Defaults = #{
+        <<"mysticeti-stakers">> => Stakers,
+        <<"mysticeti-peers">> => [],
+        <<"mysticeti-wave-length">> => 3,
+        <<"mysticeti-proposer-offset">> => 0,
+        <<"mysticeti-num-proposers">> => length(Validators),
+        %% Disable auto-advancement: test vectors construct DAGs manually.
+        <<"mysticeti-advance-interval">> => 999999999
     },
-    Mysticeti = hb_maps:merge(Mysticeti0, Overrides, Opts),
+    Base = hb_maps:merge(Defaults, Overrides, Opts),
     hb_message:commit(
-        #{
+        Base#{
             <<"device">> => <<"process@1.0">>,
             <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
             <<"scheduler-location">> => Validators,
-            <<"mysticeti">> => Mysticeti,
             <<"type">> => <<"Process">>,
             <<"test-random-seed">> => rand:uniform(1000000)
         },
@@ -257,14 +266,14 @@ proposer_offset(Proc, Opts) ->
 
 %% @doc Read a required mysticeti config key.
 mysticeti_required(Proc, Key, Opts) ->
-    Mysticeti = hb_maps:get(<<"mysticeti">>, Proc, not_found, Opts),
-    case Mysticeti of
+    case hb_ao:get(
+        <<"mysticeti-", Key/binary>>,
+        Proc,
+        not_found,
+        Opts#{ hashpath => ignore }
+    ) of
         not_found -> erlang:error({missing_mysticeti_config, Key});
-        _ ->
-            case hb_maps:get(Key, Mysticeti, not_found, Opts) of
-                not_found -> erlang:error({missing_mysticeti_config, Key});
-                Value -> Value
-            end
+        Value -> Value
     end.
 
 %% @doc Build vote parents with a specific proposer ordering.
@@ -700,7 +709,7 @@ mysticeti_multi_proposer_commit_test_() ->
 %% Mysticeti-C Algorithm 3: TryDecide over numOfProposers
 %% (mysticeti-paper/algorithms/universal_committer.tex).
 mysticeti_multi_proposer_commit() ->
-    Ctx = test_context(4, #{ <<"num-proposers">> => 2 }),
+    Ctx = test_context(4, #{ <<"mysticeti-num-proposers">> => 2 }),
     {_Msg0, ProposerBlock0} = schedule_body(Ctx, <<"m0">>),
     [A2, A3, A4] = other_authors(Ctx),
     Msg1 = test_message(ctx_get(proc_id, Ctx), <<"m1">>, opts_for(Ctx, A2)),
