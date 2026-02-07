@@ -19,10 +19,11 @@ arweave(_Base, Request, Opts) ->
     {From, To} = parse_range(Request, Opts),
     Mode = hb_maps:get(<<"mode">>, Request, <<"write">>, Opts),
     case Mode of
-        <<"write">> -> fetch_blocks(Request, From, To, Opts);
-        <<"list">>  -> list_index(From, To, Opts);
+        <<"write">>  -> fetch_blocks(Request, From, To, write, Opts);
+        <<"update">> -> fetch_blocks(Request, From, To, update, Opts);
+        <<"list">>   -> list_index(From, To, Opts);
         _ ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, update, list">>}
     end.
 
 %% @doc Parse the range from the request.
@@ -103,8 +104,11 @@ classify_txs(TXIDs, Opts) ->
         TXIDs
     ).
 
-%% @doc Fetch blocks from an Arweave node between a given range.
-fetch_blocks(Req, Current, To, _Opts) when Current < To ->
+%% @doc Fetch blocks from an Arweave node between a given range. The `Mode'
+%% parameter controls whether each block is processed unconditionally
+%% (`write`) or only when it is not already fully indexed
+%% (`update`).
+fetch_blocks(Req, Current, To, _Mode, _Opts) when Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
             {reached_target, To},
@@ -112,11 +116,44 @@ fetch_blocks(Req, Current, To, _Opts) when Current < To ->
         }
     ),
     {ok, To};
-fetch_blocks(Req, Current, To, Opts) ->
-    observe_event(<<"block_indexed">>, fun() ->
-        fetch_and_process_block(Current, To, Opts)
-    end),
-    fetch_blocks(Req, Current - 1, To, Opts).
+fetch_blocks(Req, Current, To, Mode, Opts) ->
+    case should_process_block(Mode, Current, Opts) of
+        true ->
+            observe_event(<<"block_indexed">>, fun() ->
+                fetch_and_process_block(Current, To, Opts)
+            end);
+        false ->
+            ?event(copycat_short,
+                {arweave_block_already_indexed,
+                    {height, Current},
+                    {target, To}
+                }
+            )
+    end,
+    fetch_blocks(Req, Current - 1, To, Mode, Opts).
+
+%% @doc Decide whether a block at the given height needs processing.
+%% In `write' mode every block is processed. In `update' mode a block is
+%% skipped when it already exists in the block cache and all of its TXs are
+%% present in the arweave index store.
+should_process_block(write, _Current, _Opts) -> true;
+should_process_block(update, Current, Opts) ->
+    not is_block_fully_indexed(Current, Opts).
+
+%% @doc Check if a block at a given height is fully indexed. A block is fully
+%% indexed when it exists in the block cache and every transaction ID listed in
+%% its `txs` field has a corresponding entry in the arweave index store.
+is_block_fully_indexed(Height, Opts) ->
+    case dev_arweave_block_cache:read(Height, Opts) of
+        {ok, Block} ->
+            TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+            lists:all(
+                fun(TXID) -> is_tx_indexed(TXID, Opts) end,
+                TXIDs
+            );
+        not_found ->
+            false
+    end.
 
 fetch_and_process_block(Current, To, Opts) ->
     ?event(copycat_debug, {fetching_block, Current}),
@@ -720,6 +757,75 @@ list_index_test() ->
             <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
         ], maps:get(<<"indexed">>, BlockInfo)),
     ?assertEqual([ ], maps:get(<<"not_indexed">>, BlockInfo)),
+    ok.
+
+%% @doc Test `mode=update` with three blocks representing three scenarios:
+%%   - Block A (1826702): Fully indexed -- should be skipped by update.
+%%   - Block B (1826701): Missing entirely (never fetched/cached) -- should
+%%     be fetched and indexed.
+%%   - Block C (1826700): Block header is cached but at least one TX is not
+%%     indexed -- should be re-fetched and fully reindexed.
+update_mode_test() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    BlockA = 1826702,
+    BlockB = 1826701,
+    BlockC = 1826700,
+    %% 1. Fully index Block A using mode=write.
+    {ok, BlockA} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(BlockA))/binary, "&"
+                "to=", (hb_util:bin(BlockA))/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    %% 2. Block B: intentionally left un-fetched/un-cached (nothing to do).
+    %% 3. Block C: cache the block header but do NOT index TXs.
+    %%    We set arweave_index_ids => false so the arweave device caches the
+    %%    block but maybe_index_ids/2 skips TX indexing.
+    NoIndexOpts = Opts#{ arweave_index_ids => false },
+    {ok, BlockC} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(BlockC))/binary, "&"
+                "to=", (hb_util:bin(BlockC))/binary, "&"
+                "mode=write"
+            >>,
+            NoIndexOpts
+        ),
+    %%    Now manually index all but the first TX with dummy offsets so that
+    %%    the block appears partially indexed (at least 1 TX is missing).
+    {ok, BlockCData} = dev_arweave_block_cache:read(BlockC, Opts),
+    TXIDs = hb_maps:get(<<"txs">>, BlockCData, [], Opts),
+    ?assert(length(TXIDs) > 1),
+    [_SkippedTXID | RestTXIDs] = TXIDs,
+    lists:foreach(
+        fun(TXID) ->
+            hb_store_arweave:write_offset(StoreOpts, TXID, true, 0, 0)
+        end,
+        RestTXIDs
+    ),
+    ?assert(is_block_fully_indexed(BlockA, Opts)),
+    ?assertNot(is_block_fully_indexed(BlockB, Opts)),
+    ?assertNot(is_block_fully_indexed(BlockC, Opts)),
+    %% --- Run mode=update over the full range ---
+    {ok, BlockC} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(BlockA))/binary, "&"
+                "to=", (hb_util:bin(BlockC))/binary, "&"
+                "mode=update"
+            >>,
+            Opts
+        ),
+    %% All three blocks should now be fully indexed.
+    ?assert(is_block_fully_indexed(BlockA, Opts)),
+    ?assert(is_block_fully_indexed(BlockB, Opts)),
+    ?assert(is_block_fully_indexed(BlockC, Opts)),
     ok.
 
 setup_index_opts() ->
