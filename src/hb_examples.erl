@@ -496,15 +496,16 @@ exec_spec(lua, _Nodes) ->
     }.
 
 setup_mysticeti_http_network(NodeCount) ->
-    {Nodes, Validators} = start_mysticeti_nodes(NodeCount),
-    case wait_for_nodes_ready(Nodes, 10000) of
+    {Nodes, Validators} = dev_mysticeti_test_utils:start_mysticeti_nodes(NodeCount),
+    case dev_mysticeti_test_utils:wait_for_nodes_ready(Nodes, 10000) of
         true -> ok;
         {error, MissingNodes} -> erlang:error({nodes_not_ready, MissingNodes})
     end,
     Locations =
         lists:map(
             fun(#{ url := Node, opts := Opts }) ->
-                {ok, Location} = register_scheduler_location(Node, Opts),
+                {ok, Location} =
+                    dev_mysticeti_test_utils:register_scheduler_location(Node, Opts),
                 #{ location => Location, opts => Opts }
             end,
             Nodes
@@ -519,7 +520,9 @@ setup_mysticeti_http_network(NodeCount) ->
         fun(#{ location := Location, opts := SenderOpts }) ->
             lists:foreach(
                 fun(#{ url := Node }) ->
-                    case post_scheduler_location(Node, Location, SenderOpts, 10000) of
+                    case dev_mysticeti_test_utils:post_scheduler_location(
+                        Node, Location, SenderOpts, 10000
+                    ) of
                         {ok, _} -> ok;
                         {error, Reason} ->
                             erlang:error({scheduler_location_post_failed, Node, Reason})
@@ -531,7 +534,9 @@ setup_mysticeti_http_network(NodeCount) ->
         Locations
     ),
     timer:sleep(200),
-    case wait_for_scheduler_locations(Nodes, Validators, 20000) of
+    case dev_mysticeti_test_utils:wait_for_scheduler_locations(
+        Nodes, Validators, 20000
+    ) of
         true -> ok;
         {error, MissingLocations} ->
             erlang:error({scheduler_locations_missing, MissingLocations})
@@ -620,147 +625,6 @@ factorial(Value) ->
 
 factorial(N, Acc) when N =< 1 -> Acc;
 factorial(N, Acc) -> factorial(N - 1, Acc * N).
-
-start_mysticeti_nodes(NodeCount) ->
-    Wallets = [ar_wallet:new() || _ <- lists:seq(1, NodeCount)],
-    Validators = [hb_util:human_id(ar_wallet:to_address(W)) || W <- Wallets],
-    Triples =
-        lists:zip3(lists:zip(Wallets, Validators), lists:seq(1, NodeCount), lists:seq(1, NodeCount)),
-    Nodes =
-        lists:map(
-            fun({{Wallet, Author}, _UnusedPort, Index}) ->
-                LocalStore = hb_test_utils:test_store(),
-                ok = hb_store:reset(LocalStore),
-                ok = hb_store:start(LocalStore),
-                Port = random_port(),
-                Opts =
-                    #{
-                        store => [LocalStore],
-                        priv_wallet => Wallet,
-                        mysticeti_author => Author,
-                        mysticeti_registry_namespace => Author,
-                        cache_writers => Validators,
-                        port => Port,
-                        host => <<"localhost">>,
-                        gateway => <<"http://localhost:1">>,
-                        http_connect_timeout => 2000,
-                        http_request_send_timeout => 2000
-                    },
-                {Url, FinalPort} = start_node_with_retry(Opts, 10),
-                FinalOpts = Opts#{ port => FinalPort },
-                #{ url => Url, addr => Author, opts => FinalOpts, index => Index }
-            end,
-            Triples
-        ),
-    {Nodes, Validators}.
-
-random_port() ->
-    20000 + rand:uniform(40000).
-
-start_node_with_retry(_Opts, 0) ->
-    erlang:error({start_node_failed, retries_exhausted});
-start_node_with_retry(Opts, Attempts) ->
-    Port = hb_opts:get(port, undefined, Opts),
-    case catch hb_http_server:start_node(Opts) of
-        Url when is_binary(Url) ->
-            {trim_trailing_slash(Url), Port};
-        {'EXIT', Reason} ->
-            case contains_eaddrinuse(Reason) of
-                true ->
-                    start_node_with_retry(Opts#{ port => random_port() }, Attempts - 1);
-                false ->
-                    erlang:error({start_node_failed, Reason})
-            end
-    end.
-
-trim_trailing_slash(<<>>) -> <<>>;
-trim_trailing_slash(Url) when is_binary(Url) ->
-    case binary:last(Url) of
-        $/ -> binary:part(Url, 0, byte_size(Url) - 1);
-        _ -> Url
-    end.
-
-http_opts(Opts) ->
-    Opts#{
-        http_connect_timeout => 2000,
-        http_request_send_timeout => 10000
-    }.
-
-contains_eaddrinuse(eaddrinuse) -> true;
-contains_eaddrinuse(Term) when is_tuple(Term) ->
-    contains_eaddrinuse(tuple_to_list(Term));
-contains_eaddrinuse(Term) when is_list(Term) ->
-    lists:any(fun contains_eaddrinuse/1, Term);
-contains_eaddrinuse(_Term) ->
-    false.
-
-register_scheduler_location(Node, Opts) ->
-    Req0 = #{
-        <<"path">> => <<"/~scheduler@1.0/location">>,
-        <<"method">> => <<"POST">>
-    },
-    Req = hb_message:commit(Req0, Opts),
-    ReqOpts = http_opts(Opts),
-    case hb_http:post(Node, Req, ReqOpts) of
-        {ok, Response} ->
-            case scheduler_location_from_response(Response, Opts) of
-                {ok, Location} ->
-                    {ok, hb_cache:ensure_all_loaded(Location, Opts)};
-                Error ->
-                    Error
-            end;
-        Error ->
-            Error
-    end.
-
-wait_for_scheduler_locations(Nodes, Addresses, Timeout) ->
-    _Ready =
-        hb_util:wait_until(
-            fun() ->
-                missing_scheduler_locations(Nodes, Addresses) == []
-            end,
-            Timeout
-        ),
-    case missing_scheduler_locations(Nodes, Addresses) of
-        [] -> true;
-        Missing -> {error, Missing}
-    end.
-
-missing_scheduler_locations(Nodes, Addresses) ->
-    lists:foldl(
-        fun(#{ url := Node, opts := Opts }, Acc0) ->
-            lists:foldl(
-                fun(Address, Acc1) ->
-                    ReqOpts =
-                        http_opts(Opts),
-                    case catch hb_http:get(
-                        Node,
-                        <<"/~scheduler@1.0/location?address=", Address/binary>>,
-                        ReqOpts
-                    ) of
-                        {ok, Response} ->
-                            Status = hb_maps:get(<<"status">>, Response, 200, ReqOpts),
-                            case Status >= 400 of
-                                true ->
-                                    [{Node, Address, {status, Status}} | Acc1];
-                                false ->
-                                    case scheduler_location_from_response(Response, ReqOpts) of
-                                        {ok, _} -> Acc1;
-                                        {error, Reason} ->
-                                            [{Node, Address, {invalid, Reason}} | Acc1]
-                                    end
-                            end;
-                        Error ->
-                            [{Node, Address, {request_error, Error}} | Acc1]
-                    end
-                end,
-                Acc0,
-                Addresses
-            )
-        end,
-        [],
-        Nodes
-    ).
 
 schedule_round_messages(
     #{ url := Node, opts := Opts, proc_id := ProcID },
@@ -868,125 +732,6 @@ assignment_body_slots(Assignments, ExpectedBodies, Opts) ->
         end,
         #{},
         hb_util:to_sorted_list(Assignments, Opts)
-    ).
-
-scheduler_location_from_response(Response, Opts) ->
-    case scheduler_location_candidate(Response, Opts) of
-        {ok, Location0} ->
-            case hb_message:with_only_committed(Location0, Opts) of
-                {ok, Location} -> {ok, Location};
-                {error, _} -> {ok, Location0}
-            end;
-        {error, _} = Error ->
-            Error
-    end.
-
-scheduler_location_candidate(Response, Opts) ->
-    case direct_scheduler_location(Response, Opts) of
-        {ok, _} = Ok -> Ok;
-        {error, _} ->
-            decode_scheduler_location(Response, Opts)
-    end.
-
-decode_scheduler_location(Response, Opts) ->
-    try hb_message:convert(Response, <<"structured@1.0">>, <<"httpsig@1.0">>, Opts) of
-        Decoded ->
-            case direct_scheduler_location(Decoded, Opts) of
-                {ok, _} = Ok -> Ok;
-                {error, _} -> {error, {invalid_scheduler_location_response, Response}}
-            end
-    catch
-        _:_ ->
-            {error, {invalid_scheduler_location_response, Response}}
-    end.
-
-direct_scheduler_location(Response, Opts) ->
-    case hb_maps:get(<<"type">>, Response, undefined, Opts) of
-        <<"scheduler-location">> ->
-            {ok, Response};
-        _ ->
-            case hb_maps:get(<<"body">>, Response, not_found, Opts) of
-                Body when is_map(Body) ->
-                    case hb_maps:get(<<"type">>, Body, undefined, Opts) of
-                        <<"scheduler-location">> -> {ok, Body};
-                        _ -> {error, not_found}
-                    end;
-                _ ->
-                    {error, not_found}
-            end
-    end.
-
-post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
-    Deadline = erlang:system_time(millisecond) + Timeout,
-    post_scheduler_location(Node, Location, SenderOpts, Deadline, none).
-
-post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
-    ReqOpts = http_opts(SenderOpts),
-    Attempt =
-        case catch hb_http:post(
-            Node,
-            <<"/~scheduler@1.0/location">>,
-            Location,
-            ReqOpts
-        ) of
-            {ok, Res} ->
-                Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
-                case Status < 400 of
-                    true -> {ok, Res};
-                    false -> {error, {status, Status, Res}}
-                end;
-            Error ->
-                {error, {request_error, Error}}
-        end,
-    case Attempt of
-        {ok, _} = Ok ->
-            Ok;
-        {error, Reason} ->
-            Now = erlang:system_time(millisecond),
-            case Now >= Deadline of
-                true -> {error, {timeout, Reason, LastError}};
-                false ->
-                    timer:sleep(100),
-                    post_scheduler_location(
-                        Node,
-                        Location,
-                        SenderOpts,
-                        Deadline,
-                        Reason
-                    )
-            end
-    end.
-
-wait_for_nodes_ready(Nodes, Timeout) ->
-    _Ready =
-        hb_util:wait_until(
-            fun() ->
-                missing_ready_nodes(Nodes) == []
-            end,
-            Timeout
-        ),
-    case missing_ready_nodes(Nodes) of
-        [] -> true;
-        Missing -> {error, Missing}
-    end.
-
-missing_ready_nodes(Nodes) ->
-    lists:foldl(
-        fun(#{ url := Node, opts := Opts }, Acc) ->
-            ReqOpts = http_opts(Opts),
-            case catch hb_http:get(Node, <<"/~scheduler@1.0/status">>, ReqOpts) of
-                {ok, Res} ->
-                    Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
-                    case Status < 400 of
-                        true -> Acc;
-                        false -> [{Node, {status, Status}} | Acc]
-                    end;
-                Error ->
-                    [{Node, {request_error, Error}} | Acc]
-            end
-        end,
-        [],
-        Nodes
     ).
 
 %% @doc Test that we can schedule an ANS-104 data item on a relayed node. The

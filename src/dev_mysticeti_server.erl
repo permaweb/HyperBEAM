@@ -169,6 +169,9 @@ server(State) ->
         {schedule, Message, Reply, AbortTime} ->
             case scheduler_time() > AbortTime of
                 true ->
+                    ?event(mysticeti,
+                        {schedule_request_expired,
+                            {proc_id, state_get(id, State)}}),
                     server(State);
                 false ->
                     {NextState, Result} = handle_schedule(State, Message),
@@ -181,6 +184,8 @@ server(State) ->
             Reply ! {info, summarize(State)},
             server(State);
         stop ->
+            ?event(mysticeti,
+                {stopping_server, {proc_id, state_get(id, State)}}),
             ok
     end.
 
@@ -188,35 +193,65 @@ server(State) ->
 handle_schedule(State, Message) ->
     Opts = state_opts(State),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Message, Opts),
+    MessageId = hb_message:id(OnlyCommitted, all, Opts),
+    ?event(mysticeti,
+        {handle_schedule,
+            {proc_id, state_get(id, State)},
+            {message_id, MessageId}}),
     case make_block(State, OnlyCommitted) of
         {ok, Block} ->
+            BlockId = hb_maps:get(<<"id">>, Block, undefined, Opts),
+            Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
+            ?event(mysticeti,
+                {block_created,
+                    {block_id, BlockId},
+                    {round, Round}}),
             {State1, _} = add_block(State, Block),
             {State2, _} = drain_pending_blocks(State1),
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
             {State4, _} = drain_pending_blocks(State3),
             {State5, NewAssignments} = try_commit(State4),
             broadcast_blocks(State5, [Block | NewLocalBlocks]),
-            MessageId = hb_message:id(OnlyCommitted, all, Opts),
             Result =
                 case lists:keyfind(MessageId, 1, NewAssignments) of
-                    {MessageId, Assignment} -> {committed, Assignment};
+                    {MessageId, Assignment} ->
+                        ?event(mysticeti,
+                            {schedule_committed,
+                                {message_id, MessageId},
+                                {slot, hb_maps:get(<<"slot">>, Assignment, undefined, Opts)}}),
+                        {committed, Assignment};
                     false ->
+                        ?event(mysticeti,
+                            {schedule_pending,
+                                {message_id, MessageId},
+                                {block_id, BlockId},
+                                {round, Round}}),
                         {pending, #{
-                            <<"block">> => hb_maps:get(<<"id">>, Block, undefined, Opts),
+                            <<"block">> => BlockId,
                             <<"author">> => hb_maps:get(<<"author">>, Block, undefined, Opts),
-                            <<"round">> => hb_maps:get(<<"round">>, Block, undefined, Opts)
+                            <<"round">> => Round
                         }}
                 end,
             {State5, Result};
         {error, Reason} ->
+            ?event(mysticeti,
+                {schedule_enqueued,
+                    {message_id, MessageId},
+                    {reason, Reason}}),
             {State1, _Queued} = enqueue_pending_message(State, OnlyCommitted),
             {State1, {pending, #{ <<"reason">> => Reason }}}
     end.
 
 %% @doc Handle an inbound block from a peer.
 handle_block(State, Block) ->
+    Opts = state_opts(State),
     case validate_block(State, Block) of
         {ok, CanonBlock} ->
+            ?event(mysticeti,
+                {block_accepted,
+                    {block_id, hb_maps:get(<<"id">>, CanonBlock, undefined, Opts)},
+                    {author, hb_maps:get(<<"author">>, CanonBlock, undefined, Opts)},
+                    {round, hb_maps:get(<<"round">>, CanonBlock, undefined, Opts)}}),
             {State1, _} = add_block(State, CanonBlock),
             {State2, _} = drain_pending_blocks(State1),
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
@@ -225,9 +260,18 @@ handle_block(State, Block) ->
             broadcast_blocks(State5, NewLocalBlocks),
             State5;
         {error, missing_parents} ->
+            ?event(mysticeti,
+                {block_pending_parents,
+                    {author, hb_maps:get(<<"author">>, Block, undefined, Opts)},
+                    {round, hb_maps:get(<<"round">>, Block, undefined, Opts)}}),
             {State1, _} = store_pending_block(State, Block),
             State1;
-        {error, _Reason} ->
+        {error, Reason} ->
+            ?event(mysticeti,
+                {block_rejected,
+                    {author, hb_maps:get(<<"author">>, Block, undefined, Opts)},
+                    {round, hb_maps:get(<<"round">>, Block, undefined, Opts)},
+                    {reason, Reason}}),
             State
     end.
 
@@ -531,6 +575,11 @@ drain_pending_messages(State, Acc) ->
 broadcast_blocks(_State, []) ->
     ok;
 broadcast_blocks(State, Blocks) ->
+    Peers = state_get(peers, State, []),
+    ?event(mysticeti,
+        {broadcasting,
+            {block_count, length(Blocks)},
+            {peer_count, length(Peers)}}),
     lists:foreach(fun(Block) -> broadcast_block(State, Block) end, Blocks),
     ok.
 
@@ -544,7 +593,20 @@ try_commit(State) ->
         false ->
             Sequence = build_decision_sequence(State, MaxRound, LastRound + 1),
             Decided = decided_prefix(Sequence),
+            ?event(mysticeti,
+                {try_commit,
+                    {max_round, MaxRound},
+                    {last_decided_round, LastRound},
+                    {decided_count, length(Decided)}}),
             {State1, Assignments} = apply_decisions(State, Decided, []),
+            case Assignments of
+                [] -> ok;
+                _ ->
+                    ?event(mysticeti,
+                        {new_assignments,
+                            {count, length(Assignments)},
+                            {current_slot, state_get(current_slot, State1, -1)}})
+            end,
             {advance_last_decided_round(State1), Assignments}
     end.
 
@@ -788,6 +850,9 @@ link(State, OldId, NewId) ->
     has_ancestor(State, NewId, OldId).
 
 %% @doc Check if a block has a specific ancestor via parent traversal.
+%% NOTE: This performs an unbounded BFS over the DAG. For large DAGs at
+%% production scale, consider memoizing link reachability or bounding the
+%% search depth to avoid traversal cost proportional to the full DAG size.
 has_ancestor(State, StartId, TargetId) ->
     case StartId == TargetId of
         true -> true;
