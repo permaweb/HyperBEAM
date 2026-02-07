@@ -277,7 +277,7 @@ run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
 mysticeti_proc_base(Validators, PeerUrls) ->
     #{
         <<"device">> => <<"process@1.0">>,
-        <<"scheduler-device">> => <<"mysticeti@1.0">>,
+        <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
         <<"scheduler-location">> => Validators,
         <<"mysticeti">> => #{
             <<"validators">> => Validators,
@@ -664,10 +664,13 @@ start_node_with_retry(Opts, Attempts) ->
     case catch hb_http_server:start_node(Opts) of
         Url when is_binary(Url) ->
             {trim_trailing_slash(Url), Port};
-        {'EXIT', {case_clause, {error, eaddrinuse}}} ->
-            start_node_with_retry(Opts#{ port => random_port() }, Attempts - 1);
         {'EXIT', Reason} ->
-            erlang:error({start_node_failed, Reason})
+            case contains_eaddrinuse(Reason) of
+                true ->
+                    start_node_with_retry(Opts#{ port => random_port() }, Attempts - 1);
+                false ->
+                    erlang:error({start_node_failed, Reason})
+            end
     end.
 
 trim_trailing_slash(<<>>) -> <<>>;
@@ -682,6 +685,14 @@ http_opts(Opts) ->
         http_connect_timeout => 2000,
         http_request_send_timeout => 10000
     }.
+
+contains_eaddrinuse(eaddrinuse) -> true;
+contains_eaddrinuse(Term) when is_tuple(Term) ->
+    contains_eaddrinuse(tuple_to_list(Term));
+contains_eaddrinuse(Term) when is_list(Term) ->
+    lists:any(fun contains_eaddrinuse/1, Term);
+contains_eaddrinuse(_Term) ->
+    false.
 
 register_scheduler_location(Node, Opts) ->
     Req0 = #{

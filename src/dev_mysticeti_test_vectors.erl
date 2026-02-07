@@ -131,7 +131,7 @@ mysticeti_test_process(Validators, Overrides, Opts) ->
     hb_message:commit(
         #{
             <<"device">> => <<"process@1.0">>,
-            <<"scheduler-device">> => <<"mysticeti@1.0">>,
+            <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
             <<"scheduler-location">> => Validators,
             <<"mysticeti">> => Mysticeti,
             <<"type">> => <<"Process">>,

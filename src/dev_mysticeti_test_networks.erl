@@ -84,7 +84,7 @@ init_state(_Opts) ->
     ProcBase =
         #{
             <<"device">> => <<"process@1.0">>,
-            <<"scheduler-device">> => <<"mysticeti@1.0">>,
+            <<"scheduler-device">> => <<"mystislopi@1.0-pre">>,
             <<"scheduler-location">> => Validators,
             <<"mysticeti">> => #{
                 <<"validators">> => Validators,

@@ -42,8 +42,8 @@ get_processes() ->
         {true, ProcID} <-
             [
                 case Key of
-                    {<<"mysticeti@1.0">>, Pid} -> {true, Pid};
-                    {<<"mysticeti@1.0">>, _Namespace, Pid} -> {true, Pid};
+                    {<<"mystislopi@1.0-pre">>, Pid} -> {true, Pid};
+                    {<<"mystislopi@1.0-pre">>, _Namespace, Pid} -> {true, Pid};
                     _ -> false
                 end
             ]
@@ -51,8 +51,8 @@ get_processes() ->
 
 registry_key(ProcID, Opts) ->
     case hb_opts:get(mysticeti_registry_namespace, undefined, Opts) of
-        undefined -> {<<"mysticeti@1.0">>, ProcID};
-        Namespace -> {<<"mysticeti@1.0">>, Namespace, ProcID}
+        undefined -> {<<"mystislopi@1.0-pre">>, ProcID};
+        Namespace -> {<<"mystislopi@1.0-pre">>, Namespace, ProcID}
     end.
 
 maybe_new_proc(_ProcID, false, _Opts) -> not_found;

@@ -9,11 +9,11 @@
 %%% derived from consensus decisions rather than any "block order" API.
 %%%
 %%% Device endpoints (invoked via process@1.0 scheduler routing):
-%%% - `POST /~mysticeti@1.0/schedule`: enqueue a message. The server creates a
+%%% - `POST /~mystislopi@1.0-pre/schedule`: enqueue a message. The server creates a
 %%%   proposer block and returns `pending` until the block is committed.
-%%% - `GET /~mysticeti@1.0/schedule`: return committed assignments.
-%%% - `GET /~mysticeti@1.0/slot`: return the latest committed slot index.
-%%% - `POST /~mysticeti@1.0/block`: ingest a consensus block from peers.
+%%% - `GET /~mystislopi@1.0-pre/schedule`: return committed assignments.
+%%% - `GET /~mystislopi@1.0-pre/slot`: return the latest committed slot index.
+%%% - `POST /~mystislopi@1.0-pre/block`: ingest a consensus block from peers.
 %%%
 %%% Process configuration (strict):
 %%% - The process message must include a `mysticeti` map containing
@@ -183,7 +183,7 @@ slot(Base, Req, Opts) ->
 %% @doc Status summary.
 status(_Base, _Req, _Opts) ->
     {ok, #{
-        <<"device">> => <<"mysticeti@1.0">>,
+        <<"device">> => <<"mystislopi@1.0-pre">>,
         <<"address">> => hb:address(),
         <<"processes">> => dev_mysticeti_registry:get_processes()
     }}.

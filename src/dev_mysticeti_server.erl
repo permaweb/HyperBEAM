@@ -1568,7 +1568,7 @@ broadcast_block(State, Block) ->
     BlockLoaded = hb_cache:ensure_all_loaded(Block, Opts),
     Req0 =
         #{
-            <<"path">> => <<"/~mysticeti@1.0/block">>,
+            <<"path">> => <<"/~mystislopi@1.0-pre/block">>,
             <<"method">> => <<"POST">>,
             <<"body">> => BlockLoaded
         },
