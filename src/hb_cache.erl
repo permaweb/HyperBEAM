@@ -510,6 +510,8 @@ store_read(Target, Path, [#{<<"store-module">> := StoreMod} = Store | RemainingS
             {store, StoreMod}
         }),
         StoreLabel = iolist_to_binary([<<"store:">>, atom_to_binary(StoreMod, utf8)]),
+        %% TODO: Allow to use timeout
+        %StoreOpts = hb_opts:mimic_default_types(Store, existing, Opts),
         hb_trace:span(StoreLabel, fun() ->
             case hb_store:read_with_type(Store, ResolvedFullPath) of
                 failure -> failure;

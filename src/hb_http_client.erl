@@ -764,7 +764,8 @@ do_gun_request(PID, Args, Opts) ->
 	Path = hb_maps:get(path, Args, undefined, Opts),
 	case check_rate_limit(Peer, Path) of
 		ok ->
-			do_gun_request_inner(PID, Args, Opts);
+            % Temporary Opts here to avoid conflict with <<"store-module">> converted to store_module.
+			do_gun_request_inner(PID, Args,             hb_opts:mimic_default_types(Opts, existing, Opts));
 		{rate_limited, RetryAfterMs} ->
 			?event(http_client, {rate_limited_fast_fail, {peer, Peer}, {path, Path}, {retry_after_ms, RetryAfterMs}}),
 			{error, {rate_limited, RetryAfterMs}}
