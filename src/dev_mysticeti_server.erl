@@ -215,10 +215,13 @@ handle_schedule(State, Message) ->
             Result =
                 case lists:keyfind(MessageId, 1, NewAssignments) of
                     {MessageId, Assignment} ->
-                        ?event(mysticeti,
+                        ?event(
+                            mysticeti,
                             {schedule_committed,
                                 {message_id, MessageId},
-                                {slot, hb_maps:get(<<"slot">>, Assignment, undefined, Opts)}}),
+                                {slot, hb_maps:get(<<"slot">>, Assignment, Opts)}
+                            }
+                        ),
                         {committed, Assignment};
                     false ->
                         ?event(mysticeti,
@@ -228,7 +231,7 @@ handle_schedule(State, Message) ->
                                 {round, Round}}),
                         {pending, #{
                             <<"block">> => BlockId,
-                            <<"author">> => hb_maps:get(<<"author">>, Block, undefined, Opts),
+                            <<"author">> => hb_maps:get(<<"author">>, Block, Opts),
                             <<"round">> => Round
                         }}
                 end,
@@ -277,56 +280,40 @@ handle_block(State, Block) ->
 
 %% @doc Construct a new block for the local author.
 make_block(State, Payload) ->
+    Opts = state_opts(State),
     Round = next_round(State),
-    case parent_set(State, Round) of
-        {ok, Parents} ->
-            Opts = state_opts(State),
-            PayloadRes =
-                case Payload of
-                    Msg when is_map(Msg) ->
-                        case hb_cache:write(Msg, Opts) of
-                            {ok, _} -> ok;
-                            {error, Reason} ->
-                                {error, {payload_cache_failed, Reason}}
-                        end;
-                    _ ->
-                        ok
-                end,
-            case PayloadRes of
-                {error, _} = Err -> Err;
-                ok ->
-                    Block0 =
-                        #{
-                            <<"type">> => <<"MysticetiBlock">>,
-                            <<"process">> => state_get(id, State),
-                            <<"author">> => state_get(local_author, State),
-                            <<"round">> => Round,
-                            <<"parents">> => Parents,
-                            <<"timestamp">> => scheduler_time(),
-                            <<"body">> => Payload
-                        },
-                    Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
-                    case ensure_payload_cached(Payload, Signed, Opts) of
-                        {error, _} = Err -> Err;
-                        ok ->
-                            case ensure_block_id(Signed, Opts) of
-                                {error, _} = Err -> Err;
-                                Block ->
-                                    BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
-                                    case verify_block_signature(BlockNoId, Opts) of
-                                        {ok, Signer} ->
-                                            case hb_maps:get(<<"author">>, Block, undefined, Opts) of
-                                                Signer -> {ok, Block};
-                                                _ -> {error, signer_mismatch}
-                                            end;
-                                        {error, _} = Err -> Err
-                                    end
-                            end
-                    end
-            end;
-        {error, Reason} ->
-            {error, Reason}
+    maybe
+        {ok, Parents} ?= parent_set(State, Round),
+        ok ?= cache_payload(Payload, Opts),
+        Block0 =
+            #{
+                <<"type">> => <<"MysticetiBlock">>,
+                <<"process">> => state_get(id, State),
+                <<"author">> => state_get(local_author, State),
+                <<"round">> => Round,
+                <<"parents">> => Parents,
+                <<"timestamp">> => scheduler_time(),
+                <<"body">> => Payload
+            },
+        Signed = hb_message:commit(Block0, Opts#{ <<"bundle">> => true }),
+        ok ?= ensure_payload_cached(Payload, Signed, Opts),
+        {ok, Block} ?= ensure_block_id(Signed, Opts),
+        BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
+        {ok, Signer} ?= verify_block_signature(BlockNoId, Opts),
+        true ?= (hb_maps:get(<<"author">>, Block, undefined, Opts) =:= Signer),
+        {ok, Block}
+    else
+        {error, _} = Err -> Err;
+        false -> {error, signer_mismatch}
     end.
+
+cache_payload(Payload, Opts) when is_map(Payload) ->
+    case hb_cache:write(Payload, Opts) of
+        {ok, _} -> ok;
+        {error, Reason} -> {error, {payload_cache_failed, Reason}}
+    end;
+cache_payload(_Payload, _Opts) ->
+    ok.
 
 %% @doc Ensure the block payload is resolvable from the local cache.
 %% Required for HTTP bundling to succeed when broadcasting blocks.
@@ -337,16 +324,13 @@ ensure_payload_cached(Payload, Block, Opts) ->
                 Msg when is_map(Msg) ->
                     PayloadId = hb_message:id(Msg, all, Opts),
                     ensure_message_id_cached(PayloadId, Msg, Opts),
-                    maybe_link_payload(PayloadId, LinkId, Opts),
-                    case hb_cache:read(LinkId, Opts) of
-                        {ok, _} -> ok;
-                        _ -> {error, payload_cache_missing}
-                    end;
+                    maybe_link_payload(PayloadId, LinkId, Opts);
                 _ ->
-                    case hb_cache:read(LinkId, Opts) of
-                        {ok, _} -> ok;
-                        _ -> {error, payload_cache_missing}
-                    end
+                    ok
+            end,
+            case hb_cache:read(LinkId, Opts) of
+                {ok, _} -> ok;
+                _ -> {error, payload_cache_missing}
             end;
         _ ->
             ok
@@ -492,8 +476,8 @@ ensure_block_id(Block, Opts) ->
     BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
     BlockId = hb_message:id(BlockNoId, all, Opts),
     case hb_maps:get(<<"id">>, Block, undefined, Opts) of
-        undefined -> BlockNoId#{ <<"id">> => BlockId };
-        BlockId -> BlockNoId#{ <<"id">> => BlockId };
+        undefined -> {ok, BlockNoId#{ <<"id">> => BlockId }};
+        BlockId -> {ok, BlockNoId#{ <<"id">> => BlockId }};
         _ -> {error, id_mismatch}
     end.
 
@@ -502,7 +486,7 @@ store_pending_block(State, Block) ->
     Opts = state_opts(State),
     case ensure_block_id(Block, Opts) of
         {error, _} = Err -> {State, Err};
-        Canon ->
+        {ok, Canon} ->
             Pending0 = state_get(pending_blocks, State, #{}),
             BlockId = hb_maps:get(<<"id">>, Canon, undefined, Opts),
             {State#{ pending_blocks := Pending0#{ BlockId => Canon } }, BlockId}
@@ -564,7 +548,10 @@ drain_pending_messages(State, Acc) ->
                                 [Block | Acc]
                             );
                         {State1, _} ->
-                            {State1#{ pending_msgs := [Message | Rest] }, lists:reverse(Acc)}
+                            {
+                                State1#{ pending_msgs := [Message | Rest] },
+                                lists:reverse(Acc)
+                            }
                     end;
                 {error, _} ->
                     {State#{ pending_msgs := [Message | Rest] }, lists:reverse(Acc)}
@@ -1293,41 +1280,42 @@ no_parent_from_author(State, Block, AuthorId) ->
 %% Block correctness rules: mysticeti-paper/sections/overview.tex (sec:dag).
 validate_block(State, Block0) ->
     Opts = state_opts(State),
-    case ensure_block_id(Block0, Opts) of
-        {error, _} = Err -> Err;
-        Block ->
-            BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
-            Validators = state_get(validators, State, []),
-            AuthorField = hb_maps:get(<<"author">>, Block, undefined, Opts),
-            Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
-            Parents = hb_maps:get(<<"parents">>, Block, undefined, Opts),
-            case verify_block_signature(BlockNoId, Opts) of
-                {ok, Signer} ->
-                    case AuthorField of
-                        Signer ->
-                            Author = Signer,
-                            case {hb_maps:get(<<"process">>, Block, undefined, Opts) =:= state_get(id, State),
-                                  hb_maps:get(<<"type">>, Block, undefined, Opts) =:= <<"MysticetiBlock">>,
-                                  lists:member(Author, Validators),
-                                  is_integer(Round),
-                                  Round >= 0,
-                                  is_list(Parents)} of
-                                {false, _, _, _, _, _} -> {error, wrong_process};
-                                {_, false, _, _, _, _} -> {error, wrong_type};
-                                {_, _, false, _, _, _} -> {error, invalid_author};
-                                {_, _, _, false, _, _} -> {error, invalid_round};
-                                {_, _, _, _, false, _} -> {error, invalid_round};
-                                {_, _, _, _, _, false} -> {error, invalid_parents};
-                                _ ->
-                                    validate_block_parents(State, Block)
-                            end;
-                        undefined ->
-                            {error, missing_author};
-                        _ ->
-                            {error, signer_mismatch}
-                    end;
-                {error, _} = Err -> Err
-            end
+    maybe
+        {ok, Block} ?= ensure_block_id(Block0, Opts),
+        BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
+        {ok, Signer} ?= verify_block_signature(BlockNoId, Opts),
+        ok ?= check_block_author(Block, Signer, Opts),
+        ok ?= check_block_fields(State, Block, Signer),
+        validate_block_parents(State, Block)
+    else
+        {error, _} = Err -> Err
+    end.
+
+check_block_author(Block, Signer, Opts) ->
+    case hb_maps:get(<<"author">>, Block, undefined, Opts) of
+        Signer -> ok;
+        undefined -> {error, missing_author};
+        _ -> {error, signer_mismatch}
+    end.
+
+check_block_fields(State, Block, Signer) ->
+    Opts = state_opts(State),
+    Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
+    Parents = hb_maps:get(<<"parents">>, Block, undefined, Opts),
+    Validators = state_get(validators, State, []),
+    case {hb_maps:get(<<"process">>, Block, Opts) =:= state_get(id, State),
+          hb_maps:get(<<"type">>, Block, Opts) =:= <<"MysticetiBlock">>,
+          lists:member(Signer, Validators),
+          is_integer(Round),
+          Round >= 0,
+          is_list(Parents)} of
+        {false, _, _, _, _, _} -> {error, wrong_process};
+        {_, false, _, _, _, _} -> {error, wrong_type};
+        {_, _, false, _, _, _} -> {error, invalid_author};
+        {_, _, _, false, _, _} -> {error, invalid_round};
+        {_, _, _, _, false, _} -> {error, invalid_round};
+        {_, _, _, _, _, false} -> {error, invalid_parents};
+        _ -> ok
     end.
 
 %% @doc Verify block signature and return the committer as the author.
@@ -1351,96 +1339,111 @@ validate_block_parents(State, Block) ->
     Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
     Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
     Dag = state_get(dag, State, #{}),
-    case length(Parents) =:= length(lists:usort(Parents)) of
-        false -> {error, duplicate_parents};
-        true ->
-            ParentBlocks =
-                lists:map(
-                    fun(ParentId) -> {ParentId, hb_maps:get(ParentId, Dag, undefined, Opts)} end,
-                    Parents
-                ),
-            case lists:any(fun({_, B}) -> B =:= undefined end, ParentBlocks) of
-                true -> {error, missing_parents};
-                false ->
-                    case lists:any(
-                        fun({_, B}) ->
-                            hb_maps:get(<<"round">>, B, -1, Opts) >= Round
-                        end,
-                        ParentBlocks
-                    ) of
-                        true -> {error, invalid_parent_round};
-                        false -> validate_block_parent_shape(State, Block, ParentBlocks)
-                    end
-            end
+    ParentBlocks =
+        lists:map(
+            fun(ParentId) -> {ParentId, hb_maps:get(ParentId, Dag, undefined, Opts)} end,
+            Parents
+        ),
+    maybe
+        ok ?= check_no_duplicate_parents(Parents),
+        ok ?= check_parents_present(ParentBlocks),
+        ok ?= check_parent_rounds(ParentBlocks, Round, Opts),
+        validate_block_parent_shape(State, Block, ParentBlocks)
+    else
+        {error, _} = Err -> Err
     end.
 
-validate_block_parent_shape(State, Block, ParentBlocks) ->
+check_no_duplicate_parents(Parents) ->
+    case length(Parents) =:= length(lists:usort(Parents)) of
+        true -> ok;
+        false -> {error, duplicate_parents}
+    end.
+
+check_parents_present(ParentBlocks) ->
+    case lists:any(fun({_, B}) -> B =:= undefined end, ParentBlocks) of
+        true -> {error, missing_parents};
+        false -> ok
+    end.
+
+check_parent_rounds(ParentBlocks, Round, Opts) ->
+    case lists:any(
+        fun({_, B}) -> hb_maps:get(<<"round">>, B, -1, Opts) >= Round end,
+        ParentBlocks
+    ) of
+        true -> {error, invalid_parent_round};
+        false -> ok
+    end.
+
+validate_block_parent_shape(State, Block, _ParentBlocks) ->
     Opts = state_opts(State),
-    Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
-    case Round of
+    case hb_maps:get(<<"round">>, Block, undefined, Opts) of
         0 ->
             case hb_maps:get(<<"parents">>, Block, [], Opts) of
                 [] -> {ok, Block};
                 _ -> {error, genesis_parents_not_empty}
             end;
         _ ->
-            Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
-            Quorum = state_get(quorum, State),
-            Parents = hb_maps:get(<<"parents">>, Block, [], Opts),
-            case Parents of
-                [] ->
-                    {error, missing_parents};
-                [FirstParentId | _] ->
-                    PrevIds = latest_author_blocks(State, Author, Round),
-                    case lists:member(FirstParentId, PrevIds) of
-                        false -> {error, invalid_prev_parent};
-                        true ->
-                            case lists:keyfind(FirstParentId, 1, ParentBlocks) of
-                                {_, FirstParent} ->
-                                    case hb_maps:get(<<"author">>, FirstParent, undefined, Opts) of
-                                        Author ->
-                                            % Block correctness: require 2f+1 distinct authors from round r-1.
-                                            PrevRoundAuthors =
-                                                lists:foldl(
-                                                    fun({_, PB}, Acc) ->
-                                                        case hb_maps:get(<<"round">>, PB, -1, Opts) of
-                                                            R when R =:= Round - 1 ->
-                                                                AuthorId =
-                                                                    hb_maps:get(
-                                                                        <<"author">>,
-                                                                        PB,
-                                                                        undefined,
-                                                                        Opts
-                                                                    ),
-                                                                case AuthorId of
-                                                                    undefined -> Acc;
-                                                                    _ ->
-                                                                        hb_maps:put(
-                                                                            AuthorId,
-                                                                            true,
-                                                                            Acc,
-                                                                            Opts
-                                                                        )
-                                                                end;
-                                                            _ ->
-                                                                Acc
-                                                        end
-                                                    end,
-                                                    #{},
-                                                    ParentBlocks
-                                                ),
-                                            case hb_maps:size(PrevRoundAuthors, Opts) >= Quorum of
-                                                true -> {ok, Block};
-                                                false -> {error, not_enough_prev_round_parents}
-                                            end;
-                                        _ ->
-                                            {error, invalid_prev_parent}
-                                    end;
-                                false ->
-                                    {error, invalid_prev_parent}
-                            end
-                    end
+            validate_non_genesis_parents(State, Block, _ParentBlocks)
+    end.
+
+validate_non_genesis_parents(State, Block, ParentBlocks) ->
+    Opts = state_opts(State),
+    Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
+    Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
+    case hb_maps:get(<<"parents">>, Block, [], Opts) of
+        [] ->
+            {error, missing_parents};
+        [FirstParentId | _] ->
+            PrevIds = latest_author_blocks(State, Author, Round),
+            case lists:member(FirstParentId, PrevIds) of
+                false ->
+                    {error, invalid_prev_parent};
+                true ->
+                    validate_first_parent_author(
+                        State, Block, FirstParentId, ParentBlocks
+                    )
             end
+    end.
+
+validate_first_parent_author(State, Block, FirstParentId, ParentBlocks) ->
+    Opts = state_opts(State),
+    Author = hb_maps:get(<<"author">>, Block, undefined, Opts),
+    case lists:keyfind(FirstParentId, 1, ParentBlocks) of
+        false ->
+            {error, invalid_prev_parent};
+        {_, FirstParent} ->
+            case hb_maps:get(<<"author">>, FirstParent, undefined, Opts) of
+                Author ->
+                    validate_prev_round_quorum(State, Block, ParentBlocks);
+                _ ->
+                    {error, invalid_prev_parent}
+            end
+    end.
+
+%% Block correctness: require 2f+1 distinct authors from round r-1.
+validate_prev_round_quorum(State, Block, ParentBlocks) ->
+    Opts = state_opts(State),
+    Round = hb_maps:get(<<"round">>, Block, undefined, Opts),
+    Quorum = state_get(quorum, State),
+    PrevRoundAuthors =
+        lists:foldl(
+            fun({_, PB}, Acc) ->
+                case hb_maps:get(<<"round">>, PB, -1, Opts) of
+                    R when R =:= Round - 1 ->
+                        case hb_maps:get(<<"author">>, PB, undefined, Opts) of
+                            undefined -> Acc;
+                            AuthorId -> hb_maps:put(AuthorId, true, Acc, Opts)
+                        end;
+                    _ ->
+                        Acc
+                end
+            end,
+            #{},
+            ParentBlocks
+        ),
+    case hb_maps:size(PrevRoundAuthors, Opts) >= Quorum of
+        true -> {ok, Block};
+        false -> {error, not_enough_prev_round_parents}
     end.
 
 %% @doc Summarize the server state for info.
@@ -1600,22 +1603,26 @@ resolve_peer(Peer, Opts) ->
 
 %% @doc Resolve a peer address via cached or gateway scheduler-location data.
 resolve_peer_location(Address, Opts) ->
-    case dev_scheduler_cache:read_location(Address, Opts) of
+    case find_peer_location(Address, Opts) of
         {ok, Location} ->
             case hb_ao:get(<<"url">>, Location, not_found, Opts) of
                 not_found -> false;
                 Url -> resolve_peer(Url, Opts)
             end;
         not_found ->
+            false
+    end.
+
+find_peer_location(Address, Opts) ->
+    case dev_scheduler_cache:read_location(Address, Opts) of
+        {ok, Location} -> {ok, Location};
+        not_found ->
             case hb_gateway_client:scheduler_location(Address, Opts) of
                 {ok, Location} ->
-                    _ = dev_scheduler_cache:write_location(Location, Opts),
-                    case hb_ao:get(<<"url">>, Location, not_found, Opts) of
-                        not_found -> false;
-                        Url -> resolve_peer(Url, Opts)
-                    end;
+                    dev_scheduler_cache:write_location(Location, Opts),
+                    {ok, Location};
                 {error, _} ->
-                    false
+                    not_found
             end
     end.
 
