@@ -195,8 +195,8 @@ maybe_index_ids(Block, Opts) ->
                 error ->
                     % Skip entire block if any transaction errors
                     {block_skipped, #{
-                        total_txs => TotalTXs,
-                        skipped_count => TotalTXs
+                        skipped_count => TotalTXs,
+                        total_txs => TotalTXs
                     }};
                 {ok, TXs} ->
                     Height = hb_maps:get(<<"height">>, Block, 0, Opts),
@@ -261,22 +261,22 @@ parallel_map_wait(ActiveRefs, Remaining, Fun, MaxWorkers, Parent, ResultsMap) ->
 process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
+    IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+    TXID = hb_util:encode(TX#tx.id),
+    TXEndOffset = BlockStartOffset + EndOffset,
+    TXStartOffset = TXEndOffset - TX#tx.data_size,
+    observe_event(<<"item_indexed">>, fun() ->
+        hb_store_arweave:write_offset(
+            IndexStore,
+            TXID,
+            true,
+            TXStartOffset,
+            TX#tx.data_size
+        )
+    end),
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
-            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
-            TXID = hb_util:encode(TX#tx.id),
-            TXEndOffset = BlockStartOffset + EndOffset,
-            TXStartOffset = TXEndOffset - TX#tx.data_size,
-            observe_event(<<"item_indexed">>, fun() ->
-                hb_store_arweave:write_offset(
-                    IndexStore,
-                    TXID,
-                    true,
-                    TXStartOffset,
-                    TX#tx.data_size
-                )
-            end),
             ?event(copycat_debug, {fetching_bundle_header, 
                 {tx_id, {explicit, TXID}},
                 {tx_end_offset, TXEndOffset},
@@ -508,10 +508,9 @@ index_ids_test() ->
             {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
         ]
     ),
-    % Non-ans104 transaction in the block should not be indexed.
-    ?assertEqual({error, not_found},
-        hb_store_arweave:read(StoreOpts,
-            <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>)),
+    % Non-ans104 data transaction 
+    assert_item_read(Opts,
+        <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>),
     % Another bundle with an unsupported signature should be indexed even if
     % it can't be deserialized.
     ?assertException(
@@ -608,6 +607,66 @@ tx_with_data_tag_test() ->
     ),
     ok.
 
+tx_with_no_data_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1826700,
+    BlockBin = hb_util:bin(Block),
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    % Value transfer
+    Resolved = hb_ao:resolve(<<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>, Opts),
+    ?assertMatch({ok, _}, Resolved),
+    {ok, StructuredTX} = Resolved,
+    ?assert(hb_message:verify(StructuredTX, all, Opts)),
+    ?assertEqual(
+        <<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>,
+        hb_message:id(StructuredTX, signed, Opts)
+    ),
+    TX = hb_message:convert(
+        StructuredTX,
+        <<"tx@1.0">>,
+        <<"structured@1.0">>,
+        Opts),
+    ?assertEqual(0, TX#tx.data_size),
+    ?assertEqual(538493200840000, TX#tx.quantity),
+    % TX with non-ans104 data
+    assert_item_read(Opts,
+        <<"bpd0CzsoTr9-X83sPCx08uNzZC_EgFwb-P8lnHXSeRo">>),
+    %% Now list the index using list mode
+    {ok, Response} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=list"
+            >>,
+            Opts
+        ),
+    JSONBody = maps:get(<<"body">>, Response),
+    IndexData = hb_json:decode(JSONBody),
+    BlockInfo = maps:get(BlockBin, IndexData),
+    %% Verify indexed and not_indexed keys exist
+    ?assert(maps:is_key(<<"indexed">>, BlockInfo)),
+    ?assert(maps:is_key(<<"not_indexed">>, BlockInfo)),
+    ?assertEqual([
+            <<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>,
+            <<"bpd0CzsoTr9-X83sPCx08uNzZC_EgFwb-P8lnHXSeRo">>,
+            <<"n5rT8Y9Jet7SCnl_M77UrPNUFeud5iKazsn9Sr9gsWA">>,
+            <<"hvZlThf1B1tY4wMm4cETSsk8vIkOY3QZRmaBnQSzlVo">>,
+            <<"3urwRfVyWN35HE5RHGwOUk6CxkJ_lZOaMY7HZbeJyRs">>
+        ], maps:get(<<"indexed">>, BlockInfo)),
+    ?assertEqual([ ], maps:get(<<"not_indexed">>, BlockInfo)),
+    ok.
+
 non_string_tags_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Res = resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts),
@@ -616,17 +675,29 @@ non_string_tags_test() ->
 
 list_index_test() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
-    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     %% First index the block using write mode
-    {ok, 1827942} =
+    Block = 1827942,
+    BlockBin = hb_util:bin(Block),
+    {ok, Block} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=write">>,
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=write"
+            >>,
             Opts
         ),
     %% Now list the index using list mode
     {ok, Response} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=list">>,
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=list"
+            >>,
             Opts
         ),
     %% Verify content-type is application/json
@@ -636,20 +707,19 @@ list_index_test() ->
     JSONBody = maps:get(<<"body">>, Response),
     IndexData = hb_json:decode(JSONBody),
     %% Verify the block height is present as a key
-    BlockKey = <<"1827942">>,
-    ?assert(maps:is_key(BlockKey, IndexData)),
-    BlockInfo = maps:get(BlockKey, IndexData),
+    ?assert(maps:is_key(BlockBin, IndexData)),
+    BlockInfo = maps:get(BlockBin, IndexData),
     %% Verify indexed and not_indexed keys exist
     ?assert(maps:is_key(<<"indexed">>, BlockInfo)),
     ?assert(maps:is_key(<<"not_indexed">>, BlockInfo)),
-    IndexedTXs = maps:get(<<"indexed">>, BlockInfo),
-    NotIndexedTXs = maps:get(<<"not_indexed">>, BlockInfo),
-    %% Verify that bundle TXs are in indexed
-    %% T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs is a bundle that should be indexed
-    ?assert(lists:member(<<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>, IndexedTXs)),
-    %% Verify that non-bundle TXs are in not_indexed
-    %% bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8 is a non-ans104 transaction that should not be indexed
-    ?assert(lists:member(<<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>, NotIndexedTXs)),
+    ?assertEqual([
+            <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
+            <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>,
+            <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
+            <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
+        ], maps:get(<<"indexed">>, BlockInfo)),
+    ?assertEqual([ ], maps:get(<<"not_indexed">>, BlockInfo)),
     ok.
 
 setup_index_opts() ->
