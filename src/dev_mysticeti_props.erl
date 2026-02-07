@@ -1,8 +1,7 @@
 %%% @doc Invariant-based tests for Mysticeti-C scheduling.
 %%%
-%%% These tests drive the AO-Core process HTTP surface (`/ID/schedule`) and check the
-%%% minimal safety properties implied by the consensus design:
-%%% - slots are contiguous and monotonic,
+%%% These tests drive `GET/POST /ID/schedule` and check core safety properties:
+%%% - slots are contiguous,
 %%% - assignments are unique,
 %%% - every assigned message was previously scheduled.
 %%%

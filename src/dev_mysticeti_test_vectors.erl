@@ -1,7 +1,7 @@
 %%% @doc Mysticeti-C test vectors and unit tests.
 %%%
-%%% These tests drive the AO-Core process HTTP surface (`/ID/schedule`) and
-%%% construct DAGs that exercise the commit rules described in the paper:
+%%% These tests drive `process@1.0` HTTP (`/ID/schedule`) and build DAGs that
+%%% exercise the paper's commit rules:
 %%% - mysticeti-paper/algorithms/consensus_utils.tex (Alg. 1 predicates),
 %%% - mysticeti-paper/algorithms/universal_committer.tex (Alg. 3 committer),
 %%% - mysticeti-paper/sections/overview.tex (block correctness),

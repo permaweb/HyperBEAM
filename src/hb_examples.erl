@@ -145,7 +145,7 @@ mysticeti_lua_process_http_test_() ->
     {timeout, 360, fun mysticeti_lua_process_http/0}.
 
 %% @doc End-to-end Mysticeti-C network execution over HTTP.
-%% Validates direct decision and total-order properties (Algorithms 2–3,
+%% Validates direct decision and total-order properties (Algorithms 2-3,
 %% mysticeti-paper/algorithms/*.tex) under multi-node gossip.
 run_mysticeti_network(NodeCount, Rounds, ExpectedRounds) ->
     {Nodes, Validators, PeerUrls} = setup_mysticeti_http_network(NodeCount),
@@ -657,7 +657,7 @@ start_mysticeti_nodes(NodeCount) ->
 random_port() ->
     20000 + rand:uniform(40000).
 
-start_node_with_retry(Opts, 0) ->
+start_node_with_retry(_Opts, 0) ->
     erlang:error({start_node_failed, retries_exhausted});
 start_node_with_retry(Opts, Attempts) ->
     Port = hb_opts:get(port, undefined, Opts),
@@ -677,17 +677,19 @@ trim_trailing_slash(Url) when is_binary(Url) ->
         _ -> Url
     end.
 
+http_opts(Opts) ->
+    Opts#{
+        http_connect_timeout => 2000,
+        http_request_send_timeout => 10000
+    }.
+
 register_scheduler_location(Node, Opts) ->
     Req0 = #{
         <<"path">> => <<"/~scheduler@1.0/location">>,
         <<"method">> => <<"POST">>
     },
     Req = hb_message:commit(Req0, Opts),
-    ReqOpts =
-        Opts#{
-            http_connect_timeout => 2000,
-            http_request_send_timeout => 10000
-        },
+    ReqOpts = http_opts(Opts),
     case hb_http:post(Node, Req, ReqOpts) of
         {ok, Response} ->
             case scheduler_location_from_response(Response, Opts) of
@@ -719,10 +721,7 @@ missing_scheduler_locations(Nodes, Addresses) ->
             lists:foldl(
                 fun(Address, Acc1) ->
                     ReqOpts =
-                        Opts#{
-                            http_connect_timeout => 2000,
-                            http_request_send_timeout => 10000
-                        },
+                        http_opts(Opts),
                     case catch hb_http:get(
                         Node,
                         <<"/~scheduler@1.0/location?address=", Address/binary>>,
@@ -911,11 +910,7 @@ post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
     post_scheduler_location(Node, Location, SenderOpts, Deadline, none).
 
 post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
-    ReqOpts =
-        SenderOpts#{
-            http_connect_timeout => 2000,
-            http_request_send_timeout => 10000
-        },
+    ReqOpts = http_opts(SenderOpts),
     Attempt =
         case catch hb_http:post(
             Node,
@@ -967,11 +962,7 @@ wait_for_nodes_ready(Nodes, Timeout) ->
 missing_ready_nodes(Nodes) ->
     lists:foldl(
         fun(#{ url := Node, opts := Opts }, Acc) ->
-            ReqOpts =
-                Opts#{
-                    http_connect_timeout => 2000,
-                    http_request_send_timeout => 10000
-                },
+            ReqOpts = http_opts(Opts),
             case catch hb_http:get(Node, <<"/~scheduler@1.0/status">>, ReqOpts) of
                 {ok, Res} ->
                     Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
@@ -986,138 +977,6 @@ missing_ready_nodes(Nodes) ->
         [],
         Nodes
     ).
-
-ensure_block_id(Block, Opts) ->
-    BlockNoId = hb_maps:remove(<<"id">>, Block, Opts),
-    BlockId = hb_message:id(BlockNoId, all, Opts),
-    case hb_maps:get(<<"id">>, Block, undefined, Opts) of
-        undefined -> BlockNoId#{ <<"id">> => BlockId };
-        BlockId -> BlockNoId#{ <<"id">> => BlockId };
-        _ -> erlang:error({block_id_mismatch, BlockId})
-    end.
-
-block_ids_by_author(BlocksByAuthor, OptsByAuthor) ->
-    lists:foldl(
-        fun({Author, Block}, Acc) ->
-            AuthorOpts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
-            BlockId = hb_maps:get(<<"id">>, Block, undefined, AuthorOpts),
-            hb_maps:put(Author, BlockId, Acc, #{})
-        end,
-        #{},
-        hb_maps:to_list(BlocksByAuthor, #{})
-    ).
-
-parents_for_author(PrevRoundByAuthor, Author) ->
-    Ordered = lists:sort(hb_maps:to_list(PrevRoundByAuthor, #{})),
-    OwnPrev = hb_maps:get(Author, PrevRoundByAuthor, undefined, #{}),
-    Others = [Id || {A, Id} <- Ordered, A =/= Author],
-    [OwnPrev | Others].
-
-make_round_blocks(ProcID, Round, Authors, PrevByAuthor, Payloads, OptsByAuthor) ->
-    lists:foldl(
-        fun(Author, Acc) ->
-            Parents =
-                case Round of
-                    0 -> [];
-                    _ -> parents_for_author(PrevByAuthor, Author)
-                end,
-            Payload = hb_maps:get(Author, Payloads, undefined, #{}),
-            Opts = hb_maps:get(Author, OptsByAuthor, #{}, #{}),
-            Block0 =
-                #{
-                    <<"type">> => <<"MysticetiBlock">>,
-                    <<"process">> => ProcID,
-                    <<"author">> => Author,
-                    <<"round">> => Round,
-                    <<"parents">> => Parents,
-                    <<"timestamp">> => erlang:system_time(millisecond),
-                    <<"body">> => Payload
-                },
-            Signed = hb_message:commit(Block0, Opts),
-            Block = ensure_block_id(Signed, Opts),
-            hb_maps:put(Author, Block, Acc, #{})
-        end,
-        #{},
-        Authors
-    ).
-
-create_schedule_aos2_test_disabled() ->
-    % The legacy process format, according to the ao.tn.1 spec:
-    % Data-Protocol	The name of the Data-Protocol for this data-item	1-1	ao
-    % Variant	The network version that this data-item is for	1-1	ao.TN.1
-    % Type	Indicates the shape of this Data-Protocol data-item	1-1	Process
-    % Module	Links the process to ao module using the module's unique
-    %   Transaction ID (TXID).	1-1	{TXID}
-    % Scheduler	Specifies the scheduler unit by Wallet Address or Name, and can
-    %   be referenced by a recent Scheduler-Location.	1-1	{ADDRESS}
-    % Cron-Interval	An interval at which a particular Cron Message is recevied by the process,
-    %   in the format X-Y, where X is a scalar value, and Y is milliseconds,
-    %   seconds, minutes, hours, days, months, years, or blocks	0-n	1-second
-    % Cron-Tag-{Name}	defines tags for Cron Messages at set intervals,
-    %   specifying relevant metadata.	0-1	
-    % Memory-Limit	Overrides maximum memory, in megabytes or gigabytes, set by 
-    %   Module, can not exceed modules setting	0-1	16-mb
-    % Compute-Limit	Caps the compute cycles for a module per evaluation, ensuring
-    %   efficient, controlled execution	0-1	1000
-    % Pushed-For	Message TXID that this Process is pushed as a result	0-1	{TXID}
-    % Cast	Sets message handling: 'True' for do not push, 'False' for normal
-    %   pushing	0-1	{True or False}
-    % Authority	Defines a trusted wallet address which can send Messages to
-    %   the Process	0-1	{ADDRESS}
-    % On-Boot	Defines a startup script to run when the process is spawned. If
-    %   value "Data" it uses the Data field of the Process Data Item. If it is a
-    %   TXID it will load that TX from Arweave and execute it.	0-1	{Data or TXID}
-    % {Any-Tags}	Custom Tags specific for the initial input of the Process	0-n
-    Node =
-        try hb_http_server:start_node(#{ priv_wallet => hb:wallet() })
-        catch
-            _:_ ->
-                <<"http://localhost:8734">>
-        end,
-    ProcMsg = #{
-        <<"data-protocol">> => <<"ao">>,
-        <<"type">> => <<"Process">>,
-        <<"variant">> => <<"ao.TN.1">>,
-        <<"type">> => <<"Process">>,
-        <<"module">> => <<"bkjb55i07GUCUSWROtKK4HU1mBS_X0TyH3M5jMV6aPg">>,
-        <<"scheduler">> => hb_util:human_id(hb:address()),
-        <<"memory-limit">> => <<"1024-mb">>,
-        <<"compute-limit">> => <<"10000000">>,
-        <<"authority">> => hb_util:human_id(hb:address()),
-        <<"scheduler-location">> => hb_util:human_id(hb:address())
-    },
-    Wallet = hb:wallet(),
-    SignedProc = hb_message:commit(ProcMsg, #{ priv_wallet => Wallet }),
-    IDNone = hb_message:id(SignedProc, none),
-    IDAll = hb_message:id(SignedProc, all),
-    {ok, Res} = schedule(SignedProc, IDNone, Wallet, Node),
-    ?event({res, Res}),
-    receive after 100 -> ok end,
-    ?event({id, IDNone, IDAll}),
-    {ok, Res2} = hb_http:get(
-        Node,
-        <<"/~scheduler@1.0/slot?target=", IDNone/binary>>,
-        #{}
-    ),
-    ?assertMatch(Slot when Slot >= 0, hb_ao:get(<<"at-slot">>, Res2, #{})).
-
-schedule(ProcMsg, Target) ->
-    schedule(ProcMsg, Target, hb:wallet()).
-schedule(ProcMsg, Target, Wallet) ->
-    schedule(ProcMsg, Target, Wallet, <<"http://localhost:8734">>).
-schedule(ProcMsg, Target, Wallet, Node) ->
-    SignedReq = 
-        hb_message:commit(
-            #{
-                <<"path">> => <<"/~scheduler@1.0/schedule">>,
-                <<"target">> => Target,
-                <<"body">> => ProcMsg
-            },
-            #{ priv_wallet => Wallet }
-        ),
-    ?event({signed_req, SignedReq}),
-    hb_http:post(Node, SignedReq, #{}).
-
 
 %% @doc Test that we can schedule an ANS-104 data item on a relayed node. The
 %% input to the relaying server comes in the form of a serialized ANS-104

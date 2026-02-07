@@ -1,8 +1,8 @@
 %%% @doc Invariant-based network tests for Mysticeti-C scheduling.
 %%%
 %%% This suite spins up multiple isolated nodes (distinct stores), discovers
-%%% peers via scheduler-location, and drives consensus through the AO-Core
-%%% process HTTP API. It enforces network-wide properties implied by the committer:
+%%% peers via scheduler-location, and drives consensus through `process@1.0`
+%%% HTTP. It enforces network-wide committer properties:
 %%% - assignments are contiguous and unique per node,
 %%% - assignments are a subset of scheduled messages,
 %%% - all nodes share a common assignment prefix (no conflicting order).
@@ -406,11 +406,7 @@ wait_for_nodes_ready(Nodes, Timeout) ->
 missing_ready_nodes(Nodes) ->
     lists:foldl(
         fun(#{ url := Node, opts := Opts }, Acc) ->
-            ReqOpts =
-                Opts#{
-                    http_connect_timeout => 2000,
-                    http_request_send_timeout => 10000
-                },
+            ReqOpts = http_opts(Opts),
             case catch hb_http:get(Node, <<"/~scheduler@1.0/status">>, ReqOpts) of
                 {ok, Res} ->
                     Status = hb_maps:get(<<"status">>, Res, 200, ReqOpts),
@@ -433,11 +429,7 @@ register_scheduler_location(Node, Opts) ->
         <<"method">> => <<"POST">>
     },
     Req = hb_message:commit(Req0, Opts),
-    ReqOpts =
-        Opts#{
-            http_connect_timeout => 2000,
-            http_request_send_timeout => 10000
-        },
+    ReqOpts = http_opts(Opts),
     case hb_http:post(Node, Req, ReqOpts) of
         {ok, Response} ->
             case scheduler_location_from_response(Response, Opts) of
@@ -457,11 +449,7 @@ post_scheduler_location(Node, Location, SenderOpts, Timeout) ->
 
 %% @doc Retry posting a scheduler-location until success or timeout.
 post_scheduler_location(Node, Location, SenderOpts, Deadline, LastError) ->
-    ReqOpts =
-        SenderOpts#{
-            http_connect_timeout => 2000,
-            http_request_send_timeout => 10000
-        },
+    ReqOpts = http_opts(SenderOpts),
     Attempt =
         case catch hb_http:post(
             Node,
@@ -518,10 +506,7 @@ missing_scheduler_locations(Nodes, Addresses) ->
             lists:foldl(
                 fun(Address, Acc1) ->
                     ReqOpts =
-                        Opts#{
-                            http_connect_timeout => 2000,
-                            http_request_send_timeout => 10000
-                        },
+                        http_opts(Opts),
                     case catch hb_http:get(
                         Node,
                         <<"/~scheduler@1.0/location?address=", Address/binary>>,
@@ -600,3 +585,9 @@ direct_scheduler_location(Response, Opts) ->
                     {error, not_found}
             end
     end.
+
+http_opts(Opts) ->
+    Opts#{
+        http_connect_timeout => 2000,
+        http_request_send_timeout => 10000
+    }.

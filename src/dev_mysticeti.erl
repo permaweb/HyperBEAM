@@ -4,12 +4,11 @@
 %%% consensus to `dev_mysticeti_server`. User-facing clients are expected to
 %%% interact through `process@1.0` (e.g. `/ID/schedule`), with this device
 %%% operating as the configured scheduler. It is intentionally thin: parse the
-%%% request, locate the per-process server, and translate results into the
-%%% canonical schedule/assignment formats. The schedule returned is a total
-%%% order of user messages (assignments), derived from the consensus decision
-%%% sequence and not from any direct “block order” API.
+%%% request, locate the per-process server, and format schedule/assignment
+%%% outputs. The schedule is a total order of user messages (assignments),
+%%% derived from consensus decisions rather than any "block order" API.
 %%%
-%%% Endpoints:
+%%% Device endpoints (invoked via process@1.0 scheduler routing):
 %%% - `POST /~mysticeti@1.0/schedule`: enqueue a message. The server creates a
 %%%   proposer block and returns `pending` until the block is committed.
 %%% - `GET /~mysticeti@1.0/schedule`: return committed assignments.

@@ -2,8 +2,8 @@
 %%%
 %%% These utilities use the canonical `process@1.0` HTTP surface and the
 %%% default scheduler response shape (a schedule map containing `assignments`).
-%%% Assignment maps are normalized to slot-only keys, discarding non-slot
-%%% metadata (e.g. commitments) and coercing slot keys to integers.
+%%% Assignment maps are normalized to slot keys (ints); non-slot metadata
+%%% (e.g. commitments) is dropped.
 -module(dev_mysticeti_test_utils).
 -export([
     post_process_schedule/4,
@@ -100,17 +100,14 @@ assignments_to_map(_, _Opts) ->
 
 slot_only_assignments(Assignments, Opts) when is_map(Assignments) ->
     lists:foldl(
-        fun(Key, Acc) ->
+        fun({Key, Value}, Acc) ->
             case hb_util:safe_int(Key) of
-                {ok, IntKey} ->
-                    Value = hb_maps:get(Key, Assignments, undefined, Opts),
-                    hb_maps:put(IntKey, Value, Acc, Opts);
-                {error, _} ->
-                    Acc
+                {ok, IntKey} -> hb_maps:put(IntKey, Value, Acc, Opts);
+                {error, _} -> Acc
             end
         end,
         #{},
-        hb_maps:keys(Assignments, Opts)
+        hb_maps:to_list(Assignments, Opts)
     );
 slot_only_assignments(_, _Opts) ->
     #{}.
