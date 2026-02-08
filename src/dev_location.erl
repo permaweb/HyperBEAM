@@ -413,6 +413,35 @@ register_scheduler_test() ->
     {ok, Res} = hb_http:post(Node, Base, Opts),
     ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
 
+%% @doc Test that unsigned GET calls to `node' return the same location record
+%% once one has been generated.
+unsigned_get_node_is_idempotent_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => Wallet
+    },
+    Node = hb_http_server:start_node(Opts),
+    {ok, FirstRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
+    FirstLocation = hb_ao:get(<<"body">>, FirstRes, FirstRes, #{}),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    {ok, CachedAfterFirst} = dev_location_cache:read(Address, Opts),
+    timer:sleep(10),
+    {ok, SecondRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
+    SecondLocation = hb_ao:get(<<"body">>, SecondRes, SecondRes, #{}),
+    {ok, CachedAfterSecond} = dev_location_cache:read(Address, Opts),
+    ?assertEqual(CachedAfterFirst, CachedAfterSecond),
+    FirstNonce = hb_util:int(hb_maps:get(<<"nonce">>, FirstLocation, -1, #{})),
+    SecondNonce = hb_util:int(hb_maps:get(<<"nonce">>, SecondLocation, -1, #{})),
+    CachedNonce = hb_util:int(hb_maps:get(<<"nonce">>, CachedAfterSecond, -1, #{})),
+    ?assert(FirstNonce > 0),
+    ?assertEqual(FirstNonce, SecondNonce),
+    ?assertEqual(FirstNonce, CachedNonce),
+    ?assertEqual(
+        hb_maps:get(<<"url">>, FirstLocation, not_found, #{}),
+        hb_maps:get(<<"url">>, SecondLocation, not_found, #{})
+    ).
+
 %% @doc Test that a scheduler location is registered on boot.
 register_location_on_boot_test() ->
     NotifiedPeerWallet = ar_wallet:new(),
