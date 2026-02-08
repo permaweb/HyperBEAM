@@ -14,7 +14,7 @@
 info() ->
     #{
         excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
-        default_handler => fun read/4
+        default => fun read/4
     }.
 
 %% @doc Route either `POST' or `GET' requests to the correct handler for known
@@ -42,33 +42,45 @@ read(Address, Opts) ->
         _ ->
             case hb_gateway_client:location(Address, Opts) of
                 {ok, Location} ->
-                    % Cache the location record locally, now that we have found it.
                     dev_location_cache:write(Location, Opts),
                     {ok, Location};
-                not_found ->
+                _ ->
                     {error,
                         #{
                             <<"status">> => 404,
                             <<"body">> =>
                                 <<"No location found for address: ", Address/binary>>
-                            }
                         }
+                    }
             end
     end.
 
+%% @doc Find the latest known nonce for an address by checking the local cache
+%% first and then the gateway.
+latest_known_nonce(Address, Opts) ->
+    case read(Address, Opts) of
+        {ok, Location} -> hb_maps:get(<<"nonce">>, Location, -1, Opts);
+        _ -> -1
+    end.
+
+
 %% @doc Find the target to be used for during a request.
-find_record(Base, RawReq, Opts) ->
+find_target(Base, RawReq, Opts) ->
     % Ensure that the request is signed by the operator.
-    Req =
-        case hb_ao:get_first(
-            [{Base, <<"target">>}, {RawReq, <<"target">>}],
-            not_found,
+    TargetSpec =
+        hb_maps:get(
+            <<"target">>,
+            Base,
+            hb_maps:get(<<"target">>, RawReq, not_found, Opts),
             Opts
-        ) of
+        ),
+    Req =
+        case TargetSpec of
             not_found -> RawReq;
             <<"self">> -> Base;
             <<"request">> -> RawReq;
-            Target -> hb_ao:get(Target, RawReq, not_found, Opts)
+            Target ->
+                hb_maps:get(Target, RawReq, RawReq, Opts)
         end,
     {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
     OnlyCommitted.
@@ -81,7 +93,7 @@ node(Base, RawReq, RawOpts) ->
             {ok, NewOpts} -> NewOpts;
             _ -> RawOpts
         end,
-    Req = find_record(Base, RawReq, Opts),
+    Req = find_target(Base, RawReq, Opts),
     % Ensure that the request is signed by the operator.
     {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
     ?event(
@@ -90,11 +102,17 @@ node(Base, RawReq, RawOpts) ->
         Opts
     ),
     Signers = hb_message:signers(OnlyCommitted, Opts),
-    Self = hb_util:human_id(hb_opts:get(priv_wallet, hb:wallet(), Opts)),
+    Self =
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_opts:get(priv_wallet, hb:wallet(), Opts)
+            )
+        ),
     IsOperator = lists:member(Self, Signers),
-    NewNonce = hb_ao:get(<<"nonce">>, OnlyCommitted, not_found, Opts),
-    case NewNonce of
-        not_found when not IsOperator ->
+    ExistingNonce = latest_known_nonce(Self, Opts),
+    RequestedNonce = hb_maps:get(<<"nonce">>, OnlyCommitted, not_found, Opts),
+    case {IsOperator, RequestedNonce} of
+        {false, not_found} ->
             % A non-operator has requested that we generate a new location record.
             % First we check if we have a valid location record already and if
             % so return that instead.
@@ -110,7 +128,7 @@ node(Base, RawReq, RawOpts) ->
                             % node's configuration.
                             generate_new_location(
                                 default_url(Opts),
-                                erlang:system_time(microsecond),
+                                erlang:system_time(millisecond),
                                 hb_opts:get(location_ttl, ?DEFAULT_TTL, Opts),
                                 hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
                                 Opts
@@ -126,14 +144,38 @@ node(Base, RawReq, RawOpts) ->
                                         >>
                                 }
                             }
-                    end
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
             end;
-        _ when not IsOperator ->
+        {false, _} ->
             % Specific-nonce generation requests are not permitted for
             % non-operators.
             {error, <<"Non-operators cannot request specific nonces.">>};
-        SpecificNonce when IsOperator ->
-            generate_new_location(SpecificNonce, Base, OnlyCommitted, Opts)
+        {true, not_found} ->
+            % The operator has requested a new location record with an unknown
+            % nonce. We will generate a new one.
+            generate_new_location(
+                erlang:system_time(millisecond),
+                Base,
+                OnlyCommitted,
+                Opts
+            );
+        {true, SpecificNonce} ->
+            case SpecificNonce > ExistingNonce of
+                true ->
+                    generate_new_location(SpecificNonce, Base, OnlyCommitted, Opts);
+                false ->
+                    {error,
+                        #{
+                            <<"status">> => 400,
+                            <<"body">> => <<"Known nonce higher than requested nonce.">>,
+                            <<"requested-nonce">> => SpecificNonce,
+                            <<"existing-nonce">> => ExistingNonce,
+                            <<"signers">> => Signers
+                        }
+                    }
+            end
     end.
 
 %% @doc Generate the default location record URL from the node's configuration.
@@ -154,30 +196,33 @@ default_url(Opts) ->
 %% `location_notify' option. Finally, we will return the signed location record
 %% to the caller.
 generate_new_location(Nonce, Base, OnlyCommitted, Opts) ->
-    TimeToLive =
-        hb_ao:get_first(
-            [
-                {Base, <<"time-to-live">>},
-                {OnlyCommitted, <<"time-to-live">>}
-            ],
+    DefaultTTL =
+        hb_opts:get(
+            location_ttl,
             hb_opts:get(scheduler_location_ttl, 1000 * 60 * 60, Opts),
             Opts
         ),
+    TimeToLive =
+        case hb_maps:get(<<"time-to-live">>, Base, not_found, Opts) of
+            not_found ->
+                hb_maps:get(<<"time-to-live">>, OnlyCommitted, DefaultTTL, Opts);
+            TTLValue ->
+                TTLValue
+        end,
     URL =
-        case hb_ao:get(<<"url">>, OnlyCommitted, Opts) of
+        case hb_maps:get(<<"url">>, OnlyCommitted, not_found, Opts) of
             not_found -> default_url(Opts);
             GivenURL -> GivenURL
         end,
     % Construct the new scheduler location message.
+    DefaultCodec = hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
     Codec =
-        hb_ao:get_first(
-            [
-                {Base, <<"require-codec">>},
-                {OnlyCommitted, <<"require-codec">>}
-            ],
-            <<"httpsig@1.0">>,
-            Opts
-        ),
+        case hb_maps:get(<<"require-codec">>, Base, not_found, Opts) of
+            not_found ->
+                hb_maps:get(<<"require-codec">>, OnlyCommitted, DefaultCodec, Opts);
+            CodecValue ->
+                CodecValue
+        end,
     generate_new_location(URL, Nonce, TimeToLive, Codec, Opts).
 generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     NewSchedulerLocation =
@@ -208,7 +253,7 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
             fun(Node) ->
                 PostRes = hb_http:post(
                     Node,
-                    <<"/~scheduler@1.0/location">>,
+                    <<"/~location@1.0/known">>,
                     Signed,
                     Opts
                 ),
@@ -228,13 +273,30 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
 
 %% @doc Verify and write a location record for a foreign peer to the cache.
 write_foreign(Base, RawReq, Opts) ->
-    MaybeLocation = find_record(Base, RawReq, Opts),
+    MaybeLocation = find_target(Base, RawReq, Opts),
     maybe
         Signers = hb_message:signers(MaybeLocation, Opts),
-        true ?= hb_message:verify(MaybeLocation, signed, Opts)
+        LocationType =
+            hb_ao:get_first(
+                [
+                    {MaybeLocation, <<"type">>},
+                    {MaybeLocation, <<"Type">>}
+                ],
+                not_found,
+                Opts
+            ),
+        NormalizedType =
+            case LocationType of
+                not_found -> not_found;
+                _ -> hb_ao:normalize_key(LocationType)
+            end,
+        true ?= hb_message:verify(MaybeLocation, all, Opts)
             orelse {error, <<"Invalid location record signature.">>},
         true ?=
-            (hb_maps:get(<<"type">>, MaybeLocation, Opts) =:= <<"scheduler-location">>)
+            lists:member(
+                NormalizedType,
+                [<<"location">>, <<"scheduler-location">>]
+            )
             orelse {error, <<"Invalid location record type.">>},
         true ?=
             (hb_maps:get(<<"url">>, MaybeLocation, Opts) =/= not_found)
@@ -245,29 +307,50 @@ write_foreign(Base, RawReq, Opts) ->
         true ?=
             (hb_maps:get(<<"time-to-live">>, MaybeLocation, Opts) =/= not_found)
             orelse {error, <<"Missing location record time-to-live.">>},
-        Nonce = hb_ao:get(<<"nonce">>, MaybeLocation, Opts),
-        Res = lists:any(
-            fun(Signer) ->
-                case latest_nonce(Signer, Nonce, Opts) of
-                    true ->
-                        dev_location_cache:write(MaybeLocation, Opts);
-                    false ->
-                        ?event(
-                            location,
-                            {newer_foreign_peer_location_already_exists,
-                                {signer, Signer},
-                                {nonce, Nonce},
-                                {location, MaybeLocation}
-                            }
-                        )
-                end
-
-           end,
-            Signers
+        Nonce = hb_util:int(hb_ao:get(<<"nonce">>, MaybeLocation, 0, Opts)),
+        SignerChecks =
+            lists:map(
+                fun(Signer) ->
+                    {Signer, latest_nonce(Signer, Nonce, Opts)}
+                end,
+                Signers
+            ),
+        lists:foreach(
+            fun
+                ({Signer, false}) ->
+                    ?event(
+                        location,
+                        {newer_foreign_peer_location_already_exists,
+                            {signer, Signer},
+                            {nonce, Nonce},
+                            {location, MaybeLocation}
+                        }
+                    );
+                (_) ->
+                    ok
+            end,
+            SignerChecks
         ),
-        case Res of
+        CanWrite =
+            lists:any(
+                fun({_Signer, IsLatest}) -> IsLatest end,
+                SignerChecks
+            ),
+        case CanWrite of
             true ->
-                {ok, MaybeLocation};
+                case dev_location_cache:write(MaybeLocation, Opts) of
+                    ok ->
+                        {ok, MaybeLocation};
+                    {error, Reason} ->
+                        {error,
+                            #{
+                                <<"status">> => 400,
+                                <<"body">> =>
+                                    <<"Failed to store new location record.">>,
+                                <<"reason">> => Reason
+                            }
+                        }
+                end;
             false ->
                 {error,
                     #{
@@ -285,9 +368,9 @@ write_foreign(Base, RawReq, Opts) ->
 latest_nonce(Signer, Nonce, Opts) ->
     case dev_location_cache:read(Signer, Opts) of
         {ok, Location} ->
-            hb_util:int(hb_ao:get(<<"nonce">>, Location, 0, Opts)) > Nonce;
-        not_found ->
-            -1
+            hb_util:int(hb_ao:get(<<"nonce">>, Location, -1, Opts)) < Nonce;
+        _ ->
+            true
     end.
 
 %%% Tests
@@ -298,7 +381,7 @@ register_scheduler_test() ->
     Base =
         hb_message:commit(
             #{
-                <<"path">> => <<"/~scheduler@1.0/location">>,
+                <<"path">> => <<"/~location@1.0/node">>,
                 <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                 <<"method">> => <<"POST">>,
                 <<"nonce">> => 1,
@@ -330,8 +413,8 @@ register_location_on_boot_test() ->
             on =>
                 #{
                     <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
+                        <<"device">> => <<"location@1.0">>,
+                        <<"path">> => <<"node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
                         <<"require-codec">> => <<"ans104@1.0">>,
@@ -355,19 +438,25 @@ register_location_on_boot_test() ->
             },
             #{}
         ),
+    CurrentBody = hb_ao:get(<<"body">>, CurrentLocation, CurrentLocation, #{}),
     ?event({current_location, CurrentLocation}),
     ?assertMatch(
         #{
             <<"url">> := <<"https://hyperbeam-test-ignore.com">>,
-            <<"nonce">> := 0
-        },
-        hb_ao:get(<<"body">>, CurrentLocation, #{})
+            <<"nonce">> := Nonce
+        } when Nonce > 0,
+        CurrentBody
     ),
+    {ok, RemoteLocation} =
+        hb_http:get(
+            RegisteringNode,
+            <<"/~location@1.0/", Address/binary>>,
+            #{}
+        ),
     ?assertMatch(
         #{
             <<"url">> := <<"https://hyperbeam-test-ignore.com">>,
-            <<"nonce">> := 0
-        },
-        hb_http:get(RegisteringNode, <<"/~location@1.0/", Address/binary>>, #{})
-    ),
-    ok.
+            <<"nonce">> := Nonce
+        } when Nonce > 0,
+        RemoteLocation
+    ).

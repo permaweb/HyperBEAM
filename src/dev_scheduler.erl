@@ -48,7 +48,6 @@ info() ->
     #{
         exports =>
             [
-                <<"location">>,
                 <<"status">>,
                 <<"next">>,
                 <<"schedule">>,

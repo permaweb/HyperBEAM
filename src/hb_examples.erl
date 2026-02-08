@@ -224,8 +224,8 @@ relay_schedule_ans104_test() ->
             #{
                 on => #{
                     <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
+                        <<"device">> => <<"location@1.0">>,
+                        <<"path">> => <<"node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
                         <<"require-codec">> => <<"ans104@1.0">>,
@@ -260,12 +260,12 @@ relay_schedule_ans104_test() ->
     {ok, SchedulerLocation} =
         hb_http:get(
             Scheduler,
-            <<"/~scheduler@1.0/location">>,
+            <<"/~location@1.0/node">>,
             #{}
         ),
     ?event({scheduler_location, SchedulerLocation}),
-    dev_scheduler_cache:write_location(
-        hb_maps:get(<<"body">>, SchedulerLocation, <<"NO BODY">>, #{}),
+    dev_location_cache:write(
+        SchedulerLocation,
         #{ store => [ComputeStore] }
     ),
     % Create the relaying server.
