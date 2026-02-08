@@ -1778,27 +1778,14 @@ resolve_peer(Peer, Opts) ->
 
 %% @doc Resolve a peer address via cached or gateway scheduler-location data.
 resolve_peer_location(Address, Opts) ->
-    case find_peer_location(Address, Opts) of
+    case dev_location:read(Address, Opts) of
         {ok, Location} ->
             case hb_ao:get(<<"url">>, Location, not_found, Opts) of
                 not_found -> false;
                 Url -> resolve_peer(Url, Opts)
             end;
-        not_found ->
+        _ ->
             false
-    end.
-
-find_peer_location(Address, Opts) ->
-    case dev_scheduler_cache:read_location(Address, Opts) of
-        {ok, Location} -> {ok, Location};
-        not_found ->
-            case hb_gateway_client:scheduler_location(Address, Opts) of
-                {ok, Location} ->
-                    dev_scheduler_cache:write_location(Location, Opts),
-                    {ok, Location};
-                {error, _} ->
-                    not_found
-            end
     end.
 
 %% @doc True when a binary is an HTTP or HTTPS URL.
