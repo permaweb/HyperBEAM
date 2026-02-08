@@ -101,16 +101,35 @@ start(ProcID, Proc, Opts) ->
     ).
 
 %% @doc Call the appropriate scheduling server to assign a message.
+%% Returns `{committed, Assignment}' once the message has been committed.
+%% If the first attempt returns `pending', the caller awaits a commitment
+%% notification from the server (driven by the round-advancement timer).
 schedule(AOProcID, Message) when is_binary(AOProcID) ->
     schedule(dev_mysticeti_registry:find(AOProcID), Message);
 schedule(ErlangProcID, Message) ->
     AbortTime = scheduler_time() + ?DEFAULT_TIMEOUT,
     ErlangProcID ! {schedule, Message, self(), AbortTime},
     receive
-        {scheduled, Message, Result} ->
-            Result
+        {scheduled, Message, {committed, _} = Result} ->
+            Result;
+        {scheduled, Message, {pending, MessageId}} ->
+            await_commitment(MessageId, AbortTime)
     after ?DEFAULT_TIMEOUT ->
         throw({mysticeti_scheduler_timeout, {proc_id, ErlangProcID}})
+    end.
+
+%% @doc Wait for a commitment notification from the server.
+await_commitment(MessageId, AbortTime) ->
+    Remaining = AbortTime - scheduler_time(),
+    Timeout = max(0, Remaining),
+    receive
+        {commitment, MessageId, Assignment} ->
+            {committed, Assignment}
+    after Timeout ->
+        {pending, #{
+            <<"message_id">> => MessageId,
+            <<"reason">> => <<"timeout">>
+        }}
     end.
 
 %% @doc Ingest a block from a peer into the server DAG.
@@ -166,12 +185,12 @@ init_state(ProcID, Proc, CurrentSlot, BaseStateHashpath, Opts) ->
         commitment_spec => commitment_spec(Proc, Opts),
         advance_interval => AdvanceInterval,
         advance_timer => undefined,
-        pending_replies => []
+        commitment_subscribers => []
     }.
 
 %% @doc Main server loop.
 server(State0) ->
-    State = expire_pending_replies(State0),
+    State = expire_commitment_subscribers(State0),
     receive
         {schedule, Message, Reply, AbortTime} ->
             case scheduler_time() > AbortTime of
@@ -182,16 +201,15 @@ server(State0) ->
                     server(State);
                 false ->
                     {NextState, Result} = handle_schedule(State, Message),
-                    case Result of
-                        {committed, _} ->
-                            Reply ! {scheduled, Message, Result},
-                            server(maybe_schedule_advance(NextState));
+                    Reply ! {scheduled, Message, Result},
+                    NextState1 = case Result of
+                        {committed, _} -> NextState;
                         {pending, MessageId} ->
-                            NextState1 = add_pending_reply(
-                                NextState, Reply, Message, MessageId, AbortTime
-                            ),
-                            server(maybe_schedule_advance(NextState1))
-                    end
+                            subscribe_commitment(
+                                NextState, Reply, MessageId, AbortTime
+                            )
+                    end,
+                    server(maybe_schedule_advance(NextState1))
             end;
         {block, Block} ->
             server(maybe_schedule_advance(handle_block(State, Block)));
@@ -229,7 +247,7 @@ handle_schedule(State, Message) ->
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
             {State4, _} = drain_pending_blocks(State3),
             {State5, NewAssignments} = try_commit(State4),
-            State6 = fulfill_pending_replies(State5, NewAssignments),
+            State6 = notify_commitment_subscribers(State5, NewAssignments),
             broadcast_blocks(State6, [Block | NewLocalBlocks]),
             Result =
                 case lists:keyfind(MessageId, 1, NewAssignments) of
@@ -275,7 +293,7 @@ handle_block(State, Block) ->
             {State3, NewLocalBlocks} = drain_pending_messages(State2),
             {State4, _} = drain_pending_blocks(State3),
             {State5, NewAssignments} = try_commit(State4),
-            State6 = fulfill_pending_replies(State5, NewAssignments),
+            State6 = notify_commitment_subscribers(State5, NewAssignments),
             broadcast_blocks(State6, NewLocalBlocks),
             State6;
         {error, missing_parents} ->
@@ -585,7 +603,7 @@ handle_advance(State) ->
         true ->
             {State1, AdvanceBlocks} = try_advance_rounds(State),
             {State2, NewAssignments} = try_commit(State1),
-            State3 = fulfill_pending_replies(State2, NewAssignments),
+            State3 = notify_commitment_subscribers(State2, NewAssignments),
             broadcast_blocks(State3, AdvanceBlocks),
             maybe_schedule_advance(State3)
     end.
@@ -610,45 +628,43 @@ cancel_advance_timer(#{ advance_timer := Ref }) when Ref =/= undefined ->
 cancel_advance_timer(_) ->
     ok.
 
-%% @doc Store a caller that is awaiting commitment of a scheduled message.
-add_pending_reply(State, Reply, Message, MessageId, AbortTime) ->
-    Pending = state_get(pending_replies, State, []),
-    State#{ pending_replies :=
-        [{Reply, Message, MessageId, AbortTime} | Pending] }.
+%% @doc Register a caller to be notified when their message is committed.
+subscribe_commitment(State, Pid, MessageId, AbortTime) ->
+    Subs = state_get(commitment_subscribers, State, []),
+    State#{ commitment_subscribers :=
+        [{Pid, MessageId, AbortTime} | Subs] }.
 
-%% @doc Reply to callers whose messages appear in the new assignments.
-fulfill_pending_replies(State, []) ->
+%% @doc Notify subscribers whose messages appear in the new assignments.
+notify_commitment_subscribers(State, []) ->
     State;
-fulfill_pending_replies(State, NewAssignments) ->
-    Pending = state_get(pending_replies, State, []),
-    {Fulfilled, Remaining} = lists:partition(
-        fun({_Reply, _Message, MsgId, _AbortTime}) ->
+notify_commitment_subscribers(State, NewAssignments) ->
+    Subs = state_get(commitment_subscribers, State, []),
+    {Matched, Remaining} = lists:partition(
+        fun({_Pid, MsgId, _AbortTime}) ->
             lists:keymember(MsgId, 1, NewAssignments)
         end,
-        Pending
+        Subs
     ),
     lists:foreach(
-        fun({Reply, Message, MsgId, _AbortTime}) ->
+        fun({Pid, MsgId, _AbortTime}) ->
             {MsgId, Assignment} = lists:keyfind(MsgId, 1, NewAssignments),
-            Reply ! {scheduled, Message, {committed, Assignment}}
+            Pid ! {commitment, MsgId, Assignment}
         end,
-        Fulfilled
+        Matched
     ),
-    State#{ pending_replies := Remaining }.
+    State#{ commitment_subscribers := Remaining }.
 
-%% @doc Drop replies whose abort time has passed (caller already timed out).
-expire_pending_replies(State) ->
-    case state_get(pending_replies, State, []) of
+%% @doc Drop subscribers whose abort time has passed.
+expire_commitment_subscribers(State) ->
+    case state_get(commitment_subscribers, State, []) of
         [] -> State;
-        Pending ->
+        Subs ->
             Now = scheduler_time(),
             Active = lists:filter(
-                fun({_Reply, _Message, _MsgId, AbortTime}) ->
-                    Now =< AbortTime
-                end,
-                Pending
+                fun({_Pid, _MsgId, AbortTime}) -> Now =< AbortTime end,
+                Subs
             ),
-            State#{ pending_replies := Active }
+            State#{ commitment_subscribers := Active }
     end.
 
 %% @doc True when there are callers awaiting commitment or queued messages
@@ -656,7 +672,7 @@ expire_pending_replies(State) ->
 %% max_round > last_decided_round, as that creates a feedback loop where
 %% advance blocks push max_round forward indefinitely.
 has_undecided_work(State) ->
-    state_get(pending_replies, State, []) =/= []
+    state_get(commitment_subscribers, State, []) =/= []
         orelse state_get(pending_msgs, State, []) =/= [].
 
 %% @doc Create empty blocks to advance rounds toward decision.
