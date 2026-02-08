@@ -129,7 +129,7 @@ location(Address, Opts) ->
         <<"query($Addresses: [String!]!) { ",
                 "transactions(",
                 "owners: $Addresses, ",
-                "tags: { name: \"Type\" values: [\"Location\", Scheduler-Location\"] }, ",
+                "tags: { name: \"Type\" values: [\"Location\", \"Scheduler-Location\"] }, ",
                 "first: 1",
             "){ ",
                 "edges { ",
