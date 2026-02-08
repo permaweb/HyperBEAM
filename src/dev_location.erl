@@ -2,6 +2,20 @@
 %%% This device allows nodes to specify the physical location (resolved through
 %%% DNS and IP addresses) that their cryptographic addresses will be found at
 %%% for a period of time.
+%%% 
+%%% The interface is as follows:
+%%% 
+%%% `GET /~location@1.0/<address>': Read a location record from the cache or
+%%%                                 gateway. If the record is retreived from a
+%%%                                 gateway it will be cached locally.
+%%% `GET /~location@1.0/node':      Generate a new location record and register it.
+%%%                                 If signed by the operator, the record can
+%%%                                 be generated for a specific nonce. Otherwise,
+%%%                                 the record will be generated with a new nonce
+%%%                                 chosen by the node.
+%%% `POST /~location@1.0/known':    Cache a location record for a foreign peer
+%%%                                 if the record is valid and newer than the
+%%%                                 known nonce for the signer.
 -module(dev_location).
 -export([info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
@@ -62,7 +76,6 @@ latest_known_nonce(Address, Opts) ->
         {ok, Location} -> hb_maps:get(<<"nonce">>, Location, -1, Opts);
         _ -> -1
     end.
-
 
 %% @doc Find the target to be used for during a request.
 find_target(Base, RawReq, Opts) ->
@@ -251,12 +264,13 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     Results =
         lists:map(
             fun(Node) ->
-                PostRes = hb_http:post(
-                    Node,
-                    <<"/~location@1.0/known">>,
-                    Signed,
-                    Opts
-                ),
+                PostRes =
+                    hb_http:post(
+                        Node,
+                        <<"/~location@1.0/known">>,
+                        Signed,
+                        Opts
+                    ),
                 ?event(scheduler_location,
                     {outbound_request, {res, PostRes}}
                 )
