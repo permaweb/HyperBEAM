@@ -18,7 +18,7 @@
 %%% AO-Core API functions:
 -export([info/0]).
 %%% Local scheduling functions:
--export([schedule/3, router/4, location/3]).
+-export([schedule/3, router/4]).
 %%% CU-flow functions:
 -export([slot/3, status/3, next/3]).
 -export([start/0, checkpoint/1]).
@@ -360,201 +360,6 @@ status(_M1, _M2, _Opts) ->
         }
     }.
 
-%% @doc Router for `record' requests. Expects either a `POST' or `GET' request.
-location(Base, Req, Opts) ->
-    case hb_ao:get(<<"method">>, Req, <<"GET">>, Opts) of
-        <<"POST">> -> post_location(Base, Req, Opts);
-        <<"GET">> -> get_location(Base, Req, Opts)
-    end.
-
-%% @doc Search for the location of the scheduler in the scheduler-location
-%% cache. If an address is provided, we search for the location of that
-%% specific scheduler. Otherwise, we return the location record for the current
-%% node's scheduler, if it has been established.
-get_location(_Base, Req, Opts) ->
-    % Get the address of the scheduler from the request.
-    Address =
-        hb_ao:get(
-            <<"address">>,
-            Req,
-            hb_util:human_id(ar_wallet:to_address(
-                hb_opts:get(priv_wallet, hb:wallet(), Opts)
-            )),
-            Opts
-        ),
-    % Search for the location of the scheduler in the scheduler-location cache.
-    case dev_scheduler_cache:read_location(Address, Opts) of
-        not_found ->
-            {ok,
-                #{
-                    <<"status">> => 404,
-                    <<"body">> =>
-                        <<"No location found for address: ", Address/binary>>
-                }
-            };
-        {ok, Location} -> {ok, #{ <<"body">> => Location }}
-    end.
-
-%% @doc Generate a new scheduler location record and register it. We both send 
-%% the new scheduler-location to the given registry, and return it to the caller.
-post_location(Base, RawReq, RawOpts) ->
-    Opts =
-        case dev_whois:ensure_host(RawOpts) of
-            {ok, NewOpts} -> NewOpts;
-            _ -> RawOpts
-        end,
-    % Ensure that the request is signed by the operator.
-    Req =
-        case hb_ao:get_first(
-            [{Base, <<"target">>}, {RawReq, <<"target">>}],
-            not_found,
-            Opts
-        ) of
-            not_found -> RawReq;
-            <<"self">> -> Base;
-            <<"request">> -> RawReq;
-            Target -> hb_ao:get(Target, RawReq, not_found, Opts)
-        end,
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
-    ?event(scheduler_location,
-        {scheduler_location_registration_request, OnlyCommitted}
-    ),
-    % Gather metadata for request validation.
-    Signers = hb_message:signers(OnlyCommitted, Opts),
-    Self =
-        hb_util:human_id(
-            ar_wallet:to_address(
-                hb_opts:get(priv_wallet, hb:wallet(), Opts)
-            )
-        ),
-    ExistingNonce = 
-        case hb_gateway_client:scheduler_location(Self, Opts) of
-            {ok, SchedulerLocation} ->
-                hb_ao:get(<<"nonce">>, SchedulerLocation, 0, Opts);
-            {error, _} -> -1
-        end,
-    NewNonce = hb_ao:get(<<"nonce">>, OnlyCommitted, ExistingNonce + 1, Opts),
-    case {NewNonce > ExistingNonce, lists:member(Self, Signers)} of
-        {false, _} ->
-            % Invalid request: Known nonce is already higher than requested nonce
-            % for the given operator.
-            {ok,
-                #{
-                    <<"status">> => 400,
-                    <<"body">> => <<"Known nonce higher than requested nonce.">>,
-                    <<"requested-nonce">> => NewNonce,
-                    <<"existing-nonce">> => ExistingNonce,
-                    <<"signers">> => Signers
-                }
-            };
-        {true, false} ->
-            % Received request to store a new scheduler location from a peer
-            % that is not the operator.
-            case dev_scheduler_cache:write_location(OnlyCommitted, Opts) of
-                ok ->
-                    ?event(scheduler_location,
-                        {cached_foreign_peer_location, OnlyCommitted}
-                    ),
-                    {ok, OnlyCommitted};
-                {error, Reason} ->
-                    {error,
-                        #{
-                            <<"status">> => 400,
-                            <<"body">> =>
-                                <<"Failed to store new scheduler location.">>,
-                            <<"reason">> => Reason
-                        }
-                    }
-            end;
-        {true, true} ->
-            % The operator has asked to replace the scheduler location. Get the
-            % details and register the new location. Registration occurs in the
-            % following steps:
-            % 1. Generate a new scheduler location message.
-            % 2. Sign the message.
-            % 3. Upload the message to Arweave.
-            % 4. Post the message to the peers specified in the
-            %    `scheduler_location_notify_peers' option.
-            TimeToLive =
-                hb_ao:get_first(
-                    [
-                        {Base, <<"time-to-live">>},
-                        {OnlyCommitted, <<"time-to-live">>}
-                    ],
-                    hb_opts:get(scheduler_location_ttl, 1000 * 60 * 60, Opts),
-                    Opts
-                ),
-            URL =
-                case hb_ao:get(<<"url">>, OnlyCommitted, Opts) of
-                    not_found ->
-                        Port = hb_util:bin(hb_opts:get(port, 8734, Opts)),
-                        Host = hb_opts:get(host, <<"localhost">>, Opts),
-                        Protocol = hb_opts:get(protocol, http1, Opts),
-                        ProtoStr =
-                            case Protocol of
-                                http1 -> <<"http">>;
-                                _ -> <<"https">>
-                            end,
-                        <<ProtoStr/binary, "://", Host/binary, ":", Port/binary>>;
-                    GivenURL -> GivenURL
-                end,
-            % Construct the new scheduler location message.
-            Codec =
-                hb_ao:get_first(
-                    [
-                        {Base, <<"require-codec">>},
-                        {OnlyCommitted, <<"require-codec">>}
-                    ],
-                    <<"httpsig@1.0">>,
-                    Opts
-                ),
-            NewSchedulerLocation =
-                #{
-                    <<"data-protocol">> => <<"ao">>,
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"type">> => <<"scheduler-location">>,
-                    <<"url">> => URL,
-                    <<"nonce">> => NewNonce,
-                    <<"time-to-live">> => TimeToLive,
-                    <<"codec-device">> => Codec
-                },
-            Signed = hb_message:commit(NewSchedulerLocation, Opts, Codec),
-            dev_scheduler_cache:write_location(Signed, Opts),
-            ?event(scheduler_location,
-                {uploading_signed_scheduler_location, Signed}
-            ),
-            % Asynchronously upload the location record to Arweave.
-            spawn(
-                fun() ->
-                    hb_client:upload(Signed, Opts)
-                end
-            ),
-            % Post the new scheduler location to the peers specified in the
-            % `scheduler_location_notify_peers' option.
-            Results =
-                lists:map(
-                    fun(Node) ->
-                        PostRes = hb_http:post(
-                            Node,
-                            <<"/~scheduler@1.0/record">>,
-                            Signed,
-                            Opts
-                        ),
-                        ?event(scheduler_location,
-                            {outbound_request, {res, PostRes}}
-                        )
-                    end,
-                    hb_opts:get(scheduler_location_notify_peers, [], Opts)
-                ),
-            ?event(scheduler_location,
-                {scheduler_location_registration_success,
-                    {arweave_publication, async_upload_initiated},
-                    {foreign_peers_notified, length(Results)}
-                }
-            ),
-            {ok, Signed}
-    end.
-
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
 schedule(Base, Req, Opts) ->
@@ -893,36 +698,14 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             % We have a hint. Construct a redirect message.
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
-            case dev_scheduler_cache:read_location(Scheduler, Opts) of
+            case dev_location:read(Scheduler, Opts) of
                 {ok, SchedMsg} ->
                     % We have a cached scheduler location. Use it to construct a
                     % redirect message.
                     generate_redirect(ProcID, SchedMsg, Opts);
-                not_found ->
-                    % We have not yet cached the location for this address.
-                    % Find it via the gateway.
-                    case hb_gateway_client:scheduler_location(Scheduler, Opts) of
-                        {ok, SchedMsg} ->
-                            % We have found the location. Cache it and use it to
-                            % construct a redirect message.
-                            Res =
-                                dev_scheduler_cache:write_location(
-                                    SchedMsg,
-                                    Opts
-                                ),
-                            ?event(scheduler_location,
-                                {cached_scheduler_location, {res, Res}}
-                            ),
-                            generate_redirect(ProcID, SchedMsg, Opts);
-                        {error, Res} ->
-                            ?event(
-                                scheduler_location,
-                                {failed_to_find_scheduler_location_from_gateway,
-                                    {error, Res}
-                                }
-                            ),
-                            {error, Res}
-                    end
+                {error, Error} ->
+                    ?event({failed_to_find_scheduler_location, {error, Error}}),
+                    {error, Error}
             end
     end.
 
@@ -1695,62 +1478,6 @@ register_new_process_test() ->
         )
     ).
 
-%% @doc Test that a scheduler location is registered on boot.
-register_location_on_boot_test() ->
-    NotifiedPeerWallet = ar_wallet:new(),
-    RegisteringNodeWallet = ar_wallet:new(),
-    start(),
-    NotifiedPeer =
-        hb_http_server:start_node(#{
-            priv_wallet => NotifiedPeerWallet,
-            store => [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/scheduler-location-notified">>
-                }
-            ]
-        }),
-    RegisteringNode = hb_http_server:start_node(
-        #{
-            priv_wallet => RegisteringNodeWallet,
-            on =>
-                #{
-                    <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
-                        <<"method">> => <<"POST">>,
-                        <<"target">> => <<"self">>,
-                        <<"require-codec">> => <<"ans104@1.0">>,
-                        <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
-                        <<"hook">> => #{
-                            <<"result">> => <<"ignore">>,
-                            <<"commit-request">> => true
-                        }
-                    }
-                },
-            scheduler_location_notify_peers => [NotifiedPeer]
-        }
-    ),
-    {ok, CurrentLocation} =
-        hb_http:get(
-            RegisteringNode,
-            #{
-                <<"method">> => <<"GET">>,
-                <<"path">> => <<"/~scheduler@1.0/location">>,
-                <<"address">> =>
-                    hb_util:human_id(ar_wallet:to_address(RegisteringNodeWallet))
-            },
-            #{}
-        ),
-    ?event({current_location, CurrentLocation}),
-    ?assertMatch(
-        #{
-            <<"url">> := <<"https://hyperbeam-test-ignore.com">>,
-            <<"nonce">> := 0
-        },
-        hb_ao:get(<<"body">>, CurrentLocation, #{})
-    ).
-
 schedule_message_and_get_slot_test() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
@@ -1888,19 +1615,6 @@ http_init(Opts) ->
 	},
     Node = hb_http_server:start_node(ExtendedOpts),
     {Node, ExtendedOpts}.
-
-register_scheduler_test() ->
-    start(),
-    {Node, Opts} = http_init(),
-    Base = hb_message:commit(#{
-        <<"path">> => <<"/~scheduler@1.0/location">>,
-        <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
-        <<"method">> => <<"POST">>,
-        <<"nonce">> => 1,
-        <<"require-codec">> => <<"ans104@1.0">>
-    }, Opts),
-    {ok, Res} = hb_http:post(Node, Base, Opts),
-    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
 
 http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
     Base = hb_message:commit(#{
