@@ -192,16 +192,23 @@ node(Base, RawReq, RawOpts) ->
     end.
 
 %% @doc Generate the default location record URL from the node's configuration.
+%% If a custom URL is provided in the `location_url' option, we will use that,
+%% otherwise we will construct the URL from the node's configuration (host, port,
+%% and protocol).
 default_url(Opts) ->
-    Port = hb_util:bin(hb_opts:get(port, 8734, Opts)),
-    Host = hb_opts:get(host, <<"localhost">>, Opts),
-    Protocol = hb_opts:get(protocol, http1, Opts),
-    ProtoStr =
-        case Protocol of
-            http1 -> <<"http">>;
-            _ -> <<"https">>
-        end,
-    <<ProtoStr/binary, "://", Host/binary, ":", Port/binary>>.
+    case hb_opts:get(location_url, not_found, Opts) of
+        not_found ->
+            Port = hb_util:bin(hb_opts:get(port, 8734, Opts)),
+            Host = hb_opts:get(host, <<"localhost">>, Opts),
+            Protocol = hb_opts:get(protocol, http1, Opts),
+            ProtoStr =
+                case Protocol of
+                    http1 -> <<"http">>;
+                    _ -> <<"https">>
+                end,
+            <<ProtoStr/binary, "://", Host/binary, ":", Port/binary>>;
+        GivenURL -> GivenURL
+    end.
 
 %% @doc We have been asked to generate a new location record, given the nonce,
 %% TTL, and codec. We will generate the record, sign it, store it in the cache,
