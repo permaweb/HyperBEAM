@@ -476,14 +476,21 @@ reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     StartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
-    {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
-    {Status, HeadersBeforeCors, EncodedBody} =
-        encode_reply_filter_bundles(
-            RawStatus,
-            TABMReq,
-            Message,
-            Opts
-        ),
+    case is_bundle_reply(TABMReq, KeyNormMessage) of
+        true ->
+            ?event(http, {bundle_404_early, {path, hb_maps:get(<<"path">>, TABMReq, <<>>, Opts)}}),
+            {Status, HeadersBeforeCors, EncodedBody} = {404, #{}, <<>>},
+            Req = InitReq;
+        false ->
+            {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
+            {Status, HeadersBeforeCors, EncodedBody} =
+                encode_reply(
+                    RawStatus,
+                    TABMReq,
+                    Message,
+                    Opts
+                )
+    end,
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
@@ -597,19 +604,18 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
     % included, due to `hb_maps:merge''s precidence order.
     hb_maps:merge(WithAllowHeaders, Msg, Opts).
 
-encode_reply_filter_bundles(Status, TABMReq, Message, Opts) ->
-    case TABMReq of
-        #{<<"path">> := <<"/", TXID/binary>>} ->
-            case maps:get(TXID, maps:get(<<"commitments">>, Message, #{}), not_found) of 
-                #{<<"bundle">> := <<"true">>} ->
-                    ?event(http, {bundle_404, {txid, TXID}}),
-                    {404, #{}, <<>>};
-                _ ->
-                    encode_reply(Status, TABMReq, Message, Opts)
+is_bundle_reply(#{<<"path">> := <<"/", TXID/binary>>}, Message) ->
+    case maps:get(<<"commitments">>, Message, #{}) of
+        Commitments when is_map(Commitments) ->
+            case maps:get(TXID, Commitments, not_found) of
+                #{<<"bundle">> := <<"true">>} -> true;
+                _ -> false
             end;
         _ ->
-            encode_reply(Status, TABMReq, Message, Opts)
-    end.
+            false
+    end;
+is_bundle_reply(_, _) ->
+    false.
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
