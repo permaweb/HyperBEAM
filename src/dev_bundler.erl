@@ -226,7 +226,8 @@ unsigned_dataitem_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store(hb_store_lmdb),
+            debug_print => false
         }),
         Item = #tx{
                 data = <<"testdata">>,
