@@ -301,7 +301,7 @@ extract_nonce_limiter_info(PrevBlock) ->
 get_any(_Map, [], Default) ->
     Default;
 get_any(Map, [Key | Rest], Default) ->
-    case maps:find(Key, Map) of
+    case hb_maps:find(Key, Map, #{}) of
         {ok, Value} -> Value;
         error -> get_any(Map, Rest, Default)
     end.

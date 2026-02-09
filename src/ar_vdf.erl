@@ -413,3 +413,82 @@ vdf_reset_verify_test() ->
         )
     ),
     ok.
+
+vdf_reset_second_step_verify_test() ->
+    StartStepNumber1 = 2,
+    StartStepNumber2 = 3,
+    StartSalt1 = step_number_to_salt_number(StartStepNumber1 - 1),
+    StartSalt2 = step_number_to_salt_number(StartStepNumber2 - 1),
+    PrevOutput = hb_util:decode(?ENCODED_PREV_OUTPUT),
+    ResetSeed = hb_util:decode(?RESET_SEED),
+    ResetSalt = StartSalt2,
+    {ok, Output1, Checkpoints1} =
+        compute2(StartStepNumber1, PrevOutput, ?TEST_VDF_DIFFICULTY),
+    Mixed = crypto:hash(sha256, <<Output1/binary, ResetSeed/binary>>),
+    {ok, _Output2, Checkpoints2} =
+        compute2(StartStepNumber2, Mixed, ?TEST_VDF_DIFFICULTY),
+    ?assertEqual(
+        {true, iolist_to_binary(lists:reverse(Checkpoints2))},
+        verify(
+            StartSalt2,
+            Output1,
+            1,
+            lists:reverse(Checkpoints2),
+            ResetSalt,
+            ResetSeed,
+            1,
+            ?TEST_VDF_DIFFICULTY
+        )
+    ),
+    Hashes = lists:reverse(Checkpoints1) ++ lists:reverse(Checkpoints2),
+    ?assertEqual(
+        {true, iolist_to_binary(Hashes)},
+        verify(
+            StartSalt1,
+            PrevOutput,
+            1,
+            Hashes,
+            ResetSalt,
+            ResetSeed,
+            1,
+            ?TEST_VDF_DIFFICULTY
+        )
+    ).
+
+vdf_corruption_edges_test() ->
+    StartStepNumber1 = 2,
+    StartSalt1 = step_number_to_salt_number(StartStepNumber1 - 1),
+    PrevOutput = hb_util:decode(?ENCODED_PREV_OUTPUT),
+    ResetSeed = hb_util:decode(?RESET_SEED),
+    {ok, _Output1, Checkpoints1} =
+        compute2(StartStepNumber1, PrevOutput, ?TEST_VDF_DIFFICULTY),
+    Hashes = lists:reverse(Checkpoints1),
+    Buffer = iolist_to_binary(Hashes),
+    Corrupt0 = checkpoint_buffer_to_checkpoints(break_byte(Buffer, 0)),
+    CorruptLast = checkpoint_buffer_to_checkpoints(break_byte(Buffer, byte_size(Buffer) - 1)),
+    ?assertEqual(
+        false,
+        verify(
+            StartSalt1,
+            PrevOutput,
+            1,
+            Corrupt0,
+            -1,
+            ResetSeed,
+            1,
+            ?TEST_VDF_DIFFICULTY
+        )
+    ),
+    ?assertEqual(
+        false,
+        verify(
+            StartSalt1,
+            PrevOutput,
+            1,
+            CorruptLast,
+            -1,
+            ResetSeed,
+            1,
+            ?TEST_VDF_DIFFICULTY
+        )
+    ).

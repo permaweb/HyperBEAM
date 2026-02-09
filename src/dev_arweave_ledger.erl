@@ -306,6 +306,8 @@ validate_tx_with_state(State, TXInput, Opts) ->
                 false ->
                     {error, invalid_tx};
                 true ->
+                    Quantity = TX#tx.quantity,
+                    Reward = TX#tx.reward,
                     SenderRaw = ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type),
                     Sender = addr_key(SenderRaw),
                     Recipient =
@@ -313,27 +315,38 @@ validate_tx_with_state(State, TXInput, Opts) ->
                             <<>> -> <<>>;
                             Target -> addr_key(Target)
                         end,
-                    Spend = TX#tx.quantity + TX#tx.reward,
+                    Spend = Quantity + Reward,
                     SenderBalance = get_balance(State, Sender, Opts),
-                    case SenderBalance >= Spend of
-                        false ->
-                            {error, insufficient_balance};
+                    TXIDRaw = tx_id_raw(TX),
+                    TXID = hb_util:encode(TXIDRaw),
+                    case Quantity < 0 orelse Reward < 0 of
                         true ->
-                            TXIDRaw = tx_id_raw(TX),
-                            {
-                                ok,
-                                #{
-                                    <<"valid">> => true,
-                                    <<"sender">> => Sender,
-                                    <<"recipient">> => Recipient,
-                                    <<"quantity">> => TX#tx.quantity,
-                                    <<"reward">> => TX#tx.reward,
-                                    <<"spend">> => Spend,
-                                    <<"tx-id">> => hb_util:encode(TXIDRaw),
-                                    <<"tx-id-raw">> => TXIDRaw,
-                                    <<"tx-record">> => TX
-                                }
-                            }
+                            {error, invalid_tx_amounts};
+                        false ->
+                            case history_has_tx(State, TXID, Opts) of
+                                true ->
+                                    {error, tx_already_seen};
+                                false ->
+                                    case SenderBalance >= Spend of
+                                        false ->
+                                            {error, insufficient_balance};
+                                        true ->
+                                            {
+                                                ok,
+                                                #{
+                                                    <<"valid">> => true,
+                                                    <<"sender">> => Sender,
+                                                    <<"recipient">> => Recipient,
+                                                    <<"quantity">> => Quantity,
+                                                    <<"reward">> => Reward,
+                                                    <<"spend">> => Spend,
+                                                    <<"tx-id">> => TXID,
+                                                    <<"tx-id-raw">> => TXIDRaw,
+                                                    <<"tx-record">> => TX
+                                                }
+                                            }
+                                    end
+                            end
                     end
             end
     end.
@@ -486,6 +499,9 @@ update_balance(Address, Delta, Balances, Opts) ->
     Existing = hb_maps:get(Address, Balances, 0, Opts),
     hb_maps:put(Address, Existing + Delta, Balances, Opts).
 
+history_has_tx(State, TXID, Opts) ->
+    lists:member(TXID, hb_maps:get(<<"tx-history">>, State, [], Opts)).
+
 addr_key(Address) when is_binary(Address), byte_size(Address) == 32 ->
     hb_util:encode(Address);
 addr_key(Address) when is_binary(Address) ->
@@ -588,3 +604,26 @@ reject_invalid_tx_root_test() ->
     BrokenBlock = Block#{<<"tx-root">> => hb_util:encode(crypto:strong_rand_bytes(32))},
     {ok, Validation} = validate_block(State0, #{<<"block">> => BrokenBlock}, #{}),
     ?assertEqual(false, hb_maps:get(<<"valid">>, Validation, true, #{})).
+
+reject_replay_tx_test() ->
+    {SenderWallet, _Recipient, SignedTX} = test_signed_tx(5, 1),
+    State0 = base_state(SenderWallet, 100),
+    TXMsg = hb_message:convert(SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    {ok, State1} = apply_tx(State0, #{<<"tx">> => TXMsg}, #{}),
+    {ok, Validation} = validate_tx(State1, #{<<"tx">> => TXMsg}, #{}),
+    ?assertEqual(false, hb_maps:get(<<"valid">>, Validation, true, #{})),
+    ?assertEqual(<<"tx_already_seen">>, hb_maps:get(<<"error">>, Validation, <<>>, #{})).
+
+reject_duplicate_tx_in_block_test() ->
+    {SenderWallet, _Recipient, SignedTX} = test_signed_tx(5, 1),
+    State0 = base_state(SenderWallet, 100),
+    TXMsg = hb_message:convert(SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    {error, tx_already_seen} =
+        generate_block(
+            State0,
+            #{
+                <<"txs">> => [TXMsg, TXMsg],
+                <<"timestamp">> => 1000
+            },
+            #{}
+        ).

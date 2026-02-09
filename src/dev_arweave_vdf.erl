@@ -2,11 +2,13 @@
 -module(dev_arweave_vdf).
 
 -export([info/1, info/3, default/4]).
--export([compute/3, verify/3, step_salt/3, checkpoints/3]).
+-export([compute/3, verify/3, step_salt/3, checkpoints/3, session/3, previous_session/3, update/3]).
 
 -include("include/hb.hrl").
 -include("include/ar_vdf.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(VDF_PREFIX, <<"~arweave-vdf@2.9.5">>).
 
 info(_Opts) ->
     #{
@@ -23,7 +25,10 @@ info(_Base, _Req, _Opts) ->
                     <<"compute">>,
                     <<"verify">>,
                     <<"step-salt">>,
-                    <<"checkpoints">>
+                    <<"checkpoints">>,
+                    <<"session">>,
+                    <<"previous-session">>,
+                    <<"update">>
                 ]
         }
     }.
@@ -40,6 +45,14 @@ default(<<"step-salt">>, Base, Req, Opts) ->
     step_salt(Base, Req, Opts);
 default(<<"checkpoints">>, Base, Req, Opts) ->
     checkpoints(Base, Req, Opts);
+default(<<"session">>, Base, Req, Opts) ->
+    session(Base, Req, Opts);
+default(<<"previous-session">>, Base, Req, Opts) ->
+    previous_session(Base, Req, Opts);
+default(<<"previous_session">>, Base, Req, Opts) ->
+    previous_session(Base, Req, Opts);
+default(<<"update">>, Base, Req, Opts) ->
+    update(Base, Req, Opts);
 default(_, Base, Req, Opts) ->
     compute(Base, Req, Opts).
 
@@ -62,15 +75,16 @@ compute(Base, Req, Opts) ->
             Opts
         ),
     {ok, Output, Checkpoints} = ar_vdf:compute2(StepNumber, PrevOutput, IterationCount),
-    {
-        ok,
+    Result =
         #{
             <<"step-number">> => StepNumber,
             <<"iteration-count">> => IterationCount,
             <<"output">> => hb_util:encode(Output),
-            <<"checkpoints">> => lists:map(fun hb_util:encode/1, Checkpoints)
-        }
-    }.
+            <<"checkpoints">> => lists:map(fun hb_util:encode/1, Checkpoints),
+            <<"updated-at">> => os:system_time(second)
+        },
+    maybe_persist_session(Result, Base, Req, Opts),
+    {ok, Result}.
 
 verify(Base, Req, Opts) ->
     PrevOutput =
@@ -173,6 +187,81 @@ checkpoints(Base, Req, Opts) ->
         )
     }.
 
+session(_Base, _Req, Opts) ->
+    read_state(session_path(Opts), Opts).
+
+previous_session(_Base, _Req, Opts) ->
+    read_state(previous_session_path(Opts), Opts).
+
+update(Base, Req, Opts) ->
+    case hb_maps:get(<<"method">>, Req, <<"GET">>, Opts) of
+        <<"POST">> -> compute(Base, Req, Opts);
+        _ -> session(Base, Req, Opts)
+    end.
+
+read_state(Path, Opts) ->
+    case Path of
+        undefined ->
+            {error, not_found};
+        _ ->
+            case hb_cache:read(Path, Opts) of
+                {ok, Session} -> {ok, hb_cache:ensure_all_loaded(Session, Opts)};
+                _ -> {error, not_found}
+            end
+    end.
+
+maybe_persist_session(Result, Base, Req, Opts) ->
+    Persist = read_any([<<"persist-session">>], Base, Req, true, Opts),
+    case Persist of
+        false ->
+            ok;
+        <<"false">> ->
+            ok;
+        _ ->
+            case session_path(Opts) of
+                undefined ->
+                    ok;
+                SessionPath ->
+                    case hb_cache:read(SessionPath, Opts) of
+                        {ok, CurrentSession} ->
+                            ok = write_state(previous_session_path(Opts), CurrentSession, Opts);
+                        _ ->
+                            ok
+                    end,
+                    ok = write_state(SessionPath, Result, Opts)
+            end
+    end.
+
+write_state(Path, Value, Opts) ->
+    case Path of
+        undefined ->
+            ok;
+        _ ->
+            {ok, ID} = hb_cache:write(Value, Opts),
+            ok = hb_cache:link(ID, Path, Opts),
+            ok
+    end.
+
+session_path(Opts) ->
+    case hb_opts:get(store, no_viable_store, Opts) of
+        no_viable_store ->
+            undefined;
+        not_found ->
+            undefined;
+        Store ->
+            hb_store:path(Store, [?VDF_PREFIX, <<"state">>, <<"session">>])
+    end.
+
+previous_session_path(Opts) ->
+    case hb_opts:get(store, no_viable_store, Opts) of
+        no_viable_store ->
+            undefined;
+        not_found ->
+            undefined;
+        Store ->
+            hb_store:path(Store, [?VDF_PREFIX, <<"state">>, <<"previous-session">>])
+    end.
+
 read_hashes(Base, Req, Opts) ->
     Raw = read_any([<<"hashes">>, <<"checkpoints">>], Base, Req, [], Opts),
     lists:map(fun maybe_decode_binary/1, Raw).
@@ -254,3 +343,31 @@ checkpoint_decode_test() ->
             #{}
         ),
     ?assert(length(Checkpoints) > 0).
+
+session_persistence_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
+    {ok, _} =
+        compute(
+            #{},
+            #{
+                <<"step-number">> => 2,
+                <<"prev-output">> => hb_util:encode(PrevOutput),
+                <<"iteration-count">> => 2
+            },
+            Opts
+        ),
+    {ok, Session1} = session(#{}, #{}, Opts),
+    ?assertEqual(2, hb_maps:get(<<"step-number">>, Session1, 0, #{})),
+    {ok, _} =
+        compute(
+            #{},
+            #{
+                <<"step-number">> => 3,
+                <<"prev-output">> => hb_maps:get(<<"output">>, Session1, <<>>, #{}),
+                <<"iteration-count">> => 2
+            },
+            Opts
+        ),
+    {ok, Prev} = previous_session(#{}, #{}, Opts),
+    ?assertEqual(2, hb_maps:get(<<"step-number">>, Prev, 0, #{})).

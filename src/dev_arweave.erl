@@ -63,10 +63,26 @@ default(<<"spora">>, Base, Req, Opts) ->
     spora(Base, Req, Opts);
 default(<<"vdf">>, Base, Req, Opts) ->
     vdf(Base, Req, Opts);
+default(<<"vdf2">>, Base, Req, Opts) ->
+    vdf(Base, Req, Opts);
+default(<<"vdf3">>, Base, Req, Opts) ->
+    vdf(Base, Req, Opts);
+default(<<"vdf4">>, Base, Req, Opts) ->
+    vdf(Base, Req, Opts);
+default(<<"nonce-limiter">>, Base, Req, Opts) ->
+    spora(Base, Req, Opts);
+default(<<"nonce_limiter">>, Base, Req, Opts) ->
+    spora(Base, Req, Opts);
 default(<<"ledger">>, Base, Req, Opts) ->
     ledger(Base, Req, Opts);
 default(<<"gossip">>, Base, Req, Opts) ->
     gossip(Base, Req, Opts);
+default(<<"peers">>, Base, Req, Opts) ->
+    gossip(Base, Req#{<<"action">> => <<"peers">>}, Opts);
+default(<<"peer">>, Base, Req, Opts) ->
+    gossip(Base, Req#{<<"action">> => <<"peer">>}, Opts);
+default(<<"block_announcement">>, Base, Req, Opts) ->
+    gossip(Base, Req#{<<"action">> => <<"block">>}, Opts);
 default(Key, _Base, Req, Opts) ->
     Method = hb_maps:get(<<"method">>, Req, <<"GET">>, Opts),
     KeyBin = hb_util:bin(Key),
@@ -82,7 +98,17 @@ status(_Base, _Request, Opts) ->
 tx(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_tx(Base, Request, Opts);
-        <<"GET">> -> get_tx(Base, Request, Opts)
+        <<"GET">> ->
+            case subkey(Request, <<>>, Opts) of
+                <<"pending">> ->
+                    gossip(Base, Request#{<<"action">> => <<"tx/pending">>}, Opts);
+                <<"ready_for_mining">> ->
+                    gossip(Base, Request#{<<"action">> => <<"tx/ready_for_mining">>}, Opts);
+                <<>> ->
+                    get_tx(Base, Request, Opts);
+                _ ->
+                    get_tx(Base, Request, Opts)
+            end
     end.
 
 %% @doc Upload either an ans104 or an L1 transaction to Arweave.

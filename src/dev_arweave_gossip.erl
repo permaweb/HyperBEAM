@@ -8,6 +8,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(GOSSIP_PREFIX, <<"~arweave-gossip@2.9.5">>).
+-define(TX_GOSSIP_PATH, <<"/~arweave-gossip@2.9.5/tx">>).
+-define(BLOCK_GOSSIP_PATH, <<"/~arweave-gossip@2.9.5/block">>).
 
 info(_Opts) ->
     #{
@@ -40,6 +42,8 @@ default(<<"block">>, Base, Req, Opts) ->
     block(Base, Req, Opts);
 default(<<"peers">>, Base, Req, Opts) ->
     peers(Base, Req, Opts);
+default(<<"peer">>, Base, Req, Opts) ->
+    peers(Base, Req, Opts);
 default(<<"gossip-tx">>, Base, Req, Opts) ->
     gossip_tx(Base, Req, Opts);
 default(<<"gossip-block">>, Base, Req, Opts) ->
@@ -51,11 +55,21 @@ tx(Base, Req, Opts) ->
     case method(Base, Req, Opts) of
         <<"POST">> ->
             TX = read_any([<<"tx">>], Base, Req, Req, Opts),
-            Type = <<"tx">>,
-            {ok, Stored} = store_item(Type, TX, Opts),
+            {ok, Stored} = store_item(<<"tx">>, TX, Opts),
             {ok, Stored};
+        <<"GET">> ->
+            case resource_suffix(<<"tx">>, Base, Req, Opts) of
+                <<"pending">> ->
+                    {ok, #{<<"txids">> => pending_ids(<<"tx">>, Opts)}};
+                <<"ready_for_mining">> ->
+                    {ok, #{<<"txids">> => pending_ids(<<"tx">>, Opts)}};
+                <<>> ->
+                    {ok, list_items(<<"tx">>, Opts)};
+                TXID ->
+                    get_item(<<"tx">>, TXID, Opts)
+            end;
         _ ->
-            {ok, list_items(<<"tx">>, Opts)}
+            {error, method_not_allowed}
     end.
 
 block(Base, Req, Opts) ->
@@ -65,89 +79,187 @@ block(Base, Req, Opts) ->
             {ok, Stored} = store_item(<<"block">>, Block, Opts),
             maybe_cache_block(Block, Opts),
             {ok, Stored};
+        <<"GET">> ->
+            case resource_suffix(<<"block">>, Base, Req, Opts) of
+                <<>> ->
+                    {ok, list_items(<<"block">>, Opts)};
+                ID ->
+                    get_item(<<"block">>, ID, Opts)
+            end;
         _ ->
-            {ok, list_items(<<"block">>, Opts)}
+            {error, method_not_allowed}
     end.
 
 peers(Base, Req, Opts) ->
     case method(Base, Req, Opts) of
         <<"POST">> ->
-            Given = read_any([<<"peers">>], Base, Req, [], Opts),
-            {ok, #{<<"peers">> => Given}};
+            ToAdd = normalize_peer_list(read_any([<<"peer">>, <<"peers">>], Base, Req, [], Opts)),
+            Existing = persisted_peers(Opts),
+            Updated = unique_peers(Existing ++ ToAdd),
+            ok = write_persisted_peers(Updated, Opts),
+            {ok, #{<<"peers">> => Updated, <<"added">> => ToAdd}};
+        <<"DELETE">> ->
+            ToRemove = normalize_peer_list(read_any([<<"peer">>, <<"peers">>], Base, Req, [], Opts)),
+            Existing = persisted_peers(Opts),
+            Updated = [Peer || Peer <- Existing, not lists:member(Peer, ToRemove)],
+            ok = write_persisted_peers(Updated, Opts),
+            {ok, #{<<"peers">> => Updated, <<"removed">> => ToRemove}};
         _ ->
             {ok, #{<<"peers">> => read_peers(Base, Req, Opts)}}
     end.
 
 gossip_tx(Base, Req, Opts) ->
     TX = read_any([<<"tx">>], Base, Req, Req, Opts),
-    Results =
-        lists:map(
-            fun(Peer) ->
-                {
-                    Peer,
-                    hb_http:post(
-                        Peer,
-                        #{
-                            <<"path">> => <<"/~arweave-gossip@2.9.5/tx">>,
-                            <<"tx">> => TX
-                        },
-                        Opts
-                    )
-                }
-            end,
-            read_peers(Base, Req, Opts)
-        ),
-    {ok, #{<<"results">> => Results}}.
+    _ = store_item(<<"tx">>, TX, Opts),
+    {ok, broadcast(<<"tx">>, TX, Base, Req, Opts)}.
 
 gossip_block(Base, Req, Opts) ->
     Block = read_any([<<"block">>], Base, Req, Req, Opts),
+    _ = store_item(<<"block">>, Block, Opts),
+    maybe_cache_block(Block, Opts),
+    {ok, broadcast(<<"block">>, Block, Base, Req, Opts)}.
+
+broadcast(Type, Item, Base, Req, Opts) ->
+    Path =
+        read_any(
+            [<<"broadcast-path">>],
+            Base,
+            Req,
+            default_broadcast_path(Type),
+            Opts
+        ),
+    Peers = read_peers(Base, Req, Opts),
     Results =
         lists:map(
             fun(Peer) ->
-                {
-                    Peer,
-                    hb_http:post(
-                        Peer,
-                        #{
-                            <<"path">> => <<"/~arweave-gossip@2.9.5/block">>,
-                            <<"block">> => Block
-                        },
-                        Opts
-                    )
-                }
+                Payload =
+                    case Type of
+                        <<"tx">> -> #{<<"path">> => Path, <<"tx">> => Item};
+                        _ -> #{<<"path">> => Path, <<"block">> => Item}
+                    end,
+                {Peer, catch hb_http:post(Peer, Payload, Opts)}
             end,
-            read_peers(Base, Req, Opts)
+            Peers
         ),
-    {ok, #{<<"results">> => Results}}.
-
-store_item(Type, Item, Opts) ->
-    {ok, ID} = hb_cache:write(Item, Opts),
-    Slot = next_slot(Type, Opts),
-    ok = hb_cache:link(ID, slot_path(Type, Slot, Opts), Opts),
-    {ok,
-        #{
-            <<"accepted">> => true,
-            <<"id">> => ID,
-            <<"slot">> => Slot
-        }
-    }.
-
-list_items(Type, Opts) ->
-    Slots = lists:sort(hb_cache:list_numbered(pool_dir(Type), Opts)),
-    Items =
-        lists:filtermap(
-            fun(Slot) ->
-                case hb_cache:read(slot_path(Type, Slot, Opts), Opts) of
-                    {ok, Msg} -> {true, Msg};
-                    _ -> false
-                end
-            end,
-            Slots
+    SuccessCount =
+        length(
+            [
+                ok
+             || {_Peer, Res} <- Results,
+                is_successful_broadcast(Res)
+            ]
         ),
     #{
+        <<"results">> => Results,
+        <<"success-count">> => SuccessCount,
+        <<"failure-count">> => length(Results) - SuccessCount
+    }.
+
+is_successful_broadcast({ok, _}) ->
+    true;
+is_successful_broadcast(#{<<"status">> := Status}) when is_integer(Status) ->
+    Status >= 200 andalso Status < 300;
+is_successful_broadcast(_) ->
+    false.
+
+default_broadcast_path(<<"tx">>) ->
+    ?TX_GOSSIP_PATH;
+default_broadcast_path(<<"block">>) ->
+    ?BLOCK_GOSSIP_PATH.
+
+store_item(Type, Item, Opts) ->
+    LogicalID = item_id(Type, Item, Opts),
+    case find_item(Type, LogicalID, Opts) of
+        {ok, ExistingSlot, _Entry} ->
+            {ok,
+                #{
+                    <<"accepted">> => true,
+                    <<"known">> => true,
+                    <<"id">> => LogicalID,
+                    <<"slot">> => ExistingSlot
+                }
+            };
+        not_found ->
+            {ok, ItemID} = hb_cache:write(Item, Opts),
+            Slot = next_slot(Type, Opts),
+            Entry =
+                #{
+                    <<"id">> => LogicalID,
+                    <<"item-id">> => ItemID,
+                    <<"received-at">> => os:system_time(second),
+                    <<"item">> => Item
+                },
+            {ok, EntryID} = hb_cache:write(Entry, Opts),
+            ok = hb_cache:link(EntryID, slot_path(Type, Slot, Opts), Opts),
+            {ok,
+                #{
+                    <<"accepted">> => true,
+                    <<"known">> => false,
+                    <<"id">> => LogicalID,
+                    <<"slot">> => Slot
+                }
+            }
+    end.
+
+get_item(Type, ID, Opts) ->
+    case find_item(Type, ID, Opts) of
+        {ok, _Slot, Entry} ->
+            {ok, materialize(entry_item(Entry, Opts), Opts)};
+        not_found ->
+            {error, not_found}
+    end.
+
+find_item(Type, ID, Opts) ->
+    lists:foldl(
+        fun({Slot, Entry}, not_found) ->
+                case entry_id(Entry, Opts) of
+                    ID -> {ok, Slot, Entry};
+                    _ -> not_found
+                end;
+           (_, Found) ->
+                Found
+        end,
+        not_found,
+        pool_entries(Type, Opts)
+    ).
+
+list_items(Type, Opts) ->
+    Entries = pool_entries(Type, Opts),
+    Items = [materialize(entry_item(Entry, Opts), Opts) || {_Slot, Entry} <- Entries],
+    IDs = [entry_id(Entry, Opts) || {_Slot, Entry} <- Entries],
+    #{
         <<"count">> => length(Items),
+        <<"ids">> => IDs,
         <<"items">> => Items
     }.
+
+pending_ids(Type, Opts) ->
+    [entry_id(Entry, Opts) || {_Slot, Entry} <- pool_entries(Type, Opts)].
+
+pool_entries(Type, Opts) ->
+    Slots = lists:sort(hb_cache:list_numbered(pool_dir(Type), Opts)),
+    lists:filtermap(
+        fun(Slot) ->
+            case hb_cache:read(slot_path(Type, Slot, Opts), Opts) of
+                {ok, Entry} when is_map(Entry) -> {true, {Slot, Entry}};
+                _ -> false
+            end
+        end,
+        Slots
+    ).
+
+entry_id(Entry, Opts) ->
+    hb_util:bin(hb_maps:get(<<"id">>, Entry, <<>>, Opts)).
+
+entry_item(Entry, Opts) ->
+    hb_maps:get(<<"item">>, Entry, Entry, Opts).
+
+materialize(Value, Opts) ->
+    try
+        hb_cache:ensure_all_loaded(Value, Opts)
+    catch
+        _:_ -> Value
+    end.
 
 next_slot(Type, Opts) ->
     case hb_cache:list_numbered(pool_dir(Type), Opts) of
@@ -159,7 +271,43 @@ pool_dir(Type) ->
     [?GOSSIP_PREFIX, Type].
 
 slot_path(Type, Slot, Opts) ->
-    hb_store:path(hb_opts:get(store, no_viable_store, Opts), pool_dir(Type) ++ [hb_util:bin(Slot)]).
+    hb_store:path(
+        hb_opts:get(store, no_viable_store, Opts),
+        pool_dir(Type) ++ [hb_util:bin(Slot)]
+    ).
+
+item_id(_Type, Item, Opts) when is_map(Item) ->
+    MaybeID =
+        first_present_key(
+            Item,
+            [
+                <<"id">>,
+                <<"tx-id">>,
+                <<"txid">>,
+                <<"hash">>,
+                <<"indep-hash">>,
+                <<"indep_hash">>,
+                <<"height">>
+            ],
+            not_found,
+            Opts
+        ),
+    case MaybeID of
+        not_found ->
+            hb_util:encode(crypto:hash(sha256, term_to_binary(Item)));
+        ID ->
+            hb_util:bin(ID)
+    end;
+item_id(_Type, Item, _Opts) ->
+    hb_util:encode(crypto:hash(sha256, term_to_binary(Item))).
+
+first_present_key(_Map, [], Default, _Opts) ->
+    Default;
+first_present_key(Map, [Key | Rest], Default, Opts) ->
+    case hb_maps:find(Key, Map, Opts) of
+        {ok, Value} -> Value;
+        error -> first_present_key(Map, Rest, Default, Opts)
+    end.
 
 maybe_cache_block(Block, Opts) ->
     try
@@ -168,11 +316,84 @@ maybe_cache_block(Block, Opts) ->
         _:_ -> ok
     end.
 
+persisted_peers(Opts) ->
+    case hb_cache:read(peer_state_path(Opts), Opts) of
+        {ok, Stored} ->
+            normalize_peer_list(hb_maps:get(<<"peers">>, Stored, [], Opts));
+        _ ->
+            []
+    end.
+
+write_persisted_peers(Peers, Opts) ->
+    {ok, MsgID} = hb_cache:write(#{<<"peers">> => unique_peers(Peers)}, Opts),
+    ok = hb_cache:link(MsgID, peer_state_path(Opts), Opts),
+    ok.
+
+peer_state_path(Opts) ->
+    hb_store:path(
+        hb_opts:get(store, no_viable_store, Opts),
+        [?GOSSIP_PREFIX, <<"state">>, <<"peers">>]
+    ).
+
 read_peers(Base, Req, Opts) ->
-    read_any([<<"peers">>, arweave_gossip_peers], Base, Req, hb_opts:get(arweave_gossip_peers, [], Opts), Opts).
+    Configured =
+        read_any(
+            [<<"peers">>, arweave_gossip_peers],
+            Base,
+            Req,
+            hb_opts:get(arweave_gossip_peers, [], Opts),
+            Opts
+        ),
+    unique_peers(persisted_peers(Opts) ++ normalize_peer_list(Configured)).
+
+normalize_peer_list(Peers) when is_list(Peers) ->
+    [hb_util:bin(Peer) || Peer <- Peers];
+normalize_peer_list(Peer) when is_binary(Peer) ->
+    [Peer];
+normalize_peer_list(Peer) when is_atom(Peer) ->
+    [hb_util:bin(Peer)];
+normalize_peer_list(_) ->
+    [].
+
+unique_peers(Peers) ->
+    lists:foldl(
+        fun(Peer, Acc) ->
+            case lists:member(Peer, Acc) of
+                true -> Acc;
+                false -> Acc ++ [Peer]
+            end
+        end,
+        [],
+        Peers
+    ).
 
 method(Base, Req, Opts) ->
     hb_ao:get_first([{Req, <<"method">>}, {Base, <<"method">>}], <<"GET">>, Opts).
+
+resource_suffix(Resource, Base, Req, Opts) ->
+    Action = hb_util:bin(read_any([<<"action">>], Base, Req, <<>>, Opts)),
+    Path = hb_util:bin(read_any([<<"path">>], Base, Req, <<>>, Opts)),
+    Candidate =
+        case Path of
+            <<>> -> Action;
+            _ -> Path
+        end,
+    trim_resource_prefix(Resource, trim_leading_slash(Candidate)).
+
+trim_resource_prefix(Resource, Resource) ->
+    <<>>;
+trim_resource_prefix(Resource, Candidate) ->
+    Prefix = <<Resource/binary, "/">>,
+    PrefixSize = byte_size(Prefix),
+    case Candidate of
+        <<Prefix:PrefixSize/binary, Rest/binary>> -> Rest;
+        _ -> Candidate
+    end.
+
+trim_leading_slash(<<"/", Rest/binary>>) ->
+    trim_leading_slash(Rest);
+trim_leading_slash(Bin) ->
+    Bin.
 
 read_any(Keys, Base, Req, Default, Opts) ->
     Candidates = [{Req, Key} || Key <- Keys] ++ [{Base, Key} || Key <- Keys],
@@ -184,11 +405,35 @@ read_any(Keys, Base, Req, Default, Opts) ->
 
 tx_pool_roundtrip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
-    TX = #{<<"hello">> => <<"world">>},
-    {ok, #{<<"accepted">> := true}} =
+    TX = #{<<"id">> => <<"tx-1">>, <<"hello">> => <<"world">>},
+    {ok, #{<<"accepted">> := true, <<"known">> := false}} =
+        tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
+    {ok, #{<<"accepted">> := true, <<"known">> := true}} =
         tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
     {ok, Listed} = tx(#{}, #{<<"method">> => <<"GET">>}, Opts),
     ?assertEqual(1, hb_maps:get(<<"count">>, Listed, 0, #{})).
+
+pending_ids_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    TX1 = #{<<"id">> => <<"tx-a">>},
+    TX2 = #{<<"id">> => <<"tx-b">>},
+    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX1}, Opts),
+    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX2}, Opts),
+    {ok, #{<<"txids">> := IDs}} =
+        tx(
+            #{},
+            #{<<"method">> => <<"GET">>, <<"path">> => <<"pending">>},
+            Opts
+        ),
+    ?assertEqual(2, length(IDs)).
+
+get_tx_by_id_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    TX = #{<<"id">> => <<"tx-42">>, <<"a">> => 1},
+    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
+    {ok, Loaded} = tx(#{}, #{<<"method">> => <<"GET">>, <<"path">> => <<"tx-42">>}, Opts),
+    ?assertEqual(<<"tx-42">>, hb_maps:get(<<"id">>, Loaded, <<>>, #{})),
+    ?assertEqual(1, hb_maps:get(<<"a">>, Loaded, 0, #{})).
 
 block_pool_roundtrip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
@@ -210,3 +455,30 @@ peers_read_test() ->
             #{<<"method">> => <<"GET">>, <<"peers">> => [<<"http://example.com">>]},
             #{}
         ).
+
+peers_add_remove_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    {ok, #{<<"peers">> := [<<"http://a">>]}} =
+        peers(
+            #{},
+            #{<<"method">> => <<"POST">>, <<"peer">> => <<"http://a">>},
+            Opts
+        ),
+    {ok, #{<<"peers">> := [<<"http://a">>]}} = peers(#{}, #{<<"method">> => <<"GET">>}, Opts),
+    {ok, #{<<"peers">> := []}} =
+        peers(
+            #{},
+            #{<<"method">> => <<"DELETE">>, <<"peer">> => <<"http://a">>},
+            Opts
+        ).
+
+gossip_tx_no_peers_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    {ok, Res} =
+        gossip_tx(
+            #{},
+            #{<<"tx">> => #{<<"id">> => <<"tx-x">>}},
+            Opts
+        ),
+    ?assertEqual(0, hb_maps:get(<<"success-count">>, Res, -1, #{})),
+    ?assertEqual(0, hb_maps:get(<<"failure-count">>, Res, -1, #{})).
