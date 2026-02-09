@@ -4,10 +4,74 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
+-export([info/1, info/3, default/4]).
 -export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([graphql/3, vdf/3, spora/3, ledger/3, gossip/3]).
 -export([post_tx/3, post_tx/4, post_binary_ans104/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+info(_Opts) ->
+    #{
+        default => fun default/4
+    }.
+
+info(_Base, _Req, _Opts) ->
+    {ok,
+        #{
+            <<"name">> => <<"arweave@2.9-pre">>,
+            <<"description">> => <<"Arweave API and AO-native Arweave subdevices">>,
+            <<"exports">> =>
+                [
+                    <<"status">>,
+                    <<"tx">>,
+                    <<"chunk">>,
+                    <<"block">>,
+                    <<"current">>,
+                    <<"price">>,
+                    <<"tx-anchor">>,
+                    <<"graphql">>,
+                    <<"spora">>,
+                    <<"vdf">>,
+                    <<"ledger">>,
+                    <<"gossip">>
+                ]
+        }
+    }.
+
+default(<<"set">>, Base, Req, Opts) ->
+    dev_message:set(Base, Req, Opts);
+default(<<"keys">>, Base, _Req, _Opts) ->
+    dev_message:keys(Base);
+default(<<"status">>, Base, Req, Opts) ->
+    status(Base, Req, Opts);
+default(<<"tx">>, Base, Req, Opts) ->
+    tx(Base, Req, Opts);
+default(<<"chunk">>, Base, Req, Opts) ->
+    chunk(Base, Req, Opts);
+default(<<"block">>, Base, Req, Opts) ->
+    block(Base, Req, Opts);
+default(<<"current">>, Base, Req, Opts) ->
+    current(Base, Req, Opts);
+default(<<"price">>, Base, Req, Opts) ->
+    price(Base, Req, Opts);
+default(<<"tx-anchor">>, Base, Req, Opts) ->
+    tx_anchor(Base, Req, Opts);
+default(<<"graphql">>, Base, Req, Opts) ->
+    graphql(Base, Req, Opts);
+default(<<"spora">>, Base, Req, Opts) ->
+    spora(Base, Req, Opts);
+default(<<"vdf">>, Base, Req, Opts) ->
+    vdf(Base, Req, Opts);
+default(<<"ledger">>, Base, Req, Opts) ->
+    ledger(Base, Req, Opts);
+default(<<"gossip">>, Base, Req, Opts) ->
+    gossip(Base, Req, Opts);
+default(Key, _Base, Req, Opts) ->
+    Method = hb_maps:get(<<"method">>, Req, <<"GET">>, Opts),
+    KeyBin = hb_util:bin(Key),
+    Path = <<"/", KeyBin/binary, (path_suffix(Req, Opts))/binary>>,
+    request(Method, Path, Req, Opts).
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
@@ -230,6 +294,33 @@ price(Base, Request, Opts) ->
 tx_anchor(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/tx_anchor">>, Opts).
 
+graphql(Base, Request, Opts) ->
+    case hb_maps:get(<<"method">>, Request, <<"POST">>, Opts) of
+        <<"POST">> ->
+            Query = hb_maps:get(<<"query">>, Request, not_found, Opts),
+            Body = hb_maps:get(<<"body">>, Request, not_found, Opts),
+            case {Query, Body} of
+                {not_found, not_found} ->
+                    request(<<"POST">>, <<"/graphql">>, Request, Opts);
+                _ ->
+                    dev_query_graphql:handle(Base, Request, Opts)
+            end;
+        _ ->
+            request(<<"GET">>, <<"/graphql">>, Request, Opts)
+    end.
+
+vdf(Base, Request, Opts) ->
+    dev_arweave_vdf:default(subkey(Request, <<"compute">>, Opts), Base, Request, Opts).
+
+spora(Base, Request, Opts) ->
+    dev_arweave_spora:default(subkey(Request, <<"compute">>, Opts), Base, Request, Opts).
+
+ledger(Base, Request, Opts) ->
+    dev_arweave_ledger:default(subkey(Request, <<"validate-block">>, Opts), Base, Request, Opts).
+
+gossip(Base, Request, Opts) ->
+    dev_arweave_gossip:default(subkey(Request, <<"tx">>, Opts), Base, Request, Opts).
+
 %%% Internal Functions
 
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
@@ -244,18 +335,57 @@ find_txid(Base, Request, Opts) ->
         Opts
     ).
 
+subkey(Request, Default, Opts) ->
+    Raw = hb_ao:get_first([{Request, <<"action">>}, {Request, <<"path">>}], Default, Opts),
+    First = hb_util:bin(Raw),
+    Trimmed = trim_leading_slash(First),
+    case binary:split(Trimmed, <<"/">>, [global]) of
+        [<<>>] -> Default;
+        [Head | _] -> Head
+    end.
+
+trim_leading_slash(<<"/", Rest/binary>>) ->
+    trim_leading_slash(Rest);
+trim_leading_slash(Bin) ->
+    Bin.
+
+path_suffix(Request, Opts) ->
+    case hb_maps:get(<<"path">>, Request, <<>>, Opts) of
+        <<>> ->
+            <<>>;
+        Path ->
+            PathBin = hb_util:bin(Path),
+            case binary:at(PathBin, 0) of
+                $/ -> PathBin;
+                _ -> <<"/", PathBin/binary>>
+            end
+    end.
+
+maybe_copy_key(Key, From, To, Opts) ->
+    case hb_maps:find(Key, From, Opts) of
+        {ok, Value} -> hb_maps:put(Key, Value, To, Opts);
+        error -> To
+    end.
+
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
 %% a `content-type' header. Subsequently, we parse the response manually and
 %% pass it back as a message.
 request(Method, Path, Opts) ->
+    request(Method, Path, #{}, Opts).
+request(Method, Path, Req, Opts) ->
     ?event({arweave_request, {method, Method}, {path, Path}}),
+    BaseReq =
+        #{
+            <<"path">> => <<"/arweave", Path/binary>>,
+            <<"method">> => Method
+        },
+    Req1 = maybe_copy_key(<<"body">>, Req, BaseReq, Opts),
+    Req2 = maybe_copy_key(<<"content-type">>, Req, Req1, Opts),
+    Req3 = maybe_copy_key(<<"accept">>, Req, Req2, Opts),
     Res =
         hb_http:request(
-            #{
-                <<"path">> => <<"/arweave", Path/binary>>,
-                <<"method">> => Method
-            },
+            Req3,
             Opts
         ),
     to_message(Path, Res, Opts).
@@ -337,6 +467,68 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
     }.
 
 %%% Tests
+
+delegates_vdf_compute_test() ->
+    PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
+    {ok, Res} =
+        vdf(
+            #{},
+            #{
+                <<"action">> => <<"compute">>,
+                <<"step-number">> => 2,
+                <<"prev-output">> => hb_util:encode(PrevOutput),
+                <<"iteration-count">> => 2
+            },
+            #{}
+        ),
+    ?assert(hb_maps:get(<<"output">>, Res, not_found, #{}) =/= not_found).
+
+delegates_spora_entropy_test() ->
+    {ok, 1200} =
+        spora(
+            #{},
+            #{
+                <<"action">> => <<"entropy-reset-point">>,
+                <<"prev-step-number">> => 1199,
+                <<"step-number">> => 1200
+            },
+            #{}
+        ).
+
+delegates_ledger_validate_test() ->
+    {ok, Res} =
+        ledger(
+            #{},
+            #{
+                <<"action">> => <<"validate-tx">>,
+                <<"tx">> => #{}
+            },
+            #{}
+        ),
+    ?assertEqual(false, hb_maps:get(<<"valid">>, Res, true, #{})).
+
+delegates_gossip_tx_test() ->
+    Opts = #{store => [hb_test_utils:test_store()]},
+    {ok, #{<<"accepted">> := true}} =
+        gossip(
+            #{},
+            #{
+                <<"action">> => <<"tx">>,
+                <<"method">> => <<"POST">>,
+                <<"tx">> => #{<<"hello">> => <<"world">>}
+            },
+            Opts
+        ),
+    {ok, Listed} =
+        gossip(
+            #{},
+            #{
+                <<"action">> => <<"tx">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    ?assertEqual(1, hb_maps:get(<<"count">>, Listed, 0, #{})).
 
 post_ans104_tx_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
