@@ -230,45 +230,54 @@ validate_block_with_state(State, Block, Opts) ->
                             {error, invalid_tx_root};
                         true ->
                             Timestamp = read_int([<<"timestamp">>], Block, Block, 0, Opts),
-                            PrevHashRaw =
-                                case read_binary_optional(
+                            BlockPrevHash =
+                                read_binary_optional(
                                     [<<"previous-block">>, <<"previous_block">>],
                                     Block,
                                     Block,
                                     Opts
-                                ) of
-                                    {ok, H} -> H;
-                                    error ->
-                                        case read_binary_optional(
-                                            [<<"last-block-hash">>],
-                                            State,
-                                            State,
-                                            Opts
-                                        ) of
-                                            {ok, H2} -> H2;
-                                            error -> <<>>
-                                        end
-                                end,
-                            HashRaw = compute_block_hash(
-                                PrevHashRaw,
-                                Height,
-                                Timestamp,
-                                TXRootRaw,
-                                TXRecords
-                            ),
-                            case verify_block_hash(Block, HashRaw, Opts) of
-                                false ->
-                                    {error, invalid_block_hash};
-                                true ->
-                                    {ok,
-                                        #{
-                                            <<"valid">> => true,
-                                            <<"height">> => Height,
-                                            <<"tx-root-raw">> => TXRootRaw,
-                                            <<"hash-raw">> => HashRaw,
-                                            <<"state-after">> => InterimState
-                                        }
-                                    }
+                                ),
+                            StatePrevHash =
+                                read_binary_optional(
+                                    [<<"last-block-hash">>],
+                                    State,
+                                    State,
+                                    Opts
+                                ),
+                            case {StatePrevHash, BlockPrevHash} of
+                                {{ok, S}, {ok, B}} when S =/= B ->
+                                    {error, invalid_previous_block};
+                                _ ->
+                                    PrevHashRaw =
+                                        case BlockPrevHash of
+                                            {ok, H} -> H;
+                                            error ->
+                                                case StatePrevHash of
+                                                    {ok, H2} -> H2;
+                                                    error -> <<>>
+                                                end
+                                        end,
+                                    HashRaw = compute_block_hash(
+                                        PrevHashRaw,
+                                        Height,
+                                        Timestamp,
+                                        TXRootRaw,
+                                        TXRecords
+                                    ),
+                                    case verify_block_hash(Block, HashRaw, Opts) of
+                                        false ->
+                                            {error, invalid_block_hash};
+                                        true ->
+                                            {ok,
+                                                #{
+                                                    <<"valid">> => true,
+                                                    <<"height">> => Height,
+                                                    <<"tx-root-raw">> => TXRootRaw,
+                                                    <<"hash-raw">> => HashRaw,
+                                                    <<"state-after">> => InterimState
+                                                }
+                                            }
+                                    end
                             end
                     end
             end
@@ -627,3 +636,67 @@ reject_duplicate_tx_in_block_test() ->
             },
             #{}
         ).
+
+reject_invalid_height_test() ->
+    {SenderWallet, _Recipient, SignedTX} = test_signed_tx(5, 1),
+    State0 = base_state(SenderWallet, 100),
+    TXMsg = hb_message:convert(SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    {ok, Block} =
+        generate_block(
+            State0,
+            #{
+                <<"txs">> => [TXMsg],
+                <<"timestamp">> => 1000
+            },
+            #{}
+        ),
+    Broken = Block#{<<"height">> => 10},
+    {ok, Validation} = validate_block(State0, #{<<"block">> => Broken}, #{}),
+    ?assertEqual(false, hb_maps:get(<<"valid">>, Validation, true, #{})),
+    ?assertEqual(<<"invalid_height">>, hb_maps:get(<<"error">>, Validation, <<>>, #{})).
+
+reject_invalid_block_hash_test() ->
+    {SenderWallet, _Recipient, SignedTX} = test_signed_tx(5, 1),
+    State0 = base_state(SenderWallet, 100),
+    TXMsg = hb_message:convert(SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    {ok, Block} =
+        generate_block(
+            State0,
+            #{
+                <<"txs">> => [TXMsg],
+                <<"timestamp">> => 1000
+            },
+            #{}
+        ),
+    Broken = Block#{<<"hash">> => hb_util:encode(crypto:strong_rand_bytes(32))},
+    {ok, Validation} = validate_block(State0, #{<<"block">> => Broken}, #{}),
+    ?assertEqual(false, hb_maps:get(<<"valid">>, Validation, true, #{})),
+    ?assertEqual(<<"invalid_block_hash">>, hb_maps:get(<<"error">>, Validation, <<>>, #{})).
+
+reject_previous_block_mismatch_test() ->
+    {SenderWallet, _Recipient, SignedTX} = test_signed_tx(5, 1),
+    State0 = base_state(SenderWallet, 100),
+    TXMsg = hb_message:convert(SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    {ok, Block1} =
+        generate_block(
+            State0,
+            #{
+                <<"txs">> => [TXMsg],
+                <<"timestamp">> => 1000
+            },
+            #{}
+        ),
+    {ok, State1} = apply_block(State0, #{<<"block">> => Block1}, #{}),
+    {ok, Block2} =
+        generate_block(
+            State1,
+            #{
+                <<"txs">> => [],
+                <<"timestamp">> => 1001
+            },
+            #{}
+        ),
+    Broken2 = Block2#{<<"previous-block">> => hb_util:encode(crypto:strong_rand_bytes(32))},
+    {ok, Validation} = validate_block(State1, #{<<"block">> => Broken2}, #{}),
+    ?assertEqual(false, hb_maps:get(<<"valid">>, Validation, true, #{})),
+    ?assertEqual(<<"invalid_previous_block">>, hb_maps:get(<<"error">>, Validation, <<>>, #{})).
