@@ -299,8 +299,25 @@ read_binary(Keys, Base, Req, Default, Opts) ->
     maybe_decode_binary(read_any(Keys, Base, Req, Default, Opts)).
 
 read_any(Keys, Base, Req, Default, Opts) ->
-    Candidates = [{Req, Key} || Key <- Keys] ++ [{Base, Key} || Key <- Keys],
-    hb_ao:get_first(Candidates, Default, Opts).
+    read_any_local(Keys, Req, Base, Default, Opts).
+
+read_any_local([], _Req, _Base, Default, _Opts) ->
+    Default;
+read_any_local([Key | Rest], Req, Base, Default, Opts) ->
+    case hb_maps:find(Key, Req, Opts) of
+        {ok, Value} ->
+            Value;
+        error ->
+            case is_map(Base) of
+                true ->
+                    case hb_maps:find(Key, Base, Opts) of
+                        {ok, Value2} -> Value2;
+                        error -> read_any_local(Rest, Req, Base, Default, Opts)
+                    end;
+                false ->
+                    read_any_local(Rest, Req, Base, Default, Opts)
+            end
+    end.
 
 maybe_decode_binary(Bin) when is_binary(Bin) ->
     case hb_util:safe_decode(Bin) of
@@ -314,11 +331,24 @@ maybe_decode_binary(Other) ->
 %% Tests (adapted from upstream nonce-limiter/VDF test vectors)
 %% ------------------------------------------------------------------
 
+resolve_spora(Path, Req, Opts) ->
+    hb_ao:resolve(
+        #{<<"device">> => dev_arweave_spora},
+        Req#{<<"path">> => Path},
+        test_opts(Opts)
+    ).
+
+test_opts(Opts) ->
+    case maps:is_key(store, Opts) of
+        true -> Opts;
+        false -> Opts#{store => [hb_test_utils:test_store()]}
+    end.
+
 compute_and_verify_test() ->
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, ComputeRes} =
-        compute(
-            #{},
+        resolve_spora(
+            <<"compute">>,
             #{
                 <<"step-number">> => 2,
                 <<"prev-output">> => hb_util:encode(PrevOutput),
@@ -328,8 +358,8 @@ compute_and_verify_test() ->
         ),
     Hashes = lists:reverse(hb_maps:get(<<"checkpoints">>, ComputeRes, [], #{})),
     {ok, VerifyRes} =
-        verify(
-            #{},
+        resolve_spora(
+            <<"verify">>,
             #{
                 <<"start-step-number">> => 2,
                 <<"prev-output">> => hb_util:encode(PrevOutput),
@@ -342,14 +372,14 @@ compute_and_verify_test() ->
 
 entropy_reset_point_test() ->
     {ok, <<"none">>} =
-        entropy_reset_point(
-            #{},
+        resolve_spora(
+            <<"entropy-reset-point">>,
             #{<<"prev-step-number">> => 1, <<"step-number">> => 100},
             #{}
         ),
     {ok, 1200} =
-        entropy_reset_point(
-            #{},
+        resolve_spora(
+            <<"entropy-reset-point">>,
             #{<<"prev-step-number">> => 1199, <<"step-number">> => 1200},
             #{}
         ).
@@ -370,7 +400,12 @@ seed_data_reset_test() ->
                     <<"next-vdf-difficulty">> => 4
                 }
         },
-    {ok, SeedData} = seed_data(#{}, #{<<"step-number">> => 1200, <<"previous-block">> => PrevBlock}, #{}),
+    {ok, SeedData} =
+        resolve_spora(
+            <<"seed-data">>,
+            #{<<"step-number">> => 1200, <<"previous-block">> => PrevBlock},
+            #{}
+        ),
     ?assertEqual(
         <<"seed-b">>,
         hb_util:decode(hb_maps:get(<<"seed">>, SeedData, <<>>, #{}))
@@ -383,8 +418,8 @@ poa_validate_test() ->
     {Root, Tree} = ar_merkle:generate_tree(SizedChunks),
     Path = ar_merkle:generate_path(Root, 0, Tree),
     {ok, Result} =
-        poa(
-            #{},
+        resolve_spora(
+            <<"poa">>,
             #{
                 <<"data-root">> => hb_util:encode(Root),
                 <<"data-path">> => hb_util:encode(Path),

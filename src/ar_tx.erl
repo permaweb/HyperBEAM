@@ -42,7 +42,6 @@ sign_v1(TX, PrivKey, PubKey = {_, Owner}) ->
 %% 
 %% Checks that are missing:
 %% - format 2 unsupported pre-2.0
-%% - valid ECDSA signature post-2.9
 %% - verify_denomination
 %% - is_tx_fee_sufficient
 %% - tx_field_size_limit_v1/v2
@@ -54,7 +53,7 @@ verify(TX) ->
     From = ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type),
     Checks = [
         {"tx_format_not_supported", TX#tx.format == 1 orelse TX#tx.format == 2},
-        {"invalid_signature_type", {?RSA_SIGN_ALG, 65537} == TX#tx.signature_type},
+        {"invalid_signature_type", verify_signature_type(TX)},
         {"quantity_negative", TX#tx.quantity >= 0},
         {"same_owner_as_target", (From =/= TX#tx.target)},
         {"tx_id_not_valid", verify_hash(TX)},
@@ -108,6 +107,10 @@ verify_signature(TX = #tx{ signature_type = SigType }) ->
     end.
 
 %% @doc Generate the data segment to be signed for a given TX.
+generate_signature_data_segment(#tx{ format = 2, signature_type = {?ECDSA_SIGN_ALG, secp256k1} } = TX) ->
+    signature_data_segment_v2_no_public_key(TX);
+generate_signature_data_segment(#tx{ format = 2, signature_type = {?ECDSA_SIGN_ALG, 256} } = TX) ->
+    signature_data_segment_v2_no_public_key(TX);
 generate_signature_data_segment(#tx{ format = 2 } = TX) ->
     signature_data_segment_v2(TX);
 generate_signature_data_segment(#tx{ format = 1 } = TX) ->
@@ -120,6 +123,26 @@ signature_data_segment_v2(TX) ->
     List = [
         << (integer_to_binary(TX#tx.format))/binary >>,
         << (TX#tx.owner)/binary >>,
+        << (TX#tx.target)/binary >>,
+        << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
+        << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
+        << (TX#tx.anchor)/binary >>,
+        tags_to_list(TX#tx.tags),
+        << (integer_to_binary(TX#tx.data_size))/binary >>,
+        << (TX#tx.data_root)/binary >>
+    ],
+    List2 =
+        case TX#tx.denomination > 0 of
+            true ->
+                [<< (integer_to_binary(TX#tx.denomination))/binary >> | List];
+            false ->
+                List
+        end,
+    ar_deep_hash:hash(List2).
+
+signature_data_segment_v2_no_public_key(TX) ->
+    List = [
+        << (integer_to_binary(TX#tx.format))/binary >>,
         << (TX#tx.target)/binary >>,
         << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
         << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
@@ -218,6 +241,17 @@ verify_v2_data(#tx{
 verify_v2_data(_) ->
     true.
 
+verify_signature_type(#tx{ format = 1, signature_type = ?RSA_KEY_TYPE }) ->
+    true;
+verify_signature_type(#tx{ format = 2, signature_type = ?RSA_KEY_TYPE }) ->
+    true;
+verify_signature_type(#tx{ format = 2, signature_type = {?ECDSA_SIGN_ALG, secp256k1} }) ->
+    true;
+verify_signature_type(#tx{ format = 2, signature_type = {?ECDSA_SIGN_ALG, 256} }) ->
+    true;
+verify_signature_type(_) ->
+    false.
+
 collect_validation_results(_TXID, Checks) ->
     KeepFailed = fun
         ({_, true}) -> false;
@@ -261,9 +295,7 @@ json_struct_to_tx(TXStruct) ->
     32 = byte_size(TXID),
     Owner = hb_util:decode(hb_util:find_value(<<"owner">>, TXStruct)),
     Sig = hb_util:decode(hb_util:find_value(<<"signature">>, TXStruct)),
-    SigType = set_sig_type_from_pub_key(Owner),
-    %% Only RSA supported for now
-    ?RSA_KEY_TYPE = SigType,
+    SigType = set_sig_type_from_pub_key(Owner, Sig),
     TX = #tx{
         format = Format,
         id = TXID,
@@ -286,11 +318,23 @@ json_struct_to_tx(TXStruct) ->
             end,
         denomination = Denomination
     },
-    TX#tx{ owner_address = get_owner_address(TX) }.
+    TX#tx{
+        owner_address =
+            case Owner of
+                <<>> ->
+                    not_set;
+                _ ->
+                    get_owner_address(TX)
+            end
+    }.
 
-set_sig_type_from_pub_key(Owner) ->
-    case Owner of
-        <<>> ->
+set_sig_type_from_pub_key(Owner, Sig) ->
+    case {Owner, byte_size(Sig)} of
+        {<<>>, 65} ->
+            ?ECDSA_KEY_TYPE;
+        {_, 65} ->
+            ?ECDSA_KEY_TYPE;
+        {<<>>, _} ->
             ?ECDSA_KEY_TYPE;
         _ ->
             ?RSA_KEY_TYPE
@@ -308,13 +352,11 @@ tx_to_json_struct(
         data = Data,
         reward = Reward,
         signature = Sig,
-        signature_type = SigType,
+        signature_type = _SigType,
         data_size = DataSize,
         data_root = DataRoot,
         denomination = Denomination
     }) ->
-    %% Only RSA supported for now
-    ?RSA_KEY_TYPE = SigType,
     Fields = [
         {<<"format">>,
             case Format of
@@ -681,8 +723,7 @@ json_struct_to_tx_failure_test() ->
         {"data_root_invalid_b64", BaseStruct#{ <<"data_root">> => InvalidB64 }, badarg},
         {"tag_name_invalid_b64", BaseStruct#{ <<"tags">> => BadTagName }, badarg},
         {"tag_value_invalid_b64", BaseStruct#{ <<"tags">> => BadTagValue }, badarg},
-        {"target_invalid_b64", BaseStruct#{ <<"target">> => InvalidB64 }, badarg},
-        {"invalid_signature_type", BaseStruct#{ <<"owner">> => <<>> }, {badmatch, {ecdsa,secp256k1}}}
+        {"target_invalid_b64", BaseStruct#{ <<"target">> => InvalidB64 }, badarg}
         ],
 
     lists:foreach(
@@ -819,8 +860,7 @@ tx_to_json_struct_failure_test() ->
         {"denomination_not_integer_when_positive", BaseTX#tx{denomination = <<"5">>}, badarg},
         {"tag_name_not_binary",  BaseTX#tx{tags = [{not_binary, <<"val">>}]}, badarg},
         {"tag_value_not_binary", BaseTX#tx{tags = [{<<"key">>, not_binary}]}, badarg},
-        {"tags_not_list", BaseTX#tx{tags = #{}}, {case_clause, #{}}},
-        {"invalid_signature_type", BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {badmatch, {ecdsa,secp256k1}}}
+        {"tags_not_list", BaseTX#tx{tags = #{}}, {case_clause, #{}}}
     ],
 
     lists:foreach(

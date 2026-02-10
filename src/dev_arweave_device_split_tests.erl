@@ -4,11 +4,24 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+resolve_arweave(Path, Req, Opts) ->
+    hb_ao:resolve(
+        #{<<"device">> => dev_arweave},
+        Req#{<<"path">> => Path},
+        test_opts(Opts)
+    ).
+
+test_opts(Opts) ->
+    case maps:is_key(store, Opts) of
+        true -> Opts;
+        false -> Opts#{store => [hb_test_utils:test_store()]}
+    end.
+
 delegates_to_vdf_test() ->
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, Res} =
-        dev_arweave:vdf(
-            #{},
+        resolve_arweave(
+            <<"vdf">>,
             #{
                 <<"action">> => <<"compute">>,
                 <<"step-number">> => 2,
@@ -21,8 +34,8 @@ delegates_to_vdf_test() ->
 
 delegates_to_spora_test() ->
     {ok, 1200} =
-        dev_arweave:spora(
-            #{},
+        resolve_arweave(
+            <<"spora">>,
             #{
                 <<"action">> => <<"entropy-reset-point">>,
                 <<"prev-step-number">> => 1199,
@@ -33,8 +46,8 @@ delegates_to_spora_test() ->
 
 delegates_to_ledger_test() ->
     {ok, Res} =
-        dev_arweave:ledger(
-            #{},
+        resolve_arweave(
+            <<"ledger">>,
             #{
                 <<"action">> => <<"validate-tx">>,
                 <<"tx">> => #{}
@@ -46,8 +59,8 @@ delegates_to_ledger_test() ->
 delegates_to_gossip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     {ok, #{<<"accepted">> := true}} =
-        dev_arweave:gossip(
-            #{},
+        resolve_arweave(
+            <<"gossip">>,
             #{
                 <<"action">> => <<"tx">>,
                 <<"method">> => <<"POST">>,
@@ -56,8 +69,8 @@ delegates_to_gossip_test() ->
             Opts
         ),
     {ok, Listed} =
-        dev_arweave:gossip(
-            #{},
+        resolve_arweave(
+            <<"gossip">>,
             #{
                 <<"action">> => <<"tx">>,
                 <<"method">> => <<"GET">>
@@ -69,8 +82,8 @@ delegates_to_gossip_test() ->
 delegates_tx_pending_to_gossip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     {ok, _} =
-        dev_arweave:gossip(
-            #{},
+        resolve_arweave(
+            <<"gossip">>,
             #{
                 <<"action">> => <<"tx">>,
                 <<"method">> => <<"POST">>,
@@ -79,11 +92,11 @@ delegates_tx_pending_to_gossip_test() ->
             Opts
         ),
     {ok, #{<<"txids">> := IDs}} =
-        dev_arweave:tx(
-            #{},
+        resolve_arweave(
+            <<"tx">>,
             #{
                 <<"method">> => <<"GET">>,
-                <<"path">> => <<"pending">>
+                <<"action">> => <<"pending">>
             },
             Opts
         ),
@@ -92,9 +105,8 @@ delegates_tx_pending_to_gossip_test() ->
 delegates_peers_alias_to_gossip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     {ok, #{<<"peers">> := [<<"http://peer-a">>]}} =
-        dev_arweave:default(
+        resolve_arweave(
             <<"peers">>,
-            #{},
             #{
                 <<"method">> => <<"POST">>,
                 <<"peer">> => <<"http://peer-a">>
@@ -105,9 +117,8 @@ delegates_peers_alias_to_gossip_test() ->
 delegates_vdf2_alias_test() ->
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, Res} =
-        dev_arweave:default(
+        resolve_arweave(
             <<"vdf2">>,
-            #{},
             #{
                 <<"action">> => <<"compute">>,
                 <<"step-number">> => 2,
@@ -122,9 +133,8 @@ delegates_vdf_session_alias_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, _} =
-        dev_arweave:default(
+        resolve_arweave(
             <<"vdf">>,
-            #{},
             #{
                 <<"action">> => <<"compute">>,
                 <<"step-number">> => 2,
@@ -134,11 +144,10 @@ delegates_vdf_session_alias_test() ->
             Opts
         ),
     {ok, Session} =
-        dev_arweave:default(
+        resolve_arweave(
             <<"vdf2">>,
-            #{},
             #{
-                <<"path">> => <<"session">>
+                <<"action">> => <<"session">>
             },
             Opts
         ),

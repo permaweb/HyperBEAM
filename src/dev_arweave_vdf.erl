@@ -288,8 +288,25 @@ read_binary(Keys, Base, Req, Default, Opts) ->
     maybe_decode_binary(read_any(Keys, Base, Req, Default, Opts)).
 
 read_any(Keys, Base, Req, Default, Opts) ->
-    Candidates = [{Req, Key} || Key <- Keys] ++ [{Base, Key} || Key <- Keys],
-    hb_ao:get_first(Candidates, Default, Opts).
+    read_any_local(Keys, Req, Base, Default, Opts).
+
+read_any_local([], _Req, _Base, Default, _Opts) ->
+    Default;
+read_any_local([Key | Rest], Req, Base, Default, Opts) ->
+    case hb_maps:find(Key, Req, Opts) of
+        {ok, Value} ->
+            Value;
+        error ->
+            case is_map(Base) of
+                true ->
+                    case hb_maps:find(Key, Base, Opts) of
+                        {ok, Value2} -> Value2;
+                        error -> read_any_local(Rest, Req, Base, Default, Opts)
+                    end;
+                false ->
+                    read_any_local(Rest, Req, Base, Default, Opts)
+            end
+    end.
 
 maybe_decode_binary(Bin) when is_binary(Bin) ->
     case hb_util:safe_decode(Bin) of
@@ -303,11 +320,24 @@ maybe_decode_binary(Other) ->
 %% Tests (adapted from upstream `ar_vdf_tests`)
 %% ------------------------------------------------------------------
 
+resolve_vdf(Path, Req, Opts) ->
+    hb_ao:resolve(
+        #{<<"device">> => dev_arweave_vdf},
+        Req#{<<"path">> => Path},
+        test_opts(Opts)
+    ).
+
+test_opts(Opts) ->
+    case maps:is_key(store, Opts) of
+        true -> Opts;
+        false -> Opts#{store => [hb_test_utils:test_store()]}
+    end.
+
 compute_and_verify_roundtrip_test() ->
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, ComputeRes} =
-        compute(
-            #{},
+        resolve_vdf(
+            <<"compute">>,
             #{
                 <<"step-number">> => 2,
                 <<"prev-output">> => hb_util:encode(PrevOutput),
@@ -317,8 +347,8 @@ compute_and_verify_roundtrip_test() ->
         ),
     Hashes = lists:reverse(hb_maps:get(<<"checkpoints">>, ComputeRes, [], #{})),
     {ok, VerifyRes} =
-        verify(
-            #{},
+        resolve_vdf(
+            <<"verify">>,
             #{
                 <<"step-number">> => 2,
                 <<"prev-output">> => hb_util:encode(PrevOutput),
@@ -330,15 +360,15 @@ compute_and_verify_roundtrip_test() ->
     ?assertEqual(true, hb_maps:get(<<"valid">>, VerifyRes, false, #{})).
 
 step_salt_test() ->
-    {ok, Salt} = step_salt(#{}, #{<<"step-number">> => 2}, #{}),
+    {ok, Salt} = resolve_vdf(<<"step-salt">>, #{<<"step-number">> => 2}, #{}),
     ?assertEqual(26, Salt).
 
 checkpoint_decode_test() ->
     PrevOutput = crypto:strong_rand_bytes(32),
     {ok, _Output, Buffer} = ar_vdf:compute(2, PrevOutput, 2),
     {ok, Checkpoints} =
-        checkpoints(
-            #{},
+        resolve_vdf(
+            <<"checkpoints">>,
             #{<<"buffer">> => hb_util:encode(Buffer)},
             #{}
         ),
@@ -348,8 +378,8 @@ session_persistence_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     PrevOutput = hb_util:decode(<<"f_z7RLug8etm3SrmRf-xPwXEL0ZQ_xHng2A5emRDQBw">>),
     {ok, _} =
-        compute(
-            #{},
+        resolve_vdf(
+            <<"compute">>,
             #{
                 <<"step-number">> => 2,
                 <<"prev-output">> => hb_util:encode(PrevOutput),
@@ -357,11 +387,11 @@ session_persistence_test() ->
             },
             Opts
         ),
-    {ok, Session1} = session(#{}, #{}, Opts),
+    {ok, Session1} = resolve_vdf(<<"session">>, #{}, Opts),
     ?assertEqual(2, hb_maps:get(<<"step-number">>, Session1, 0, #{})),
     {ok, _} =
-        compute(
-            #{},
+        resolve_vdf(
+            <<"compute">>,
             #{
                 <<"step-number">> => 3,
                 <<"prev-output">> => hb_maps:get(<<"output">>, Session1, <<>>, #{}),
@@ -369,5 +399,5 @@ session_persistence_test() ->
             },
             Opts
         ),
-    {ok, Prev} = previous_session(#{}, #{}, Opts),
+    {ok, Prev} = resolve_vdf(<<"previous-session">>, #{}, Opts),
     ?assertEqual(2, hb_maps:get(<<"step-number">>, Prev, 0, #{})).

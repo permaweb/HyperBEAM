@@ -368,15 +368,15 @@ unique_peers(Peers) ->
     ).
 
 method(Base, Req, Opts) ->
-    hb_ao:get_first([{Req, <<"method">>}, {Base, <<"method">>}], <<"GET">>, Opts).
+    read_any([<<"method">>], Base, Req, <<"GET">>, Opts).
 
 resource_suffix(Resource, Base, Req, Opts) ->
     Action = hb_util:bin(read_any([<<"action">>], Base, Req, <<>>, Opts)),
     Path = hb_util:bin(read_any([<<"path">>], Base, Req, <<>>, Opts)),
     Candidate =
-        case Path of
-            <<>> -> Action;
-            _ -> Path
+        case Action of
+            <<>> -> Path;
+            _ -> Action
         end,
     trim_resource_prefix(Resource, trim_leading_slash(Candidate)).
 
@@ -396,33 +396,63 @@ trim_leading_slash(Bin) ->
     Bin.
 
 read_any(Keys, Base, Req, Default, Opts) ->
-    Candidates = [{Req, Key} || Key <- Keys] ++ [{Base, Key} || Key <- Keys],
-    hb_ao:get_first(Candidates, Default, Opts).
+    read_any_local(Keys, Req, Base, Default, Opts).
+
+read_any_local([], _Req, _Base, Default, _Opts) ->
+    Default;
+read_any_local([Key | Rest], Req, Base, Default, Opts) ->
+    case hb_maps:find(Key, Req, Opts) of
+        {ok, Value} ->
+            Value;
+        error ->
+            case is_map(Base) of
+                true ->
+                    case hb_maps:find(Key, Base, Opts) of
+                        {ok, Value2} -> Value2;
+                        error -> read_any_local(Rest, Req, Base, Default, Opts)
+                    end;
+                false ->
+                    read_any_local(Rest, Req, Base, Default, Opts)
+            end
+    end.
 
 %% ------------------------------------------------------------------
 %% Tests
 %% ------------------------------------------------------------------
 
+resolve_gossip(Path, Req, Opts) ->
+    hb_ao:resolve(
+        #{<<"device">> => dev_arweave_gossip},
+        Req#{<<"path">> => Path},
+        test_opts(Opts)
+    ).
+
+test_opts(Opts) ->
+    case maps:is_key(store, Opts) of
+        true -> Opts;
+        false -> Opts#{store => [hb_test_utils:test_store()]}
+    end.
+
 tx_pool_roundtrip_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     TX = #{<<"id">> => <<"tx-1">>, <<"hello">> => <<"world">>},
     {ok, #{<<"accepted">> := true, <<"known">> := false}} =
-        tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
+        resolve_gossip(<<"tx">>, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
     {ok, #{<<"accepted">> := true, <<"known">> := true}} =
-        tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
-    {ok, Listed} = tx(#{}, #{<<"method">> => <<"GET">>}, Opts),
+        resolve_gossip(<<"tx">>, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
+    {ok, Listed} = resolve_gossip(<<"tx">>, #{<<"method">> => <<"GET">>}, Opts),
     ?assertEqual(1, hb_maps:get(<<"count">>, Listed, 0, #{})).
 
 pending_ids_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     TX1 = #{<<"id">> => <<"tx-a">>},
     TX2 = #{<<"id">> => <<"tx-b">>},
-    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX1}, Opts),
-    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX2}, Opts),
+    {ok, _} = resolve_gossip(<<"tx">>, #{<<"method">> => <<"POST">>, <<"tx">> => TX1}, Opts),
+    {ok, _} = resolve_gossip(<<"tx">>, #{<<"method">> => <<"POST">>, <<"tx">> => TX2}, Opts),
     {ok, #{<<"txids">> := IDs}} =
-        tx(
-            #{},
-            #{<<"method">> => <<"GET">>, <<"path">> => <<"pending">>},
+        resolve_gossip(
+            <<"tx">>,
+            #{<<"method">> => <<"GET">>, <<"action">> => <<"pending">>},
             Opts
         ),
     ?assertEqual(2, length(IDs)).
@@ -430,8 +460,13 @@ pending_ids_test() ->
 get_tx_by_id_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     TX = #{<<"id">> => <<"tx-42">>, <<"a">> => 1},
-    {ok, _} = tx(#{}, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
-    {ok, Loaded} = tx(#{}, #{<<"method">> => <<"GET">>, <<"path">> => <<"tx-42">>}, Opts),
+    {ok, _} = resolve_gossip(<<"tx">>, #{<<"method">> => <<"POST">>, <<"tx">> => TX}, Opts),
+    {ok, Loaded} =
+        resolve_gossip(
+            <<"tx">>,
+            #{<<"method">> => <<"GET">>, <<"action">> => <<"tx-42">>},
+            Opts
+        ),
     ?assertEqual(<<"tx-42">>, hb_maps:get(<<"id">>, Loaded, <<>>, #{})),
     ?assertEqual(1, hb_maps:get(<<"a">>, Loaded, 0, #{})).
 
@@ -444,14 +479,14 @@ block_pool_roundtrip_test() ->
             <<"hash">> => <<"hash-2">>
         },
     {ok, #{<<"accepted">> := true}} =
-        block(#{}, #{<<"method">> => <<"POST">>, <<"block">> => Block}, Opts),
-    {ok, Listed} = block(#{}, #{<<"method">> => <<"GET">>}, Opts),
+        resolve_gossip(<<"block">>, #{<<"method">> => <<"POST">>, <<"block">> => Block}, Opts),
+    {ok, Listed} = resolve_gossip(<<"block">>, #{<<"method">> => <<"GET">>}, Opts),
     ?assertEqual(1, hb_maps:get(<<"count">>, Listed, 0, #{})).
 
 peers_read_test() ->
     {ok, #{<<"peers">> := [<<"http://example.com">>]}} =
-        peers(
-            #{},
+        resolve_gossip(
+            <<"peers">>,
             #{<<"method">> => <<"GET">>, <<"peers">> => [<<"http://example.com">>]},
             #{}
         ).
@@ -459,15 +494,16 @@ peers_read_test() ->
 peers_add_remove_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     {ok, #{<<"peers">> := [<<"http://a">>]}} =
-        peers(
-            #{},
+        resolve_gossip(
+            <<"peers">>,
             #{<<"method">> => <<"POST">>, <<"peer">> => <<"http://a">>},
             Opts
         ),
-    {ok, #{<<"peers">> := [<<"http://a">>]}} = peers(#{}, #{<<"method">> => <<"GET">>}, Opts),
+    {ok, #{<<"peers">> := [<<"http://a">>]}} =
+        resolve_gossip(<<"peers">>, #{<<"method">> => <<"GET">>}, Opts),
     {ok, #{<<"peers">> := []}} =
-        peers(
-            #{},
+        resolve_gossip(
+            <<"peers">>,
             #{<<"method">> => <<"DELETE">>, <<"peer">> => <<"http://a">>},
             Opts
         ).
@@ -475,8 +511,8 @@ peers_add_remove_test() ->
 gossip_tx_no_peers_test() ->
     Opts = #{store => [hb_test_utils:test_store()]},
     {ok, Res} =
-        gossip_tx(
-            #{},
+        resolve_gossip(
+            <<"gossip-tx">>,
             #{<<"tx">> => #{<<"id">> => <<"tx-x">>}},
             Opts
         ),

@@ -57,7 +57,11 @@ verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65
             publicExponent = PublicExpnt,
             modulus = binary:decode_unsigned(Pub)
         }
-    ).
+    );
+verify({{ecdsa, secp256k1}, Pub}, Data, Sig, sha256) ->
+    verify_ecdsa_signature(Pub, Data, Sig);
+verify({{ecdsa, 256}, Pub}, Data, Sig, sha256) ->
+    verify_ecdsa_signature(Pub, Data, Sig).
 
 %% @doc Find a public key from a wallet.
 to_pubkey(Pubkey) ->
@@ -80,8 +84,10 @@ to_address({{_, _, PubKey}, {_, PubKey}}, _) ->
     to_address(PubKey);
 to_address(PubKey, {rsa, 65537}) ->
     to_rsa_address(PubKey);
+to_address(PubKey, {ecdsa, secp256k1}) ->
+    to_rsa_address(PubKey);
 to_address(PubKey, {ecdsa, 256}) ->
-	to_ecdsa_address(PubKey).
+	to_rsa_address(PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.
@@ -227,8 +233,38 @@ to_rsa_address(PubKey) ->
 hash_address(PubKey) ->
     crypto:hash(sha256, PubKey).
 
-to_ecdsa_address(PubKey) ->
-	hb_keccak:key_to_ethereum_address(PubKey).
+verify_ecdsa_signature(Pub, Data, Sig)
+        when is_binary(Pub), is_binary(Data), is_binary(Sig) ->
+    case ecdsa_signature_to_der(Sig) of
+        {ok, DerSig} ->
+            try
+                crypto:verify(ecdsa, sha256, Data, DerSig, [Pub, secp256k1])
+            catch
+                _:_ -> false
+            end;
+        error ->
+            false
+    end;
+verify_ecdsa_signature(_, _, _) ->
+    false.
+
+ecdsa_signature_to_der(<<RBin:32/binary, SBin:32/binary, _RecId:8>>) ->
+    ecdsa_rs_to_der(RBin, SBin);
+ecdsa_signature_to_der(<<RBin:32/binary, SBin:32/binary>>) ->
+    ecdsa_rs_to_der(RBin, SBin);
+ecdsa_signature_to_der(DerSig) when is_binary(DerSig), byte_size(DerSig) > 0 ->
+    {ok, DerSig};
+ecdsa_signature_to_der(_) ->
+    error.
+
+ecdsa_rs_to_der(RBin, SBin) ->
+    R = binary:decode_unsigned(RBin),
+    S = binary:decode_unsigned(SBin),
+    try
+        {ok, public_key:der_encode('ECDSA-Sig-Value', {'ECDSA-Sig-Value', R, S})}
+    catch
+        _:_ -> error
+    end.
 
 %%%===================================================================
 %%% Private functions.
