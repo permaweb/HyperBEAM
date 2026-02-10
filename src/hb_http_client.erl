@@ -516,7 +516,7 @@ handle_info({gun_up, PID, Protocol}, State) ->
 			%% A connection timeout should have occurred.
 			{noreply, State};
 		[{PID, {connecting, PendingRequests}, MonitorRef, ConnKey}] ->
-            ?event(gun, {gun_up, {protocol, Protocol}, {conn_key, ConnKey}}),
+            ?event(http_client, {gun_up, {protocol, Protocol}, {conn_key, ConnKey}}),
 			[gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
 			ets:insert(?CONN_STATUS_ETS, {PID, connected, MonitorRef, ConnKey}),
 			inc_prometheus_gauge(outbound_connections),
@@ -557,7 +557,12 @@ handle_info({gun_error, PID, Reason}, State) ->
 			{noreply, State}
 	end;
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams}, State) ->
+handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
+    ?event(http_client, 
+        {gun_down, 
+            {protocol, Protocol}, 
+            {reason, Reason}, 
+            {killed_streams, KilledStreams}}),
 	case ets:lookup(?CONN_STATUS_ETS, PID) of
 		[] ->
 			?event(warning,
