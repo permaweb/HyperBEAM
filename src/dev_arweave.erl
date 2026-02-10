@@ -454,9 +454,7 @@ get_bad_tx_test() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
-    %% @TODO: somewhere in the hb_ao/hb_http stack {error, client_error} gets
-    %% remapped to {ok, client_error}.
-    ?assertEqual({ok, client_error}, Res).
+    ?assertEqual({error, client_error}, Res).
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.
