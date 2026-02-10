@@ -129,7 +129,7 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    ?event({to, {inbound, RawTABM}, {req, Req}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {inbound, RawTABM}, {req, Req}}),
     MaybeCommitment = hb_message:commitment(
         #{ <<"commitment-device">> => <<"ans104@1.0">> },
         RawTABM,
@@ -137,22 +137,22 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
-    ?event({to, {maybe_bundle, MaybeBundle}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {maybe_bundle, MaybeBundle}}),
 
     % Calculate and normalize the `data', if applicable.
     Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
-    ?event({to, {calculated_data, Data}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {calculated_data, Data}}),
     TX0 = dev_codec_ans104_to:siginfo(
         MaybeBundle, MaybeCommitment,
         fun dev_codec_ans104_to:fields_to_tx/4, Opts
     ),
-    ?event({to, {found_siginfo, TX0}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {found_siginfo, TX0}}),
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_codec_ans104_to:tags(
         TX1, MaybeCommitment, MaybeBundle,
         dev_codec_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
-    ?event({to, {calculated_tags, Tags}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {calculated_tags, Tags}}),
     TX2 = TX1#tx { tags = Tags },
     Res =
         try dev_arweave_common:normalize(TX2)
@@ -167,7 +167,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
                 }),
                 erlang:raise(Type, Error, Stacktrace)
         end,
-    ?event({to, {result, Res}}),
+    dev_arweave_common:log_conversion(ans104_to, {to, {result, Res}}),
     {ok, Res};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
@@ -479,34 +479,9 @@ unsigned_lowercase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     ?assert(UnsignedTX#tx.manifest =/= undefined),
     {ok, TABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
-    ExpectedTABM = UnsignedTABM#{ 
-        <<"commitments">> => #{
-            <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">> => #{
-                <<"bundle">> => <<"true">>,
-                <<"commitment-device">> => <<"ans104@1.0">>,
-                <<"committed">> => [<<"data">>, <<"a1">>, <<"c1">>],
-                <<"signature">> => <<"q6hcdZlyNre_X3L5Z7zeSkjOKUP6L88BcQ_D0JOjrLs">>,
-                <<"type">> => <<"unsigned-sha256">>
-            }
-        },
-        <<"data">> => #{
-            <<"commitments">> => #{
-                <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8">> => #{
-                    <<"bundle">> => <<"false">>,
-                    <<"commitment-device">> => <<"ans104@1.0">>,
-                    <<"committed">> => [<<"data">>, <<"a2">>, <<"c2">>],
-                    <<"signature">> => <<"IkDi2KTYxvbyeJ3t0JR1wuN9vJunYI1hj3wQjFloSG8">>,
-                    <<"type">> => <<"unsigned-sha256">>
-                }
-            },
-            <<"data">> => <<"testdata">>,
-            <<"a2">> => <<"value2">>,
-            <<"c2">> => <<"value3">>
-        }
-    },
-    ?event(debug_test, {expected_tabm, {explicit, ExpectedTABM}}),
+    ?event(debug_test, {expected_tabm, {explicit, UnsignedTABM}}),
     ?event(debug_test, {tabm, {explicit, TABM}}),
-    ?assertEqual(ExpectedTABM, TABM).
+    ?assertEqual(UnsignedTABM, TABM).
 
 unsigned_mixedcase_bundle_list_tags_1_test() ->
     UnsignedTX = dev_arweave_common:normalize(#tx{
