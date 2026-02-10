@@ -461,6 +461,7 @@ handle_request(RawReq, Body, ServerID) ->
 
 %% @doc Return a 500 error response to the client.
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    Path = cowboy_req:path(Req),
     DetailsStr = hb_util:bin(hb_format:message(Details, NodeMsg, 1)),
     StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
     ErrorMsg =
@@ -474,6 +475,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     ?event(
         http_error,
         {returning_500_error,
+            {path, Path},
             {string,
                 hb_format:indent_lines(
                     <<"\n", ErrorBin/binary, "\n">>,
