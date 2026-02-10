@@ -532,9 +532,10 @@ handle_info({gun_error, PID, Reason}, State) ->
 		[] ->
 			?event(warning, {gun_connection_error_with_unknown_pid}),
 			{noreply, State};
-		[{PID, Status, _MonitorRef, ConnKey}] ->
+		[{PID, Status, MonitorRef, ConnKey}] ->
 			ets:delete(?CONNECTIONS_ETS, ConnKey),
 			ets:delete(?CONN_STATUS_ETS, PID),
+			demonitor(MonitorRef, [flush]),
 			Reason2 =
 				case Reason of
 					timeout ->
@@ -568,9 +569,10 @@ handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
 			?event(warning,
                 {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
 			{noreply, State};
-		[{PID, Status, _MonitorRef, ConnKey}] ->
+		[{PID, Status, MonitorRef, ConnKey}] ->
 			ets:delete(?CONNECTIONS_ETS, ConnKey),
 			ets:delete(?CONN_STATUS_ETS, PID),
+			demonitor(MonitorRef, [flush]),
 			Reason2 =
 				case Reason of
 					{Type, _} ->
@@ -585,6 +587,8 @@ handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
 					dec_prometheus_gauge(outbound_connections),
 					ok
 			end,
+			gun:shutdown(PID),
+			?event(http_outbound, {gun_shutdown_after_down, {conn_key, ConnKey}}),
 			{noreply, State}
 	end;
 
