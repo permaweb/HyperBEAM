@@ -497,6 +497,31 @@ l2_dataitem_ed25519_test() ->
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"{\"displayName\":\"Test Hub\",\"description\":\"This is a test hub created in the test suite\",\"externalurl\":\"\",\"image\":\"\"}">>, Data).
 
+%% @doc Solana L2 Transaction test
+l2_dataitem_solana_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    ID = <<"hXKqH_9rkYZ7LwvVps81uKNZd_i36WZjlp4Wnc5BkiE">>,
+    {ok, Res} = read(ID, #{}),
+    ?event(gateway, {l2_dataitem, Res}),
+    Opts = #{},
+    CommitmentType = hb_util:deep_get(
+        [<<"commitments">>, ID, <<"type">>],
+        Res,
+        not_found,
+        Opts
+    ),
+    ?assertEqual(<<"ed25519">>, CommitmentType),
+    CommitmentCommitter = hb_util:deep_get(
+        [<<"commitments">>, ID, <<"committer">>],
+        Res,
+        not_found,
+        Opts
+    ),
+    ?assertEqual(<<"Wa3OCs_CoAnzIppzhbc82bYqpR4e8f_EV9dgFh6EKgE">>, CommitmentCommitter),
+    %% Check Data
+    Data = maps:get(<<"data">>, Res),
+    ?assertEqual(<<"Hello, Irys!">>, Data).
+
 %% @doc Test optimistic index
 ao_dataitem_test() ->
     _Node = hb_http_server:start_node(#{}),
