@@ -20,10 +20,12 @@ scope(_) -> scope().
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_store:read(IndexStore, path(ID)) of
+    Type = case hb_store:read(IndexStore, path(ID)) of
         {ok, _Offset} -> simple;
         _ -> not_found
-    end.
+    end,
+    ?event({type, {id, {explicit, ID}}, {type, Type}}),
+    Type.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     case hb_store:read(IndexStore, path(ID)) of
@@ -43,8 +45,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                         {id, {explicit, ID}},
                         {is_tx, IsTX},
                         {start_offset, StartOffset},
-                        {length, Length},
-                        {message, Message}});
+                        {length, Length}});
                 {error, Reason} ->
                     ?event({{read, error}, 
                         {id, {explicit, ID}}, 
