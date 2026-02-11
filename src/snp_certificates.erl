@@ -7,7 +7,7 @@
 -module(snp_certificates).
 -export([fetch_cert_chain/1, fetch_vcek/6, pem_to_der_chain/1, pem_cert_to_der/1,
          clear_cache/0, clear_cert_chain_cache/0, clear_vcek_cache/0,
-         fetch_verification_certificates/5]).
+         fetch_verification_certificates/6]).
 -include("include/hb.hrl").
 -include("include/snp_constants.hrl").
 -include("include/snp_guids.hrl").
@@ -516,11 +516,12 @@ store_vcek_in_cache(CacheKey, Vcek) ->
 %% @param UcodeSPL Microcode SPL value (0-255)
 %% @returns {CertChainPEM, VcekDER} tuple with both certificates
 -spec fetch_verification_certificates(ChipId :: binary(), BootloaderSPL :: integer(),
-    TeeSPL :: integer(), SnpSPL :: integer(), UcodeSPL :: integer()) -> 
+    TeeSPL :: integer(), SnpSPL :: integer(), UcodeSPL :: integer(), NodeOpts :: map()) -> 
     {binary(), binary()}.
-fetch_verification_certificates(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL) ->
+fetch_verification_certificates(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts) ->
     ?event(snp_short, {fetching_cert_chain_start}),
-    {ok, CertChainPEM} = fetch_cert_chain(undefined),
+    Family = hb_opts:get(<<"cpu_family">>, NodeOpts, undefined),
+    {ok, CertChainPEM} = fetch_cert_chain(Family),
     ?event(snp_short, {cert_chain_fetched, byte_size(CertChainPEM)}),
     
     ?event(snp, {fetching_vcek_start, #{
@@ -530,7 +531,7 @@ fetch_verification_certificates(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL)
         snp => SnpSPL,
         microcode => UcodeSPL
     }}),
-    {ok, VcekDER} = fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, undefined),
+    {ok, VcekDER} = fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, Family),
     ?event(snp_short, {vcek_fetched, byte_size(VcekDER)}),
     {CertChainPEM, VcekDER}.
 

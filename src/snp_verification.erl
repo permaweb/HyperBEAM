@@ -5,7 +5,7 @@
 %%% verification pipelines.
 -module(snp_verification).
 -export([verify_measurement/2, verify_signature/3, verify_signature_and_address/3,
-         verify_debug_disabled/1, verify_measurement/3, verify_report_integrity/1,
+         verify_debug_disabled/1, verify_measurement/3, verify_report_integrity/2,
          verify_nonce/4, verify_trusted_software/3, is_verification_failure/1,
          verify/3]).
 -include("include/hb.hrl").
@@ -695,9 +695,9 @@ convert_and_verify_signature(ReportJSON, CertChainPEM, VcekDER) ->
 %% @param ReportJSON The raw JSON report to verify
 %% @returns `{ok, true}' if the report signature is valid, or
 %% `{error, report_signature_invalid}' on failure
--spec verify_report_integrity(ReportJSON :: binary()) ->
+-spec verify_report_integrity(ReportJSON :: binary(), NodeOpts :: map()) ->
     {ok, true} | {error, report_signature_invalid | term()}.
-verify_report_integrity(ReportJSON) ->
+verify_report_integrity(ReportJSON, NodeOpts) ->
     ?event(snp_short, {verify_report_integrity_start, byte_size(ReportJSON)}),
     {IntegrityTimeMicros, Result} = timer:tc(fun() ->
         maybe
@@ -724,7 +724,7 @@ verify_report_integrity(ReportJSON) ->
         
         % Fetch certificates
         {CertChainPEM, VcekDER} = snp_certificates:fetch_verification_certificates(
-            ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL),
+            ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts),
         
         % Convert and verify signature
         ReportIsValid = convert_and_verify_signature(ReportJSON, CertChainPEM, VcekDER),
@@ -876,7 +876,7 @@ verify(M1, M2, NodeOpts) ->
             {ok, DebugResult} ?= verify_debug_disabled(Msg),
             {ok, TrustedResult} ?= verify_trusted_software(M1, Msg, NodeOpts),
             {ok, MeasurementResult} ?= verify_measurement(Msg, ReportJSON, NodeOpts),
-            {ok, ReportResult} ?= verify_report_integrity(ReportJSON),
+            {ok, ReportResult} ?= verify_report_integrity(ReportJSON, NodeOpts),
             Valid = lists:all(
                 fun(Bool) -> Bool end, 
                     [
