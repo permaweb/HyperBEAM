@@ -192,14 +192,16 @@ extract_rpc_result(_) ->
 %%% Response building
 build_response(Events, FromBlock, ToBlock, CurrentBlock, Contract) ->
     #{
-        <<"data">> => hb_json:encode(Events),
-        <<"from-block">> => FromBlock,
-        <<"from-block-number">> => hex_to_int(FromBlock),
-        <<"to-block">> => ToBlock,
-        <<"to-block-number">> => hex_to_int(ToBlock),
-        <<"latest-block">> => CurrentBlock,
-        <<"latest-block-number">> => hex_to_int(CurrentBlock),
-        <<"contract">> => Contract,
+        <<"body">> => #{
+            <<"data">> => hb_json:encode(Events),
+            <<"from-block">> => FromBlock,
+            <<"from-block-number">> => hex_to_int(FromBlock),
+            <<"to-block">> => ToBlock,
+            <<"to-block-number">> => hex_to_int(ToBlock),
+            <<"latest-block">> => CurrentBlock,
+            <<"latest-block-number">> => hex_to_int(CurrentBlock),
+            <<"contract">> => Contract
+        },
         <<"status">> => 200
     }.
 
