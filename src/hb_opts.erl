@@ -290,14 +290,59 @@ default_message() ->
             },
             #{
                 % Routes for Arweave transaction requests to use a remote gateway.
-                <<"template">> => <<"/arweave">>,
-                <<"node">> =>
-                    #{
-                        <<"match">> => <<"^/arweave">>,
-                        <<"with">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                    }
-            },
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 3_600_000_000,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 8_200_000_000,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 12_200_000_000,
+                            <<"with">> => <<"https://data-3.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://data-4.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+
+                    ],
+                <<"strategy">> => <<"nearest">>,
+                <<"choose">> => 3,
+                <<"parallel">> => 2
+           },
+            #{
+                % Routes for Arweave transaction requests to use a remote gateway.
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"nearest">>,
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
+           },
             #{
                 % Routes for raw data requests to use a remote gateway.
                 <<"template">> => <<"/raw">>,
