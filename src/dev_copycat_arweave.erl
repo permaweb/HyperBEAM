@@ -571,7 +571,29 @@ index_ids_test() ->
     ),
    ok.
 
-basic_bundle_header_test() ->
+%% @doc Test a bundle header that fits in a single chunk.
+small_bundle_header_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    TXID = <<"29TsnbqPQ_7rQ_r4KF5qRr995W1wBw_mTy6WEMy40aw">>,
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    {ok, {BundleIndex, HeaderSize}} =
+        download_bundle_header(EndOffset, Size, Opts),
+    ?assertEqual(1704, length(BundleIndex)),
+    ?assertEqual(109088, HeaderSize),
+    ok.
+
+%% @doc Test a bundle header that doesn't fit in a single chunk.
+large_bundle_header_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     TXID = <<"bnMTI7LglBGSaK5EdV_juh6GNtXLm0cd5lkd2q4nlT0">>,
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -585,9 +607,10 @@ basic_bundle_header_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, _HeaderSize}} =
+    {ok, {BundleIndex, HeaderSize}} =
         download_bundle_header(EndOffset, Size, Opts),
     ?assertEqual(15000, length(BundleIndex)),
+    ?assertEqual(960032, HeaderSize),
     ok.
 
 % ecdsa_no_data_test() ->
