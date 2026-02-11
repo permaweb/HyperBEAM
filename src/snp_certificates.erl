@@ -520,7 +520,7 @@ store_vcek_in_cache(CacheKey, Vcek) ->
     {binary(), binary()}.
 fetch_verification_certificates(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts) ->
     ?event(snp_short, {fetching_cert_chain_start}),
-    Family = hb_opts:get(<<"cpu_family">>, NodeOpts, undefined),
+    Family = hb_opts:get(<<"cpu_family">>, undefined, NodeOpts),
     {ok, CertChainPEM} = fetch_cert_chain(Family),
     ?event(snp_short, {cert_chain_fetched, byte_size(CertChainPEM)}),
     
