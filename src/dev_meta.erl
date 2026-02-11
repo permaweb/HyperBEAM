@@ -325,6 +325,7 @@ status_code(ok, _NodeMsg) -> 200;
 status_code(error, _NodeMsg) -> 400;
 status_code(created, _NodeMsg) -> 201;
 status_code(not_found, _NodeMsg) -> 404;
+status_code(client_error, _NodeMsg) -> 400;
 status_code(failure, _NodeMsg) -> 500;
 status_code(unavailable, _NodeMsg) -> 503;
 status_code(unauthorized, _NodeMsg) -> 401;

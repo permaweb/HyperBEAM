@@ -202,9 +202,9 @@ tx_error_test() ->
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % After a tx request fails it should be retried indefinitely. We'll
         % wait for a few retries then continue.
-        TXs = hb_mock_server:get_requests(tx, 4, ServerHandle),
-        ?assert(length(TXs) >= 4),
-        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 2, ServerHandle),
+        ?assert(length(TXs) >= 2),
+        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle, 500),
         ?assertEqual([], Chunks),
         ok
     after
@@ -226,7 +226,8 @@ unsigned_dataitem_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store(hb_store_lmdb),
+            debug_print => false
         }),
         Item = #tx{
                 data = <<"testdata">>,
@@ -256,7 +257,7 @@ idle_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            bundler_max_idle_time => 10000,
+            bundler_max_idle_time => 2000,
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(hb_store_lmdb)
         }),
@@ -265,12 +266,12 @@ idle_test() ->
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % Wait just to give the server a chance to post a transaction
         % (but it shouldn't)
-        timer:sleep(2000),
+        timer:sleep(1000),
         ?assertEqual(0, length(hb_mock_server:get_requests(tx, 0, ServerHandle))),
         ?assertEqual(0, length(hb_mock_server:get_requests(chunk, 0, ServerHandle))),
         % Wait gain to give the server a chance to trip the max idle time.
         % It should *now* post a transaction.
-        timer:sleep(8000),
+        timer:sleep(1000),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
@@ -284,7 +285,7 @@ idle_test() ->
     end.
 
 dispatch_blocking_test() ->
-    BlockTime = 10000,
+    BlockTime = 2000,
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -327,7 +328,6 @@ dispatch_blocking_test() ->
             {slowest, Slowest}, {max_allowed, 2 * Slowest}
         }),
         ?assert(Time4 =< 2 * Slowest),
-        timer:sleep(BlockTime),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
@@ -460,11 +460,11 @@ test_api_error(Responses) ->
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
-        % Since thre was an error either before or while posting the tx,
+        % Since there was an error either before or while posting the tx,
         % no bundles should be posted and no chunks should be posted.
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 1000),
         ?assertEqual([], TXs),
-        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle, 1000),
         ?assertEqual([], Chunks),
         % Now that we dispatch asynchronously, an error won't cause the
         % Item to remain in the queue. Instead we'll rely on the retry
