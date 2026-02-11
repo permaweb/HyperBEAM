@@ -19,16 +19,10 @@ scope(_) -> scope().
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(StoreOpts, Key) ->
-    case read(StoreOpts, Key) of
-        {error, not_found} -> not_found;
-        {ok, _Data} ->
-            % TODO:
-            % - should this return composite for any index L1 bundles?
-            % - if so, I guess we need to implement list/2?
-            % - for now we don't index nested bundle children, but once we
-            %   do we may nalso need to return composite for them.
-            simple
+type(#{ <<"index-store">> := IndexStore }, ID) ->
+    case hb_store:read(IndexStore, path(ID)) of
+        {ok, _Offset} -> simple;
+        _ -> not_found
     end.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
