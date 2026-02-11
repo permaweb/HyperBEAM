@@ -414,17 +414,22 @@ download_bundle_header(EndOffset, Size, Opts) ->
 header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
         when HeaderSize =< byte_size(FirstChunk) ->
     {ok, FirstChunk};
-header_chunk(HeaderSize, _FirstChunk, StartOffset, Opts) ->
-    hb_ao:resolve(
-        <<
-            ?ARWEAVE_DEVICE/binary,
-            "/chunk&offset=",
-            (hb_util:bin(StartOffset))/binary,
-            "&length=",
-            (hb_util:bin(HeaderSize))/binary
-        >>,
-        Opts
-    ).
+header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
+    Res =
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary,
+                "/chunk&offset=",
+                (hb_util:bin(StartOffset + byte_size(FirstChunk)))/binary,
+                "&length=",
+                (hb_util:bin(HeaderSize - byte_size(FirstChunk)))/binary
+            >>,
+            Opts
+        ),
+    case Res of
+        {ok, OtherChunks} -> {ok, <<FirstChunk/binary, OtherChunks/binary>>};
+        Other -> Other
+    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
