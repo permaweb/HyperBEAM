@@ -2,7 +2,8 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/2, read/2, read_with_type/2]).
+-export([scope/0, scope/1, type/2, read/2]).
+-export([read_with_type/2, resolve/2]).
 %%% Indexing API:
 -export([write_offset/5]).
 -include("include/hb.hrl").
@@ -13,6 +14,8 @@
 scope() -> remote.
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
+
+resolve(_, Key) -> Key.
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
