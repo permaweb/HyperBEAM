@@ -192,7 +192,7 @@ extract_rpc_result(_) ->
 %%% Response building
 build_response(Events, FromBlock, ToBlock, CurrentBlock, Contract) ->
     #{
-        <<"body">> => Events,
+        <<"data">> => hb_json:encode(Events),
         <<"from-block">> => FromBlock,
         <<"from-block-number">> => hex_to_int(FromBlock),
         <<"to-block">> => ToBlock,
@@ -214,13 +214,28 @@ build_filter_params(Contract, EventSig, FromBlock, ToBlock) ->
         not_found -> Base;
         <<>> -> Base;
         _ ->
-            EventHash = keccak256_topic(EventSig),
-            Base#{ <<"topics">> => [EventHash] }
+            Sigs = split_event_signatures(EventSig),
+            Hashes = lists:map(fun keccak256_topic/1, Sigs),
+            Topics = case Hashes of
+                [Single] -> [Single];
+                Multiple -> [Multiple]
+            end,
+            Base#{ <<"topics">> => Topics }
     end.
 
 keccak256_topic(EventSig) ->
     Hash = hb_keccak:keccak_256(EventSig),
     <<"0x", (hb_util:to_hex(Hash))/binary>>.
+
+%% @doc Split a comma-separated list of event signatures.
+%% Splits on ")," boundaries to avoid breaking on commas inside param lists.
+split_event_signatures(EventSig) ->
+    Parts = binary:split(EventSig, <<"),">>, [global]),
+    restore_closing_parens(Parts).
+
+restore_closing_parens([Last]) -> [Last];
+restore_closing_parens([H | T]) ->
+    [<<H/binary, ")">> | restore_closing_parens(T)].
 
 %%% Event decoding
 
@@ -233,9 +248,17 @@ decode_events(<<"true">>, _EventSig, Events) ->
 decode_events(_, NoSig, Events) when NoSig =:= not_found; NoSig =:= <<>> ->
     lists:map(fun decode_event_metadata/1, Events);
 decode_events(_, EventSig, Events) ->
-    {Name, Types} = parse_event_signature(EventSig),
+    Sigs = split_event_signatures(EventSig),
+    SigMap = maps:from_list(lists:map(
+        fun(Sig) ->
+            {Name, Types} = parse_event_signature(Sig),
+            Hash = keccak256_topic(Sig),
+            {Hash, {Name, Types}}
+        end,
+        Sigs
+    )),
     lists:map(
-        fun(Event) -> decode_event(Event, Name, Types) end,
+        fun(Event) -> decode_event_by_topic(Event, SigMap) end,
         Events
     ).
 
@@ -282,6 +305,22 @@ decode_event(Event, Name, Types) when is_map(Event) ->
         <<"event">> => Name,
         <<"args">> => IndexedArgs ++ DataArgs
     }.
+
+%% @doc Decode an event by matching its topic[0] against a signature map.
+%% Falls back to metadata-only decoding if no matching signature is found.
+decode_event_by_topic(Event, SigMap) when is_map(Event) ->
+    Topics = hb_maps:get(<<"topics">>, Event, []),
+    case Topics of
+        [TopicHash | _] ->
+            case maps:get(TopicHash, SigMap, not_found) of
+                {Name, Types} ->
+                    decode_event(Event, Name, Types);
+                not_found ->
+                    decode_event_metadata(Event)
+            end;
+        [] ->
+            decode_event_metadata(Event)
+    end.
 
 %% @doc Parse event signature into name and type list.
 parse_event_signature(Sig) ->
@@ -510,6 +549,45 @@ decode_full_transfer_event_test() ->
             <<"block-number">> := 24420855,
             <<"log-index">> := 10,
             <<"removed">> := false
-        }, 
+        },
         Decoded
     ).
+
+decode_multi_sig_event_test() ->
+    TransferSig = <<"Transfer(address,address,uint256)">>,
+    ApprovalSig = <<"Approval(address,address,uint256)">>,
+    MultiSig = <<TransferSig/binary, ",", ApprovalSig/binary>>,
+    Addr1 = <<"0x", (pad32(
+        <<"11b815efb8f581194ae79006d24e0d814b7697f6">>))/binary>>,
+    Addr2 = <<"0x", (pad32(
+        <<"51c72848c68a965f66fa7a88855f9f7784502a7f">>))/binary>>,
+    Amount = <<"0x", (pad32(<<"3a5da3d3">>))/binary>>,
+    TransferEvent = #{
+        <<"topics">> => [keccak256_topic(TransferSig), Addr1, Addr2],
+        <<"data">> => Amount,
+        <<"blockNumber">> => <<"0x100">>,
+        <<"logIndex">> => <<"0x1">>,
+        <<"transactionHash">> => <<"0xabc">>,
+        <<"removed">> => false
+    },
+    ApprovalEvent = #{
+        <<"topics">> => [keccak256_topic(ApprovalSig), Addr1, Addr2],
+        <<"data">> => Amount,
+        <<"blockNumber">> => <<"0x101">>,
+        <<"logIndex">> => <<"0x2">>,
+        <<"transactionHash">> => <<"0xdef">>,
+        <<"removed">> => false
+    },
+    [Decoded1, Decoded2] = decode_events(<<"false">>, MultiSig,
+        [TransferEvent, ApprovalEvent]),
+    ?assertEqual(<<"Transfer">>, maps:get(<<"event">>, Decoded1)),
+    ?assertEqual(<<"Approval">>, maps:get(<<"event">>, Decoded2)),
+    ?assertEqual(
+        [
+            <<"0x11b815efb8f581194ae79006d24e0d814b7697f6">>,
+            <<"0x51c72848c68a965f66fa7a88855f9f7784502a7f">>,
+            <<"979215315">>
+        ],
+        maps:get(<<"args">>, Decoded1)
+    ),
+    ?assertEqual(maps:get(<<"args">>, Decoded1), maps:get(<<"args">>, Decoded2)).
