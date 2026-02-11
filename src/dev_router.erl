@@ -1,3 +1,12 @@
+%% TODOs:
+%% 
+%% 1. Matching routes: Take `routes` from Opts and return first hit.
+%% 2. Apply route: Transform the route message with the request data
+%% 3. Choose nodes: If the route has multiple nodes, choose a node based on the
+%%    given strategy.
+%% 4. Return _with_ the route `Opts`, which `hb_http` uses to make the request.
+
+
 %%% @doc A device that routes outbound messages from the node to their
 %%% appropriate network recipients via HTTP. All messages are initially
 %%% routed to a single process per node, which then load-balances them
@@ -242,21 +251,19 @@ route(_, Msg, Opts) ->
         Node when is_map(Node) -> apply_route(Msg, Node, Opts);
         not_found ->
             ModR = apply_routes(Msg, R, Opts),
-            case hb_ao:get(<<"strategy">>, R, Opts) of
-                not_found -> {ok, ModR};
+            case hb_ao:get(<<"strategy">>, R, <<"All">>, Opts) of
                 <<"All">> -> {ok, ModR};
                 Strategy ->
                     ChooseN = hb_ao:get(<<"choose">>, R, 1, Opts),
                     % Get the first element of the path -- the `base' message
                     % of the request.
-                    Base = extract_base(Msg, Opts),
                     Nodes = hb_ao:get(<<"nodes">>, ModR, Opts),
-                    Chosen = choose(ChooseN, Strategy, Base, Nodes, Opts),
+                    Chosen = choose(ChooseN, Strategy, Msg, Nodes, Opts),
                     ?event({choose,
                         {strategy, Strategy},
                         {choose_n, ChooseN},
-                        {base, Base},
                         {nodes, Nodes},
+                        {msg, Msg},
                         {chosen, Chosen}
                     }),
                     case Chosen of
@@ -458,9 +465,9 @@ choose(N, <<"By-Weight">>, _, Nodes, Opts) ->
     |
         choose(N - 1, <<"By-Weight">>, nop, lists:delete(Node, Nodes), Opts)
     ];
-choose(N, <<"By-Base">>, Hashpath, Nodes, Opts) when is_binary(Hashpath) ->
+choose(N, <<"By-Base">>, #{ <<"path">> := Hashpath }, Nodes, Opts) when is_binary(Hashpath) ->
     choose(N, <<"By-Base">>, binary_to_bignum(Hashpath), Nodes, Opts);
-choose(N, <<"By-Base">>, HashInt, Nodes, Opts) ->
+choose(N, <<"By-Base">>, #{ <<"path">> := HashInt }, Nodes, Opts) ->
     Node = lists:nth((HashInt rem length(Nodes)) + 1, Nodes),
     [
         Node
@@ -473,7 +480,28 @@ choose(N, <<"By-Base">>, HashInt, Nodes, Opts) ->
             Opts
         )
     ];
-choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
+choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
+    NodesWithDistances =
+        lists:map(
+            fun(Node) ->
+                {Node, field_distance(Int, hb_maps:get(<<"center">>, Node, Opts))}
+            end,
+            Nodes
+        ),
+    lists:reverse(
+        element(
+            1,
+            lists:foldl(
+                fun(_, {Current, Remaining}) ->
+                    Res = {Lowest, _} = lowest_distance(Remaining),
+                    {[Lowest|Current], lists:delete(Res, Remaining)}
+                end,
+                {[], NodesWithDistances},
+                lists:seq(1, N)
+            )
+        )
+    );
+choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts) ->
     BareHashPath = hb_util:native_id(HashPath),
     NodesWithDistances =
         lists:map(
