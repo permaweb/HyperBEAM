@@ -173,25 +173,38 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 %% If the device is a map, we look for a key in the map. First we try to find
 %% the key using its literal value. If that fails, we cast the key to an atom
 %% and try again.
+find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
+    NormKey = hb_ao:normalize_key(Key),
+    NormDev = hb_ao:normalize_keys(Dev, Opts),
+	MapValue =
+		case hb_maps:get(NormKey, NormDev, not_found, Opts) of
+			not_found when not is_atom(Key) ->
+				try
+					AtomKey = hb_util:key_to_atom(Key, false),
+					hb_maps:get(hb_ao:normalize_key(AtomKey), NormDev, not_found, Opts)
+				catch _:_ ->
+					not_found
+				end;
+			Found ->
+				Found
+		end,
+	case MapValue of
+		not_found -> not_found;
+		Fun when is_function(Fun) ->
+			case erlang:fun_info(Fun, arity) of
+					{arity, Arity} when Arity =< MaxArity ->
+						case is_exported(Msg, Dev, Key, Opts) of
+							true -> {ok, Fun};
+							false -> not_found
+						end;
+					_ -> not_found
+				end;
+			_ -> not_found
+		end;
 find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
 	try hb_util:key_to_atom(Key, false) of
 		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
 	catch _:_ -> not_found
-	end;
-find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
-    NormKey = hb_ao:normalize_key(Key),
-    NormDev = hb_ao:normalize_keys(Dev, Opts),
-	case hb_maps:get(NormKey, NormDev, not_found, Opts) of
-		not_found -> not_found;
-		Fun when is_function(Fun) ->
-			case erlang:fun_info(Fun, arity) of
-				{arity, Arity} when Arity =< MaxArity ->
-					case is_exported(Msg, Dev, Key, Opts) of
-						true -> {ok, Fun};
-						false -> not_found
-					end;
-				_ -> not_found
-			end
 	end;
 find_exported_function(_Msg, _Mod, _Key, Arity, _Opts) when Arity < 0 ->
     not_found;
