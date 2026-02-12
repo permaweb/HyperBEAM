@@ -498,7 +498,17 @@ choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                {Node, field_distance(RouteInt, hb_maps:get(<<"center">>, Node, Opts))}
+                %% Use 4-arity get with explicit default — the old
+                %% 3-arity call returned the Opts map when `center'
+                %% was missing, crashing field_distance with badarith.
+                %% Centerless nodes get 2^256 (> max distance) so they
+                %% are selected last.
+                case hb_maps:get(<<"center">>, Node, not_found, Opts) of
+                    not_found ->
+                        {Node, 1 bsl 256};
+                    Center ->
+                        {Node, field_distance(RouteInt, Center)}
+                end
             end,
             Nodes
         ),
@@ -1870,6 +1880,285 @@ route_multirequest_parallel_limit() ->
     % waves (~600ms), not one (~300ms) or fully serial (~900ms).
     ?assert(Duration >= 450),
     ?assert(Duration < 850).
+
+%% @doc Test that a full production-style route configuration (matching a
+%% typical config.json) resolves every request type correctly: single-node
+%% prefix routes, multi-node All-strategy routes, Nearest-Integer chunk
+%% routes, match/with regex routes, and fallback routes.
+full_route_config_test() ->
+    Routes =
+        [
+            #{
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 3_600_000_000,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 8_200_000_000,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 12_200_000_000,
+                            <<"with">> => <<"https://data-3.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://data-4.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 16_200_000_000,
+                            <<"with">> => <<"https://data-5.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"choose">> => 3,
+                <<"parallel">> => 2
+            },
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => <<"/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
+            }
+        ],
+    Opts = #{ routes => Routes },
+
+    %% --- Nearest-Integer strategy for /arweave/chunk ---
+
+    %% A chunk request with route-by near center 8_200_000_000 should pick
+    %% the 3 closest nodes out of the 5 available.
+    {ok, ChunkRoute} =
+        route(
+            #{
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            Opts
+        ),
+    ?event(router_test, {chunk_route, {route_by, 8_200_000_100}, {route, ChunkRoute}}),
+    ?assertEqual(2, hb_ao:get(<<"parallel">>, ChunkRoute, #{})),
+    ChunkNodes = hb_ao:get(<<"nodes">>, ChunkRoute, #{}),
+    ?assertEqual(3, length(ChunkNodes)),
+    %% The three nearest centers to 8_200_000_100 should be
+    %% 8_200_000_000, 3_600_000_000, and 12_200_000_000.
+    ChunkCenters =
+        lists:sort(
+            [hb_ao:get(<<"center">>, N, #{}) || N <- ChunkNodes]
+        ),
+    ?event(router_test, {chunk_centers, ChunkCenters}),
+    ?assertEqual([3_600_000_000, 8_200_000_000, 12_200_000_000], ChunkCenters),
+    %% Each selected node should have a URI with the match/with regex applied:
+    %% /arweave/chunk/... -> https://data-N.arweave.net/chunk/...
+    ChunkURIs =
+        lists:sort(
+            [hb_ao:get(<<"uri">>, N, #{}) || N <- ChunkNodes]
+        ),
+    ?event(router_test, {chunk_uris, ChunkURIs}),
+    ?assertEqual(
+        [
+            <<"https://data-1.arweave.net/chunk/8200000100">>,
+            <<"https://data-2.arweave.net/chunk/8200000100">>,
+            <<"https://data-3.arweave.net/chunk/8200000100">>
+        ],
+        ChunkURIs
+    ),
+
+    %% A chunk request near the high end should select the 3 closest to
+    %% 16_000_000_000: 16_200_000_000, 12_200_000_000, and 8_200_000_000.
+    {ok, HighChunkRoute} =
+        route(
+            #{
+                <<"path">> => <<"/arweave/chunk/16000000000">>,
+                <<"route-by">> => 16_000_000_000
+            },
+            Opts
+        ),
+    ?event(router_test, {high_chunk_route, {route_by, 16_000_000_000}, {route, HighChunkRoute}}),
+    HighChunkCenters =
+        lists:sort(
+            [
+                hb_ao:get(<<"center">>, N, #{})
+            ||
+                N <- hb_ao:get(<<"nodes">>, HighChunkRoute, #{})
+            ]
+        ),
+    ?event(router_test, {high_chunk_centers, HighChunkCenters}),
+    ?assertEqual(
+        [8_200_000_000, 12_200_000_000, 16_200_000_000],
+        HighChunkCenters
+    ),
+
+    %% --- Fallback /arweave route (non-chunk) ---
+
+    %% A non-chunk arweave request (e.g. /arweave/tx/...) should fall
+    %% through the chunk template and match the general ^/arweave route.
+    {ok, ArweaveRoute} =
+        route(#{ <<"path">> => <<"/arweave/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">> }, Opts),
+    ?event(router_test, {arweave_fallback_route, ArweaveRoute}),
+    ?assertEqual(true, hb_ao:get(<<"parallel">>, ArweaveRoute, #{})),
+    ?assertEqual(1, hb_ao:get(<<"stop-after">>, ArweaveRoute, #{})),
+    ?assertEqual(200, hb_ao:get(<<"admissible-status">>, ArweaveRoute, #{})),
+    ArweaveNodes = hb_ao:get(<<"nodes">>, ArweaveRoute, #{}),
+    ?assertEqual(1, length(ArweaveNodes)),
+    ArweaveURI = hb_ao:get(<<"uri">>, hd(ArweaveNodes), #{}),
+    ?event(router_test, {arweave_fallback_uri, ArweaveURI}),
+    ?assertEqual(<<"https://arweave.net/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>, ArweaveURI),
+
+    %% --- Single-node prefix route (/raw) ---
+
+    {ok, RawRoute} =
+        route(#{ <<"path">> => <<"/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">> }, Opts),
+    ?event(router_test, {raw_route, RawRoute}),
+    ?assertEqual(
+        <<"https://arweave.net/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>,
+        hb_ao:get(<<"uri">>, RawRoute, #{})
+    ),
+
+    %% --- No match ---
+
+    NoMatchResult = route(#{ <<"path">> => <<"/unknown/endpoint">> }, Opts),
+    ?event(router_test, {no_match_result, NoMatchResult}),
+    ?assertEqual({error, no_matches}, NoMatchResult),
+
+    %% --- HTTP GETs through the routes ---
+    %% Fire actual requests using hb_http:request/2, the same way the
+    %% route_multirequest_parallel_limit test does it.
+    HttpReqOpts = #{ routes => Routes, http_only_result => false },
+
+    %% Chunk request via Nearest-Integer (parallel=2, choose=3).
+    %% With 3 nodes and parallel=2, wave 1 sends to 2 nodes, wave 2 sends
+    %% to the remaining 1. We time it to confirm parallelism.
+    ChunkStart = os:system_time(millisecond),
+    ChunkHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            HttpReqOpts
+        )),
+    ChunkDuration = os:system_time(millisecond) - ChunkStart,
+    ?event(router_test, {chunk_http_result, ChunkHttpRes}),
+    ?event(router_test, {chunk_http_duration_ms, ChunkDuration}),
+
+    %% Now test with ALL 5 data nodes to really exercise parallel=2.
+    %% choose=5 means all 5 nodes get hit, but only 2 at a time.
+    %% With ~300-500ms per request, we expect ~3 waves (~900-1500ms)
+    %% instead of fully serial (~1500-2500ms) or fully parallel (~300-500ms).
+    AllChunkRoutes =
+        [
+            #{
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 3_600_000_000,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 8_200_000_000,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 12_200_000_000,
+                            <<"with">> => <<"https://data-3.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 14_000_000_000,
+                            <<"with">> => <<"https://data-4.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 16_200_000_000,
+                            <<"with">> => <<"https://data-5.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"choose">> => 5,
+                <<"parallel">> => 2,
+                <<"responses">> => 5,
+                <<"stop-after">> => false
+            }
+        ],
+    AllChunkStart = os:system_time(millisecond),
+    AllChunkHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            #{ routes => AllChunkRoutes, http_only_result => false }
+        )),
+    AllChunkDuration = os:system_time(millisecond) - AllChunkStart,
+    ?event(router_test, {all_chunk_http_result, AllChunkHttpRes}),
+    ?event(router_test, {all_chunk_http_duration_ms, AllChunkDuration}),
+    ?event(router_test, {all_chunk_responses,
+        case is_list(AllChunkHttpRes) of
+            true -> length(AllChunkHttpRes);
+            false -> not_a_list
+        end
+    }),
+
+    %% Fallback /arweave route.
+    ArweaveHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>
+            },
+            HttpReqOpts
+        )),
+    ?event(router_test, {arweave_http_result, ArweaveHttpRes}),
+
+    %% /raw prefix route.
+    RawHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>
+            },
+            HttpReqOpts
+        )),
+    ?event(router_test, {raw_http_result, RawHttpRes}).
 
 %%% Statistical test utilities
 
