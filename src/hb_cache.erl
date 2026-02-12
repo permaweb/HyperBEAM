@@ -401,6 +401,13 @@ read(Path, Opts) ->
     case StoreReadResult of 
         {ok, Res} ->
             hb_message:paranoid_verify(cache_read, Res, Opts),
+            % case is_map(Res) andalso length(maps:keys(Res)) > 60 of
+            %     true ->
+            %         ?event(debug_test, {greater_than_60, {path, {string, Path}}}),
+            %         ?event(debug_test, {read, {res, {explicit, Res}}});
+            %     _ ->
+            %         ok
+            % end,
             {ok, hb_message:normalize_commitments(Res, Opts)};
         _ -> StoreReadResult
     end.

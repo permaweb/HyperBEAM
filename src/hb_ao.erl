@@ -223,7 +223,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
 resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % If the first message is a link, we should load the message and
     % continue with the resolution.
-    ?event(ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
+    ?event(debug_test, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and

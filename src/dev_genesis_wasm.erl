@@ -33,6 +33,7 @@ compute(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
     case delegate_request(Msg, Req, Opts) of
         {ok, Res} ->
+            ?event(debug_test, {gw_compute_done}),
             % Resolve the `patch@1.0' device.
             {ok, Msg4} =
                 hb_ao:resolve(
@@ -80,23 +81,23 @@ delegate_request(Msg, Req, Opts) ->
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(State, Req, Opts) ->
     maybe
-        {ok, State2} ?=
-            hb_ao:resolve(
-                State,
-                {as, <<"dedup@1.0">>, Req},
-                Opts
-            ),
-        ?event(dedup_short,
-            {continue,
-                {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
-                {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
-                {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)},
-                {input, hb_ao:get(<<"body/data">>, Req, no_input, Opts)}
-            }
-        ),
+        % {ok, State2} ?=
+            % hb_ao:resolve(
+            %     State,
+            %     {as, <<"dedup@1.0">>, Req},
+            %     Opts
+            % ),
+        % ?event(dedup_short,
+        %     {continue,
+        %         {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
+        %         {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
+        %         {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)},
+        %         {input, hb_ao:get(<<"body/data">>, Req, no_input, Opts)}
+        %     }
+        % ),
         {ok, State3} ?=
             hb_ao:resolve(
-                State2,
+                State,
                 {as, <<"delegated-compute@1.0">>, Req},
                 Opts
             ),

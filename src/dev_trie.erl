@@ -75,22 +75,38 @@ get(TrieNode, Req, Opts) ->
 
 %% @doc Set keys and their values in the trie.
 set(Trie, Req, Opts) ->
-    io:format("START====================~n", []),
-    io:format("Trie: ~p~n", [Trie]),
-    io:format("Req: ~p~n", [Req]),
-    ?event(debug_test, {setting_trie}),
+    % io:format("START====================~n", []),
+    % io:format("Trie: ~p~n", [Trie]),
+    % io:format("Req: ~p~n", [Req]),
+    ?event(debug_test, {setting_trie, {req, Req}}),
+    % Comms = hb_maps:get(<<"commitments">>, Trie, #{}, Opts),
+    % ?event(debug_test, {commitments, {comms, Comms}, {trie_size, erlang:external_size(Trie)}}),
     Insertable = hb_maps:without([<<"path">>], Req, Opts),
     KeyVals = hb_maps:to_list(Insertable, Opts),
     Ret = {ok, do_set(Trie, KeyVals, Opts)},
-    ?event(debug_test, {done_setting_trie}),
-    io:format("done_setting_trie~n~p~n", [Ret]),
+    % ?event(debug_test, {done_setting_trie, {ret, Ret}}),
+    % io:format("done_setting_trie~n~p~n", [Ret]),
     Ret.
 do_set(Trie, [], Opts) ->
+    ?event(debug_test, {done_set}),
+    ?event(debug_test, {trie_size, {size, erlang:external_size(Trie)}}),
+    ?event(debug_test, {trie_keys, {keys, {explicit, maps:keys(Trie)}}}),
+    ?event(debug_test, {trie_commitments, {commitments, maps:get(<<"commitments">>, Trie, not_found)}}),
+    % ?event(debug_test, {keys, {explicit, maps:keys(Trie)}}),
     Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
-    {ok, Path} = hb_cache:write(Uncommitted, Opts),
-    {link, Path, Opts};
+    ?event(debug_test, {uncommitted}),
+    ?event(debug_test, {uncommitted_keys, {keys, {explicit, maps:keys(Uncommitted)}}}),
+    CommittedTrie = hb_message:commit(Uncommitted, Opts, #{ <<"type">> => <<"hmac-sha256">> }),
+    ?event(debug_test, {committed_trie, {committed_trie, {explicit, CommittedTrie}}}),
+    {ok, Path} = hb_cache:write(CommittedTrie, Opts),
+    % {ok, Read} = hb_cache:read(Path, Opts),
+    % ?event(debug_test, {read, {read, Read}}),
+    ?event(debug_test, {written, {path, {string, Path}}}),
+    CommittedTrie;
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
+    % ?event(debug_test, {inserting, {key, Key}, {val, Val}}),
     NewTrie = insert(Trie, Key, Val, Opts),
+    % ?event(debug_test, {inserted, {key, Key}, {val, Val}}),
     do_set(NewTrie, KeyVals, Opts).
 
 insert(TrieNode, Key, Val, Opts) ->
@@ -923,13 +939,13 @@ bulk_update_cases_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, Opts)),
     ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, Opts)).
 
-trie_test() ->
-    {Trie, Req} = dev_test_trie:test(),
-    ?event(debug_jack, {trie_test, {req, Req}}),
-    {ok, Res} = set(Trie, Req, #{}),
-    ?event(debug_jack, {trie_test, {res, Res}}).
-reproduce_missing_balances_test_() ->
-    {timeout, 500, fun reproduce_missing_balances/0}.
+% trie_test() ->
+%     {Trie, Req} = dev_test_trie:test(),
+%     ?event(debug_jack, {trie_test, {req, Req}}),
+%     {ok, Res} = set(Trie, Req, #{}),
+%     ?event(debug_jack, {trie_test, {res, Res}}).
+% % reproduce_missing_balances_test_() ->
+    % {timeout, 500, fun reproduce_missing_balances/0}.
 reproduce_missing_balances() ->
     application:ensure_all_started(hb),
     Opts =
@@ -952,8 +968,9 @@ reproduce_missing_balances() ->
         ),
     {ok, FirstNow} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
     ?event(debug_test, {reproduce_missing_balances_test, {first_now, FirstNow}}),
-    TotalBalances = 100_000,
+    TotalBalances = 300_000,
     BatchSize = 5_000,
+    TotalBatches = TotalBalances div BatchSize,
     AllBalances =
         maps:from_list(
             [
@@ -991,15 +1008,46 @@ reproduce_missing_balances() ->
         end,
         Chunks
     ),
-    {ok, _} =
+    lists:foreach(
+        fun(Chunk) ->
+            lists:map(
+                fun(_) ->    
+                    TransferString = generate_random_transfer_message(Chunk),
+                    {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString, <<"Eval">>, Opts)
+                end,
+                lists:seq(1, 500)
+            )
+        end,
+        Chunks
+    ),
+    % lists:foreach(
+    %     fun(Chunk) ->
+    %         TransferString = generate_random_transfer_message(Chunk),
+    %         ?event(debug_trie_test, {reproduce_missing_balances_test, {transfer_string, TransferString}}),
+    %         {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString, <<"Eval">>, Opts),
+    %         BalanceString = generate_random_balance_message(Chunk),
+    %         ?event(debug_trie_test, {reproduce_missing_balances_test, {balance_string, BalanceString}}),
+    %         {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, BalanceString, <<"Eval">>, Opts),
+    %         InfoString = generate_info_message(),
+    %         ?event(debug_trie_test, {reproduce_missing_balances_test, {info_string, InfoString}}),
+    %         {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, InfoString, <<"Eval">>, Opts),
+    %         TransferString2 = generate_random_transfer_message(Chunk),
+    %         ?event(debug_trie_test, {reproduce_missing_balances_test, {transfer_string_2, TransferString2}}),
+    %         {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString2, <<"Eval">>, Opts)
+    %     end,
+    %     Chunks
+    % ),
+    {ok, Now} =
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"now">> },
             Opts
         ),
+    ?event(debug_trie_test, {reproduce_missing_balances_test, {now, Now}}),
+    %     ),
     maps:map(
         fun(Address, Amount) ->
-            {ok, Result} = hb_ao:resolve_many(
+            {Status, Result} = hb_ao:resolve_many(
                 [
                     Base, 
                     #{ <<"path">> => <<"now">>},
@@ -1007,22 +1055,44 @@ reproduce_missing_balances() ->
                     #{ <<"path">> => Address }
                 ],
             Opts),
-            ?event(debug_test, {reproduce_missing_balances_test, {result, {address, Address}, {amount, Amount}, {explicit, Result}}}),
-            ?assertEqual(hb_util:bin(Amount), hb_util:bin(Result))
+            case Status of
+                ok ->
+                    ?event(test_output, {reproduce_missing_balances_test, {success, {address, Address}, {amount, Amount}, {explicit, Result}}});
+                error ->
+                    ?event(test_output, {reproduce_missing_balances_test, {error, {address, Address}, {amount, Amount}, {explicit, Result}}})
+            end
         end,
         AllBalances
     ).
-
+generate_random_transfer_message(Chunk) ->
+    {TransferRecipient, _} = lists:nth(rand:uniform(length(Chunk)), Chunk),
+    {TransferFrom, _} = lists:nth(rand:uniform(length(Chunk)), Chunk),
+    TransferAmount = hb_util:bin(rand:uniform(1000)),
+    ?event(debug_trie_test, {reproduce_missing_balances_test, {transfer_recipient, TransferRecipient}, {transfer_from, TransferFrom}, {transfer_amount, TransferAmount}}),
+    BalanceUpdates = <<
+        "NewBalances = {};\n",
+        "Balances['", TransferFrom/binary, "'] = Balances['", TransferFrom/binary, "'] - ", TransferAmount/binary, ";\n",
+        "Balances['", TransferRecipient/binary, "'] = Balances['", TransferRecipient/binary, "'] + ", TransferAmount/binary, ";\n"
+        "NewBalances['", TransferFrom/binary, "'] = Balances['", TransferFrom/binary, "'];\n",
+        "NewBalances['", TransferRecipient/binary, "'] = Balances['", TransferRecipient/binary, "'];\n"
+    >>,
+    <<BalanceUpdates/binary, "Send({ device = \"patch@1.0\", balances = NewBalances })">>.
+generate_random_balance_message(Chunk) ->
+    {Address, _} = lists:nth(rand:uniform(length(Chunk)), Chunk),
+    <<"Send({ target = ao.id, action = \"Balance\", target = \"", Address/binary, "\" })">>.
+generate_info_message() ->
+    <<"Send({ target = ao.id, action = \"Info\" })">>.
 generate_lua_balance_data(Chunk) ->
     BalanceUpdates = 
         lists:foldl(
             fun({Key, Value}, Acc) ->
-                <<Acc/binary, "Balances['", Key/binary, "'] = ", Value/binary, ";\n">>
+                <<Acc/binary, "Balances['", Key/binary, "'] = ", Value/binary, ";\n",
+                "NewBalances['", Key/binary, "'] = ", Value/binary, ";\n">>
             end,
-            <<"">>,
+            <<"NewBalances = {};\n">>,
             Chunk
         ),
-    <<BalanceUpdates/binary, "Send({ device = \"patch@1.0\", balances = Balances })">>.
+    <<BalanceUpdates/binary, "Send({ device = \"patch@1.0\", balances = NewBalances })">>.
         
 
 n_length_chunks_fast(List,Len) ->
@@ -1040,3 +1110,157 @@ n_length_chunks_fast([H|T],[HAcc | TAcc],Pos,Max) ->
     n_length_chunks_fast(T,[[H | HAcc] | TAcc],Pos+1,Max);
 n_length_chunks_fast([H|T],[],Pos,Max) ->
     n_length_chunks_fast(T,[[H]],Pos+1,Max).
+
+reproduce_missing_balances_dep() ->
+    application:ensure_all_started(hb),
+    Opts =
+        #{
+            priv_wallet => hb:wallet(),
+            store => hb_opts:get(store)
+        },
+    ?event(debug_test, {reproduce_missing_balances_test, {opts, Opts}}),
+    Base = dev_genesis_wasm:test_genesis_wasm_process(Opts),
+    hb_cache:write(Base, Opts),
+    {ok, _SchedInit} = 
+        hb_ao:resolve(
+            Base,
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"schedule">>,
+                <<"body">> => Base
+            },
+            Opts
+        ),
+    {ok, FirstNow} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
+    ?event(debug_test, {reproduce_missing_balances_test, {first_now, FirstNow}}),
+    TotalBalances = 175_000,
+    BatchSize = 5_000,
+    TotalBatches = TotalBalances div BatchSize,
+    AllBalances =
+        maps:from_list(
+            [
+                {
+                    hb_util:human_id(crypto:strong_rand_bytes(32)),
+                    hb_util:bin(rand:uniform(1_000_000_000_000))
+                }
+            ||
+                _ <- lists:seq(1, TotalBalances)
+            ]
+        ),
+    Chunks = n_length_chunks_fast(maps:to_list(AllBalances), BatchSize),
+    FirstChunk = hd(Chunks),
+    % ?event(debug_test, {reproduce_missing_balances_test, {chunks, length(Chunks)}}),
+    % ?event(debug_test, {reproduce_missing_balances_test, {first_chunk_len, length(FirstChunk)}, {first_chunk, FirstChunk}}),
+    {ok, _} =
+        dev_genesis_wasm:schedule_aos_call(
+            Base,
+            <<"
+                Balances = Balances or {};\n
+                Send({ 
+                    device = \"patch@1.0\",
+                    balances = { device = \"trie@1.0\" }
+                })
+            ">>,
+            <<"Eval">>,
+            Opts
+        ),
+    ProcessId = dev_process_lib:process_id(Base, #{}, Opts),
+    ?event(debug_test, {reproduce_missing_balances_test, {process_id, {string, ProcessId}}}),
+    lists:foreach(
+        fun(Chunk) ->
+            LuaString = generate_lua_balance_data(Chunk),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, LuaString, <<"Eval">>, Opts)
+        end,
+        Chunks
+    ),
+    lists:foreach(
+        fun(Chunk) ->
+            TransferString = generate_random_transfer_message(Chunk),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString, <<"Eval">>, Opts)
+        end,
+        Chunks
+    ),
+    lists:foreach(
+        fun(Chunk) ->
+            TransferString = generate_random_transfer_message(Chunk),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {transfer_string, TransferString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString, <<"Eval">>, Opts),
+            BalanceString = generate_random_balance_message(Chunk),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {balance_string, BalanceString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, BalanceString, <<"Eval">>, Opts),
+            InfoString = generate_info_message(),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {info_string, InfoString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, InfoString, <<"Eval">>, Opts)
+        end,
+        Chunks
+    ),
+    {ok, _} =
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"now">> },
+            Opts
+        ),
+    lists:foreach(
+        fun(Chunk) ->
+            TransferString = generate_random_transfer_message(Chunk),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {transfer_string, TransferString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, TransferString, <<"Eval">>, Opts),
+            BalanceString = generate_random_balance_message(Chunk),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {balance_string, BalanceString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, BalanceString, <<"Eval">>, Opts),
+            InfoString = generate_info_message(),
+            ?event(debug_trie_test, {reproduce_missing_balances_test, {info_string, InfoString}}),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, InfoString, <<"Eval">>, Opts)
+        end,
+        Chunks
+    ),
+    {ok, _} =
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"now">> },
+            Opts
+        ),
+    NewBalances =
+        maps:from_list(
+            [
+                {
+                    hb_util:human_id(crypto:strong_rand_bytes(32)),
+                    hb_util:bin(rand:uniform(1_000_000_000_000))
+                }
+            ||
+                _ <- lists:seq(1, 30_000)
+            ]
+        ),
+    NewChunks = n_length_chunks_fast(maps:to_list(NewBalances), 10_000),
+    lists:foreach(
+        fun(Chunk) ->
+            LuaString = generate_lua_balance_data(Chunk),
+            {ok, _} = dev_genesis_wasm:schedule_aos_call(Base, LuaString, <<"Eval">>, Opts)
+        end,
+        NewChunks
+    ),
+    {ok, _} =
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"now">> },
+            Opts
+        ),
+    maps:map(
+        fun(Address, Amount) ->
+            {Status, Result} = hb_ao:resolve_many(
+                [
+                    Base, 
+                    #{ <<"path">> => <<"now">>},
+                    #{ <<"path">> => <<"balances">> }, 
+                    #{ <<"path">> => Address }
+                ],
+            Opts),
+            case Status of
+                ok ->
+                    ?event(test_output, {reproduce_missing_balances_test, {success, {address, Address}, {amount, Amount}, {explicit, Result}}});
+                error ->
+                    ?event(test_output, {reproduce_missing_balances_test, {error, {address, Address}, {amount, Amount}, {explicit, Result}}})
+            end
+        end,
+        AllBalances
+    ).

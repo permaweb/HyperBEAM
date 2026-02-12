@@ -605,6 +605,8 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
 set(Base, NewValuesMsg, Opts) ->
+    % io:format("Set Called: ~p~n", [Base]),
+    % io:format("New Values Msg: ~p~n", [NewValuesMsg]),
     OriginalPriv = hb_private:from_message(Base),
 	% Filter keys that are in the default device (this one).
     {ok, NewValuesKeys} = keys(NewValuesMsg, Opts),
@@ -695,16 +697,19 @@ set(Base, NewValuesMsg, Opts) ->
             end,
             OriginalPriv
         ),
+    % ?event(debug_test, {merged, {merged, Merged}, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
     case OverwrittenCommittedKeys of
         [] ->
             ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
             {ok, Merged};
         _ ->
+            Matches = hb_message:match(Merged, Base, strict, Opts),
+            % ?event(debug_test, {matches, {matches, Matches}}),
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, strict, Opts) of
+            case Matches of
                 true ->
-                    ?event(message_set, {set_keys_matched, {merged, Merged}}),
+                    % ?event(debug_test, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
                 % {error, {Details, {trace, Stacktrace}}} ->
                 %     erlang:raise(error, Details, Stacktrace);
@@ -720,32 +725,67 @@ set(Base, NewValuesMsg, Opts) ->
                 %         }
                 %     ),
                 _ ->
-                    {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
+                    WithoutCommitments = hb_maps:without([<<"commitments">>], Merged, Opts),
+                    % ?event(debug_test, {without_commitments, {without_commitments, WithoutCommitments}}),
+                    {ok, WithoutCommitments}
             end
     end.
 
 %% @doc Deep merge keys in a message, utilizing the set device of any child
 %% keys that are themselves messages.
 do_deep_merge(BaseValues, NewValues, Opts) ->
+    % ?event(debug_test, {do_deep_merge_called}),
+    % ?event(debug_test, {base_values, {base_values, {explicit, BaseValues}}}),
+    % ?event(debug_test, {new_values, {new_values, {explicit, NewValues}}}),
     {WithNestedMerges, StillToDeepMerge} =
         maps:fold(
             fun(Key, NewValue, {Acc, ToDeepMerge})
                     when is_map(NewValue)
                     andalso is_map(map_get(Key, Acc)) ->
+                ComputedValue = 
+                    hb_util:ok(
+                        hb_ao:resolve(
+                            map_get(Key, Acc),
+                            NewValue#{
+                                <<"path">> => <<"set">>
+                            },
+                            Opts
+                        ),
+                        Opts
+                    ),
+                    % case Key of 
+                        % <<"balances">> ->
+                        %         case maps:get(<<"balances">>, BaseValues, undefined) of
+                        %             undefined ->
+                        %                 ok;
+                        %             Balances ->
+                        %                 ?event(debug_test, {balances_in_base_values}),
+                        %                 Keys = maps:keys(Balances),
+                        %                 ?event(debug_test, {keys_in_balances, {keys, {explicit, Keys}}}),
+                        %                 Commitments = maps:get(<<"commitments">>, Balances, #{}),
+                        %                 ?event(debug_test, {commitments_in_balances, {commitments, Commitments}}),
+                        %                 BalancesSize = erlang:external_size(Balances),
+                        %                 ?event(debug_test, {balances_size, {size, BalancesSize}})
+                        %         end,
+                        %         case maps:get(<<"balances">>, NewValues, undefined) of
+                        %             undefined ->
+                        %                 ok;
+                        %             NewBalances ->
+                        %                 ?event(debug_test, {new_balances_in_new_values}),
+                        %                 NewKeys = maps:keys(NewBalances),
+                        %                 ?event(debug_test, {new_keys_in_balances, {keys, {explicit, NewKeys}}}),
+                        %                 NewCommitments = maps:get(<<"commitments">>, NewBalances, #{}),
+                        %                 ?event(debug_test, {new_commitments_in_balances, {commitments, NewCommitments}}),
+                        %                 NewBalancesSize = erlang:external_size(NewBalances),
+                        %                 ?event(debug_test, {new_balances_size, {size, NewBalancesSize}})
+                        %         end,
+                        %     ?event(debug_test, {computed_value_key, {key, Key}}),
+                        %     ?event(debug_test, {computed_value, {computed_value, {explicit, ComputedValue}}});
+                        % _ -> ok
+                    % end,
+                % ?event(debug_test, {do_deep_merge_with_nested_merges, {key, Key}, {new_value, NewValue}, {computed_value, ComputedValue}, {acc, Acc}, {to_deep_merge, ToDeepMerge}}),
                 {
-                    Acc#{
-                        Key =>
-                            hb_util:ok(
-                                hb_ao:resolve(
-                                    map_get(Key, Acc),
-                                    NewValue#{
-                                        <<"path">> => <<"set">>
-                                    },
-                                    Opts
-                                ),
-                                Opts
-                            )
-                    },
+                    Acc#{ Key => ComputedValue },
                     ToDeepMerge
                 };
             (Key, _, {Acc, ToDeepMerge}) ->
@@ -754,11 +794,39 @@ do_deep_merge(BaseValues, NewValues, Opts) ->
             {BaseValues, []},
             NewValues
         ),
-    hb_util:deep_merge(
+    % ?event(debug_test, {do_deep_merge_with_nested_merges_called}),
+    % ?event(debug_test, {do_deep_merge_with_nested_merges, {still_to_deep_merge, StillToDeepMerge}}),
+    % case maps:get(<<"balances">>, WithNestedMerges, undefined) of
+    %     undefined -> ok;
+    %     WithNestedMergesBalances ->
+    %         ?event(debug_test, {balances_in_with_nested_merges}),
+    %         WithNestedMergesKeys = maps:keys(WithNestedMergesBalances),
+    %         ?event(debug_test, {with_nested_merges_keys_in_balances, {keys, {explicit, WithNestedMergesKeys}}}),
+    %         WithNestedMergesCommitments = maps:get(<<"commitments">>, WithNestedMergesBalances, #{}),
+    %         ?event(debug_test, {with_nested_merges_commitments_in_balances, {commitments, WithNestedMergesCommitments}}),
+    %         WithNestedMergesBalancesSize = erlang:external_size(WithNestedMergesBalances),
+    %         ?event(debug_test, {with_nested_merges_balances_size, {size, WithNestedMergesBalancesSize}})
+    % end,
+    Res = hb_util:deep_merge(
         WithNestedMerges,
         maps:with(StillToDeepMerge, NewValues),
         Opts
-    ).
+    ),
+    % ?event(debug_test, {do_deep_merge_done}),
+    % ?event(debug_test, {do_deep_merge_result, {res, {explicit, Res}}}),
+    % case maps:get(<<"balances">>, Res, undefined) of
+    %     undefined ->
+    %         ok;
+    %     ResBalances ->
+    %         ?event(debug_test, {balances_in_res}),
+    %         ResKeys = maps:keys(ResBalances),
+    %         ?event(debug_test, {res_keys_in_balances, {keys, {explicit, ResKeys}}}),
+    %         ResCommitments = maps:get(<<"commitments">>, ResBalances, #{}),
+    %         ?event(debug_test, {res_commitments_in_balances, {commitments, ResCommitments}}),
+    %         ResBalancesSize = erlang:external_size(ResBalances),
+    %         ?event(debug_test, {res_balances_size, {size, ResBalancesSize}})
+    % end,
+    Res.
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, used to

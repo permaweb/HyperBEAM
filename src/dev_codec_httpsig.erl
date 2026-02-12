@@ -187,6 +187,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         Opts
     );
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
+    % ?event(debug_test, {unsigned_commit_called}),
     % Extract the key material from the request.
     Opts = opts(RawOpts),
     ?event({req_to_key_material, {req, Req}}),
@@ -209,11 +210,12 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     CommittedKeys = keys_to_commit(Msg, Req, Opts),
     % Create the commitment with the appropriate keyid, committed keys, and 
     % bundle specifier.
+    NormalizedCommittedKeys = hb_ao:normalize_keys(CommittedKeys),
     CommitmentWithoutCommitter = #{
         <<"commitment-device">> => <<"httpsig@1.0">>,
         <<"type">> => <<"hmac-sha256">>,
         <<"keyid">> => KeyID,
-        <<"committed">> => hb_ao:normalize_keys(CommittedKeys)
+        <<"committed">> => NormalizedCommittedKeys
     },
     % If the committer is undefined, we do not need to add the `committer' key.
     BaseCommitment =
@@ -242,21 +244,28 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
             {hmac, HMac}
         }
     ),
+    NewCommitments =
+        Commitments#{
+            HMac =>
+                UnauthedCommitment#{
+                    <<"signature">> => HMac,
+                    <<"committed">> => ModCommittedKeys
+                }
+        },
+    % case length(maps:to_list(NormalizedCommittedKeys)) > 60 of
+    %     true ->
+    %         ?event(debug_test, {greater_than_60}),
+    %         ?event(debug_test, {new_commitments_greater_60, {base_msg, {explicit, BaseMsg}}, {new_commitments, {explicit, NewCommitments}}});
+    %     _ ->
+    %         ok
+    % end,
     Res =
         {
             ok,
             Msg#{
-                <<"commitments">> =>
-                    Commitments#{
-                        HMac =>
-                            UnauthedCommitment#{
-                                <<"signature">> => HMac,
-                                <<"committed">> => ModCommittedKeys
-                            }
-                    }
+                <<"commitments">> => NewCommitments
             }
         },
-    ?event(debug_commitments, {hmac_generation_complete, Res}),
     Res.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains
