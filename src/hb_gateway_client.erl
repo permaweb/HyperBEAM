@@ -451,7 +451,7 @@ l2_dataitem_ed25519_test() ->
         not_found,
         Opts
     ),
-    ?assertEqual(<<"ed25519">>, CommitmentType),
+    ?assertEqual(<<"ed25519-sha512">>, CommitmentType),
     CommitmentCommitter = hb_util:deep_get(
         [<<"commitments">>, ID, <<"committer">>],
         Res,
