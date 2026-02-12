@@ -62,31 +62,33 @@ request(Config, Method, Path, Message, Opts) ->
             {raw_message, Message},
             {message_to_send, MultirequestMsg}
         }),
+    ParallelWorkers = parse_parallel(Parallel, Nodes),
     AllResults =
-        if Parallel =/= false ->
-            parallel_multirequest(
-                Parallel,
-                Nodes,
-                Responses,
-                StopAfter,
-                Method,
-                Path,
-                MultirequestMsg,
-                Admissible,
-                Statuses,
-                Opts
-            );
-        true ->
-            serial_multirequest(
-                Nodes,
-                Responses,
-                Method,
-                Path,
-                MultirequestMsg,
-                Admissible,
-                Statuses,
-                Opts
-            )
+        case ParallelWorkers of
+            false ->
+                serial_multirequest(
+                    Nodes,
+                    Responses,
+                    Method,
+                    Path,
+                    MultirequestMsg,
+                    Admissible,
+                    Statuses,
+                    Opts
+                );
+            WorkerCount ->
+                parallel_multirequest(
+                    WorkerCount,
+                    Nodes,
+                    Responses,
+                    StopAfter,
+                    Method,
+                    Path,
+                    MultirequestMsg,
+                    Admissible,
+                    Statuses,
+                    Opts
+                )
         end,
     ?event(http, {multirequest_results, {results, AllResults}}),
     case AllResults of
@@ -183,18 +185,20 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, 
     end.
 
 %% @doc Dispatch the same HTTP request to many nodes in parallel.
-parallel_multirequest(true, Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
-    parallel_multirequest(length(Nodes), Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts);
 parallel_multirequest(MaxWorkers, Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
     Ref = make_ref(),
     {Workers, Queue} = start_workers(MaxWorkers, Ref, Nodes, Method, Path, Message, Opts),
     parallel_responses([], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
 
 %% @doc Start a new fleet of workers, returning the list of worker PIDs.
+start_workers(Count, _Ref, Nodes, _Method, _Path, _Message, _Opts) when Count =< 0 ->
+    {[], Nodes};
+start_workers(_Count, _Ref, [], _Method, _Path, _Message, _Opts) ->
+    {[], []};
 start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     Parent = self(),
-    NewWorkerNodes = lists:sublist(Nodes, Count),
-    NewRemainingNodes = lists:nthtail(Count, Nodes),
+    {NewWorkerNodes, NewRemainingNodes} =
+        lists:split(min(Count, length(Nodes)), Nodes),
     {
         lists:map(
             fun(Node) ->
@@ -277,23 +281,15 @@ parallel_responses(Res, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, St
     receive
         {Ref, Pid, {Status, NewRes}} ->
             WorkersWithoutPid = lists:delete(Pid, Procs),
-            [NewWorker] =
-                start_workers(
-                    length(WorkersWithoutPid),
-                    Ref,
-                    Queue,
-                    Method,
-                    Path,
-                    Message,
-                    Opts
-                ),
-            NewProcs = [NewWorker | WorkersWithoutPid],
+            {RefilledWorkers, NewQueue} =
+                start_workers(1, Ref, Queue, Method, Path, Message, Opts),
+            NewProcs = RefilledWorkers ++ WorkersWithoutPid,
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
                     parallel_responses(
                         [{Status, NewRes} | Res],
                         NewProcs,
-                        Queue,
+                        NewQueue,
                         {Method, Path, Message},
                         Ref,
                         Awaiting - 1,
@@ -306,7 +302,7 @@ parallel_responses(Res, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, St
                 parallel_responses(
                     Res,
                     NewProcs,
-                    Queue,
+                    NewQueue,
                     {Method, Path, Message},
                     Ref,
                     Awaiting,
@@ -321,4 +317,41 @@ end.
 %% @doc Empty the inbox of the current process for all messages with the given
 %% reference.
 empty_inbox(Ref) ->
-    receive {Ref, _} -> empty_inbox(Ref) after 0 -> ok end.
+    receive
+        {Ref, _, _} -> empty_inbox(Ref);
+        {Ref, _} -> empty_inbox(Ref)
+    after 0 ->
+        ok
+    end.
+
+parse_parallel(false, _Nodes) ->
+    false;
+parse_parallel(true, Nodes) ->
+    length(Nodes);
+parse_parallel(Parallel, _Nodes) when is_integer(Parallel), Parallel =< 0 ->
+    false;
+parse_parallel(Parallel, Nodes) when is_integer(Parallel) ->
+    min(Parallel, length(Nodes));
+parse_parallel(Parallel, Nodes) when is_binary(Parallel) ->
+    case hb_util:to_lower(Parallel) of
+        <<"false">> ->
+            false;
+        <<"true">> ->
+            length(Nodes);
+        _ ->
+            case safe_binary_to_integer(Parallel) of
+                {ok, I} when I > 0 -> min(I, length(Nodes));
+                _ -> length(Nodes)
+            end
+    end;
+parse_parallel(Parallel, Nodes) when is_atom(Parallel) ->
+    parse_parallel(hb_util:bin(Parallel), Nodes);
+parse_parallel(_Parallel, Nodes) ->
+    length(Nodes).
+
+safe_binary_to_integer(Value) ->
+    try binary_to_integer(Value) of
+        Int -> {ok, Int}
+    catch
+        _:_ -> error
+    end.
