@@ -62,7 +62,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
-    ?event({verify, {base, Msg}, {req, Req}}),
+    dev_arweave_common:log_conversion(ans104_verify, {verify, {base, Msg}, {req, Req}}),
     OnlyWithCommitment =
         hb_private:reset(
             hb_message:with_commitments(
@@ -71,7 +71,7 @@ verify(Msg, Req, Opts) ->
                 Opts
             )
         ),
-    ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
+    dev_arweave_common:log_conversion(ans104_verify, {verify, {only_with_commitment, OnlyWithCommitment}}),
     {ok, TX} = to(OnlyWithCommitment, Req, Opts),
     ?event({verify, {encoded, TX}}),
     Res = ar_bundles:verify_item(TX),
