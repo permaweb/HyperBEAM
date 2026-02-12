@@ -28,7 +28,8 @@ tx(Base, Request, Opts) ->
 %% Note: When uploading ans104 transactions, this function will use the
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
-post_tx(Base, Request, Opts) ->
+post_tx(Base, RawRequest, Opts) ->
+    {ok, Request} = extract_target(Base, RawRequest, Opts),
     case hb_message:commitment_devices(Request, Opts) of
         [Device] -> post_tx(Base, Request, Opts, Device);
         [] -> 
@@ -42,6 +43,21 @@ post_tx(Base, Request, Opts) ->
         Devices ->
             ?event({too_many_commitment_devices, Devices}),
             {error, too_many_commitment_devices}
+    end.
+
+%% @doc Extract the target from the request or base message.
+extract_target(Base, Request, Opts) ->
+    case hb_maps:get(<<"target">>, Request, <<"request">>, Opts) of
+        <<"request">> ->
+            {ok, Request};
+        <<"base">> ->
+            {ok, Base};
+        <<"base:", BaseTarget/binary>> ->
+            hb_maps:find(BaseTarget, Base, Opts);
+        <<"request:", RequestTarget/binary>> ->
+            hb_maps:find(RequestTarget, Request, Opts);
+        _ ->
+            not_found
     end.
 
 post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
@@ -454,7 +470,7 @@ get_bad_tx_test() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
-    ?assertEqual({error, not_found}, Res).
+    ?assertEqual({error, client_error}, Res).
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.

@@ -31,11 +31,45 @@ maybe_load(RawTABM, true, Opts) ->
             Opts
         ),
     % Ensure the commitments from the original message are the only
-    % ones in the fully loaded message.
-    LoadedComms = maps:get(<<"commitments">>, RawTABM, #{}),
-    LoadedTABM#{ <<"commitments">> => LoadedComms };
+    % ones in the fully loaded message, recursively for nested maps.
+    replace_commitments_recursive(LoadedTABM, RawTABM);
 maybe_load(RawTABM, false, _Opts) ->
     RawTABM.
+
+%% @doc Recursively replace commitments from RawTABM into LoadedTABM.
+%% For each nested map in LoadedTABM, if there's a corresponding map in RawTABM,
+%% recursively apply commitment replacement.
+replace_commitments_recursive(LoadedTABM, RawTABM)
+        when is_map(LoadedTABM), is_map(RawTABM) ->
+    % First, replace commitments at this level.
+    % If raw does not contain commitments, remove any loaded commitments.
+    LoadedTABM2 =
+        case maps:find(<<"commitments">>, RawTABM) of
+            {ok, RawCommitments} ->
+                LoadedTABM#{ <<"commitments">> => RawCommitments };
+            error ->
+                maps:remove(<<"commitments">>, LoadedTABM)
+        end,
+    % Then recursively process nested maps
+    maps:map(
+        fun(<<"commitments">>, Value) ->
+            % Do not recurse into the commitments payload itself.
+            Value;
+           (Key, Value) when is_map(Value) ->
+            case maps:get(Key, RawTABM, undefined) of
+                RawValue when is_map(RawValue) ->
+                    replace_commitments_recursive(Value, RawValue);
+                _ ->
+                    Value
+            end;
+           (_Key, Value) ->
+            Value
+        end,
+        LoadedTABM2
+    );
+replace_commitments_recursive(LoadedTABM, _RawTABM) ->
+    LoadedTABM.
+
 
 %% @doc Calculate the fields for a message, returning an initial TX record.
 %% One of the nuances here is that the `target' field must be set correctly.

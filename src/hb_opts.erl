@@ -21,7 +21,7 @@
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error]).
+-define(DEFAULT_PRINT_OPTS, [error, http_error, cron_error]).
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
@@ -151,6 +151,7 @@ default_message() ->
             #{<<"name">> => <<"faff@1.0">>, <<"module">> => dev_faff},
             #{<<"name">> => <<"flat@1.0">>, <<"module">> => dev_codec_flat},
             #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
+            #{<<"name">> => <<"gzip@1.0">>, <<"module">> => dev_gzip},
             #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
             #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
             #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},

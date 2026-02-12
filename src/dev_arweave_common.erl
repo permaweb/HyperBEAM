@@ -4,6 +4,7 @@
 -export([is_signed/1, type/1, tagfind/3, find_key/3]).
 -export([reset_ids/1, generate_id/2, normalize/1, serialize_data/1]).
 -export([convert_bundle_list_to_map/1, convert_bundle_map_to_list/1]).
+-export([log_conversion/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -193,4 +194,7 @@ normalize_data_root(Item = #tx{data = Bin, format = 2})
     Item#tx{data_root = ar_tx:data_root(Bin)};
 normalize_data_root(Item) -> Item.
 
-
+%% @doc Turn off debug_print_verify when logging within the to/from functions
+%% to avoid infinite recursion.
+log_conversion(Topic, X) ->
+    ?event(Topic, X, #{debug_print_verify => false}).
