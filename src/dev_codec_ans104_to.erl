@@ -101,6 +101,14 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
                 );
             error -> ?DEFAULT_OWNER
         end,
+    SignatureType =
+        case maps:get(<<"type">>, Commitment) of
+            <<"rsa-pss-sha256">> -> {rsa, 65537};
+            <<"ed25519-sha512">> -> {eddsa, ed25519};
+            Type ->
+                ?event(error, {signature_type, {type, Type}}),
+                throw({invalid_signature_type, Type})
+        end,
     Tags =
         case hb_maps:find(<<"original-tags">>, Commitment, Opts) of
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
@@ -108,10 +116,12 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         end,
     ?event({commitment_owner, Owner}),
     ?event({commitment_signature, Signature}),
+    ?event({commitment_type, SignatureType}),
     ?event({commitment_tags, Tags}),
     TX = #tx{
         owner = Owner,
         signature = Signature,
+        signature_type = SignatureType,
         tags = Tags
     },
     FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
