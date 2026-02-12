@@ -253,7 +253,17 @@ json_to_message(Resp, Opts) when is_map(Resp) ->
                             )
                     ]
                 ),
-            <<"patches">> => lists:map(fun(Patch) -> tags_to_map(Patch, Opts) end, Patches),
+            <<"patches">> =>
+                lists:map(
+                    fun(Patch) ->
+                        NormPatch =
+                            hb_util:lower_case_keys(
+                                hb_ao:normalize_keys(Patch, Opts),
+                                Opts
+                            ),
+                        tags_to_map(NormPatch, Opts) end,
+                    Patches
+                ),
             <<"data">> => Data
         },
     {ok, Output};
@@ -398,37 +408,33 @@ normalize_results(Msg) ->
 %% signing node needs to add some tags to each message and spawn such that
 %% the target process knows these messages are created by a process.
 preprocess_results(Msg, Opts) ->
-    Tags = tags_to_map(Msg, Opts),
+    NormMsg = hb_util:lower_case_keys(hb_ao:normalize_keys(Msg, Opts), Opts),
+    Tags = tags_to_map(NormMsg, Opts),
     FilteredMsg =
         hb_maps:without(
             [<<"from-process">>, <<"from-image">>, <<"anchor">>, <<"tags">>],
-            Msg,
+            NormMsg,
             Opts
         ),
-    hb_maps:merge(
-        hb_maps:from_list(
-            lists:map(
-                fun({Key, Value}) ->
-                    {hb_ao:normalize_key(Key), Value}
-                end,
-                hb_maps:to_list(FilteredMsg, Opts)
-            )
-        ),
-        Tags,
-        Opts
-    ).
+    Res = hb_maps:merge(FilteredMsg, Tags, Opts),
+    ?event({preprocessed_results, Res}),
+    Res.
 
 %% @doc Convert a message with tags into a map of their key-value pairs.
 tags_to_map(Msg, Opts) ->
-    NormMsg = hb_util:lower_case_keys(hb_ao:normalize_keys(Msg, Opts), Opts),
-    RawTags = hb_maps:get(<<"tags">>, NormMsg, [], Opts),
+    RawTags = hb_maps:get(<<"tags">>, Msg, [], Opts),
     TagList =
         [
-            {hb_maps:get(<<"name">>, Tag, Opts), hb_maps:get(<<"value">>, Tag, Opts)}
+            {
+                hb_util:to_lower(hb_maps:get(<<"name">>, Tag, Opts)),
+                hb_maps:get(<<"value">>, Tag, Opts)
+            }
         ||
             Tag <- RawTags
         ],
-    hb_maps:from_list(TagList).
+    Res = hb_maps:from_list(TagList),
+    ?event({tags_to_map, {input, Msg}, {result, Res}}),
+    Res.
 
 %% @doc Post-process messages in the outbox to add the correct `from-process'
 %% and `from-image' tags.
