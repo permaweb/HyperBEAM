@@ -519,6 +519,10 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     ?event(push, {prepared_msg, {msg, AugmentedMsg}}, Opts),
     % Load the `accept-id`'d wallet into the `Opts` map, if requested.
     SignedMsg = apply_security(AugmentedMsg, TargetProcess, Codec, Opts),
+    % Verify the signed message before writing to cache
+    true = hb_message:verify(SignedMsg, signers, Opts),
+    % Write the signed message to cache before including it in the schedule request
+    {ok, _} = hb_cache:write(SignedMsg, Opts),
     ScheduleReq = #{
         <<"path">> => <<"schedule">>,
         <<"method">> => <<"POST">>,
@@ -527,8 +531,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     ?event(push, {schedule_req, {req, ScheduleReq}}, Opts),
     ?event(debug,
         {push_scheduling_result,
-            {signed_req, SignedMsg},
-            {verifies, hb_message:verify(SignedMsg, signers, Opts)}
+            {signed_req, SignedMsg}
         }
     ),
     {ErlStatus, Res} =

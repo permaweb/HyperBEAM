@@ -449,7 +449,8 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
                     1
                 )
             }
-        }
+        },
+        NodeMsg
     ),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =

@@ -64,7 +64,7 @@
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
--export([with_commitments/3, without_commitments/3, remove_all_commitments/2]).
+-export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
@@ -581,16 +581,18 @@ uncommitted(Msg) -> uncommitted(Msg, #{}).
 uncommitted(Bin, _Opts) when is_binary(Bin) -> Bin;
 uncommitted(Msg, Opts) ->
     hb_maps:remove(<<"commitments">>, Msg, Opts).
-remove_all_commitments(Msg, Opts) ->
+
+%% @doc Recursively remove commitments from a message.
+uncommitted_deep(Msg, Opts) ->
     % Remove commitments at the current level
     MsgWithoutCommitments = hb_maps:remove(<<"commitments">>, Msg, Opts),
     % Recursively remove commitments from nested maps
     maps:map(
         fun(_Key, Value) when is_map(Value) ->
-            uncommitted(Value, Opts);
+            uncommitted_deep(Value, Opts);
            (_Key, Value) when is_list(Value) ->
             lists:map(
-                fun(Item) when is_map(Item) -> uncommitted(Item, Opts);
+                fun(Item) when is_map(Item) -> uncommitted_deep(Item, Opts);
                    (Item) -> Item
                 end,
                 Value
