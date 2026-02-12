@@ -315,10 +315,16 @@ default_message() ->
                             <<"match">> => <<"^/arweave">>,
                             <<"with">> => <<"https://data-4.arweave.net">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 16_200_000_000,
+                            <<"with">> => <<"https://data-5.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
                         }
 
                     ],
-                <<"strategy">> => <<"nearest">>,
+                <<"strategy">> => <<"Nearest-Integer">>,
                 <<"choose">> => 3,
                 <<"parallel">> => 2
            },
@@ -329,16 +335,10 @@ default_message() ->
                     [
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"https://data-1.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"with">> => <<"https://arweave.net">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
                         }
                     ],
-                <<"strategy">> => <<"nearest">>,
                 <<"parallel">> => true,
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200

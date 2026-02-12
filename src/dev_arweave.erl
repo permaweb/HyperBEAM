@@ -257,27 +257,11 @@ request(Method, Path, Extra, Opts) ->
         hb_http:request(
             Extra#{
                 <<"path">> => <<"/arweave", Path/binary>>,
-                <<"method">> => Method,
-                <<"multirequest-admissible">> => <<"~arweave@2.9-pre/admissible">>
+                <<"method">> => Method
             },
             Opts
         ),
     to_message(Path, Res, Opts).
-
-admissible(Base, Request, Opts) ->
-    case hb_maps:get(<<"path">>, Request, <<>>, Opts) of
-        <<"/arweave/chunk=", IntPlus/binary>> -> verify_chunk(IntPlus, Opts);
-        _ -> true
-    end.
-
-%%% 1. `multirequest-parallel` integer support
-%%% 2. `Nearest-Integer` strategy (for the `chunk` route)
-%%% 3. `
-
-verify_chunk(IntPlus, Opts) ->
-    [BinInt|_] = binary:split(IntPlus, [<<"+">>, <<"/">>, <<"=">>, <<">">>], [global]),
-    Int = binary_to_integer(BinInt),
-    {ok, Int}.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
