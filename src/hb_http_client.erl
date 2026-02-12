@@ -21,7 +21,7 @@
 -define(CONN_COUNTER_ETS, hb_http_client_conn_counter).
 
 %% Connection pool sizes per type (easily configurable)
--define(READ_POOL_SIZE, 1).
+-define(READ_POOL_SIZE, 3).
 -define(WRITE_POOL_SIZE, 10).
 
 %%% ==================================================================
@@ -970,8 +970,12 @@ get_status_class({error, noproc}) ->
 	<<"noproc">>;
 get_status_class({error, {rate_limited, _}}) ->
 	<<"rate_limited_fast_fail">>;
-get_status_class({error,{connection_error,{stream_closed, _Message}}}) -> 
+get_status_class({error, {connection_error, {stream_closed, _Message}}}) -> 
     <<"stream_closed">>;
+get_status_class({error, {stream_error, {stream_error, too_many_streams, _Message}}}) ->
+    <<"too_many_streams">>;
+get_status_class({error, {stream_error, {stream_error, refused_stream, _Message}}}) ->
+    <<"refused_stream">>;
 get_status_class(208) ->
 	<<"already_processed">>;
 get_status_class(404) ->
@@ -989,7 +993,8 @@ get_status_class(Data) when is_binary(Data) ->
 	end;
 get_status_class(Data) when is_atom(Data) ->
 	atom_to_binary(Data);
-get_status_class(_) ->
+get_status_class(StatusClass) ->
+    ?event(error, {unknown_status_class, {status_class, StatusClass}}),
 	<<"unknown">>.
 
 %% ==================================================================
