@@ -1,12 +1,3 @@
-%% TODOs:
-%% 
-%% 1. Matching routes: Take `routes` from Opts and return first hit.
-%% 2. Apply route: Transform the route message with the request data
-%% 3. Choose nodes: If the route has multiple nodes, choose a node based on the
-%%    given strategy.
-%% 4. Return _with_ the route `Opts`, which `hb_http` uses to make the request.
-
-
 %%% @doc A device that routes outbound messages from the node to their
 %%% appropriate network recipients via HTTP. All messages are initially
 %%% routed to a single process per node, which then load-balances them
@@ -243,47 +234,77 @@ routes(M1, M2, Opts) ->
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
-    R = match_routes(Msg, Routes, Opts),
-    ?event({find_route, {msg, Msg}, {routes, Routes}, {res, R}}),
-    case (R =/= no_matches) andalso hb_ao:get(<<"node">>, R, Opts) of
-        false -> {error, no_matches};
-        Node when is_binary(Node) -> {ok, Node};
-        Node when is_map(Node) -> apply_route(Msg, Node, Opts);
-        not_found ->
-            ModR = apply_routes(Msg, R, Opts),
-            case hb_ao:get(<<"strategy">>, R, <<"All">>, Opts) of
-                <<"All">> -> {ok, ModR};
-                Strategy ->
-                    ChooseN = hb_ao:get(<<"choose">>, R, 1, Opts),
-                    % Get the first element of the path -- the `base' message
-                    % of the request.
-                    Nodes = hb_ao:get(<<"nodes">>, ModR, Opts),
-                    Chosen = choose(ChooseN, Strategy, Msg, Nodes, Opts),
-                    ?event({choose,
-                        {strategy, Strategy},
-                        {choose_n, ChooseN},
-                        {nodes, Nodes},
-                        {msg, Msg},
-                        {chosen, Chosen}
-                    }),
-                    case Chosen of
-                        [Node] when is_map(Node) ->
-                            apply_route(Msg, Node, Opts);
-                        [NodeURI] -> {ok, NodeURI};
-                        _ChosenNodes ->
-                            {ok,
-                                hb_ao:set(
-                                    <<"nodes">>,
-                                    hb_maps:map(
-                                        fun(Node) ->
-                                            hb_util:ok(apply_route(Msg, Node, Opts))
-                                        end,
-                                        Chosen,
+    MatchedRoute = match_routes(Msg, Routes, Opts),
+    ?event({find_route, {msg, Msg}, {routes, Routes}, {res, MatchedRoute}}),
+    case MatchedRoute of
+        no_matches ->
+            {error, no_matches};
+        R ->
+            case hb_ao:get(<<"node">>, R, Opts) of
+                Node when is_binary(Node) ->
+                    {ok, Node};
+                Node when is_map(Node) ->
+                    apply_route(Msg, Node, Opts);
+                not_found ->
+                    case hb_ao:get(<<"nodes">>, R, not_found, Opts) of
+                        not_found ->
+                            {error, no_matches};
+                        _ ->
+                            RouteWithAppliedNodes = apply_routes(Msg, R, Opts),
+                            Strategy =
+                                normalize_strategy(
+                                    hb_ao:get(
+                                        <<"strategy">>,
+                                        RouteWithAppliedNodes,
+                                        <<"All">>,
                                         Opts
-                                    ),
-                                    Opts
-                                )
-                            }
+                                    )
+                                ),
+                            case Strategy of
+                                <<"All">> ->
+                                    {ok, RouteWithAppliedNodes};
+                                _ ->
+                                    Nodes =
+                                        hb_ao:get(
+                                            <<"nodes">>,
+                                            RouteWithAppliedNodes,
+                                            [],
+                                            Opts
+                                        ),
+                                    ChooseN =
+                                        choose_count(
+                                            hb_ao:get(
+                                                <<"choose">>,
+                                                RouteWithAppliedNodes,
+                                                1,
+                                                Opts
+                                            ),
+                                            Nodes
+                                        ),
+                                    Chosen = choose(ChooseN, Strategy, Msg, Nodes, Opts),
+                                    ?event({choose,
+                                        {strategy, Strategy},
+                                        {choose_n, ChooseN},
+                                        {nodes, Nodes},
+                                        {msg, Msg},
+                                        {chosen, Chosen}
+                                    }),
+                                    case Chosen of
+                                        [] ->
+                                            {error, no_matches};
+                                        [Node] when is_map(Node) ->
+                                            {ok, Node};
+                                        [NodeURI] when is_binary(NodeURI) ->
+                                            {ok, NodeURI};
+                                        _ ->
+                                            {
+                                                ok,
+                                                RouteWithAppliedNodes#{
+                                                    <<"nodes">> => Chosen
+                                                }
+                                            }
+                                    end
+                            end
                     end
             end
     end.
@@ -360,6 +381,8 @@ apply_route(Msg, Route, Opts) ->
     }}.
 do_apply_route(#{ <<"route-path">> := Path }, R, Opts) ->
     do_apply_route(#{ <<"path">> => Path }, R, Opts);
+do_apply_route(_, #{ <<"uri">> := URI }, _Opts) ->
+    {ok, URI};
 do_apply_route(#{ <<"path">> := RawPath }, #{ <<"prefix">> := RawPrefix }, Opts) ->
     Path = hb_cache:ensure_loaded(RawPath, Opts),
     Prefix = hb_cache:ensure_loaded(RawPrefix, Opts),
@@ -381,7 +404,11 @@ do_apply_route(
             {ok, NewPath};
         _ ->
             {error, invalid_replace_args}
-    end.
+    end;
+do_apply_route(_, Route, _Opts) when is_binary(Route) ->
+    {ok, Route};
+do_apply_route(_, _, _) ->
+    {error, invalid_route}.
 
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this
@@ -448,6 +475,7 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
 
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
+choose(_, _, _, [], _) -> [];
 choose(N, <<"Random">>, _, Nodes, _Opts) ->
     Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
     [Node | choose(N - 1, <<"Random">>, nop, lists:delete(Node, Nodes), _Opts)];
@@ -465,9 +493,8 @@ choose(N, <<"By-Weight">>, _, Nodes, Opts) ->
     |
         choose(N - 1, <<"By-Weight">>, nop, lists:delete(Node, Nodes), Opts)
     ];
-choose(N, <<"By-Base">>, #{ <<"path">> := Hashpath }, Nodes, Opts) when is_binary(Hashpath) ->
-    choose(N, <<"By-Base">>, binary_to_bignum(Hashpath), Nodes, Opts);
-choose(N, <<"By-Base">>, #{ <<"path">> := HashInt }, Nodes, Opts) ->
+choose(N, <<"By-Base">>, Selector, Nodes, Opts) ->
+    HashInt = selector_to_integer(Selector, Opts),
     Node = lists:nth((HashInt rem length(Nodes)) + 1, Nodes),
     [
         Node
@@ -480,11 +507,17 @@ choose(N, <<"By-Base">>, #{ <<"path">> := HashInt }, Nodes, Opts) ->
             Opts
         )
     ];
-choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
+choose(N, <<"Nearest-Integer">>, Selector, Nodes, Opts) ->
+    RouteInt = selector_to_integer(Selector, Opts),
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                {Node, field_distance(Int, hb_maps:get(<<"center">>, Node, Opts))}
+                case hb_maps:find(<<"center">>, Node, Opts) of
+                    {ok, Center} ->
+                        {Node, field_distance(RouteInt, selector_to_integer(Center, Opts))};
+                    error ->
+                        {Node, infinity}
+                end
             end,
             Nodes
         ),
@@ -501,30 +534,35 @@ choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
             )
         )
     );
-choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts) ->
-    BareHashPath = hb_util:native_id(HashPath),
+choose(N, <<"Nearest">>, Selector, Nodes, Opts) ->
+    HashSeed = selector_to_seed(Selector, Opts),
+    HashPath = selector_to_binary(Selector, Opts),
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
-                Salt =
-                    case hb_maps:find(<<"salt">>, Node, Opts) of
-                        {ok, S} -> <<":", S/binary>>;
-                        error -> <<>>
-                    end,
-                DistanceScore =
-                    field_distance(
-                        hb_crypto:sha256(
-                            <<
-                                HashPath/binary,
-                                ":",
-                                Wallet/binary,
-                                Salt/binary
-                            >>
-                        ),
-                        BareHashPath
-                    ),
-                {Node, DistanceScore}
+                case hb_maps:find(<<"wallet">>, Node, Opts) of
+                    {ok, Wallet} when is_binary(Wallet) ->
+                        Salt =
+                            case hb_maps:find(<<"salt">>, Node, Opts) of
+                                {ok, S} -> <<":", S/binary>>;
+                                error -> <<>>
+                            end,
+                        DistanceScore =
+                            field_distance(
+                                hb_crypto:sha256(
+                                    <<
+                                        HashSeed/binary,
+                                        ":",
+                                        Wallet/binary,
+                                        Salt/binary
+                                    >>
+                                ),
+                                HashPath
+                            ),
+                        {Node, DistanceScore};
+                    _ ->
+                        {Node, infinity}
+                end
             end,
             Nodes
         ),
@@ -540,6 +578,81 @@ choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts) ->
             )
         )
     ).
+
+choose_count(RawChoose, Nodes) ->
+    NormalizedChoose =
+        case safe_to_integer(RawChoose) of
+            {ok, X} when X > 0 -> X;
+            _ -> 0
+        end,
+    min(NormalizedChoose, length(Nodes)).
+
+normalize_strategy(RawStrategy) ->
+    case hb_util:to_lower(hb_util:bin(RawStrategy)) of
+        <<"all">> -> <<"All">>;
+        <<"random">> -> <<"Random">>;
+        <<"by-base">> -> <<"By-Base">>;
+        <<"by_base">> -> <<"By-Base">>;
+        <<"by-weight">> -> <<"By-Weight">>;
+        <<"by_weight">> -> <<"By-Weight">>;
+        <<"nearest">> -> <<"Nearest">>;
+        <<"nearest-integer">> -> <<"Nearest-Integer">>;
+        <<"nearest_integer">> -> <<"Nearest-Integer">>;
+        _ -> <<"All">>
+    end.
+
+selector_to_binary(#{ <<"route-by">> := RouteBy }, Opts) ->
+    selector_to_binary(RouteBy, Opts);
+selector_to_binary(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
+    selector_to_binary(extract_base(Path, Opts), Opts);
+selector_to_binary(Bin, _Opts) when is_binary(Bin), byte_size(Bin) == 32 ->
+    Bin;
+selector_to_binary(Bin, _Opts) when is_binary(Bin), ?IS_ID(Bin) ->
+    hb_util:native_id(Bin);
+selector_to_binary(Bin, _Opts) when is_binary(Bin) ->
+    case safe_to_integer(Bin) of
+        {ok, I} -> <<(normalize_u256(I)):256/unsigned-integer>>;
+        error -> hb_crypto:sha256(Bin)
+    end;
+selector_to_binary(Int, _Opts) when is_integer(Int) ->
+    <<(normalize_u256(Int)):256/unsigned-integer>>;
+selector_to_binary(Value, _Opts) ->
+    hb_crypto:sha256(hb_util:bin(Value)).
+
+selector_to_seed(#{ <<"route-by">> := RouteBy }, Opts) ->
+    selector_to_seed(RouteBy, Opts);
+selector_to_seed(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
+    selector_to_seed(extract_base(Path, Opts), Opts);
+selector_to_seed(Bin, _Opts) when is_binary(Bin) ->
+    Bin;
+selector_to_seed(Int, _Opts) when is_integer(Int) ->
+    integer_to_binary(Int);
+selector_to_seed(Value, _Opts) ->
+    hb_util:bin(Value).
+
+selector_to_integer(Selector, Opts) ->
+    <<Int:256/unsigned-integer>> = selector_to_binary(Selector, Opts),
+    Int.
+
+safe_to_integer(Value) when is_integer(Value) ->
+    {ok, Value};
+safe_to_integer(Value) when is_binary(Value) ->
+    try binary_to_integer(Value) of
+        Int -> {ok, Int}
+    catch
+        _:_ -> error
+    end;
+safe_to_integer(Value) when is_list(Value) ->
+    try list_to_integer(Value) of
+        Int -> {ok, Int}
+    catch
+        _:_ -> error
+    end;
+safe_to_integer(_) ->
+    error.
+
+normalize_u256(Int) ->
+    Int band ((1 bsl 256) - 1).
 
 %% @doc Calculate the minimum distance between two numbers
 %% (either progressing backwards or forwards), assuming a
@@ -1633,6 +1746,145 @@ request_hook_reroute_to_nearest_test() ->
         Peers
     ),
     ?assert(HasValidSigner).
+
+route_nearest_integer_preserves_opts_test() ->
+    Routes =
+        [
+            #{
+                <<"template">> => <<"/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"center">> => 100,
+                            <<"prefix">> => <<"http://node-100">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        },
+                        #{
+                            <<"center">> => 200,
+                            <<"prefix">> => <<"http://node-200">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        },
+                        #{
+                            <<"center">> => 400,
+                            <<"prefix">> => <<"http://node-400">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"nearest-integer">>,
+                <<"choose">> => 2,
+                <<"parallel">> => 2,
+                <<"responses">> => 2,
+                <<"stop-after">> => false,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => <<".*">>,
+                <<"node">> => <<"fallback">>
+            }
+        ],
+    {ok, Route} =
+        route(
+            #{ <<"path">> => <<"/chunk">>, <<"route-by">> => 210 },
+            #{ routes => Routes }
+        ),
+    ?assertEqual(2, hb_ao:get(<<"parallel">>, Route, #{})),
+    ?assertEqual(2, hb_ao:get(<<"responses">>, Route, #{})),
+    ?assertEqual(false, hb_ao:get(<<"stop-after">>, Route, #{})),
+    SelectedNodes = hb_ao:get(<<"nodes">>, Route, #{}),
+    ?assertEqual(2, length(SelectedNodes)),
+    SelectedCenters =
+        lists:sort(
+            [
+                hb_ao:get(<<"center">>, Node, #{})
+            ||
+                Node <- SelectedNodes
+            ]
+        ),
+    ?assertEqual([100, 200], SelectedCenters),
+    SelectedURIs =
+        lists:sort(
+            [
+                hb_ao:get(<<"uri">>, Node, #{})
+            ||
+                Node <- SelectedNodes
+            ]
+        ),
+    ?assertEqual(
+        [<<"http://node-100/chunk">>, <<"http://node-200/chunk">>],
+        SelectedURIs
+    ).
+
+route_multirequest_parallel_limit_test_() ->
+    {timeout, 30, fun route_multirequest_parallel_limit/0}.
+route_multirequest_parallel_limit() ->
+    DelayMs = 300,
+    WorkerNodes =
+        lists:map(
+            fun(N) ->
+                hb_http_server:start_node(
+                    #{
+                        store => hb_test_utils:test_store(),
+                        on =>
+                            #{
+                                <<"request">> =>
+                                    #{
+                                        <<"device">> => <<"test-device@1.0">>,
+                                        <<"path">> => <<"delay">>,
+                                        <<"duration">> => DelayMs,
+                                        <<"return">> =>
+                                            #{
+                                                <<"body">> =>
+                                                    [
+                                                        #{ <<"worker">> => N },
+                                                        <<"worker">>
+                                                    ]
+                                            }
+                                    }
+                            }
+                    }
+                )
+            end,
+            lists:seq(1, 3)
+        ),
+    Routes =
+        [
+            #{
+                <<"template">> => <<"/worker">>,
+                <<"nodes">> =>
+                    lists:map(
+                        fun(Node) -> #{ <<"prefix">> => Node } end,
+                        WorkerNodes
+                    ),
+                <<"strategy">> => <<"all">>,
+                <<"parallel">> => 2,
+                <<"responses">> => 3,
+                <<"stop-after">> => false
+            }
+        ],
+    Start = os:system_time(millisecond),
+    Results =
+        hb_http:request(
+            #{ <<"method">> => <<"GET">>, <<"path">> => <<"/worker">> },
+            #{
+                routes => Routes,
+                http_only_result => false
+            }
+        ),
+    Duration = os:system_time(millisecond) - Start,
+    ?assertEqual(3, length(Results)),
+    WorkerBodies =
+        lists:sort(
+            [
+                hb_ao:get(<<"body">>, Res, #{})
+            ||
+                {ok, Res} <- Results
+            ]
+        ),
+    ?assertEqual([1, 2, 3], WorkerBodies),
+    % With 3 peers of 300ms each: `parallel = 2` should complete in about two
+    % waves (~600ms), not one (~300ms) or fully serial (~900ms).
+    ?assert(Duration >= 450),
+    ?assert(Duration < 850).
 
 %%% Statistical test utilities
 
