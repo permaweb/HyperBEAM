@@ -80,8 +80,14 @@ set(Trie, Req, Opts) ->
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
     Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
-    {ok, Path} = hb_cache:write(Uncommitted, Opts),
-    {link, Path, Opts};
+    CommittedTrie = 
+        hb_message:commit(
+            Uncommitted,
+            Opts,
+            #{ <<"type">> => <<"hmac-sha256">> }
+        ),
+    {ok, _} = hb_cache:write(CommittedTrie, Opts),
+    CommittedTrie;
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
     do_set(NewTrie, KeyVals, Opts).
