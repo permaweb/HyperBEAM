@@ -157,10 +157,11 @@ extract_json_res(Response, Opts) ->
     case Response of 
         {ok, Res} ->
             JSONRes = hb_ao:get(<<"body">>, Res, Opts),
-            ?event({
-                delegated_compute_res_metadata,
-                {req, hb_maps:without([<<"body">>], Res, Opts)}
-            }),
+            ?event(
+                debug_delegated_compute,
+                {returning_json_response, {json_response, JSONRes}},
+                Opts
+            ),
             {ok, JSONRes};
         {Err, Error} when Err == error; Err == failure ->
             {error, Error}
