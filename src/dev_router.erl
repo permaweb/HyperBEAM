@@ -325,21 +325,6 @@ load_routes(Opts) ->
             end
     end.
 
-%% @doc Extract the base message ID from a request message. Produces a single
-%% binary ID that can be used for routing decisions.
-extract_base(#{ <<"path">> := Path }, Opts) ->
-    extract_base(Path, Opts);
-extract_base(RawPath, Opts) when is_binary(RawPath) ->
-    BasePath = hb_path:hd(#{ <<"path">> => RawPath }, Opts),
-    case ?IS_ID(BasePath) of
-        true -> BasePath;
-        false ->
-            case binary:split(BasePath, [<<"\~">>, <<"?">>, <<"&">>], [global]) of
-                [BaseMsgID|_] when ?IS_ID(BaseMsgID) -> BaseMsgID;
-                _ -> hb_crypto:sha256(BasePath)
-            end
-    end.
-
 %% @doc Generate a `uri' key for each node in a route.
 apply_routes(Msg, R, Opts) ->
     Nodes = hb_ao:get(<<"nodes">>, R, Opts),
@@ -404,11 +389,7 @@ do_apply_route(
             {ok, NewPath};
         _ ->
             {error, invalid_replace_args}
-    end;
-do_apply_route(_, Route, _Opts) when is_binary(Route) ->
-    {ok, Route};
-do_apply_route(_, _, _) ->
-    {error, invalid_route}.
+    end.
 
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this
@@ -493,8 +474,13 @@ choose(N, <<"By-Weight">>, _, Nodes, Opts) ->
     |
         choose(N - 1, <<"By-Weight">>, nop, lists:delete(Node, Nodes), Opts)
     ];
-choose(N, <<"By-Base">>, Selector, Nodes, Opts) ->
-    HashInt = selector_to_integer(Selector, Opts),
+choose(N, <<"By-Base">>, #{ <<"path">> := Path }, Nodes, Opts) when is_binary(Path) ->
+    choose(N, <<"By-Base">>, route_hash_int(Path, Opts), Nodes, Opts);
+choose(N, <<"By-Base">>, #{ <<"route-by">> := RouteBy }, Nodes, Opts) ->
+    choose(N, <<"By-Base">>, route_hash_int(RouteBy, Opts), Nodes, Opts);
+choose(N, <<"By-Base">>, Hashpath, Nodes, Opts) when is_binary(Hashpath) ->
+    choose(N, <<"By-Base">>, route_hash_int(Hashpath, Opts), Nodes, Opts);
+choose(N, <<"By-Base">>, HashInt, Nodes, Opts) when is_integer(HashInt) ->
     Node = lists:nth((HashInt rem length(Nodes)) + 1, Nodes),
     [
         Node
@@ -507,17 +493,12 @@ choose(N, <<"By-Base">>, Selector, Nodes, Opts) ->
             Opts
         )
     ];
-choose(N, <<"Nearest-Integer">>, Selector, Nodes, Opts) ->
-    RouteInt = selector_to_integer(Selector, Opts),
+choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
+    RouteInt = route_integer(Int, Opts),
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                case hb_maps:find(<<"center">>, Node, Opts) of
-                    {ok, Center} ->
-                        {Node, field_distance(RouteInt, selector_to_integer(Center, Opts))};
-                    error ->
-                        {Node, infinity}
-                end
+                {Node, field_distance(RouteInt, hb_maps:get(<<"center">>, Node, Opts))}
             end,
             Nodes
         ),
@@ -534,35 +515,44 @@ choose(N, <<"Nearest-Integer">>, Selector, Nodes, Opts) ->
             )
         )
     );
-choose(N, <<"Nearest">>, Selector, Nodes, Opts) ->
-    HashSeed = selector_to_seed(Selector, Opts),
-    HashPath = selector_to_binary(Selector, Opts),
+choose(N, <<"Nearest-Integer">>, #{ <<"path">> := Path }, Nodes, Opts)
+        when is_binary(Path) ->
+    choose(
+        N,
+        <<"Nearest-Integer">>,
+        #{ <<"route-by">> => route_hash_int(Path, Opts) },
+        Nodes,
+        Opts
+    );
+choose(N, <<"Nearest-Integer">>, RouteBy, Nodes, Opts) ->
+    choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> => RouteBy }, Nodes, Opts);
+choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts)
+        when is_binary(HashPath) ->
+    choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
+choose(N, <<"Nearest">>, HashPath, Nodes, Opts) when is_binary(HashPath) ->
+    BareHashPath = hb_util:native_id(HashPath),
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                case hb_maps:find(<<"wallet">>, Node, Opts) of
-                    {ok, Wallet} when is_binary(Wallet) ->
-                        Salt =
-                            case hb_maps:find(<<"salt">>, Node, Opts) of
-                                {ok, S} -> <<":", S/binary>>;
-                                error -> <<>>
-                            end,
-                        DistanceScore =
-                            field_distance(
-                                hb_crypto:sha256(
-                                    <<
-                                        HashSeed/binary,
-                                        ":",
-                                        Wallet/binary,
-                                        Salt/binary
-                                    >>
-                                ),
-                                HashPath
-                            ),
-                        {Node, DistanceScore};
-                    _ ->
-                        {Node, infinity}
-                end
+                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
+                Salt =
+                    case hb_maps:find(<<"salt">>, Node, Opts) of
+                        {ok, S} -> <<":", S/binary>>;
+                        error -> <<>>
+                    end,
+                DistanceScore =
+                    field_distance(
+                        hb_crypto:sha256(
+                            <<
+                                HashPath/binary,
+                                ":",
+                                Wallet/binary,
+                                Salt/binary
+                            >>
+                        ),
+                        BareHashPath
+                    ),
+                {Node, DistanceScore}
             end,
             Nodes
         ),
@@ -601,38 +591,36 @@ normalize_strategy(RawStrategy) ->
         _ -> <<"All">>
     end.
 
-selector_to_binary(#{ <<"route-by">> := RouteBy }, Opts) ->
-    selector_to_binary(RouteBy, Opts);
-selector_to_binary(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
-    selector_to_binary(extract_base(Path, Opts), Opts);
-selector_to_binary(Bin, _Opts) when is_binary(Bin), byte_size(Bin) == 32 ->
-    Bin;
-selector_to_binary(Bin, _Opts) when is_binary(Bin), ?IS_ID(Bin) ->
-    hb_util:native_id(Bin);
-selector_to_binary(Bin, _Opts) when is_binary(Bin) ->
+route_integer(Int, _Opts) when is_integer(Int) ->
+    Int;
+route_integer(Bin, Opts) when is_binary(Bin) ->
     case safe_to_integer(Bin) of
-        {ok, I} -> <<(normalize_u256(I)):256/unsigned-integer>>;
-        error -> hb_crypto:sha256(Bin)
+        {ok, Int} -> Int;
+        error -> route_hash_int(Bin, Opts)
     end;
-selector_to_binary(Int, _Opts) when is_integer(Int) ->
-    <<(normalize_u256(Int)):256/unsigned-integer>>;
-selector_to_binary(Value, _Opts) ->
-    hb_crypto:sha256(hb_util:bin(Value)).
+route_integer(Value, Opts) ->
+    route_hash_int(Value, Opts).
 
-selector_to_seed(#{ <<"route-by">> := RouteBy }, Opts) ->
-    selector_to_seed(RouteBy, Opts);
-selector_to_seed(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
-    selector_to_seed(extract_base(Path, Opts), Opts);
-selector_to_seed(Bin, _Opts) when is_binary(Bin) ->
+route_hash_int(Int, _Opts) when is_integer(Int) ->
+    Int;
+route_hash_int(Bin, _Opts) when is_binary(Bin), ?IS_ID(Bin) ->
+    binary_to_bignum(Bin);
+route_hash_int(Bin, _Opts) when is_binary(Bin), byte_size(Bin) == 32 ->
+    <<Int:256/unsigned-integer>> = Bin,
+    Int;
+route_hash_int(Bin, Opts) when is_binary(Bin) ->
+    route_hash_int(hb_crypto:sha256(Bin), Opts);
+route_hash_int(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
+    route_hash_int(Path, Opts);
+route_hash_int(Value, Opts) ->
+    route_hash_int(hb_util:bin(Value), Opts).
+
+normalize_hashpath(Bin) when is_binary(Bin), ?IS_ID(Bin) ->
     Bin;
-selector_to_seed(Int, _Opts) when is_integer(Int) ->
-    integer_to_binary(Int);
-selector_to_seed(Value, _Opts) ->
-    hb_util:bin(Value).
-
-selector_to_integer(Selector, Opts) ->
-    <<Int:256/unsigned-integer>> = selector_to_binary(Selector, Opts),
-    Int.
+normalize_hashpath(Bin) when is_binary(Bin), byte_size(Bin) == 32 ->
+    Bin;
+normalize_hashpath(Bin) when is_binary(Bin) ->
+    hb_crypto:sha256(Bin).
 
 safe_to_integer(Value) when is_integer(Value) ->
     {ok, Value};
@@ -650,9 +638,6 @@ safe_to_integer(Value) when is_list(Value) ->
     end;
 safe_to_integer(_) ->
     error.
-
-normalize_u256(Int) ->
-    Int band ((1 bsl 256) - 1).
 
 %% @doc Calculate the minimum distance between two numbers
 %% (either progressing backwards or forwards), assuming a
