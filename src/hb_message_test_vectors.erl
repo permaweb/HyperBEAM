@@ -23,7 +23,11 @@ test_codecs() ->
         #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
-        #{<<"device">> => <<"ans104@1.0">>, <<"type">> => <<"ed25519-sha512">>},
+        #{
+            <<"device">> => <<"ans104@1.0">>,
+            <<"type">> => <<"ed25519-sha512">>,
+            <<"with-opts">> => [ed25519]
+        },
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
@@ -41,6 +45,11 @@ suite_test_opts() ->
             parallel => true,
             desc => <<"Default opts">>,
             opts => test_opts(normal)
+        },
+        #{
+            name => ed25519,
+            desc => <<"ED25519 opts">>,
+            opts => test_opts(ed25519)
         }
     ].
 suite_test_opts(OptsName) ->
@@ -50,6 +59,11 @@ test_opts(normal) ->
     #{
         store => hb_test_utils:test_store(),
         priv_wallet => hb:wallet()
+    };
+test_opts(ed25519) ->
+    #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => ar_wallet:new({eddsa, ed25519})
     }.
  
 test_suite() ->
@@ -184,19 +198,31 @@ suite_test_() ->
 %% are completely isolated from each other.
 codec_test_suite(Codecs, OptsType) ->
     lists:flatmap(
-        fun(CodecName) ->
-            lists:map(fun({Desc, Test}) ->
-                TestName =
-                    binary_to_list(
-                        << (suite_name(CodecName))/binary, ": ", Desc/binary >>
-                    ),
-                TestSpecificOpts = test_opts(OptsType),
-                {
-                    Desc,
-                    TestName,
-                    fun(_SuiteOpts) -> Test(CodecName, TestSpecificOpts) end
-                }
-            end, test_suite())
+        fun(CodecSpec) ->
+            lists:filtermap(
+                fun({Desc, Test}) ->
+                    TestName =
+                        binary_to_list(
+                            << (suite_name(CodecSpec))/binary, ": ", Desc/binary >>
+                        ),
+                    TestSpecificOpts = test_opts(OptsType),
+                    case is_relevant_opts(CodecSpec, OptsType) of
+                        false -> false;
+                        true ->
+                            {
+                                true,
+                                {
+                                    Desc,
+                                    TestName,
+                                    fun(_SuiteOpts) ->
+                                        Test(CodecSpec, TestSpecificOpts)
+                                    end
+                                }
+                            }
+                    end
+                end,
+                test_suite()
+            )
         end,
         Codecs
     ).
@@ -210,6 +236,14 @@ suite_name(CodecSpec) when is_map(CodecSpec) ->
         true -> << CodecName/binary, " (bundle)">>
     end.
 
+%% @doc Determine if the given codec setup is relevant, given the `OptsType'
+%% specified.
+is_relevant_opts(#{ <<"with-opts">> := RelevantOpts }, OptsType) ->
+    lists:member(OptsType, RelevantOpts);
+is_relevant_opts(_Codec, _OptsType) -> true.
+
+%% @doc Determine if a CodecSpec (either binary, map, or list thereof) matches
+%% a given codec device name binary.
 is_device_codec(Devices, Codec) when is_list(Devices) ->
     lists:any(fun(Device) -> is_device_codec(Device, Codec) end, Devices);
 is_device_codec(Device, Codec) when Device == Codec ->
