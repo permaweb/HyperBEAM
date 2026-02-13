@@ -2,72 +2,50 @@
 %%%
 %%% This module handles fetching certificates from AMD KDS (Key Distribution
 %%% Service) and converting between PEM and DER certificate formats.
-%%% Certificates are cached in ETS tables to reduce network calls and improve
-%%% performance for repeated verifications.
+
+%%% Certificates are not cached; each fetch goes to the network.
 -module(snp_certificates).
 -export([fetch_cert_chain/1, fetch_vcek/6, pem_to_der_chain/1, pem_cert_to_der/1,
-         clear_cache/0, clear_cert_chain_cache/0, clear_vcek_cache/0,
          fetch_verification_certificates/6]).
 -include("include/hb.hrl").
 -include("include/snp_constants.hrl").
 -include("include/snp_guids.hrl").
 
-%% ETS table names for certificate caching
--define(CERT_CHAIN_CACHE_TABLE, snp_cert_chain_cache).
--define(VCEK_CACHE_TABLE, snp_vcek_cache).
-
-%% Cache TTL (time-to-live) in seconds - certificates are cached indefinitely
-%% until explicitly cleared or the table is destroyed
--define(CACHE_TTL_SECONDS, infinity).
-
 %% @doc Fetches the AMD certificate chain (ASK + ARK) for the given SEV product name.
-%% Certificates are cached to reduce network calls for repeated requests.
 %% @param SevProdName SEV product name (e.g., "Milan"). Defaults to "Milan" if not provided.
 %% @returns {ok, CertChainPEM} on success, {error, Reason} on failure
 -spec fetch_cert_chain(SevProdName :: undefined | binary() | string()) -> 
     {ok, binary()} | {error, term()}.
 fetch_cert_chain(SevProdName) ->
     Product = normalize_sev_product(SevProdName),
-    CacheKey = Product,
-    % Check cache first
-    case get_cert_chain_from_cache(CacheKey) of
-        {ok, CachedCert} ->
-            ?event(snp_short, {fetch_cert_chain_cache_hit, byte_size(CachedCert)}),
-            {ok, CachedCert};
-        cache_miss ->
-            % Fetch from network
-            Path = lists:flatten([?KDS_VCEK_PATH, "/", Product, "/cert_chain"]),
-            URL = ?KDS_CERT_SITE ++ Path,
-            ?event(snp, {fetch_cert_chain_http_request, #{
-                url => URL,
-                product => Product
+    Path = lists:flatten([?KDS_VCEK_PATH, "/", Product, "/cert_chain"]),
+    URL = ?KDS_CERT_SITE ++ Path,
+    ?event(snp, {fetch_cert_chain_http_request, #{
+        url => URL,
+        product => Product
+    }}),
+    {TimeMicros, Result} = timer:tc(fun() -> do_http_get(URL) end),
+    TimeMs = TimeMicros / 1000,
+    case Result of
+        {ok, CertChainPEM} = SuccessResult ->
+            ?event(snp_short, {fetch_cert_chain_success, #{
+                size => byte_size(CertChainPEM),
+                time_ms => TimeMs
             }}),
-            {TimeMicros, Result} = timer:tc(fun() -> do_http_get(URL) end),
-            TimeMs = TimeMicros / 1000,
-            case Result of
-                {ok, CertChainPEM} = SuccessResult ->
-                    % Store in cache on success
-                    store_cert_chain_in_cache(CacheKey, CertChainPEM),
-                    ?event(snp_short, {fetch_cert_chain_success, #{
-                        size => byte_size(CertChainPEM),
-                        time_ms => TimeMs
-                    }}),
-                    SuccessResult;
-                Error ->
-                    ?event(snp_error, {fetch_cert_chain_error, #{
-                        operation => <<"fetch_cert_chain">>,
-                        error => Error,
-                        url => URL,
-                        product => Product,
-                        time_ms => TimeMs,
-                        suggestion => <<"Check network connectivity and AMD KDS availability. Verify product name is correct (e.g., 'Milan').">>
-                    }}),
-                    Error
-            end
+            SuccessResult;
+        Error ->
+            ?event(snp_error, {fetch_cert_chain_error, #{
+                operation => <<"fetch_cert_chain">>,
+                error => Error,
+                url => URL,
+                product => Product,
+                time_ms => TimeMs,
+                suggestion => <<"Check network connectivity and AMD KDS availability. Verify product name is correct (e.g., 'Milan').">>
+            }}),
+            Error
     end.
 
 %% @doc Fetches the VCEK certificate for the given chip ID and TCB version.
-%% Certificates are cached to reduce network calls for repeated requests.
 %% @param ChipId 64-byte binary chip ID
 %% @param BootloaderSPL Bootloader SPL version (u8, 0-255)
 %% @param TeeSPL TEE SPL version (u8, 0-255)
@@ -80,66 +58,51 @@ fetch_cert_chain(SevProdName) ->
     SevProdName :: undefined | binary() | string()) -> 
     {ok, binary()} | {error, term()}.
 fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, SevProdName) ->
-    % Validate ChipId using centralized validation
     case snp_validation:validate_chip_id(ChipId) of
         {error, Reason} -> {error, {invalid_chip_id, Reason}};
         {ok, ValidChipId} ->
-            % Validate SPL values using centralized validation
             case snp_validation:validate_spl_values(BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL) of
                 {error, Reason} -> {error, Reason};
                 ok ->
                     Product = normalize_sev_product(SevProdName),
-                    % Create cache key from all parameters
-                    CacheKey = create_vcek_cache_key(ValidChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, Product),
-                    % Check cache first
-                    case get_vcek_from_cache(CacheKey) of
-                        {ok, CachedVcek} ->
-                            ?event(snp_short, {fetch_vcek_cache_hit, byte_size(CachedVcek)}),
-                            {ok, CachedVcek};
-                        cache_miss ->
-                            % Fetch from network
-                            % Convert chip ID to hex string (needs to be list for URL construction)
-                            HwId = hb_util:list(hb_util:to_hex(ValidChipId)),
-                            Path = lists:flatten([
-                                ?KDS_VCEK_PATH, "/", Product, "/", HwId,
-                                "?blSPL=", hb_util:list(hb_util:bin(BootloaderSPL)),
-                                "&teeSPL=", hb_util:list(hb_util:bin(TeeSPL)),
-                                "&snpSPL=", hb_util:list(hb_util:bin(SnpSPL)),
-                                "&ucodeSPL=", hb_util:list(hb_util:bin(UcodeSPL))
-                            ]),
-                            URL = ?KDS_CERT_SITE ++ Path,
-                            ?event(snp, {fetch_vcek_http_request, #{
-                                url => URL,
-                                product => Product,
-                                chip_id_hex => HwId,
-                                spl_values => #{
-                                    bootloader => BootloaderSPL,
-                                    tee => TeeSPL,
-                                    snp => SnpSPL,
-                                    ucode => UcodeSPL
-                                }
+                    HwId = hb_util:list(hb_util:to_hex(ValidChipId)),
+                    Path = lists:flatten([
+                        ?KDS_VCEK_PATH, "/", Product, "/", HwId,
+                        "?blSPL=", hb_util:list(hb_util:bin(BootloaderSPL)),
+                        "&teeSPL=", hb_util:list(hb_util:bin(TeeSPL)),
+                        "&snpSPL=", hb_util:list(hb_util:bin(SnpSPL)),
+                        "&ucodeSPL=", hb_util:list(hb_util:bin(UcodeSPL))
+                    ]),
+                    URL = ?KDS_CERT_SITE ++ Path,
+                    ?event(snp, {fetch_vcek_http_request, #{
+                        url => URL,
+                        product => Product,
+                        chip_id_hex => HwId,
+                        spl_values => #{
+                            bootloader => BootloaderSPL,
+                            tee => TeeSPL,
+                            snp => SnpSPL,
+                            ucode => UcodeSPL
+                        }
+                    }}),
+                    {TimeMicros, Result} = timer:tc(fun() -> do_http_get(URL) end),
+                    TimeMs = TimeMicros / 1000,
+                    case Result of
+                        {ok, VcekDER} = SuccessResult ->
+                            ?event(snp_short, {fetch_vcek_success, #{
+                                size => byte_size(VcekDER),
+                                time_ms => TimeMs
                             }}),
-                            {TimeMicros, Result} = timer:tc(fun() -> do_http_get(URL) end),
-                            TimeMs = TimeMicros / 1000,
-                            case Result of
-                                {ok, VcekDER} = SuccessResult ->
-                                    % Store in cache on success
-                                    store_vcek_in_cache(CacheKey, VcekDER),
-                                    ?event(snp_short, {fetch_vcek_success, #{
-                                        size => byte_size(VcekDER),
-                                        time_ms => TimeMs
-                                    }}),
-                                    SuccessResult;
-                                Error ->
-                                    ?event(snp_error, {fetch_vcek_error, #{
-                                        operation => <<"fetch_vcek">>,
-                                        error => Error,
-                                        url => URL,
-                                        time_ms => TimeMs,
-                                        suggestion => <<"Check network connectivity and AMD KDS availability. Verify chip ID and SPL values are correct.">>
-                                    }}),
-                                    Error
-                            end
+                            SuccessResult;
+                        Error ->
+                            ?event(snp_error, {fetch_vcek_error, #{
+                                operation => <<"fetch_vcek">>,
+                                error => Error,
+                                url => URL,
+                                time_ms => TimeMs,
+                                suggestion => <<"Check network connectivity and AMD KDS availability. Verify chip ID and SPL values are correct.">>
+                            }}),
+                            Error
                     end
             end
     end.
@@ -405,106 +368,6 @@ do_http_get(InvalidURL) ->
     }}),
     {error, <<"HTTP request failed: URL must be a binary or string, got ", 
         ActualType/binary, ". Convert the URL to a binary or string before calling.">>}.
-
-%% Cache management functions
-
-%% @doc Clear all certificate caches (both cert chain and VCEK caches).
--spec clear_cache() -> ok.
-clear_cache() ->
-    clear_cert_chain_cache(),
-    clear_vcek_cache(),
-    ok.
-
-%% @doc Clear the certificate chain cache.
--spec clear_cert_chain_cache() -> ok.
-clear_cert_chain_cache() ->
-    ensure_cert_chain_cache_table(),
-    ets:delete_all_objects(?CERT_CHAIN_CACHE_TABLE),
-    ok.
-
-%% @doc Clear the VCEK certificate cache.
--spec clear_vcek_cache() -> ok.
-clear_vcek_cache() ->
-    ensure_vcek_cache_table(),
-    ets:delete_all_objects(?VCEK_CACHE_TABLE),
-    ok.
-
-%% Internal cache functions
-
-%% Ensure cert chain cache table exists
--spec ensure_cert_chain_cache_table() -> ok.
-ensure_cert_chain_cache_table() ->
-    case ets:info(?CERT_CHAIN_CACHE_TABLE) of
-        undefined ->
-            ets:new(?CERT_CHAIN_CACHE_TABLE, [named_table, set, public, {read_concurrency, true}]);
-        _ ->
-            ok
-    end,
-    ok.
-
-%% Ensure VCEK cache table exists
--spec ensure_vcek_cache_table() -> ok.
-ensure_vcek_cache_table() ->
-    case ets:info(?VCEK_CACHE_TABLE) of
-        undefined ->
-            ets:new(?VCEK_CACHE_TABLE, [named_table, set, public, {read_concurrency, true}]);
-        _ ->
-            ok
-    end,
-    ok.
-
-%% Get cert chain from cache
--spec get_cert_chain_from_cache(string()) -> {ok, binary()} | cache_miss.
-get_cert_chain_from_cache(CacheKey) ->
-    ensure_cert_chain_cache_table(),
-    case ets:lookup(?CERT_CHAIN_CACHE_TABLE, CacheKey) of
-        [{CacheKey, CertChain}] ->
-            {ok, CertChain};
-        [] ->
-            cache_miss
-    end.
-
-%% Store cert chain in cache
--spec store_cert_chain_in_cache(string(), binary()) -> true.
-store_cert_chain_in_cache(CacheKey, CertChain) ->
-    ensure_cert_chain_cache_table(),
-    ets:insert(?CERT_CHAIN_CACHE_TABLE, {CacheKey, CertChain}).
-
-%% Create cache key for VCEK certificate
--spec create_vcek_cache_key(binary(), integer(), integer(), integer(), integer(), string()) -> binary().
-create_vcek_cache_key(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, Product) ->
-    % Create a unique key from all parameters
-    KeyParts = [
-        hb_util:bin(Product),
-        <<":">>,
-        hb_util:to_hex(ChipId),
-        <<":">>,
-        hb_util:bin(integer_to_list(BootloaderSPL)),
-        <<":">>,
-        hb_util:bin(integer_to_list(TeeSPL)),
-        <<":">>,
-        hb_util:bin(integer_to_list(SnpSPL)),
-        <<":">>,
-        hb_util:bin(integer_to_list(UcodeSPL))
-    ],
-    << <<Part/binary>> || Part <- KeyParts >>.
-
-%% Get VCEK from cache
--spec get_vcek_from_cache(binary()) -> {ok, binary()} | cache_miss.
-get_vcek_from_cache(CacheKey) ->
-    ensure_vcek_cache_table(),
-    case ets:lookup(?VCEK_CACHE_TABLE, CacheKey) of
-        [{CacheKey, Vcek}] ->
-            {ok, Vcek};
-        [] ->
-            cache_miss
-    end.
-
-%% Store VCEK in cache
--spec store_vcek_in_cache(binary(), binary()) -> true.
-store_vcek_in_cache(CacheKey, Vcek) ->
-    ensure_vcek_cache_table(),
-    ets:insert(?VCEK_CACHE_TABLE, {CacheKey, Vcek}).
 
 %% @doc Fetch both certificate chain and VCEK for verification.
 %% This is a convenience function that fetches both certificates needed for
