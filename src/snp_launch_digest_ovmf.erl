@@ -29,23 +29,15 @@ parse_and_update_ovmf_metadata_erlang(GCTX, VMMType, KernelHash, InitrdHash, App
         has_initrd => is_binary(InitrdHash),
         has_append => is_binary(AppendHash)
     }}),
-    % Try to find OVMF file
-    CwdPath = case file:get_cwd() of
-        {ok, Cwd} -> filename:join([Cwd, "test", "OVMF-1.55.fd"]);
-        {error, _} -> filename:join(["test", "OVMF-1.55.fd"])
-    end,
-    OvmfPaths = [
-        CwdPath,
-        "/root/hb-release/test/OVMF-1.55.fd"
-    ],
-    ?event(snp, {ovmf_paths_to_try, OvmfPaths}),
-    
-    case find_ovmf_file(OvmfPaths) of
-        {ok, OvmfPath} ->
+    % OVMF is copied to priv/ovmf/ at build time (rebar pre_hook); single fixed path.
+    OvmfPath = filename:join([code:priv_dir(hb), "ovmf", "OVMF-1.55.fd"]),
+    ?event(snp, {ovmf_path, OvmfPath}),
+    case file:read_file_info(OvmfPath) of
+        {ok, _FileInfo} ->
             ?event(snp_short, {ovmf_file_found, #{path => OvmfPath}}),
             parse_ovmf_and_update(GCTX, OvmfPath, VMMType, KernelHash, InitrdHash, AppendHash, SevHashesGPA);
         {error, Reason} ->
-            ?event(snp_error, {ovmf_file_not_found, #{reason => Reason}}),
+            ?event(snp_error, {ovmf_file_not_found, #{path => OvmfPath, reason => Reason}}),
             % Fallback: use default reset EIP (0x0) if OVMF not found, matching Rust
             DefaultResetEIP = ?DEFAULT_RESET_EIP,
             ?event(snp, {using_default_reset_eip, #{reset_eip => DefaultResetEIP}}),
@@ -62,26 +54,6 @@ parse_and_update_ovmf_metadata_erlang(GCTX, VMMType, KernelHash, InitrdHash, App
                     GCTX
             end,
             {GCTX1, DefaultResetEIP}
-    end.
-
-%% Find OVMF file in list of paths
--spec find_ovmf_file([string()]) -> {ok, string()} | {error, term()}.
-find_ovmf_file([]) -> 
-    ?event(snp, ovmf_file_search_exhausted),
-    {error, not_found};
-find_ovmf_file([Path | Rest]) ->
-    ?event(snp, {trying_ovmf_path, #{path => Path}}),
-    case file:read_file_info(Path) of
-        {ok, FileInfo} -> 
-            FileSize = case is_tuple(FileInfo) andalso tuple_size(FileInfo) >= 2 of
-                true -> element(2, FileInfo);
-                false -> 0
-            end,
-            ?event(snp_short, {ovmf_file_found_at_path, #{path => Path, size => FileSize}}),
-            {ok, Path};
-        {error, Reason} -> 
-            ?event(snp, {ovmf_path_failed, #{path => Path, reason => Reason}}),
-            find_ovmf_file(Rest)
     end.
 
 %% Parse OVMF and update GCTX with all metadata sections
