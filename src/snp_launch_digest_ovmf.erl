@@ -53,8 +53,11 @@ parse_and_update_ovmf_metadata_erlang(GCTX, VMMType, KernelHash, InitrdHash, App
             GCTX1 = case {KernelHash, InitrdHash, AppendHash, SevHashesGPA} of
                 {K, I, A, GPA} when is_binary(K), is_binary(I), is_binary(A), GPA =/= 0 ->
                     ?event(snp, {updating_sev_hashes_table_fallback, #{gpa => GPA}}),
-                    snp_launch_digest_sev_hashes:update_sev_hashes_table(GCTX, K, I, A, GPA);
-                _ -> 
+                    case snp_launch_digest_sev_hashes:update_sev_hashes_table(GCTX, K, I, A, GPA) of
+                        {ok, G} -> G;
+                        {error, invalid_hex} -> erlang:error(invalid_hex)
+                    end;
+                _ ->
                     ?event(snp, no_sev_hashes_update_possible),
                     GCTX
             end,
@@ -248,7 +251,10 @@ parse_ovmf_and_update(GCTX, OvmfPath, VMMType, KernelHash, InitrdHash, AppendHas
                             case snp_ovmf:parse_ovmf_sev_hashes_gpa(OvmfPath) of
                                 {ok, FallbackGPA} ->
                                     ?event(snp, {fallback_to_sev_hashes_gpa, #{gpa => FallbackGPA}}),
-                                    snp_launch_digest_sev_hashes:update_sev_hashes_table(GCTX, K, I, A, FallbackGPA);
+                                    case snp_launch_digest_sev_hashes:update_sev_hashes_table(GCTX, K, I, A, FallbackGPA) of
+                                        {ok, G} -> G;
+                                        {error, invalid_hex} -> erlang:error(invalid_hex)
+                                    end;
                                 _ -> GCTX
                             end;
                         _ -> GCTX
@@ -383,7 +389,8 @@ process_ovmf_section(GCTX, Section, VMMType, KernelHash, InitrdHash, AppendHash,
                         section_gpa => GPA,
                         using_footer_table_gpa => SevHashesTableGPA =/= 0
                     }}),
-                    SevHashesPage = snp_launch_digest_sev_hashes:construct_sev_hashes_page_erlang(K, I, A, PageOffset),
+                    case snp_launch_digest_sev_hashes:construct_sev_hashes_page_erlang(K, I, A, PageOffset) of
+                        {ok, SevHashesPage} ->
                     SevHashesPageHex = snp_util:binary_to_hex_string(SevHashesPage),
                     SevHashesPageHash = crypto:hash(sha384, SevHashesPage),
                     SevHashesPageHashHex = snp_util:binary_to_hex_string(SevHashesPageHash),
@@ -394,6 +401,9 @@ process_ovmf_section(GCTX, Section, VMMType, KernelHash, InitrdHash, AppendHash,
                         page_sha384 => SevHashesPageHashHex
                     }}),
                     snp_launch_digest_gctx:gctx_update_page(GCTX, ?PAGE_TYPE_NORMAL, GPA, SevHashesPage); % use GPA directly
+                        {error, invalid_hex} ->
+                            erlang:error(invalid_hex)
+                    end;
                 _ ->
                     ?event(snp, {skipping_snp_kernel_hashes_no_hashes, #{gpa => GPA}}),
                     % Process as zero pages if no hashes provided

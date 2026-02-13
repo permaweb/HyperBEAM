@@ -14,9 +14,10 @@
 %% @param InitrdHash binary() - Initrd hash (SHA-256, ?SEV_HASH_BINARY_SIZE bytes or hex string)
 %% @param AppendHash binary() - Append hash (SHA-256, ?SEV_HASH_BINARY_SIZE bytes or hex string)
 %% @param PageOffset non_neg_integer() - Page offset for hash table placement
-%% @returns binary() - Complete SEV hashes page (?PAGE_SIZE bytes)
--spec construct_sev_hashes_page_erlang(KernelHash :: binary(), InitrdHash :: binary(), 
-    AppendHash :: binary(), PageOffset :: non_neg_integer()) -> binary().
+%% @returns {ok, binary()} - Complete SEV hashes page (?PAGE_SIZE bytes), or {error, invalid_hex}
+-spec construct_sev_hashes_page_erlang(KernelHash :: binary(), InitrdHash :: binary(),
+    AppendHash :: binary(), PageOffset :: non_neg_integer()) ->
+    {ok, binary()} | {error, invalid_hex}.
 construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset) ->
     ?event(snp, {construct_sev_hashes_page_start, #{
         page_offset => PageOffset,
@@ -24,24 +25,32 @@ construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset)
         initrd_size => byte_size(InitrdHash),
         append_size => byte_size(AppendHash)
     }}),
-    
     % Convert hex strings to binary if needed (hashes come in as hex strings, need ?SEV_HASH_BINARY_SIZE-byte binaries)
-    KernelHashBin = case byte_size(KernelHash) of
-        ?SEV_HASH_BINARY_SIZE -> KernelHash;  % Already binary
-        ?SEV_HASH_HEX_SIZE -> snp_util:hex_to_binary(KernelHash);  % Hex string, convert to binary
-        _ -> KernelHash  % Unexpected size, use as-is
-    end,
-    InitrdHashBin = case byte_size(InitrdHash) of
-        ?SEV_HASH_BINARY_SIZE -> InitrdHash;  % Already binary
-        ?SEV_HASH_HEX_SIZE -> snp_util:hex_to_binary(InitrdHash);  % Hex string, convert to binary
-        _ -> InitrdHash  % Unexpected size, use as-is
-    end,
-    AppendHashBin = case byte_size(AppendHash) of
-        ?SEV_HASH_BINARY_SIZE -> AppendHash;  % Already binary
-        ?SEV_HASH_HEX_SIZE -> snp_util:hex_to_binary(AppendHash);  % Hex string, convert to binary
-        _ -> AppendHash  % Unexpected size, use as-is
-    end,
-    
+    case hash_to_binary(KernelHash) of
+        {error, invalid_hex} -> {error, invalid_hex};
+        {ok, KernelHashBin} ->
+            case hash_to_binary(InitrdHash) of
+                {error, invalid_hex} -> {error, invalid_hex};
+                {ok, InitrdHashBin} ->
+                    case hash_to_binary(AppendHash) of
+                        {error, invalid_hex} -> {error, invalid_hex};
+                        {ok, AppendHashBin} ->
+                            build_sev_hashes_page(KernelHashBin, InitrdHashBin, AppendHashBin, PageOffset)
+                    end
+            end
+    end.
+
+%% @doc Convert hash (binary or hex string) to ?SEV_HASH_BINARY_SIZE binary.
+-spec hash_to_binary(binary()) -> {ok, binary()} | {error, invalid_hex}.
+hash_to_binary(Hash) when byte_size(Hash) =:= ?SEV_HASH_BINARY_SIZE ->
+    {ok, Hash};
+hash_to_binary(Hash) when byte_size(Hash) =:= ?SEV_HASH_HEX_SIZE ->
+    snp_util:hex_to_binary(Hash);
+hash_to_binary(Hash) ->
+    {ok, Hash}.
+
+-spec build_sev_hashes_page(binary(), binary(), binary(), non_neg_integer()) -> {ok, binary()}.
+build_sev_hashes_page(KernelHashBin, InitrdHashBin, AppendHashBin, PageOffset) ->
     ?event(snp, {hashes_converted, #{
         kernel_size => byte_size(KernelHashBin),
         initrd_size => byte_size(InitrdHashBin),
@@ -99,13 +108,12 @@ construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset)
         false -> <<>>
     end,
     Result = <<PagePrefix/binary, PaddedHashTable/binary, PageSuffix/binary>>,
-    
     ?event(snp_short, {construct_sev_hashes_page_complete, #{
         result_size => byte_size(Result),
         page_offset => PageOffset,
         hash_table_size => HashTableSize
     }}),
-    Result.
+    {ok, Result}.
 
 %% @doc Update SEV hashes table in GCTX
 %% @param GCTX #gctx{} record with current launch digest
@@ -113,9 +121,9 @@ construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset)
 %% @param InitrdHash binary() - Initrd hash
 %% @param AppendHash binary() - Append hash
 %% @param SevHashesGPA non_neg_integer() - SEV hashes table GPA
-%% @returns #gctx{} record with updated launch digest
--spec update_sev_hashes_table(GCTX :: #gctx{}, KernelHash :: binary(), InitrdHash :: binary(), 
-    AppendHash :: binary(), SevHashesGPA :: non_neg_integer()) -> #gctx{}.
+%% @returns {ok, #gctx{}} with updated launch digest, or {error, invalid_hex}
+-spec update_sev_hashes_table(GCTX :: #gctx{}, KernelHash :: binary(), InitrdHash :: binary(),
+    AppendHash :: binary(), SevHashesGPA :: non_neg_integer()) -> {ok, #gctx{}} | {error, invalid_hex}.
 update_sev_hashes_table(GCTX, KernelHash, InitrdHash, AppendHash, SevHashesGPA) ->
     ?event(snp, {update_sev_hashes_table_start, #{
         sev_hashes_gpa => SevHashesGPA,
@@ -123,13 +131,14 @@ update_sev_hashes_table(GCTX, KernelHash, InitrdHash, AppendHash, SevHashesGPA) 
         initrd_size => byte_size(InitrdHash),
         append_size => byte_size(AppendHash)
     }}),
-    % Construct SEV hashes page
     PageOffset = SevHashesGPA band ?PAGE_MASK,
     PageAlignedGPA = SevHashesGPA band (bnot ?PAGE_MASK),
     ?event(snp, {sev_hashes_page_calc, #{page_offset => PageOffset, page_aligned_gpa => PageAlignedGPA}}),
-    SevHashesPage = construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset),
-    ?event(snp_short, {sev_hashes_page_constructed, #{page_size => byte_size(SevHashesPage)}}),
-    
-    % Update GCTX with the page
-    snp_launch_digest_gctx:gctx_update_page(GCTX, ?PAGE_TYPE_NORMAL, PageAlignedGPA, SevHashesPage).
+    case construct_sev_hashes_page_erlang(KernelHash, InitrdHash, AppendHash, PageOffset) of
+        {ok, SevHashesPage} ->
+            ?event(snp_short, {sev_hashes_page_constructed, #{page_size => byte_size(SevHashesPage)}}),
+            {ok, snp_launch_digest_gctx:gctx_update_page(GCTX, ?PAGE_TYPE_NORMAL, PageAlignedGPA, SevHashesPage)};
+        {error, invalid_hex} ->
+            {error, invalid_hex}
+    end.
 

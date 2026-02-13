@@ -27,27 +27,25 @@
 -type maybe_result(T) :: T | {error, error_reason()}.
 
 %% @doc Convert hex string to binary.
-%% @param Hex binary() - Hex string (must have even number of bytes)
-%% @returns binary() - Binary representation of hex string, or zeros on error
+%% @param Hex binary() - Hex string (must have even number of bytes, valid hex chars)
+%% @returns {ok, binary()} on success, {error, invalid_hex} on invalid or odd-length input
 %% @example
-%%   hex_to_binary(<<"48656c6c6f">>) =:= <<"Hello">>  % true
--spec hex_to_binary(Hex :: binary()) -> binary().
+%%   hex_to_binary(<<"48656c6c6f">>) =:= {ok, <<"Hello">>}
+-spec hex_to_binary(Hex :: binary()) -> {ok, binary()} | {error, invalid_hex}.
 hex_to_binary(Hex) when is_binary(Hex), byte_size(Hex) rem 2 =:= 0 ->
     ?event(snp, {hex_to_binary_start, #{hex_size => byte_size(Hex)}}),
     try
         Result = << <<(hex_char_to_int(H) bsl 4 + hex_char_to_int(L))>> || <<H, L>> <= Hex >>,
         ?event(snp, {hex_to_binary_success, #{result_size => byte_size(Result)}}),
-        Result
+        {ok, Result}
     catch
-        Error:Reason -> 
-            ?event(snp_error, {hex_to_binary_error, #{error => Error, reason => Reason, hex_size => byte_size(Hex)}}),
-            % Invalid hex characters, return zeros
-            <<0:(byte_size(Hex) div 2 * 8)>>
+        _:_ ->
+            ?event(snp_error, {hex_to_binary_error, #{hex_size => byte_size(Hex)}}),
+            {error, invalid_hex}
     end;
 hex_to_binary(Hex) ->
     ?event(snp_error, {hex_to_binary_invalid_input, #{hex => case is_binary(Hex) of true -> {size, byte_size(Hex)}; false -> Hex end}}),
-    % Invalid input, return ?LAUNCH_DIGEST_SIZE bytes of zeros
-    <<0:?LAUNCH_DIGEST_BITS>>.
+    {error, invalid_hex}.
 
 %% @doc Convert binary to hex string for logging.
 %% @param Binary binary() - Binary to convert

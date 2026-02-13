@@ -191,13 +191,16 @@ initialize_gctx_from_firmware(FirmwareHash) ->
             HashSize = byte_size(Hash),
             ?event(snp_short, {gctx_init_with_binary, #{size => HashSize}}),
             case HashSize of
-                ?HEX_STRING_48_BYTES -> 
+                ?HEX_STRING_48_BYTES ->
                     ?event(snp_short, gctx_init_from_hex_96),
-                    snp_launch_digest_gctx:init_gctx_with_seed(snp_util:hex_to_binary(Hash));
-                ?LAUNCH_DIGEST_SIZE -> 
+                    case snp_util:hex_to_binary(Hash) of
+                        {ok, B} -> snp_launch_digest_gctx:init_gctx_with_seed(B);
+                        {error, invalid_hex} -> erlang:error(invalid_hex)
+                    end;
+                ?LAUNCH_DIGEST_SIZE ->
                     ?event(snp_short, gctx_init_from_binary_48),
                     snp_launch_digest_gctx:init_gctx_with_seed(Hash);
-                _ -> 
+                _ ->
                     ?event(snp_short, {gctx_init_fallback_to_zeros, #{size => HashSize}}),
                     snp_launch_digest_gctx:init_gctx()
             end;
@@ -206,13 +209,16 @@ initialize_gctx_from_firmware(FirmwareHash) ->
             HashSize = byte_size(HashBin),
             ?event(snp_short, {gctx_init_with_list, #{size => HashSize}}),
             case HashSize of
-                ?HEX_STRING_48_BYTES -> 
+                ?HEX_STRING_48_BYTES ->
                     ?event(snp, gctx_init_from_hex_96_list),
-                    snp_launch_digest_gctx:init_gctx_with_seed(snp_util:hex_to_binary(HashBin));
-                ?LAUNCH_DIGEST_SIZE -> 
+                    case snp_util:hex_to_binary(HashBin) of
+                        {ok, B} -> snp_launch_digest_gctx:init_gctx_with_seed(B);
+                        {error, invalid_hex} -> erlang:error(invalid_hex)
+                    end;
+                ?LAUNCH_DIGEST_SIZE ->
                     ?event(snp, gctx_init_from_binary_48_list),
                     snp_launch_digest_gctx:init_gctx_with_seed(HashBin);
-                _ -> 
+                _ ->
                     ?event(snp, {gctx_init_fallback_to_zeros_list, #{size => HashSize}}),
                     snp_launch_digest_gctx:init_gctx()
             end
