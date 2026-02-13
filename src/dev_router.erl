@@ -234,49 +234,77 @@ routes(M1, M2, Opts) ->
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
-    R = match_routes(Msg, Routes, Opts),
-    ?event({find_route, {msg, Msg}, {routes, Routes}, {res, R}}),
-    case (R =/= no_matches) andalso hb_ao:get(<<"node">>, R, Opts) of
-        false -> {error, no_matches};
-        Node when is_binary(Node) -> {ok, Node};
-        Node when is_map(Node) -> apply_route(Msg, Node, Opts);
-        not_found ->
-            ModR = apply_routes(Msg, R, Opts),
-            case hb_ao:get(<<"strategy">>, R, Opts) of
-                not_found -> {ok, ModR};
-                <<"All">> -> {ok, ModR};
-                Strategy ->
-                    ChooseN = hb_ao:get(<<"choose">>, R, 1, Opts),
-                    % Get the first element of the path -- the `base' message
-                    % of the request.
-                    Base = extract_base(Msg, Opts),
-                    Nodes = hb_ao:get(<<"nodes">>, ModR, Opts),
-                    Chosen = choose(ChooseN, Strategy, Base, Nodes, Opts),
-                    ?event({choose,
-                        {strategy, Strategy},
-                        {choose_n, ChooseN},
-                        {base, Base},
-                        {nodes, Nodes},
-                        {chosen, Chosen}
-                    }),
-                    case Chosen of
-                        [Node] when is_map(Node) ->
-                            apply_route(Msg, Node, Opts);
-                        [NodeURI] -> {ok, NodeURI};
-                        _ChosenNodes ->
-                            {ok,
-                                hb_ao:set(
-                                    <<"nodes">>,
-                                    hb_maps:map(
-                                        fun(Node) ->
-                                            hb_util:ok(apply_route(Msg, Node, Opts))
-                                        end,
-                                        Chosen,
+    MatchedRoute = match_routes(Msg, Routes, Opts),
+    ?event({find_route, {msg, Msg}, {routes, Routes}, {res, MatchedRoute}}),
+    case MatchedRoute of
+        no_matches ->
+            {error, no_matches};
+        R ->
+            case hb_ao:get(<<"node">>, R, Opts) of
+                Node when is_binary(Node) ->
+                    {ok, Node};
+                Node when is_map(Node) ->
+                    apply_route(Msg, Node, Opts);
+                not_found ->
+                    case hb_ao:get(<<"nodes">>, R, not_found, Opts) of
+                        not_found ->
+                            {error, no_matches};
+                        _ ->
+                            RouteWithAppliedNodes = apply_routes(Msg, R, Opts),
+                            Strategy =
+                                normalize_strategy(
+                                    hb_ao:get(
+                                        <<"strategy">>,
+                                        RouteWithAppliedNodes,
+                                        <<"All">>,
                                         Opts
-                                    ),
-                                    Opts
-                                )
-                            }
+                                    )
+                                ),
+                            case Strategy of
+                                <<"All">> ->
+                                    {ok, RouteWithAppliedNodes};
+                                _ ->
+                                    Nodes =
+                                        hb_ao:get(
+                                            <<"nodes">>,
+                                            RouteWithAppliedNodes,
+                                            [],
+                                            Opts
+                                        ),
+                                    ChooseN =
+                                        choose_count(
+                                            hb_ao:get(
+                                                <<"choose">>,
+                                                RouteWithAppliedNodes,
+                                                1,
+                                                Opts
+                                            ),
+                                            Nodes
+                                        ),
+                                    Chosen = choose(ChooseN, Strategy, Msg, Nodes, Opts),
+                                    ?event({choose,
+                                        {strategy, Strategy},
+                                        {choose_n, ChooseN},
+                                        {nodes, Nodes},
+                                        {msg, Msg},
+                                        {chosen, Chosen}
+                                    }),
+                                    case Chosen of
+                                        [] ->
+                                            {error, no_matches};
+                                        [Node] when is_map(Node) ->
+                                            {ok, Node};
+                                        [NodeURI] when is_binary(NodeURI) ->
+                                            {ok, NodeURI};
+                                        _ ->
+                                            {
+                                                ok,
+                                                RouteWithAppliedNodes#{
+                                                    <<"nodes">> => Chosen
+                                                }
+                                            }
+                                    end
+                            end
                     end
             end
     end.
@@ -294,21 +322,6 @@ load_routes(Opts) ->
             case hb_ao:resolve_many(ProviderMsgs, Opts) of
                 {ok, Routes} -> hb_cache:ensure_all_loaded(Routes, Opts);
                 {error, Error} -> throw({routes, routes_provider_failed, Error})
-            end
-    end.
-
-%% @doc Extract the base message ID from a request message. Produces a single
-%% binary ID that can be used for routing decisions.
-extract_base(#{ <<"path">> := Path }, Opts) ->
-    extract_base(Path, Opts);
-extract_base(RawPath, Opts) when is_binary(RawPath) ->
-    BasePath = hb_path:hd(#{ <<"path">> => RawPath }, Opts),
-    case ?IS_ID(BasePath) of
-        true -> BasePath;
-        false ->
-            case binary:split(BasePath, [<<"\~">>, <<"?">>, <<"&">>], [global]) of
-                [BaseMsgID|_] when ?IS_ID(BaseMsgID) -> BaseMsgID;
-                _ -> hb_crypto:sha256(BasePath)
             end
     end.
 
@@ -353,6 +366,8 @@ apply_route(Msg, Route, Opts) ->
     }}.
 do_apply_route(#{ <<"route-path">> := Path }, R, Opts) ->
     do_apply_route(#{ <<"path">> => Path }, R, Opts);
+do_apply_route(_, #{ <<"uri">> := URI }, _Opts) ->
+    {ok, URI};
 do_apply_route(#{ <<"path">> := RawPath }, #{ <<"prefix">> := RawPrefix }, Opts) ->
     Path = hb_cache:ensure_loaded(RawPath, Opts),
     Prefix = hb_cache:ensure_loaded(RawPrefix, Opts),
@@ -441,6 +456,7 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
 
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
+choose(_, _, _, [], _) -> [];
 choose(N, <<"Random">>, _, Nodes, _Opts) ->
     Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
     [Node | choose(N - 1, <<"Random">>, nop, lists:delete(Node, Nodes), _Opts)];
@@ -458,9 +474,13 @@ choose(N, <<"By-Weight">>, _, Nodes, Opts) ->
     |
         choose(N - 1, <<"By-Weight">>, nop, lists:delete(Node, Nodes), Opts)
     ];
+choose(N, <<"By-Base">>, #{ <<"path">> := Path }, Nodes, Opts) when is_binary(Path) ->
+    choose(N, <<"By-Base">>, route_hash_int(Path, Opts), Nodes, Opts);
+choose(N, <<"By-Base">>, #{ <<"route-by">> := RouteBy }, Nodes, Opts) ->
+    choose(N, <<"By-Base">>, route_hash_int(RouteBy, Opts), Nodes, Opts);
 choose(N, <<"By-Base">>, Hashpath, Nodes, Opts) when is_binary(Hashpath) ->
-    choose(N, <<"By-Base">>, binary_to_bignum(Hashpath), Nodes, Opts);
-choose(N, <<"By-Base">>, HashInt, Nodes, Opts) ->
+    choose(N, <<"By-Base">>, route_hash_int(Hashpath, Opts), Nodes, Opts);
+choose(N, <<"By-Base">>, HashInt, Nodes, Opts) when is_integer(HashInt) ->
     Node = lists:nth((HashInt rem length(Nodes)) + 1, Nodes),
     [
         Node
@@ -473,7 +493,53 @@ choose(N, <<"By-Base">>, HashInt, Nodes, Opts) ->
             Opts
         )
     ];
-choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
+choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
+    RouteInt = route_integer(Int, Opts),
+    NodesWithDistances =
+        lists:map(
+            fun(Node) ->
+                %% Use 4-arity get with explicit default — the old
+                %% 3-arity call returned the Opts map when `center'
+                %% was missing, crashing field_distance with badarith.
+                %% Centerless nodes get 2^256 (> max distance) so they
+                %% are selected last.
+                case hb_maps:get(<<"center">>, Node, not_found, Opts) of
+                    not_found ->
+                        {Node, 1 bsl 256};
+                    Center ->
+                        {Node, field_distance(RouteInt, Center)}
+                end
+            end,
+            Nodes
+        ),
+    lists:reverse(
+        element(
+            1,
+            lists:foldl(
+                fun(_, {Current, Remaining}) ->
+                    Res = {Lowest, _} = lowest_distance(Remaining),
+                    {[Lowest|Current], lists:delete(Res, Remaining)}
+                end,
+                {[], NodesWithDistances},
+                lists:seq(1, N)
+            )
+        )
+    );
+choose(N, <<"Nearest-Integer">>, #{ <<"path">> := Path }, Nodes, Opts)
+        when is_binary(Path) ->
+    choose(
+        N,
+        <<"Nearest-Integer">>,
+        #{ <<"route-by">> => route_hash_int(Path, Opts) },
+        Nodes,
+        Opts
+    );
+choose(N, <<"Nearest-Integer">>, RouteBy, Nodes, Opts) ->
+    choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> => RouteBy }, Nodes, Opts);
+choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts)
+        when is_binary(HashPath) ->
+    choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
+choose(N, <<"Nearest">>, HashPath, Nodes, Opts) when is_binary(HashPath) ->
     BareHashPath = hb_util:native_id(HashPath),
     NodesWithDistances =
         lists:map(
@@ -512,6 +578,76 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
             )
         )
     ).
+
+choose_count(RawChoose, Nodes) ->
+    NormalizedChoose =
+        case safe_to_integer(RawChoose) of
+            {ok, X} when X > 0 -> X;
+            _ -> 0
+        end,
+    min(NormalizedChoose, length(Nodes)).
+
+normalize_strategy(RawStrategy) ->
+    case hb_util:to_lower(hb_util:bin(RawStrategy)) of
+        <<"all">> -> <<"All">>;
+        <<"random">> -> <<"Random">>;
+        <<"by-base">> -> <<"By-Base">>;
+        <<"by_base">> -> <<"By-Base">>;
+        <<"by-weight">> -> <<"By-Weight">>;
+        <<"by_weight">> -> <<"By-Weight">>;
+        <<"nearest">> -> <<"Nearest">>;
+        <<"nearest-integer">> -> <<"Nearest-Integer">>;
+        <<"nearest_integer">> -> <<"Nearest-Integer">>;
+        _ -> <<"All">>
+    end.
+
+route_integer(Int, _Opts) when is_integer(Int) ->
+    Int;
+route_integer(Bin, Opts) when is_binary(Bin) ->
+    case safe_to_integer(Bin) of
+        {ok, Int} -> Int;
+        error -> route_hash_int(Bin, Opts)
+    end;
+route_integer(Value, Opts) ->
+    route_hash_int(Value, Opts).
+
+route_hash_int(Int, _Opts) when is_integer(Int) ->
+    Int;
+route_hash_int(Bin, _Opts) when is_binary(Bin), ?IS_ID(Bin) ->
+    binary_to_bignum(Bin);
+route_hash_int(Bin, _Opts) when is_binary(Bin), byte_size(Bin) == 32 ->
+    <<Int:256/unsigned-integer>> = Bin,
+    Int;
+route_hash_int(Bin, Opts) when is_binary(Bin) ->
+    route_hash_int(hb_crypto:sha256(Bin), Opts);
+route_hash_int(#{ <<"path">> := Path }, Opts) when is_binary(Path) ->
+    route_hash_int(Path, Opts);
+route_hash_int(Value, Opts) ->
+    route_hash_int(hb_util:bin(Value), Opts).
+
+normalize_hashpath(Bin) when is_binary(Bin), ?IS_ID(Bin) ->
+    Bin;
+normalize_hashpath(Bin) when is_binary(Bin), byte_size(Bin) == 32 ->
+    Bin;
+normalize_hashpath(Bin) when is_binary(Bin) ->
+    hb_crypto:sha256(Bin).
+
+safe_to_integer(Value) when is_integer(Value) ->
+    {ok, Value};
+safe_to_integer(Value) when is_binary(Value) ->
+    try binary_to_integer(Value) of
+        Int -> {ok, Int}
+    catch
+        _:_ -> error
+    end;
+safe_to_integer(Value) when is_list(Value) ->
+    try list_to_integer(Value) of
+        Int -> {ok, Int}
+    catch
+        _:_ -> error
+    end;
+safe_to_integer(_) ->
+    error.
 
 %% @doc Calculate the minimum distance between two numbers
 %% (either progressing backwards or forwards), assuming a
@@ -1605,6 +1741,424 @@ request_hook_reroute_to_nearest_test() ->
         Peers
     ),
     ?assert(HasValidSigner).
+
+route_nearest_integer_preserves_opts_test() ->
+    Routes =
+        [
+            #{
+                <<"template">> => <<"/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"center">> => 100,
+                            <<"prefix">> => <<"http://node-100">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        },
+                        #{
+                            <<"center">> => 200,
+                            <<"prefix">> => <<"http://node-200">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        },
+                        #{
+                            <<"center">> => 400,
+                            <<"prefix">> => <<"http://node-400">>,
+                            <<"opts">> => #{ protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"nearest-integer">>,
+                <<"choose">> => 2,
+                <<"parallel">> => 2,
+                <<"responses">> => 2,
+                <<"stop-after">> => false,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => <<".*">>,
+                <<"node">> => <<"fallback">>
+            }
+        ],
+    {ok, Route} =
+        route(
+            #{ <<"path">> => <<"/chunk">>, <<"route-by">> => 210 },
+            #{ routes => Routes }
+        ),
+    ?assertEqual(2, hb_ao:get(<<"parallel">>, Route, #{})),
+    ?assertEqual(2, hb_ao:get(<<"responses">>, Route, #{})),
+    ?assertEqual(false, hb_ao:get(<<"stop-after">>, Route, #{})),
+    SelectedNodes = hb_ao:get(<<"nodes">>, Route, #{}),
+    ?assertEqual(2, length(SelectedNodes)),
+    SelectedCenters =
+        lists:sort(
+            [
+                hb_ao:get(<<"center">>, Node, #{})
+            ||
+                Node <- SelectedNodes
+            ]
+        ),
+    ?assertEqual([100, 200], SelectedCenters),
+    SelectedURIs =
+        lists:sort(
+            [
+                hb_ao:get(<<"uri">>, Node, #{})
+            ||
+                Node <- SelectedNodes
+            ]
+        ),
+    ?assertEqual(
+        [<<"http://node-100/chunk">>, <<"http://node-200/chunk">>],
+        SelectedURIs
+    ).
+
+route_multirequest_parallel_limit_test_() ->
+    {timeout, 30, fun route_multirequest_parallel_limit/0}.
+route_multirequest_parallel_limit() ->
+    DelayMs = 300,
+    WorkerNodes =
+        lists:map(
+            fun(N) ->
+                hb_http_server:start_node(
+                    #{
+                        store => hb_test_utils:test_store(),
+                        on =>
+                            #{
+                                <<"request">> =>
+                                    #{
+                                        <<"device">> => <<"test-device@1.0">>,
+                                        <<"path">> => <<"delay">>,
+                                        <<"duration">> => DelayMs,
+                                        <<"return">> =>
+                                            #{
+                                                <<"body">> =>
+                                                    [
+                                                        #{ <<"worker">> => N },
+                                                        <<"worker">>
+                                                    ]
+                                            }
+                                    }
+                            }
+                    }
+                )
+            end,
+            lists:seq(1, 3)
+        ),
+    Routes =
+        [
+            #{
+                <<"template">> => <<"/worker">>,
+                <<"nodes">> =>
+                    lists:map(
+                        fun(Node) -> #{ <<"prefix">> => Node } end,
+                        WorkerNodes
+                    ),
+                <<"strategy">> => <<"all">>,
+                <<"parallel">> => 2,
+                <<"responses">> => 3,
+                <<"stop-after">> => false
+            }
+        ],
+    Start = os:system_time(millisecond),
+    Results =
+        hb_http:request(
+            #{ <<"method">> => <<"GET">>, <<"path">> => <<"/worker">> },
+            #{
+                routes => Routes,
+                http_only_result => false
+            }
+        ),
+    Duration = os:system_time(millisecond) - Start,
+    ?assertEqual(3, length(Results)),
+    WorkerBodies =
+        lists:sort(
+            [
+                hb_ao:get(<<"body">>, Res, #{})
+            ||
+                {ok, Res} <- Results
+            ]
+        ),
+    ?assertEqual([1, 2, 3], WorkerBodies),
+    % With 3 peers of 300ms each: `parallel = 2` should complete in about two
+    % waves (~600ms), not one (~300ms) or fully serial (~900ms).
+    ?assert(Duration >= 450),
+    ?assert(Duration < 850).
+
+%% @doc Test that a full production-style route configuration (matching a
+%% typical config.json) resolves every request type correctly: single-node
+%% prefix routes, multi-node All-strategy routes, Nearest-Integer chunk
+%% routes, match/with regex routes, and fallback routes.
+full_route_config_test() ->
+    Routes =
+        [
+            #{
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 3_600_000_000,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 8_200_000_000,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 12_200_000_000,
+                            <<"with">> => <<"https://data-3.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://data-4.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 16_200_000_000,
+                            <<"with">> => <<"https://data-5.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"choose">> => 3,
+                <<"parallel">> => 2
+            },
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => <<"/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
+            }
+        ],
+    Opts = #{ routes => Routes },
+
+    %% --- Nearest-Integer strategy for /arweave/chunk ---
+
+    %% A chunk request with route-by near center 8_200_000_000 should pick
+    %% the 3 closest nodes out of the 5 available.
+    {ok, ChunkRoute} =
+        route(
+            #{
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            Opts
+        ),
+    ?event(router_test, {chunk_route, {route_by, 8_200_000_100}, {route, ChunkRoute}}),
+    ?assertEqual(2, hb_ao:get(<<"parallel">>, ChunkRoute, #{})),
+    ChunkNodes = hb_ao:get(<<"nodes">>, ChunkRoute, #{}),
+    ?assertEqual(3, length(ChunkNodes)),
+    %% The three nearest centers to 8_200_000_100 should be
+    %% 8_200_000_000, 3_600_000_000, and 12_200_000_000.
+    ChunkCenters =
+        lists:sort(
+            [hb_ao:get(<<"center">>, N, #{}) || N <- ChunkNodes]
+        ),
+    ?event(router_test, {chunk_centers, ChunkCenters}),
+    ?assertEqual([3_600_000_000, 8_200_000_000, 12_200_000_000], ChunkCenters),
+    %% Each selected node should have a URI with the match/with regex applied:
+    %% /arweave/chunk/... -> https://data-N.arweave.net/chunk/...
+    ChunkURIs =
+        lists:sort(
+            [hb_ao:get(<<"uri">>, N, #{}) || N <- ChunkNodes]
+        ),
+    ?event(router_test, {chunk_uris, ChunkURIs}),
+    ?assertEqual(
+        [
+            <<"https://data-1.arweave.net/chunk/8200000100">>,
+            <<"https://data-2.arweave.net/chunk/8200000100">>,
+            <<"https://data-3.arweave.net/chunk/8200000100">>
+        ],
+        ChunkURIs
+    ),
+
+    %% A chunk request near the high end should select the 3 closest to
+    %% 16_000_000_000: 16_200_000_000, 12_200_000_000, and 8_200_000_000.
+    {ok, HighChunkRoute} =
+        route(
+            #{
+                <<"path">> => <<"/arweave/chunk/16000000000">>,
+                <<"route-by">> => 16_000_000_000
+            },
+            Opts
+        ),
+    ?event(router_test, {high_chunk_route, {route_by, 16_000_000_000}, {route, HighChunkRoute}}),
+    HighChunkCenters =
+        lists:sort(
+            [
+                hb_ao:get(<<"center">>, N, #{})
+            ||
+                N <- hb_ao:get(<<"nodes">>, HighChunkRoute, #{})
+            ]
+        ),
+    ?event(router_test, {high_chunk_centers, HighChunkCenters}),
+    ?assertEqual(
+        [8_200_000_000, 12_200_000_000, 16_200_000_000],
+        HighChunkCenters
+    ),
+
+    %% --- Fallback /arweave route (non-chunk) ---
+
+    %% A non-chunk arweave request (e.g. /arweave/tx/...) should fall
+    %% through the chunk template and match the general ^/arweave route.
+    {ok, ArweaveRoute} =
+        route(#{ <<"path">> => <<"/arweave/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">> }, Opts),
+    ?event(router_test, {arweave_fallback_route, ArweaveRoute}),
+    ?assertEqual(true, hb_ao:get(<<"parallel">>, ArweaveRoute, #{})),
+    ?assertEqual(1, hb_ao:get(<<"stop-after">>, ArweaveRoute, #{})),
+    ?assertEqual(200, hb_ao:get(<<"admissible-status">>, ArweaveRoute, #{})),
+    ArweaveNodes = hb_ao:get(<<"nodes">>, ArweaveRoute, #{}),
+    ?assertEqual(1, length(ArweaveNodes)),
+    ArweaveURI = hb_ao:get(<<"uri">>, hd(ArweaveNodes), #{}),
+    ?event(router_test, {arweave_fallback_uri, ArweaveURI}),
+    ?assertEqual(<<"https://arweave.net/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>, ArweaveURI),
+
+    %% --- Single-node prefix route (/raw) ---
+
+    {ok, RawRoute} =
+        route(#{ <<"path">> => <<"/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">> }, Opts),
+    ?event(router_test, {raw_route, RawRoute}),
+    ?assertEqual(
+        <<"https://arweave.net/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>,
+        hb_ao:get(<<"uri">>, RawRoute, #{})
+    ),
+
+    %% --- No match ---
+
+    NoMatchResult = route(#{ <<"path">> => <<"/unknown/endpoint">> }, Opts),
+    ?event(router_test, {no_match_result, NoMatchResult}),
+    ?assertEqual({error, no_matches}, NoMatchResult),
+
+    %% --- HTTP GETs through the routes ---
+    %% Fire actual requests using hb_http:request/2, the same way the
+    %% route_multirequest_parallel_limit test does it.
+    HttpReqOpts = #{ routes => Routes, http_only_result => false },
+
+    %% Chunk request via Nearest-Integer (parallel=2, choose=3).
+    %% With 3 nodes and parallel=2, wave 1 sends to 2 nodes, wave 2 sends
+    %% to the remaining 1. We time it to confirm parallelism.
+    ChunkStart = os:system_time(millisecond),
+    ChunkHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            HttpReqOpts
+        )),
+    ChunkDuration = os:system_time(millisecond) - ChunkStart,
+    ?event(router_test, {chunk_http_result, ChunkHttpRes}),
+    ?event(router_test, {chunk_http_duration_ms, ChunkDuration}),
+
+    %% Now test with ALL 5 data nodes to really exercise parallel=2.
+    %% choose=5 means all 5 nodes get hit, but only 2 at a time.
+    %% With ~300-500ms per request, we expect ~3 waves (~900-1500ms)
+    %% instead of fully serial (~1500-2500ms) or fully parallel (~300-500ms).
+    AllChunkRoutes =
+        [
+            #{
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 3_600_000_000,
+                            <<"with">> => <<"https://data-1.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 8_200_000_000,
+                            <<"with">> => <<"https://data-2.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 12_200_000_000,
+                            <<"with">> => <<"https://data-3.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 14_000_000_000,
+                            <<"with">> => <<"https://data-4.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 16_200_000_000,
+                            <<"with">> => <<"https://data-5.arweave.net">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"choose">> => 5,
+                <<"parallel">> => 2,
+                <<"responses">> => 5,
+                <<"stop-after">> => false
+            }
+        ],
+    AllChunkStart = os:system_time(millisecond),
+    AllChunkHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/chunk/8200000100">>,
+                <<"route-by">> => 8_200_000_100
+            },
+            #{ routes => AllChunkRoutes, http_only_result => false }
+        )),
+    AllChunkDuration = os:system_time(millisecond) - AllChunkStart,
+    ?event(router_test, {all_chunk_http_result, AllChunkHttpRes}),
+    ?event(router_test, {all_chunk_http_duration_ms, AllChunkDuration}),
+    ?event(router_test, {all_chunk_responses,
+        case is_list(AllChunkHttpRes) of
+            true -> length(AllChunkHttpRes);
+            false -> not_a_list
+        end
+    }),
+
+    %% Fallback /arweave route.
+    ArweaveHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/arweave/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>
+            },
+            HttpReqOpts
+        )),
+    ?event(router_test, {arweave_http_result, ArweaveHttpRes}),
+
+    %% /raw prefix route.
+    RawHttpRes =
+        (catch hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>
+            },
+            HttpReqOpts
+        )),
+    ?event(router_test, {raw_http_result, RawHttpRes}).
 
 %%% Statistical test utilities
 
