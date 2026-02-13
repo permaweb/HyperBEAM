@@ -894,25 +894,25 @@ verify(M1, M2, NodeOpts) ->
             {ok, _} ?= validate_verify_config(NodeOpts),
             {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}} 
                 ?= snp_message:extract_and_normalize_message(M2, NodeOpts),
-            ?event(snp_short, {snp_verify_step, extract_ok, #{address => Address, report_keys => maps:keys(Report)}}),
+            ?event(snp_temp, {snp_verify_step, extract_ok, #{address => Address, report_keys => maps:keys(Report)}}),
             % Perform all validation steps (policy from Report, not Msg)
             {ok, NonceResult} ?= verify_nonce(Address, NodeMsgID, Msg, NodeOpts),
-            ?event(snp_short, {snp_verify_step, nonce, NonceResult}),
+            ?event(snp_temp, {snp_verify_step, nonce, NonceResult}),
             {ok, SigResult} ?= 
                 verify_signature_and_address(
                     MsgWithJSONReport, 
                     Address, 
                     NodeOpts
                 ),
-            ?event(snp_short, {snp_verify_step, signature, SigResult}),
+            ?event(snp_temp, {snp_verify_step, signature, SigResult}),
             {ok, DebugResult} ?= verify_debug_disabled(Report),
-            ?event(snp_short, {snp_verify_step, debug_disabled, DebugResult}),
+            ?event(snp_temp, {snp_verify_step, debug_disabled, DebugResult}),
             {ok, TrustedResult} ?= verify_trusted_software(M1, Msg, NodeOpts),
-            ?event(snp_short, {snp_verify_step, trusted_software, TrustedResult}),
+            ?event(snp_temp, {snp_verify_step, trusted_software, TrustedResult}),
             {ok, MeasurementResult} ?= verify_measurement(Msg, ReportJSON, NodeOpts),
-            ?event(snp_short, {snp_verify_step, measurement, MeasurementResult}),
+            ?event(snp_temp, {snp_verify_step, measurement, MeasurementResult}),
             {ok, ReportResult} ?= verify_report_integrity(ReportJSON, NodeOpts),
-            ?event(snp_short, {snp_verify_step, report_integrity, ReportResult}),
+            ?event(snp_temp, {snp_verify_step, report_integrity, ReportResult}),
             Valid = lists:all(
                 fun(Bool) -> Bool end, 
                     [
@@ -925,7 +925,7 @@ verify(M1, M2, NodeOpts) ->
                     ]
                 ),
             ?event(snp_short, {final_validation_result, Valid}),
-            ?event(snp_short, {snp_verify_done, #{valid => Valid}}),
+            ?event(snp_temp, {snp_verify_done, #{valid => Valid}}),
             % Return boolean value (not binary) for consistency with dev_message:verify expectations
             % dev_message:verify_commitment expects {ok, boolean()}, so we must return {ok, false}
             % for verification failures, not {error, ...}

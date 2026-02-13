@@ -66,7 +66,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
         ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
         {ok, Report} = snp_util:safe_json_decode(ReportJSON),
         Msg = maps:without([<<"report">>], MsgWithJSONReport),
-        ?event(snp_short, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
+        ?event(snp_temp, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
 
         % Extract address and node message ID from the message (not from Report)
         Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
