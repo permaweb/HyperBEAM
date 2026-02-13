@@ -702,7 +702,10 @@ set(Base, NewValuesMsg, Opts) ->
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, strict, Opts) of
+            ChangedBaseKeys = hb_maps:with(OverwrittenCommittedKeys, Base, Opts),
+            ChangedMergedKeys = hb_maps:with(OverwrittenCommittedKeys, Merged, Opts),
+            Match = hb_message:match(ChangedMergedKeys, ChangedBaseKeys, strict, Opts),
+            case Match of
                 true ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};

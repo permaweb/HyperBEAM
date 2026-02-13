@@ -668,11 +668,17 @@ ensure_loaded(Base, Req, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    LoadedSnapshotMsg =
-                        hb_cache:ensure_all_loaded(
-                            MaybeLoadedSnapshotMsg,
-                            Opts
-                        ),
+                    ?event(debug_load, {loading_snapshot}),
+                    ?event(debug_load, {preload_snapshot_size, erlang:external_size(MaybeLoadedSnapshotMsg)}),
+                    ?event(debug_load, {preload_snapshot_keys, {explicit, maps:keys(MaybeLoadedSnapshotMsg)}}),
+                    LoadedSnapshotMsg = MaybeLoadedSnapshotMsg,
+                        % hb_cache:ensure_all_loaded(
+                        %     MaybeLoadedSnapshotMsg,
+                        %     Opts
+                        % ),
+                    ?event(debug_load, {loaded_snapshot_msg}),
+                    ?event(debug_load, {postload_snapshot_size, erlang:external_size(LoadedSnapshotMsg)}),
+                    ?event(debug_load, {postload_snapshot_keys, {explicit, maps:keys(LoadedSnapshotMsg)}}),
                     Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
