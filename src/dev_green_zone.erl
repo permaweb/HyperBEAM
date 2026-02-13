@@ -569,7 +569,7 @@ validate_join(M1, Req, Opts) ->
     ?event(green_zone, {public_key, {explicit, RequesterPubKey}}),
     % Verify the commitment report provided in the join request.
     case dev_snp:verify(M1, Req, Opts) of
-        {ok, <<"true">>} ->
+        {ok, true} ->
             % Commitment verified.
             ?event(green_zone, {join, commitment, verified}),
             % Retrieve the shared AES key used for encryption.
@@ -585,13 +585,17 @@ validate_join(M1, Req, Opts) ->
             EncryptedPayload = encrypt_payload(GreenZoneAES, RequesterPubKey),
             % Log completion of AES key encryption.
             ?event(green_zone, {join, encrypt, aes_key, complete}),
-            {ok, #{
+            % Create the response message and commit it so it can be verified
+            ResponseMsg = #{
                 <<"body">>         => <<"Node joined green zone successfully.">>,
                 <<"node-address">> => NodeAddr,
                 <<"zone-key">>     => base64:encode(EncryptedPayload),
                 <<"public_key">>   => WalletPubKey
-            }};
-        {ok, <<"false">>} ->
+            },
+            % Commit the response message so it can be verified by the receiving node
+            CommittedResponse = hb_message:commit(ResponseMsg, Opts),
+            {ok, CommittedResponse};
+        {ok, false} ->
             % Commitment failed.
             ?event(green_zone, {join, commitment, failed}),
             {error, <<"Received invalid commitment report.">>};
