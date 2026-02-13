@@ -11,6 +11,7 @@
 %% Page and memory sizes
 -define(PAGE_SIZE, 4096).                 % Standard page size in bytes (4KB)
 -define(LAUNCH_DIGEST_SIZE, 48).          % Launch digest size in bytes (SHA-384)
+-define(MAX_VCPUS, 512).                  % Max VCPUs for launch digest (DoS safeguard)
 -define(LAUNCH_DIGEST_BITS, 384).         % Launch digest size in bits (48 * 8)
 -define(CHIP_ID_SIZE, 64).                 % Chip ID size in bytes
 

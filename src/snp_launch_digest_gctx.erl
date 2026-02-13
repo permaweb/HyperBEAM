@@ -200,6 +200,11 @@ build_page_info(CurrentLD, PageType, GPA, Contents, IsIMI, VMPL3, VMPL2, VMPL1, 
 -spec update_with_vmsa_pages(GCTX :: #gctx{}, VCPUs :: non_neg_integer(), BSPVMSA :: binary(), APVMSA :: binary()) -> 
     #gctx{}.
 update_with_vmsa_pages(GCTX, VCPUs, BSPVMSA, APVMSA) ->
+    % DoS safeguard: reject out-of-range VCPUs before building lists:seq(0, VCPUs - 1)
+    case is_integer(VCPUs) andalso VCPUs >= 1 andalso VCPUs =< ?MAX_VCPUS of
+        true -> ok;
+        false -> erlang:error({invalid_vcpus, VCPUs}, [GCTX, VCPUs, BSPVMSA, APVMSA])
+    end,
     ?event(snp, {update_with_vmsa_pages_start, #{
         vcpus => VCPUs,
         bsp_vmsa_size => byte_size(BSPVMSA),

@@ -72,7 +72,11 @@ compute_launch_digest_steps(Args) ->
     % Extract parameters
     {VCPUs, VCPUType, VMMType, GuestFeatures, FirmwareHash, KernelHash, InitrdHash, AppendHash, SevHashesGPA} = 
         extract_launch_digest_params(Args),
-    
+    % Reject invalid vcpus to prevent huge list allocation / DoS (finding #7)
+    case is_integer(VCPUs) andalso VCPUs >= 1 andalso VCPUs =< ?MAX_VCPUS of
+        true -> ok;
+        false -> erlang:error({invalid_vcpus, VCPUs}, [VCPUs])
+    end,
     % Initialize GCTX with OVMF hash
     GCTX = initialize_gctx_from_firmware(FirmwareHash),
     
