@@ -88,7 +88,12 @@ new_item(Target, Anchor, Tags, Data) ->
 %% @doc Sign a data item.
 sign_item(_, undefined) -> throw(wallet_not_found);
 sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
-    Item = (dev_arweave_common:normalize(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
+    Item =
+        (dev_arweave_common:normalize(RawItem))#tx{
+            format = ans104,
+            owner = Owner,
+            signature_type = KeyType
+        },
     % Generate the signature from the data item's data segment in 'signed'-ready mode.
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item)),
     dev_arweave_common:reset_ids(Item#tx{signature = Sig}).
