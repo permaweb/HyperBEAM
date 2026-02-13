@@ -377,24 +377,33 @@ do_http_get(InvalidURL) ->
 %% @param TeeSPL TEE SPL value (0-255)
 %% @param SnpSPL SNP SPL value (0-255)
 %% @param UcodeSPL Microcode SPL value (0-255)
-%% @returns {CertChainPEM, VcekDER} tuple with both certificates
+%% @returns {ok, {CertChainPEM, VcekDER}} on success, {error, Reason} when a fetch fails
 -spec fetch_verification_certificates(ChipId :: binary(), BootloaderSPL :: integer(),
     TeeSPL :: integer(), SnpSPL :: integer(), UcodeSPL :: integer(), NodeOpts :: map()) -> 
-    {binary(), binary()}.
+    {ok, {binary(), binary()}} | {error, term()}.
 fetch_verification_certificates(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts) ->
     ?event(snp_short, {fetching_cert_chain_start}),
     Family = hb_opts:get(<<"cpu_family">>, undefined, NodeOpts),
-    {ok, CertChainPEM} = fetch_cert_chain(Family),
-    ?event(snp_short, {cert_chain_fetched, byte_size(CertChainPEM)}),
-    
-    ?event(snp, {fetching_vcek_start, #{
-        chip_id => hb_util:to_hex(ChipId),
-        bootloader => BootloaderSPL,
-        tee => TeeSPL,
-        snp => SnpSPL,
-        microcode => UcodeSPL
-    }}),
-    {ok, VcekDER} = fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, Family),
-    ?event(snp_short, {vcek_fetched, byte_size(VcekDER)}),
-    {CertChainPEM, VcekDER}.
+    case fetch_cert_chain(Family) of
+        {ok, CertChainPEM} ->
+            ?event(snp_short, {cert_chain_fetched, byte_size(CertChainPEM)}),
+            ?event(snp, {fetching_vcek_start, #{
+                chip_id => hb_util:to_hex(ChipId),
+                bootloader => BootloaderSPL,
+                tee => TeeSPL,
+                snp => SnpSPL,
+                microcode => UcodeSPL
+            }}),
+            case fetch_vcek(ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, Family) of
+                {ok, VcekDER} ->
+                    ?event(snp_short, {vcek_fetched, byte_size(VcekDER)}),
+                    {ok, {CertChainPEM, VcekDER}};
+                {error, Reason} ->
+                    ?event(snp_error, {fetch_verification_certificates_vcek_failed, #{reason => Reason}}),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            ?event(snp_error, {fetch_verification_certificates_cert_chain_failed, #{reason => Reason}}),
+            {error, Reason}
+    end.
 

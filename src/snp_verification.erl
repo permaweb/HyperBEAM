@@ -753,22 +753,25 @@ verify_report_integrity(ReportJSON, NodeOpts) ->
             microcode => UcodeSPL
         }}),
         
-        % Fetch certificates
-        {CertChainPEM, VcekDER} = snp_certificates:fetch_verification_certificates(
-            ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts),
-        
-        % Convert and verify signature
-        ReportIsValid = convert_and_verify_signature(ReportJSON, CertChainPEM, VcekDER),
-        case ReportIsValid of
-            true -> 
-                ?event(snp_short, {verify_report_integrity_success}),
-                {ok, true};
-            false -> 
-                ?event(snp_error, {signature_invalid, #{
-                    operation => <<"verify_report_integrity">>,
-                    suggestion => <<"The report signature is invalid. This may indicate a compromised or tampered report. Verify the report source and certificates.">>
-                }}),
-                {error, report_signature_invalid}
+        % Fetch certificates (KDS fetch failure returns {error, Reason})
+        case snp_certificates:fetch_verification_certificates(
+            ChipId, BootloaderSPL, TeeSPL, SnpSPL, UcodeSPL, NodeOpts) of
+            {ok, {CertChainPEM, VcekDER}} ->
+                % Convert and verify signature
+                ReportIsValid = convert_and_verify_signature(ReportJSON, CertChainPEM, VcekDER),
+                case ReportIsValid of
+                    true ->
+                        ?event(snp_short, {verify_report_integrity_success}),
+                        {ok, true};
+                    false ->
+                        ?event(snp_error, {signature_invalid, #{
+                            operation => <<"verify_report_integrity">>,
+                            suggestion => <<"The report signature is invalid. This may indicate a compromised or tampered report. Verify the report source and certificates.">>
+                        }}),
+                        {error, report_signature_invalid}
+                end;
+            {error, Reason} ->
+                {error, Reason}
         end
     else
         {error, ErrorReason} -> 
