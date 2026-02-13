@@ -3,7 +3,7 @@
 -module(hb_store_arweave).
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
--export([read_with_type/2, resolve/2]).
+-export([start/1, read_with_type/2, resolve/2]).
 %%% Indexing API:
 -export([write_offset/5]).
 -include("include/hb.hrl").
@@ -16,6 +16,9 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 resolve(_, Key) -> Key.
+
+start(_Opts) ->
+    init_prometheus().
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
@@ -74,6 +77,15 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                 {miss, {id, {explicit, ID}}}
             )
     end.
+
+end_read_metric(StartRead) ->
+    spawn(fun () -> 
+        Duration = erlang:monotonic_time(microsecond) - StartRead,
+        prometheus_histogram:observe(
+        hb_store_arweave_index_check_duration_seconds,
+        Duration * 1000
+        )
+    end).
 
 read_with_type(Opts, Key) when is_list(Key) ->
     read_with_type(Opts, hb_store:join(Key));
@@ -160,6 +172,22 @@ write_offset(
         }
     ),
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
+
+init_prometheus() ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try
+                prometheus_histogram:declare([
+                    {name, hb_store_arweave_index_check_duration_seconds},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
+                    {help, "How much it takes to check the index"}
+                ])
+            catch
+                error:mfa_already_exists -> ok;
+                _:_ -> ok
+            end
+    end.
 
 %%% Tests
 
