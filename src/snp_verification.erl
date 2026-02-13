@@ -402,10 +402,10 @@ verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
 
 %% @doc Verify that the debug flag is disabled in the SNP policy.
 %%
-%% This function checks the SNP policy to ensure that debug mode is disabled,
-%% which is required for production environments to maintain security guarantees.
-%% Policy is read from the decoded report map (signed attestation), not from the
-%% outer message, so it cannot be spoofed before signature verification.
+%% This function checks the SNP guest policy DEBUG bit: if set, the report is from
+%% a debug-enabled guest; if clear, non-debug/production. We use policy only (not
+%% TCB/SVN). The report is verified (signature + VCEK/ASK/ARK chain) in the same
+%% pipeline, so policy.DEBUG is cryptographically bound to the attestation.
 %%
 %% @param ReportMap The decoded SNP report map (from report JSON)
 %% @returns `{ok, true}' if debug is disabled, or `{error, debug_enabled}' if enabled
@@ -415,14 +415,24 @@ verify_debug_disabled(ReportMap) ->
     % Missing policy: treat as debug enabled (fail verification)
     DebugDisabled = case PolicyRaw of
         undefined -> false;
-        _ -> (policy_to_integer(PolicyRaw) band (1 bsl ?DEBUG_FLAG_BIT)) =:= 0
+        _ -> (policy_to_integer(PolicyRaw) band ?SNP_GUEST_POLICY_DEBUG) =:= 0
     end,
     PolicyInt = policy_to_integer(PolicyRaw),
+    DebugBitMask = ?SNP_GUEST_POLICY_DEBUG,
+    DebugBitSet = (PolicyInt band DebugBitMask) =/= 0,
     ?event(snp_short, {verify_debug_disabled_check, #{
         policy_raw => PolicyRaw,
         policy_int => PolicyInt,
         debug_bit => ?DEBUG_FLAG_BIT,
         debug_disabled => DebugDisabled
+    }}),
+    ?event(snp_temp, {snp_debug_policy_check, #{
+        policy_int => PolicyInt,
+        debug_bit => ?DEBUG_FLAG_BIT,
+        debug_bit_mask => DebugBitMask,
+        debug_bit_set => DebugBitSet,
+        debug_disabled => DebugDisabled,
+        note => <<"If debug_bit_set is false, report has debug bit clear (policy from attestation)">>
     }}),
     case DebugDisabled of
         true -> 
@@ -445,7 +455,7 @@ verify_debug_disabled(ReportMap) ->
 -spec is_debug(Report :: map()) -> boolean().
 is_debug(Report) ->
     PolicyInt = policy_to_integer(hb_ao:get(<<"policy">>, Report, undefined, #{})),
-    (PolicyInt band (1 bsl ?DEBUG_FLAG_BIT)) =/= 0.
+    (PolicyInt band ?SNP_GUEST_POLICY_DEBUG) =/= 0.
 
 %% Coerce report policy value to integer for bit test (handles JSON int/float).
 -spec policy_to_integer(term()) -> non_neg_integer().

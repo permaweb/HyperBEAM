@@ -108,7 +108,10 @@
 %% Configuration constants
 -define(COMMITTED_PARAMETERS, [vcpus, vcpu_type, vmm_type, guest_features,
     firmware, kernel, initrd, append]).  % Parameters committed in SNP reports
--define(DEBUG_FLAG_BIT, 19).              % Bit position of debug flag in SNP policy
+%% Guest policy DEBUG bit (AMD SEV-SNP): policy.DEBUG=1 => debug VM, 0 => production.
+%% Use this bit only; do not infer debug from TCB/SVN. Report must be verified (signature + chain) first.
+-define(DEBUG_FLAG_BIT, 19).              % Bit position of DEBUG in SNP guest policy (u64)
+-define(SNP_GUEST_POLICY_DEBUG, (1 bsl ?DEBUG_FLAG_BIT)).  % Mask for C-style (report.policy & SNP_GUEST_POLICY_DEBUG)
 
 %% TCB structure offsets
 -define(TCB_OFFSET_BOOTLOADER, 0).        % Bootloader SPL offset in TCB structure
