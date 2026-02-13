@@ -5,6 +5,7 @@
 -include("include/hb.hrl").
 -export([start_link/1, response_status_to_atom/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
+-export([ok/0]).
 
 -record(state, {
 	opts = #{}
@@ -27,6 +28,9 @@
 %%% ==================================================================
 %%% Public interface.
 %%% ==================================================================
+
+ok() ->
+    gen_server:call(?MODULE, ok).
 
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
@@ -467,6 +471,8 @@ init_prometheus() ->
     ?event(started),
     ok.
 
+handle_call(ok, _From, State) ->
+    {reply, ok, State};
 handle_call({get_connection, ConnKey, Args, _Opts}, From, State) ->
     %% ConnKey = {Peer, ConnType, Index} where ConnType is 'read' or 'write'
     %% and Index is 1..PoolSize for round-robin distribution

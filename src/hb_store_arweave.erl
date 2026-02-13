@@ -17,8 +17,9 @@ scope(_) -> scope().
 
 resolve(_, Key) -> Key.
 
-start(_Opts) ->
-    init_prometheus().
+start(#{<<"index-store">> := IndexStore}) ->
+    init_prometheus(),
+    hb_store:start(IndexStore).
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
