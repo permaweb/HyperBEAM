@@ -40,6 +40,7 @@
 -module(hb_cache).
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
+-export([ensure_one_loaded/2, ensure_one_loaded/3]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
@@ -174,6 +175,13 @@ ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
     );
 ensure_all_loaded(Ref, Msg, Opts) ->
     ensure_loaded(Ref, Msg, Opts).
+
+ensure_one_loaded(Msg, Opts) ->
+    ensure_one_loaded([], Msg, Opts).
+ensure_one_loaded(Ref, Msg, Opts) when is_map(Msg) ->
+    maps:map(fun(K, V) -> ensure_loaded(Ref, V, Opts) end, Msg);
+ensure_one_loaded(Ref, Msg, Opts) ->
+    Msg.
 
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->

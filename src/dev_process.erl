@@ -671,10 +671,12 @@ ensure_loaded(Base, Req, Opts) ->
                     ?event(debug_load, {loading_snapshot}),
                     ?event(debug_load, {preload_snapshot_size, erlang:external_size(MaybeLoadedSnapshotMsg)}),
                     ?event(debug_load, {preload_snapshot_keys, {explicit, maps:keys(MaybeLoadedSnapshotMsg)}}),
-                    LoadedSnapshotMsg = MaybeLoadedSnapshotMsg,
+                    LoadedSnapshotMsg = 
+                        % MaybeLoadedSnapshotMsg,
+                        hb_cache:ensure_one_loaded(MaybeLoadedSnapshotMsg, Opts),
                         % hb_cache:ensure_all_loaded(
-                        %     MaybeLoadedSnapshotMsg,
-                        %     Opts
+                            % MaybeLoadedSnapshotMsg,
+                            % Opts
                         % ),
                     ?event(debug_load, {loaded_snapshot_msg}),
                     ?event(debug_load, {postload_snapshot_size, erlang:external_size(LoadedSnapshotMsg)}),
