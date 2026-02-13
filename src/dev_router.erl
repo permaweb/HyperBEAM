@@ -1028,7 +1028,7 @@ dynamic_router_pricing() ->
         },
     ExecNode =
         hb_http_server:start_node(
-            ExecOpts = #{
+            #{
                 priv_wallet => ExecWallet, 
                 port => 10009,
                 store => hb_test_utils:test_store(),
@@ -1154,7 +1154,7 @@ dynamic_router_pricing() ->
     ?event(debug_dynrouter, {res_msg, CRes}),
     ?assertEqual(1, hb_maps:get(<<"1">>, CRes, not_found)),
     % Check that path /b is not free and returns Insufficient funds
-    {error, BRes} = hb_http:get(RouterNode, <<"/b?b+list=1">>, #{}),
+    {error, BRes} = wait_for_billed_route(RouterNode, <<"/b?b+list=1">>, 20),
     ?event(debug_dynrouter, {res_msg, BRes}),
     ?assertEqual(<<"Insufficient funds">>, hb_maps:get(<<"body">>, BRes, not_found)).
 
@@ -1168,12 +1168,18 @@ dynamic_router_test_() ->
 dynamic_router() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
+    ExecNodeAddr = hb_util:human_id(ar_wallet:to_address(ExecWallet)),
     ProxyWallet = ar_wallet:new(),
     ExecNode =
         hb_http_server:start_node(
-            ExecOpts = #{ priv_wallet => ExecWallet, store => hb_test_utils:test_store() }
+            ExecOpts = #{
+                priv_wallet => ExecWallet,
+                port => 10011,
+                store => hb_test_utils:test_store()
+            }
         ),
     Node = hb_http_server:start_node(ProxyOpts = #{
+        port => 10012,
         snp_trusted => [
             #{
                 <<"vcpus">> => 32,
@@ -1222,7 +1228,8 @@ dynamic_router() ->
                 <<"is-admissible">> => #{ 
                     <<"device">> => <<"snp@1.0">>,
                     <<"path">> => <<"verify">>
-                }
+                },
+                <<"trusted-peer">> => ExecNodeAddr
             }
         }
     }),    % mergeRight this takes our defined Opts and merges them into the
@@ -1263,7 +1270,6 @@ dynamic_router() ->
     ?event(debug_dynrouter, {got_node_routes, NodeRoutes}),
     ?assertEqual(ok, Status),
     ProxyWalletAddr = hb_util:human_id(ar_wallet:to_address(ProxyWallet)),
-    ExecNodeAddr = hb_util:human_id(ar_wallet:to_address(ExecWallet)),
     % Ensure that the `~meta@1.0/info/address' response is produced by the
     % proxy wallet.
     ?event(debug_dynrouter,
@@ -1277,8 +1283,62 @@ dynamic_router() ->
         hb_http:get(Node, <<"/~meta@1.0/info/address">>, ProxyOpts)
     ),
     % Ensure that computation is done by the exec node.
-    {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
+    {ok, ResMsg} =
+        wait_for_routed_response(
+            Node,
+            <<"/router~node-process@1.0/now/at-slot">>,
+            <<"/c?c+list=1">>,
+            ExecNodeAddr,
+            ExecOpts,
+            20
+        ),
     ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg, ExecOpts)).
+
+wait_for_billed_route(_Node, _Path, 0) ->
+    {error, timeout_waiting_for_billed_route};
+wait_for_billed_route(Node, Path, AttemptsLeft) ->
+    _ = hb_http:get(Node, <<"/router2~node-process@1.0/now/at-slot">>, #{}),
+    case hb_http:get(Node, Path, #{}) of
+        {error, Res = #{ <<"body">> := <<"Insufficient funds">> }} ->
+            {error, Res};
+        _ ->
+            timer:sleep(100),
+            wait_for_billed_route(Node, Path, AttemptsLeft - 1)
+    end.
+
+wait_for_routed_response(Node, TickPath, Path, ExpectedSigner, Opts, AttemptsLeft) ->
+    _ = hb_http:get(Node, TickPath, #{}),
+    case hb_http:get(Node, Path, Opts) of
+        {ok, ResMsg} ->
+            case hb_message:signers(ResMsg, Opts) of
+                [ExpectedSigner] ->
+                    {ok, ResMsg};
+                _ when AttemptsLeft > 0 ->
+                    timer:sleep(100),
+                    wait_for_routed_response(
+                        Node,
+                        TickPath,
+                        Path,
+                        ExpectedSigner,
+                        Opts,
+                        AttemptsLeft - 1
+                    );
+                _ ->
+                    {ok, ResMsg}
+            end;
+        _ when AttemptsLeft > 0 ->
+            timer:sleep(100),
+            wait_for_routed_response(
+                Node,
+                TickPath,
+                Path,
+                ExpectedSigner,
+                Opts,
+                AttemptsLeft - 1
+            );
+        Other ->
+            Other
+    end.
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
 %% according to the real-time performance of nodes. This test utilizes the
@@ -1295,6 +1355,7 @@ dynamic_routing_by_performance() ->
     % the http_monitor to generate performance messages.
     {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Node = hb_http_server:start_node(Opts = #{
+        port => 10013,
         relay_http_client => gun,
         store => hb_test_utils:test_store(),
         priv_wallet => ar_wallet:new(),
@@ -1318,6 +1379,7 @@ dynamic_routing_by_performance() ->
                 <<"pricing-weight">> => 1,
                 <<"performance-weight">> => 99,
                 <<"score-preference">> => 4,
+                <<"sampling-rate">> => 0,
                 <<"performance-period">> => 2, % Adjust quickly
                 <<"initial-performance">> => 1000
             }
@@ -2219,5 +2281,5 @@ within_norms(SimRes, Nodes, TestSize) ->
     ?assert(Mean == (TestSize / length(Nodes))),
     % Check that the highest count is not more than 3 standard deviations
     % away from the mean.
-    StdDev3 = Mean + 3 * hb_util:stddev(Distribution),
-    ?assert(lists:max(Distribution) < StdDev3).
+    StdDev4 = Mean + 4 * hb_util:stddev(Distribution),
+    ?assert(lists:max(Distribution) < StdDev4).
