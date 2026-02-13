@@ -404,15 +404,24 @@ verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
 %%
 %% This function checks the SNP policy to ensure that debug mode is disabled,
 %% which is required for production environments to maintain security guarantees.
+%% Policy is read from the decoded report map (signed attestation), not from the
+%% outer message, so it cannot be spoofed before signature verification.
 %%
-%% @param Msg The normalized SNP message containing the policy
+%% @param ReportMap The decoded SNP report map (from report JSON)
 %% @returns `{ok, true}' if debug is disabled, or `{error, debug_enabled}' if enabled
--spec verify_debug_disabled(Msg :: map()) -> {ok, true} | {error, debug_enabled}.
-verify_debug_disabled(Msg) ->
-    DebugDisabled = not is_debug(Msg),
-    Policy = hb_ao:get(<<"policy">>, Msg, #{}),
+-spec verify_debug_disabled(ReportMap :: map()) -> {ok, true} | {error, debug_enabled}.
+verify_debug_disabled(ReportMap) ->
+    PolicyRaw = maps:get(<<"policy">>, ReportMap, undefined),
+    % Missing policy: treat as debug enabled (fail verification)
+    DebugDisabled = case PolicyRaw of
+        undefined -> false;
+        _ -> (policy_to_integer(PolicyRaw) band (1 bsl ?DEBUG_FLAG_BIT)) =:= 0
+    end,
+    PolicyInt = policy_to_integer(PolicyRaw),
     ?event(snp_short, {verify_debug_disabled_check, #{
-        policy => Policy,
+        policy_raw => PolicyRaw,
+        policy_int => PolicyInt,
+        debug_bit => ?DEBUG_FLAG_BIT,
         debug_disabled => DebugDisabled
     }}),
     case DebugDisabled of
@@ -422,17 +431,33 @@ verify_debug_disabled(Msg) ->
         false -> 
             ?event(snp_error, {verify_debug_disabled_failed, #{
                 operation => <<"verify_debug_disabled">>,
-                policy => Policy,
+                policy_raw => PolicyRaw,
+                policy_int => PolicyInt,
                 suggestion => <<"Debug mode is enabled in the SNP policy. This is not allowed in production. Disable debug mode by clearing bit ", 
                     (hb_util:bin(integer_to_list(?DEBUG_FLAG_BIT)))/binary, " in the policy field.">>
             }}),
             {error, debug_enabled}
     end.
 
-%% Helper to check if debug is enabled in the report
+%% Helper to check if debug is enabled in the report.
+%% Policy is read directly from the report map (decoded JSON); we coerce to
+%% integer so that decoders that return floats (e.g. 720896.0) still work.
 -spec is_debug(Report :: map()) -> boolean().
 is_debug(Report) ->
-    (hb_ao:get(<<"policy">>, Report, #{}) band (1 bsl ?DEBUG_FLAG_BIT)) =/= 0.
+    PolicyInt = policy_to_integer(maps:get(<<"policy">>, Report, undefined)),
+    (PolicyInt band (1 bsl ?DEBUG_FLAG_BIT)) =/= 0.
+
+%% Coerce report policy value to integer for bit test (handles JSON int/float).
+-spec policy_to_integer(term()) -> non_neg_integer().
+policy_to_integer(P) when is_integer(P), P >= 0 -> P;
+policy_to_integer(P) when is_float(P), P >= 0 -> round(P);
+policy_to_integer(P) when is_binary(P) ->
+    try binary_to_integer(P) of
+        N when N >= 0 -> N
+    catch
+        _:_ -> 0
+    end;
+policy_to_integer(_) -> 0.
 
 %% @doc Verify that the measurement in the SNP report is valid.
 %%
@@ -463,8 +488,12 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     ?event(snp, {compute_launch_digest_args, ArgsWithGpa}),
     {ok, ExpectedBin} = snp_launch_digest:compute_launch_digest(ArgsWithGpa),
     ?event(snp, {expected_measurement, hb_util:to_hex(ExpectedBin)}),
-    Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
-    ?event(snp, {actual_measurement, Measurement}),
+    % Actual measurement from report (not Msg) for logging
+    ActualMeasurement = case snp_util:safe_json_decode(ReportJSON) of
+        {ok, R} -> hb_ao:get(<<"measurement">>, R, undefined);
+        {error, _} -> undefined
+    end,
+    ?event(snp, {actual_measurement, ActualMeasurement}),
     % verify_measurement is now implemented in Erlang
     % Returns {ok, true} on match, {ok, false} on mismatch, {error, Reason} on parse errors
     case verify_measurement(ReportJSON, ExpectedBin) of
@@ -475,7 +504,7 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
             ?event(snp_error, {verify_measurement_mismatch, #{
                 operation => <<"verify_measurement">>,
                 expected_hex => hb_util:to_hex(ExpectedBin),
-                actual_measurement => Measurement,
+                actual_measurement => ActualMeasurement,
                 suggestion => <<"Measurement mismatch indicates the launch digest does not match. Verify that all committed parameters (vcpus, vcpu_type, vmm_type, guest_features, firmware, kernel, initrd, append) match the expected values.">>
             }}),
             {error, measurement_invalid};
@@ -863,20 +892,27 @@ verify(M1, M2, NodeOpts) ->
         maybe
             % Validate configuration options
             {ok, _} ?= validate_verify_config(NodeOpts),
-            {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}} 
+            {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}} 
                 ?= snp_message:extract_and_normalize_message(M2, NodeOpts),
-            % Perform all validation steps
+            ?event(snp_short, {snp_verify_step, extract_ok, #{address => Address, report_keys => maps:keys(Report)}}),
+            % Perform all validation steps (policy from Report, not Msg)
             {ok, NonceResult} ?= verify_nonce(Address, NodeMsgID, Msg, NodeOpts),
+            ?event(snp_short, {snp_verify_step, nonce, NonceResult}),
             {ok, SigResult} ?= 
                 verify_signature_and_address(
                     MsgWithJSONReport, 
                     Address, 
                     NodeOpts
                 ),
-            {ok, DebugResult} ?= verify_debug_disabled(Msg),
+            ?event(snp_short, {snp_verify_step, signature, SigResult}),
+            {ok, DebugResult} ?= verify_debug_disabled(Report),
+            ?event(snp_short, {snp_verify_step, debug_disabled, DebugResult}),
             {ok, TrustedResult} ?= verify_trusted_software(M1, Msg, NodeOpts),
+            ?event(snp_short, {snp_verify_step, trusted_software, TrustedResult}),
             {ok, MeasurementResult} ?= verify_measurement(Msg, ReportJSON, NodeOpts),
+            ?event(snp_short, {snp_verify_step, measurement, MeasurementResult}),
             {ok, ReportResult} ?= verify_report_integrity(ReportJSON, NodeOpts),
+            ?event(snp_short, {snp_verify_step, report_integrity, ReportResult}),
             Valid = lists:all(
                 fun(Bool) -> Bool end, 
                     [
@@ -889,6 +925,7 @@ verify(M1, M2, NodeOpts) ->
                     ]
                 ),
             ?event(snp_short, {final_validation_result, Valid}),
+            ?event(snp_short, {snp_verify_done, #{valid => Valid}}),
             % Return boolean value (not binary) for consistency with dev_message:verify expectations
             % dev_message:verify_commitment expects {ok, boolean()}, so we must return {ok, false}
             % for verification failures, not {error, ...}

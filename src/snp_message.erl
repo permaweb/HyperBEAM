@@ -19,10 +19,13 @@
 %%
 %% @param M2 The input message containing the SNP report
 %% @param NodeOpts A map of configuration options
-%% @returns `{ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}}'
-%% on success with all extracted components, or `{error, Reason}' on failure
+%% @returns `{ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}}'
+%% on success with all extracted components, or `{error, Reason}' on failure.
+%% Msg is the message without the report; report-derived fields (e.g. policy) must
+%% be read from Report, not from Msg, so trust/debug/measurement use only
+%% message or signed-report data.
 -spec extract_and_normalize_message(M2 :: term(), NodeOpts :: map()) ->
-    {ok, {map(), binary(), binary(), binary(), map()}} | {error, term()}.
+    {ok, {map(), binary(), binary(), binary(), map(), map()}} | {error, term()}.
 extract_and_normalize_message(M2, NodeOpts) ->
     maybe
         % Validate message structure early
@@ -56,21 +59,21 @@ extract_and_normalize_message(M2, NodeOpts) ->
                 )
             ),
         ?event(snp_short, {msg_with_json_report, {explicit, MsgWithJSONReport}}),
-        % Normalize the request message
+        % Normalize the request message: do NOT merge report JSON into Msg.
+        % Report may contain attacker-controlled keys; merging would let them
+        % override local-hashes, address, policy, etc. used for trust/debug/
+        % measurement checks before the report signature is verified.
         ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
         {ok, Report} = snp_util:safe_json_decode(ReportJSON),
-        Msg =
-            maps:merge(
-                maps:without([<<"report">>], MsgWithJSONReport),
-                Report
-            ),
-        
-        % Extract address and node message ID
+        Msg = maps:without([<<"report">>], MsgWithJSONReport),
+        ?event(snp_short, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
+
+        % Extract address and node message ID from the message (not from Report)
         Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
         ?event(snp_short, {snp_address, Address}),
         {ok, NodeMsgID} ?= extract_node_message_id(Msg, NodeOpts),
         ?event(snp_short, {snp_node_msg_id, NodeMsgID}),
-        {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}}
+        {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}}
     else
         {error, Reason} -> {error, Reason};
         Error -> {error, Error}
