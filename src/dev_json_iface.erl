@@ -216,7 +216,7 @@ prepare_header_case_tags(TABM, Opts) ->
     lists:map(
         fun({Name, Value}) ->
             #{
-                <<"name">> => header_case_string(maybe_list_to_binary(Name)),
+                <<"name">> => hb_util:to_header_case(maybe_list_to_binary(Name)),
                 <<"value">> => maybe_list_to_binary(Value)
             }
         end,
@@ -274,20 +274,6 @@ maybe_list_to_binary(List) when is_list(List) ->
     list_to_binary(List);
 maybe_list_to_binary(Bin) ->
     Bin.
-
-header_case_string(Key) ->
-    NormKey = hb_ao:normalize_key(Key),
-    Words = string:lexemes(NormKey, "-"),
-    TitleCaseWords =
-        lists:map(
-            fun binary_to_list/1,
-            lists:map(
-                fun string:titlecase/1,
-                Words
-            )
-        ),
-    TitleCaseKey = list_to_binary(string:join(TitleCaseWords, "-")),
-    TitleCaseKey.
 
 %% @doc Read the computed results out of the WASM environment, assuming that
 %% the environment has been set up by `prep_call/3' and that the WASM executor

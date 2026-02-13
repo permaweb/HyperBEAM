@@ -16,7 +16,7 @@
 -export([is_string_list/1, list_replace/3, list_without/2, list_with/2]).
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
--export([remove_common/2, to_lower/1]).
+-export([remove_common/2, to_lower/1, to_header_case/1]).
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
@@ -173,6 +173,20 @@ id(Data, Type) when is_list(Data) ->
 %% @doc Convert a binary to a lowercase.
 to_lower(Str) ->
     string:lowercase(Str).
+
+%% @doc Convert a binary to HTTP header case (`For-Example-This`).
+to_header_case(Str) ->
+    NormStr = hb_ao:normalize_key(Str),
+    Words = string:lexemes(NormStr, "-"),
+    TitleCaseWords =
+        lists:map(
+            fun binary_to_list/1,
+            lists:map(
+                fun string:titlecase/1,
+                Words
+            )
+        ),
+    bin(string:join(TitleCaseWords, "-")).
 
 %% @doc Is the given term a string list?
 is_string_list(MaybeString) ->
