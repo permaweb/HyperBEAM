@@ -131,10 +131,10 @@ validate_message_structure(Message) ->
 %% Validate report field
 -spec validate_report_field(Message :: map(), Errors :: [binary()]) -> [binary()].
 validate_report_field(Message, Errors) ->
-    case maps:get(<<"report">>, Message, undefined) of
+    case hb_ao:get(<<"report">>, Message, undefined, #{}) of
         undefined ->
             % Check if report might be in body
-            case maps:get(<<"body">>, Message, undefined) of
+            case hb_ao:get(<<"body">>, Message, undefined, #{}) of
                 undefined ->
                     ErrorMsg = <<"Missing required field 'report': The message must contain a 'report' field with the SNP report JSON, or a 'body' field containing the report.">>,
                     [ErrorMsg | Errors];
@@ -167,7 +167,7 @@ validate_report_field(Message, Errors) ->
 %% Validate address field
 -spec validate_address_field(Message :: map(), Errors :: [binary()]) -> [binary()].
 validate_address_field(Message, Errors) ->
-    case maps:get(<<"address">>, Message, undefined) of
+    case hb_ao:get(<<"address">>, Message, undefined, #{}) of
         undefined ->
             % Address might be in NodeOpts, so we don't fail here
             % It will be checked during extraction

@@ -411,7 +411,7 @@ verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
 %% @returns `{ok, true}' if debug is disabled, or `{error, debug_enabled}' if enabled
 -spec verify_debug_disabled(ReportMap :: map()) -> {ok, true} | {error, debug_enabled}.
 verify_debug_disabled(ReportMap) ->
-    PolicyRaw = maps:get(<<"policy">>, ReportMap, undefined),
+    PolicyRaw = hb_ao:get(<<"policy">>, ReportMap, undefined, #{}),
     % Missing policy: treat as debug enabled (fail verification)
     DebugDisabled = case PolicyRaw of
         undefined -> false;
@@ -444,7 +444,7 @@ verify_debug_disabled(ReportMap) ->
 %% integer so that decoders that return floats (e.g. 720896.0) still work.
 -spec is_debug(Report :: map()) -> boolean().
 is_debug(Report) ->
-    PolicyInt = policy_to_integer(maps:get(<<"policy">>, Report, undefined)),
+    PolicyInt = policy_to_integer(hb_ao:get(<<"policy">>, Report, undefined, #{})),
     (PolicyInt band (1 bsl ?DEBUG_FLAG_BIT)) =/= 0.
 
 %% Coerce report policy value to integer for bit test (handles JSON int/float).
@@ -490,7 +490,7 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     ?event(snp, {expected_measurement, hb_util:to_hex(ExpectedBin)}),
     % Actual measurement from report (not Msg) for logging
     ActualMeasurement = case snp_util:safe_json_decode(ReportJSON) of
-        {ok, R} -> hb_ao:get(<<"measurement">>, R, undefined);
+        {ok, R} -> hb_ao:get(<<"measurement">>, R, undefined, #{});
         {error, _} -> undefined
     end,
     ?event(snp, {actual_measurement, ActualMeasurement}),
