@@ -65,6 +65,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % measurement checks before the report signature is verified.
         ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
         {ok, Report} = snp_util:safe_json_decode(ReportJSON),
+        ?event(snp_temp, {snp_report, {explicit, Report}}),
         Msg = maps:without([<<"report">>], MsgWithJSONReport),
         ?event(snp_temp, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
 
