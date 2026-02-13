@@ -22,7 +22,7 @@
 -define(CONN_COUNTER_ETS, hb_http_client_conn_counter).
 
 %% Connection pool sizes per type (easily configurable)
--define(READ_POOL_SIZE, 20).
+-define(READ_POOL_SIZE, 30).
 -define(WRITE_POOL_SIZE, 10).
 
 %%% ==================================================================
