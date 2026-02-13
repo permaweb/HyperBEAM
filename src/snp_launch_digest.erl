@@ -127,20 +127,21 @@ create_and_update_vmsa_pages(GCTX, VCPUs, VCPUType, VMMType, GuestFeatures, Rese
     }}),
     GCTX2.
 
-%% Helper function to extract launch digest parameters from Args map
--spec extract_launch_digest_params(Args :: launch_digest_args()) -> 
-    {integer(), vcpu_type(), vmm_type(), guest_features(), undefined | binary() | list(), 
+%% Helper function to extract launch digest parameters from Args map.
+%% Args may have binary or atom keys; we use binary keys as canonical.
+-spec extract_launch_digest_params(Args :: launch_digest_args()) ->
+    {integer(), vcpu_type(), vmm_type(), guest_features(), undefined | binary() | list(),
      undefined | binary(), undefined | binary(), undefined | binary(), non_neg_integer()}.
-extract_launch_digest_params(Args) ->
-    VCPUs = maps:get(vcpus, Args),
-    VCPUType = maps:get(vcpu_type, Args),
-    VMMType = maps:get(vmm_type, Args),
-    GuestFeatures = maps:get(guest_features, Args, 0),
-    FirmwareHash = maps:get(firmware, Args, undefined),
-    KernelHash = maps:get(kernel, Args, undefined),
-    InitrdHash = maps:get(initrd, Args, undefined),
-    AppendHash = maps:get(append, Args, undefined),
-    SevHashesGPA = maps:get(sev_hashes_gpa, Args, 0),
+extract_launch_digest_params(Args) when is_map(Args) ->
+    VCPUs = arg_get(Args, <<"vcpus">>, undefined),
+    VCPUType = arg_get(Args, <<"vcpu_type">>, undefined),
+    VMMType = arg_get(Args, <<"vmm_type">>, undefined),
+    GuestFeatures = arg_get(Args, <<"guest_features">>, 0),
+    FirmwareHash = arg_get(Args, <<"firmware">>, undefined),
+    KernelHash = arg_get(Args, <<"kernel">>, undefined),
+    InitrdHash = arg_get(Args, <<"initrd">>, undefined),
+    AppendHash = arg_get(Args, <<"append">>, undefined),
+    SevHashesGPA = arg_get(Args, <<"sev_hashes_gpa">>, 0),
     ?event(snp, {extracted_params, #{vcpus => VCPUs, vcpu_type => VCPUType, vmm_type => VMMType, guest_features => GuestFeatures}}),
     FirmwareHashInfo = case FirmwareHash of 
         undefined -> undefined; 
@@ -170,6 +171,16 @@ extract_launch_digest_params(Args) ->
         sev_hashes_gpa => SevHashesGPA
     }}),
     {VCPUs, VCPUType, VMMType, GuestFeatures, FirmwareHash, KernelHash, InitrdHash, AppendHash, SevHashesGPA}.
+
+%% Get Arg by binary key, fallback to atom key (for callers that pass atom-key maps).
+arg_get(Args, BinKey, Default) when is_map(Args) ->
+    case maps:find(BinKey, Args) of
+        {ok, V} -> V;
+        error ->
+            try maps:get(binary_to_existing_atom(BinKey, utf8), Args)
+            catch _:_ -> Default
+            end
+    end.
 
 %% Helper function to initialize GCTX from firmware hash
 -spec initialize_gctx_from_firmware(FirmwareHash :: undefined | binary() | list()) -> gctx().

@@ -488,10 +488,10 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
     ?event(snp, {verify_measurement_args, Args}),  % Verbose: full args
     % Try to read OVMF file and extract SEV hashes table GPA
     ArgsWithGpa = case snp_ovmf:read_ovmf_gpa() of
-        {ok, Gpa} -> 
+        {ok, Gpa} ->
             ?event(snp_short, {ovmf_gpa_found, Gpa}),
-            Args#{sev_hashes_gpa => Gpa};
-        {error, GpaReason} -> 
+            Args#{<<"sev_hashes_gpa">> => Gpa};
+        {error, GpaReason} ->
             ?event(snp, {ovmf_gpa_not_found, GpaReason}),
             Args  % Continue without GPA if file not found
     end,
@@ -535,23 +535,15 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
 %%
 %% @param Msg The normalized SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
-%% @returns A map of measurement arguments with atom keys
+%% @returns A map of measurement arguments with binary keys (for launch digest Args)
 -spec extract_measurement_args(Msg :: map(), NodeOpts :: map()) -> map().
 extract_measurement_args(Msg, NodeOpts) ->
-    maps:from_list(
-        lists:map(
-            fun({Key, Val}) -> {binary_to_existing_atom(Key), Val} end,
-            maps:to_list(
-                maps:with(
-                    lists:map(fun atom_to_binary/1, ?COMMITTED_PARAMETERS),
-                    hb_cache:ensure_all_loaded(
-                        hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
-                        NodeOpts
-                    )
-                )
-            )
-        )
-    ).
+    EnforcedKeys = lists:map(fun atom_to_binary/1, ?COMMITTED_PARAMETERS),
+    LocalHashes = hb_cache:ensure_all_loaded(
+        hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
+        NodeOpts
+    ),
+    maps:with(EnforcedKeys, LocalHashes).
 
 %% Helper function to parse and validate report JSON
 -spec parse_and_validate_report_json(ReportJSON :: binary()) -> map().

@@ -46,13 +46,16 @@ execute_is_trusted(_M1, Msg, NodeOpts) ->
 %%
 %% This function retrieves the local software hashes from the message and
 %% filters them to only include the keys that are configured for enforcement.
+%% Local-hashes keys are normalized to binary so that atom-key and binary-key
+%% maps are both handled correctly (avoids empty filter when key types differ).
 %%
 %% @param Msg The SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
-%% @returns A map of filtered local hashes with only enforced keys
+%% @returns A map of filtered local hashes with only enforced keys (binary keys)
 -spec get_filtered_local_hashes(Msg :: map(), NodeOpts :: map()) -> map().
 get_filtered_local_hashes(Msg, NodeOpts) ->
-    LocalHashes = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
+    LocalHashesRaw = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
+    LocalHashes = normalize_map_keys_to_binary(LocalHashesRaw),
     EnforcedKeys = get_enforced_keys(NodeOpts),
     ?event(snp, {enforced_keys, {explicit, EnforcedKeys}}),
     FilteredLocalHashes = hb_cache:ensure_all_loaded(
@@ -61,6 +64,25 @@ get_filtered_local_hashes(Msg, NodeOpts) ->
     ),
     ?event(snp, {filtered_local_hashes, {explicit, FilteredLocalHashes}}),
     FilteredLocalHashes.
+
+%% @doc Normalize a map so all keys are binaries (for consistent filtering with EnforcedKeys).
+%% Non-map input is treated as empty map.
+-spec normalize_map_keys_to_binary(term()) -> map().
+normalize_map_keys_to_binary(M) when is_map(M) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            maps:put(ensure_binary_key(K), V, Acc)
+        end,
+        #{},
+        M
+    );
+normalize_map_keys_to_binary(_) ->
+    #{}.
+
+-spec ensure_binary_key(atom() | binary() | term()) -> binary().
+ensure_binary_key(K) when is_binary(K) -> K;
+ensure_binary_key(K) when is_atom(K) -> atom_to_binary(K, utf8);
+ensure_binary_key(K) -> hb_util:bin(K).
 
 %% @doc Get the list of enforced keys for software validation.
 %%
@@ -96,11 +118,12 @@ is_software_trusted(FilteredLocalHashes, TrustedSoftware, NodeOpts)
     when is_list(TrustedSoftware) ->
     lists:any(
         fun(TrustedMap) ->
-            Match = 
+            TrustedNormalized = normalize_map_keys_to_binary(TrustedMap),
+            Match =
                 hb_message:match(
                     FilteredLocalHashes,
-                    TrustedMap,
-                    primary, 
+                    TrustedNormalized,
+                    primary,
                     NodeOpts
                 ),
             ?event(snp, {match, {explicit, Match}}),

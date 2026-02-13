@@ -300,8 +300,8 @@ do_http_get(URL) when is_binary(URL) ->
                         "https" -> <<"https://", HostBin/binary, ":", (hb_util:bin(Port))/binary>>;
                         _ -> <<"http://", HostBin/binary, ":", (hb_util:bin(Port))/binary>>
                     end,
-                    Path = maps:get(path, URI, <<"/">>),
-                    Query = maps:get(query, URI, undefined),
+                    Path = hb_maps:get(path, URI, <<"/">>, #{}),
+                    Query = hb_maps:get(query, URI, undefined, #{}),
                     FullPath = case Query of
                         undefined -> Path;
                         <<>> -> Path;

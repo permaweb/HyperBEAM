@@ -158,9 +158,9 @@ parse_ovmf_and_update(GCTX, OvmfPath, VMMType, KernelHash, InitrdHash, AppendHas
                     % Process all sections (starting from GCTX1 which may have been updated with OVMF data)
                     GCTX2 = lists:foldl(
                         fun(Section, AccGCTX) ->
-                            SectionNum = maps:get(section_type, Section),
-                            SectionGPA = maps:get(gpa, Section),
-                            SectionSize = maps:get(size, Section),
+                            SectionNum = hb_maps:get(<<"section_type">>, Section, undefined, #{}),
+                            SectionGPA = hb_maps:get(<<"gpa">>, Section, undefined, #{}),
+                            SectionSize = hb_maps:get(<<"size">>, Section, undefined, #{}),
                             LD_BeforeSection = snp_util:binary_to_hex_string(AccGCTX#gctx.ld),
                             ?event(snp, {metadata_section_before, #{
                                 section_type => SectionNum,
@@ -204,8 +204,8 @@ parse_ovmf_and_update(GCTX, OvmfPath, VMMType, KernelHash, InitrdHash, AppendHas
                             Result = lists:foldl(
                                 fun(Section, AccGCTX) ->
                                     case Section of
-                                        #{section_type := ?OVMF_SECTION_CPUID} -> % Cpuid
-                                            SectionGPA = maps:get(gpa, Section),
+                                        #{<<"section_type">> := ?OVMF_SECTION_CPUID} -> % Cpuid
+                                            SectionGPA = hb_maps:get(<<"gpa">>, Section, undefined, #{}),
                                             ?event(snp, {processing_cpuid_section_ec2, #{
                                                 gpa => SectionGPA,
                                                 ld_before_hex => snp_util:binary_to_hex_string(AccGCTX#gctx.ld)
@@ -232,7 +232,7 @@ parse_ovmf_and_update(GCTX, OvmfPath, VMMType, KernelHash, InitrdHash, AppendHas
                     case {KernelHash, InitrdHash, AppendHash} of
                         {K, I, A} when is_binary(K), is_binary(I), is_binary(A) ->
                             HasSevHashes = lists:any(
-                                fun(S) -> maps:get(section_type, S) =:= ?OVMF_SECTION_SNP_KERNEL_HASHES end, % SnpKernelHashes = 0x10
+                                fun(S) -> hb_maps:get(<<"section_type">>, S, undefined, #{}) =:= ?OVMF_SECTION_SNP_KERNEL_HASHES end, % SnpKernelHashes = 0x10
                                 Sections
                             ),
                             case HasSevHashes of
@@ -326,9 +326,9 @@ parse_metadata_section_descriptors(OvmfData, ItemsStart, ItemsSize, NumItems, Ac
                 binary:part(OvmfData, Offset, DescriptorSize),
             
             Section = #{
-                gpa => GPA,
-                size => Size,
-                section_type => SectionType
+                <<"gpa">> => GPA,
+                <<"size">> => Size,
+                <<"section_type">> => SectionType
             },
             ?event(snp, {parsed_metadata_section, Section}),
             parse_metadata_section_descriptors(OvmfData, ItemsStart, ItemsSize, NumItems - 1, [Section | Acc])
@@ -340,9 +340,9 @@ parse_metadata_section_descriptors(OvmfData, ItemsStart, ItemsSize, NumItems, Ac
     AppendHash :: undefined | binary(), OvmfData :: binary(), SevHashesTableGPA :: non_neg_integer()) ->
     #gctx{}.
 process_ovmf_section(GCTX, Section, VMMType, KernelHash, InitrdHash, AppendHash, _OvmfData, SevHashesTableGPA) ->
-    SectionType = maps:get(section_type, Section),
-    GPA = maps:get(gpa, Section),
-    Size = maps:get(size, Section),
+    SectionType = hb_maps:get(<<"section_type">>, Section, undefined, #{}),
+    GPA = hb_maps:get(<<"gpa">>, Section, undefined, #{}),
+    Size = hb_maps:get(<<"size">>, Section, undefined, #{}),
     
     LD_Before = snp_util:binary_to_hex_string(GCTX#gctx.ld),
     ?event(snp, {processing_section_start, #{
