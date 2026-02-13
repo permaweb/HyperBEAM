@@ -978,6 +978,8 @@ get_status_class({error, {stream_error, {stream_error, refused_stream, _Message}
     <<"refused_stream">>;
 get_status_class({error, {stream_error, {goaway, no_error, _Message}}}) ->
     <<"goaway">>;
+get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
+    <<"closed_einval">>;
 get_status_class(208) ->
 	<<"already_processed">>;
 get_status_class(404) ->
