@@ -134,51 +134,30 @@ validate_trusted_configs_list([Config | Rest], Index, Acc) ->
             {error, {invalid_trusted_config_type, Index, <<"Config at index ", (hb_util:bin(integer_to_list(Index)))/binary, " must be a map">>}}
     end.
 
-%% Helper function to generate attestation report (handles mock and real NIF calls)
+%% Helper function to generate attestation report via NIF only (no mock fallback).
+%% If the NIF is not loaded, returns {error, nif_not_loaded} so production never
+%% uses process-dictionary or fake report data.
 -spec generate_attestation_report(ReportData :: binary()) -> {ok, binary()} | {error, term()}.
 generate_attestation_report(ReportData) ->
     {ReportTimeMicros, ReportResult} = timer:tc(fun() ->
-        case get(mock_snp_nif_enabled) of
-            true ->
-                generate_mock_report();
-            _ ->
-                % Call actual NIF function (returns binary)
-                % If NIF is not loaded, this will call not_loaded() which raises an error
-                % Catch the error and fallback to mock report for development/testing
-                try
-                    snp_nif:generate_attestation_report(
-                        ReportData, 
-                        ?REPORT_DATA_VERSION
-                    )
-                catch
-                    error:{nif_error, _} ->
-                        % NIF not loaded, fallback to mock report
-                        ?event(snp_short, {nif_not_loaded_fallback_to_mock, #{
-                            operation => <<"generate_attestation_report">>
-                        }}),
-                        generate_mock_report()
-                end
+        try
+            snp_nif:generate_attestation_report(
+                ReportData,
+                ?REPORT_DATA_VERSION
+            )
+        catch
+            error:{nif_error, _} ->
+                ?event(snp_short, {nif_not_loaded, #{operation => <<"generate_attestation_report">>}}),
+                {error, nif_not_loaded};
+            error:undef ->
+                % NIF not loaded: stubs raise undef when NIF module load failed
+                ?event(snp_short, {nif_not_loaded, #{operation => <<"generate_attestation_report">>}}),
+                {error, nif_not_loaded}
         end
     end),
     ReportTimeMs = ReportTimeMicros / 1000,
     ?event(snp_short, {report_generation_time_ms, ReportTimeMs}),
     ReportResult.
-
-%% Helper function to generate mock report for testing
--spec generate_mock_report() -> {ok, binary()} | {error, term()}.
-generate_mock_report() ->
-    MockResponse = get(mock_snp_nif_response),
-    case is_binary(MockResponse) andalso byte_size(MockResponse) =:= ?REPORT_SIZE of
-        true -> {ok, MockResponse};
-        false -> 
-            % Assume it's JSON, convert to binary
-            % report_json_to_binary returns bare binary on success, {error, ...} on failure
-            case snp_nif:report_json_to_binary(MockResponse) of
-                {error, ConvertError} -> {error, ConvertError};
-                Binary when is_binary(Binary) -> {ok, Binary};
-                Other -> {error, {unexpected_return_type, Other}}
-            end
-    end.
 
 %% Helper function to convert report binary to JSON map
 -spec convert_report_binary_to_json(ReportBinary :: binary()) -> {ok, map()} | {error, term()}.
