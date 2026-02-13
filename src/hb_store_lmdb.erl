@@ -268,6 +268,10 @@ read_direct(Opts, Path) when is_binary(Path) ->
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;  % Normalize error format
         not_found -> not_found;  % Handle both old and new format
+        {error, transaction_error, _} -> 
+            ?event(lmdb_store, {transaction_error, {path, Path}}),
+            %% TODO: Create a proper solution (max-retries)
+            read_direct(Opts, Path);
         {error, database_error, ErrorMessage} ->
             ?event(lmdb_store, {database_error, {msg, ErrorMessage}}),
             %% TODO: Create a proper solution
