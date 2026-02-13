@@ -29,7 +29,6 @@
 extract_and_normalize_message(M2, NodeOpts) ->
     maybe
         % Validate message structure early
-        ?event(snp, {node_opts, {explicit, NodeOpts}}),
         case validate_message_structure(M2) of
             ok -> ok;
             {error, ValidationErrors} ->
@@ -43,7 +42,6 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % Search for a `body' key in the message, and if found use it as the source
         % of the report. If not found, use the message itself as the source.
         RawMsg = hb_ao:get(<<"body">>, M2, M2, NodeOpts#{ hashpath => ignore }),
-        ?event(snp, {msg, {explicit, RawMsg}}),
         MsgWithJSONReport =
             hb_util:ok(
                 hb_message:with_only_committed(
@@ -58,22 +56,18 @@ extract_and_normalize_message(M2, NodeOpts) ->
                     NodeOpts
                 )
             ),
-        ?event(snp_short, {msg_with_json_report, {explicit, MsgWithJSONReport}}),
         % Normalize the request message: do NOT merge report JSON into Msg.
         % Report may contain attacker-controlled keys; merging would let them
         % override local-hashes, address, policy, etc. used for trust/debug/
         % measurement checks before the report signature is verified.
         ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
         {ok, Report} = snp_util:safe_json_decode(ReportJSON),
-        ?event(snp_temp, {snp_report, {explicit, Report}}),
         Msg = maps:without([<<"report">>], MsgWithJSONReport),
-        ?event(snp_temp, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
+        ?event(snp_short, {snp_message_normalized, #{msg_keys => maps:keys(Msg), report_not_merged => true}}),
 
         % Extract address and node message ID from the message (not from Report)
         Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
-        ?event(snp_short, {snp_address, Address}),
         {ok, NodeMsgID} ?= extract_node_message_id(Msg, NodeOpts),
-        ?event(snp_short, {snp_node_msg_id, NodeMsgID}),
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}}
     else
         {error, Reason} -> {error, Reason};

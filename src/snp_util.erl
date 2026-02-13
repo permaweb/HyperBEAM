@@ -44,7 +44,7 @@ hex_to_binary(Hex) when is_binary(Hex), byte_size(Hex) rem 2 =:= 0 ->
             {error, invalid_hex}
     end;
 hex_to_binary(Hex) ->
-    ?event(snp_error, {hex_to_binary_invalid_input, #{hex => case is_binary(Hex) of true -> {size, byte_size(Hex)}; false -> Hex end}}),
+    ?event(snp_error, {hex_to_binary_invalid_input, #{hex_size => case is_binary(Hex) of true -> byte_size(Hex); false -> undefined end}}),
     {error, invalid_hex}.
 
 %% @doc Convert binary to hex string for logging.

@@ -184,27 +184,19 @@ verify_measurement(ReportJSON, ExpectedMeasurement) ->
             case maps:find(<<"measurement">>, ReportMap) of
                 {ok, ActualMeasurement} when is_list(ActualMeasurement) ->
                     ActualBin = hb_util:bin(ActualMeasurement),
-                    ExpectedHex = hb_util:to_hex(ExpectedMeasurement),
-                    ActualHex = hb_util:to_hex(ActualBin),
-                    ?event(snp_short, {verify_measurement_hex, #{expected => ExpectedHex, actual => ActualHex}}),
                     case ActualBin =:= ExpectedMeasurement of
                         true ->
                             ?event(snp_short, {verify_measurement_match, true}),
                             {ok, true};
-                        false -> 
-                            ?event(snp_short, {verify_measurement_mismatch, #{expected_hex => ExpectedHex, actual_hex => ActualHex}}),
+                        false ->
                             {ok, false}  % Measurement mismatch, not an error
                     end;
                 {ok, ActualMeasurement} when is_binary(ActualMeasurement) ->
-                    ExpectedHex = hb_util:to_hex(ExpectedMeasurement),
-                    ActualHex = hb_util:to_hex(ActualMeasurement),
-                    ?event(snp_short, {verify_measurement_hex, #{expected => ExpectedHex, actual => ActualHex}}),
                     case ActualMeasurement =:= ExpectedMeasurement of
-                        true -> 
+                        true ->
                             ?event(snp_short, {verify_measurement_match, true}),
                             {ok, true};
-                        false -> 
-                            ?event(snp_short, {verify_measurement_mismatch, #{expected_hex => ExpectedHex, actual_hex => ActualHex}}),
+                        false ->
                             {ok, false}  % Measurement mismatch, not an error
                     end;
                 error ->
@@ -372,26 +364,17 @@ verify_signature(ReportBinary, CertChainPEM, VcekDER) ->
     {ok, true} | {error, signature_or_address_invalid}.
 verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
     Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
-    ?event(snp, {verify_signature_and_address_signers, Signers}),
     SigIsValid = hb_message:verify(MsgWithJSONReport, Signers),
-    ?event(snp, {verify_signature_and_address_sig_valid, SigIsValid}),
     AddressIsValid = lists:member(Address, Signers),
-    ?event(snp, {verify_signature_and_address_check, #{
-        address => Address,
-        signers => Signers,
-        address_is_valid => AddressIsValid
-    }}),
     case SigIsValid andalso AddressIsValid of
         true -> 
             ?event(snp_short, {verify_signature_and_address_success, true}),
             {ok, true};
-        false -> 
+        false ->
             ?event(snp_error, {verify_signature_and_address_failed, #{
                 operation => <<"verify_signature_and_address">>,
                 signature_valid => SigIsValid,
                 address_valid => AddressIsValid,
-                expected_address => Address,
-                actual_signers => Signers,
                 suggestion => case {SigIsValid, AddressIsValid} of
                     {false, _} -> <<"Message signature is invalid. Verify the message was signed correctly.">>;
                     {true, false} -> <<"Address mismatch: expected address not found in signers. Verify the message was signed by the expected address.">>
@@ -426,7 +409,7 @@ verify_debug_disabled(ReportMap) ->
         debug_bit => ?DEBUG_FLAG_BIT,
         debug_disabled => DebugDisabled
     }}),
-    ?event(snp_temp, {snp_debug_policy_check, #{
+    ?event(snp_short, {snp_debug_policy_check, #{
         policy_int => PolicyInt,
         debug_bit => ?DEBUG_FLAG_BIT,
         debug_bit_mask => DebugBitMask,
@@ -485,7 +468,6 @@ policy_to_integer(_) -> 0.
     NodeOpts :: map()) -> {ok, true} | {error, measurement_invalid | {measurement_verification_failed, term()}}.
 verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Args = extract_measurement_args(Msg, NodeOpts),
-    ?event(snp, {verify_measurement_args, Args}),  % Verbose: full args
     % Try to read OVMF file and extract SEV hashes table GPA
     ArgsWithGpa = case snp_ovmf:read_ovmf_gpa() of
         {ok, Gpa} ->
@@ -495,26 +477,16 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
             ?event(snp, {ovmf_gpa_not_found, GpaReason}),
             Args  % Continue without GPA if file not found
     end,
-    ?event(snp, {compute_launch_digest_args, ArgsWithGpa}),
     {ok, ExpectedBin} = snp_launch_digest:compute_launch_digest(ArgsWithGpa),
-    ?event(snp, {expected_measurement, hb_util:to_hex(ExpectedBin)}),
-    % Actual measurement from report (not Msg) for logging
-    ActualMeasurement = case snp_util:safe_json_decode(ReportJSON) of
-        {ok, R} -> hb_ao:get(<<"measurement">>, R, undefined, #{});
-        {error, _} -> undefined
-    end,
-    ?event(snp, {actual_measurement, ActualMeasurement}),
     % verify_measurement is now implemented in Erlang
     % Returns {ok, true} on match, {ok, false} on mismatch, {error, Reason} on parse errors
     case verify_measurement(ReportJSON, ExpectedBin) of
         {ok, true} -> 
             ?event(snp_short, {verify_measurement_success, true}),
             {ok, true};
-        {ok, false} -> 
+        {ok, false} ->
             ?event(snp_error, {verify_measurement_mismatch, #{
                 operation => <<"verify_measurement">>,
-                expected_hex => hb_util:to_hex(ExpectedBin),
-                actual_measurement => ActualMeasurement,
                 suggestion => <<"Measurement mismatch indicates the launch digest does not match. Verify that all committed parameters (vcpus, vcpu_type, vmm_type, guest_features, firmware, kernel, initrd, append) match the expected values.">>
             }}),
             {error, measurement_invalid};
@@ -549,13 +521,6 @@ extract_measurement_args(Msg, NodeOpts) ->
 -spec parse_and_validate_report_json(ReportJSON :: binary()) -> map().
 parse_and_validate_report_json(ReportJSON) ->
     Report = hb_json:decode(ReportJSON),
-    ?event(snp, {report_json_decoded, #{
-        is_map => is_map(Report),
-        report_type => case Report of
-            R when is_map(R) -> map;
-            _ -> other
-        end
-    }}),
     case Report of
         ReportMap when is_map(ReportMap) -> 
             ?event(snp, {report_map_valid, map_size(ReportMap)}),
@@ -580,13 +545,6 @@ parse_and_validate_report_json(ReportJSON) ->
 -spec extract_and_validate_chip_id(ReportMap :: map()) -> binary().
 extract_and_validate_chip_id(ReportMap) ->
     ChipIdRaw = hb_ao:get(<<"chip_id">>, ReportMap, undefined, #{}),
-    ?event(snp, {chip_id_raw, #{
-        is_list => is_list(ChipIdRaw),
-        list_length => case ChipIdRaw of
-            L0 when is_list(L0) -> length(L0);
-            _ -> undefined
-        end
-    }}),
     % Use centralized ChipId validation
     ChipId = case ChipIdRaw of
         undefined -> 
@@ -802,19 +760,14 @@ verify_report_integrity(ReportJSON, NodeOpts) ->
     Msg :: map(), NodeOpts :: map()) -> {ok, true} | {error, nonce_mismatch}.
 verify_nonce(Address, NodeMsgID, Msg, NodeOpts) ->
     Nonce = hb_util:decode(hb_ao:get(<<"nonce">>, Msg, NodeOpts)),
-    ?event(snp, {snp_nonce, Nonce}),
     NonceMatches = snp_nonce:report_data_matches(Address, NodeMsgID, Nonce),
-    ?event(snp, {nonce_matches, NonceMatches}),
     case NonceMatches of
         true -> 
             ?event(snp_short, {verify_nonce_success, true}),
             {ok, true};
-        false -> 
+        false ->
             ?event(snp_error, {verify_nonce_mismatch, #{
                 operation => <<"verify_nonce">>,
-                address => Address,
-                node_msg_id => NodeMsgID,
-                nonce => Nonce,
                 suggestion => <<"Nonce mismatch indicates the report was not generated for this specific address and message ID. Verify the report corresponds to the expected request.">>
             }}),
             {error, nonce_mismatch}
@@ -899,25 +852,25 @@ verify(M1, M2, NodeOpts) ->
             {ok, _} ?= validate_verify_config(NodeOpts),
             {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport, Report}} 
                 ?= snp_message:extract_and_normalize_message(M2, NodeOpts),
-            ?event(snp_temp, {snp_verify_step, extract_ok, #{address => Address, report_keys => maps:keys(Report)}}),
+            ?event(snp_short, {snp_verify_step, extract_ok, #{report_keys => maps:keys(Report)}}),
             % Perform all validation steps (policy from Report, not Msg)
             {ok, NonceResult} ?= verify_nonce(Address, NodeMsgID, Msg, NodeOpts),
-            ?event(snp_temp, {snp_verify_step, nonce, NonceResult}),
+            ?event(snp_short, {snp_verify_step, nonce, NonceResult}),
             {ok, SigResult} ?= 
                 verify_signature_and_address(
                     MsgWithJSONReport, 
                     Address, 
                     NodeOpts
                 ),
-            ?event(snp_temp, {snp_verify_step, signature, SigResult}),
+            ?event(snp_short, {snp_verify_step, signature, SigResult}),
             {ok, DebugResult} ?= verify_debug_disabled(Report),
-            ?event(snp_temp, {snp_verify_step, debug_disabled, DebugResult}),
+            ?event(snp_short, {snp_verify_step, debug_disabled, DebugResult}),
             {ok, TrustedResult} ?= verify_trusted_software(M1, Msg, NodeOpts),
-            ?event(snp_temp, {snp_verify_step, trusted_software, TrustedResult}),
+            ?event(snp_short, {snp_verify_step, trusted_software, TrustedResult}),
             {ok, MeasurementResult} ?= verify_measurement(Msg, ReportJSON, NodeOpts),
-            ?event(snp_temp, {snp_verify_step, measurement, MeasurementResult}),
+            ?event(snp_short, {snp_verify_step, measurement, MeasurementResult}),
             {ok, ReportResult} ?= verify_report_integrity(ReportJSON, NodeOpts),
-            ?event(snp_temp, {snp_verify_step, report_integrity, ReportResult}),
+            ?event(snp_short, {snp_verify_step, report_integrity, ReportResult}),
             Valid = lists:all(
                 fun(Bool) -> Bool end, 
                     [
@@ -930,7 +883,7 @@ verify(M1, M2, NodeOpts) ->
                     ]
                 ),
             ?event(snp_short, {final_validation_result, Valid}),
-            ?event(snp_temp, {snp_verify_done, #{valid => Valid}}),
+            ?event(snp_short, {snp_verify_done, #{valid => Valid}}),
             % Return boolean value (not binary) for consistency with dev_message:verify expectations
             % dev_message:verify_commitment expects {ok, boolean()}, so we must return {ok, false}
             % for verification failures, not {error, ...}

@@ -203,7 +203,6 @@ convert_report_binary_to_json(ReportBinary) ->
 generate(_M1, _M2, Opts) ->
     maybe
         LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),
-        ?event(snp, {generate_opts, {explicit, LoadedOpts}}),  % Verbose: full opts
         % Validate configuration options
         {ok, _} ?= validate_generate_config(LoadedOpts),
         % Validate wallet availability
@@ -217,7 +216,6 @@ generate(_M1, _M2, Opts) ->
             LoadedOpts
         ),
         RawPublicNodeMsgID = hb_util:native_id(PublicNodeMsgID),
-        ?event(snp, {snp_node_msg, NodeMsg}),  % Verbose: full node message
         % Generate the commitment report components
         ?event(snp_short, {snp_address, byte_size(Address)}),
         ReportData = snp_nonce:generate_nonce(Address, RawPublicNodeMsgID),
@@ -229,14 +227,12 @@ generate(_M1, _M2, Opts) ->
                 [FirstConfig | _] -> {ok, FirstConfig};
                 _ -> {error, invalid_trusted_configs_format}
             end,
-        ?event(snp, {snp_local_hashes, {explicit, ValidLocalHashes}}),  % Verbose: full hashes
         % Generate the hardware attestation report
         {ok, ReportBinary} ?= generate_attestation_report(ReportData),
         % Convert binary to JSON for storage/transmission
         {ok, ReportMap} ?= convert_report_binary_to_json(ReportBinary),
         ReportJSON = hb_json:encode(ReportMap),
-        ?event(snp, {snp_report_json, ReportJSON}),  % Verbose: full report JSON
-        ?event(snp_short, {snp_report_generated, #{report_size => byte_size(ReportJSON)}}),  % Flow: report generated
+        ?event(snp_short, {snp_report_generated, #{report_size => byte_size(ReportJSON)}}),
         % Package the complete report message
         ReportMsg = #{
             <<"local-hashes">> => ValidLocalHashes,
@@ -245,7 +241,6 @@ generate(_M1, _M2, Opts) ->
             <<"node-message">> => NodeMsg,
             <<"report">> => ReportJSON
         },
-        ?event(snp, {snp_report_msg, ReportMsg}),  % Verbose: full report message
         {ok, ReportMsg}
     else
         {error, GenerateError} -> {error, GenerateError};

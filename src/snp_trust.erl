@@ -32,7 +32,6 @@
 execute_is_trusted(_M1, Msg, NodeOpts) ->
     FilteredLocalHashes = get_filtered_local_hashes(Msg, NodeOpts),
     TrustedSoftware = hb_opts:get(snp_trusted, [#{}], NodeOpts),
-    ?event(snp, {trusted_software, {explicit, TrustedSoftware}}),
     IsTrusted = 
         is_software_trusted(
             FilteredLocalHashes, 
@@ -57,12 +56,10 @@ get_filtered_local_hashes(Msg, NodeOpts) ->
     LocalHashesRaw = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
     LocalHashes = normalize_map_keys_to_binary(LocalHashesRaw),
     EnforcedKeys = get_enforced_keys(NodeOpts),
-    ?event(snp, {enforced_keys, {explicit, EnforcedKeys}}),
     FilteredLocalHashes = hb_cache:ensure_all_loaded(
         maps:with(EnforcedKeys, LocalHashes),
         NodeOpts
     ),
-    ?event(snp, {filtered_local_hashes, {explicit, FilteredLocalHashes}}),
     FilteredLocalHashes.
 
 %% @doc Normalize a map so all keys are binaries (for consistent filtering with EnforcedKeys).
@@ -126,7 +123,6 @@ is_software_trusted(FilteredLocalHashes, TrustedSoftware, NodeOpts)
                     primary,
                     NodeOpts
                 ),
-            ?event(snp, {match, {explicit, Match}}),
             is_map(TrustedMap) andalso Match == true
         end,
         TrustedSoftware
