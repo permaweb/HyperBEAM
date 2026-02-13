@@ -29,17 +29,18 @@ generate_nonce(RawAddress, RawNodeMsgID) ->
 %%
 %% This function ensures that the nonce in the SNP report was generated
 %% using the same address and node message ID that are expected for this
-%% verification request.
+%% verification request. Uses constant-time comparison to avoid timing
+%% leaks of the nonce content.
 %%
 %% @param Address The node's address used in nonce generation
-%% @param NodeMsgID The node message ID used in nonce generation  
+%% @param NodeMsgID The node message ID used in nonce generation
 %% @param ReportData The actual nonce data from the SNP report
 %% @returns `true' if the report data matches the expected nonce, `false' otherwise
--spec report_data_matches(Address :: binary(), NodeMsgID :: binary(), 
+-spec report_data_matches(Address :: binary(), NodeMsgID :: binary(),
     ReportData :: binary()) -> boolean().
 report_data_matches(Address, NodeMsgID, ReportData) ->
     ExpectedNonce = generate_nonce(Address, NodeMsgID),
-    % Log nonce summary instead of full values for security
+    Match = constant_time_eq(ExpectedNonce, ReportData),
     NonceHash = crypto:hash(sha256, ExpectedNonce),
     ReportDataHash = crypto:hash(sha256, ReportData),
     ?event(snp_short, {nonce_validation, #{
@@ -47,7 +48,16 @@ report_data_matches(Address, NodeMsgID, ReportData) ->
         expected_nonce_hash => snp_util:binary_to_hex_string(NonceHash),
         report_data_size => byte_size(ReportData),
         report_data_hash => snp_util:binary_to_hex_string(ReportDataHash),
-        match => (ExpectedNonce == ReportData)
+        match => Match
     }}),
-    ExpectedNonce == ReportData.
+    Match.
+
+%% @doc Constant-time equality for two binaries (avoids timing leaks).
+%% Returns true only if same size and all bytes equal.
+-spec constant_time_eq(binary(), binary()) -> boolean().
+constant_time_eq(A, B) when is_binary(A), is_binary(B), byte_size(A) =:= byte_size(B) ->
+    Xored = crypto:exor(A, B),
+    0 =:= lists:foldl(fun(Byte, Acc) -> Byte bor Acc end, 0, binary_to_list(Xored));
+constant_time_eq(_, _) ->
+    false.
 
