@@ -218,6 +218,7 @@ block({height, Height}, Opts) ->
             request(
                 <<"GET">>,
                 <<"/block/height/", (hb_util:bin(Height))/binary>>,
+                #{ <<"route-by">> => Height },
                 Opts
             )
     end.
@@ -265,10 +266,12 @@ find_txid(Base, Request, Opts) ->
 %% a `content-type' header. Subsequently, we parse the response manually and
 %% pass it back as a message.
 request(Method, Path, Opts) ->
+    request(Method, Path, #{}, Opts).
+request(Method, Path, Extra, Opts) ->
     ?event({arweave_request, {method, Method}, {path, Path}}),
     Res =
         hb_http:request(
-            #{
+            Extra#{
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
