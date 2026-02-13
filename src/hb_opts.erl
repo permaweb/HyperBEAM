@@ -249,28 +249,25 @@ default_message() ->
             vmm_type, guest_features
         ],
         routes => [
+            %% Local CU routes.
             #{
-                % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/result/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
-                % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/snapshot/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
-                % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/dry-run.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
-                % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/state.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
+            %% GraphQL: race all gateways, take the first 200.
             #{
-                % Routes for GraphQL requests to use a remote GraphQL API.
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
                     [
@@ -288,63 +285,183 @@ default_message() ->
                         }
                     ]
             },
+            %% Chunk requests: route to the nearest data nodes by
+            %% partition midpoint (byte offset). Tries 4 at a time,
+            %% ordered by proximity, until one returns 200.
             #{
-                % Routes for Arweave transaction requests to use a remote gateway.
                 <<"template">> => <<"^/arweave/chunk">>,
                 <<"nodes">> =>
                     [
+                        %% Partitions 0-15
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 3_600_000_000,
-                            <<"with">> => <<"https://data-1.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"center">> => 28_800_000_000_000,
+                            <<"with">> => <<"http://data-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 8_200_000_000,
-                            <<"with">> => <<"https://data-2.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"center">> => 28_800_000_000_000,
+                            <<"with">> => <<"http://data-13.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 16-31
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 12_200_000_000,
-                            <<"with">> => <<"https://data-3.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-3.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"https://data-4.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-14.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 16_200_000_000,
-                            <<"with">> => <<"https://data-5.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-15.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 32-47
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-4.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-5.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-16.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-17.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 48-63
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 201_600_000_000_000,
+                            <<"with">> => <<"http://data-6.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 201_600_000_000_000,
+                            <<"with">> => <<"http://data-7.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 48-107 (tip nodes)
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-4.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-5.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 64-126
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 343_800_000_000_000,
+                            <<"with">> => <<"http://data-8.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 75-138
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-9.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-10.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-11.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-12.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
                         }
-
                     ],
                 <<"strategy">> => <<"Nearest-Integer">>,
-                <<"choose">> => 3,
-                <<"parallel">> => 2
-           },
+                <<"choose">> => 22,
+                <<"parallel">> => 4,
+                <<"responses">> => 1,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            %% General Arweave requests: race both chain nodes, take
+            %% the first 200.
             #{
-                % Routes for Arweave transaction requests to use a remote gateway.
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> =>
                     [
                         #{
                             <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"https://arweave.net">>,
+                            <<"with">> => <<"http://chain-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://chain-2.arweave.xyz:1984">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
                         }
                     ],
                 <<"parallel">> => true,
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200
-           },
+            },
+            %% Raw data requests via arweave.net gateway. TODO: Update later.
             #{
-                % Routes for raw data requests to use a remote gateway.
                 <<"template">> => <<"/raw">>,
                 <<"node">> =>
                     #{
