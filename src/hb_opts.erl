@@ -454,7 +454,7 @@ default_message() ->
                     ],
                 <<"strategy">> => <<"Nearest-Integer">>,
                 <<"choose">> => 22,
-                <<"parallel">> => 4,
+                <<"parallel">> => 2,
                 <<"responses">> => 1,
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
