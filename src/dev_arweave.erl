@@ -209,7 +209,7 @@ get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
 
 get_chunk(Offset, Opts) ->
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, Opts).
+    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -327,10 +327,7 @@ request(Method, Path, Extra, Opts) ->
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
-            Opts#{
-                http_retry => 3,
-                http_retry_response => [error, failure]
-            }
+            Opts
         ),
     to_message(Path, Res, Opts).
 
