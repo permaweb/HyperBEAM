@@ -13,19 +13,16 @@ info() ->
         routes => #{
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
-            % HyperBEAM default homepage:
-            <<"dashboard">> => <<"dashboard.html">>,
-            % Interactive REPL:
-            <<"console">> => <<"console.html">>,
-            <<"graph">> => <<"graph.html">>,
-            % Styling and scripts:
-			<<"styles.css">> => <<"styles.css">>,
-			<<"metrics.js">> => <<"metrics.js">>,
-			<<"devices.js">> => <<"devices.js">>,
-			<<"utils.js">> => <<"utils.js">>,
-			<<"dashboard.js">> => <<"dashboard.js">>,
-			<<"graph.js">> => <<"graph.js">>,
-            <<"404.html">> => <<"404.html">>
+            <<"bundle.js">> => <<"bundle.js">>,
+            <<"fonts.css">> => <<"fonts.css">>,
+            <<"font-dm-sans-italic.ttf">> => <<"font-dm-sans-italic.ttf">>,
+            <<"font-dm-sans-variable.ttf">> => <<"font-dm-sans-variable.ttf">>,
+            <<"font-geist-mono-variable.ttf">> => <<"font-geist-mono-variable.ttf">>,
+            % Error pages:
+            <<"404.html">> => <<"404.html">>,
+            <<"500.html">> => <<"500.html">>,
+            <<"styles.css">> => <<"styles.css">>,
+            <<"script.js">> => <<"script.js">>
         },
         excludes => [<<"return_file">>]
     }.
@@ -175,7 +172,8 @@ return_file(Device, Name, Template) ->
                         <<".js">> -> <<"text/javascript">>;
                         <<".css">> -> <<"text/css">>;
                         <<".png">> -> <<"image/png">>;
-                        <<".ico">> -> <<"image/x-icon">>
+                        <<".ico">> -> <<"image/x-icon">>;
+                        <<".ttf">> -> <<"font/ttf">>
                     end
                 }
             };

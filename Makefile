@@ -10,6 +10,11 @@ GENESIS_WASM_BRANCH = feat/hb-unit
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
+HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
+HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
+HYPERBUDDY_UI_TARGET = src/html/hyperbuddy@1.0/bundle.js
+ARWEAVE_GATEWAY = https://arweave.net
+
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug
 else
@@ -104,3 +109,20 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+# Update hyperbuddy-ui from remote bundle
+update-hyperbuddy-ui:
+	@echo "Fetching package.json from $(HYPERBUDDY_UI_REPO)..." && \
+	TX_ID=$$(curl -s "$(HYPERBUDDY_UI_PACKAGE_JSON)" | grep -o '"bundle"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4) && \
+	if [ -z "$$TX_ID" ]; then \
+		echo "Error: Could not find 'bundle' field in package.json"; \
+		exit 1; \
+	fi && \
+	echo "Found transaction ID: $$TX_ID" && \
+	if [ -f "$(HYPERBUDDY_UI_TARGET)" ]; then \
+		rm "$(HYPERBUDDY_UI_TARGET)" && \
+		echo "Removed existing bundle.js"; \
+	fi && \
+	echo "Downloading source code from Arweave..." && \
+	curl -sL "$(ARWEAVE_GATEWAY)/$$TX_ID" -o "$(HYPERBUDDY_UI_TARGET)" && \
+	echo "Successfully updated $(HYPERBUDDY_UI_TARGET)"
