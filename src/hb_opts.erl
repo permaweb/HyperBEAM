@@ -164,6 +164,7 @@ default_message() ->
             #{<<"name">> => <<"cron@1.0">>, <<"module">> => dev_cron},
             #{<<"name">> => <<"dedup@1.0">>, <<"module">> => dev_dedup},
             #{<<"name">> => <<"delegated-compute@1.0">>, <<"module">> => dev_delegated_compute},
+            #{<<"name">> => <<"eth-client@1.0">>, <<"module">> => dev_eth_client},
             #{<<"name">> => <<"faff@1.0">>, <<"module">> => dev_faff},
             #{<<"name">> => <<"flat@1.0">>, <<"module">> => dev_codec_flat},
             #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
@@ -209,8 +210,7 @@ default_message() ->
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
-            #{<<"name">> => <<"eth-events@1.0">>, <<"module">> => dev_eth_events}
+            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
