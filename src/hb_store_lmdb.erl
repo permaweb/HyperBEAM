@@ -544,9 +544,6 @@ find_env(Opts) -> hb_store:find(Opts).
 
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
-    StoreRef = {store, ?MODULE, DataDir},
-    erlang:erase(StoreRef),
-    persistent_term:erase(StoreRef),
     StoreKey = {lmdb, ?MODULE, DataDir},
     close_environment(StoreKey, DataDir);
 stop(_InvalidStoreOpts) ->
@@ -630,7 +627,7 @@ reset(Opts) ->
             ok;
         DataDir ->
             % Stop the store and remove the database.
-            stop(Opts),
+            % stop(Opts),
             os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
             ok
     end.
