@@ -64,6 +64,10 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         case maps:get(<<"read-only">>, Opts, false) of
             true -> [no_lock];
             false -> []
+        end ++
+        case maps:get(<<"max-readers">>, Opts, false) of
+            false -> [];
+            MaxReaders -> [max_readers, hb_util:int(MaxReaders)]
         end,
     % Create the LMDB environment with specified size limit
     {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
