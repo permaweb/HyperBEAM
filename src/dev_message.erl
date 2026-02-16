@@ -702,7 +702,10 @@ set(Base, NewValuesMsg, Opts) ->
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, strict, Opts) of
+            ChangedBaseKeys = hb_maps:with(OverwrittenCommittedKeys, Base, Opts),
+            ChangedMergedKeys = hb_maps:with(OverwrittenCommittedKeys, Merged, Opts),
+            Matches = hb_message:match(ChangedMergedKeys, ChangedBaseKeys, strict, Opts),
+            case Matches of
                 true ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
@@ -732,22 +735,46 @@ do_deep_merge(BaseValues, NewValues, Opts) ->
             fun(Key, NewValue, {Acc, ToDeepMerge})
                     when is_map(NewValue)
                     andalso is_map(map_get(Key, Acc)) ->
-                {
-                    Acc#{
-                        Key =>
-                            hb_util:ok(
-                                hb_ao:resolve(
-                                    map_get(Key, Acc),
-                                    NewValue#{
-                                        <<"path">> => <<"set">>
-                                    },
-                                    Opts
-                                ),
-                                Opts
-                            )
-                    },
-                    ToDeepMerge
-                };
+                        BaseValue = map_get(Key, Acc),
+                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
+                        {
+                            Acc#{
+                                Key =>
+                                    hb_util:ok(
+                                        hb_ao:resolve(
+                                            BaseValue,
+                                            NewValueSet,
+                                            Opts
+                                        ),
+                                        Opts
+                                    )
+                            },
+                            ToDeepMerge
+                        };
+            (Key, NewValue, {Acc, ToDeepMerge})
+                    when is_map(NewValue) 
+                    andalso ?IS_LINK(map_get(Key, Acc)) ->
+                LoadedBaseValue = hb_cache:ensure_loaded(map_get(Key, Acc), Opts),
+                case is_map(LoadedBaseValue) of
+                    true ->
+                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
+                        {
+                            Acc#{
+                                Key =>
+                                    hb_util:ok(
+                                        hb_ao:resolve(
+                                            LoadedBaseValue,
+                                            NewValueSet,
+                                            Opts
+                                        ),
+                                        Opts
+                                    )
+                            },
+                            ToDeepMerge
+                        };
+                    false -> 
+                        {Acc, [Key | ToDeepMerge]}
+                end;
             (Key, _, {Acc, ToDeepMerge}) ->
                 {Acc, [Key | ToDeepMerge]}
             end,
