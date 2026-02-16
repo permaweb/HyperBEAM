@@ -986,6 +986,8 @@ get_status_class({error, {stream_error, {goaway, no_error, _Message}}}) ->
     <<"goaway">>;
 get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
     <<"closed_einval">>;
+get_status_class({error, {down, shutdown}}) ->
+    <<"down_shutdown">>;
 get_status_class(208) ->
 	<<"already_processed">>;
 get_status_class(404) ->
