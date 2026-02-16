@@ -107,11 +107,13 @@ write(IDs, Base, Opts) ->
                     ValuePath = value_path(Value, Opts),
                     lists:foreach(
                         fun(ID) ->
-                            hb_store:write(
-                                Store,
-                                address(Key, ValuePath, ID),
-                                <<"">>
-                            )
+                            Address = address(Key, ValuePath, ID),
+                            ?event(
+                                debug_match,
+                                {writing_reverse_index, {address, Address},
+                                Opts
+                            }),
+                            hb_store:write(Store, Address, <<"">>)
                         end,
                         IDs
                     )
