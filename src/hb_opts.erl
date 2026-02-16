@@ -447,7 +447,7 @@ default_message() ->
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             },
             %% General Arweave requests: race both chain nodes, take
