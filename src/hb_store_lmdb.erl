@@ -31,12 +31,7 @@
 
 %% Configuration constants with reasonable defaults
 -define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
--define(CONNECT_TIMEOUT, 6000).                 % Timeout for server communication
--define(DEFAULT_IDLE_FLUSH_TIME, 5).            % Idle server time before auto-flush
--define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
--define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
--define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -55,15 +50,26 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    EnvOpts =
+        [
+            {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+            no_mem_init,
+            no_sync
+        ] ++
+        case maps:get(<<"read-only">>, Opts, false) of
+            true -> [no_lock];
+            false -> []
+        end ++
+        case maps:get(<<"max-readers">>, Opts, false) of
+            false -> [];
+            MaxReaders -> [max_readers, hb_util:int(MaxReaders)]
+        end ++
+        case maps:get(<<"lock">>, Opts, true) of
+            true -> [];
+            false -> [no_lock]
+        end,
     % Create the LMDB environment with specified size limit
-    {ok, Env} =
-        elmdb:env_open(
-            DataDirPath,
-            [
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_sync
-            ]
-        ),
+    {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
     % Store both environment and DB instance in persistent_term for later cleanup
     StoreKey = {lmdb, ?MODULE, DataDir},
@@ -120,7 +126,9 @@ type(Opts, Key) ->
 %% @param Path Binary path to write
 %% @param Value Binary value to store
 %% @returns 'ok' immediately (write happens asynchronously)
--spec write(map(), binary() | list(), binary()) -> ok.
+-spec write(map(), binary() | list(), binary()) -> ok | not_found.
+write(#{ <<"read-only">> := true }, _PathParts, _Value) ->
+    not_found;
 write(Opts, PathParts, Value) when is_list(PathParts) ->
     % Convert to binary
     PathBin = to_path(PathParts),
@@ -476,7 +484,9 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
 %% @param Existing The key that already exists and contains the target value
 %% @param New The new key that should link to the existing key
 %% @returns Result of the write operation
--spec make_link(map(), binary() | list(), binary()) -> ok.
+-spec make_link(map(), binary() | list(), binary()) -> ok | not_found.
+make_link(#{ <<"read-only">> := true }, _Existing, _New) ->
+    not_found;
 make_link(Opts, Existing, New) when is_list(Existing) ->
     ExistingBin = to_path(Existing),
     make_link(Opts, ExistingBin, New);
