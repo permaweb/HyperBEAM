@@ -9,12 +9,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8734']
         labels:
           node: 'local'
-      - targets: ['green.hyperbeam']
-        labels:
-          node: 'green'
-      - targets: ['blue.hyperbeam']
-        labels:
-          node: 'blue'
 
   - job_name: 'node-exporter'
     static_configs:
