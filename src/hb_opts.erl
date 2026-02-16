@@ -503,6 +503,7 @@ default_message() ->
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
+        match_index => [?DEFAULT_PRIMARY_STORE],
         priv_store =>
             [
                 #{
