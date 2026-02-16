@@ -9,7 +9,7 @@
  {<<"ddskerl">>,{pkg,<<"ddskerl">>,<<"0.4.2">>},1},
  {<<"elmdb">>,
   {git,"https://github.com/twilson63/elmdb-rs.git",
-       {ref,"90c8857cd4ccff341fbe415b96bc5703d17ff7f0"}},
+       {ref,"5ac27143b44f4f19175fc0179b33c707300f1d44"}},
   0},
  {<<"graphql">>,{pkg,<<"graphql_erl">>,<<"0.17.1">>},0},
  {<<"gun">>,{pkg,<<"gun">>,<<"2.2.0">>},0},
@@ -17,7 +17,8 @@
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"6.0.3">>},0},
  {<<"prometheus_cowboy">>,{pkg,<<"prometheus_cowboy">>,<<"0.2.0">>},0},
  {<<"prometheus_httpd">>,{pkg,<<"prometheus_httpd">>,<<"2.1.15">>},0},
- {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},0}]}.
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},0},
+ {<<"ssl_cert">>,{pkg,<<"ssl_cert">>,<<"1.0.1">>},0}]}.
 [
 {pkg_hash,[
  {<<"accept">>, <<"CD6E34A2D7E28CA38B2D3CB233734CA0C221EFBC1F171F91FEC5F162CC2D18DA">>},
@@ -30,7 +31,8 @@
  {<<"prometheus">>, <<"95302236124C0F919163A7762BF7D2B171B919B6FF6148D26EB38A5D2DEF7B81">>},
  {<<"prometheus_cowboy">>, <<"526F75D9850A9125496F78BCEECCA0F237BC7B403C976D44508543AE5967DAD9">>},
  {<<"prometheus_httpd">>, <<"8F767D819A5D36275EAB9264AFF40D87279151646776069BF69FBDBBD562BD75">>},
- {<<"ranch">>, <<"25528F82BC8D7C6152C57666CA99EC716510FE0925CB188172F41CE93117B1B0">>}]},
+ {<<"ranch">>, <<"25528F82BC8D7C6152C57666CA99EC716510FE0925CB188172F41CE93117B1B0">>},
+ {<<"ssl_cert">>, <<"5E4133E7D524141836C045838C98E69964E188707DF12032CE5DA902BB40C9A3">>}]},
 {pkg_hash_ext,[
  {<<"accept">>, <<"CA69388943F5DAD2E7232A5478F16086E3C872F48E32B88B378E1885A59F5649">>},
  {<<"cowboy">>, <<"EA99769574550FE8A83225C752E8A62780A586770EF408816B82B6FE6D46476B">>},
@@ -42,5 +44,6 @@
  {<<"prometheus">>, <<"53554ECADAC0354066801D514D1A244DD026175E4EE3A9A30192B71D530C8268">>},
  {<<"prometheus_cowboy">>, <<"2C7EB12F4B970D91E3B47BAAD0F138F6ADC34E53EEB0AE18068FF0AFAB441B24">>},
  {<<"prometheus_httpd">>, <<"67736D000745184D5013C58A63E947821AB90CB9320BC2E6AE5D3061C6FFE039">>},
- {<<"ranch">>, <<"FA0B99A1780C80218A4197A59EA8D3BDAE32FBFF7E88527D7D8A4787EFF4F8E7">>}]}
+ {<<"ranch">>, <<"FA0B99A1780C80218A4197A59EA8D3BDAE32FBFF7E88527D7D8A4787EFF4F8E7">>},
+ {<<"ssl_cert">>, <<"2E37259313514B854EE0BC5B0696250883568CD1A5FC9EC338D78E27C521E65D">>}]}
 ].
