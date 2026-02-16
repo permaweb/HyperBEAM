@@ -31,12 +31,7 @@
 
 %% Configuration constants with reasonable defaults
 -define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
--define(CONNECT_TIMEOUT, 6000).                 % Timeout for server communication
--define(DEFAULT_IDLE_FLUSH_TIME, 5).            % Idle server time before auto-flush
--define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
--define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
--define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
