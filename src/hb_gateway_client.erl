@@ -105,7 +105,7 @@ data(ID, Opts) ->
     Req = #{
         <<"multirequest-accept-status">> => 200,
         <<"multirequest-responses">> => 1,
-        <<"path">> => <<"/raw/", ID/binary>>,
+        <<"path">> => <<"/arweave/raw/", ID/binary>>,
         <<"method">> => <<"GET">>
     },
     case hb_http:request(Req, Opts) of
