@@ -67,7 +67,9 @@ atom(Str) when is_binary(Str) ->
 atom(Str) when is_list(Str) ->
     list_to_existing_atom(Str);
 atom(Atom) when is_atom(Atom) ->
-    Atom.
+    Atom;
+atom(#{<<"ao-result">> := Key} = Result) ->
+    atom(maps:get(Key, Result)).
 
 %% @doc Coerce a value to a binary.
 bin(Value) when is_atom(Value) ->

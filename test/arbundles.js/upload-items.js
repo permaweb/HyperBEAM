@@ -4,7 +4,7 @@ const { ArweaveSigner, createData } = require("@dha-team/arbundles");
 
 // Configuration
 const BUNDLER_URL = "http://localhost:8734";
-const WALLET_PATH = "/Users/piechota/dev/arweave/repos/wallets/4OPKVB3dDtm1SP_8icx5ILil87Bh_JduGHzj8cuI36k.json";
+const WALLET_PATH = "../../hyperbeam-key.json";
 const CONCURRENT_UPLOADS = 100; // Number of parallel uploads
 
 async function performanceTest(itemCount, bytesPerItem = 0) {

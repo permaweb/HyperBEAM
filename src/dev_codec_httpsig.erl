@@ -230,7 +230,8 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
         normalize_for_encoding(Msg, UnauthedCommitment, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),    
     HMac = hb_util:human_id(crypto:mac(hmac, sha256, Key, SigBase)),
-    ?event(httpsig_commit,
+    ?event(
+        debug_commitments,
         {hmac_commit,
             {type, <<"hmac-sha256">>},
             {keyid, KeyID},
@@ -255,7 +256,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
                     }
             }
         },
-    ?event({hmac_generation_complete, Res}),
+    ?event(debug_commitments, {hmac_generation_complete, Res}),
     Res.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains

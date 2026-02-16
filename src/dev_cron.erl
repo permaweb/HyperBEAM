@@ -63,9 +63,10 @@ once_worker(Path, Req, Opts) ->
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
+                cron_error,
                 {cron_every_worker_error,
                     {path, Path},
-                    {error, Class, Reason, Stacktrace}
+                    {error, Class, Reason, {trace, Stacktrace}}
                 }
             ),
 			throw({error, Class, Reason, Stacktrace})
@@ -173,9 +174,13 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
         ?event({cron_every_worker_executed, {path, CronPath}})
     catch
         Class:Reason:Stack ->
-            ?event(cron_error, {cron_every_worker_error,
+            ?event(
+                cron_error,
+                {cron_every_worker_error,
                     {path, CronPath},
-                    {error, Class, Reason, Stack}})
+                    {error, Class, Reason, {trace, Stack}}
+                }
+            )
     end,
     timer:sleep(IntervalMillis),
     every_worker_loop(CronPath, Req, Opts, IntervalMillis).

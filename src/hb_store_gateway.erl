@@ -13,6 +13,7 @@ list(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
     end.
 
@@ -23,6 +24,7 @@ type(StoreOpts, Key) ->
     ?event(store_gateway, executing_type),
     case read(StoreOpts, Key) of
         not_found -> not_found;
+        failure -> failure;
         {ok, Data} ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
@@ -60,7 +62,7 @@ read(BaseStoreOpts, Key) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    case hb_gateway_client:read(ID, StoreOpts) of
+                    try hb_gateway_client:read(ID, StoreOpts) of
                         {error, _} ->
                             ?event({read_not_found, {key, ID}}),
                             not_found;
@@ -68,6 +70,16 @@ read(BaseStoreOpts, Key) ->
                             ?event({read_found, {key, ID}}),
                             hb_store_remote_node:maybe_cache(StoreOpts, Message),
                             extract_path_value(Message, Rest, StoreOpts)
+                    catch Class:Reason:Stacktrace ->
+                        ?event(
+                            gateway,
+                            {read_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {stacktrace, {trace, Stacktrace}}
+                            }
+                        ),
+                        failure
                     end;
                 {ok, CachedMessage} ->
                     extract_path_value(CachedMessage, Rest, StoreOpts)
@@ -80,7 +92,8 @@ read(BaseStoreOpts, Key) ->
 %% @doc Normalize the routes in the given `Opts`.
 opts(Opts) ->
     case hb_maps:find(<<"node">>, Opts) of
-        error -> Opts;
+        error ->
+            hb_opts:mimic_default_types(Opts, existing, Opts);
         {ok, Node} ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
@@ -285,23 +298,49 @@ custom_raw_routes(MockServer) ->
 %% produce the same result, despite an empty 'only' route list, then we would
 %% know that the module is not respecting the route list.
 specific_route_test() ->
-    hb_http_server:start_node(#{}),
+    LocalNode = hb_http_server:start_node(#{}),
+    %% Define the response we want
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    %% Define configuration, we use a valid gateway to obtain a valid response
+    %% and then mock the raw endpoint to our mockserver.
     Opts = #{
         store =>
             [
                 #{ <<"store-module">> => hb_store_gateway, 
-                   <<"routes">> => [],
-                   <<"only">> => local
+                   <<"routes">> => [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => httpc,
+                                    <<"protocol">> => http2
+                                }
+                            }
+                        ]
+                    },
+                    #{
+                        <<"template">> => <<"/raw">>,
+                        <<"node">> =>
+                            %% This prefix allow us to set a custom message that is a little bit 
+                            %% different than the original one (data field isn't provided).
+                            #{
+                                <<"prefix">> => <<LocalNode/binary, "~message@1.0/set&body=3#">>,
+                                <<"opts">> => #{
+                                    <<"http_client">> => gun,
+                                    <<"protocol">> => http2 
+                                }
+                            }
+                     }
+                   ]
                 }
             ]
     },
-    ?assertMatch(
-        not_found,
-        hb_cache:read(
-            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            Opts
-        )
-    ).
+    {ok, Response} = hb_cache:read(ID, Opts),
+    %% If the result returns <<"1984">>, it is using the default route, 
+    %% not the custom one we defined
+    ?assertEqual(<<"3">>, maps:get(<<"data">>, Response)).
 
 %% @doc Test that the default node config allows for data to be accessed.
 external_http_access_test() ->
@@ -435,6 +474,23 @@ verifiability_test() ->
         ),
     ?event({verifying, {structured, Structured}, {original, Message}}),
     ?assert(hb_message:verify(Structured)).
+
+%% @doc Reading an unsupported signature type transaction should fail
+failure_to_process_message_test() ->
+    hb_http_server:start_node(#{}),
+    ?assertEqual(failure,
+        hb_cache:read(
+            <<"j0_mJMXG2YO4oRcOtjYsNoUJbN2TaKLo4nTtbhKqnEU">>,
+            #{
+                store =>
+                    [
+                        #{
+                            <<"store-module">> => hb_store_gateway
+                        }
+                    ]
+            }
+        )
+    ).
 
 %% @doc Test that another HyperBEAM node offering the `~query@1.0' device can
 %% be used as a store.
