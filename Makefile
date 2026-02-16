@@ -55,11 +55,16 @@ $(WAMR_DIR):
 		--single-branch
 
 $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
-	sed -i '742a tbl_inst->is_table64 = 1;' ./_build/wamr/core/iwasm/aot/aot_runtime.c; \
+	@if ! grep -Fq 'tbl_inst->is_table64 = 1;' ./_build/wamr/core/iwasm/aot/aot_runtime.c; then \
+		awk 'NR == 742 { print; print "tbl_inst->is_table64 = 1;"; next } { print }' \
+			./_build/wamr/core/iwasm/aot/aot_runtime.c > ./_build/wamr/core/iwasm/aot/aot_runtime.c.tmp && \
+		mv ./_build/wamr/core/iwasm/aot/aot_runtime.c.tmp ./_build/wamr/core/iwasm/aot/aot_runtime.c; \
+	fi; \
 	cmake \
 		$(WAMR_FLAGS) \
 		-S $(WAMR_DIR) \
 		-B $(WAMR_DIR)/lib \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWAMR_BUILD_TARGET=$(WAMR_BUILD_TARGET) \
 		-DWAMR_BUILD_PLATFORM=$(WAMR_BUILD_PLATFORM) \
 		-DWAMR_BUILD_MEMORY64=1 \
