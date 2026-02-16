@@ -440,6 +440,16 @@ default_message() ->
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
+            %% Raw data requests via arweave.net gateway. TODO: Update later.
+            #{
+                <<"template">> => <<"^/arweave/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
+            },
             %% General Arweave requests: race both chain nodes, take
             %% the first 200.
             #{
@@ -460,15 +470,6 @@ default_message() ->
                 <<"parallel">> => true,
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200
-            },
-            %% Raw data requests via arweave.net gateway. TODO: Update later.
-            #{
-                <<"template">> => <<"/raw">>,
-                <<"node">> =>
-                    #{
-                        <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
-                    }
             }
         ],
         store =>
