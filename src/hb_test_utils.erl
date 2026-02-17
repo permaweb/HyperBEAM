@@ -10,12 +10,14 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% The default store module to use for testing.
+-define(DEFAULT_STORE_MODULE, hb_store_ets).
 %%% The number of seconds to run a benchmark for when no time is specified.
 -define(DEFAULT_BENCHMARK_TIME, 1).
 
 %% @doc Generate a new, unique test store as an isolated context for an execution.
 test_store() ->
-    test_store(maps:get(<<"store-module">>, hd(hb_opts:get(store)))).
+    test_store(?DEFAULT_STORE_MODULE).
 test_store(Mod) ->
     test_store(Mod, <<"default">>).
 test_store(Mod, Tag) ->

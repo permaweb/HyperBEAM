@@ -492,9 +492,6 @@ do_test_restore() ->
     % Execute the first computation, then the second as a disconnected process.
     Opts = #{ process_cache_frequency => 1, process_async_cache => false },
     init(),
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ResetRes = hb_store:reset(Store),
-    ?event({reset_store, {result, ResetRes}, {store, Store}}),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),
     schedule_aos_call(Base, <<"X = 1337">>, Opts),

@@ -178,7 +178,7 @@ match(UserSpec, _Base, Req, Opts) ->
 
 %% @doc Return test options with a test store.
 test_setup() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb),
+    Store = hb_test_utils:test_store(),
     Opts = #{ store => Store, priv_wallet => hb:wallet() },
     % Write a simple message.
     hb_cache:write(

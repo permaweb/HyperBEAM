@@ -70,7 +70,7 @@ simple_blocks_query_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node),
@@ -115,7 +115,7 @@ block_by_height_query_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node),
@@ -166,7 +166,7 @@ simple_ans104_query_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -233,7 +233,7 @@ transactions_query_tags_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -296,7 +296,7 @@ transactions_query_owners_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -358,7 +358,7 @@ transactions_query_recipients_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     Alice = ar_wallet:new(),
@@ -423,7 +423,7 @@ transactions_query_ids_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -485,7 +485,7 @@ transactions_query_combined_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -553,7 +553,7 @@ transaction_query_by_id_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -603,7 +603,7 @@ transaction_query_full_test() ->
     Opts =
         #{
             priv_wallet => SenderKey = hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     Alice = ar_wallet:new(),
@@ -680,7 +680,7 @@ transaction_query_not_found_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Res =
         dev_query_graphql:test_query(
@@ -716,7 +716,7 @@ transaction_query_with_anchor_test() ->
     Opts =
         #{
             priv_wallet => hb:wallet(),
-            store => [hb_test_utils:test_store(hb_store_lmdb)]
+            store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, ID} =
