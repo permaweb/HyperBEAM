@@ -26,7 +26,7 @@ write_test_message(Opts) ->
     {ok, Msg}.
 
 %% @doc Populate the cache with three test blocks.
-get_test_blocks(Node) ->
+get_test_blocks(Node, Opts) ->
     InitialHeight = 1745749,
     FinalHeight = 1745750,
     lists:foreach(
@@ -36,7 +36,7 @@ get_test_blocks(Node) ->
                     <<"GET">>,
                     Node,
                     <<"/~arweave@2.9-pre/block=", (hb_util:bin(Height))/binary>>,
-                    #{}
+                    Opts
                 )
         end,
         lists:seq(InitialHeight, FinalHeight)
@@ -73,7 +73,7 @@ simple_blocks_query_test() ->
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
-    get_test_blocks(Node),
+    get_test_blocks(Node, Opts),
     Query =
         <<"""
             query {
@@ -118,7 +118,7 @@ block_by_height_query_test() ->
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
-    get_test_blocks(Node),
+    get_test_blocks(Node, Opts),
     Query =
         <<"""
             query {
