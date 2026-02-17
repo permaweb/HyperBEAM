@@ -1289,11 +1289,12 @@ parallel_request_test() ->
             },
             #{
                 % Routes for raw data requests to use a remote gateway.
-                <<"template">> => <<"/raw">>,
+                <<"template">> => <<"/arweave/raw">>,
                 <<"node">> =>
                     #{
-                        <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             }
     ],
