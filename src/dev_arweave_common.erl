@@ -4,6 +4,7 @@
 -export([is_signed/1, type/1, tagfind/3, find_key/3]).
 -export([reset_ids/1, generate_id/2, normalize/1, serialize_data/1]).
 -export([convert_bundle_list_to_map/1, convert_bundle_map_to_list/1]).
+-export([serialize_sig_type/1, deserialize_sig_type/1]).
 -export([log_conversion/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -197,6 +198,19 @@ normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_root = ar_tx:data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
+
+serialize_sig_type({rsa, 65537}) -> <<"rsa-pss-sha256">>;
+serialize_sig_type({ecdsa, secp256k1}) -> <<"ecdsa-secp256k1-sha256">>;
+serialize_sig_type(Type) ->
+    ?event(error, {signature_type, {type, Type}}),
+    throw({invalid_signature_type, Type}).
+
+deserialize_sig_type(<<"rsa-pss-sha256">>) -> {rsa, 65537};
+deserialize_sig_type(<<"ecdsa-secp256k1-sha256">>) -> {ecdsa, secp256k1};
+deserialize_sig_type(<<"unsigned-sha256">>) -> {rsa, 65537};
+deserialize_sig_type(Type) ->
+    ?event(error, {signature_type, {type, Type}}),
+    throw({invalid_signature_type, Type}).
 
 %% @doc Turn off debug_print_verify when logging within the to/from functions
 %% to avoid infinite recursion.

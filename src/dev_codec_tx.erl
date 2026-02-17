@@ -231,9 +231,9 @@ enforce_valid_tx(TX) ->
         hb_util:check_value(TX#tx.denomination, [0]),
         {invalid_field, denomination, TX#tx.denomination}
     ),
-    % Arweave L1 #tx only supports RSA signatures for now
+    % Arweave L1 #tx supports RSA and ECDSA signatures
     hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.signature_type, [?RSA_KEY_TYPE]),
+        hb_util:check_value(TX#tx.signature_type, [?RSA_KEY_TYPE, ?ECDSA_KEY_TYPE]),
         {invalid_field, signature_type, TX#tx.signature_type}
     ),
     hb_util:ok_or_throw(TX,
@@ -295,7 +295,7 @@ enforce_valid_tx_test() ->
         {signature_invalid_type, BaseTX#tx{signature = "hello"}, {invalid_field, signature, "hello"}},
         {reward_not_integer, BaseTX#tx{reward = 1.0}, {invalid_field, reward, 1.0}},
         {denomination_not_zero, BaseTX#tx{denomination = 1}, {invalid_field, denomination, 1}},
-        {signature_type_not_rsa, BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {invalid_field, signature_type, ?ECDSA_KEY_TYPE}},
+        %% ECDSA signature type is now supported, removed signature_type_not_rsa test
         {tags_not_list, BaseTX#tx{tags = #{}}, {invalid_field, tags, #{}}},
         {tag_name_not_binary, BaseTX#tx{tags = [{not_binary, <<"val">>}]}, {invalid_field, tag_name, not_binary}},
         {tag_name_too_long, BaseTX#tx{tags = [{TooLongTagName, <<"val">>}]}, {invalid_field, tag_name, TooLongTagName}},
@@ -1177,6 +1177,18 @@ real_ecdsa_single_item_bundle_tx_test_disabled() ->
     do_real_tx_verify(
         <<"5CHMPU1oDCiqwrjGG5PEh7mht9VdVFnnF9yGfjPehno">>,
         []
+    ).
+
+real_ecdsa_no_data_tx_test() ->
+    do_real_tx_verify(
+        <<"p42_hnfcQd2ESry-WY8x9RcMbaw6piapVM1CpErzf8Y">>,
+        [<<"p42_hnfcQd2ESry-WY8x9RcMbaw6piapVM1CpErzf8Y">>]
+    ).
+
+real_ecdsa_data_tx_test() ->
+    do_real_tx_verify(
+        <<"LomQXlcWSeJdhg26wXQwiE_spvAfEq4nULkUMV_1Fqo">>,
+        [<<"LomQXlcWSeJdhg26wXQwiE_spvAfEq4nULkUMV_1Fqo">>]
     ).
 
 real_2048_bit_rsa_tx_test() ->
