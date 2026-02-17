@@ -18,7 +18,7 @@
 %%% AO-Core API functions:
 -export([info/0]).
 %%% Local scheduling functions:
--export([schedule/3, router/4, location/3]).
+-export([schedule/3, router/4, location/3, import/3]).
 %%% CU-flow functions:
 -export([slot/3, status/3, next/3]).
 -export([start/0, checkpoint/1]).
@@ -52,6 +52,7 @@ info() ->
                 <<"status">>,
                 <<"next">>,
                 <<"schedule">>,
+                <<"import">>,
                 <<"slot">>,
                 <<"init">>,
                 <<"checkpoint">>
@@ -714,7 +715,9 @@ find_server(ProcID, Base, ToSched, Opts) ->
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
             ?event({no_hint_in_proc_id, ProcID}),
-            case dev_scheduler_registry:find(ProcID, false, Opts) of
+            RegistryRes = dev_scheduler_registry:find(ProcID, false, Opts),
+            ?event(reg, {registry_res, RegistryRes}),
+            case RegistryRes of
                 PID when is_pid(PID) ->
                     ?event({found_pid_in_local_registry, PID}),
                     {local, PID};
@@ -737,9 +740,9 @@ find_server(ProcID, Base, ToSched, Opts) ->
                         ),
                     ?event({sched_loc, SchedLoc}),
                     case SchedLoc of
-                        _ ->
-                            {error, <<"No scheduler information provided.">>};
                         false ->
+                            {error, <<"No scheduler information provided.">>};
+                        _ ->
                             ?event(
                                 {confirming_if_scheduler_is_local,
                                     {addr, SchedLoc}
@@ -759,6 +762,42 @@ find_server(ProcID, Base, ToSched, Opts) ->
                             end
                     end
             end
+    end.
+
+import(RawBase, Req, Opts) ->
+    PassedProcID = hb_maps:find(<<"process-id">>, Req, Opts),
+    Base =
+        case PassedProcID of
+            {ok, ProcessId} ->
+                {ok, CacheProcMsg} = hb_cache:read(ProcessId, Opts),
+                CacheProcMsg;
+            error ->
+                RawBase
+        end,
+    ProcID = dev_process_lib:process_id(Base, #{}, Opts),
+    ?event(import, {import, {base, Base}, {req, Req}}),
+    ?event(import, {importing_assignments_for, {process_id, ProcID}}),
+
+    % Fetch all assignments from GraphQL
+    case hb_gateway_client:assignments(ProcID, Opts) of
+        {ok, Assignments} ->
+            % Find / start scheduler server if necessary
+            dev_scheduler_registry:find(ProcID, Base, Opts),
+            ?event(import, {fetched_assignments, {count, length(Assignments)}}),
+            % Write each assignment to cache
+            lists:foreach(
+                fun(Assignment) ->
+                    ?event(import, {writing_assignment, {id, hb_message:id(Assignment, signed, Opts)}}),
+                    dev_scheduler_cache:write(Assignment, Opts)
+                end,
+                Assignments
+            ),
+            ?event(import, {import_complete, {cached_count, length(Assignments)}}),
+            {ok, Assignments};
+        {error, Reason} ->
+            ?event(import, {import_failed, {reason, Reason}}),
+            % Fall back to the normal get_schedule behavior
+            {error, Reason}
     end.
 
 %% @doc Find the process message for a given process ID and base message.
@@ -1049,11 +1088,22 @@ get_schedule(Base, Req, Opts) ->
     case find_server(ProcID, Base, Opts) of
         {local, _PID} ->
             generate_local_schedule(Format, ProcID, From, To, Opts);
-        {redirect, Redirect} ->
-            ?event(j, {redirect_received, {redirect, Redirect}}),
+        {redirect, RawRedirect} ->
+            ?event(import, {raw_redirect_received, {raw_redirect, RawRedirect}}),
+            Redirect = hb_ao:set(RawRedirect, #{ <<"location">> => <<"https://schedule2.forward.computer">> }, Opts),
+            ?event(import, {redirect_received, {redirect, Redirect}}),
+            
             Ret = case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
-                    case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
+                    RemoteRes = 
+                        try 
+                            get_remote_schedule(ProcID, From, To, Redirect, Opts)
+                        catch error:Reason ->
+                            ?event(import, {remote_schedule_error, {error, Reason}}),
+                            {error, Reason}
+                        end,
+                    ?event(import, {remote_res, RemoteRes}),
+                    case RemoteRes of
                         {ok, Res} ->
                             case uri_string:percent_decode(Format) of
                                 <<"application/aos-2">> ->
@@ -1069,7 +1119,8 @@ get_schedule(Base, Req, Opts) ->
                                     {ok, Res}
                             end;
                         {error, Res} ->
-                            {error, Res}
+                            ?event(j, {get_remote_schedule_error, {error, Res}}),
+                            get_graphql_schedule(ProcID, From, To, Format, Opts)
                     end;
                 false ->
                     {ok, Redirect}
@@ -1077,34 +1128,35 @@ get_schedule(Base, Req, Opts) ->
             ?event(j, {get_schedule_remote_res, {res, Ret}, {format, Format}}),
             Ret;
         _ -> 
-            Ret = 
-                case get_graphql_schedule(ProcID, From, To, Opts) of 
-                    {ok, Res} -> 
-                        case uri_string:percent_decode(Format) of
-                            <<"application/aos-2">> ->
-                                dev_scheduler_formats:assignments_to_aos2(
-                                    ProcID,
-                                    Res,
-                                    undefined,
-                                    Opts
-                                );
-                            _ ->
-                                dev_scheduler_formats:assignments_to_bundle(
-                                    ProcID,
-                                    Res,
-                                    undefined,
-                                    Opts
-                                )
-                        end;
-                    {error, Res} ->
-                        {error, Res}
-                end,
+            Ret = get_graphql_schedule(ProcID, From, To, Format, Opts),
             ?event(j, {get_schedule_graphql_res, {res, Ret}, {format, Format}}),
             Ret
     end.
 
-get_graphql_schedule(RawProcID, From, To, Opts) ->
+get_graphql_schedule(RawProcID, From, To, Format, Opts) ->
     ProcID = without_hint(RawProcID),
+    case do_get_graphql_schedule(ProcID, From, To, Opts) of 
+        {ok, Res} -> 
+            case uri_string:percent_decode(Format) of
+                <<"application/aos-2">> ->
+                    dev_scheduler_formats:assignments_to_aos2(
+                        ProcID,
+                        Res,
+                        undefined,
+                        Opts
+                    );
+                _ ->
+                    dev_scheduler_formats:assignments_to_bundle(
+                        ProcID,
+                        Res,
+                        false,
+                        Opts
+                    )
+            end;
+        {error, Res} ->
+            {error, Res}
+    end.
+do_get_graphql_schedule(ProcID, From, To, Opts) ->
     ?event(j, {get_graphql_schedule_start, {proc_id, ProcID}}),
     hb_gateway_client:assignments(ProcID, Opts).
 

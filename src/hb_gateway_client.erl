@@ -163,50 +163,62 @@ scheduler_location(Address, Opts) ->
             end
     end.
 assignments(ProcessId, Opts) ->
+        fetch_all_assignments(ProcessId, undefined, [], Opts).
+
+%% @doc Helper function to recursively fetch all assignment pages
+fetch_all_assignments(ProcessId, Cursor, AccResults, Opts) ->
         Query =
-            <<"query($Processes: [String!]!) { ",
+            <<"query($Processes: [String!]!, $After: String) { ",
                 "transactions(",
                     "tags: ["
-                "{ name: \"type\" values: [\"Assignment\"] }, " 
+                "{ name: \"type\" values: [\"Assignment\"] }, "
                 "{ name: \"variant\" values: [\"ao.N.1\"] }, ",
                 "{ name: \"process\" values: $Processes } ",
                 "], "
-                "sort: HEIGHT_ASC, "
+                % "sort: HEIGHT_ASC, "
+                "first: 100, "
+                "after: $After "
                 "){ ",
-                    "count "
+                    "pageInfo { hasNextPage } "
                     "edges { ",
                         (item_spec())/binary ,
                     " } ",
                 "} ",
             "}">>,
-        Variables = #{ <<"Processes">> => [ProcessId] },
+        Variables = case Cursor of
+            undefined -> #{ <<"Processes">> => [ProcessId] };
+            _ -> #{ <<"Processes">> => [ProcessId], <<"After">> => Cursor }
+        end,
         GqlRes = query(Query, Variables, Opts),
-        case GqlRes of 
+        case GqlRes of
             {error, Reason} ->
                 ?event({process_assignments, {query, Query}, {error, Reason}}),
                 {error, Reason};
             {ok, GqlMsg} ->
                 ?event(j, {scheduler_location_req, {query, Query}, {response, GqlMsg}}),
-                case hb_ao:get(<<"data/transactions/count">>, GqlMsg, Opts) of
-                    0 ->
-                        ?event(scheduler_location,
-                            {graphql_scheduler_location_not_found,
-                                {process_id, ProcessId}
-                            }
-                        ),
+                Edges =
+                    hb_ao:get(
+                        <<"data/transactions/edges">>,
+                        GqlMsg,
+                        [],
+                        Opts
+                    ),
+                Count = length(Edges),
+                case Count of
+                    0 when AccResults =:= [] ->
                         {error, not_found};
                     _ ->
-                        Edges = 
-                            hb_ao:get(
-                                <<"data/transactions/edges">>,
-                                GqlMsg,
-                                [],
-                                Opts
-                            ),
-                        ?event(j, {edges, Edges}),
-                        % EdgesMap = hb_maps:from_list(Edges),
-                        % ?event(j, {edges_map, EdgesMap}),
-                        Results = 
+
+                        ?event(page, {edges, Edges}),
+                        RawTags = [hb_ao:get(<<"node/tags">>, Edge, Opts) || Edge <- Edges],
+                        ?event(page, {raw_tags, RawTags}),
+                        Slots = [
+                            hb_ao:get(<<"value">>, hd(lists:filter(fun(Tag) -> hb_ao:get(<<"name">>, Tag, Opts) == <<"slot">> end, Tag)), Opts)
+                            ||
+                            Tag <- RawTags
+                        ],
+                        ?event(page, {slots, {explicit, Slots}}),
+                        Results =
                             lists:map(
                                 fun(Edge) ->
                                     ?event(j, {edge_start, Edge}),
@@ -216,14 +228,27 @@ assignments(ProcessId, Opts) ->
                                 end,
                                 Edges
                             ),
-                        ?event(j,
-                            {found_via_graphql,
-                                {process_id, ProcessId},
-                                {results, Results}
-                            },
-                            Opts
-                        ),
-                        {ok, hb_cache:ensure_all_loaded(Results, Opts)}
+                        AllResults = AccResults ++ Results,
+                        % Check if there are more pages
+                        HasNextPage = hb_ao:get(<<"data/transactions/pageInfo/hasNextPage">>, GqlMsg, false, Opts),
+                        ?event(page, {do_next, {has_next_page, HasNextPage}}),
+                        case HasNextPage of
+                            true ->
+                                % Get the cursor from the last edge
+                                LastEdge = lists:last(Edges),
+                                NextCursor = hb_ao:get(<<"cursor">>, LastEdge, Opts),
+                                ?event(page, {fetching_next_page, {cursor, NextCursor}}),
+                                fetch_all_assignments(ProcessId, NextCursor, AllResults, Opts);
+                            _ ->
+                                ?event(j,
+                                    {found_via_graphql,
+                                        {process_id, ProcessId},
+                                        {total_results, length(AllResults)}
+                                    },
+                                    Opts
+                                ),
+                                {ok, hb_cache:ensure_all_loaded(AllResults, Opts)}
+                        end
                 end
         end.
         
