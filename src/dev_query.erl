@@ -141,37 +141,73 @@ match(UserSpec, _Base, Req, Opts) ->
     ReturnType = hb_maps:get(<<"return">>, Req, <<"paths">>, Opts),
     ?event({matching, {spec, FilteredSpec}, {return, ReturnType}}),
     case hb_cache:match(FilteredSpec, Opts) of
-        {ok, Matches} when ReturnType == <<"count">> ->
-            ?event({matched, {paths, Matches}}),
-            {ok, length(Matches)};
-        {ok, Matches} when ReturnType == <<"paths">> ->
-            ?event({matched, {paths, Matches}}),
-            {ok, Matches};
-        {ok, Matches} when ReturnType == <<"messages">> ->
-            ?event({matched, {paths, Matches}}),
-            Messages =
-                lists:map(
-                    fun(Path) ->
-                        hb_util:ok(hb_cache:read(Path, Opts))
-                    end,
-                    Matches
-                ),
-            ?event({matched, {messages, Messages}}),
-            {ok, Messages};
-        {ok, Matches} when ReturnType == <<"first-path">> ->
-            ?event({matched, {paths, Matches}}),
-            {ok, hd(Matches)};
-        {ok, Matches} when ReturnType == <<"first">>
-                orelse ReturnType == <<"first-message">> ->
-            ?event({matched, {paths, Matches}}),
-            {ok, hb_util:ok(hb_cache:read(hd(Matches), Opts))};
-        {ok, Matches} when ReturnType == <<"boolean">> ->
-            ?event({matched, {paths, Matches}}),
-            {ok, length(Matches) > 0};
+        {ok, RawMatches} ->
+            Matches = dedupe_query_matches(RawMatches, Opts),
+            case ReturnType of
+                <<"count">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, length(Matches)};
+                <<"paths">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, Matches};
+                <<"messages">> ->
+                    ?event({matched, {paths, Matches}}),
+                    Messages =
+                        lists:map(
+                            fun(Path) ->
+                                hb_util:ok(hb_cache:read(Path, Opts))
+                            end,
+                            Matches
+                        ),
+                    ?event({matched, {messages, Messages}}),
+                    {ok, Messages};
+                <<"first-path">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, hd(Matches)};
+                <<"first">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, hb_util:ok(hb_cache:read(hd(Matches), Opts))};
+                <<"first-message">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, hb_util:ok(hb_cache:read(hd(Matches), Opts))};
+                <<"boolean">> ->
+                    ?event({matched, {paths, Matches}}),
+                    {ok, length(Matches) > 0}
+            end;
         not_found when ReturnType == <<"boolean">> ->
             {ok, false};
         not_found ->
             {error, not_found}
+    end.
+
+dedupe_query_matches(Matches, Opts) ->
+    {_, DedupedRev} =
+        lists:foldl(
+            fun(Path, {Seen, Acc}) ->
+                Key = query_match_key(Path, Opts),
+                case maps:is_key(Key, Seen) of
+                    true ->
+                        {Seen, Acc};
+                    false ->
+                        {maps:put(Key, true, Seen), [Path | Acc]}
+                end
+            end,
+            {#{}, []},
+            Matches
+        ),
+    lists:reverse(DedupedRev).
+
+query_match_key(Path, Opts) ->
+    case hb_cache:read(Path, Opts) of
+        {ok, Msg} when is_map(Msg) ->
+            CanonicalMsg =
+                hb_message:uncommitted_deep(
+                    hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts)),
+                    Opts
+                ),
+            hb_message:id(CanonicalMsg, none, Opts#{ linkify_mode => discard });
+        _ ->
+            Path
     end.
 
 %%% Tests
