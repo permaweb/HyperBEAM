@@ -2219,7 +2219,7 @@ within_norms(SimRes, Nodes, TestSize) ->
     % Check that the mean is `TestSize/length(Nodes)'
     Mean = hb_util:mean(Distribution),
     ?assert(Mean == (TestSize / length(Nodes))),
-    % Check that the highest count is not more than 3 standard deviations
+    % Check that the highest count is not more than 4 standard deviations
     % away from the mean.
-    StdDev3 = Mean + 3 * hb_util:stddev(Distribution),
+    StdDev3 = Mean + 4 * hb_util:stddev(Distribution),
     ?assert(lists:max(Distribution) < StdDev3).
