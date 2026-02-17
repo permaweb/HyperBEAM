@@ -235,7 +235,7 @@ avoid_double_read_test() ->
     ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
     Data = <<"123">>,
     DefaultResponse = {200, Data},
-    Endpoints = [{<<"/raw/", ID/binary>>, raw, DefaultResponse}],
+    Endpoints = [{<<"/arweave/raw/", ID/binary>>, raw, DefaultResponse}],
     %% Start MockServer
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     %% Setup local store
@@ -249,8 +249,7 @@ avoid_double_read_test() ->
             [
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local],
-                    %% To be replaced with `<<"routes">>` after PR 563
-                    routes => custom_raw_routes(MockServer)
+                    <<"routes">> => custom_raw_routes(MockServer)
                 }
             ]
     },
