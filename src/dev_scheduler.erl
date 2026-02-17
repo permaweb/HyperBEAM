@@ -544,9 +544,9 @@ find_server(ProcID, Base, ToSched, Opts) ->
                         ),
                     ?event({sched_loc, SchedLoc}),
                     case SchedLoc of
-                        _ ->
-                            {error, <<"No scheduler information provided.">>};
                         false ->
+                            {error, <<"No scheduler information provided.">>};
+                        _ ->
                             ?event(
                                 {confirming_if_scheduler_is_local,
                                     {addr, SchedLoc}
@@ -870,8 +870,11 @@ get_schedule(Base, Req, Opts) ->
     case find_server(ProcID, Base, Opts) of
         {local, _PID} ->
             generate_local_schedule(Format, ProcID, From, To, Opts);
-        {redirect, Redirect} ->
-            ?event(j, {redirect_received, {redirect, Redirect}}),
+        {redirect, RawRedirect} ->
+            ?event(import, {raw_redirect_received, {raw_redirect, RawRedirect}}),
+            Redirect = hb_ao:set(RawRedirect, #{ <<"location">> => <<"https://schedule2.forward.computer">> }, Opts),
+            ?event(import, {redirect_received, {redirect, Redirect}}),
+            
             Ret = case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
                     RemoteRes = 
