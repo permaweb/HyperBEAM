@@ -5,7 +5,7 @@
 -include("include/hb.hrl").
 -export([start_link/1, response_status_to_atom/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
--export([ok/0]).
+-export([ok/0, setup_conn/1]).
 
 -record(state, {
 	opts = #{}
@@ -21,13 +21,19 @@
 -define(CONN_STATUS_ETS, hb_http_client_conn_status).
 -define(CONN_COUNTER_ETS, hb_http_client_conn_counter).
 
-%% Connection pool sizes per type (easily configurable)
--define(READ_POOL_SIZE, 30).
--define(WRITE_POOL_SIZE, 10).
-
+-define(CONN_TERM, connection_pool_size).
+-define(DEFAULT_CONN_POOL_READ_SIZE, 10).
+-define(DEFAULT_CONN_POOL_WRITE_SIZE, 10).
 %%% ==================================================================
 %%% Public interface.
 %%% ==================================================================
+
+setup_conn(Opts) ->
+    ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
+    ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    erlang:display({conn, ConnPoolReadSize, ConnPoolWriteSize}),
+    persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
+
 
 ok() ->
     gen_server:call(?MODULE, ok).
@@ -226,8 +232,13 @@ get_connection_type(head) -> read;
 get_connection_type(_) -> write.
 
 %% @doc Get the pool size for a connection type.
-get_pool_size(read) -> ?READ_POOL_SIZE;
-get_pool_size(write) -> ?WRITE_POOL_SIZE.
+get_pool_size(read) ->
+    {ReadSize, _} = persistent_term:get(?CONN_TERM, {?DEFAULT_CONN_POOL_READ_SIZE, ?DEFAULT_CONN_POOL_WRITE_SIZE}),
+    ReadSize;
+get_pool_size(write) -> 
+    {_, WriteSize} = persistent_term:get(?CONN_TERM, {?DEFAULT_CONN_POOL_READ_SIZE, ?DEFAULT_CONN_POOL_WRITE_SIZE}),
+    WriteSize.
+
 
 %% @doc Get the next connection index using round-robin selection.
 %% Uses ets:update_counter for atomic increment.

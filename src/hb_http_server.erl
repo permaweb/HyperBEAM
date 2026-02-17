@@ -36,6 +36,7 @@ start() ->
             hb_opts:default_message_with_env(),
             Loaded
         ),
+    hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
