@@ -1617,20 +1617,24 @@ http_init(Opts) ->
     {Node, ExtendedOpts}.
 
 http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
-    Base = hb_message:commit(#{
-        <<"path">> => <<"/~scheduler@1.0/schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> =>
-            hb_message:commit(
-                Msg#{
-                    <<"target">> =>
-                        hb_util:human_id(hb_message:id(ProcessMsg, all)),
-                    <<"type">> => <<"Message">>
-                },
-                Opts
-            )
-    }, Opts),
-    hb_http:post(Node, Base, #{}).
+    Base =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        Msg#{
+                            <<"target">> =>
+                                hb_util:human_id(hb_message:id(ProcessMsg, all, Opts)),
+                            <<"type">> => <<"Message">>
+                        },
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    hb_http:post(Node, Base, Opts).
 
 http_get_slot(N, PMsg) ->
     ID = hb_message:id(PMsg, all),
