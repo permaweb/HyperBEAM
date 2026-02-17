@@ -195,7 +195,7 @@ tx_error_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_max_items => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -226,7 +226,7 @@ unsigned_dataitem_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             debug_print => false
         }),
         Item = #tx{
@@ -259,7 +259,7 @@ idle_test() ->
         Node = hb_http_server:start_node(NodeOpts#{
             bundler_max_idle_time => 2000,
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         }),
         %% Upload 1 data items across 2 chunks.
         Item1 = new_data_item(1, floor(1.5 * ?DATA_CHUNK_SIZE)),
@@ -303,7 +303,7 @@ dispatch_blocking_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_max_items => 3
         }),
         %% Upload 4 data items and time each post
@@ -344,7 +344,7 @@ dispatch_blocking_test() ->
     end.
 
 recover_unbundled_items_test() ->
-    Opts = #{store => hb_test_utils:test_store(hb_store_lmdb)},
+    Opts = #{store => hb_test_utils:test_store()},
     % Create and cache some items
     Item1 = hb_message:convert(new_data_item(1, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
     Item2 = hb_message:convert(new_data_item(2, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
@@ -378,7 +378,7 @@ recover_respects_max_items_test() ->
         MaxItems = 3,
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_max_items => MaxItems
         },
         % Create and cache 10 unbundled items
@@ -426,7 +426,7 @@ test_bundle(Opts) ->
         NodeOpts2 = maps:merge(NodeOpts, Opts),
         Node = hb_http_server:start_node(NodeOpts2#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         }),
         %% Upload 3 data items across 4 chunks.
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -455,7 +455,7 @@ test_api_error(Responses) ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_max_items => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),

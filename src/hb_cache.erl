@@ -1084,5 +1084,5 @@ test_device_map_cannot_be_written_test() ->
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb),
+    Store = hb_test_utils:test_store(),
     test_match_typed_message(Store).

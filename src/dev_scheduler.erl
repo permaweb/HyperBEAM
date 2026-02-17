@@ -1607,8 +1607,8 @@ http_init(Opts) ->
 		priv_wallet => Wallet,
 		store => [
 			#{
-                <<"store-module">> => hb_store_lmdb,
-                <<"name">> => <<"cache-mainnet/lmdb">>
+                <<"store-module">> => hb_store_ets,
+                <<"name">> => <<"cache-mainnet/ets">>
             },
 			#{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
 		]

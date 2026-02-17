@@ -269,7 +269,7 @@ default_query(Parts) ->
 %%% Tests
 %% @doc Run node for testing
 run_test_node() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb),
+    Store = hb_test_utils:test_store(),
     Opts = #{ store => Store, priv_wallet => hb:wallet() },
     Node = hb_http_server:start_node(Opts),
     {Node ,Opts}. 
