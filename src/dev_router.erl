@@ -1289,7 +1289,7 @@ dynamic_routing_by_performance_test_() ->
 dynamic_routing_by_performance() ->
     % Setup test parameters
     TestNodes = 4,
-    BenchRoutes = 16,
+    BenchRoutes = 64,
     TestPath = <<"/worker">>,
     % Start the main node for the test, loading the `dynamic-router' script and
     % the http_monitor to generate performance messages.
@@ -1406,6 +1406,7 @@ dynamic_routing_by_performance() ->
         end,
         lists:seq(1, BenchRoutes)
     ),
+    timer:sleep(300),
     % Call `recalculate' on the router process and get the resulting weight
     % table.
     hb_http:post(
