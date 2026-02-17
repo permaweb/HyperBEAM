@@ -361,17 +361,20 @@ aos_compute_test_() ->
 aos_browsable_state_test_() ->
     {timeout, 30, fun() ->
         init(),
-        Base = aos_process(),
-        schedule_aos_call(Base,
+        Opts = #{ process_async_cache => false },
+        Base = aos_process(Opts),
+        schedule_aos_call(
+            Base,
             <<"table.insert(ao.outbox.Messages, { target = ao.id, ",
                 "action = \"State\", ",
-                "data = { deep = 4, bool = true } })">>
+                "data = { deep = 4, bool = true } })">>,
+            Opts
         ),
         Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Res} =
             hb_ao:resolve_many(
                 [Base, Req, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
-                #{ cache_control => <<"always">> }
+                Opts#{ cache_control => <<"always">> }
             ),
         ID = hb_message:id(Base),
         ?event({computed_message, {id, {explicit, ID}}}),
@@ -522,17 +525,17 @@ now_results_test_() ->
     end}.
 
 prior_results_accessible_test_() ->
-	{timeout, 30, fun() ->
-		init(),
-        Opts = #{
-            process_async_cache => false
-        },
-		Base = aos_process(),
-		schedule_aos_call(Base, <<"return 1+1">>),
-		schedule_aos_call(Base, <<"return 2+2">>),
-		?assertEqual(
-            {ok, <<"4">>},
-            hb_ao:resolve(Base, <<"now/results/data">>, Opts)
+		{timeout, 30, fun() ->
+			init(),
+	        Opts = #{
+	            process_async_cache => false
+	        },
+			Base = aos_process(Opts),
+			schedule_aos_call(Base, <<"return 1+1">>, Opts),
+			schedule_aos_call(Base, <<"return 2+2">>, Opts),
+			?assertEqual(
+	            {ok, <<"4">>},
+	            hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
         {ok, Results} = 
             hb_ao:resolve(
