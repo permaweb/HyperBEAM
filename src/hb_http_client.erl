@@ -468,6 +468,11 @@ init_prometheus() ->
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
+	prometheus_gauge:new([
+		{name, gun_active_streams},
+		{labels, [conn_id]},
+		{help, "Number of active HTTP streams per gun connection"}
+	]),
     ?event(started),
     ok.
 
@@ -539,6 +544,7 @@ handle_info({gun_error, PID, Reason}, State) ->
 			?event(warning, {gun_connection_error_with_unknown_pid}),
 			{noreply, State};
 		[{PID, Status, MonitorRef, ConnKey}] ->
+            reset_gun_stream_metric(PID),
 			ets:delete(?CONNECTIONS_ETS, ConnKey),
 			ets:delete(?CONN_STATUS_ETS, PID),
 			demonitor(MonitorRef, [flush]),
@@ -576,6 +582,7 @@ handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
                 {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
 			{noreply, State};
 		[{PID, Status, MonitorRef, ConnKey}] ->
+            reset_gun_stream_metric(PID),
 			ets:delete(?CONNECTIONS_ETS, ConnKey),
 			ets:delete(?CONN_STATUS_ETS, PID),
 			demonitor(MonitorRef, [flush]),
@@ -603,6 +610,7 @@ handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
 		[] ->
 			{noreply, State};
 		[{PID, Status, _MonitorRef, ConnKey}] ->
+            reset_gun_stream_metric(PID),
 			ets:delete(?CONNECTIONS_ETS, ConnKey),
 			ets:delete(?CONN_STATUS_ETS, PID),
 			case Status of
@@ -663,6 +671,58 @@ inc_prometheus_counter(Name, Labels, Value) ->
         undefined -> ok;
         _ -> prometheus_counter:inc(Name, Labels, Value)
     end.
+
+reset_gun_stream_metric(PID) -> 
+    ConnId = conn_id_from_pid(PID),
+    spawn(fun() ->
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ ->
+                try prometheus_gauge:set(gun_active_streams, [ConnId], 0) 
+                catch _:_ -> ok 
+                end
+        end
+    end).
+
+%% @doc Increment the active stream count gauge for a given ConnId.
+inc_stream_count(undefined) -> ok;
+inc_stream_count(ConnId) ->
+    spawn(fun() ->
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ ->
+                try prometheus_gauge:inc(gun_active_streams, [ConnId])
+                catch _:_ -> ok
+                end
+        end
+    end).
+
+%% @doc Decrement the active stream count gauge for a given ConnId.
+dec_stream_count(undefined) -> ok;
+dec_stream_count(ConnId) ->
+    spawn(fun() ->
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ ->
+                try prometheus_gauge:dec(gun_active_streams, [ConnId])
+                catch _:_ -> ok
+                end
+        end
+    end).
+
+%% @doc Look up the ConnKey for a PID and format it as a binary conn_id label.
+conn_id_from_pid(PID) ->
+    case ets:lookup(?CONN_STATUS_ETS, PID) of
+        [{PID, _, _, ConnKey}] -> format_conn_id(ConnKey);
+        [] -> undefined
+    end.
+
+format_conn_id({Peer, ConnType, Index}) ->
+    iolist_to_binary([hb_util:bin(Peer), "_", atom_to_binary(ConnType), "_", integer_to_binary(Index)]);
+format_conn_id({Peer, ConnType}) ->
+    iolist_to_binary([hb_util:bin(Peer), "_", atom_to_binary(ConnType)]);
+format_conn_id(ConnKey) ->
+    hb_util:bin(ConnKey).
 
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
@@ -819,22 +879,28 @@ do_gun_request_inner(PID, Args, Opts) ->
         },
         Opts
     ),
+	ConnId = conn_id_from_pid(PID),
 	Ref = gun:request(PID, Method, Path, Headers, Body),
+	inc_stream_count(ConnId),
 	ResponseArgs =
         #{
-            pid => PID, 
+            pid => PID,
             stream_ref => Ref,
-			timer => Timer, 
+			timer => Timer,
             limit => hb_maps:get(limit, Args, infinity, Opts),
-			counter => 0, 
-            acc => [], 
+			counter => 0,
+            acc => [],
             start => os:system_time(microsecond),
 			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
-	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
-	record_response_status(Method, Response),
-	inet:stop_timer(Timer),
-	Response.
+	try
+		Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
+		record_response_status(Method, Response),
+		inet:stop_timer(Timer),
+		Response
+	after
+		dec_stream_count(ConnId)
+	end.
 
 await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
