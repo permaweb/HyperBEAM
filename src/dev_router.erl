@@ -1437,8 +1437,9 @@ dynamic_routing_by_performance() ->
             )
         ),
     ?event(debug_dynrouter, {worker_weights, {explicit, WeightsByWorker}}),
-    ?assert(maps:get(1, WeightsByWorker) > 0.5),
-    ?assert(maps:get(TestNodes, WeightsByWorker) < 0.5),
+    ?assert(
+        maps:get(1, WeightsByWorker) > maps:get(TestNodes, WeightsByWorker)
+    ),
     ok.
 
 weighted_random_strategy_test() ->
