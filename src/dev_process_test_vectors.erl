@@ -361,17 +361,20 @@ aos_compute_test_() ->
 aos_browsable_state_test_() ->
     {timeout, 30, fun() ->
         init(),
-        Base = aos_process(),
-        schedule_aos_call(Base,
+        Opts = #{ process_async_cache => false },
+        Base = aos_process(Opts),
+        schedule_aos_call(
+            Base,
             <<"table.insert(ao.outbox.Messages, { target = ao.id, ",
                 "action = \"State\", ",
-                "data = { deep = 4, bool = true } })">>
+                "data = { deep = 4, bool = true } })">>,
+            Opts
         ),
         Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Res} =
             hb_ao:resolve_many(
                 [Base, Req, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
-                #{ cache_control => <<"always">> }
+                Opts#{ cache_control => <<"always">> }
             ),
         ID = hb_message:id(Base),
         ?event({computed_message, {id, {explicit, ID}}}),
