@@ -7,7 +7,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
--define(MAX_MEMORY, 1_000_000_000). % 1GB
+-define(MAX_MEMORY, 2_000_000_000). % 2GB
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -71,6 +71,7 @@ increment(linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_id, _Message, _Opts, _Count) -> ignored;
 increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
+increment(debug_enc, _Message, _Opts, _Count) -> ignored;
 increment(ao_core, _Message, _Opts, _Count) -> ignored;
 increment(ao_internal, _Message, _Opts, _Count) -> ignored;
 increment(ao_devices, _Message, _Opts, _Count) -> ignored;
