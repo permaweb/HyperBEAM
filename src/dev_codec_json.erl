@@ -122,3 +122,35 @@ decode_with_atom_test() ->
         [#{ <<"store-module">> := hb_store_fs }|_],
         hb_cache:ensure_all_loaded(Msg, #{})
     ).
+
+roundtrip_with_deeply_nested_atoms_test() ->
+    Opts = #{ store => [hb_test_utils:test_store()] },
+    Msg = #{
+        <<"message">> =>
+            [
+                #{
+                    <<"deep-integer">> => 456,
+                    <<"deep-atom">> => atom,
+                    <<"deep-list">> => [1,2,3]
+                }
+            ]
+    },
+    Encoded =
+        hb_message:convert(
+            Msg,
+            #{
+                <<"device">> => <<"json@1.0">>,
+                <<"bundle">> => true
+            },
+            Opts
+        ),
+    ?event(debug_json, {encoded, Encoded}, Opts),
+    Decoded =
+        hb_message:convert(
+            Encoded,
+            <<"structured@1.0">>,
+            <<"json@1.0">>,
+            Opts
+        ),
+    ?event(debug_json, {decoded, Decoded}, Opts),
+    ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
