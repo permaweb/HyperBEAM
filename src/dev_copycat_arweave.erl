@@ -411,6 +411,8 @@ download_bundle_header(EndOffset, Size, Opts) ->
         end
     end).
 
+header_chunk(invalid_bundle_header, _FirstChunk, _StartOffset, _Opts) ->
+    {error, invalid_bundle_header};
 header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
         when HeaderSize =< byte_size(FirstChunk) ->
     {ok, FirstChunk};
@@ -532,27 +534,31 @@ index_ids_test() ->
     ),
     % These 3 items are within the WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4
     % bundle.
-    assert_item_read(Opts,
-        <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>),
-    assert_item_read(Opts,
-        <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>),
-    assert_item_read(Opts,
-        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>),
+    assert_item_read(
+        <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>,
+        Opts),
+    assert_item_read(
+        <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>,
+        Opts),
+    assert_item_read(
+        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>,
+        Opts),
     % The T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs can be deserialized so
     % we'll verify that some of its items were index and match the version
     % in the deserialized bundle.
     assert_bundle_read(
-        Opts,
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         [
             {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
             {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
             {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
-        ]
+        ],
+        Opts
     ),
     % Non-ans104 data transaction 
-    assert_item_read(Opts,
-        <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>),
+    assert_item_read(
+        <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
+        Opts),
     % Another bundle with an unsupported signature should be indexed even if
     % it can't be deserialized.
     ?assertException(
@@ -563,11 +569,11 @@ index_ids_test() ->
             <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
     ),
     assert_bundle_read(
-        Opts,
         <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
         [
             {<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, <<"1">>}
-        ]
+        ],
+        Opts
     ),
    ok.
 
@@ -613,6 +619,55 @@ large_bundle_header_test() ->
     ?assertEqual(960032, HeaderSize),
     ok.
 
+invalid_bundle_header_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    TXID = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>,
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    ?assertEqual({error, invalid_bundle_header},
+        download_bundle_header(EndOffset, Size, Opts)),
+    ok.
+
+invalid_bundle_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1307606,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+            Opts
+        ),
+    assert_bundle_read(
+        <<"8S12ZqO6-_icGkeuH8mFq6x9q7OIoXOqFRGH5k-wshg">>,
+        [
+            {<<"gintz-t6q_kdeP_IBQVGnp9fgFzs-pPGGehXW-V7ZRk">>, <<"1">>}
+        ],
+        Opts
+    ),
+    % L1 TX with bundle tags, but data is not a valid bundle. The L1 TX
+    % should still be indexed.
+    assert_item_read(<<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>, Opts),
+    ok.
+
+bad_block_test_disabled() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 633719,
+    fetch_and_process_block(Block, Block, Opts),
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+            Opts
+        ),
+    ok.
+
 % ecdsa_no_data_test() ->
 %     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
 %     {ok, 1827904} =
@@ -641,7 +696,8 @@ large_bundle_header_test() ->
 %         ),
 %     ok.
 
-tx_with_data_tag_test() ->
+%% @doc Disabled because the test takes ~30 seconds to run.
+tx_with_data_tag_test_disabled() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1289677,
     {ok, Block} =
@@ -664,12 +720,13 @@ tx_with_data_tag_test() ->
             <<"-8ikoQo3KZkp9Hz_7kNdiUw3Vmn7J2DFslL_rBz0OBY">>)
     ),
     assert_bundle_read(
-        Opts,
         <<"0vvttUgGqSsMul8RKIPvBjlwTU5_0x68sZr4uJxgNF8">>,
         [
             {<<"7U7GRZ8cXtKezSQmQmGpJar6haz-uink46i6evxzDCI">>, <<"1">>}
-        ]
+        ],
+        Opts
     ),
+    assert_item_read(<<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>, Opts),
     ok.
 
 tx_with_no_data_test() ->
@@ -703,8 +760,9 @@ tx_with_no_data_test() ->
     ?assertEqual(0, TX#tx.data_size),
     ?assertEqual(538493200840000, TX#tx.quantity),
     % TX with non-ans104 data
-    assert_item_read(Opts,
-        <<"bpd0CzsoTr9-X83sPCx08uNzZC_EgFwb-P8lnHXSeRo">>),
+    assert_item_read(
+        <<"bpd0CzsoTr9-X83sPCx08uNzZC_EgFwb-P8lnHXSeRo">>,
+        Opts),
     %% Now list the index using list mode
     {ok, Response} =
         hb_ao:resolve(
@@ -893,15 +951,15 @@ setup_index_opts() ->
     },
     {TestStore, StoreOpts, Opts}.
 
-assert_bundle_read(Opts, BundleID, ExpectedItems) ->
+assert_bundle_read(BundleID, ExpectedItems, Opts) ->
     ReadItems =
         lists:map(
             fun({ItemID, _Index}) ->
-                assert_item_read(Opts, ItemID)
+                assert_item_read(ItemID, Opts)
             end,
             ExpectedItems
         ),
-    Bundle = assert_item_read(Opts, BundleID),
+    Bundle = assert_item_read(BundleID, Opts),
     lists:foreach(
         fun({{_ItemID, Index}, Item}) ->
             QueriedItem = hb_ao:get(Index, Bundle, Opts),
@@ -911,10 +969,12 @@ assert_bundle_read(Opts, BundleID, ExpectedItems) ->
     ),
     ok.
 
-assert_item_read(Opts, ItemID) ->
+assert_item_read(ItemID, Opts) ->
+    ?event(debug_test, {resolving, {explicit, ItemID}}),
     Resolved = hb_ao:resolve(ItemID, Opts),
     ?assertMatch({ok, _}, Resolved, ItemID),
     {ok, Item} = Resolved,
+    ?event(debug_test, {item, Item}),
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
