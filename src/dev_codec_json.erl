@@ -28,15 +28,13 @@ to(Msg, Req, Opts) ->
         ),
     Loaded =
         case hb_maps:get(<<"bundle">>, Req, false, Opts) of
-            true ->
-                hb_cache:ensure_all_loaded(Restructured, Opts);
-            false ->
-                Restructured
+            true -> hb_cache:ensure_all_loaded(Restructured, Opts);
+            false -> Restructured
         end,
     {ok, JSONStructured} =
         dev_codec_structured:from(
             Loaded,
-            Req,%#{ <<"encode-types">> => [<<"atom">>] },
+            Req#{ <<"encode-types">> => [<<"atom">>] },
             Opts
         ),
     {ok, hb_json:encode(JSONStructured)}.
