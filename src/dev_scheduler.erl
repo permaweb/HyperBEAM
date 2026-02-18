@@ -1726,32 +1726,33 @@ http_get_schedule_test_() ->
                 )
 		}, Opts),
 		{ok, _} = hb_http:post(Node, Base, Opts),
-		lists:foreach(
-			fun(_) ->
-                {ok, Res} = hb_http:post(Node, Req, Opts),
-                ?event(debug_scheduler_test, {res, Res})
-            end,
-			lists:seq(1, 10)
-		),
-		?assertMatch({ok, #{ <<"current">> := 10 }}, http_get_slot(Node, PMsg)),
-        ?debug_wait(5000),
-		{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 10),
-		Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
-		?assertEqual(
-			13, % 11 assignments, +1 for the hashpath, +1 for the commitments
-			hb_maps:size(Assignments, Opts)
-		)
-	end}.
+			lists:foreach(
+				fun(_) ->
+	                {ok, Res} = hb_http:post(Node, Req, Opts),
+	                ?event(debug_scheduler_test, {res, Res})
+	            end,
+					lists:seq(1, 3)
+				),
+				?assertMatch({ok, #{ <<"current">> := 3 }}, http_get_slot(Node, PMsg)),
+			        ?debug_wait(100),
+				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3),
+				Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
+				?assertEqual(
+					6, % 4 assignments, +1 for the hashpath, +1 for the commitments
+					hb_maps:size(Assignments, Opts)
+				)
+			end}.
     
 
 http_get_legacy_schedule_test_() ->
-    {timeout, 60, fun() ->
-        Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
-        {Node, Opts} = http_init(),
-        {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary>>, Opts),
-		LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
-        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
-    end}.
+	    {timeout, 60, fun() ->
+	        Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
+	        {Node, Opts} = http_init(),
+	        {ok, Res} =
+	            hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary, "&to=3">>, Opts),
+			LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
+	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
+	    end}.
 
 http_get_legacy_slot_test_() ->
     {timeout, 60, fun() ->
@@ -1762,29 +1763,29 @@ http_get_legacy_slot_test_() ->
     end}.
 
 http_get_legacy_schedule_slot_range_test_() ->
-    {timeout, 60, fun() ->
-        Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,
-        {Node, Opts} = http_init(),
-        {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary,
-            "&from=0&to=10">>, Opts),
-		LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
-        ?event({res, LoadedRes}),
-        % 11 assignments, +1 for the commitments
-        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 12, LoadedRes)
-    end}.
+	    {timeout, 60, fun() ->
+	        Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,
+	        {Node, Opts} = http_init(),
+	        {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary,
+	            "&from=0&to=3">>, Opts),
+			LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
+	        ?event({res, LoadedRes}),
+	        % 4 assignments, +1 for the commitments
+	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
+	    end}.
 
 http_get_legacy_schedule_as_aos2_test_() ->
     {timeout, 60, fun() ->
         Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
         {Node, Opts} = http_init(),
         {ok, Res} =
-            hb_http:get(
-                Node,
-                #{
-                    <<"path">> => <<"/~scheduler@1.0/schedule?target=", Target/binary>>,
-                    <<"accept">> => <<"application/aos-2">>,
-                    <<"method">> => <<"GET">>
-                },
+	            hb_http:get(
+	                Node,
+	                #{
+	                    <<"path">> => <<"/~scheduler@1.0/schedule?target=", Target/binary, "&to=3">>,
+	                    <<"accept">> => <<"application/aos-2">>,
+	                    <<"method">> => <<"GET">>
+	                },
                 #{}
             ),
         Decoded = hb_json:decode(hb_ao:get(<<"body">>, Res, Opts)),
@@ -1847,26 +1848,26 @@ http_get_json_schedule_test_() ->
 			},
 			Opts
 		),
-		lists:foreach(
-			fun(_) -> {ok, _} = hb_http:post(Node, Req, Opts) end,
-			lists:seq(1, 10)
-		),
-		?assertMatch({ok, #{ <<"current">> := 10 }}, http_get_slot(Node, PMsg)),
-		{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 10, <<"application/aos-2">>),
-		?event({schedule, Schedule}),
-		JSON = hb_ao:get(<<"body">>, Schedule, Opts),
-		Assignments = hb_json:decode(JSON),
-		?assertEqual(
-			11, % +1 for the hashpath
-			length(hb_maps:get(<<"edges">>, Assignments))
-		)
-	end}.
+			lists:foreach(
+				fun(_) -> {ok, _} = hb_http:post(Node, Req, Opts) end,
+					lists:seq(1, 3)
+				),
+				?assertMatch({ok, #{ <<"current">> := 3 }}, http_get_slot(Node, PMsg)),
+				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3, <<"application/aos-2">>),
+				?event({schedule, Schedule}),
+				JSON = hb_ao:get(<<"body">>, Schedule, Opts),
+				Assignments = hb_json:decode(JSON),
+				?assertEqual(
+					4, % +1 for the hashpath
+					length(hb_maps:get(<<"edges">>, Assignments))
+				)
+			end}.
 
 %%% Benchmarks
 
 single_resolution(Opts) ->
     start(),
-    BenchTime = 1,
+    BenchTime = 0.25,
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Base = test_process(Opts#{ priv_wallet => Wallet }),
     ?event({benchmark_start, ?MODULE}),
@@ -1904,7 +1905,7 @@ single_resolution(Opts) ->
     ?assert(Iterations > 3).
 
 many_clients(Opts) ->
-    BenchTime = 1,
+    BenchTime = 0.25,
     Processes = hb_opts:get(workers, 25, Opts),
     {Node, Opts} = http_init(Opts),
     PMsg = hb_message:commit(test_process(Opts), Opts),

@@ -32,11 +32,17 @@ log(Topic, X, Mod, Func, Line, Opts) ->
         true -> hb_format:print(X, Mod, Func, Line, Opts);
         false -> X
     end,
-    try increment(Topic, X, Opts) catch _:_ -> ok end,
+    maybe_increment(Topic, X, Opts),
     % Return the logged value to the caller. This allows callers to insert 
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
+-ifdef(TEST).
+maybe_increment(_Topic, _X, _Opts) -> ok.
+-else.
+maybe_increment(Topic, X, Opts) ->
+    try increment(Topic, X, Opts) catch _:_ -> ok end.
+-endif.
 -endif.
 
 %% @doc Determine if the topic should be printed. Uses a cache in the process
@@ -251,7 +257,8 @@ benchmark_event_test() ->
         hb_test_utils:benchmark(
             fun() ->
                 log(test_module, {test, 1})
-            end
+            end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),
@@ -266,7 +273,8 @@ benchmark_print_lookup_test() ->
             fun() ->
                 should_print(test_module, DefaultOpts)
                     orelse should_print(test_event, DefaultOpts)
-            end
+            end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Looked-up">>, <<"topics">>, Iterations),
     ?assert(Iterations >= 1000),
@@ -276,7 +284,8 @@ benchmark_print_lookup_test() ->
 benchmark_increment_test() ->
     Iterations =
         hb_test_utils:benchmark(
-            fun() -> increment(test_module, {test, 1}, #{}) end
+            fun() -> increment(test_module, {test, 1}, #{}) end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),

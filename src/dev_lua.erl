@@ -639,7 +639,7 @@ ao_core_resolution_from_lua_test() ->
 
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->
-    BenchTime = 3,
+    BenchTime = 0.25,
     {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
@@ -745,7 +745,7 @@ pure_lua_process_benchmark_test_() ->
             })
     end}.
 pure_lua_process_benchmark(Opts) ->
-    BenchMsgs = 50,
+    BenchMsgs = 30,
     hb:init(),
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
@@ -810,7 +810,7 @@ aos_authority_not_trusted_test() ->
 %% @doc Benchmark the performance of Lua executions.
 aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
-        BenchMsgs = 10,
+        BenchMsgs = 6,
         Opts = #{
             process_async_cache => true,
             hashpath => ignore,

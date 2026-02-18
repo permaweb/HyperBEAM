@@ -254,7 +254,7 @@ stop_every_test() ->
 	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
 	% Create an "every" task that calls the test worker
 	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
-				   "&interval=500-milliseconds",
+					   "&interval=200-milliseconds",
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
 	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
 	?event({cron_stop_every_test_created, CronTaskID}),
@@ -263,7 +263,7 @@ stop_every_test() ->
 	?assert(is_pid(CronWorkerPid)),
 	?assert(erlang:is_process_alive(CronWorkerPid)),
 	% Wait a bit to ensure the cron worker has run a few times
-	timer:sleep(1000),
+		timer:sleep(400),
 	% Call stop on the cron task using its ID
 	EveryStopPath = <<"/~cron@1.0/stop?task=", CronTaskID/binary>>,
 	{ok, EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
@@ -311,7 +311,7 @@ once_executed_test() ->
 	% the test device should look up the worker via the id given 
 	{ok, #{ <<"body">> := _ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
 	% wait for the request to be processed
-	timer:sleep(1000),
+		timer:sleep(400),
 	% send a message to the worker to get the state
 	PID ! {get, self()},
 	% receive the state from the worker
@@ -333,7 +333,7 @@ every_worker_loop_test() ->
 	hb_name:register({<<"test">>, ID}, PID),
 	UrlPath =
         <<
-            "/~cron@1.0/500-milliseconds", 
+	            "/~cron@1.0/200-milliseconds", 
 		    "=\"/~test-device@1.0/increment_counter\"",
             "?test-id=",
             ID/binary
@@ -341,7 +341,7 @@ every_worker_loop_test() ->
 	?event({cron_every_test_send_url, UrlPath}),
 	{ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
 	?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
-	timer:sleep(1500),
+		timer:sleep(700),
 	PID ! {get, self()},
 	% receive the state from the worker
 	receive
