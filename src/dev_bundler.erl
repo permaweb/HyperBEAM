@@ -101,8 +101,13 @@ recover_unbundled_items(Opts) ->
 server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
     receive
         {item, From, Ref, _Base, Req} ->
-            From ! {response, Ref, {ok, <<"Message queued.">>}},
-            server(maybe_dispatch(add_item(Req, State, Opts), Opts), Opts);
+            {ok, Item} = hb_message:with_only_committed(Req, Opts),
+            ItemID = hb_message:id(Item, signed, Opts),
+            From ! {response, Ref, {ok, #{
+                <<"id">> => ItemID,
+                <<"timestamp">> => erlang:system_time(millisecond)
+            }}},
+            server(maybe_dispatch(add_item(Item, State, Opts), Opts), Opts);
         stop ->
             exit(normal)
     after MaxIdleTime ->
@@ -111,10 +116,9 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
         server(State#{ queue => [] }, Opts)
     end.
 
-%% @doc Add an item to the queue. Update the state with the new queue and
-%% approximate total byte size of the queue.
-add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
-    {ok, Item} = hb_message:with_only_committed(Req, Opts),
+%% @doc Add a committed item to the queue. Update the state with the new queue
+%% and approximate total byte size of the queue.
+add_item(Item, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
     ItemSize = erlang:external_size(Item),
     ?event({adding_item, {item_size, ItemSize},
         {item, {explicit, hb_message:id(Item, signed, Opts)}}}),
