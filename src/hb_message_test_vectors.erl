@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_empty_map_test(
-        <<"structured@1.0">>,
+    sign_node_message_test(
+        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -37,6 +37,7 @@ suite_test_opts() ->
     [
         #{
             name => normal,
+            parallel => true,
             desc => <<"Default opts">>,
             opts => test_opts(normal)
         }
