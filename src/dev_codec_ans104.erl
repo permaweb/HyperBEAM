@@ -36,16 +36,15 @@ commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= <<"rsa-pss-sha256
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-    Signed = ar_bundles:sign_item(TX, Wallet),
-    SignedStructured =
-        hb_message:convert(
-            Signed,
-            <<"structured@1.0">>,
-            <<"ans104@1.0">>,
-            Opts
-        ),
-    {ok, SignedStructured};
+    case {hb_opts:get(priv_wallet, no_viable_wallet, Opts), Type} of
+        {{{?RSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, <<"rsa-pss-sha256">>} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, <<"ed25519-sha512">>} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{WalletType, _, _}, _}, _Type} ->
+            ?event(warning, {wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}}),
+            throw(wrong_wallet_to_sign)
+    end;
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.
     % This forces the message to be normalized and the unsigned ID to be
@@ -59,6 +58,17 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
             Opts
         )
     }.
+
+sign_tx(TX, Wallet, Opts) ->
+    Signed = ar_bundles:sign_item(TX, Wallet),
+    SignedStructured =
+        hb_message:convert(
+            Signed,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+    {ok, SignedStructured}.
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
