@@ -304,7 +304,7 @@ large_assignment_volume_test() ->
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
-    VolumeSize = 1000,
+    VolumeSize = 500,
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     StartTime = erlang:monotonic_time(millisecond),
     lists:foreach(

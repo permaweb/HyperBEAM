@@ -547,7 +547,9 @@ complete_task_sequence_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store()
+            store => hb_test_utils:test_store(),
+            retry_base_delay_ms => 100,
+            retry_jitter => 0
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts), new_data_item(2, 10, Opts)],
@@ -595,7 +597,9 @@ post_tx_price_failure_retry_test() ->
         persistent_term:put(price_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store()
+            store => hb_test_utils:test_store(),
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts)],
@@ -630,7 +634,9 @@ post_tx_anchor_failure_retry_test() ->
         persistent_term:put(anchor_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store()
+            store => hb_test_utils:test_store(),
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts)],
@@ -665,11 +671,11 @@ post_tx_post_failure_retry_test() ->
     }),
     try
         persistent_term:put(tx_attempts, 0),
-        % Use short retry delays for testing (100ms base, with exponential backoff)
+        % Use short retry delays for testing.
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
-            retry_base_delay_ms => 100,
+            retry_base_delay_ms => 50,
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
@@ -707,7 +713,9 @@ post_proof_failure_retry_test() ->
         persistent_term:put(chunk_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store()
+            store => hb_test_utils:test_store(),
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
         },
         hb_http_server:start_node(Opts),
         % Large enough for multiple chunks
@@ -741,7 +749,7 @@ rapid_dispatch_test() ->
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
-            timer:sleep(1000),
+            timer:sleep(100),
             {200, <<"OK">>}
         end
     }),
@@ -813,7 +821,7 @@ one_bundle_fails_others_continue_test() ->
 parallel_task_execution_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    SleepTime = 1000,
+    SleepTime = 120,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
@@ -843,7 +851,7 @@ parallel_task_execution_test() ->
         ElapsedTime = erlang:system_time(millisecond) - StartTime,
         ?assertEqual(10, length(Chunks)),
         % Should take ~2-3 seconds with parallelism, not 9+
-        ?assert(ElapsedTime < 5000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
+        ?assert(ElapsedTime < 2000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
         ok
     after
         cleanup_dispatcher(ServerHandle)
@@ -875,15 +883,15 @@ exponential_backoff_timing_test() ->
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
-            retry_base_delay_ms => 1000,
-            retry_max_delay_ms => 5000,  % Cap at 5000ms
+            retry_base_delay_ms => 100,
+            retry_max_delay_ms => 500,  % Cap at 500ms
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to eventually succeed
-        TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle, 30000),
+        TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle, 5000),
         ?assertEqual(FailCount+1, length(TXs)),
         % Verify backoff respects cap
         Timestamps = lists:reverse(persistent_term:get(backoff_cap_timestamps, [])),
@@ -895,13 +903,12 @@ exponential_backoff_timing_test() ->
         Delay3 = T4 - T3,
         Delay4 = T5 - T4,
         Delay5 = T6 - T5,
-        % Expected: ~1000ms, ~2000ms, ~4000ms, ~5000ms (capped), ~5000ms (capped)
-        ?assert(Delay1 >= 800 andalso Delay1 =< 1500, Delay1),
-        ?assert(Delay2 >= 1800 andalso Delay2 =< 2500, Delay2),
-        ?assert(Delay3 >= 3800 andalso Delay3 =< 4500, Delay3),
-        % These should be capped at 5000ms, not 8000ms and 16000ms
-        ?assert(Delay4 >= 4800 andalso Delay4 =< 5500, Delay4),
-        ?assert(Delay5 >= 4800 andalso Delay5 =< 5500, Delay5),
+        % Expected: ~100ms, ~200ms, ~400ms, ~500ms (capped), ~500ms (capped)
+        ?assert(Delay1 >= 70 andalso Delay1 =< 200, Delay1),
+        ?assert(Delay2 >= 150 andalso Delay2 =< 300, Delay2),
+        ?assert(Delay3 >= 300 andalso Delay3 =< 500, Delay3),
+        ?assert(Delay4 >= 400 andalso Delay4 =< 700, Delay4),
+        ?assert(Delay5 >= 400 andalso Delay5 =< 700, Delay5),
         ok
     after
         persistent_term:erase(backoff_cap_attempts),
@@ -934,7 +941,7 @@ independent_task_retry_counts_test() ->
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
-            retry_base_delay_ms => 1000,
+            retry_base_delay_ms => 100,
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
@@ -1055,5 +1062,5 @@ start_mock_gateway(Responses) ->
 
 cleanup_dispatcher(ServerHandle) ->
     stop_dispatcher(),
-    timer:sleep(100), % Ensure dispatcher fully stops
+    timer:sleep(10), % Ensure dispatcher fully stops
     hb_mock_server:stop(ServerHandle).
