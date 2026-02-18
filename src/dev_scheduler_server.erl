@@ -14,20 +14,32 @@
 %%% confirmation of the assignment, but the scheduler still processes it.
 -define(DEFAULT_TIMEOUT, 10000).
 
-%% @doc Start a scheduling server for a given computation.
+%% @doc Start a scheduling server for a given computation. Once the server has
+%% started it attempts to register on the message ID for the process definition.
+%% If there is already a scheduler registered on the message ID, it will return
+%% the existing PID and log a warning.
 start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
-    spawn_link(
+    Ref = make_ref(),
+    Caller = self(),
+    spawn(
         fun() ->
             % Before we start, register the scheduler name.
             case hb_name:register({<<"scheduler@1.0">>, ProcID}) of
                 ok -> ok;
                 error ->
-                    throw(
+                    % Another scheduler is already registered on the process
+                    % message ID, so we return the existing PID to the caller
+                    % rather than our own.
+                    ExistingPid = dev_scheduler_registry:find(ProcID, false, Opts),
+                    ?event(
+                        warning,
                         {another_scheduler_is_already_registered,
-                            {proc_id, ProcID}
+                            {process_message_id, ProcID},
+                            {existing_pid, ExistingPid}
                         }
-                    )
+                    ),
+                    Caller ! {ok, Ref, ExistingPid}
             end,
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
@@ -53,6 +65,7 @@ start(ProcID, Proc, Opts) ->
                     {base_state_hashpath, BaseStateHashpath}
                 }
             ),
+            Caller ! {ok, Ref, self()},
             server(
                 #{
                     id => ProcID,
@@ -71,7 +84,10 @@ start(ProcID, Proc, Opts) ->
                 }
             )
         end
-    ).
+    ),
+    receive
+        {ok, Ref, ServerPID} -> ServerPID
+    end.
 
 %% @doc Determine the appropriate list of keys to use to commit assignments for
 %% a process.
