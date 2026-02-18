@@ -46,32 +46,37 @@ suite_with_opts(Suite, OptsList) ->
             Skip = hb_maps:get(skip, OptSpec, [], Opts),
             case satisfies_requirements(OptSpec) of
                 true ->
-                    {true, {foreach,
-                        fun() ->
-                            ?event({starting, Store}),
-                            % Create and set a random server ID for the test
-                            % process.
-                            hb_http_server:set_proc_server_id(
-                                hb_util:human_id(crypto:strong_rand_bytes(32))
-                            ),
-                            hb_store:reset(Store),
-                            hb_store:start(Store)
-                        end,
-                        fun(_) ->
-                            hb_store:reset(Store),
-                            ok
-                        end,
-                        [
-                            {
-                                hb_util:list(ODesc)
-                                    ++ ": "
-                                    ++ hb_util:list(TestDesc),
-                                fun() -> Test(Opts) end}
-                        ||
-                            {TestAtom, TestDesc, Test} <- Suite, 
-                                not lists:member(TestAtom, Skip)
-                        ]
-                    }};
+                    Each = 
+                        {foreach,
+                            fun() ->
+                                ?event({starting, Store}),
+                                % Create and set a random server ID for the test
+                                % process.
+                                hb_http_server:set_proc_server_id(
+                                    hb_util:human_id(crypto:strong_rand_bytes(32))
+                                ),
+                                hb_store:reset(Store),
+                                hb_store:start(Store)
+                            end,
+                            fun(_) ->
+                                hb_store:reset(Store),
+                                ok
+                            end,
+                            [
+                                {
+                                    hb_util:list(ODesc)
+                                        ++ ": "
+                                        ++ hb_util:list(TestDesc),
+                                    fun() -> Test(Opts) end}
+                            ||
+                                {TestAtom, TestDesc, Test} <- Suite, 
+                                    not lists:member(TestAtom, Skip)
+                            ]
+                        },
+                    case maps:get(parallel, OptSpec, true) of
+                        true -> {true, {inparallel, Each}};
+                        false -> {true, Each}
+                    end;
                 false -> false
             end
         end,

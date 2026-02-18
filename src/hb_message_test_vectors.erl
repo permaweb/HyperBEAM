@@ -37,6 +37,7 @@ suite_test_opts() ->
     [
         #{
             name => normal,
+            parallel => true,
             desc => <<"Default opts">>,
             opts => test_opts(normal)
         }
