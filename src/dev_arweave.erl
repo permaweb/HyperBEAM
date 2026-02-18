@@ -320,7 +320,7 @@ exclude_data(Base, Request, Opts) ->
 request(Method, Path, Opts) ->
     request(Method, Path, #{}, Opts).
 request(Method, Path, Extra, Opts) ->
-    ?event({arweave_request, {method, Method}, {path, Path}}),
+    ?event({arweave_request, {method, Method}, {path, {explicit, Path}}}),
     Res =
         hb_http:request(
             Extra#{
@@ -342,7 +342,7 @@ to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) 
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
     ?event(
         {arweave_tx_response,
-            {path, Path},
+            {path, {explicit, Path}},
             {raw_body, {explicit, Body}},
             {body, {explicit, hb_json:decode(Body)}},
             {tx, TXHeader}

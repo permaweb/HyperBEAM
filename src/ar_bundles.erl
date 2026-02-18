@@ -490,12 +490,16 @@ decode_bundle_items([{_ID, Size} | RestItems], ItemsBin) ->
 
 bundle_header_size(<<Count:256/little-integer, _/binary>>) ->
     % Eeach item in the bundle header index consumes 64 bytes
-    32 + (Count * 64).
+    32 + (Count * 64);
+bundle_header_size(_) ->
+    invalid_bundle_header.
 
 decode_bundle_header(<<Count:256/little-integer, Content/binary>>) ->
     decode_bundle_header(Count, Content);
 decode_bundle_header(<<>>) ->
-    {<<>>, []}.
+    {<<>>, []};
+decode_bundle_header(_) ->
+    invalid_bundle_header.
 
 decode_bundle_header(Count, Bin) -> decode_bundle_header(Count, Bin, []).
 decode_bundle_header(0, ItemsBin, Header) ->
@@ -505,7 +509,9 @@ decode_bundle_header(
     <<Size:256/little-integer, ID:32/binary, Rest/binary>>,
     Header
 ) ->
-    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]).
+    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]);
+decode_bundle_header(_, _, _) ->
+    invalid_bundle_header.
 
 %% @doc Decode the signature from a binary format. Only RSA 4096 is currently supported.
 %% Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
@@ -656,6 +662,12 @@ with_zero_length_tag_test() ->
     Serialized = serialize(Item),
     Deserialized = deserialize(Serialized),
     ?assertEqual(Item, Deserialized).
+
+bundle_header_size_test() ->
+    ?assertEqual(672, bundle_header_size(<<10:256/little, 1234/little>>)),
+    ?assertEqual(32, bundle_header_size(<<0:256/little>>)),
+    ?assertEqual(invalid_bundle_header, bundle_header_size(<<>>)),
+    ?assertEqual(invalid_bundle_header, bundle_header_size(<<0>>)).
 
 decode_bundle_header_test() ->
     ?assertEqual({<<>>, []}, decode_bundle_header(<<>>)),
