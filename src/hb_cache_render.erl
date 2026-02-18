@@ -256,7 +256,8 @@ get_graph_data(Base, MaxSize, Opts) ->
                 #{
                     <<"id">> => ID,
                     <<"label">> => get_label(hb_util:bin(ID)),
-                    <<"type">> => get_node_type(Color)
+                    <<"type">> => get_node_type(Color),
+                    <<"data">> => iolist_to_binary(hb_format:term(hb_cache:read(ID, Opts)))
                 }
             ||
                 {ID, {_, Color}} <- NodesList
@@ -270,16 +271,24 @@ get_graph_data(Base, MaxSize, Opts) ->
                     lists:member(From, NodeIds)
                     andalso lists:member(To, NodeIds)
         ],
-    Links =
-        [
-                #{
-                    <<"source">> => From,
-                    <<"target">> => To,
-                    <<"label">> => Label
-                }
-            ||
-                {From, To, Label} <- FilteredLinks
-        ],
+    % Loop through the links, and do hb_cache:read on source
+    Links = lists:map(
+        fun({From, To, Label}) ->
+            % Read cache data for the source node
+            SourceData = case hb_cache:read(To, Opts) of
+                {ok, Data} -> hb_format:term(Data);
+                not_found ->  <<"">>;
+                _ -> <<"">>
+            end,
+            #{
+                <<"source">> => From,
+                <<"target">> => To,
+                <<"label">> => Label,
+                <<"data">> => SourceData
+            }
+        end,
+        FilteredLinks
+    ),
     % Return the JSON data
     JsonData = hb_json:encode(#{ <<"nodes">> => Nodes, <<"links">> => Links }),
     {ok, #{

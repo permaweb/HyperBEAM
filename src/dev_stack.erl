@@ -720,7 +720,7 @@ not_found_test() ->
 				<<"1">> => generate_append_device(<<"+D1">>),
 				<<"2">> =>
                     (generate_append_device(<<"+D2">>))#{
-                        <<"special">> =>
+                        special =>
                             fun(M1) ->
                                 {ok, M1#{ <<"output">> => 1337 }}
                             end

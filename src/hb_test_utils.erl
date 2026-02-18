@@ -10,12 +10,14 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% The default store module to use for testing.
+-define(DEFAULT_STORE_MODULE, hb_store_ets).
 %%% The number of seconds to run a benchmark for when no time is specified.
 -define(DEFAULT_BENCHMARK_TIME, 1).
 
 %% @doc Generate a new, unique test store as an isolated context for an execution.
 test_store() ->
-    test_store(maps:get(<<"store-module">>, hd(hb_opts:get(store)))).
+    test_store(?DEFAULT_STORE_MODULE).
 test_store(Mod) ->
     test_store(Mod, <<"default">>).
 test_store(Mod, Tag) ->
@@ -44,32 +46,37 @@ suite_with_opts(Suite, OptsList) ->
             Skip = hb_maps:get(skip, OptSpec, [], Opts),
             case satisfies_requirements(OptSpec) of
                 true ->
-                    {true, {foreach,
-                        fun() ->
-                            ?event({starting, Store}),
-                            % Create and set a random server ID for the test
-                            % process.
-                            hb_http_server:set_proc_server_id(
-                                hb_util:human_id(crypto:strong_rand_bytes(32))
-                            ),
-                            hb_store:reset(Store),
-                            hb_store:start(Store)
-                        end,
-                        fun(_) ->
-                            hb_store:reset(Store),
-                            ok
-                        end,
-                        [
-                            {
-                                hb_util:list(ODesc)
-                                    ++ ": "
-                                    ++ hb_util:list(TestDesc),
-                                fun() -> Test(Opts) end}
-                        ||
-                            {TestAtom, TestDesc, Test} <- Suite, 
-                                not lists:member(TestAtom, Skip)
-                        ]
-                    }};
+                    Each = 
+                        {foreach,
+                            fun() ->
+                                ?event({starting, Store}),
+                                % Create and set a random server ID for the test
+                                % process.
+                                hb_http_server:set_proc_server_id(
+                                    hb_util:human_id(crypto:strong_rand_bytes(32))
+                                ),
+                                hb_store:reset(Store),
+                                hb_store:start(Store)
+                            end,
+                            fun(_) ->
+                                hb_store:reset(Store),
+                                ok
+                            end,
+                            [
+                                {
+                                    hb_util:list(ODesc)
+                                        ++ ": "
+                                        ++ hb_util:list(TestDesc),
+                                    fun() -> Test(Opts) end}
+                            ||
+                                {TestAtom, TestDesc, Test} <- Suite, 
+                                    not lists:member(TestAtom, Skip)
+                            ]
+                        },
+                    case maps:get(parallel, OptSpec, true) of
+                        true -> {true, {inparallel, Each}};
+                        false -> {true, Each}
+                    end;
                 false -> false
             end
         end,

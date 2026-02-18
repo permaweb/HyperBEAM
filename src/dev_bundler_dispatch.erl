@@ -547,7 +547,7 @@ complete_task_sequence_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts), new_data_item(2, 10, Opts)],
@@ -595,7 +595,7 @@ post_tx_price_failure_retry_test() ->
         persistent_term:put(price_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts)],
@@ -630,7 +630,7 @@ post_tx_anchor_failure_retry_test() ->
         persistent_term:put(anchor_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10, Opts)],
@@ -668,7 +668,7 @@ post_tx_post_failure_retry_test() ->
         % Use short retry delays for testing (100ms base, with exponential backoff)
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             retry_base_delay_ms => 100,
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
@@ -707,7 +707,7 @@ post_proof_failure_retry_test() ->
         persistent_term:put(chunk_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         % Large enough for multiple chunks
@@ -748,7 +748,7 @@ rapid_dispatch_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_workers => 3
         },
         hb_http_server:start_node(Opts),
@@ -790,7 +790,7 @@ one_bundle_fails_others_continue_test() ->
         % Use short retry delays for testing (100ms base, with exponential backoff)
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             retry_base_delay_ms => 100,
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
@@ -825,7 +825,7 @@ parallel_task_execution_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             bundler_workers => 5
         },
         hb_http_server:start_node(Opts),
@@ -874,7 +874,7 @@ exponential_backoff_timing_test() ->
         persistent_term:put(backoff_cap_timestamps, []),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             retry_base_delay_ms => 1000,
             retry_max_delay_ms => 5000,  % Cap at 5000ms
             retry_jitter => 0  % Disable jitter for deterministic tests
@@ -933,7 +933,7 @@ independent_task_retry_counts_test() ->
         persistent_term:put(independent_total_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb),
+            store => hb_test_utils:test_store(),
             retry_base_delay_ms => 1000,
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
@@ -967,7 +967,7 @@ recover_bundles_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store(hb_store_lmdb)
+            store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         % Create some test items
