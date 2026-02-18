@@ -36,27 +36,28 @@ to(Msg, Req, Opts) ->
     {ok, JSONStructured} =
         dev_codec_structured:from(
             Loaded,
-            Req#{ <<"encode-types">> => [<<"atom">>] },
+            Req,%#{ <<"encode-types">> => [<<"atom">>] },
             Opts
         ),
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
-from(JSON, _Req, Opts) ->
+from(JSON, Req, Opts) ->
     % The JSON string will be a partially-TABM encoded message: Rich number
     % and list types, but no `atom's. Subsequently, we convert it to a fully
     % structured message after decoding, then turn the result back into a TABM.
     % This is resource-intensive and could be improved, but ensures that the
     % results are fully normalized.
-    Decoded = json:decode(JSON),
     {ok, Structured} =
         dev_codec_structured:to(
-            Decoded,
+            json:decode(JSON),
             #{},
             Opts
         ),
-    {ok, TABM} = dev_codec_structured:from(Structured, #{}, Opts),
+    ?event(debug_json, {structured, Structured}, Opts),
+    {ok, TABM} = dev_codec_structured:from(Structured, Req, Opts),
+    ?event(debug_json, {tabm, TABM}, Opts),
     {ok, TABM}.
 
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
@@ -123,7 +124,7 @@ decode_with_atom_test() ->
         hb_cache:ensure_all_loaded(Msg, #{})
     ).
 
-roundtrip_with_deeply_nested_atoms_test() ->
+deeply_nested_typed_keys_test() ->
     Opts = #{ store => [hb_test_utils:test_store()] },
     Msg = #{
         <<"message">> =>
