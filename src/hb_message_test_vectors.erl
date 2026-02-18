@@ -1684,3 +1684,25 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     ?assert(hb_message:verify(Decoded, all, Opts));
 bundled_ordering_test(_Codec, _Opts) ->
     skip.
+
+rsa_wallet_not_match_message_ed25519_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?RSA_KEY_TYPE)},
+    SignatureType = <<"ed25519-sha512">>,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assertThrow(wrong_wallet_to_sign,
+        hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        )).
+
+ed25519_wallet_not_match_message_rsa_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?EDDSA_KEY_TYPE)},
+    SignatureType = <<"rsa-pss-sha256">>,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assertThrow(wrong_wallet_to_sign,
+        hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        )).
