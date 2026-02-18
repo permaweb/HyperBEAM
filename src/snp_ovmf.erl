@@ -9,19 +9,16 @@
 -include("include/snp_guids.hrl").
 
 %% @doc Read OVMF file and extract SEV hashes table GPA.
-%% Tries multiple possible paths for the OVMF file.
+%% OVMF is copied to priv/ovmf/ at build time (rebar); same layout as snp_launch_digest_ovmf.
 %% @returns {ok, GPA} or {error, Reason}
 -spec read_ovmf_gpa() -> {ok, non_neg_integer()} | {error, term()}.
 read_ovmf_gpa() ->
-    % Try to find OVMF file in various locations
-    % First, try relative to current working directory
-    % Then try relative to code path (for releases)
-    % Then try absolute paths
     {ok, Cwd} = file:get_cwd(),
     OvmfPaths = [
-        % Relative to code/priv directory (for releases)
-        filename:join([Cwd, "test", "OVMF-1.55.fd"]),
-        "/root/hb-release/test/OVMF-1.55.fd"
+        % Canonical path: priv/ovmf/ (build-time copy)
+        filename:join([code:priv_dir(hb), "ovmf", "OVMF-1.55.fd"]),
+        % Fallback: repo root (dev, before compile)
+        filename:join([Cwd, "OVMF-1.55.fd"])
     ],
     ?event(snp, {ovmf_search_paths, OvmfPaths}),
     read_ovmf_gpa(OvmfPaths).
@@ -40,7 +37,7 @@ read_ovmf_gpa([Path | Rest]) ->
 
 %% @doc Parse OVMF file to extract SEV hashes table GPA.
 %% This reads the OVMF footer table and finds the SEV_HASH_TABLE_RV_GUID entry.
-%% @param OvmfPath Path to the OVMF file (e.g., "test/OVMF-1.55.fd")
+%% @param OvmfPath Path to the OVMF file (e.g. priv/ovmf/OVMF-1.55.fd)
 %% @returns {ok, GPA} where GPA is a 64-bit integer, or {error, Reason} on failure
 -spec parse_ovmf_sev_hashes_gpa(OvmfPath :: string() | binary()) -> {ok, non_neg_integer()} | {error, term()}.
 parse_ovmf_sev_hashes_gpa(OvmfPath) when is_binary(OvmfPath) ->
