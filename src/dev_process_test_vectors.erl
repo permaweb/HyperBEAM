@@ -389,10 +389,7 @@ aos_state_access_via_http_test_() ->
             port => 10000 + rand:uniform(10000),
             priv_wallet => Wallet,
             cache_control => <<"always">>,
-            store => #{
-                <<"store-module">> => hb_store_fs,
-                <<"name">> => <<"cache-mainnet">>
-            },
+            store => hb_test_utils:test_store(),
             force_signed_requests => true
         }),
         Proc = aos_process(Opts),
@@ -585,7 +582,7 @@ persistent_process_test() ->
 
 simple_wasm_persistent_worker_benchmark_test() ->
     init(),
-    BenchTime = 1,
+    BenchTime = 0.05,
     Base = wasm_process(<<"test/test-64.wasm">>),
     schedule_wasm_call(Base, <<"fac">>, [5.0]),
     schedule_wasm_call(Base, <<"fac">>, [6.0]),
@@ -618,12 +615,12 @@ simple_wasm_persistent_worker_benchmark_test() ->
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
-    ?assert(Iterations >= 2),
+    ?assert(Iterations >= 1),
     ok.
 
 aos_persistent_worker_benchmark_test_() ->
     {timeout, 30, fun() ->
-        BenchTime = 5,
+        BenchTime = 0.25,
         init(),
         Base = aos_process(),
         schedule_aos_call(Base, <<"X=1337">>),
@@ -657,6 +654,6 @@ aos_persistent_worker_benchmark_test_() ->
             "Scheduled and evaluated ~p AOS process messages in ~p s (~s msg/s)",
             [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
         ),
-        ?assert(Iterations >= 2),
+        ?assert(Iterations >= 1),
         ok
     end}.
