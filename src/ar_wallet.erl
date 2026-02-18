@@ -9,15 +9,79 @@
 %%% @doc Utilities for manipulating wallets.
 
 -define(WALLET_DIR, ".").
+-define(WALLET_POOL_NAME, ar_wallet_pool).
+-define(WALLET_POOL_TARGET, 6).
 
 %%% Public interface.
 
 new() ->
     new({rsa, 65537}).
-new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
+new(KeyType = {rsa, 65537}) ->
+    case request_pooled_wallet(KeyType) of
+        {ok, Wallet} -> Wallet;
+        timeout -> generate_wallet(KeyType)
+    end.
+
+generate_wallet(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
         = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
+
+request_pooled_wallet(KeyType) ->
+    Pool = ensure_wallet_pool(KeyType),
+    Ref = make_ref(),
+    Pool ! {wallet, self(), Ref},
+    receive
+        {wallet, Ref, Wallet} -> {ok, Wallet}
+    after 30000 ->
+        timeout
+    end.
+
+ensure_wallet_pool(KeyType) ->
+    case whereis(?WALLET_POOL_NAME) of
+        undefined ->
+            Pid = spawn(fun() -> wallet_pool_loop(KeyType, queue:new(), queue:new(), 0) end),
+            case catch register(?WALLET_POOL_NAME, Pid) of
+                true -> Pid;
+                _ -> whereis(?WALLET_POOL_NAME)
+            end;
+        Pid ->
+            Pid
+    end.
+
+wallet_pool_loop(KeyType, Wallets, Waiters, InFlight) ->
+    {Wallets1, InFlight1} = maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight),
+    receive
+        {wallet, From, Ref} ->
+            case queue:out(Wallets1) of
+                {{value, Wallet}, Rest} ->
+                    From ! {wallet, Ref, Wallet},
+                    wallet_pool_loop(KeyType, Rest, Waiters, InFlight1);
+                {empty, _} ->
+                    wallet_pool_loop(KeyType, Wallets1, queue:in({From, Ref}, Waiters), InFlight1)
+            end;
+        {wallet_generated, Wallet} ->
+            case queue:out(Waiters) of
+                {{value, {From, Ref}}, RestWaiters} ->
+                    From ! {wallet, Ref, Wallet},
+                    wallet_pool_loop(KeyType, Wallets1, RestWaiters, InFlight1 - 1);
+                {empty, _} ->
+                    wallet_pool_loop(KeyType, queue:in(Wallet, Wallets1), Waiters, InFlight1 - 1)
+            end
+    end.
+
+maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight) ->
+    Desired = ?WALLET_POOL_TARGET + queue:len(Waiters),
+    Available = queue:len(Wallets) + InFlight,
+    Needed = max(0, Desired - Available),
+    Parent = self(),
+    lists:foreach(
+        fun(_) ->
+            spawn(fun() -> Parent ! {wallet_generated, generate_wallet(KeyType)} end)
+        end,
+        lists:seq(1, Needed)
+    ),
+    {Wallets, InFlight + Needed}.
 
 
 %% @doc Sign some data with a private key.
