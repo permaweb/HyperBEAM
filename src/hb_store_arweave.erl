@@ -40,7 +40,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                         hb_util:int(StartOffset), hb_util:int(Length), StoreOpts)
             end,
             case Loaded of
-                {ok, Message} ->
+                {ok, _Message} ->
                     ?event({{read, ok},
                         {id, {explicit, ID}},
                         {is_tx, IsTX},
@@ -122,6 +122,13 @@ write_offset(
         ":",
         (hb_util:bin(Length))/binary
     >>,
+    ?event(store_arweave_debug, 
+        {writing_offset, 
+            {id, {explicit, ID}},
+            {is_tx, IsTX},
+            {start_offset, StartOffset},
+            {length, Length},
+            {value, {explicit, Value}}}),
     hb_store:write(IndexStore, path(ID), Value).
 
 path(ID) ->
@@ -165,6 +172,20 @@ write_read_tx_test() ->
         <<"variant">> => <<"ao.TN.1">>
     },
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
+    ok.
+
+%% @doc The L1 TX has bundle tags, but data is not a valid bundle.
+write_read_fake_bundle_tx_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{ 
+        <<"index-store">> => Store 
+    },
+    ID = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>,
+    Size = 2,
+    StartOffset = 155309918167286,
+    ok = write_offset(Opts, ID, true, StartOffset, Size),
+    {ok, TX} = read(Opts, ID),
+    ?assert(hb_message:verify(TX, all, #{})),
     ok.
 
 %% XXX TODO: write/read for data item
