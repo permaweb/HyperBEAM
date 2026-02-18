@@ -32,17 +32,11 @@ log(Topic, X, Mod, Func, Line, Opts) ->
         true -> hb_format:print(X, Mod, Func, Line, Opts);
         false -> X
     end,
-    maybe_increment(Topic, X, Opts),
+    try increment(Topic, X, Opts) catch _:_ -> ok end,
     % Return the logged value to the caller. This allows callers to insert 
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
--ifdef(TEST).
-maybe_increment(_Topic, _X, _Opts) -> ok.
--else.
-maybe_increment(Topic, X, Opts) ->
-    try increment(Topic, X, Opts) catch _:_ -> ok end.
--endif.
 -endif.
 
 %% @doc Determine if the topic should be printed. Uses a cache in the process
