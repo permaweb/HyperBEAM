@@ -178,11 +178,11 @@ new_server(RawNodeMsg) ->
             )
         ),
     % Put server ID into node message so it's possible to update current server
-    % params
+    % params.
     NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
     ProtoOpts = #{
-        env => #{dispatch => Dispatcher, node_msg => NodeMsgWithID},
+        env => #{ dispatch => Dispatcher, node_msg => NodeMsgWithID },
         stream_handlers => [cowboy_stream_h],
         max_connections => infinity,
         idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg)
@@ -232,6 +232,10 @@ new_server(RawNodeMsg) ->
                 start_http2(ServerID, PrometheusOpts, NodeMsg);
             _ -> {error, {unknown_protocol, Protocol}}
         end,
+    % Update the node message with the actual port that was used, in the event
+    % that the OS assigned a different port. This happens, for example, when we
+    % use port 0.
+    set_opts(NodeMsg#{ port => Port }),
     ?event(http,
         {http_server_started,
             {listener, Listener},
@@ -249,34 +253,36 @@ start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ServerPID =
         spawn(fun() ->
             application:ensure_all_started(quicer),
-            {ok, Listener} = cowboy:start_quic(
-                ServerID, 
-                TransOpts = #{
-                    socket_opts => [
-                        {certfile, "test/test-tls.pem"},
-                        {keyfile, "test/test-tls.key"},
-                        {port, Port = hb_opts:get(port, 8734, NodeMsg)}
-                    ]
-                },
-                ProtoOpts
-            ),
+            {ok, Listener} =
+                cowboy:start_quic(
+                    ServerID, 
+                    TransOpts = #{
+                        socket_opts => [
+                            {certfile, "test/test-tls.pem"},
+                            {keyfile, "test/test-tls.key"},
+                            {port, hb_opts:get(port, 0, NodeMsg)}
+                        ]
+                    },
+                    ProtoOpts
+                ),
+            ActualPort = ranch:get_port(ServerID),
             ranch_server:set_new_listener_opts(
                 ServerID,
                 1024,
                 ranch:normalize_opts(
-                    hb_maps:to_list(TransOpts#{ port => Port })
+                    hb_maps:to_list(TransOpts#{ port => ActualPort })
                 ),
                 ProtoOpts,
                 []
             ),
-            ranch_server:set_addr(ServerID, {<<"localhost">>, Port}),
+            ranch_server:set_addr(ServerID, {<<"localhost">>, ActualPort}),
             % Bypass ranch's requirement to have a connection supervisor define
             % to support updating protocol opts.
             % Quicer doesn't use a connection supervisor, so we just spawn one
             % that does nothing.
             ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
             ranch_server:set_connections_sup(ServerID, ConnSup),
-            Parent ! {ok, Port},
+            Parent ! {ok, ActualPort},
             receive stop -> stopped end
         end),
     receive {ok, Port} -> {ok, Port, ServerPID}
@@ -293,17 +299,25 @@ http3_conn_sup_loop() ->
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http2, ServerID}),
-    StartRes = cowboy:start_clear(
-        ServerID,
-        [
-            {port, Port = hb_opts:get(port, 8734, NodeMsg)}
-        ],
-        ProtoOpts
-    ),
+    StartRes =
+        cowboy:start_clear(
+            ServerID,
+            [{port, RequestedPort = hb_opts:get(port, 0, NodeMsg)}],
+            ProtoOpts
+        ),
     case StartRes of
         {ok, Listener} ->
-            ?event(debug_router_info, {http2_started, {listener, Listener}, {port, Port}}),
-            {ok, Port, Listener};
+            ActualPort = ranch:get_port(ServerID),
+            ?event(
+                debug_router_info,
+                {http2_started,
+                    {listener, Listener},
+                    {requested_port, RequestedPort},
+                    {actual_port, ActualPort}
+                },
+                NodeMsg
+            ),
+            {ok, ActualPort, Listener};
         {error, {already_started, Listener}} ->
             ?event(http, {http2_already_started, {listener, Listener}}),
             ?event(debug_router_info,
@@ -313,7 +327,6 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
                 }
             ),
             cowboy:set_env(ServerID, node_msg, #{}),
-            % {ok, Port, Listener}
             cowboy:stop_listener(ServerID),
             start_http2(ServerID, ProtoOpts, NodeMsg)
     end.
@@ -522,15 +535,9 @@ set_proc_server_id(ServerID) ->
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.
     TempOpts = Opts#{ only => local },
-    % Generate a random port number between 10000 and 30000 to use
-    % for the server.
-    Port =
-        case hb_opts:get(port, no_port, TempOpts) of
-            no_port ->
-                rand:seed(exsplus, erlang:system_time(microsecond)),
-                10000 + rand:uniform(50000);
-            PassedPort -> PassedPort
-        end,
+    % Get the port to use for the server. If no port is provided, we use port 0
+    % will the operating system assign a free port.
+    Port = hb_opts:get(port, 0, TempOpts),
     Wallet =
         case hb_opts:get(priv_wallet, no_viable_wallet, TempOpts) of
             no_viable_wallet -> ar_wallet:new();
@@ -575,7 +582,7 @@ start_node(Opts) ->
     hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
     {ok, _Listener, Port} = new_server(ServerOpts),
-    <<"http://localhost:", (integer_to_binary(Port))/binary, "/">>.
+    <<"http://localhost:", (hb_util:bin(Port))/binary, "/">>.
 
 %%% Tests
 %%% The following only covering the HTTP server initialization process. For tests
