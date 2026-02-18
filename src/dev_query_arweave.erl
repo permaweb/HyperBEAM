@@ -299,7 +299,7 @@ all_ids(ID, Opts) ->
     case hb_store:list(Store, << ID/binary, "/commitments">>) of
         {ok, []} -> [ID];
         {ok, CommitmentIDs} -> CommitmentIDs;
-        _ -> []
+        _ -> [ID]
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be
