@@ -2,13 +2,13 @@
 %%% replication. This engine works in _reverse_ chronological order by default,
 %%% fetching blocks from the latest known block towards the Genesis block. The
 %%% node avoids retrieving blocks that are already present in the cache using
-%%% `~arweave@2.9-pre''s built-in caching mechanism.
+%%% `~arweave@2.9''s built-in caching mechanism.
 -module(dev_copycat_arweave).
 -export([arweave/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(ARWEAVE_DEVICE, <<"~arweave@2.9-pre">>).
+-define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
