@@ -63,21 +63,18 @@ terminate(_Result, #state{
     Failed = unique_names(lists:reverse(FailedReversed)),
     Skipped = unique_names(lists:reverse(SkippedReversed)),
     Cancelled = unique_names(lists:reverse(CancelledReversed)),
-    FailedTests = runnable_test_selectors(Failed),
-    CancelledTests = runnable_test_selectors(Cancelled),
-    FailedOrCancelledTests = unique_names(FailedTests ++ CancelledTests),
+    FailedSkippedOrCancelled = unique_names(Failed ++ Skipped ++ Cancelled),
+    FailedSkippedOrCancelledTests = unique_names(
+        runnable_test_selectors(FailedSkippedOrCancelled)
+    ),
     FailedOrCancelledModules = unique_names(
         lists:filtermap(
             fun module_from_test_selector/1,
-            FailedOrCancelledTests
+            FailedSkippedOrCancelledTests
         )
     ),
-    print_summary_block("Failed tests summary", Failed),
-    print_summary_block("Skipped tests summary", Skipped),
-    print_summary_block("Cancelled tests summary", Cancelled),
-    print_csv_block("Failed tests (--test=...)", FailedTests),
-    print_csv_block("Cancelled tests (--test=...)", CancelledTests),
-    print_csv_block("Failed + cancelled tests (--test=...)", FailedOrCancelledTests),
+    print_summary_block("Failed tests summary", FailedSkippedOrCancelled),
+    print_csv_block("Failed tests (--test=...)", FailedSkippedOrCancelledTests),
     print_csv_block("Unique failing modules (--module=...)", FailedOrCancelledModules),
     io:format("~n", []),
     ok.
