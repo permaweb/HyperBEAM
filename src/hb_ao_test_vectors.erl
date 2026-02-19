@@ -117,18 +117,20 @@ benchmark_suite() ->
     ].
 
 test_opts() ->
+    CachedExecStore = hb_test_utils:test_store(),
     [
         #{
             name => normal,
             desc => "Default opts",
-            opts => #{},
+            opts => #{ store => hb_test_utils:test_store() },
             skip => []
         },
         #{
             name => without_hashpath,
             desc => "Default without hashpath",
             opts => #{
-                hashpath => ignore
+                hashpath => ignore,
+                store => hb_test_utils:test_store()
             },
             skip => []
         },
@@ -139,10 +141,7 @@ test_opts() ->
                 hashpath => ignore,
                 cache_control => [<<"no-cache">>, <<"no-store">>],
                 spawn_worker => false,
-                store => #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/fs">>
-                }
+                store => hb_test_utils:test_store()
             },
             skip => [load_as]
         },
@@ -153,10 +152,7 @@ test_opts() ->
                 hashpath => update,
                 cache_control => [<<"no-cache">>],
                 spawn_worker => false,
-                store => #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/fs">>
-                }
+                store => CachedExecStore
             },
             skip => [
                 denormalized_device_name,
@@ -172,10 +168,7 @@ test_opts() ->
                 hashpath => ignore,
                 cache_control => [<<"only-if-cached">>],
                 spawn_worker => false,
-                store => #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/fs">>
-                }
+                store => CachedExecStore
             },
             skip => [
                 % Skip test with locally defined device, amongst others.
@@ -849,6 +842,8 @@ load_as_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     {ok, ID} = hb_cache:write(Msg, Opts),
+    {ok, ReadMsg} = hb_cache:read(ID, Opts),
+    ?assert(hb_message:match(Msg, ReadMsg, primary, Opts)),
     ?assertEqual(
         {ok, <<"MESSAGE">>},
         hb_ao:resolve_many(

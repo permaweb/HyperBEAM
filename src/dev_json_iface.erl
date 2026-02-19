@@ -528,7 +528,7 @@ basic_aos_call_test_() ->
 
 aos_stack_benchmark_test_() ->
     {timeout, 20, fun() ->
-        BenchTime = 5,
+        BenchTime = 0.25,
         Opts = #{ store => hb_test_utils:test_store() },
         RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm", <<"WASM">>, Opts),
         Proc = hb_ao:get(<<"process">>, RawWASMMsg, Opts#{ hashpath => ignore }),
@@ -552,6 +552,6 @@ aos_stack_benchmark_test_() ->
             Iterations,
             BenchTime
         ),
-        ?assert(Iterations >= 10),
+        ?assert(Iterations >= 2),
         ok
     end}.

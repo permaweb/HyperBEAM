@@ -308,7 +308,7 @@ multiclient_test() ->
     end.
 
 benchmark_test() ->
-    BenchTime = 1,
+    BenchTime = 0.25,
     {ok, File} = file:read_file("test/test-64.wasm"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     Iterations = hb_test_utils:benchmark(

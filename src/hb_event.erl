@@ -251,7 +251,8 @@ benchmark_event_test() ->
         hb_test_utils:benchmark(
             fun() ->
                 log(test_module, {test, 1})
-            end
+            end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),
@@ -266,7 +267,8 @@ benchmark_print_lookup_test() ->
             fun() ->
                 should_print(test_module, DefaultOpts)
                     orelse should_print(test_event, DefaultOpts)
-            end
+            end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Looked-up">>, <<"topics">>, Iterations),
     ?assert(Iterations >= 1000),
@@ -276,7 +278,8 @@ benchmark_print_lookup_test() ->
 benchmark_increment_test() ->
     Iterations =
         hb_test_utils:benchmark(
-            fun() -> increment(test_module, {test, 1}, #{}) end
+            fun() -> increment(test_module, {test, 1}, #{}) end,
+            0.25
         ),
     hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),

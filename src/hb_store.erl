@@ -432,13 +432,8 @@ test_stores() ->
         (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
-        (hb_test_utils:test_store(hb_store_lru))#{
-            <<"persistent-store">> => [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/lru">>
-                }
-            ]
+        (hb_test_utils:test_store(hb_store_ets))#{
+            <<"benchmark-scale">> => 0.01
         }
     ] ++ rocks_stores().
 

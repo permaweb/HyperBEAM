@@ -463,7 +463,7 @@ imported_function_test() ->
     ).
 
 benchmark_test() ->
-    BenchTime = 0.5,
+    BenchTime = 0.25,
     init(),
     Msg0 = cache_wasm_image("test/test-64.wasm"),
     {ok, Base} = hb_ao:resolve(Msg0, <<"init">>, #{}),

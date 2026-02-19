@@ -166,7 +166,8 @@ benchmark_pbkdf2_test() ->
         hb_test_utils:benchmark(
             fun() ->
                 hb_crypto:pbkdf2(sha256, Key, <<"salt">>, Iterations, KeyLength)
-            end
+            end,
+            0.5
         ),
     hb_test_utils:benchmark_print(
         <<"Derived">>,

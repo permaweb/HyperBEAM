@@ -235,7 +235,7 @@ avoid_double_read_test() ->
     ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
     Data = <<"123">>,
     DefaultResponse = {200, Data},
-    Endpoints = [{<<"/raw/", ID/binary>>, raw, DefaultResponse}],
+    Endpoints = [{<<"/arweave/raw/", ID/binary>>, raw, DefaultResponse}],
     %% Start MockServer
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     %% Setup local store
@@ -249,8 +249,7 @@ avoid_double_read_test() ->
             [
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local],
-                    %% To be replaced with `<<"routes">>` after PR 563
-                    routes => custom_raw_routes(MockServer)
+                    <<"routes">> => custom_raw_routes(MockServer)
                 }
             ]
     },
@@ -501,6 +500,7 @@ remote_hyperbeam_node_ans104_test() ->
             store => hb_test_utils:test_store()
         },
     Server = hb_http_server:start_node(ServerOpts),
+    ?debug_wait(1000),
     Msg =
         hb_message:commit(
             #{
@@ -525,6 +525,7 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
+    ?debug_wait(1000),
     {ok, Req} = hb_cache:read(ID, ClientOpts),
     ?assert(hb_message:verify(Req)),
     ?assert(hb_message:match(Msg, Req)).

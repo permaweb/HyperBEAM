@@ -238,13 +238,22 @@ wallet() ->
 wallet(Location) ->
     wallet(Location, #{}).
 wallet(Location, Opts) ->
-    case file:read_file_info(Location) of
-        {ok, _} ->
-            ar_wallet:load_keyfile(Location, Opts);
-        {error, _} -> 
-            Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
-            ?event({created_new_keyfile, Location, address(Res)}),
-            Res
+    CacheKey = {?MODULE, wallet, Location},
+    case persistent_term:get(CacheKey, not_found) of
+        not_found ->
+            Wallet =
+                case file:read_file_info(Location) of
+                    {ok, _} ->
+                        ar_wallet:load_keyfile(Location, Opts);
+                    {error, _} ->
+                        Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
+                        ?event({created_new_keyfile, Location, address(Res)}),
+                        Res
+                end,
+            persistent_term:put(CacheKey, Wallet),
+            Wallet;
+        Wallet ->
+            Wallet
     end.
 
 %% @doc Get the address of a wallet. Defaults to the address of the wallet
