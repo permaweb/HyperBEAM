@@ -105,6 +105,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         case maps:get(<<"type">>, Commitment) of
             <<"rsa-pss-sha256">> -> {rsa, 65537};
             <<"ed25519-sha512">> -> {eddsa, ed25519};
+            <<"unsigned-sha256">> -> {rsa, 65537};
             Type ->
                 ?event(error, {signature_type, {type, Type}}),
                 throw({invalid_signature_type, Type})
