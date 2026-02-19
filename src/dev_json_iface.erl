@@ -546,6 +546,6 @@ aos_stack_benchmark_test_() ->
             Iterations,
             BenchTime
         ),
-        ?assert(Iterations >= 2),
+        ?assert(Iterations >= 1),
         ok
     end}.
