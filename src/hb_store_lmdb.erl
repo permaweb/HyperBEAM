@@ -30,7 +30,7 @@
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
--define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(DEFAULT_SIZE, 2 * 1024 * 1024 * 1024 * 1024). % 2TiB default database size
 -define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
                                                 % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
