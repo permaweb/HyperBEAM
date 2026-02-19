@@ -697,7 +697,7 @@ delegate_to_self_test() ->
     S1 = dev_pot:delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
     % After delegating to self, deposit should still be 10 (5 removed, 5 added back)
     ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
-    % Delegation record should show 5 to self
+    % Self delegation is a noop, so no delegation record should be written
     Delegation = hb_ao:get(
         <<"/resources/",
         ResourceOxygen/binary,
@@ -709,7 +709,7 @@ delegate_to_self_test() ->
         0,
         Opts
     ),
-    ?assertEqual(5, Delegation).
+    ?assertEqual(0, Delegation).
 
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
