@@ -35,7 +35,7 @@ get_test_blocks(Node, Opts) ->
                 hb_http:request(
                     <<"GET">>,
                     Node,
-                    <<"/~arweave@2.9-pre/block=", (hb_util:bin(Height))/binary>>,
+                    <<"/~arweave@2.9/block=", (hb_util:bin(Height))/binary>>,
                     Opts
                 )
         end,

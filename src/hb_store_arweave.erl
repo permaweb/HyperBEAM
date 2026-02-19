@@ -8,7 +8,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(ARWEAVE_INDEX_PATH, <<"~arweave@2.9-pre/offset">>).
+-define(ARWEAVE_INDEX_PATH, <<"~arweave@2.9/offset">>).
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -77,7 +77,7 @@ load_item(StartOffset, Length, Opts) ->
 
 load_bundle(ID, StartOffset, Length, Opts) ->
     {ok, StructuredTXHeader} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
         Opts
     ),
@@ -103,7 +103,7 @@ load_bundle(ID, StartOffset, Length, Opts) ->
 
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => StartOffset + 1,
