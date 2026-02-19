@@ -172,7 +172,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
         {normalized_response_headers, {norm_header_map, NormHeaderMap}},
         Opts
     ),
-    ?event(http_short,
+    ?event(outbound_http_short,
         {received,
             {status, Status},
             {duration, Duration},
@@ -519,7 +519,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     EndTime = os:system_time(millisecond),
     TotalDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ?event(http, {reply_headers, {explicit, PostStreamReq}}),
-    ?event(http_short,
+    ?event(inbound_http_short,
         {sent,
             {status, Status},
             {duration, TotalDuration},

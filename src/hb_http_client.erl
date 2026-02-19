@@ -31,7 +31,6 @@
 setup_conn(Opts) ->
     ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
     ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
-    erlang:display({conn, ConnPoolReadSize, ConnPoolWriteSize}),
     persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
 
 
