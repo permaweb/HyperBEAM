@@ -6,13 +6,18 @@
 -export([init/0, aos_process/0, aos_process/1, test_process/0, wasm_process/1]).
 -export([schedule_aos_call/2, schedule_aos_call/3]).
 
-init() ->
-    application:ensure_all_started(hb),
-    ok.
+init() -> application:ensure_all_started(hb).
+
+test_opts() ->
+    test_opts(#{}).
+test_opts(Opts) ->
+    init(),
+    Opts#{
+        store => hb_test_utils:test_store(hb_store_lmdb),
+        priv_wallet => ar_wallet:new()
+    }.
 
 %% @doc Generate a process message with a random number, and no executor.
-base_process() ->
-    base_process(#{}).
 base_process(Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -89,24 +94,27 @@ aos_process(Opts, Stack) ->
 %% execution. This should generate a message state has doubled 
 %% `Already-Seen' elements for each assigned slot.
 test_process() ->
+    test_process(#{}).
+test_process(Opts) ->
     Wallet = hb:wallet(),
     hb_message:commit(
         hb_maps:merge(
-            base_process(),
+            base_process(Opts),
             #{
                 <<"execution-device">> => <<"stack@1.0">>,
                 <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]
             }, 
-            #{}
+            Opts
         ),
-        #{ priv_wallet => Wallet }
+        Opts#{ priv_wallet => Wallet }
     ).
 
 schedule_test_message(Base, Text, Opts) ->
     schedule_test_message(Base, Text, #{}, Opts).
 schedule_test_message(Base, Text, MsgBase, Opts) ->
-    Wallet = hb:wallet(),
-    UncommittedBase = hb_message:uncommitted(MsgBase, Opts),
+    ?event(debug_test, {opts, Opts}),
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    UncommittedBase = hb_message:uncommitted(MsgBase, Opts#{ priv_wallet => Wallet }),
     Req =
         hb_message:commit(
             #{
@@ -123,7 +131,7 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
             },
 			Opts#{ priv_wallet => Wallet }
         ),
-    {ok, _} = hb_ao:resolve(Base, Req, Opts).
+    {ok, _} = hb_ao:resolve(Base, Req, Opts#{ priv_wallet => Wallet }).
 
 schedule_aos_call(Base, Code) ->
     schedule_aos_call(Base, Code, #{}).
@@ -141,8 +149,6 @@ schedule_aos_call(Base, Code, Opts) ->
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
-schedule_wasm_call(Base, FuncName, Params) ->
-    schedule_wasm_call(Base, FuncName, Params, #{}).
 schedule_wasm_call(Base, FuncName, Params, Opts) ->
     Wallet = hb:wallet(),
     Req = 
@@ -166,16 +172,16 @@ schedule_wasm_call(Base, FuncName, Params, Opts) ->
 
 schedule_on_process_test_() ->
 	{timeout, 30, fun()->
-		init(),
-		Base = aos_process(),
-		schedule_test_message(Base, <<"TEST TEXT 1">>, #{}),
-		schedule_test_message(Base, <<"TEST TEXT 2">>, #{}),
+		Opts = test_opts(),
+		Base = aos_process(Opts),
+		schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
+		schedule_test_message(Base, <<"TEST TEXT 2">>, Opts),
 		?event(messages_scheduled),
 		{ok, SchedulerRes} =
 			hb_ao:resolve(Base, #{
 				<<"method">> => <<"GET">>,
 				<<"path">> => <<"schedule">>
-			}, #{}),
+			}, Opts),
 		?assertMatch(
 			<<"TEST TEXT 1">>,
 			hb_ao:get(<<"assignments/0/body/test-label">>, SchedulerRes)
@@ -187,28 +193,28 @@ schedule_on_process_test_() ->
 	end}.
 
 get_scheduler_slot_test() ->
-    init(),
-    Base = base_process(),
-    schedule_test_message(Base, <<"TEST TEXT 1">>, #{}),
-    schedule_test_message(Base, <<"TEST TEXT 2">>, #{}),
+    Opts = test_opts(),
+    Base = base_process(Opts),
+    schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
+    schedule_test_message(Base, <<"TEST TEXT 2">>, Opts),
     Req = #{
         <<"path">> => <<"slot">>,
         <<"method">> => <<"GET">>
     },
     ?assertMatch(
         {ok, #{ <<"current">> := CurrentSlot }} when CurrentSlot > 0,
-        hb_ao:resolve(Base, Req, #{})
+        hb_ao:resolve(Base, Req, Opts)
     ).
 
 recursive_path_resolution_test() ->
-    init(),
-    Base = base_process(),
-    schedule_test_message(Base, <<"TEST TEXT 1">>, #{}),
+    Opts = test_opts(),
+    Base = base_process(Opts),
+    schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
     CurrentSlot =
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"slot/current">> },
-            #{ <<"hashpath">> => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     ?event({resolved_current_slot, CurrentSlot}),
     ?assertMatch(
@@ -218,73 +224,72 @@ recursive_path_resolution_test() ->
     ok.
 
 test_device_compute_test() ->
-    init(),
-    Base = test_process(),
-    schedule_test_message(Base, <<"TEST TEXT 1">>, #{}),
-    schedule_test_message(Base, <<"TEST TEXT 2">>, #{}),
+    Opts = test_opts(),
+    Base = test_process(Opts),
+    schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
+    schedule_test_message(Base, <<"TEST TEXT 2">>, Opts),
     ?assertMatch(
         {ok, <<"TEST TEXT 2">>},
         hb_ao:resolve(
             Base,
             <<"schedule/assignments/1/body/test-label">>,
-            #{}
+            Opts
         )
     ),
     Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-    {ok, Res} = hb_ao:resolve(Base, Req, #{}),
+    {ok, Res} = hb_ao:resolve(Base, Req, Opts),
     ?event({computed_message, {res, Res}}),
-    ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Res, #{})),
-    ?assertEqual([1,1,0,0], hb_ao:get(<<"already-seen">>, Res, #{})).
+    ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Res, Opts)),
+    ?assertEqual([1,1,0,0], hb_ao:get(<<"already-seen">>, Res, Opts)).
 
 wasm_compute_test() ->
-    init(),
-    Base = wasm_process(<<"test/test-64.wasm">>),
-    schedule_wasm_call(Base, <<"fac">>, [2.0]),
-    schedule_wasm_call(Base, <<"fac">>, [3.0]),
-    schedule_wasm_call(Base, <<"fac">>, [4.0]),
-    schedule_wasm_call(Base, <<"fac">>, [5.0]),
-    schedule_wasm_call(Base, <<"fac">>, [6.0]),
+    Opts = test_opts(),
+    Base = wasm_process(<<"test/test-64.wasm">>, Opts),
+    schedule_wasm_call(Base, <<"fac">>, [2.0], Opts),
+    schedule_wasm_call(Base, <<"fac">>, [3.0], Opts),
+    schedule_wasm_call(Base, <<"fac">>, [4.0], Opts),
+    schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
+    schedule_wasm_call(Base, <<"fac">>, [6.0], Opts),
     {ok, _} = 
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 3 },
-            #{}
+            Opts
         ),
     {ok, _} = 
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 3 },
-            #{}
+            Opts
         ),
     {ok, _} = 
        hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-            #{}
+            Opts
         ),
     {ok, _} = 
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 2 },
-            #{}
+            Opts
         ),
     {ok, _} = 
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
-            #{}
+            Opts
         ),
     ok.
-    % ?assertEqual([24.0], hb_ao:get(<<"results/output">>, Slot2Res, #{})),
-    % ?assertEqual([2.0], hb_ao:get(<<"results/output">>, Slot0Res, #{})),
-    % ?assertEqual([6.0], hb_ao:get(<<"results/output">>, Slot1Res, #{})).
+    % ?assertEqual([24.0], hb_ao:get(<<"results/output">>, Slot2Res, Opts)),
+    % ?assertEqual([2.0], hb_ao:get(<<"results/output">>, Slot0Res, Opts)),
+    % ?assertEqual([6.0], hb_ao:get(<<"results/output">>, Slot1Res, Opts)).
 
 wasm_compute_from_id_test() ->
-    init(),
-    Opts = #{ cache_control => <<"always">> },
-    Base = wasm_process(<<"test/test-64.wasm">>),
+    Opts = test_opts(#{ cache_control => <<"always">> }),
+    Base = wasm_process(<<"test/test-64.wasm">>, Opts),
     schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
-    BaseID = hb_message:id(Base, all),
+    BaseID = hb_message:id(Base, all, Opts),
     Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
     {ok, Res} = hb_ao:resolve(BaseID, Req, Opts),
     ?event(process_compute, {computed_message, {res, Res}}),
@@ -306,13 +311,13 @@ http_wasm_process_by_id_test() ->
     Wallet = ar_wallet:new(),
     Proc = wasm_process(<<"test/test-64.wasm">>, Opts),
     hb_cache:write(Proc, Opts),
-    ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
     InitRes =
         hb_http:post(
             Node,
             << "/schedule" >>,
             Proc,
-            #{}
+            Opts
         ),
     ?event({schedule_proc_res, InitRes}),
     ExecMsg =
@@ -323,9 +328,9 @@ http_wasm_process_by_id_test() ->
                 <<"function">> => <<"fac">>,
                 <<"parameters">> => [5.0]
             },
-            #{ priv_wallet => Wallet }
+            Opts#{ priv_wallet => Wallet }
         ),
-    {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, #{}),
+    {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, Opts),
     ?event({schedule_msg_res, {res, Res}}),
     {ok, Msg4} =
         hb_http:get(
@@ -334,34 +339,33 @@ http_wasm_process_by_id_test() ->
                 <<"path">> => << ProcID/binary, "/compute">>,
                 <<"slot">> => 1
             },
-            #{}
+            Opts
         ),
     ?event({compute_msg_res, {msg4, Msg4}}),
-    ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Msg4, #{})).
+    ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Msg4, Opts)).
 
 aos_compute_test_() ->
     {timeout, 30, fun() ->
-        init(),
-        Base = aos_process(),
-        schedule_aos_call(Base, <<"return 1+1">>),
-        schedule_aos_call(Base, <<"return 2+2">>),
+        Opts = test_opts(),
+        Base = aos_process(Opts),
+        schedule_aos_call(Base, <<"return 1+1">>, Opts),
+        schedule_aos_call(Base, <<"return 2+2">>, Opts),
         Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-        {ok, Res1} = hb_ao:resolve(Base, Req, #{}),
-        {ok, Res2} = hb_ao:resolve(Res1, <<"results">>, #{}),
+        {ok, Res1} = hb_ao:resolve(Base, Req, Opts),
+        {ok, Res2} = hb_ao:resolve(Res1, <<"results">>, Opts),
         ?event({computed_message, {res2, Res2}}),
-        {ok, Data} = hb_ao:resolve(Res2, <<"data">>, #{}),
+        {ok, Data} = hb_ao:resolve(Res2, <<"data">>, Opts),
         ?event({computed_data, Data}),
         ?assertEqual(<<"2">>, Data),
         Msg4 = #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-        {ok, Res3} = hb_ao:resolve(Base, Msg4, #{}),
-        ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Res3, #{})),
+        {ok, Res3} = hb_ao:resolve(Base, Msg4, Opts),
+        ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Res3, Opts)),
         {ok, Res3}
     end}.
 
 aos_browsable_state_test_() ->
     {timeout, 30, fun() ->
-        init(),
-        Opts = #{ process_async_cache => false },
+        Opts = test_opts(#{ cache_control => <<"always">> }),
         Base = aos_process(Opts),
         schedule_aos_call(
             Base,
@@ -374,9 +378,9 @@ aos_browsable_state_test_() ->
         {ok, Res} =
             hb_ao:resolve_many(
                 [Base, Req, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
-                Opts#{ cache_control => <<"always">> }
+                Opts
             ),
-        ID = hb_message:id(Base),
+        ID = hb_message:id(Base, Opts),
         ?event({computed_message, {id, {explicit, ID}}}),
         ?assertEqual(4, Res)
     end}.
@@ -385,15 +389,15 @@ aos_state_access_via_http_test_() ->
     {timeout, 60, fun() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
-        Node = hb_http_server:start_node(Opts = #{
+        Node = hb_http_server:start_node(Opts = test_opts(#{
             port => 10000 + rand:uniform(10000),
             priv_wallet => Wallet,
             cache_control => <<"always">>,
             store => hb_test_utils:test_store(),
             force_signed_requests => true
-        }),
+        })),
         Proc = aos_process(Opts),
-        ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+        ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
         {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
         Req = 
             hb_message:commit(
@@ -410,7 +414,7 @@ aos_state_access_via_http_test_() ->
                             "}})">>,
                     <<"target">> => ProcID
                 },
-                #{ priv_wallet => Wallet }
+                Opts
             ),
         {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
         ?event({schedule_msg_res, {res, Res}}),
@@ -443,16 +447,16 @@ aos_state_access_via_http_test_() ->
 aos_state_patch_test_() ->
     {timeout, 30, fun() ->
         Wallet = hb:wallet(),
-        init(),
-        BaseRaw = aos_process(#{}, [
+        Opts = test_opts(),
+        BaseRaw = aos_process(Opts, [
             <<"wasi@1.0">>,
             <<"json-iface@1.0">>,
             <<"wasm-64@1.0">>,
             <<"patch@1.0">>,
             <<"multipass@1.0">>
         ]),
-        {ok, Base} = hb_message:with_only_committed(BaseRaw, #{}),
-        ProcID = hb_message:id(Base, all),
+        {ok, Base} = hb_message:with_only_committed(BaseRaw, Opts),
+        ProcID = hb_message:id(Base, all, Opts),
         InnerReq = 
             hb_message:commit(
                 #{
@@ -467,17 +471,17 @@ aos_state_patch_test_() ->
                                 "{ method = \"PATCH\", x = \"banana\" })"
                         >>
                 },
-                #{ priv_wallet => Wallet }
+                Opts#{ priv_wallet => Wallet }
             ),
         Req = InnerReq#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">> 
         },
-        {ok, _} = hb_ao:resolve(Base, Req, #{}),
+        {ok, _} = hb_ao:resolve(Base, Req, Opts),
         Res = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-        {ok, Msg4} = hb_ao:resolve(Base, Res, #{}),
+        {ok, Msg4} = hb_ao:resolve(Base, Res, Opts),
         ?event({computed_message, {res, Msg4}}),
-        {ok, Data} = hb_ao:resolve(Msg4, <<"x">>, #{}),
+        {ok, Data} = hb_ao:resolve(Msg4, <<"x">>, Opts),
         ?event({computed_data, Data}),
         ?assertEqual(<<"banana">>, Data)
     end}.
@@ -490,8 +494,10 @@ do_test_restore() ->
     % 1. Set variables in Lua.
     % 2. Return the variable.
     % Execute the first computation, then the second as a disconnected process.
-    Opts = #{ process_cache_frequency => 1, process_async_cache => false },
-    init(),
+    Opts = test_opts(#{
+        process_cache_frequency => 1,
+        process_async_cache => false
+    }),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),
     schedule_aos_call(Base, <<"X = 1337">>, Opts),
@@ -510,29 +516,26 @@ do_test_restore() ->
             Opts
         ),
     ?event({result_b, ResultB}),
-    ?assertEqual(<<"1337">>, hb_ao:get(<<"results/data">>, ResultB, #{})).
+    ?assertEqual(<<"1337">>, hb_ao:get(<<"results/data">>, ResultB, Opts)).
 
 now_results_test_() ->
     {timeout, 30, fun() ->
-        init(),
-        Base = aos_process(),
-        schedule_aos_call(Base, <<"return 1+1">>),
-        schedule_aos_call(Base, <<"return 2+2">>),
-        ?assertEqual({ok, <<"4">>}, hb_ao:resolve(Base, <<"now/results/data">>, #{}))
+        Opts = test_opts(),
+        Base = aos_process(Opts),
+        schedule_aos_call(Base, <<"return 1+1">>, Opts),
+        schedule_aos_call(Base, <<"return 2+2">>, Opts),
+        ?assertEqual({ok, <<"4">>}, hb_ao:resolve(Base, <<"now/results/data">>, Opts))
     end}.
 
 prior_results_accessible_test_() ->
-		{timeout, 30, fun() ->
-			init(),
-	        Opts = #{
-	            process_async_cache => false
-	        },
-			Base = aos_process(Opts),
-			schedule_aos_call(Base, <<"return 1+1">>, Opts),
-			schedule_aos_call(Base, <<"return 2+2">>, Opts),
-			?assertEqual(
-	            {ok, <<"4">>},
-	            hb_ao:resolve(Base, <<"now/results/data">>, Opts)
+	{timeout, 30, fun() ->
+		Opts = test_opts(#{ process_async_cache => false }),
+		Base = aos_process(Opts),
+		schedule_aos_call(Base, <<"return 1+1">>, Opts),
+		schedule_aos_call(Base, <<"return 2+2">>, Opts),
+		?assertEqual(
+            {ok, <<"4">>},
+            hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
         {ok, Results} = 
             hb_ao:resolve(
@@ -548,11 +551,11 @@ prior_results_accessible_test_() ->
 
 persistent_process_test() ->
     {timeout, 30, fun() ->
-        init(),
-        Base = aos_process(),
-        schedule_aos_call(Base, <<"X=1">>),
-        schedule_aos_call(Base, <<"return 2">>),
-        schedule_aos_call(Base, <<"return X">>),
+        Opts = test_opts(),
+        Base = aos_process(Opts),
+        schedule_aos_call(Base, <<"X=1">>, Opts),
+        schedule_aos_call(Base, <<"return 2">>, Opts),
+        schedule_aos_call(Base, <<"return X">>, Opts),
         T0 = hb:now(),
         FirstSlotReq = #{
             <<"path">> => <<"compute">>,
@@ -560,14 +563,14 @@ persistent_process_test() ->
         },
         ?assertMatch(
             {ok, _},
-            hb_ao:resolve(Base, FirstSlotReq, #{ spawn_worker => true })
+            hb_ao:resolve(Base, FirstSlotReq, Opts#{ spawn_worker => true })
         ),
         T1 = hb:now(),
         ThirdSlotReq = #{
             <<"path">> => <<"compute">>,
             <<"slot">> => 2
         },
-        Res = hb_ao:resolve(Base, ThirdSlotReq, #{}),
+        Res = hb_ao:resolve(Base, ThirdSlotReq, Opts),
         ?event({computed_message, {res, Res}}),
         ?assertMatch(
             {ok, _},
@@ -581,30 +584,31 @@ persistent_process_test() ->
     end}.
 
 simple_wasm_persistent_worker_benchmark_test() ->
-    init(),
+    Opts = test_opts(),
     BenchTime = 0.05,
-    Base = wasm_process(<<"test/test-64.wasm">>),
-    schedule_wasm_call(Base, <<"fac">>, [5.0]),
-    schedule_wasm_call(Base, <<"fac">>, [6.0]),
+    Base = wasm_process(<<"test/test-64.wasm">>, Opts),
+    schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
+    schedule_wasm_call(Base, <<"fac">>, [6.0], Opts),
     {ok, Initialized} = 
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-            #{ spawn_worker => true, process_workers => true }
+            Opts#{ spawn_worker => true, process_workers => true }
         ),
     Iterations = hb_test_utils:benchmark(
         fun(Iteration) ->
             schedule_wasm_call(
                 Initialized,
                 <<"fac">>,
-                [5.0]
+                [5.0],
+                Opts
             ),
             ?assertMatch(
                 {ok, _},
                 hb_ao:resolve(
                     Initialized,
                     #{ <<"path">> => <<"compute">>, <<"slot">> => Iteration + 1 },
-                    #{}
+                    Opts
                 )
             )
         end,
