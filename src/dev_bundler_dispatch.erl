@@ -418,7 +418,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
                     Opts),
                 PostTXResponse = hb_ao:resolve(
-                    #{ <<"device">> => <<"arweave@2.9-pre">> },
+                    #{ <<"device">> => <<"arweave@2.9">> },
                     Committed#{
                         <<"path">> => <<"/tx">>,
                         <<"method">> => <<"POST">>
@@ -522,14 +522,14 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
 
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"/price">>, <<"size">> => DataSize },
         Opts
     ).
 
 get_anchor(Opts) ->
     hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"/tx_anchor">> },
         Opts
     ).
