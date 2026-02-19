@@ -256,9 +256,9 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
             hb_opts:get(store, no_viable_store, Opts),
             Opts
         ) end, native),
-        UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+        %UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
         record_cache_write_message_duration(Duration),
-        ?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, erlang:convert_time_unit(Duration, native, millisecond)}}),
+        %?event(metrics_short, {write_message, {uncommitted_id, UncommittedID}, {duration, erlang:convert_time_unit(Duration, native, millisecond)}}),
         Result
     catch
         Type:Reason:Stacktrace ->
@@ -421,7 +421,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    {Duration, Result} = timer:tc(fun() ->
+    {_Duration, Result} = timer:tc(fun() ->
         StoreReadResult = store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
         case StoreReadResult of 
             {ok, Res} ->
@@ -430,7 +430,7 @@ read(Path, Opts) ->
             _ -> StoreReadResult
         end 
         end, millisecond),
-    ?event(metrics_short, {hb_cache_read, {path, Path}, {duration, Duration}}),
+    %?event(metrics_short, {hb_cache_read, {path, Path}, {duration, Duration}}),
     Result.
 do_read_commitment(Path, Opts) ->
     store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).

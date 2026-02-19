@@ -536,7 +536,6 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ),
     ReplyDuration = EndTime-StartTime,
     record_reply_duration(TotalDuration*1000000, ReplyDuration*1000000, Status),
-    ?event(metrics_short, {http_reply, {duration, ReplyDuration}}),
     {ok, PostStreamReq, no_state}.
 
 %% @doc Handle replying with cookies if the message contains them. Returns the

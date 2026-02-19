@@ -260,13 +260,7 @@ read(Modules, Key) -> call_function(Modules, read, [Key]).
 
 %% @doc Write a key with a value to the store.
 write(Modules, Key, Value) -> 
-    {Duration, Result} = timer:tc(fun () -> call_function(Modules, write, [Key, Value]) end, millisecond),
-        LogSize = 1024*1024,
-    case byte_size(Value) > LogSize of
-        true -> ?event(metrics_short, {hb_store_write, {duration, Duration}});
-        false -> no_op
-    end,
-    Result.
+    call_function(Modules, write, [Key, Value]).
 
 %% @doc Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.

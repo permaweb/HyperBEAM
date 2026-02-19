@@ -94,12 +94,12 @@ record_index_check_metric(Duration) ->
 record_chunk_fetch_metric(Duration, Type) ->
     record_metric(hb_store_arweave_chunk_fetch_duration_seconds, [Type], Duration).
 
-record_metric(Metric, Label, Duration) ->
+record_metric(Metric, Labels, Duration) ->
     spawn(fun () -> 
         case application:get_application(prometheus) of
             undefined -> ok;
             _ ->
-                prometheus_histogram:observe(Metric, Label, Duration)
+                prometheus_histogram:observe(Metric, Labels, Duration)
         end
     end).
 
