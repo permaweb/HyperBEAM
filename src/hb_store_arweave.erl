@@ -201,7 +201,7 @@ init_prometheus() ->
                 ]),
                 prometheus_histogram:declare([
                     {name, hb_store_arweave_chunk_fetch_duration_seconds},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
                     {labels, [type]},
                     {help, "How much it takes to check the index"}
                 ]),
