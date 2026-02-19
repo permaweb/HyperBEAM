@@ -463,8 +463,8 @@ binary(Bin, Opts) ->
                     end
                 ]
             );
-        ShortID ->
-            lists:flatten(io_lib:format("~s", [ShortID]))
+        _ShortID ->
+            Bin
     end.
 
 %% @doc Format a map as either a single line or a multi-line string depending
