@@ -411,7 +411,7 @@ default_message() ->
         http_extra_opts =>
             #{
                 force_message => true,
-                cache_control => [<<"always">>]
+                cache_control => [<<"no-cache">>, <<"no-store">>]
             },
         % Should the node store all signed messages?
         store_all_signed => true,
