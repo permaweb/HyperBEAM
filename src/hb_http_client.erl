@@ -308,7 +308,8 @@ record_duration(Details, Opts) ->
                                     <<"/tx", _/binary>> -> <<"TX">>;
                                     <<"/chunk", _/binary>> -> <<"Chunk">>;
                                     <<"/block/height/", _/binary>> -> <<"Block Height">>;
-                                    _Path -> 
+                                    Path -> 
+                                        ?event(warning, {unknown_path, {path, Path}}),
                                         <<"unknown">>
                                 end;
                             (Key) -> 
@@ -1065,6 +1066,8 @@ get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
     <<"closed_einval">>;
 get_status_class({error, {down, shutdown}}) ->
     <<"down_shutdown">>;
+get_status_class({error, {stream_error, closed}}) ->
+    <<"stream_closed">>;
 get_status_class(208) ->
 	<<"already_processed">>;
 get_status_class(404) ->
