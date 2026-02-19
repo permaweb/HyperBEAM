@@ -722,6 +722,14 @@ delegate_entire_balance_test() ->
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     ?assertEqual(10, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)).
 
+delegate_exceeds_available_balance_rejected_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
+    ?assertError(_, dev_pot:delegate(Alice, Bob, ResourceOxygen, 15, S0, Opts)).
+
 %%% Delegation Chain Tests
 
 deep_delegation_chain_test() ->

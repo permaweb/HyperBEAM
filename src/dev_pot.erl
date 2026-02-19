@@ -528,6 +528,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         true -> S2;
         false ->
             DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
+            true = DelegatorDeposit >= Amount,
             S3 =
                 hb_ao:set(
                     S2,
