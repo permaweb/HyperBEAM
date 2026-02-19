@@ -166,7 +166,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     % Convert to binary
     PathBin = to_path(PathParts),
     write(Opts, PathBin, Value);
-write(Opts, Path, Value) ->
+write(#{<<"name">> := Name} = Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
@@ -175,6 +175,8 @@ write(Opts, Path, Value) ->
             ?event(
                 error,
                 {lmdb_error,
+                    {name, Name},
+                    {path, Path},
                     {type, Type},
                     {description, Description}
                 }
