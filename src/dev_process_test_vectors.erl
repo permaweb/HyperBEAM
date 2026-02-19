@@ -414,7 +414,7 @@ aos_state_access_via_http_test_() ->
                             "}})">>,
                     <<"target">> => ProcID
                 },
-                #{ priv_wallet => Wallet }
+                Opts
             ),
         {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
         ?event({schedule_msg_res, {res, Res}}),
