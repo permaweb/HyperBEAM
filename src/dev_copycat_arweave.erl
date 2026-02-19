@@ -171,6 +171,7 @@ fetch_and_process_block(Current, To, Opts) ->
 
 %% @doc Process a block.
 process_block(BlockRes, Current, To, Opts) ->
+    ?event(copycat_debug, {{processing_block, Current}, {block, BlockRes}}),
     case BlockRes of
         {ok, Block} ->
             case maybe_index_ids(Block, Opts) of
@@ -302,6 +303,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
+    ?event(copycat_debug, {writing_index,
+        {id, {explicit, TXID}},
+        {offset, TXStartOffset},
+        {size, TX#tx.data_size}
+    }),
     observe_event(<<"item_indexed">>, fun() ->
         hb_store_arweave:write_offset(
             IndexStore,
@@ -657,15 +663,17 @@ invalid_bundle_test() ->
     assert_item_read(<<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>, Opts),
     ok.
 
-bad_block_test_disabled() ->
+block_with_large_integer_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 633719,
-    fetch_and_process_block(Block, Block, Opts),
     {ok, Block} =
         hb_ao:resolve(
             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
             Opts
         ),
+    % This is bundle signed with a solana signature, so only the L1 TX can
+    % actually be loaded.
+    assert_item_read(<<"UXpcKTl6Mh34eTFSgny4NcIqoUjBcgYIcMqromcS6_Q">>, Opts),
     ok.
 
 % ecdsa_no_data_test() ->
@@ -697,6 +705,8 @@ bad_block_test_disabled() ->
 %     ok.
 
 %% @doc Disabled because the test takes ~30 seconds to run.
+%% dev_arweave:get_tx_data_tag_exclude_data_test has some test coverage for
+%% handling an L1 TX with a data tag. 
 tx_with_data_tag_test_disabled() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1289677,
