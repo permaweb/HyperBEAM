@@ -435,7 +435,7 @@ post_ans104_tx_test() ->
         hb_http:post(
             Server,
             Msg#{
-                <<"path">> => <<"/~arweave@2.9-pre/tx">>,
+                <<"path">> => <<"/~arweave@2.9/tx">>,
                 <<"codec-device">> => <<"ans104@1.0">>
             },
             ClientOpts
@@ -460,7 +460,7 @@ post_ans104_tx_test() ->
 
 get_tx_basic_data_test() ->
     {ok, Structured} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
             <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
@@ -488,7 +488,7 @@ get_tx_basic_data_test() ->
 %% @doc The data for this transaction ends with two smaller chunks.
 get_tx_split_chunk_test() ->
     {ok, Structured} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
             <<"tx">> => <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
@@ -517,7 +517,7 @@ get_tx_split_chunk_test() ->
 
 get_tx_basic_data_exclude_data_test() ->
     {ok, Structured} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
             <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
@@ -535,7 +535,7 @@ get_tx_basic_data_exclude_data_test() ->
     },
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"raw">>,
             <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
@@ -550,7 +550,7 @@ get_tx_basic_data_exclude_data_test() ->
 
 get_tx_data_tag_exclude_data_test() ->
     {ok, Structured} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
             <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
@@ -568,7 +568,7 @@ get_tx_data_tag_exclude_data_test() ->
     },
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"raw">>,
             <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>
@@ -583,7 +583,7 @@ get_tx_data_tag_exclude_data_test() ->
 
 get_tx_rsa_nested_bundle_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    Path = <<"/~arweave@2.9/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     {ok, Root} = hb_http:get(Node, Path, #{}),
     ?event(debug_test, {root, Root}),
     ?assert(hb_message:verify(Root, all, #{})),
@@ -617,7 +617,7 @@ get_tx_rsa_nested_bundle_test() ->
 get_tx_rsa_large_bundle_test_disabled() ->
     {timeout, 300, fun() ->
         Node = hb_http_server:start_node(),
-        Path = <<"/~arweave@2.9-pre/tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
+        Path = <<"/~arweave@2.9/tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
         {ok, Root} = hb_http:get(Node, Path, #{}),
         ?event(debug_test, {root, Root}),
         ?assert(hb_message:verify(Root, all, #{})),
@@ -626,7 +626,7 @@ get_tx_rsa_large_bundle_test_disabled() ->
 
 get_bad_tx_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
+    Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, client_error}, Res).
 
@@ -670,7 +670,7 @@ get_partial_chunk_post_split_test() ->
     ExpectedLength = 1000,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -691,7 +691,7 @@ get_full_chunk_post_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -712,7 +712,7 @@ get_multi_chunk_post_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE * 3,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -735,7 +735,7 @@ get_mid_chunk_post_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -756,7 +756,7 @@ get_partial_chunk_pre_split_test() ->
     ExpectedLength = 1000,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -777,7 +777,7 @@ get_full_chunk_pre_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -798,7 +798,7 @@ get_multi_chunk_pre_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE * 3,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,
@@ -819,7 +819,7 @@ get_mid_chunk_pre_split_test() ->
     ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
     Opts = #{},
     {ok, Data} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => Offset,

@@ -112,14 +112,14 @@ upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
 upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
     ?event({uploading_item, Msg}),
     dev_arweave:post_tx(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         Msg,
         Opts,
         <<"ans104@1.0">>
     );
 upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
     dev_arweave:post_tx(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         Msg,
         Opts,
         <<"tx@1.0">>
