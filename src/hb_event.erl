@@ -7,7 +7,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
--define(MAX_MEMORY, 2_000_000_000). % 2GB
+-define(MAX_MEMORY, 1_000_000_000). % 2GB
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.

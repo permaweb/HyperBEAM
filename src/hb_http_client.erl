@@ -31,8 +31,8 @@
 setup_conn(Opts) ->
     ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
     ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    ?event(warning, {connection_pool_size, {read, ConnPoolReadSize}, {write, ConnPoolWriteSize}}),
     persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
-
 
 ok() ->
     gen_server:call(?MODULE, ok).
