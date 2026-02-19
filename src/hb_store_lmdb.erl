@@ -30,7 +30,7 @@
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
--define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(DEFAULT_SIZE, 2 * 1024 * 1024 * 1024 * 1024). % 4TiB default database size
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 
 %% @doc Start the LMDB storage system for a given database configuration.
