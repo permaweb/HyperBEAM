@@ -319,7 +319,7 @@ encode_value(Value) ->
 decode_value(Type, Value) when is_list(Type) ->
     decode_value(list_to_binary(Type), Value);
 decode_value(Type, Value) when is_binary(Type) ->
-    ?event({decoding, {type, Type}, {value, Value}}),
+    ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
     decode_value(
         binary_to_existing_atom(
             list_to_binary(string:to_lower(binary_to_list(Type))),
