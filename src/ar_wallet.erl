@@ -11,7 +11,6 @@
 %%% @doc Utilities for manipulating wallets.
 
 -define(WALLET_DIR, ".").
--define(WALLET_POOL_NAME, ar_wallet_pool).
 -define(WALLET_POOL_TARGET, 6).
 
 %%% Public interface.
@@ -52,12 +51,13 @@ request_pooled_wallet(KeyType) ->
     end.
 
 ensure_wallet_pool(KeyType) ->
-    case whereis(?WALLET_POOL_NAME) of
+    PoolName = wallet_pool_name(KeyType),
+    case whereis(PoolName) of
         undefined ->
             Pid = spawn(fun() -> wallet_pool_loop(KeyType, queue:new(), queue:new(), 0) end),
-            case catch register(?WALLET_POOL_NAME, Pid) of
+            case catch register(PoolName, Pid) of
                 true -> Pid;
-                _ -> whereis(?WALLET_POOL_NAME)
+                _ -> whereis(PoolName)
             end;
         Pid ->
             Pid
@@ -96,6 +96,11 @@ maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight) ->
         lists:seq(1, Needed)
     ),
     {Wallets, InFlight + Needed}.
+
+wallet_pool_name({rsa, 65537}) ->
+    ar_wallet_pool_rsa_65537;
+wallet_pool_name({?ECDSA_SIGN_ALG, secp256k1}) ->
+    ar_wallet_pool_ecdsa_secp256k1.
 
 %% @doc Sign some data with a private key.
 sign(Key, Data) ->
