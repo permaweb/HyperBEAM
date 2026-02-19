@@ -35,16 +35,25 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
     Type.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+    {IndexDuration, IndexResponse} = timer:tc(
+        fun () -> hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) end, 
+        native
+    ),
+    record_index_check_metric(IndexDuration),
+    case IndexResponse of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
             Loaded =
                 case CodecName of
                     <<"ans104@1.0">> ->
-                        load_item(StartOffset, Length, StoreOpts);
+                        {LoadDuration, LoadedMsg} = timer:tc(fun () -> load_item(StartOffset, Length, StoreOpts) end, native),
+                        record_chunk_fetch_metric(LoadDuration, load_bundle),
+                        LoadedMsg;
                     <<"tx@1.0">> ->
-                        load_tx(ID, StartOffset, Length, StoreOpts)
+                        {LoadDuration, LoadedMsg} = timer:tc(fun () -> load_tx(ID, StartOffset, Length, StoreOpts) end, native),
+                        record_chunk_fetch_metric(LoadDuration, load_item),
+                        LoadedMsg
                 end,
             case Loaded of
                 {ok, _Message} ->
@@ -79,13 +88,19 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             )
     end.
 
-end_read_metric(StartRead) ->
+record_index_check_metric(Duration) ->
+    record_metric(hb_store_arweave_index_check_duration_seconds, [], Duration).
+
+record_chunk_fetch_metric(Duration, Type) ->
+    record_metric(hb_store_arweave_chunk_fetch_duration_seconds, [Type], Duration).
+
+record_metric(Metric, Label, Duration) ->
     spawn(fun () -> 
-        Duration = erlang:monotonic_time(microsecond) - StartRead,
-        prometheus_histogram:observe(
-        hb_store_arweave_index_check_duration_seconds,
-        Duration * 1000
-        )
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ ->
+                prometheus_histogram:observe(Metric, Label, Duration)
+        end
     end).
 
 read_with_type(Opts, Key) when is_list(Key) ->
@@ -184,6 +199,13 @@ init_prometheus() ->
                     {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
                     {help, "How much it takes to check the index"}
                 ]),
+                prometheus_histogram:declare([
+                    {name, hb_store_arweave_chunk_fetch_duration_seconds},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
+                    {labels, [type]},
+                    {help, "How much it takes to check the index"}
+                ]),
+
                 ok
             catch
                 error:mfa_already_exists -> ok;
