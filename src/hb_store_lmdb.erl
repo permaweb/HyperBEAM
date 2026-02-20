@@ -227,6 +227,7 @@ read(#{<<"name">> := Name} = Opts, Path) ->
 
     case ReadResult of
         {ok, Value} -> 
+            name_hit_metrics(Name),
             {ok, Value};
         not_found ->
             try
@@ -641,6 +642,12 @@ reset(Opts) ->
             ok
     end.
 
+name_hit_metrics(Name) ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ -> prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1)
+    end.
+
 init_prometheus() ->
     case application:get_application(prometheus) of
         undefined -> ok;
@@ -651,6 +658,11 @@ init_prometheus() ->
                     {labels, [function, store_name]},
                     {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
                     {help, "Duration of lmdb operations in microseconds"}
+                ]),
+                prometheus_counter:new([
+                    {name, hb_store_lmdb_hit},
+                    {labels, [name]},
+                    {help, "LMDB name requested"}
                 ]),
                 ok
             catch
