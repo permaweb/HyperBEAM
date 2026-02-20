@@ -196,7 +196,7 @@ init_prometheus() ->
             try
                 prometheus_histogram:declare([
                     {name, hb_store_arweave_index_check_duration_seconds},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]},
                     {help, "How much it takes to check the index"}
                 ]),
                 prometheus_histogram:declare([
