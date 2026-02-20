@@ -177,9 +177,9 @@ get_deep_key_test() ->
 
 priv_opts_store_read_link_test() ->
     % Write a message to the public store.
-    PublicStore = [hb_test_utils:test_store(hb_store_lmdb)],
+    PublicStore = [hb_test_utils:test_store()],
     timer:sleep(1),
-    OnlyPrivStore = [hb_test_utils:test_store(hb_store_fs)],
+    OnlyPrivStore = [hb_test_utils:test_store()],
     ok = hb_store:write(PublicStore, <<"key">>, <<"test-message">>),
     {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"key">>),
     % Make a link to the key in the public store.
@@ -199,8 +199,8 @@ priv_opts_store_read_link_test() ->
 
 priv_opts_cache_read_message_test() ->
     hb:init(),
-    PublicStore = [hb_test_utils:test_store(hb_store_lmdb)],
-    OnlyPrivStore = [hb_test_utils:test_store(hb_store_fs)],
+    PublicStore = [hb_test_utils:test_store()],
+    OnlyPrivStore = [hb_test_utils:test_store()],
     Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
     PrivOpts = opts(Opts),
     % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a

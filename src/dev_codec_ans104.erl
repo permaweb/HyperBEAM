@@ -753,7 +753,7 @@ bundle_commitment_test() ->
     ok.
 
 test_bundle_commitment(Commit, Encode, Decode) ->
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ priv_wallet => hb:wallet(), store => hb_test_utils:test_store() },
     Structured = #{ <<"list">> => [1, 2, 3] },
     ToBool = fun(unbundled) -> false; (bundled) -> true end,
     Label = lists:flatten(io_lib:format("~p -> ~p -> ~p",
