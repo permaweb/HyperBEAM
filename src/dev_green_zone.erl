@@ -133,10 +133,10 @@ info(_Msg1, _Msg2, _Opts) ->
             },
             <<"join">> => #{
                 <<"description">> => <<"Join an existing green zone">>,
-                <<"required_node_opts">> => #{
-                    <<"green_zone_peer_location">> => 
+                <<"required-node-opts">> => #{
+                    <<"green-zone-peer-location">> => 
                         <<"Target peer's address">>,
-                    <<"green_zone_peer_id">> => 
+                    <<"green-zone-peer-id">> => 
                         <<"Target peer's unique identifier">>
                 }
             },
@@ -151,10 +151,10 @@ info(_Msg1, _Msg2, _Opts) ->
             },
             <<"become">> => #{
                 <<"description">> => <<"Clone the identity of a target node">>,
-                <<"required_node_opts">> => #{
-                    <<"green_zone_peer_location">> => 
+                <<"required-node-opts">> => #{
+                    <<"green-zone-peer-location">> => 
                         <<"Target peer's address">>,
-                    <<"green_zone_peer_id">> => 
+                    <<"green-zone-peer-id">> => 
                         <<"Target peer's unique identifier">>
                 }
             }
@@ -327,9 +327,9 @@ become(_M1, _M2, Opts) ->
             ?event(green_zone, {become, error, <<"no aes key">>}),
             {error, <<"Node not part of a green zone.">>};
         {error, missing_peer_location} ->
-            {error, <<"green_zone_peer_location required">>};
+            {error, <<"green-zone-peer-location required">>};
         {error, missing_peer_id} ->
-            {error, <<"green_zone_peer_id required">>};
+            {error, <<"green-zone-peer-id required">>};
         {error, invalid_peer_response} ->
             {error, <<"Received incorrect response from peer!">>};
         Error ->
@@ -355,7 +355,7 @@ become(_M1, _M2, Opts) ->
 %% @returns {ok, ProcessedConfig} with processed configuration
 setup_green_zone_config(Opts) ->
     RequiredConfig = hb_opts:get(
-        <<"green_zone_required_config">>,
+        <<"green-zone-required-config">>,
         default_zone_required_opts(Opts),
         Opts
     ),
@@ -409,8 +409,8 @@ ensure_aes_key(Opts) ->
 %% @param Opts Configuration options
 %% @returns {PeerLocation, PeerID, HasGreenZoneIdentity} tuple
 extract_peer_info(Opts) ->
-    PeerLocation = hb_opts:get(<<"green_zone_peer_location">>, undefined, Opts),
-    PeerID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
+    PeerLocation = hb_opts:get(green_zone_peer_location, undefined, Opts),
+    PeerID = hb_opts:get(green_zone_peer_id, undefined, Opts),
     Identities = hb_opts:get(identities, #{}, Opts),
     HasGreenZoneIdentity = maps:is_key(<<"green-zone">>, Identities),
     {PeerLocation, PeerID, HasGreenZoneIdentity}.
@@ -510,7 +510,7 @@ prepare_join_request(InitOpts) ->
         ?event(green_zone, {remove_uncommitted, Report}),
         MergedReq = hb_ao:set(
             Report, 
-            <<"public_key">>,
+            <<"public-key">>,
             base64:encode(term_to_binary(WalletPub)),
             InitOpts
         ),
@@ -628,7 +628,7 @@ extract_join_request_data(Req, Opts) ->
         NodeAddr = hb_ao:get(<<"address">>, Req, Opts),
         ?event(green_zone, {join, extract, {node_addr, NodeAddr}}),
         % Extract and decode public key
-        EncodedPubKey = hb_ao:get(<<"public_key">>, Req, Opts),
+        EncodedPubKey = hb_ao:get(<<"public-key">>, Req, Opts),
         ?event(green_zone, {encoded_pub_key, {explicit, EncodedPubKey}}),
         RequesterPubKey = case EncodedPubKey of
             not_found -> not_found;
@@ -664,7 +664,7 @@ process_successful_join(NodeAddr, RequesterPubKey, Req, Opts) ->
         <<"body">>         => <<"Node joined green zone successfully.">>,
         <<"node-address">> => NodeAddr,
         <<"zone-key">>     => base64:encode(EncryptedPayload),
-        <<"public_key">>   => WalletPubKey
+        <<"public-key">>   => WalletPubKey
     }}.
 
 %% @doc Validates that a peer's configuration matches required options.
@@ -762,10 +762,9 @@ add_trusted_node(NodeAddr, Report, RequesterPubKey, Opts) ->
 %% @param Opts Configuration options containing identities and wallet info
 %% @returns Wallet to use for encryption operations
 get_appropriate_wallet(Opts) ->
-    Identities = hb_opts:get(identities, #{}, Opts),
-    case maps:find(<<"green-zone">>, Identities) of
-        {ok, #{priv_wallet := GreenZoneWallet}} -> GreenZoneWallet;
-        _ -> hb_opts:get(priv_wallet, undefined, Opts)
+    case hb_opts:as(<<"green-zone">>, Opts) of
+        {ok, IdentityOpts} -> hb_opts:get(priv_wallet, undefined, IdentityOpts);
+        {error, not_found} -> hb_opts:get(priv_wallet, undefined, Opts)
     end.
 
 %% @doc Build successful key response with encrypted data.
@@ -779,7 +778,7 @@ get_appropriate_wallet(Opts) ->
 build_key_response(EncryptedData, IV) ->
     {ok, #{
         <<"status">>        => 200,
-        <<"encrypted_key">> => base64:encode(EncryptedData),
+        <<"encrypted-key">> => base64:encode(EncryptedData),
         <<"iv">>            => base64:encode(IV)
     }}.
 
@@ -804,8 +803,8 @@ validate_become_params(Opts) ->
         end,
         % Extract and validate peer parameters
         NodeLocation = 
-            hb_opts:get(<<"green_zone_peer_location">>, undefined, Opts),
-        NodeID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
+            hb_opts:get(green_zone_peer_location, undefined, Opts),
+        NodeID = hb_opts:get(green_zone_peer_id, undefined, Opts),
         case {NodeLocation, NodeID} of
             {undefined, _} -> {error, missing_peer_location};
             {_, undefined} -> {error, missing_peer_id};
@@ -858,7 +857,7 @@ request_and_verify_peer_key(NodeLocation, NodeID, Opts) ->
 finalize_become(KeyResp, NodeLocation, NodeID, Opts) ->
     maybe
         % Decode and decrypt the encrypted key
-        Combined = base64:decode(hb_ao:get(<<"encrypted_key">>, KeyResp, Opts)),
+        Combined = base64:decode(hb_ao:get(<<"encrypted-key">>, KeyResp, Opts)),
         IV = base64:decode(hb_ao:get(<<"iv">>, KeyResp, Opts)),
         {ok, DecryptedBin} ?= decrypt_data(Combined, IV, Opts),
         % Log current wallet info
