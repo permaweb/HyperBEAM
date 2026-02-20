@@ -62,7 +62,7 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         end ++
         case maps:get(<<"max-readers">>, Opts, false) of
             false -> [];
-            MaxReaders -> [max_readers, hb_util:int(MaxReaders)]
+            MaxReaders -> [{max_readers, hb_util:int(MaxReaders)}]
         end ++
         case maps:get(<<"lock">>, Opts, true) of
             true -> [];
