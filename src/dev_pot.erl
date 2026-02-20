@@ -508,7 +508,12 @@ delegate(State, Assignment, Opts) ->
             ),
         NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
         StateWithT = State#{ <<"t">> := NewT },
-        {ok, delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts)}
+        case delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts) of
+            {error, _} = Err -> Err;
+            NewState -> {ok, NewState}
+        end
+    else
+        Reason -> {error, Reason}
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
@@ -528,99 +533,103 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         true -> S2;
         false ->
             DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
-            true = DelegatorDeposit >= Amount,
-            S3 =
-                hb_ao:set(
-                    S2,
-                    <<
-                        "/resources/",
-                        ResourceID/binary,
-                        "/deposits/",
-                        FromAddr/binary,
-                        "/quantity"
-                    >>,
-                    DelegatorDeposit - Amount,
-                    Opts
-                ),
-            ExistingDelegation =
-                hb_ao:get(
-                    <<
-                        "/resources/",
-                        ResourceID/binary,
-                        "/deposits/",
-                        FromAddr/binary,
-                        "/delegations/",
-                        ToAddr/binary
-                    >>,
-                    S3,
-                    0,
-                    Opts
-                ),
-            S4 =
-                hb_ao:set(
-                    S3,
-                    <<
-                        "/resources/",
-                        ResourceID/binary,
-                        "/deposits/",
-                        FromAddr/binary,
-                        "/delegations/",
-                        ToAddr/binary
-                    >>,
-                    ExistingDelegation + Amount,
-                    Opts
-                ),
-            ResourceAcc =
-                hb_ao:get(
-                    <<"resources/", ResourceID/binary, "/accumulator">>,
-                    S4,
-                    0,
-                    Opts
-                ),
-            RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
-            S5 =
-                hb_ao:set(
-                    S4,
-                    <<
-                        "/resources/", 
-                        ResourceID/binary,
-                        "/deposits/",
-                        ToAddr/binary,
-                        "/quantity"
-                    >>,
-                    RecipientDeposit + Amount,
-                    Opts
-                ),
-            S6 =
-                hb_ao:set(
-                    S5,
-                    <<
-                        "/resources/", 
-                        ResourceID/binary,
-                        "/deposits/",
-                        ToAddr/binary,
-                        "/last-resource-accumulator"
-                    >>,
-                    ResourceAcc,
-                    Opts
-                ),
-            S7 =
-                update_deposit_index(
-                    FromAddr,
-                    ResourceID,
-                    get_deposit(FromAddr, ResourceID, S6, Opts),
-                    S6,
-                    Opts
-                ),
-            S8 =
-                update_deposit_index(
-                    ToAddr,
-                    ResourceID,
-                    get_deposit(ToAddr, ResourceID, S7, Opts),
-                    S7,
-                    Opts
-                ),
-            send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S8, Opts)
+            case DelegatorDeposit >= Amount of
+                false ->
+                    {error, <<"Delegation amount exceeds available deposit.">>};
+                true ->
+                    S3 =
+                        hb_ao:set(
+                            S2,
+                            <<
+                                "/resources/",
+                                ResourceID/binary,
+                                "/deposits/",
+                                FromAddr/binary,
+                                "/quantity"
+                            >>,
+                            DelegatorDeposit - Amount,
+                            Opts
+                        ),
+                    ExistingDelegation =
+                        hb_ao:get(
+                            <<
+                                "/resources/",
+                                ResourceID/binary,
+                                "/deposits/",
+                                FromAddr/binary,
+                                "/delegations/",
+                                ToAddr/binary
+                            >>,
+                            S3,
+                            0,
+                            Opts
+                        ),
+                    S4 =
+                        hb_ao:set(
+                            S3,
+                            <<
+                                "/resources/",
+                                ResourceID/binary,
+                                "/deposits/",
+                                FromAddr/binary,
+                                "/delegations/",
+                                ToAddr/binary
+                            >>,
+                            ExistingDelegation + Amount,
+                            Opts
+                        ),
+                    ResourceAcc =
+                        hb_ao:get(
+                            <<"resources/", ResourceID/binary, "/accumulator">>,
+                            S4,
+                            0,
+                            Opts
+                        ),
+                    RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
+                    S5 =
+                        hb_ao:set(
+                            S4,
+                            <<
+                                "/resources/", 
+                                ResourceID/binary,
+                                "/deposits/",
+                                ToAddr/binary,
+                                "/quantity"
+                            >>,
+                            RecipientDeposit + Amount,
+                            Opts
+                        ),
+                    S6 =
+                        hb_ao:set(
+                            S5,
+                            <<
+                                "/resources/", 
+                                ResourceID/binary,
+                                "/deposits/",
+                                ToAddr/binary,
+                                "/last-resource-accumulator"
+                            >>,
+                            ResourceAcc,
+                            Opts
+                        ),
+                    S7 =
+                        update_deposit_index(
+                            FromAddr,
+                            ResourceID,
+                            get_deposit(FromAddr, ResourceID, S6, Opts),
+                            S6,
+                            Opts
+                        ),
+                    S8 =
+                        update_deposit_index(
+                            ToAddr,
+                            ResourceID,
+                            get_deposit(ToAddr, ResourceID, S7, Opts),
+                            S7,
+                            Opts
+                        ),
+                    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S8, Opts)
+            end
     end.
 
 %% @doc Undelegate some quantity of a resource from one address to another.
