@@ -697,7 +697,7 @@ delegate_to_self_test() ->
     S1 = dev_pot:delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
     % After delegating to self, deposit should still be 10 (5 removed, 5 added back)
     ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
-    % Delegation record should show 5 to self
+    % Self delegation is a noop, so no delegation record should be written
     Delegation = hb_ao:get(
         <<"/resources/",
         ResourceOxygen/binary,
@@ -709,7 +709,7 @@ delegate_to_self_test() ->
         0,
         Opts
     ),
-    ?assertEqual(5, Delegation).
+    ?assertEqual(0, Delegation).
 
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
@@ -721,6 +721,17 @@ delegate_entire_balance_test() ->
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     ?assertEqual(10, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)).
+
+delegate_exceeds_available_balance_rejected_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
+    ?assertMatch(
+        {error, <<"Delegation amount exceeds available deposit.">>},
+        dev_pot:delegate(Alice, Bob, ResourceOxygen, 15, S0, Opts)
+    ).
 
 %%% Delegation Chain Tests
 
