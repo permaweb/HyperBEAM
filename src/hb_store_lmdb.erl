@@ -643,16 +643,19 @@ reset(Opts) ->
     end.
 
 name_hit_metrics(Name) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ -> prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1)
-    end.
+    spawn(fun() ->
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ -> prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1)
+        end
+    end).
 
 init_prometheus() ->
     case application:get_application(prometheus) of
         undefined -> ok;
         _ ->
             try
+                application:ensure_all_started([prometheus]),
                 prometheus_histogram:declare([
                     {name, hb_store_lmdb_duration_seconds},
                     {labels, [function, store_name]},
