@@ -64,10 +64,9 @@ extract_target(Base, Request, Opts) ->
             not_found
     end.
 
-post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
-    ?event({{request, Request}, {base, Base}}),
+post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
-    ?event({tx, TX}),
+    ?event({post_tx, TX}),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
     Serialized = hb_json:encode(JSON),
     ?event({serialized_tx, {explicit, Serialized}}),
@@ -96,12 +95,11 @@ post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
             TXResponse;
         Else -> Else
     end;
-post_tx(Base, Request, Opts, <<"ans104@1.0">>) ->
-    ?event({{request, Request}, {base, Base}, {opts, Opts}}),
+post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
     TX = hb_message:convert(Request, <<"ans104@1.0">>, Opts),
-    ?event({tx, TX}),
+    ?event({post_ans104, TX}),
     Serialized = ar_bundles:serialize(TX),
-    ?event({serialized_tx, Serialized}),
+    ?event({serialized_ans104, Serialized}),
     post_binary_ans104(Serialized, Opts).
 
 post_binary_ans104(SerializedTX, Opts) ->
@@ -413,7 +411,7 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
 
 %%% Tests
 
-post_ans104_tx_test() ->
+post_ans104_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
@@ -435,12 +433,12 @@ post_ans104_tx_test() ->
         hb_http:post(
             Server,
             Msg#{
-                <<"path">> => <<"/~arweave@2.9/tx">>,
-                <<"codec-device">> => <<"ans104@1.0">>
+                <<"path">> => <<"/~arweave@2.9/tx">>
             },
             ClientOpts
         ),
     ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
     SignedID = hb_message:id(Msg, signed, ClientOpts),
     {ok, GetRes} =
         hb_http:get(
@@ -456,6 +454,135 @@ post_ans104_tx_test() ->
         },
         GetRes
     ),
+    ok.
+
+post_ans104_binary_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"Process">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+    DataItem = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, ClientOpts),
+    ?event(debug_test, {data_item, DataItem}),
+    Serialized = ar_bundles:serialize(DataItem),
+    {ok, PostRes} =
+        hb_http:post(
+            Server,
+            #{
+                <<"device">> => <<"arweave@2.9">>,
+                <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized
+            },
+            ClientOpts
+        ),
+    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
+    SignedID = hb_message:id(Msg, signed, ClientOpts),
+    {ok, GetRes} =
+        hb_http:get(
+            Server, <<"/", SignedID/binary>>,
+            ClientOpts
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 200,
+            <<"variant">> := <<"ao.N.1">>,
+            <<"type">> := <<"Process">>,
+            <<"data">> := <<"test-data">>
+        },
+        GetRes
+    ),
+    ok.
+
+post_tx_message_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"tag">> => <<"value">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    ?event(debug_test, {msg, Msg}),
+    Response =
+        hb_http:post(
+            Server,
+            Msg#{
+                <<"device">> => <<"arweave@2.9">>,
+                <<"path">> => <<"/tx">>
+            },
+            ClientOpts
+        ),
+    ?event(debug_test, {post_response, Response}),
+    % The transaction is invalid because it has insufficient balance, only
+    % way we'll know that is if the HB node successfully posted the tx to
+    % an arweave node.
+    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
+    {error, #{ <<"body">> := Body }} = Response,
+    ?assertEqual(<<"Transaction verification failed.">>, Body),
+    ok.
+
+post_tx_json_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"tag">> => <<"value">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    TX = hb_message:convert(Msg, <<"tx@1.0">>, <<"structured@1.0">>, ClientOpts),
+    ?event(debug_test, {tx, TX}),
+    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
+    Serialized = hb_json:encode(JSON),
+    ?event(debug_test, {serialized_tx, {explicit, Serialized}}),
+    Response =
+        hb_http:post(
+            Server,
+            #{
+                <<"device">> => <<"arweave@2.9">>,
+                <<"path">> => <<"/tx?codec-device=tx@1.0">>,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => Serialized
+            },
+            ClientOpts
+        ),
+    ?event(debug_test, {post_response, Response}),
+    % The transaction is invalid because it has insufficient balance, only
+    % way we'll know that is if the HB node successfully posted the tx to
+    % an arweave node.
+    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
+    {error, #{ <<"body">> := Body }} = Response,
+    ?assertEqual(<<"Transaction verification failed.">>, Body),
     ok.
 
 get_tx_basic_data_test() ->

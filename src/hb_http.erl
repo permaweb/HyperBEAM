@@ -894,6 +894,28 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                 false ->
                     throw({invalid_ans104_signature, Item})
             end;
+        <<"tx@1.0">> ->
+            TX = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+            ?event(debug_accept,
+                {deserialized_tx,
+                    {tx, TX},
+                    {exact, {explicit, TX}}
+                }
+            ),
+            case ar_tx:verify(TX) of
+                true ->
+                    ?event(tx, {valid_tx_signature, TX}),
+                    StructuredTX =
+                        hb_message:convert(
+                            TX,
+                            <<"structured@1.0">>,
+                            <<"tx@1.0">>,
+                            Opts
+                        ),
+                    normalize_unsigned(PrimitiveMsg, Req, StructuredTX, Opts);
+                false ->
+                    throw({invalid_tx_signature, TX})
+            end;
         Codec ->
             % Assume that the codec stores the encoded message in the `body' field.
             ?event(http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
