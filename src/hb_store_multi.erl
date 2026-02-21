@@ -9,7 +9,6 @@
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([read/2, type/2, list/2, match/2]).
 -export([write/3, make_group/2, make_link/3]).
--include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Initialization and teardown functions.
@@ -22,10 +21,11 @@ scope() -> local.
 
 %% @doc Find (causing a spawn and caching of the instance data) each store.
 start(StoreOpts) ->
-    store_with_workers(StoreOpts).
+    {ok, store_with_workers(StoreOpts)}.
 
 %% @doc Stop each store and its worker process.
-stop(#{ <<"stores">> := Stores }) ->
+stop(StoreOpts) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
     operation(
         length(Stores),
         Stores,
@@ -38,7 +38,8 @@ stop(#{ <<"stores">> := Stores }) ->
     ).
 
 %% @doc Reset each store.
-reset(#{ <<"stores">> := Stores }) ->
+reset(StoreOpts) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
     operation(
         length(Stores),
         Stores,
@@ -49,33 +50,58 @@ reset(#{ <<"stores">> := Stores }) ->
 %%% Read operations.
 
 %% @doc Read a key from the stores. Return the first successful result.
-read(#{ <<"stores">> := Stores }, Key) ->
-    case operation(1, Stores, fun(XOpts) -> hb_store:read(XOpts, Key) end, [Key]) of
+read(StoreOpts, Key) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
+    case
+        operation(
+            1,
+            Stores,
+            fun(XOpts, XKey) -> hb_store:read(XOpts, XKey) end,
+            [Key]
+        )
+    of
         [Res] -> Res;
         _ -> not_found
     end.
 
 %% @doc List the keys in the stores. Return the first successful result.
-list(#{ <<"stores">> := Stores }, Key) ->
-    case operation(1, Stores, fun(XOpts) -> hb_store:list(XOpts, Key) end, [Key]) of
+list(StoreOpts, Key) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
+    case
+        operation(
+            1,
+            Stores,
+            fun(XOpts, XKey) -> hb_store:list(XOpts, XKey) end,
+            [Key]
+        )
+    of
         [Res] -> Res;
         _ -> not_found
     end.
 
 %% @doc Type a key in the stores. Return the first successful result.
-type(#{ <<"stores">> := Stores }, Key) ->
-    case operation(1, Stores, fun(XOpts) -> hb_store:type(XOpts, Key) end, [Key]) of
+type(StoreOpts, Key) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
+    case
+        operation(
+            1,
+            Stores,
+            fun(XOpts, XKey) -> hb_store:type(XOpts, XKey) end,
+            [Key]
+        )
+    of
         [Res] -> Res;
         _ -> not_found
     end.
 
 %% @doc Match a key in the stores. Return the first successful result.
-match(#{ <<"stores">> := Stores }, Match) ->
+match(StoreOpts, Match) ->
+    #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
     MatchRes = 
         operation(
             1,
             Stores,
-            fun(XOpts) -> hb_store:match(XOpts, Match) end,
+            fun(XOpts, XMatch) -> hb_store:match(XOpts, XMatch) end,
             [Match]
         ),
     case MatchRes of
@@ -91,12 +117,14 @@ confirmations(#{ <<"stores">> := Stores }) -> length(Stores).
 
 %% @doc Write a key to the stores. By default writes to all stores, but can be
 %% configured to return after only a count of `write-confirmations`, as necessary.
-write(StoreOpts = #{ <<"stores">> := Stores }, Key, Value) ->
+write(StoreOpts, Key, Value) ->
+    StoreOptsWithWorkers = hb_store:find(StoreOpts),
+    #{ <<"stores">> := Stores } = StoreOptsWithWorkers,
     Res = 
         operation(
-            confirmations(StoreOpts),
+            confirmations(StoreOptsWithWorkers),
             Stores,
-            fun(XOpts) -> hb_store:write(XOpts, Key, Value) end,
+            fun(XOpts, XKey, XValue) -> hb_store:write(XOpts, XKey, XValue) end,
             [Key, Value]
         ),
     case Res of
@@ -107,12 +135,16 @@ write(StoreOpts = #{ <<"stores">> := Stores }, Key, Value) ->
 %% @doc Make a link in the stores. By default makes a link in all stores, but
 %% consults the `write-confirmations' configuration to determine how many stores
 %% as with `write/2`.
-make_link(StoreOpts = #{ <<"stores">> := Stores }, Existing, New) ->
+make_link(StoreOpts, Existing, New) ->
+    StoreOptsWithWorkers = hb_store:find(StoreOpts),
+    #{ <<"stores">> := Stores } = StoreOptsWithWorkers,
     Res =
         operation(
-            confirmations(StoreOpts),
+            confirmations(StoreOptsWithWorkers),
             Stores,
-            fun(XOpts) -> hb_store:make_link(XOpts, Existing, New) end,
+            fun(XOpts, XExisting, XNew) ->
+                hb_store:make_link(XOpts, XExisting, XNew)
+            end,
             [Existing, New]
         ),
     case Res of
@@ -125,11 +157,13 @@ make_link(StoreOpts = #{ <<"stores">> := Stores }, Existing, New) ->
 %% @doc Make a group in the stores. By default makes a group in all stores, but
 %% consults the `write-confirmations' configuration to determine how many stores
 %% as with `write/2`.
-make_group(StoreOpts = #{ <<"stores">> := Stores }, Path) ->
+make_group(StoreOpts, Path) ->
+    StoreOptsWithWorkers = hb_store:find(StoreOpts),
+    #{ <<"stores">> := Stores } = StoreOptsWithWorkers,
     Res = operation(
-        confirmations(StoreOpts),
+        confirmations(StoreOptsWithWorkers),
         Stores,
-        fun(XOpts) -> hb_store:make_group(XOpts, Path) end,
+        fun(XOpts, XPath) -> hb_store:make_group(XOpts, XPath) end,
         [Path]
     ),
     case Res of
@@ -144,7 +178,7 @@ store_with_workers(StoreOpts = #{ <<"stores">> := Stores }) ->
     StoreOpts#{
         <<"stores">> :=
             lists:map(
-                fun(Store) -> Store#{ <<"worker">> := start_worker(Store) } end,
+                fun(Store) -> Store#{ <<"worker">> => start_worker(Store) } end,
                 Stores
             )
     }.
@@ -179,38 +213,38 @@ dispatch(Worker, Function, Args) ->
     Ref = make_ref(),
     Caller = self(),
     Worker ! {operation, Ref, Caller, Function, Args},
-    {Worker, {waiting, Ref}}.
+    {Ref, {waiting, Worker}}.
 
 %% @doc Collect result messages from worker processes, cancelling operations
 %% that are no longer needed.
-collect(Required, PIDRefs) when is_list(PIDRefs) ->
-    collect(Required, maps:from_list(PIDRefs));
-collect(0, PIDRefs) ->
+collect(Required, RefStates) when is_list(RefStates) ->
+    collect(Required, maps:from_list(RefStates));
+collect(0, RefStates) ->
     % Cancel all remaining operations and return the result values.
     maps:values(
         maps:filtermap(
-            fun(PID, {waiting, Ref}) -> cancel(PID, Ref), false;
-               (_PID, Res) -> {true, Res}
+            fun(Ref, {waiting, Worker}) -> cancel(Worker, Ref), false;
+               (_Ref, Res) -> {true, Res}
             end,
-            PIDRefs
+            RefStates
         )
     );
 collect(Count, Refs) when Count > map_size(Refs) ->
     % Threre are more results still to gather than remaining store references.
     % Cancel the remaining operations and return an error.
-    maps:map(
-        fun(PID, {waiting, Ref}) -> cancel(PID, Ref);
-           (_PID, _Res) -> ok
+    maps:foreach(
+        fun(Ref, {waiting, Worker}) -> cancel(Worker, Ref);
+           (_Ref, _Res) -> ok
         end,
         Refs
     ),
     {error, not_enough_results};
 collect(Count, Refs) ->
     receive
-        {result, Ref, Res} when is_map_key(Ref, Refs) ->
+        {result, Ref, Result} when is_map_key(Ref, Refs) ->
             % Add new `ok' or `{ok, Res}' to the results, but remove erroring
             % store references.
-            case Res of
+            case Result of
                 ok -> collect(Count - 1, maps:put(Ref, ok, Refs));
                 {ok, Res} -> collect(Count - 1, maps:put(Ref, {ok, Res}, Refs));
                 _ -> collect(Count, maps:remove(Ref, Refs))
@@ -233,3 +267,78 @@ server(StoreOpts) ->
                 server(StoreOpts)
             end
     end.
+
+%%% Tests
+
+key_in_any_store_is_found_test() ->
+    with_multi_store(
+        fun(#{ multi_store := MultiStore, stores := Stores }) ->
+            [_Store1, Store2, _Store3] = Stores,
+            Key = <<"found-in-second-store">>,
+            Value = <<"value-in-second-store">>,
+            ok = hb_store:write(Store2, Key, Value),
+            ?assertEqual({ok, Value}, hb_store:read(MultiStore, Key))
+        end
+    ).
+
+write_meets_confirmation_threshold_test() ->
+    with_multi_store(
+        fun(#{ multi_store := MultiStore, stores := Stores }) ->
+            StoreWithConfirmations = MultiStore#{ <<"confirmations">> => 2 },
+            Key = <<"minimum-confirmations-key">>,
+            Value = <<"minimum-confirmations-value">>,
+            ?assertEqual(ok, hb_store:write(StoreWithConfirmations, Key, Value)),
+            Copies = stores_with_key(Stores, Key, Value),
+            ?assert(Copies >= 2),
+            ?assert(Copies =< length(Stores))
+        end
+    ).
+
+write_replicates_to_all_stores_by_default_test() ->
+    with_multi_store(
+        fun(#{ multi_store := MultiStore, stores := Stores }) ->
+            Key = <<"all-stores-key">>,
+            Value = <<"all-stores-value">>,
+            ?assertEqual(ok, hb_store:write(MultiStore, Key, Value)),
+            ?assertEqual(length(Stores), stores_with_key(Stores, Key, Value))
+        end
+    ).
+
+setup_multi_store() ->
+    Unique = integer_to_binary(erlang:unique_integer([positive])),
+    MultiStore =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"multi-store-", Unique/binary>>,
+            <<"stores">> => Stores =
+                [
+                    hb_test_utils:test_store(hb_store_fs),
+                    hb_test_utils:test_store(hb_store_fs),
+                    hb_test_utils:test_store(hb_store_fs)
+                ]
+        },
+    ok = hb_store:start(MultiStore),
+    #{ multi_store => MultiStore, stores => Stores }.
+
+cleanup_multi_store(#{ multi_store := MultiStore, stores := Stores }) ->
+    hb_store:stop(MultiStore),
+    lists:foreach(
+        fun(Store) -> hb_store:reset(Store) end,
+        Stores
+    ).
+
+with_multi_store(TestFun) ->
+    Context = setup_multi_store(),
+    try TestFun(Context)
+    after cleanup_multi_store(Context)
+    end.
+
+stores_with_key(Stores, Key, Value) ->
+    length(
+        [
+            Store
+        ||
+            Store <- Stores,
+            hb_store:read(Store, Key) =:= {ok, Value}
+        ]
+    ).
