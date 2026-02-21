@@ -937,7 +937,10 @@ liquidate_insufficient_delegations_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     % Alice has 0 deposits, 10 delegated to Bob. Try to withdraw 15 - impossible
-    ?assertError(_, dev_pot:withdraw(Alice, ResourceOxygen, 15, S1, Opts)).
+    ?assertMatch(
+        {error, <<"Insufficient delegated balance to liquidate withdrawal">>},
+        dev_pot:withdraw(Alice, ResourceOxygen, 15, S1, Opts)
+    ).
 
 undelegate_more_than_delegated_test() ->
     Alice = <<"alice">>,

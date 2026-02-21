@@ -344,9 +344,10 @@ withdraw(Base, Req, Opts) ->
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
-    S1 = liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
-    modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts).
-
+    case liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts) of
+        {error, _} = Err -> Err;
+        S1 -> modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
+    end.
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
 %% if the request is valid, otherwise returns `{error, Reason}'.
@@ -458,21 +459,29 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
             #{},
             Opts
         ),
-    LargestDelegation =
-        lists:max(
-            hb_maps:values(
-                hb_private:reset(ExistingDelegations)
-            )
+    DelegationPairs =
+        lists:filter(
+            fun({ToAddr, Qty}) ->
+                is_binary(ToAddr) andalso is_integer(Qty) andalso Qty > 0
+            end,
+            hb_maps:to_list(hb_private:reset(ExistingDelegations))
         ),
-    {LargestDelegationAddr, _} =
-        lists:keyfind(
-            LargestDelegation,
-            2,
-            hb_maps:to_list(ExistingDelegations)
-        ),
-    RevokeAmount = min(Amount, LargestDelegation),
-    S0 = undelegate(Addr, LargestDelegationAddr, ResourceID, RevokeAmount, S, Opts),
-    liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts).
+    ExistingDelegationsVals = lists:map(fun({_ToAddr, Qty}) -> Qty end, DelegationPairs),
+    case ExistingDelegationsVals of
+        [] -> {error, <<"Insufficient delegated balance to liquidate withdrawal">>};
+        _ -> LargestDelegation = lists:max(ExistingDelegationsVals),
+            {LargestDelegationAddr, _} =
+            lists:keyfind(
+                LargestDelegation,
+                2,
+                DelegationPairs
+            ),
+            RevokeAmount = min(Amount, LargestDelegation),
+            case undelegate(Addr, LargestDelegationAddr, ResourceID, RevokeAmount, S, Opts) of
+                {error, _} = Err -> Err;
+                S0 -> liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts)
+            end
+end.
 
 %% @doc Delegate some quantity of a resource from one address to another.
 delegate(State, Assignment, Opts) ->
