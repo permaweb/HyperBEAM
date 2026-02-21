@@ -650,15 +650,10 @@ undelegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
-    GlobalDrippedS = drip_global(S, Opts),
-    S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    S1 = drip_user(FromAddr, S0, Opts),
-    S2 = drip_user(ToAddr, S1, Opts),
-    % Self-undelegation is a noop
-    case FromAddr =:= ToAddr of
-        true -> S2;
-        false ->
-            ExistingDelegation =
+    ExistingDelegationBefore =
+        case FromAddr =:= ToAddr of
+            true -> 0;
+            false ->
                 hb_ao:get(
                     <<
                         "/resources/",
@@ -668,25 +663,38 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                         "/delegations/",
                         ToAddr/binary
                     >>,
-                    S2,
+                    S,
                     0,
                     Opts
-                ),
-            case ExistingDelegation >= Amount of
+                )
+        end,
+    Validation =
+        case FromAddr =:= ToAddr of
+            true -> ok;
+            false ->
+                case ExistingDelegationBefore >= Amount of
+                    true -> ok;
+                    false ->
+                        {error, <<"Undelegation amount exceeds existing delegation.">>}
+                end
+        end,
+    case Validation of
+        {error, _} = Err -> Err;
+        ok ->
+            RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+            Liquidated = liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts),
+            GlobalDrippedS = drip_global(Liquidated, Opts),
+            DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
+            S0 = drip_user(FromAddr, DrippedS, Opts),
+            S1 = drip_user(ToAddr, S0, Opts),
+            % Self-undelegation is a noop
+            case FromAddr =:= ToAddr of
+                true -> S1;
                 false ->
-                    {error, <<"Undelegation amount exceeds existing delegation.">>};
-                true ->
-                    RecipientDeposit = get_deposit(ToAddr, ResourceID, S2, Opts),
-                    Liquidated =
-                        liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S2, Opts),
-                    PostLiqGlobalDrippedS = drip_global(Liquidated, Opts),
-                    PostLiqDrippedS = drip_resource(ResourceID, PostLiqGlobalDrippedS, Opts),
-                    S3 = drip_user(FromAddr, PostLiqDrippedS, Opts),
-                    S4 = drip_user(ToAddr, S3, Opts),
-                    NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
-                    S5 =
+                    NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S1, Opts),
+                    S2 =
                         hb_ao:set(
-                            S4,
+                            S1,
                             <<
                                 "/resources/",
                                 ResourceID/binary,
@@ -697,10 +705,10 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             NewRecipientDeposit - Amount,
                             Opts
                         ),
-                    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S4, Opts),
-                    S6 =
+                    DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1, Opts),
+                    S3 =
                         hb_ao:set(
-                            S5,
+                            S2,
                             <<
                                 "/resources/",
                                 ResourceID/binary,
@@ -711,9 +719,23 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             DelegatorDeposit + Amount,
                             Opts
                         ),
-                    S7 =
+                    ExistingDelegation =
+                        hb_ao:get(
+                            <<
+                                "/resources/",
+                                ResourceID/binary,
+                                "/deposits/",
+                                FromAddr/binary,
+                                "/delegations/",
+                                ToAddr/binary
+                            >>,
+                            S1,
+                            0,
+                            Opts
+                        ),
+                    S4 =
                         hb_ao:set(
-                            S6,
+                            S3,
                             <<
                                 "/resources/",
                                 ResourceID/binary,
@@ -725,23 +747,23 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             ExistingDelegation - Amount,
                             Opts
                         ),
-                    S8 =
+                    S5 =
                         update_deposit_index(
                             FromAddr,
                             ResourceID,
-                            get_deposit(FromAddr, ResourceID, S6, Opts),
-                            S7,
+                            get_deposit(FromAddr, ResourceID, S3, Opts),
+                            S4,
                             Opts
                         ),
-                    S9 =
+                    S6 =
                         update_deposit_index(
                             ToAddr,
                             ResourceID,
-                            get_deposit(ToAddr, ResourceID, S7, Opts),
-                            S8,
+                            get_deposit(ToAddr, ResourceID, S4, Opts),
+                            S5,
                             Opts
                         ),
-                    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S9, Opts)
+                    send_delegation_notice(FromAddr, ToAddr, ResourceID, -Amount, S6, Opts)
             end
     end.
 

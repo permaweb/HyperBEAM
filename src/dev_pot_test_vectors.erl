@@ -948,7 +948,23 @@ undelegate_more_than_delegated_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
     % Delegation record shows 5, try to undelegate 10
-    ?assertError(_, dev_pot:undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)).
+    ?assertMatch(
+        {error, <<"Undelegation amount exceeds existing delegation.">>},
+        dev_pot:undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)
+    ).
+
+undelegate_exceeds_delegated_rejected_with_recipient_buffer_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    % Bob starts with own deposits, this should still reject over undelegation
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 20}]),
+    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
+    ?assertMatch(
+        {error, <<"Undelegation amount exceeds existing delegation.">>},
+        dev_pot:undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)
+    ).
 
 %%% Weight Change Scenarios
 
