@@ -316,6 +316,8 @@ embed_status({ErlStatus, Res}, NodeMsg) ->
 %% 1. The status code from the message.
 %% 2. The HTTP representation of the status code.
 %% 3. The default status code.
+status_code({error, {no_viable_responses, _AllResponses}}, NodeMsg) ->
+    status_code(no_viable_responses, NodeMsg);
 status_code({ErlStatus, Msg}, NodeMsg) ->
     case message_to_status(Msg, NodeMsg) of
         default -> status_code(ErlStatus, NodeMsg);
@@ -326,6 +328,7 @@ status_code(error, _NodeMsg) -> 400;
 status_code(created, _NodeMsg) -> 201;
 status_code(not_found, _NodeMsg) -> 404;
 status_code(client_error, _NodeMsg) -> 400;
+status_code(no_viable_responses, _NodeMsg) -> 400;
 status_code(failure, _NodeMsg) -> 500;
 status_code(unavailable, _NodeMsg) -> 503;
 status_code(unauthorized, _NodeMsg) -> 401;
