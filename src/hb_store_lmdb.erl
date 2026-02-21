@@ -49,7 +49,7 @@
 start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
-    ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    ok = ensure_dir(DataDirPath),
     EnvOpts =
         [
             {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
@@ -74,6 +74,12 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
+
+%% @doc Ensure that the database directory exists.
+ensure_dir(DataDirPath) ->
+    % `filelib` interprets the last path element as a filename, so we add a 
+    % dummy one, else the final directory will not be created.
+    filelib:ensure_dir(filename:join(DataDirPath, "dummy.mdb")).
 
 %% @doc Determine whether a key represents a simple value or composite group.
 %%
@@ -570,6 +576,7 @@ reset(Opts) ->
             % Stop the store and remove the database.
             stop(Opts),
             os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
+            ensure_dir(DataDir),
             ok
     end.
 
