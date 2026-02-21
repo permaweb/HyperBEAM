@@ -196,8 +196,8 @@ new_server(RawNodeMsg) ->
                 ),
                 % Attempt to start the prometheus application, if possible.
                 try
-                    application:ensure_all_started([prometheus, prometheus_cowboy]),
-                    prometheus_registry:register_collector(hb_metrics_collector),
+                    application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
+                    prometheus_registry:register_collectors([hb_metrics_collector, prometheus_ranch_collector]),
                     ProtoOpts#{
                         metrics_callback =>
                             fun prometheus_cowboy2_instrumenter:observe/1,
@@ -300,11 +300,14 @@ http3_conn_sup_loop() ->
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http2, ServerID}),
+    MaxConnections = maps:get(max_connections, NodeMsg, 10000),
+    NumAcceptors = maps:get(num_acceptors, NodeMsg, erlang:system_info(schedulers) * 4),
     StartRes = cowboy:start_clear(
         ServerID,
         #{
             socket_opts => [{port, RequestedPort = hb_opts:get(port, 8734, NodeMsg)}],
-            max_connections => 10000
+            max_connections => MaxConnections,
+            num_acceptors => NumAcceptors
          },
         ProtoOpts
     ),
