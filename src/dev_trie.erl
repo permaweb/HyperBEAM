@@ -283,7 +283,7 @@ longest_prefix_match({BestLabel, BestSize}, Key, [EdgeLabel | EdgeLabels], N) ->
 %%% Tests
 test_opts() ->
     #{
-        store => [hb_test_utils:test_store(hb_store_lmdb)],
+        store => [hb_test_utils:test_store()],
         priv_wallet => hb:wallet()
     }.
 count_nodes(TrieNode, Opts) when not is_map(TrieNode) -> 0;
