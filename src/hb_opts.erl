@@ -290,7 +290,11 @@ default_message() ->
             %% partition midpoint (byte offset). Tries 4 at a time,
             %% ordered by proximity, until one returns 200.
             #{
-                <<"template">> => <<"^/arweave/chunk">>,
+                <<"template">> =>
+                    #{
+                        <<"path">> => <<"^/arweave/chunk">>,
+                        <<"method">> => <<"GET">>
+                    },
                 <<"nodes">> =>
                     [
                         %% Partitions 0-15

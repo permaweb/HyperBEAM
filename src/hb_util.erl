@@ -368,8 +368,8 @@ find_target_path(Msg, Opts) ->
 %% - A map: Uses structural matching against the message
 %% - A binary regex: Matches against the message's target path
 %% Returns true/false for map templates, or regex match result for binary templates.
-template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
-    case hb_message:match(Template, ToMatch, primary) of
+template_matches(ToMatch, Template, Opts) when is_map(Template) ->
+    case hb_message:match(Template, ToMatch, primary, Opts) of
         {mismatch, value, _Key, _Val1, _Val2} -> false;
         Match -> Match
     end;
