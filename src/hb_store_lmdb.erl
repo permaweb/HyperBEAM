@@ -71,9 +71,6 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Create the LMDB environment with specified size limit
     {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
-    % Store both environment and DB instance in persistent_term for later cleanup
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    persistent_term:put(StoreKey, {Env, DBInstance, DataDir}),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
@@ -547,73 +544,11 @@ find_env(Opts) -> hb_store:find(Opts).
 
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
-    % Clear the generic store cache entry so a subsequent `start/1` will
-    % create a fresh LMDB environment instead of reusing closed handles.
-    StoreRef = {store, ?MODULE, DataDir},
-    erlang:erase(StoreRef),
-    persistent_term:erase(StoreRef),
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    close_environment(StoreKey, DataDir);
+    % Soft-close by name; refs stay valid and reopen lazily on next access.
+    catch elmdb:env_close_by_name(hb_util:list(DataDir)),
+    ok;
 stop(_InvalidStoreOpts) ->
     ok.
-
-%% Close environment using persistent_term lookup with fallback
-close_environment(StoreKey, DataDir) ->
-    case safe_get_persistent_term(StoreKey) of
-        {ok, {Env, DBInstance}} ->
-            close_and_cleanup(Env, DBInstance, StoreKey, DataDir);
-        not_found ->
-            ?event({lmdb_stop_not_found_in_persistent_term, DataDir}),
-            safe_close_by_name(DataDir)
-    end,
-    ok.
-
-%% Get environment and DB instance from persistent_term without exceptions
-safe_get_persistent_term(Key) ->
-    case persistent_term:get(Key, undefined) of
-        {Env, DBInstance, _DataDir} -> {ok, {Env, DBInstance}};
-        {Env, _DataDir} -> {ok, {Env, undefined}};  % Backwards compatibility
-        _ -> not_found
-    end.
-
-%% Close DB instance and environment, then cleanup persistent_term entry
-close_and_cleanup(Env, DBInstance, StoreKey, DataDir) ->
-    % Close DB instance first if it exists
-    DBCloseResult = safe_close_db(DBInstance),
-    ?event({db_close_result, DBCloseResult}),
-    % Then close the environment
-    EnvCloseResult = safe_close_env(Env),
-    persistent_term:erase(StoreKey),
-    case EnvCloseResult of
-        ok -> ?event({lmdb_stop_success, DataDir});
-        {error, Reason} -> ?event({lmdb_stop_error, Reason})
-    end.
-
-%% Close DB instance with error capture
-safe_close_db(undefined) ->
-    ok;  % No DB instance to close
-safe_close_db(DBInstance) ->
-    try
-        elmdb:db_close(DBInstance)
-    catch
-        error:Reason -> {error, Reason}
-    end.
-
-%% Close environment handle with error capture
-safe_close_env(Env) ->
-    try
-        elmdb:env_close(Env)
-    catch
-        error:Reason -> {error, Reason}
-    end.
-
-%% Fallback close by name with error suppression
-safe_close_by_name(DataDir) ->
-    try
-        elmdb:env_close_by_name(binary_to_list(DataDir))
-    catch
-        error:_ -> ok
-    end.
 
 %% @doc Completely delete the database directory and all its contents.
 %%
