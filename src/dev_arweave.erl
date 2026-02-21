@@ -82,16 +82,12 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     case Res of
         {ok, _} ->
             CacheRes = hb_cache:write(Request, Opts),
-            ?event(arweave_debug,
-                {cache_uploaded_message,
-                    {msg, Request},
-                    {status,
-                        case CacheRes of {ok, _} -> ok;
-                        _ -> failed
-                        end
-                    }
-                }
-            );
+            case CacheRes of
+                {ok, _} ->
+                    ?event(arweave_debug, {tx_cached, {msg, Request}, {status, ok}});
+                _ ->
+                    ?event(error, {tx_failed_to_cache, {msg, Request}, CacheRes})
+            end;
         _ ->
             ok
     end,
@@ -99,13 +95,22 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
 
 post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
     TX = hb_message:convert(Request, <<"ans104@1.0">>, Opts),
-    ?event({post_ans104, TX}),
     Serialized = ar_bundles:serialize(TX),
-    ?event({serialized_ans104, Serialized}),
-    post_binary_ans104(Serialized, Opts).
+    LogExtra = [
+        {codec, <<"ans104@1.0">>},
+        {id, {explicit, hb_util:human_id(TX#tx.id)}}
+    ],
+    post_binary_ans104(Serialized, LogExtra, Opts).
 
 post_binary_ans104(SerializedTX, Opts) ->
-    hb_http:post(
+    LogExtra = [
+        {codec, <<"ans104@1.0">>},
+        {id, unknown}
+    ],
+    post_binary_ans104(SerializedTX, LogExtra, Opts).
+
+post_binary_ans104(SerializedTX, LogExtra, Opts) ->
+    Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
             <<"path">> => <<"/tx">>,
@@ -116,7 +121,8 @@ post_binary_ans104(SerializedTX, Opts) ->
             http_client =>
                 hb_opts:get(bundler_ans104_http_client, httpc, Opts)
         }
-    ).
+    ),
+    to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
 %% @doc Get a transaction from the Arweave node, as indicated by the
 %% `tx` key in the request or base message. By default, this embeds the data
@@ -142,7 +148,6 @@ raw(Base, Request, Opts) ->
 
 %% @doc Retrieve the data of a transaction from Arweave.
 data(TXID, Opts) ->
-    ?event({retrieving_tx_data, {tx, TXID}}),
     request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 chunk(Base, Request, Opts) ->
@@ -244,7 +249,9 @@ block(Base, Request, Opts) ->
 block({id, ID}, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Block} ->
-            ?event({retrieved_block_from_cache, {id, ID}}),
+            ?event(arweave_short, {read_block_from_cache,
+                {id, {explicit, ID}}
+            }),
             {ok, Block};
         not_found ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
@@ -252,7 +259,9 @@ block({id, ID}, Opts) ->
 block({height, Height}, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} ->
-            ?event({retrieved_block_from_cache, {height, Height}}),
+            ?event(arweave_short, {read_block_from_cache,
+                {height, Height}
+            }),
             {ok, Block};
         not_found ->
             request(
@@ -322,7 +331,6 @@ request(Method, Path, Opts) ->
 request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
-    ?event({arweave_request, {method, Method}, {path, {explicit, Path}}}),
     Res =
         hb_http:request(
             Extra#{
@@ -355,22 +363,22 @@ best_response(Responses) ->
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
-    event_short(Path, Method, 404, LogExtra),
+    event_request(Path, Method, 404, LogExtra),
     {error, not_found};
 to_message(Path, Method, {error, Response}, LogExtra, _Opts) ->
     Status = maps:get(<<"status">>, Response, client_error),
-    event_short(Path, Method, Status, LogExtra),
+    event_request(Path, Method, Status, LogExtra),
     {error, Response};
 to_message(Path, Method, {failure, Response}, LogExtra, _Opts) ->
     Status = maps:get(<<"status">>, Response, server_error),
-    event_short(Path, Method, Status, LogExtra),
+    event_request(Path, Method, Status, LogExtra),
     {error, server_error};
 to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
     Status = maps:get(<<"status">>, Response, 200),
-    event_short(Path, <<"POST">>, Status, LogExtra),
+    event_request(Path, <<"POST">>, Status, LogExtra),
     {ok, Response};
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
     ?event(arweave_debug,
         {arweave_tx_response,
@@ -395,10 +403,10 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             end
     end;
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     Block = hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts),
     CacheRes = dev_arweave_block_cache:write(Block, Opts),
     ?event(
@@ -409,15 +417,15 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
     ),
     {ok, Block};
 to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     Price = hb_util:int(Body),
     {ok, Price};
 to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     Anchor = hb_util:decode(Body),
     {ok, Anchor};
 to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
-    event_short(Path, <<"GET">>, 200, LogExtra),
+    event_request(Path, <<"GET">>, 200, LogExtra),
     % All other responses that are `OK' status are converted from JSON to an
     % AO-Core message.
     ?event(
@@ -436,8 +444,8 @@ to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         )
     }.
 
-event_short(Path, Method, Status, Extra) ->
-    BaseList = [{path, {explicit, Path}}, {method, Method}, {status, Status}],
+event_request(Path, Method, Status, Extra) ->
+    BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
     MergedTuple = erlang:list_to_tuple(BaseList ++ Extra),
     ?event(arweave_short, MergedTuple).
 
