@@ -298,19 +298,7 @@ record_duration(Details, Opts) ->
             % it.
             GetFormat = fun 
                             (<<"request-category">>) ->
-                                case maps:get(<<"request-path">>, Details) of
-                                    %% TODO: Make it configurable for S3 bucket defined
-                                    <<"/hb-s3", _/binary>> -> <<"S3">>;
-                                    <<"/hyperbeam", _/binary>> -> <<"S3">>;
-                                    <<"/graphql">> -> <<"GraphQL">>;
-                                    <<"/raw", _/binary>> -> <<"RAW">>;
-                                    <<"/tx", _/binary>> -> <<"TX">>;
-                                    <<"/chunk", _/binary>> -> <<"Chunk">>;
-                                    <<"/block/height/", _/binary>> -> <<"Block Height">>;
-                                    Path -> 
-                                        ?event(warning, {unknown_path, {path, Path}}),
-                                        <<"unknown">>
-                                end;
+                                path_to_category(maps:get(<<"request-path">>, Details));
                             (Key) -> 
                                 hb_util:list(maps:get(Key, Details)) 
                         end,
@@ -336,6 +324,24 @@ record_duration(Details, Opts) ->
             )
         end
     ).
+
+%% @doc Convert path to category for grafana labels
+path_to_category(Path) ->
+    case Path of
+        %% TODO: Make it configurable for S3 bucket defined
+        <<"/hb-s3", _/binary>> -> <<"S3">>;
+        <<"/hyperbeam", _/binary>> -> <<"S3">>;
+        <<"/graphql">> -> <<"GraphQL">>;
+        <<"/raw", _/binary>> -> <<"RAW">>;
+        <<"/tx", _/binary>> -> <<"TX">>;
+        <<"/chunk", _/binary>> -> <<"Chunk">>;
+        <<"/block/height/", _/binary>> -> <<"Block Height">>;
+        <<"/~cache@1.0/read", _/binary>> -> <<"Cache@1.0 Read">>;
+        undefined -> <<"unknown">>;
+        _ -> 
+            ?event(warning, {unknown_path, {path, Path}}),
+            <<"unknown">>
+    end.
 
 %% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
 %% node message key. We invoke the given message with the `body' set to a signed
@@ -443,7 +449,7 @@ init_prometheus() ->
     application:ensure_all_started([prometheus, prometheus_cowboy]),
 	prometheus_counter:new([
 		{name, gun_requests_total},
-		{labels, [http_method, status_class]},
+		{labels, [http_method, status_class, category]},
 		{
 			help,
 			"The total number of GUN requests."
@@ -814,10 +820,13 @@ reply_error([PendingRequest | PendingRequests], Reason) ->
 	reply_error(PendingRequests, Reason).
 
 record_response_status(Method, Response) ->
+    record_response_status(Method, Response, undefined).
+record_response_status(Method, Response, Path) ->
 	inc_prometheus_counter(gun_requests_total,
         [
             hb_util:list(method_to_bin(Method)),
-			hb_util:list(get_status_class(Response))
+			hb_util:list(get_status_class(Response)),
+            hb_util:list(path_to_category(Path))
         ],
         1
     ).
@@ -906,7 +915,7 @@ do_gun_request_inner(PID, Args, Opts) ->
         },
 	try
 		Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
-		record_response_status(Method, Response),
+		record_response_status(Method, Response, Path),
 		inet:stop_timer(Timer),
 		Response
 	after
@@ -973,11 +982,11 @@ await_response(Args, Opts) ->
             gun:cancel(PID, Ref),
             Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
-			record_response_status(Method, Response),
+			record_response_status(Method, Response, Path),
 			log(warn, gun_await_process_down, Args, Reason, Opts),
 			Response;
 		Response ->
-			record_response_status(Method, Response),
+			record_response_status(Method, Response, Path),
 			log(warn, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
