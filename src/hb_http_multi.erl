@@ -62,7 +62,7 @@ request(Config, Method, Path, Message, Opts) ->
             {raw_message, Message},
             {message_to_send, MultirequestMsg}
         }),
-    AllResults =
+    {AdmissibleResults, AllResponses} =
         if Parallel =/= false ->
             parallel_multirequest(
                 Parallel,
@@ -88,9 +88,9 @@ request(Config, Method, Path, Message, Opts) ->
                 Opts
             )
         end,
-    ?event(http, {multirequest_results, {results, AllResults}}),
-    case AllResults of
-        [] -> {error, no_viable_responses};
+    ?event(http, {multirequest_results, {admissible_results, AdmissibleResults}, {all_responses, AllResponses}}),
+    case AdmissibleResults of
+        [] -> {error, {no_viable_responses, AllResponses}};
         Results -> if Responses == 1 -> hd(Results); true -> Results end
     end.
 
@@ -147,30 +147,29 @@ is_admissible(_, _, _, _, _) -> false.
 %% @doc Serially request a message, collecting responses until the required
 %% number of responses have been gathered. Ensure that the statuses are
 %% allowed, according to the configuration.
-serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> [];
-serial_multirequest([], _, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> [];
+%% Returns {AdmissibleList, AllList} where AdmissibleList contains only
+%% admissible responses and AllList contains all responses.
+serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> {[], []};
+serial_multirequest([], _, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> {[], []};
 serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, Statuses, Opts) ->
     {ErlStatus, Res} = hb_http:request(Method, Node, Path, Message, Opts),
     case is_admissible(ErlStatus, Res, Admissible, Statuses, Opts) of
         true ->
             ?event(http, {admissible_status, {response, Res}}),
-            [
-                {ErlStatus, Res}
-            |
-                serial_multirequest(
-                    Nodes,
-                    Remaining - 1,
-                    Method,
-                    Path,
-                    Message,
-                    Admissible,
-                    Statuses,
-                    Opts
-                )
-            ];
+            {AdmissibleAcc, AllAcc} = serial_multirequest(
+                Nodes,
+                Remaining - 1,
+                Method,
+                Path,
+                Message,
+                Admissible,
+                Statuses,
+                Opts
+            ),
+            {[{ErlStatus, Res} | AdmissibleAcc], [{ErlStatus, Res} | AllAcc]};
         false ->
             ?event(http, {inadmissible_status, {response, Res}}),
-            serial_multirequest(
+            {AdmissibleAcc, AllAcc} = serial_multirequest(
                 Nodes,
                 Remaining,
                 Method,
@@ -179,7 +178,8 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, 
                 Admissible,
                 Statuses,
                 Opts
-            )
+            ),
+            {AdmissibleAcc, [{ErlStatus, Res} | AllAcc]}
     end.
 
 %% @doc Dispatch the same HTTP request to many nodes in parallel.
@@ -188,7 +188,7 @@ parallel_multirequest(true, Nodes, Responses, StopAfter, Method, Path, Message, 
 parallel_multirequest(MaxWorkers, Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
     Ref = make_ref(),
     {Workers, Queue} = start_workers(MaxWorkers, Ref, Nodes, Method, Path, Message, Opts),
-    parallel_responses([], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
+    parallel_responses([], [], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
 
 %% @doc Start a new fleet of workers, returning the list of worker PIDs.
 start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
@@ -262,28 +262,32 @@ admissible_response(Response, Msg, Opts) ->
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
-parallel_responses(Res, [], _, _, Ref, _Awaiting, _StopAfter, _Admissible, _Statuses, _Opts) ->
+%% Returns {AdmissibleList, AllList} where AdmissibleList contains only
+%% admissible responses and AllList contains all responses.
+parallel_responses(AdmissibleRes, AllRes, [], _, _, Ref, _Awaiting, _StopAfter, _Admissible, _Statuses, _Opts) ->
     empty_inbox(Ref),
-    Res;
-parallel_responses(Res, Procs, _, _, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
+    {AdmissibleRes, AllRes};
+parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
-    Res;
-parallel_responses(Res, Procs, _, _, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
+    {AdmissibleRes, AllRes};
+parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> exit(P, kill) end, Procs),
     empty_inbox(Ref),
-    Res;
-parallel_responses(Res, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
+    {AdmissibleRes, AllRes};
+parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
         {Ref, Pid, {Status, NewRes}} ->
             WorkersWithoutPid = lists:delete(Pid, Procs),
             {RefilledWorkers, NewQueue} =
                 start_workers(1, Ref, Queue, Method, Path, Message, Opts),
             NewProcs = RefilledWorkers ++ WorkersWithoutPid,
+            NewAllRes = [{Status, NewRes} | AllRes],
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
                     parallel_responses(
-                        [{Status, NewRes} | Res],
+                        [{Status, NewRes} | AdmissibleRes],
+                        NewAllRes,
                         NewProcs,
                         NewQueue,
                         {Method, Path, Message},
@@ -296,7 +300,8 @@ parallel_responses(Res, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, St
                 );
             false ->
                 parallel_responses(
-                    Res,
+                    AdmissibleRes,
+                    NewAllRes,
                     NewProcs,
                     NewQueue,
                     {Method, Path, Message},
