@@ -938,7 +938,7 @@ liquidate_insufficient_delegations_test() ->
     S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     % Alice has 0 deposits, 10 delegated to Bob. Try to withdraw 15 - impossible
     ?assertMatch(
-        {error, <<"Insufficient delegated balance to liquidate withdrawal">>},
+        {error, <<"Insufficient delegated balance to liquidate.">>},
         dev_pot:withdraw(Alice, ResourceOxygen, 15, S1, Opts)
     ).
 
