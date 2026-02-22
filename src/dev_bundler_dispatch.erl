@@ -214,7 +214,7 @@ handle_task_complete(WorkerPID, Task, Result, State) ->
     },
     case maps:get(BundleID, Bundles, undefined) of
         undefined ->
-            ?event(error, {bundle_not_found, BundleID}),
+            ?event(bundler_short, {bundle_not_found, BundleID}),
             State1;
         Bundle ->
             task_completed(Task, Bundle, Result, State1)
@@ -379,7 +379,7 @@ recover_bundle(TXID, Status, State) ->
         enqueue_task(Task, State1)
     catch
         _:Error:Stack ->
-            ?event(error, {failed_to_recover_bundle,
+            ?event(bundler_short, {failed_to_recover_bundle,
                 {tx_id, {explicit, TXID}},
                 {error, Error},
                 {stack, Stack}
@@ -439,7 +439,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
-                ?event(error, {post_tx_failed,
+                ?event(bundle_short, {post_tx_failed,
                     format_task(Task),
                     {price, PriceErr},
                     {anchor, AnchorErr}}),
@@ -447,7 +447,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack -> 
-            ?event(error, {post_tx_failed,
+            ?event(bundle_short, {post_tx_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -490,7 +490,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         {ok, Proofs}
     catch
         _:Err:_Stack ->
-            ?event(error, {build_proofs_failed,
+            ?event(bundler_short, {build_proofs_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -523,7 +523,7 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack ->
-            ?event(error, {post_proof_failed,
+            ?event(bundler_short, {post_proof_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
