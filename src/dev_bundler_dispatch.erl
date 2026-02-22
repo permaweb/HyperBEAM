@@ -49,7 +49,7 @@
 
 %% @doc Dispatch the queue.
 dispatch([], _Opts) ->
-    ?event({skipping_empty_queue});
+    ok;
 dispatch(Items, Opts) ->
     PID = ensure_dispatcher(Opts),
     PID ! {dispatch, Items}.
@@ -60,6 +60,7 @@ ensure_dispatcher(Opts) ->
     case hb_name:lookup(?DISPATCHER_NAME) of
         undefined ->
             PID = spawn(fun() -> init(Opts) end),
+            ?event(bundler_short, {starting_dispatcher, {pid, PID}}),
             hb_name:register(?DISPATCHER_NAME, PID),
             hb_name:lookup(?DISPATCHER_NAME);
         PID -> PID
@@ -122,7 +123,7 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
-            ?event({dispatching_bundle, {timestamp, format_timestamp()},
+            ?event(bundler_short, {dispatching_bundle, {timestamp, format_timestamp()},
                 {bundle_id, BundleID}, {num_items, length(Items)}}),
             Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
@@ -206,14 +207,14 @@ handle_task_complete(WorkerPID, Task, Result, State) ->
     Workers = State#state.workers,
     Bundles = State#state.bundles,
     #task{bundle_id = BundleID} = Task,
-    ?event({task_complete, format_task(Task)}),
+    ?event(bundler_debug, {task_complete, format_task(Task)}),
     % Update worker to idle
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
     },
     case maps:get(BundleID, Bundles, undefined) of
         undefined ->
-            ?event({bundle_not_found, BundleID}),
+            ?event(error, {bundle_not_found, BundleID}),
             State1;
         Bundle ->
             task_completed(Task, Bundle, Result, State1)
@@ -233,7 +234,7 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
     % This distributes the delay across [delay * (1-jitter), delay * (1+jitter)]
     JitterFactor = (rand:uniform() * 2 - 1) * Jitter,  % Random value in [-jitter, +jitter]
     Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
-    ?event({task_failed_retrying, format_task(Task),
+    ?event(bundler_short, {task_failed_retrying, format_task(Task),
             {reason, {explicit, Reason}}, 
             {retry_count, RetryCount}, {delay_ms, Delay}}),
     % Update worker to idle
@@ -324,8 +325,9 @@ bundle_complete(Bundle, State) ->
     ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
     ElapsedTime = 
         timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
-    ?event({bundle_complete, {bundle_id, Bundle#bundle.id},
+    ?event(bundler_short, {bundle_complete, {bundle_id, Bundle#bundle.id},
         {timestamp, format_timestamp()},
+        {tx, {explicit, hb_message:id(Bundle#bundle.tx, signed, Opts)}},
         {elapsed_time_s, ElapsedTime}}),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
@@ -346,7 +348,10 @@ recover_bundles(State) ->
 %% @doc Recover a single bundle based on its cached state.
 recover_bundle(TXID, Status, State) ->
     Opts = State#state.opts,
-    ?event({recovering_bundle, {tx_id, TXID}, {status, Status}}),
+    ?event(bundler_short, {recovering_bundle,
+        {tx_id, {explicit, TXID}},
+        {status, Status}
+    }),
     try
         % Load the TX and its items
         CommittedTX = dev_bundler_cache:load_tx(TXID, Opts),
@@ -374,7 +379,11 @@ recover_bundle(TXID, Status, State) ->
         enqueue_task(Task, State1)
     catch
         _:Error:Stack ->
-            ?event({failed_to_recover_bundle, {tx_id, TXID}, {error, Error}, {stack, Stack}}),
+            ?event(error, {failed_to_recover_bundle,
+                {tx_id, {explicit, TXID}},
+                {error, Error},
+                {stack, Stack}
+            }),
             % Skip this bundle and continue
             State
     end.
@@ -400,7 +409,7 @@ worker_loop() ->
 %% @doc Execute a specific task.
 execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task)}),
+        ?event(bundler_debug, {execute_task, format_task(Task)}),
         % Get price and anchor
         {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
         DataSize = TX#tx.data_size,
@@ -430,7 +439,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
-                ?event({post_tx_failed,
+                ?event(error, {post_tx_failed,
                     format_task(Task),
                     {price, PriceErr},
                     {anchor, AnchorErr}}),
@@ -438,7 +447,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack -> 
-            ?event({post_tx_failed,
+            ?event(error, {post_tx_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -446,7 +455,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
 
 execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task)}),
+        ?event(bundler_debug, {execute_task, format_task(Task)}),
         % Calculate chunks and proofs
         TX = hb_message:convert(
             CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
@@ -481,7 +490,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         {ok, Proofs}
     catch
         _:Err:_Stack ->
-            ?event({build_proofs_failed,
+            ?event(error, {build_proofs_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -490,7 +499,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
 execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     #{chunk := Chunk, data_path := DataPath, offset := Offset,
       data_size := DataSize, data_root := DataRoot} = Proof,
-    ?event({execute_task, format_task(Task)}),
+    ?event(bundler_debug, {execute_task, format_task(Task)}),
     Request = #{
         <<"chunk">> => hb_util:encode(Chunk),
         <<"data_path">> => hb_util:encode(DataPath),
@@ -514,7 +523,7 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack ->
-            ?event({post_proof_failed,
+            ?event(error, {post_proof_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
