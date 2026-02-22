@@ -344,9 +344,15 @@ withdraw(Base, Req, Opts) ->
     end.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
-    case liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts) of
-        {error, _} = Err -> Err;
-        S1 -> modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
+    maybe
+        {ok, S1} ?=
+            case liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts) of
+                {error, _} = LiquidateErr -> LiquidateErr;
+                Liquidated -> {ok, Liquidated}
+            end,
+        modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
+    else
+        {error, _} = WithdrawErr -> WithdrawErr
     end.
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
