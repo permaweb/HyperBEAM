@@ -31,6 +31,8 @@
 
 %% Configuration constants with reasonable defaults
 -define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
+                                                % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 
 %% @doc Start the LMDB storage system for a given database configuration.
@@ -52,7 +54,14 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     ok = ensure_dir(DataDirPath),
     EnvOpts =
         [
-            {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+            {
+                map_size,
+                hb_util:int(maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE))
+            },
+            {
+                batch_size,
+                hb_util:int(maps:get(<<"batch-size">>, Opts, ?DEFAULT_BATCH_SIZE))
+            },
             no_mem_init,
             no_sync
         ] ++
