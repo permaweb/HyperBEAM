@@ -472,7 +472,9 @@ invalid_item_test() ->
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store()
         },
-        Node = hb_http_server:start_node(TestOpts),
+        Node = hb_http_server:start_node(TestOpts#{
+            debug_print => false
+        }),
         % Create a valid signed item
         Item = ar_bundles:sign_item(
             #tx{
@@ -501,7 +503,10 @@ invalid_item_test() ->
 
 cache_write_failure_test() ->
     GoodOpts = #{store => hb_test_utils:test_store()},
-    BadOpts = #{store => undefined}, % Invalid store will cause cache write to fail
+    BadOpts = #{
+        store => undefined,
+        debug_print => false
+    }, % Invalid store will cause cache write to fail
     try
         % Start bundler with a valid store so recovery/init paths succeed.
         ensure_server(GoodOpts),
