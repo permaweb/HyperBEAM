@@ -35,7 +35,6 @@ write_item(Item, Opts) when is_map(Item) ->
     {ok, _} = hb_cache:write(Item, Opts),
     % Use the committed (structured) item for path generation
     Path = item_path(Item, Opts),
-    ?event({write_item, {path, Path}}),
     % Create pseudopath with empty bundle reference
     write_pseudopath(Path, <<>>, Opts).
 
@@ -43,7 +42,6 @@ write_item(Item, Opts) when is_map(Item) ->
 link_item_to_tx(Item, TX, Opts) when is_map(Item) and is_map(TX) ->
     Path = item_path(Item, Opts),
     TXID = tx_id(TX, Opts),
-    ?event({link_item_to_tx, {path, Path}, {tx_id, {explicit, TXID}}}),
     write_pseudopath(Path, TXID, Opts).
 
 %% @doc Get the bundle TXID for a data item, or <<>> if not bundled.
@@ -73,7 +71,6 @@ tx_id(TX, Opts) when is_map(TX) ->
     hb_message:id(TX, signed, Opts).
 
 write_tx(TX, Items, Opts) when is_map(TX) ->
-    ?event({write_tx, {tx, {explicit, hb_message:id(TX, signed, Opts)}}}),
     {ok, _} = hb_cache:write(TX, Opts),
     set_tx_status(TX, <<"posted">>, Opts),
     lists:foreach(
@@ -89,7 +86,7 @@ complete_tx(TX, Opts) ->
 %% @doc Set the status of a bundle TX.
 set_tx_status(TX, Status, Opts) ->
     Path = tx_path(TX, Opts),
-    ?event({set_tx_status, {path, Path}, {status, Status}}),
+    ?event(bundler_debug, {set_tx_status, {path, Path}, {status, Status}}),
     write_pseudopath(Path, Status, Opts).
 
 %% @doc Get the status of a bundle TX.
@@ -139,10 +136,12 @@ load_unbundled_items(Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event({loaded_unbundled_item, {id, {explicit, ItemIDStr}}}),
+                            ?event(bundler_debug, {loaded_unbundled_item,
+                                {id, {explicit, ItemIDStr}}}),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event({failed_to_load_item, {id, {explicit, ItemIDStr}}}),
+                            ?event(error, {failed_to_load_item,
+                                {id, {explicit, ItemIDStr}}}),
                             false
                     end;
                 _ ->
@@ -172,7 +171,7 @@ load_bundle_states(Opts) ->
                 <<>> -> false; % Empty status, ignore
                 <<"complete">> -> false; % Skip completed bundles
                 Status ->
-                    ?event({loaded_tx_state, {id, {explicit, TXID}}, {status, Status}}),
+                    ?event(bundler_debug, {loaded_tx_state, {id, {explicit, TXID}}, {status, Status}}),
                     {true, {TXID, Status}}
             end
         end,
@@ -205,10 +204,10 @@ load_bundled_items(TXID, Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event({loaded_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
+                            ?event(bundler_debug, {loaded_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event({failed_to_load_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
+                            ?event(error, {failed_to_load_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
                             false
                     end;
                 _ ->
@@ -221,13 +220,13 @@ load_bundled_items(TXID, Opts) ->
 
 %% @doc Load a TX from cache by its ID.
 load_tx(TXID, Opts) ->
-    ?event({load_tx, {tx_id, {explicit, TXID}}}),
+    ?event(bundler_debug, {load_tx, {tx_id, {explicit, TXID}}}),
     case hb_cache:read(TXID, Opts) of
         {ok, TX} ->
-            ?event({loaded_tx, {tx_id, {explicit, TXID}}}),
+            ?event(bundler_debug, {loaded_tx, {tx_id, {explicit, TXID}}}),
             hb_cache:ensure_all_loaded(TX, Opts);
         _ ->
-            ?event({failed_to_load_tx, {tx_id, {explicit, TXID}}}),
+            ?event(error, {failed_to_load_tx, {tx_id, {explicit, TXID}}}),
             not_found
     end.
 
