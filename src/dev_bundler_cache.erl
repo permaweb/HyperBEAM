@@ -140,7 +140,7 @@ load_unbundled_items(Opts) ->
                                 {id, {explicit, ItemIDStr}}}),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event(error, {failed_to_load_item,
+                            ?event(bundler_short, {failed_to_load_item,
                                 {id, {explicit, ItemIDStr}}}),
                             false
                     end;
