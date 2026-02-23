@@ -601,10 +601,8 @@ post_tx_json_test() ->
             #{ <<"commitment-device">> => <<"tx@1.0">> }
         ),
     TX = hb_message:convert(Msg, <<"tx@1.0">>, <<"structured@1.0">>, ClientOpts),
-    ?event(debug_test, {tx, TX}),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
     Serialized = hb_json:encode(JSON),
-    ?event(debug_test, {serialized_tx, {explicit, Serialized}}),
     Response =
         hb_http:post(
             Server,
@@ -616,7 +614,6 @@ post_tx_json_test() ->
             },
             ClientOpts
         ),
-    ?event(debug_test, {post_response, Response}),
     % The transaction is invalid because it has insufficient balance, only
     % way we'll know that is if the HB node successfully posted the tx to
     % an arweave node.

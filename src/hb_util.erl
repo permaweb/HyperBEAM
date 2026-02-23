@@ -359,23 +359,45 @@ find_target_path(Msg, Opts) ->
     case hb_ao:get(<<"route-path">>, Msg, not_found, Opts) of
         not_found ->
             ?event({find_target_path, {msg, Msg}, not_found}),
-            hb_ao:get(<<"path">>, Msg, no_path, Opts);
-        RoutePath -> RoutePath
+            case hb_ao:get(<<"path">>, Msg, no_path, Opts) of
+                no_path -> no_path;
+                Path -> {<<"path">>, Path}
+            end;
+        RoutePath ->
+            {<<"route-path">>, RoutePath}
     end.
 
 %% @doc Check if a message matches a given template.
 %% Templates can be either:
-%% - A map: Uses structural matching against the message
+%% - A map: Optional path regex match, then structural matching for remaining keys
 %% - A binary regex: Matches against the message's target path
 %% Returns true/false for map templates, or regex match result for binary templates.
-template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
-    case hb_message:match(Template, ToMatch, primary) of
-        {mismatch, value, _Key, _Val1, _Val2} -> false;
-        Match -> Match
+template_matches(ToMatch, Template, Opts) when is_map(Template) ->
+    case find_target_path(Template, Opts) of
+        no_path ->
+            template_map_match(ToMatch, Template, Opts);
+        {TargetKey, Regex} ->
+            template_regex_match(ToMatch, hb_ao:normalize_key(Regex), Opts) andalso
+                template_map_match(
+                    ToMatch,
+                    hb_maps:remove(TargetKey, Template, Opts),
+                    Opts
+                )
     end;
 template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
-    MsgPath = find_target_path(ToMatch, Opts),
-    hb_path:regex_matches(MsgPath, Regex).
+    template_regex_match(ToMatch, Regex, Opts).
+
+template_regex_match(ToMatch, Regex, Opts) ->
+    case find_target_path(ToMatch, Opts) of
+        no_path -> false;
+        {_TargetKey, MsgPath} -> hb_path:regex_matches(MsgPath, Regex)
+    end.
+
+template_map_match(ToMatch, TemplateWithoutPath, Opts) ->
+    case hb_message:match(TemplateWithoutPath, ToMatch, primary, Opts) of
+        {mismatch, value, _Key, _Val1, _Val2} -> false;
+        Match -> Match
+    end.
 
 %% @doc Label a list of elements with a number.
 number(List) ->
