@@ -40,6 +40,12 @@
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
 
+%%% Types
+-type addr() :: binary().
+-type resource_id() :: binary().
+-type pot_state() :: map().
+-type pot_reason() :: term().
+
 %%% Pot Model Functions.
 
 info(_S) ->
@@ -317,6 +323,7 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
+-spec deposit(pot_state(), map(), map()) -> pot_state() | {error, pot_reason()}.
 deposit(State, Assignment, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
@@ -328,11 +335,13 @@ deposit(State, Assignment, Opts) ->
     else
         Reason -> {error, Reason}
     end.
+-spec deposit(addr(), resource_id(), pos_integer(), pot_state(), map()) -> pot_state().
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
+-spec withdraw(pot_state(), map(), map()) -> pot_state() | {error, pot_reason()}.
 withdraw(Base, Req, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
@@ -342,6 +351,7 @@ withdraw(Base, Req, Opts) ->
         BaseWithT = Base#{<<"t">> := NewT},
         withdraw(Address, ResourceID, Amount, BaseWithT, Opts)
     end.
+-spec withdraw(addr(), resource_id(), pos_integer(), pot_state(), map()) -> pot_state() | {error, pot_reason()}.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     maybe
@@ -447,6 +457,7 @@ notify(State, Assignment, Opts) ->
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
+-spec liquidate(addr(), resource_id(), integer(), pot_state(), map()) -> {ok, pot_state()} | {error, pot_reason()}.
 liquidate(_Addr, _ResourceID, Amount, S, _Opts) when Amount =< 0 -> {ok, S};
 liquidate(Addr, ResourceID, Amount, S, Opts) ->
     ExistingDelegations =
@@ -486,6 +497,7 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
     end.
 
 %% @doc Delegate some quantity of a resource from one address to another.
+-spec delegate(pot_state(), map(), map()) -> {ok, pot_state()} | {error, pot_reason()}.
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -526,6 +538,7 @@ delegate(State, Assignment, Opts) ->
         {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
+-spec delegate(addr(), addr(), resource_id(), pos_integer(), pot_state(), map()) -> {ok, pot_state()} | {error, pot_reason()}.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ?event(
         {delegating,
@@ -652,6 +665,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     end.
 
 %% @doc Undelegate some quantity of a resource from one address to another.
+-spec undelegate(pot_state(), map(), map()) -> {ok, pot_state()} | {error, pot_reason()}.
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -668,6 +682,7 @@ undelegate(State, Assignment, Opts) ->
         {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
+-spec undelegate(addr(), addr(), resource_id(), pos_integer(), pot_state(), map()) -> {ok, pot_state()} | {error, pot_reason()}.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     ExistingDelegationBefore =
         case FromAddr =:= ToAddr of
