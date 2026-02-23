@@ -49,14 +49,14 @@ is_tx_indexed(TXID, Opts) ->
     case IndexStore of
         no_store -> false;
         #{ <<"index-store">> := Store } ->
-            case hb_store:read(Store, hb_store_arweave:path(TXID)) of
+            case hb_store:read(Store, hb_store_arweave_offset:path(TXID)) of
                 {ok, _} -> true;
                 not_found -> false
             end
     end.
 
 %% @doc List indexed blocks and transactions in the given range.
-%% Returns JSON with block heights as keys, each containing indexed and not_indexed lists.
+%% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
 list_index(From, To, _Opts) when From < To ->
     {ok, #{
         <<"content-type">> => <<"application/json">>,
@@ -82,7 +82,7 @@ list_index_blocks(Current, To, Opts, Acc) ->
             NewAcc = Acc#{
                 BlockKey => #{
                     <<"indexed">> => IndexedTXs,
-                    <<"not_indexed">> => NotIndexedTXs
+                    <<"not-indexed">> => NotIndexedTXs
                 }
             },
             list_index_blocks(Current - 1, To, Opts, NewAcc);
@@ -91,7 +91,7 @@ list_index_blocks(Current, To, Opts, Acc) ->
             list_index_blocks(Current - 1, To, Opts, Acc)
     end.
 
-%% @doc Classify transactions as indexed or not_indexed.
+%% @doc Classify transactions as indexed or not-indexed.
 classify_txs(TXIDs, Opts) ->
     lists:foldl(
         fun(TXID, {IndexedAcc, NotIndexedAcc}) ->
@@ -312,7 +312,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         hb_store_arweave:write_offset(
             IndexStore,
             TXID,
-            true,
+            <<"tx@1.0">>,
             TXStartOffset,
             TX#tx.data_size
         )
@@ -337,7 +337,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                                 hb_store_arweave:write_offset(
                                     IndexStore,
                                     hb_util:encode(ItemID),
-                                    false,
+                                    <<"ans104@1.0">>,
                                     ItemStartOffset,
                                     Size
                                 ),
@@ -787,9 +787,9 @@ tx_with_no_data_test() ->
     JSONBody = maps:get(<<"body">>, Response),
     IndexData = hb_json:decode(JSONBody),
     BlockInfo = maps:get(BlockBin, IndexData),
-    %% Verify indexed and not_indexed keys exist
+    %% Verify indexed and not-indexed keys exist
     ?assert(maps:is_key(<<"indexed">>, BlockInfo)),
-    ?assert(maps:is_key(<<"not_indexed">>, BlockInfo)),
+    ?assert(maps:is_key(<<"not-indexed">>, BlockInfo)),
     ?assertEqual([
             <<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>,
             <<"bpd0CzsoTr9-X83sPCx08uNzZC_EgFwb-P8lnHXSeRo">>,
@@ -797,7 +797,7 @@ tx_with_no_data_test() ->
             <<"hvZlThf1B1tY4wMm4cETSsk8vIkOY3QZRmaBnQSzlVo">>,
             <<"3urwRfVyWN35HE5RHGwOUk6CxkJ_lZOaMY7HZbeJyRs">>
         ], maps:get(<<"indexed">>, BlockInfo)),
-    ?assertEqual([ ], maps:get(<<"not_indexed">>, BlockInfo)),
+    ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
 
 non_string_tags_test() ->
@@ -842,9 +842,9 @@ list_index_test() ->
     %% Verify the block height is present as a key
     ?assert(maps:is_key(BlockBin, IndexData)),
     BlockInfo = maps:get(BlockBin, IndexData),
-    %% Verify indexed and not_indexed keys exist
+    %% Verify indexed and not-indexed keys exist
     ?assert(maps:is_key(<<"indexed">>, BlockInfo)),
-    ?assert(maps:is_key(<<"not_indexed">>, BlockInfo)),
+    ?assert(maps:is_key(<<"not-indexed">>, BlockInfo)),
     ?assertEqual([
             <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
             <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>,
@@ -852,7 +852,7 @@ list_index_test() ->
             <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
             <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
         ], maps:get(<<"indexed">>, BlockInfo)),
-    ?assertEqual([ ], maps:get(<<"not_indexed">>, BlockInfo)),
+    ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
 
 %% @doc Test `mode=update` with three blocks representing three scenarios:
@@ -900,7 +900,7 @@ update_mode_test() ->
     [_SkippedTXID | RestTXIDs] = TXIDs,
     lists:foreach(
         fun(TXID) ->
-            hb_store_arweave:write_offset(StoreOpts, TXID, true, 0, 0)
+            hb_store_arweave:write_offset(StoreOpts, TXID, <<"tx@1.0">>, 0, 0)
         end,
         RestTXIDs
     ),
