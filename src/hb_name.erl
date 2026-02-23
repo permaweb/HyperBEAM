@@ -4,7 +4,7 @@
 %%% An important characteristic of these functions is that they are atomic:
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
--export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
+-export([start/0, register/1, register/2, unregister/1, lookup/1, all/0, ensure_process/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
@@ -100,6 +100,34 @@ all() ->
         fun({_, Pid}) -> is_process_alive(Pid) end,
         Registered
     ).
+
+%% @doc Ensure exactly one process is running under Name.
+%% If no process is registered, atomically race-register a spawned process.
+%% Only the winner executes InitFun.
+ensure_process(Name, InitFun) when is_function(InitFun, 0) ->
+    case lookup(Name) of
+        undefined ->
+            spawn(
+                fun() ->
+                    case hb_name:register(Name, self()) of
+                        ok -> InitFun();
+                        error -> ok
+                    end
+                end
+            ),
+            wait_for_registered_process(Name, 20);
+        Pid -> Pid
+    end.
+
+wait_for_registered_process(Name, 0) ->
+    lookup(Name);
+wait_for_registered_process(Name, Retries) ->
+    case lookup(Name) of
+        undefined ->
+            timer:sleep(10),
+            wait_for_registered_process(Name, Retries - 1);
+        Pid -> Pid
+    end.
 
 %%% Tests
 
@@ -203,3 +231,40 @@ all_test() ->
     ?assertEqual(BaseRegistered + ?CONCURRENT_REGISTRATIONS, length(hb_name:all())),
     timer:sleep(1000),
     ?assertEqual(BaseRegistered, length(hb_name:all())).
+
+ensure_process_concurrency_test() ->
+    Name = {ensure_process_test, os:timestamp()},
+    Parent = self(),
+    InitFun = fun() ->
+        ?event(bundler_short, {ensure_process_init_fun_called, {name, Name}, {pid, self()}}),
+        Parent ! {init_called, self()},
+        timer:sleep(500)
+    end,
+    Workers = [
+        spawn(fun() ->
+            Pid = hb_name:ensure_process(Name, InitFun),
+            Parent ! {ensure_result, Pid}
+        end)
+        || _ <- lists:seq(1, ?CONCURRENT_REGISTRATIONS)
+    ],
+    Results = [
+        receive
+            {ensure_result, Pid} -> Pid
+        after 1000 ->
+            timeout
+        end
+        || _ <- Workers
+    ],
+    ?assert(lists:all(fun(Pid) -> is_pid(Pid) end, Results)),
+    ?assertEqual(1, length(lists:usort(Results))),
+    InitCalls = collect_init_calls(0),
+    ?assertEqual(1, InitCalls),
+    hb_name:unregister(Name).
+
+collect_init_calls(Count) ->
+    receive
+        {init_called, _Pid} ->
+            collect_init_calls(Count + 1)
+    after 50 ->
+        Count
+    end.

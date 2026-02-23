@@ -99,22 +99,13 @@ cache_item(Item, Opts) ->
 %% @doc Return the PID of the bundler server. If the server is not running,
 %% it is started and registered with the name `?SERVER_NAME'.
 ensure_server(Opts) ->
-    case hb_name:lookup(?SERVER_NAME) of
-        undefined ->
-            PID = spawn(fun() -> init(Opts) end),
-            ?event(bundler_short, {starting_bundler_server, {pid, PID}}),
-            hb_name:register(?SERVER_NAME, PID),
-            hb_name:lookup(?SERVER_NAME);
-        PID -> PID
-    end.
-
-stop_server() ->
-    case hb_name:lookup(?SERVER_NAME) of
-        undefined -> ok;
-        PID ->
-            PID ! stop,
-            hb_name:unregister(?SERVER_NAME)
-    end.
+    hb_name:ensure_process(
+        ?SERVER_NAME,
+        fun() ->
+            ?event(bundler_short, {starting_bundler_server, {pid, self()}}),
+            init(Opts)
+        end
+    ).
 
 %% @doc Initialize the bundler server.
 init(Opts) ->
@@ -721,3 +712,11 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+stop_server() ->
+    case hb_name:lookup(?SERVER_NAME) of
+        undefined -> ok;
+        PID ->
+            PID ! stop,
+            hb_name:unregister(?SERVER_NAME)
+    end.

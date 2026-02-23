@@ -57,14 +57,13 @@ dispatch(Items, Opts) ->
 %% @doc Return the PID of the dispatch server. If the server is not running,
 %% it is started and registered with the name `?SERVER_NAME'.
 ensure_dispatcher(Opts) ->
-    case hb_name:lookup(?DISPATCHER_NAME) of
-        undefined ->
-            PID = spawn(fun() -> init(Opts) end),
-            ?event(bundler_short, {starting_dispatcher, {pid, PID}}),
-            hb_name:register(?DISPATCHER_NAME, PID),
-            hb_name:lookup(?DISPATCHER_NAME);
-        PID -> PID
-    end.
+    hb_name:ensure_process(
+        ?DISPATCHER_NAME,
+        fun() ->
+            ?event(bundler_short, {starting_dispatcher, {pid, self()}}),
+            init(Opts)
+        end
+    ).
 
 stop_dispatcher() ->
     case hb_name:lookup(?DISPATCHER_NAME) of
@@ -972,7 +971,9 @@ recover_bundles_test() ->
     try
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            store => hb_test_utils:test_store()
+            store => hb_test_utils:test_store(),
+            % Keep recovered bundle state stable for assertions.
+            bundler_workers => 0
         },
         hb_http_server:start_node(Opts),
         % Create some test items
