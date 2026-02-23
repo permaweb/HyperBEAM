@@ -345,11 +345,7 @@ withdraw(Base, Req, Opts) ->
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     maybe
-        {ok, S1} ?=
-            case liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts) of
-                {error, _} = LiquidateErr -> LiquidateErr;
-                Liquidated -> {ok, Liquidated}
-            end,
+        {ok, S1} ?= liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
         modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
     else
         {error, _} = WithdrawErr -> WithdrawErr
@@ -451,7 +447,7 @@ notify(State, Assignment, Opts) ->
 
 %% @doc For a given address, undelegate their delegations until the specified
 %% quantity has been reclaimed.
-liquidate(_Addr, _ResourceID, Amount, S, _Opts) when Amount =< 0 -> S;
+liquidate(_Addr, _ResourceID, Amount, S, _Opts) when Amount =< 0 -> {ok, S};
 liquidate(Addr, ResourceID, Amount, S, Opts) ->
     ExistingDelegations =
         hb_ao:get(
@@ -487,7 +483,7 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
                 {error, _} = Err -> Err;
                 S0 -> liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts)
             end
-end.
+    end.
 
 %% @doc Delegate some quantity of a resource from one address to another.
 delegate(State, Assignment, Opts) ->
@@ -699,7 +695,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
             RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
             case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
                 {error, _} = Err -> Err;
-                Liquidated ->
+                {ok, Liquidated} ->
                     GlobalDrippedS = drip_global(Liquidated, Opts),
                     DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
                     S0 = drip_user(FromAddr, DrippedS, Opts),
