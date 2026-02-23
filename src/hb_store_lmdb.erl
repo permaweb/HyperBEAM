@@ -31,12 +31,9 @@
 
 %% Configuration constants with reasonable defaults
 -define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
--define(CONNECT_TIMEOUT, 6000).                 % Timeout for server communication
--define(DEFAULT_IDLE_FLUSH_TIME, 5).            % Idle server time before auto-flush
--define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
+-define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
+                                                % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
--define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
--define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -54,23 +51,44 @@
 start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
-    ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    ok = ensure_dir(DataDirPath),
+    EnvOpts =
+        [
+            {
+                map_size,
+                hb_util:int(maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE))
+            },
+            {
+                batch_size,
+                hb_util:int(maps:get(<<"batch-size">>, Opts, ?DEFAULT_BATCH_SIZE))
+            },
+            no_mem_init,
+            no_sync
+        ] ++
+        case maps:get(<<"read-only">>, Opts, false) of
+            true -> [no_lock];
+            false -> []
+        end ++
+        case maps:get(<<"max-readers">>, Opts, false) of
+            false -> [];
+            MaxReaders -> [{max_readers, hb_util:int(MaxReaders)}]
+        end ++
+        case maps:get(<<"lock">>, Opts, true) of
+            true -> [];
+            false -> [no_lock]
+        end,
     % Create the LMDB environment with specified size limit
-    {ok, Env} =
-        elmdb:env_open(
-            DataDirPath,
-            [
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_sync
-            ]
-        ),
+    {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
-    % Store both environment and DB instance in persistent_term for later cleanup
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    persistent_term:put(StoreKey, {Env, DBInstance, DataDir}),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
+
+%% @doc Ensure that the database directory exists.
+ensure_dir(DataDirPath) ->
+    % `filelib` interprets the last path element as a filename, so we add a 
+    % dummy one, else the final directory will not be created.
+    filelib:ensure_dir(filename:join(DataDirPath, "dummy.mdb")).
 
 %% @doc Determine whether a key represents a simple value or composite group.
 %%
@@ -95,10 +113,8 @@ type(Opts, Key) ->
                     type(Opts, Link);
                 false ->
                     case Value of
-                        <<"group">> -> 
-                            composite;
-                        _ -> 
-                            simple
+                        <<"group">> -> composite;
+                        _ -> simple
                     end
             end;
         not_found -> not_found
@@ -120,7 +136,9 @@ type(Opts, Key) ->
 %% @param Path Binary path to write
 %% @param Value Binary value to store
 %% @returns 'ok' immediately (write happens asynchronously)
--spec write(map(), binary() | list(), binary()) -> ok.
+-spec write(map(), binary() | list(), binary()) -> ok | not_found.
+write(#{ <<"read-only">> := true }, _PathParts, _Value) ->
+    not_found;
 write(Opts, PathParts, Value) when is_list(PathParts) ->
     % Convert to binary
     PathBin = to_path(PathParts),
@@ -476,7 +494,9 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
 %% @param Existing The key that already exists and contains the target value
 %% @param New The new key that should link to the existing key
 %% @returns Result of the write operation
--spec make_link(map(), binary() | list(), binary()) -> ok.
+-spec make_link(map(), binary() | list(), binary()) -> ok | not_found.
+make_link(#{ <<"read-only">> := true }, _Existing, _New) ->
+    not_found;
 make_link(Opts, Existing, New) when is_list(Existing) ->
     ExistingBin = to_path(Existing),
     make_link(Opts, ExistingBin, New);
@@ -537,68 +557,11 @@ find_env(Opts) -> hb_store:find(Opts).
 
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    close_environment(StoreKey, DataDir);
+    % Soft-close by name; refs stay valid and reopen lazily on next access.
+    catch elmdb:env_close_by_name(hb_util:list(DataDir)),
+    ok;
 stop(_InvalidStoreOpts) ->
     ok.
-
-%% Close environment using persistent_term lookup with fallback
-close_environment(StoreKey, DataDir) ->
-    case safe_get_persistent_term(StoreKey) of
-        {ok, {Env, DBInstance}} ->
-            close_and_cleanup(Env, DBInstance, StoreKey, DataDir);
-        not_found ->
-            ?event({lmdb_stop_not_found_in_persistent_term, DataDir}),
-            safe_close_by_name(DataDir)
-    end,
-    ok.
-
-%% Get environment and DB instance from persistent_term without exceptions
-safe_get_persistent_term(Key) ->
-    case persistent_term:get(Key, undefined) of
-        {Env, DBInstance, _DataDir} -> {ok, {Env, DBInstance}};
-        {Env, _DataDir} -> {ok, {Env, undefined}};  % Backwards compatibility
-        _ -> not_found
-    end.
-
-%% Close DB instance and environment, then cleanup persistent_term entry
-close_and_cleanup(Env, DBInstance, StoreKey, DataDir) ->
-    % Close DB instance first if it exists
-    DBCloseResult = safe_close_db(DBInstance),
-    ?event({db_close_result, DBCloseResult}),
-    % Then close the environment
-    EnvCloseResult = safe_close_env(Env),
-    persistent_term:erase(StoreKey),
-    case EnvCloseResult of
-        ok -> ?event({lmdb_stop_success, DataDir});
-        {error, Reason} -> ?event({lmdb_stop_error, Reason})
-    end.
-
-%% Close DB instance with error capture
-safe_close_db(undefined) ->
-    ok;  % No DB instance to close
-safe_close_db(DBInstance) ->
-    try
-        elmdb:db_close(DBInstance)
-    catch
-        error:Reason -> {error, Reason}
-    end.
-
-%% Close environment handle with error capture
-safe_close_env(Env) ->
-    try
-        elmdb:env_close(Env)
-    catch
-        error:Reason -> {error, Reason}
-    end.
-
-%% Fallback close by name with error suppression
-safe_close_by_name(DataDir) ->
-    try
-        elmdb:env_close_by_name(binary_to_list(DataDir))
-    catch
-        error:_ -> ok
-    end.
 
 %% @doc Completely delete the database directory and all its contents.
 %%
@@ -620,8 +583,9 @@ reset(Opts) ->
             ok;
         DataDir ->
             % Stop the store and remove the database.
-            % stop(Opts),
+            stop(Opts),
             os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
+            ensure_dir(DataDir),
             ok
     end.
 
@@ -718,11 +682,7 @@ group_test() ->
 %% and verifies that reading from the link location returns the original value.
 %% This demonstrates the transparent link resolution mechanism.
 link_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store3">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     write(StoreOpts, <<"foo/bar/baz">>, <<"Bam">>),
     make_link(StoreOpts, <<"foo/bar/baz">>, <<"foo/beep/baz">>),
@@ -731,11 +691,7 @@ link_test() ->
     ?assertEqual(<<"Bam">>, Result).
 
 link_fragment_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store3">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     write(StoreOpts, [<<"data">>, <<"bar">>, <<"baz">>], <<"Bam">>),
     make_link(StoreOpts, [<<"data">>, <<"bar">>], <<"my-link">>),
@@ -749,11 +705,7 @@ link_fragment_test() ->
 %% then verifies that the type detection function correctly identifies each one.
 %% This demonstrates the semantic classification system used by the store.
 type_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-6">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     make_group(StoreOpts, <<"assets">>),
     Type = type(StoreOpts, <<"assets">>),
@@ -780,11 +732,7 @@ type_test() ->
 %% hierarchical structures where keys represent nested paths or categories,
 %% and need to create shortcuts or aliases to deeply nested data.
 link_key_list_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-7">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     write(StoreOpts, [ <<"parent">>, <<"key">> ], <<"value">>),
     make_link(StoreOpts, [ <<"parent">>, <<"key">> ], <<"my-link">>),
@@ -803,11 +751,7 @@ link_key_list_test() ->
 %% allowing reorganization of hierarchical data without breaking existing
 %% access patterns.
 path_traversal_link_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-8">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     % Create the actual data at group/key
     write(StoreOpts, [<<"group">>, <<"key">>], <<"target-value">>),
@@ -821,11 +765,7 @@ path_traversal_link_test() ->
 
 %% @doc Test that matches the exact hb_store hierarchical test pattern
 exact_hb_store_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-exact">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     % Follow exact same pattern as hb_store test
     ?event(step1_make_group),
     make_group(StoreOpts, <<"test-dir1">>),
@@ -853,11 +793,7 @@ exact_hb_store_test() ->
 %% @doc Test cache-style usage through hb_store interface
 cache_style_test() ->
     hb:init(),
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-cache-style">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     % Start the store
     hb_store:start(StoreOpts),
@@ -876,11 +812,7 @@ cache_style_test() ->
 %% 2. Links are created to compose the values back into the original map structure
 %% 3. Reading the composed structure reconstructs the original nested map
 nested_map_cache_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-nested-cache">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     % Clean up any previous test data
     reset(StoreOpts),
     % Original nested map structure
@@ -983,11 +915,7 @@ reconstruct_map(StoreOpts, Path) ->
 
 %% @doc Debug test to understand cache linking behavior
 cache_debug_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/cache-debug">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     % Simulate what the cache does:
     % 1. Create a group for message ID
@@ -1021,15 +949,11 @@ cache_debug_test() ->
 
 %% @doc Isolated test focusing on the exact cache issue
 isolated_type_debug_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/isolated-debug">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     % Create the exact scenario from user's description:
     % 1. A message ID with nested structure
-    MessageID = <<"message123">>,
+    MessageID = <<"Base23">>,
     make_group(StoreOpts, MessageID),
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,
@@ -1061,11 +985,7 @@ isolated_type_debug_test() ->
 
 %% @doc Test that list function resolves links correctly
 list_with_link_test() ->
-    StoreOpts = #{
-        <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-list-link">>,
-        <<"capacity">> => ?DEFAULT_SIZE
-    },
+    StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     % Create a group with some children
     make_group(StoreOpts, <<"real-group">>),

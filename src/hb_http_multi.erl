@@ -63,8 +63,9 @@ request(Config, Method, Path, Message, Opts) ->
             {message_to_send, MultirequestMsg}
         }),
     AllResults =
-        if Parallel ->
+        if Parallel =/= false ->
             parallel_multirequest(
+                Parallel,
                 Nodes,
                 Responses,
                 StopAfter,
@@ -182,10 +183,19 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, 
     end.
 
 %% @doc Dispatch the same HTTP request to many nodes in parallel.
-parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
+parallel_multirequest(true, Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
+    parallel_multirequest(length(Nodes), Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts);
+parallel_multirequest(MaxWorkers, Nodes, Responses, StopAfter, Method, Path, Message, Admissible, Statuses, Opts) ->
     Ref = make_ref(),
+    {Workers, Queue} = start_workers(MaxWorkers, Ref, Nodes, Method, Path, Message, Opts),
+    parallel_responses([], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
+
+%% @doc Start a new fleet of workers, returning the list of worker PIDs.
+start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     Parent = self(),
-    Procs =
+    {NewWorkerNodes, NewRemainingNodes} =
+        lists:split(min(Count, length(Nodes)), Nodes),
+    {
         lists:map(
             fun(Node) ->
                 spawn(
@@ -197,9 +207,10 @@ parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Admiss
                     end
                 )
             end,
-            Nodes
+            NewWorkerNodes
         ),
-    parallel_responses([], Procs, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
+        NewRemainingNodes
+    }.
 
 %% @doc Check if a status is allowed, according to the configuration. Statuses
 %% can be a single integer, a comma-separated list of integers, or the string
@@ -230,33 +241,52 @@ admissible_response(Response, Msg, Opts) ->
     ?event(debug_multi,
         {executing_admissible_message, {message, Base}, {req, Req}}
     ),
-    case hb_ao:resolve(Base, Req, Opts) of
+    try hb_ao:resolve(Base, Req, Opts) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
         {error, Reason} ->
             ?event(debug_multi, {admissible_error, {reason, Reason}}),
             false
+    catch 
+        Class:Reason:Stacktrace ->
+            ?event(error, 
+                {admissible_response, 
+                    {class, Class}, 
+                    {reason, Reason}, 
+                    {stacktrace, Stacktrace}
+                }
+            ),
+            false
     end.
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
-parallel_responses(Res, Procs, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
+parallel_responses(Res, [], _, _, Ref, _Awaiting, _StopAfter, _Admissible, _Statuses, _Opts) ->
+    empty_inbox(Ref),
+    Res;
+parallel_responses(Res, Procs, _, _, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
-    {ok, Res};
-parallel_responses(Res, Procs, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
+    Res;
+parallel_responses(Res, Procs, _, _, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> exit(P, kill) end, Procs),
     empty_inbox(Ref),
     Res;
-parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
+parallel_responses(Res, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
         {Ref, Pid, {Status, NewRes}} ->
+            WorkersWithoutPid = lists:delete(Pid, Procs),
+            {RefilledWorkers, NewQueue} =
+                start_workers(1, Ref, Queue, Method, Path, Message, Opts),
+            NewProcs = RefilledWorkers ++ WorkersWithoutPid,
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
                     parallel_responses(
-                        [NewRes | Res],
-                        lists:delete(Pid, Procs),
+                        [{Status, NewRes} | Res],
+                        NewProcs,
+                        NewQueue,
+                        {Method, Path, Message},
                         Ref,
                         Awaiting - 1,
                         StopAfter,
@@ -267,7 +297,9 @@ parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Admissible, Statuses, O
             false ->
                 parallel_responses(
                     Res,
-                    lists:delete(Pid, Procs),
+                    NewProcs,
+                    NewQueue,
+                    {Method, Path, Message},
                     Ref,
                     Awaiting,
                     StopAfter,
@@ -281,4 +313,9 @@ end.
 %% @doc Empty the inbox of the current process for all messages with the given
 %% reference.
 empty_inbox(Ref) ->
-    receive {Ref, _} -> empty_inbox(Ref) after 0 -> ok end.
+    receive
+        {Ref, _, _} -> empty_inbox(Ref);
+        {Ref, _} -> empty_inbox(Ref)
+    after 0 ->
+        ok
+    end.

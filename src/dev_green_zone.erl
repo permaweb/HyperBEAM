@@ -37,11 +37,11 @@ info(_) ->
 %% 2. Version information
 %% 3. Available API endpoints with their parameters and descriptions
 %%
-%% @param _Msg1 Ignored parameter
-%% @param _Msg2 Ignored parameter
+%% @param _Base Ignored parameter
+%% @param _Req Ignored parameter
 %% @param _Opts A map of configuration options
 %% @returns {ok, Map} containing the device information and documentation
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
     InfoBody = #{
         <<"description">> => 
             <<"Green Zone secure communication and identity management for trusted nodes">>,
@@ -456,8 +456,9 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
                 InitOpts
             ),
             % Create an committed join request using the wallet.
+            % hb_message:commit expects Opts map (which contains priv_wallet), not wallet tuple
             Req = hb_cache:ensure_all_loaded(
-                hb_message:commit(MergedReq, Wallet),
+                hb_message:commit(MergedReq, InitOpts),
                 InitOpts
             ),
             ?event({join_req, {explicit, Req}}),

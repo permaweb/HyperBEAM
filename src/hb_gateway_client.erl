@@ -11,7 +11,7 @@
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
--export([scheduler_location/2]).
+-export([location/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -105,7 +105,7 @@ data(ID, Opts) ->
     Req = #{
         <<"multirequest-accept-status">> => 200,
         <<"multirequest-responses">> => 1,
-        <<"path">> => <<"/raw/", ID/binary>>,
+        <<"path">> => <<"/arweave/raw/", ID/binary>>,
         <<"method">> => <<"GET">>
     },
     case hb_http:request(Req, Opts) of
@@ -124,12 +124,12 @@ data(ID, Opts) ->
     end.
 
 %% @doc Find the location of the scheduler based on its ID, through GraphQL.
-scheduler_location(Address, Opts) ->
+location(Address, Opts) ->
     Query =
-        <<"query($SchedulerAddrs: [String!]!) { ",
+        <<"query($Addresses: [String!]!) { ",
                 "transactions(",
-                "owners: $SchedulerAddrs, ",
-                "tags: { name: \"Type\" values: [\"Scheduler-Location\"] }, ",
+                "owners: $Addresses, ",
+                "tags: { name: \"Type\" values: [\"Location\", \"Scheduler-Location\"] }, ",
                 "first: 1",
             "){ ",
                 "edges { ",
@@ -137,7 +137,7 @@ scheduler_location(Address, Opts) ->
                 " } ",
             "} ",
         "}">>,
-    Variables = #{ <<"SchedulerAddrs">> => [Address] },
+    Variables = #{ <<"Addresses">> => [Address] },
     case query(Query, Variables, Opts) of
         {error, Reason} ->
             ?event({scheduler_location, {query, Query}, {error, Reason}}),
@@ -241,8 +241,8 @@ result_to_message(ExpectedID, Item, Opts) ->
     % We have the headers, so we can get the data.
     Data =
         case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
+            #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
             BinData when is_binary(BinData) -> BinData;
-            #{ <<"size">> := 0 } -> <<>>;
             _ ->
                 {ok, Bytes} = data(ExpectedID, Opts),
                 Bytes
@@ -262,7 +262,7 @@ result_to_message(ExpectedID, Item, Opts) ->
             _ -> unsupported_tx_signature_type
         end,
     TX =
-        ar_bundles:reset_ids(#tx {
+        dev_arweave_common:reset_ids(#tx {
             format = ans104,
             anchor =
                 normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
@@ -403,7 +403,7 @@ scheduler_location_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
     {ok, Res} =
-        scheduler_location(
+        location(
             <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
             #{}
         ),

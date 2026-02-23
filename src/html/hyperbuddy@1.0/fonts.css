@@ -1,0 +1,15 @@
+@font-face {
+	font-family: 'DM Sans';
+	src: url('./font-dm-sans-variable.ttf') format('truetype');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Geist Mono';
+	src: url('./font-geist-mono-variable.ttf') format('truetype');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}

@@ -7,6 +7,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% Utility macro to check if a binary is a Lua script content-type.
+-define(IS_LUA_TYPE(CT), CT == <<"application/lua">> orelse CT == <<"text/x-lua">>).
+
 %%% The set of functions that will be sandboxed by default if `sandbox' is set 
 %%% to only `true'. Setting `sandbox' to a map allows the invoker to specify
 %%% which functions should be sandboxed and what to return instead. Providing
@@ -38,8 +41,19 @@ info(Base) ->
     #{
         default => fun compute/4,
         excludes =>
-            [<<"keys">>, <<"set">>, <<"encode">>, <<"decode">>]
-                ++ maps:keys(Base)
+            [
+                <<"id">>,
+                <<"commitments">>,
+                <<"committers">>,
+                <<"keys">>,
+                <<"path">>,
+                <<"set">>,
+                <<"remove">>,
+                <<"verify">>,
+                <<"encode">>,
+                <<"decode">>
+            ] ++
+            maps:keys(Base)
     }.
 
 %% @doc Initialize the device state, loading the script into memory if it is 
@@ -65,27 +79,53 @@ ensure_initialized(Base, _Req, Opts) ->
             end
     end.
 
-%% @doc Find the script in the base message, either by ID or by string.
+%% @doc Find the script(s) specified in the base message. If the `content-type'
+%% key is set to `application/lua' or `text/x-lua', we assume that the `body' key
+%% contains a Lua script. Additionally, if a `module' key may be present with
+%% the following forms:
+%% 1. A binary ID of a Lua module.
+%% 2. A list of binary IDs of Lua modules.
+%% 3. A message containing a series of named Lua modules.
 find_modules(Base, Opts) ->
-    case hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts) of
-        not_found ->
-            {error, <<"no-modules-found">>};
-        Module when is_binary(Module) ->
+    MaybeBodyMod =
+        case hb_ao:get(<<"content-type">>, {as, <<"message@1.0">>, Base}, Opts) of
+            CT when ?IS_LUA_TYPE(CT) -> [Base];
+            _ -> []
+        end,
+    ?event(
+        debug_lua,
+        {finding_modules, {base, Base}, {body_mod, MaybeBodyMod}},
+        Opts
+    ),
+    case {hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts), MaybeBodyMod} of
+        {not_found, []} ->
+            {error, <<"No Lua modules found when preparing environment for call.">>};
+        {not_found, _} ->
+            load_modules(MaybeBodyMod, Opts);
+        {Module, _} when is_binary(Module)->
             find_modules(Base#{ <<"module">> => [Module] }, Opts);
-        Module when is_map(Module) ->
+        {Module, _} when is_map(Module) ->
             % If the module is a map, check its content type to see if it is 
             % a literal Lua module, or a map of modules with content types.
             case hb_ao:get(<<"content-type">>, Module, Opts) of
-                CT when CT == <<"application/lua">> orelse CT == <<"text/x-lua">> ->
-                    find_modules(Base#{ <<"module">> => [Module] }, Opts);
+                LuaCT when ?IS_LUA_TYPE(LuaCT) ->
+                    find_modules(
+                        Base#{ <<"module">> => [Module] },
+                        Opts
+                    );
                 _ ->
-                    % If the script is not a literal Lua script, assume it is a
-                    % map of scripts with content types, and recurse.
-                    find_modules(Base#{ <<"module">> => maps:values(Module) }, Opts)
+                    % If the script is not a literal Lua script binary, assume
+                    % it is a map of scripts with content types, and recurse.
+                    find_modules(
+                        Base#{
+                            <<"module">> => maps:values(Module)
+                        },
+                        Opts
+                    )
             end;
-        Modules when is_list(Modules) ->
+        {Modules, _} when is_list(Modules) ->
             % We have found a list of scripts, load them.
-            load_modules(Modules, Opts)
+            load_modules(MaybeBodyMod ++ Modules, Opts)
     end.
 
 %% @doc Load a list of modules for installation into the Lua VM.
@@ -108,7 +148,7 @@ load_modules([ModuleID | Rest], Opts, Acc) when ?IS_ID(ModuleID) ->
                 <<"body">> => <<"Lua module '", ModuleID/binary, "' not found.">>
             }}
     end;
-load_modules([Module | Rest], Opts, Acc) when is_map(Module) ->
+load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
     % We have found a message with a Lua module inside. Search for the binary
     % of the program in the body and the data.
     ModuleBin =
@@ -136,17 +176,13 @@ load_modules([Module | Rest], Opts, Acc) when is_map(Module) ->
         ModuleBin ->
             % Get the `name' key from the script message if it exists, or 
             % return the module ID as the module name.
-            Name =
-                hb_ao:get_first(
-                    [
-                        {Module, <<"name">>},
-                        {Module, <<"id">>}
-                    ],
-                    Module,
-                    Opts
-                ),
+            ModuleRef =
+                case hb_maps:find(<<"name">>, Module, Opts) of
+                    {ok, Name} -> Name;
+                    error -> hb_message:id(Module, all, Opts)
+                end,
             % Load the module into the Lua state.
-            load_modules(Rest, Opts, [{Name, ModuleBin}|Acc])
+            load_modules(Rest, Opts, [{ModuleRef, ModuleBin}|Acc])
     end.
 
 %% @doc Initialize a new Lua state with a given base message and module.
@@ -156,6 +192,14 @@ initialize(Base, Modules, Opts) ->
     State1 =
         lists:foldl(
             fun({ModuleID, ModuleBin}, StateIn) ->
+                ?event(
+                    debug_lua,
+                    {loading_module,
+                        {module_id, ModuleID},
+                        {module_bin, ModuleBin}
+                    },
+                    Opts
+                ),
                 {ok, _, StateOut} =
                     luerl:do_dec(
                         ModuleBin,
@@ -223,8 +267,13 @@ sandbox(State, [Path | Rest], Opts) ->
     sandbox(NextState, Rest, Opts).
 
 %% @doc Call the Lua script with the given arguments.
-compute(Key, RawBase, Req, Opts) ->
+compute(Key, RawBase, RawReq, Opts) ->
     ?event(debug_lua, compute_called),
+    Req = 
+        hb_cache:read_all_commitments(
+            RawReq,
+            Opts
+        ),
     {ok, Base} = ensure_initialized(RawBase, Req, Opts),
     ?event(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.
@@ -344,7 +393,7 @@ normalize(Base, _Req, RawOpts) ->
                 end,
             ?event(snapshot,
                 {attempting_to_restore_lua_state,
-                    {msg1, Base}, {device_key, DeviceKey}
+                    {base, Base}, {device_key, DeviceKey}
                 }
             ),
             SerializedState =
@@ -367,49 +416,53 @@ normalize(Base, _Req, RawOpts) ->
     end.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
-decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
+decode(EncMsg, Opts) ->
+    hb_message:normalize_commitments(do_decode(EncMsg, Opts), Opts, verify).
+do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
     % The value is an empty table, so we assume it is a message rather than
     % a list.
     #{};
-decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
-    decode(
+do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
+    do_decode(
         maps:map(
-            fun(_, V) -> decode(V, Opts) end,
+            fun(_, V) -> do_decode(V, Opts) end,
             maps:from_list(EncMsg)
         ),
         Opts
     );
-decode(Msg, Opts) when is_map(Msg) ->
+do_decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
     case hb_util:is_ordered_list(Msg, Opts) of
         true ->
             lists:map(
-                fun(V) -> decode(V, Opts) end,
+                fun(V) -> do_decode(V, Opts) end,
                 hb_util:message_to_ordered_list(Msg)
             );
         false ->
             Msg
     end;
-decode(Other, _Opts) ->
+do_decode(Other, _Opts) ->
     Other.
 
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
-encode(Map, Opts) when is_map(Map) ->
+encode(Map, Opts) ->
+    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+do_encode(Map, Opts) when is_map(Map) ->
     hb_cache:ensure_all_loaded(
         case hb_util:is_ordered_list(Map, Opts) of
-            true -> encode(hb_util:message_to_ordered_list(Map), Opts);
-            false -> maps:to_list(maps:map(fun(_, V) -> encode(V, Opts) end, Map))
+            true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
+            false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
         end,
         Opts
     );
-encode(List, Opts) when is_list(List) ->
+do_encode(List, Opts) when is_list(List) ->
     hb_cache:ensure_all_loaded(
-        lists:map(fun(V) -> encode(V, Opts) end, List),
+        lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
-encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
+do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
-encode(Other, _Opts) ->
+do_encode(Other, _Opts) ->
     Other.
 
 %% @doc Parse a Lua stack trace into a list of messages.
@@ -463,6 +516,31 @@ simple_invocation_test() ->
         <<"parameters">> => []
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
+
+post_invocation_message_validation_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Base =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> => #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"body">> => Script
+                },
+                <<"test-key">> => <<"test-value-1">>
+            },
+            Opts
+        ),
+    {ok, UnsignedID} = hb_cache:write(Base, Opts),
+    ?event({base, {msg, Base}, {unsigned_id, UnsignedID}}),
+    {ok, Res} = hb_ao:resolve(Base, <<"mutate_test_key">>, Opts),
+    {ok, ResID} = hb_cache:write(Res, Opts),
+    ?event({res_id, ResID}),
+    {ok, ReadMsg} = hb_cache:read(UnsignedID, Opts),
+    ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
+    ?assert(length(hb_message:signers(Res, Opts)) == 0),
+    ?assert(hb_message:verify(Res, all, Opts)).
 
 load_modules_by_id_test_() ->
     {timeout, 30, fun load_modules_by_id/0}.
@@ -561,7 +639,7 @@ ao_core_resolution_from_lua_test() ->
 
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->
-    BenchTime = 3,
+    BenchTime = 0.25,
     {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
@@ -667,7 +745,7 @@ pure_lua_process_benchmark_test_() ->
             })
     end}.
 pure_lua_process_benchmark(Opts) ->
-    BenchMsgs = 50,
+    BenchMsgs = 30,
     hb:init(),
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
@@ -732,7 +810,7 @@ aos_authority_not_trusted_test() ->
 %% @doc Benchmark the performance of Lua executions.
 aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
-        BenchMsgs = 10,
+        BenchMsgs = 6,
         Opts = #{
             process_async_cache => true,
             hashpath => ignore,
@@ -842,7 +920,7 @@ generate_test_message(Process, Opts, MsgBase) ->
 generate_stack(File) ->
     Wallet = hb:wallet(),
     {ok, Module} = file:read_file(File),
-    Msg1 = #{
+    Base = #{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -865,8 +943,8 @@ generate_stack(File) ->
                 <<"authority">> => hb:address()
             }, Wallet)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
+    Req.
 
 % execute_aos_call(Base) ->
 %     Req =

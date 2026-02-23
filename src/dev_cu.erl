@@ -76,5 +76,4 @@ execute(CarrierMsg, S) ->
                 {ok, S#{ results => Results }}
         end,
     ?event(returning_computed_results),
-    %ar_bundles:print(ModResults),
     {ResType, ModState}.

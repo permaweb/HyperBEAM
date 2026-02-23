@@ -339,7 +339,19 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
     ?event({resp_base, RespBase, WalletDetails}),
     AccessControl = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
-    {ok, _, Commitment} = hb_message:commitment(#{}, AccessControl, Opts),
+    {ok, _, Commitment} = 
+        hb_message:commitment(
+            #{},
+            hb_message:without_commitments(
+                #{
+                    <<"keyid">> => <<"constant:ao">>,
+                    <<"commitment-device">> => <<"httpsig@1.0">> 
+                },
+                AccessControl,
+                Opts
+            ),
+            Opts
+        ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
     Base = RespBase#{ <<"body">> => KeyID },
     % Determine how to persist the wallet.
@@ -828,23 +840,23 @@ list_wallets_test() ->
         priv_wallet => ar_wallet:new()
     }),
     % Generate some wallets first.
-    {ok, Msg1} =
+    {ok, Base} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory">>,
             #{}
         ),
-        ?event({msg1, Msg1}),
-    {ok, Msg2} =
+        ?event({base, Base}),
+    {ok, Req} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory">>,
             #{}
         ),
-    WalletAddress1 = maps:get(<<"body">>, Msg1),
-    WalletAddress2 = maps:get(<<"body">>, Msg2),
-    ?assertEqual(WalletAddress1, maps:get(<<"body">>, Msg1)),
-    ?assertEqual(WalletAddress2, maps:get(<<"body">>, Msg2)),
+    WalletAddress1 = maps:get(<<"body">>, Base),
+    WalletAddress2 = maps:get(<<"body">>, Req),
+    ?assertEqual(WalletAddress1, maps:get(<<"body">>, Base)),
+    ?assertEqual(WalletAddress2, maps:get(<<"body">>, Req)),
     % List all wallets (no authentication required for listing).
     {ok, Wallets} = hb_http:get(Node, <<"/~secret@1.0/list">>, #{}),
     % Each wallet entry should be a wallet name.

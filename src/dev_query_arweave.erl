@@ -183,6 +183,7 @@ match_args(Args, Opts) when is_map(Args) ->
         [],
         Opts
     ).
+match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
     Matches =
@@ -256,8 +257,13 @@ match(UnsupportedFilter, _, _) ->
 %% @doc Return the base IDs for messages that have a matching commitment.
 matching_commitments(Field, Values, Opts) when is_list(Values) ->
     hb_util:unique(lists:flatten(
-        lists:map(
-            fun(Value) -> matching_commitments(Field, Value, Opts) end,
+        lists:filtermap(
+            fun(Value) ->
+                case matching_commitments(Field, Value, Opts) of
+                    not_found -> false;
+                    IDs -> {true, IDs}
+                end
+            end,
             Values
         )
     ));
@@ -293,7 +299,7 @@ all_ids(ID, Opts) ->
     case hb_store:list(Store, << ID/binary, "/commitments">>) of
         {ok, []} -> [ID];
         {ok, CommitmentIDs} -> CommitmentIDs;
-        _ -> []
+        _ -> [ID]
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be

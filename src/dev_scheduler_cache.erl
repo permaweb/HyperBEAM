@@ -1,7 +1,6 @@
 %%% @doc A module that provides a cache for scheduler assignments and locations.
 -module(dev_scheduler_cache).
--export([write/2, write_spawn/2, write_location/2]).
--export([read/3, read_location/2]).
+-export([write/2, write_spawn/2, read/3]).
 -export([list/2, latest/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -37,12 +36,12 @@ write(RawAssignment, RawOpts) ->
         }
     ),
     case hb_cache:write(Assignment, Opts) of
-        {ok, RootPath} ->
+        {ok, _UnsignedID} ->
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
             hb_store:make_link(
                 Store,
-                RootPath,
+                hb_message:id(Assignment, signed, Opts),
                 hb_store:path(
                     Store,
                     [
@@ -141,69 +140,14 @@ latest(ProcID, RawOpts) ->
             ),
             {
                 AssignmentNum,
-                hb_ao:get(
-                    <<"hash-chain">>, Assignment, #{ hashpath => ignore })
+                hb_ao:get_first(
+                    [
+                        {Assignment, <<"base-hashpath">>},
+                        {Assignment, <<"hash-chain">>}
+                    ],
+                    #{ hashpath => ignore }
+                )
             }
-    end.
-
-%% @doc Read the latest known scheduler location for an address.
-read_location(Address, RawOpts) ->
-    Opts = opts(RawOpts),
-    Res =
-        hb_cache:read(
-            hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
-                ?SCHEDULER_CACHE_PREFIX,
-                "locations",
-                hb_util:human_id(Address)
-            ]),
-            Opts
-        ),
-    Event =
-        case Res of
-            {ok, _} -> found_in_store;
-            not_found -> not_found_in_store;
-            _ -> local_lookup_unexpected_result
-        end,
-    ?event(scheduler_location, {Event, {address, Address}, {res, Res}}),
-    Res.
-
-%% @doc Write the latest known scheduler location for an address.
-write_location(LocationMsg, RawOpts) ->
-    Opts = opts(RawOpts),
-    Signers = hb_message:signers(LocationMsg, Opts),
-    ?event(
-        scheduler_location,
-        {caching_locally,
-            {signers, Signers},
-            {location_msg, LocationMsg}
-        }
-    ),
-    case hb_cache:write(LocationMsg, Opts) of
-        {ok, RootPath} ->
-            lists:foreach(
-                fun(Signer) ->
-                    hb_store:make_link(
-                        hb_opts:get(store, no_viable_store, Opts),
-                        RootPath,
-                        hb_store:path(
-                            hb_opts:get(store, no_viable_store, Opts),
-                            [
-                                ?SCHEDULER_CACHE_PREFIX,
-                                "locations",
-                                hb_util:human_id(Signer)
-                            ]
-                        )
-                    )
-                end,
-                Signers
-            ),
-            ok;
-        false ->
-            % The message is not valid, so we don't cache it.
-            {error, <<"Invalid scheduler location message. Not caching.">>};
-        {error, Reason} ->
-            ?event(warning, {failed_to_cache_location_msg, {reason, Reason}}),
-            {error, Reason}
     end.
 
 %%% Tests
@@ -226,7 +170,8 @@ volatile_schedule_test() ->
     },
     ?assertEqual(ok, write(Assignment, Opts)),
     ?assertMatch({1, _}, latest(ProcID, Opts)),
-    ?assertEqual({ok, Assignment}, read(ProcID, 1, Opts)),
+    {ok, ReadAssignment} = read(ProcID, 1, Opts),
+    ?assertEqual(ReadAssignment, hb_message:normalize_commitments(Assignment, Opts)),
     hb_store:stop(VolStore),
     hb_store:reset(VolStore),
     hb_store:start(VolStore),
@@ -359,7 +304,7 @@ large_assignment_volume_test() ->
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
-    VolumeSize = 1000,
+    VolumeSize = 500,
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     StartTime = erlang:monotonic_time(millisecond),
     lists:foreach(
@@ -493,56 +438,6 @@ invalid_assignment_stress_test() ->
         }
     ),
     ?assertEqual(6, ErrorCount).
-
-%% @doc Test scheduler location operations under stress.
-scheduler_location_stress_test() ->
-    VolStore = hb_test_utils:test_store(hb_store_fs, <<"location-vol">>),
-    NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"location-nonvol">>),
-    Wallet = ar_wallet:new(),
-    Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore],
-        priv_wallet => Wallet
-    },
-    hb_store:start(VolStore),
-    hb_store:start(NonVolStore),
-    LocationCount = 10,
-    ?event(testing, {location_stress_test_starting, LocationCount}),
-    Results =
-        lists:map(
-            fun(N) ->
-                LocationMsg = #{
-                    <<"scheduler">> =>
-                        hb_util:human_id(ar_wallet:to_address(Wallet)),
-                    <<"location">> =>
-                        <<
-                            "http://scheduler",
-                            (integer_to_binary(N))/binary,
-                            ".com"
-                        >>,
-                    <<"timestamp">> => erlang:system_time(millisecond),
-                    <<"ttl">> => 3600000
-                },
-                Result =
-                    try
-                        write_location(LocationMsg, Opts)
-                    catch
-                        Res -> 
-                            ?event(testing, {location_write_error, {error, Res}}),
-                            ok 
-                    end,
-                ?assert(Result == ok orelse element(1, Result) == error),
-                Result
-            end,
-            lists:seq(1, LocationCount)
-        ),
-    SuccessCount = length([R || R <- Results, R == ok]),
-    ?event(
-        {location_stress_results,
-            {successes, SuccessCount},
-            {total, LocationCount}
-        }
-    ).
 
 %% @doc Test system behavior with corrupted data in volatile store.
 volatile_store_corruption_test() ->

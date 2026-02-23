@@ -432,13 +432,8 @@ test_stores() ->
         (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
-        (hb_test_utils:test_store(hb_store_lru))#{
-            <<"persistent-store">> => [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST/lru">>
-                }
-            ]
+        (hb_test_utils:test_store(hb_store_ets))#{
+            <<"benchmark-scale">> => 0.01
         }
     ] ++ rocks_stores().
 
@@ -839,10 +834,26 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
             fun() ->
                 lists:foldl(
                     fun({MsgID, Msg}, Count) -> 
+                        NormalizedMsg =
+                            hb_cache:ensure_all_loaded(
+                                hb_message:normalize_commitments(Msg, Opts),
+                                Opts
+                            ),
                         case hb_cache:read(MsgID, Opts) of
-                            {ok, Msg1} ->
-                                case hb_cache:ensure_all_loaded(Msg1, Opts) of
-                                    Msg -> Count;
+                            {ok, CacheMsg} ->
+                                NormalizedCacheMsg = 
+                                    hb_message:normalize_commitments(
+                                        hb_cache:read_all_commitments(
+                                            hb_cache:ensure_all_loaded(
+                                                CacheMsg,
+                                                Opts
+                                            ),
+                                            Opts
+                                        ),
+                                        Opts
+                                    ),
+                                case NormalizedCacheMsg of
+                                    NormalizedMsg -> Count;
                                     _ -> Count + 1
                                 end;
                             _ -> Count + 1

@@ -230,12 +230,14 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
         normalize_for_encoding(Msg, UnauthedCommitment, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),    
     HMac = hb_util:human_id(crypto:mac(hmac, sha256, Key, SigBase)),
-    ?event(httpsig_commit,
+    ?event(
+        debug_commitments,
         {hmac_commit,
             {type, <<"hmac-sha256">>},
             {keyid, KeyID},
             {committer, Committer},
             {committed, CommittedKeys},
+            {mod_committed_keys, ModCommittedKeys},
             {sig_base, SigBase},
             {hmac, HMac}
         }
@@ -254,7 +256,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
                     }
             }
         },
-    ?event({hmac_generation_complete, Res}),
+    ?event(debug_commitments, {hmac_generation_complete, Res}),
     Res.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains
@@ -338,7 +340,11 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         ),
     ?event({inputs, {list, Inputs}}),
     % Filter the message down to only the requested keys, then encode it.
-    MsgWithOnlyInputs = maps:with(Inputs, Msg),
+    MsgWithOnlyInputs =
+        maps:with(
+            Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
+            Msg
+        ),
     ?event({msg_with_only_inputs, maps:without([<<"commitments">>], MsgWithOnlyInputs)}),
     {ok, EncodedWithSigInfo} =
         to(
@@ -374,17 +380,21 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         ),
     % Calculate the keys that have been removed from the message, as a result
     % of being added to the body. These keys will need to be removed from the
-    % `committed' list and re-added where the `content-digest' was.
+    % `committed' list and re-added where the `content-digest' was in the
+    % `from_siginfo_keys' call.
     BodyKeys =
         lists:filter(
             fun(Key) -> not key_present(Key, Encoded) end,
             RawInputs
         ),
     KeysForCommitment =
-        dev_codec_httpsig_siginfo:from_siginfo_keys(
-            EncodedWithSigInfo,
-            BodyKeys,
-            KeysForEncoding
+        decode_committed_keys(
+            dev_codec_httpsig_siginfo:from_siginfo_keys(
+                EncodedWithSigInfo,
+                BodyKeys,
+                KeysForEncoding
+            ),
+            Opts
         ),
     ?event(debug_httpsig,
         {normalized_for_encoding,
@@ -401,11 +411,21 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         KeysForCommitment
     }.
 
+%% @doc Decode the committed keys from their percent-encoded form, for use in
+%% the `committed` key of the commitment.
+decode_committed_keys(ModCommittedKeys, _Opts) when is_list(ModCommittedKeys) ->
+    lists:map(fun hb_escape:decode/1, ModCommittedKeys).
+
 %% @doc Calculate if a key or its `+link' TABM variant is present in a message.
-key_present(Key, Msg) ->
-    NormalizedKey = hb_ao:normalize_key(Key),
-    maps:is_key(NormalizedKey, Msg)
-        orelse maps:is_key(<<NormalizedKey/binary, "+link">>, Msg).
+key_present(Key, Keys) -> key_present(true, Key, Keys).
+key_present(TryEncoded, Key, Msg) ->
+    if is_map_key(Key, Msg) orelse is_map_key(<<Key/binary, "+link">>, Msg) ->
+        true;
+    TryEncoded ->
+        key_present(false, hb_escape:encode(Key), Msg);
+    true ->
+        false
+    end.
 
 %% @doc create the signature base that will be signed in order to create the
 %% Signature and SignatureInput.
@@ -450,7 +470,7 @@ signature_components_line(Req, Commitment, _Opts) ->
                             }
                         );
                     Value ->
-                        << <<"\"">>/binary, Name/binary, <<"\"">>/binary, <<": ">>/binary, Value/binary>>
+                        <<"\"", Name/binary, "\": ", Value/binary>>
                 end
             end,
             maps:get(<<"committed">>, Commitment)
@@ -557,8 +577,9 @@ validate_large_message_from_http_test() ->
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed = hb_message:commit(Msg, hb:wallet()),
-    ?assert(hb_message:verify(Signed, all, #{})),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Signed = hb_message:commit(Msg, Opts),
+    ?assert(hb_message:verify(Signed, all, Opts)),
     ?event({signed_msg, Signed}),
     UnsignedID = hb_message:id(Signed, none),
     SignedID = hb_message:id(Signed, all),
@@ -567,10 +588,11 @@ committed_id_test() ->
 
 commit_secret_key_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
+    Opts = #{ priv_wallet => hb:wallet() },
     CommittedMsg =
         hb_message:commit(
             Msg,
-            #{},
+            Opts,
             #{
                 <<"type">> => <<"hmac-sha256">>,
                 <<"secret">> => <<"test-secret">>,
@@ -599,8 +621,8 @@ commit_secret_key_test() ->
 
 multicommitted_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed1 = hb_message:commit(Msg, Wallet1 = ar_wallet:new()),
-    Signed2 = hb_message:commit(Signed1, Wallet2 = ar_wallet:new()),
+    Signed1 = hb_message:commit(Msg, #{ priv_wallet => Wallet1 = ar_wallet:new() }),
+    Signed2 = hb_message:commit(Signed1, #{ priv_wallet => Wallet2 = ar_wallet:new() }),
     Addr1 = hb_util:human_id(ar_wallet:to_address(Wallet1)),
     Addr2 = hb_util:human_id(ar_wallet:to_address(Wallet2)),
     ?event({signed_msg, Signed2}),
@@ -622,8 +644,9 @@ sign_and_verify_link_test() ->
         <<"untyped">> => #{ <<"inner-untyped">> => <<"inner-value">> },
         <<"typed">> => #{ <<"inner-typed">> => 123 }
     },
+    Opts = #{ priv_wallet => hb:wallet() },
     NormMsg = hb_message:convert(Msg, <<"structured@1.0">>, #{}),
     ?event({msg, NormMsg}),
-    Signed = hb_message:commit(NormMsg, hb:wallet()),
+    Signed = hb_message:commit(NormMsg, Opts),
     ?event({signed_msg, Signed}),
-    ?assert(hb_message:verify(Signed)).
+    ?assert(hb_message:verify(Signed, Opts)).

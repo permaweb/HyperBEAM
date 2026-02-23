@@ -1,10 +1,12 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1, map/1]).
+-export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
+-export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
 -export([number/1, list_to_numbered_message/1]).
@@ -17,14 +19,14 @@
 -export([remove_common/2, to_lower/1]).
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
--export([ok/1, ok/2, until/1, until/2, until/3]).
+-export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
 -export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
 -export([unquote/1, split_escaped_single/2]).
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
--export([lower_case_key_map/2]).
+-export([lower_case_keys/2]).
 -include("include/hb.hrl").
 
 
@@ -39,6 +41,15 @@ int(Str) when is_list(Str) ->
     list_to_integer(Str);
 int(Int) when is_integer(Int) ->
     Int.
+
+%% @doc Safely coerce a string to an integer, returning an ok or error tuple.
+safe_int(Value) ->
+    try
+        Integer = int(Value),
+        {ok, Integer}
+    catch
+        _:_ -> {error, invalid}
+    end.
 
 %% @doc Coerce a string to a float.
 float(Str) when is_binary(Str) ->
@@ -56,7 +67,9 @@ atom(Str) when is_binary(Str) ->
 atom(Str) when is_list(Str) ->
     list_to_existing_atom(Str);
 atom(Atom) when is_atom(Atom) ->
-    Atom.
+    Atom;
+atom(#{<<"ao-result">> := Key} = Result) ->
+    atom(maps:get(Key, Result)).
 
 %% @doc Coerce a value to a binary.
 bin(Value) when is_atom(Value) ->
@@ -123,11 +136,31 @@ until(Condition, Fun, Count) ->
         true -> Count
     end.
 
+%% @doc Wait until a condition function returns true or timeout is reached.
+%% The condition function is polled every 100ms by default.
+%% Returns true if the condition was met, false if timeout was reached.
+wait_until(ConditionFun, TimeoutMs) ->
+    StartTime = erlang:system_time(millisecond),
+    until(
+        fun() ->
+            case ConditionFun() of
+                true -> true;
+                false ->
+                    CurrentTime = erlang:system_time(millisecond),
+                    CurrentTime - StartTime >= TimeoutMs
+            end
+        end
+    ),
+    %% Check one more time to determine if we succeeded or timed out
+    ConditionFun().
+
 %% @doc Return the human-readable form of an ID of a message when given either
 %% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
 id(Item) -> id(Item, unsigned).
-id(TX, Type) when is_record(TX, tx) ->
+id(#tx{ format = ans104 } = TX, Type) when is_record(TX, tx) ->
     encode(ar_bundles:id(TX, Type));
+id(TX, Type) when is_record(TX, tx) ->
+    encode(ar_tx:id(TX, Type));
 id(Map, Type) when is_map(Map) ->
     hb_message:id(Map, Type);
 id(Bin, _) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
@@ -230,6 +263,13 @@ safe_decode(E) ->
         {ok, D}
     catch
         _:_ -> {error, invalid}
+    end.
+
+%% @doc Determine whether a binary contains only unicode printable characters.
+is_printable_string(Bin) when is_binary(Bin) ->
+    case unicode:characters_to_binary(Bin) of
+        {error, _, _} -> false;
+        _ -> true
     end.
 
 %% @doc Convert a binary to a hex string. Do not use this for anything other than
@@ -723,10 +763,21 @@ atom_from_int(Int) ->
 binary_is_atom(X) ->
     lists:member(X, lists:map(fun hb_util:bin/1, all_atoms())).
 
-lower_case_key_map(Map, Opts) ->
-    hb_maps:fold(fun
-        (K, V, Acc) when is_map(V) ->
-            maps:put(hb_util:to_lower(K), lower_case_key_map(V, Opts), Acc);
-        (K, V, Acc) ->
-            maps:put(hb_util:to_lower(K), V, Acc)
-    end, #{}, Map, Opts).
+%% @doc Convert all keys in a message or map to lowercase.
+%% Note: Recursively forces load of _all_ keys in the map recursively for 
+%% conversion.
+lower_case_keys(Map, Opts) ->
+    hb_maps:fold(
+        fun(K, V, Acc) ->
+            maps:put(
+                to_lower(K),
+                if is_map(V) -> lower_case_keys(V, Opts);
+                true -> V
+                end,
+                Acc
+            )
+        end,
+        #{},
+        Map,
+        Opts
+    ).

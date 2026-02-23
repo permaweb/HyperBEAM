@@ -152,8 +152,8 @@
 % %     URL = hb_http_server:start_node(#{force_signed => true}),
 % %     BenchTime = 3,
 % %     BenchWorkers = 16,
-% %     Msg1 = dev_scheduler:test_process(),
-% %     Proc = hb_ao:get(process, Msg1, #{ hashpath => ignore }),
+% %     Base = dev_scheduler:test_process(),
+% %     Proc = hb_ao:get(process, Base, #{ hashpath => ignore }),
 % %     ProcID = hb_util:id(Proc),
 % %     ?event({benchmark_start, ?MODULE}),
 % %     Iterations = hb_test_utils:benchmark(
@@ -179,12 +179,12 @@
 % %         BenchWorkers
 % %     ),
 % %     ?event(benchmark, {scheduled, Iterations}),
-% %     Msg3 = #{
+% %     Res = #{
 % %         <<"path">> => <<"slot">>,
 % %         <<"method">> => <<"GET">>,
 % %         <<"process">> => ProcID
 % %     },
-% %     Res = hb_http:post(URL, Msg3),
+% %     Res = hb_http:post(URL, Res),
 % %     ?event({slot_result, Res}),
 % %     hb_formatter:eunit_print(
 % %         "Scheduled ~p messages through AO-Core in ~p seconds (~.2f msg/s)",

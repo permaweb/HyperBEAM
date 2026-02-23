@@ -14,7 +14,7 @@
 %%% Allowing users to store and retrieve not only arbitrary bytes, but also to
 %%% perform execution of computation upon that data:
 %%% 
-%%% 	`Hyperbeam(Message1, Message2) => Message3'
+%%% 	`Hyperbeam(Base, Request) => Result'
 %%% 
 %%% When Hyperbeam executes a message, it will return a new message containing
 %%% the result of that execution, as well as signed commitments of its
@@ -82,7 +82,7 @@
 %%% modules of the hyperbeam node.
 -module(hb).
 %%% Configuration and environment:
--export([init/0, now/0, build/0, deploy_scripts/0]).
+-export([init/0, top/0, now/0, build/0, deploy_scripts/0]).
 %%% Base start configurations:
 -export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
 -export([topup/3, topup/4]).
@@ -101,6 +101,14 @@ init() ->
     Old = erlang:system_flag(backtrace_depth, hb_opts:get(debug_stack_depth)),
     ?event({old_system_stack_depth, Old}),
     ok.
+
+-ifdef(AO_TOP).
+%% @doc Start a monitoring interface for the node. Presently this is offered
+%% with the `observer_cli' module atop `Recon'.
+top() -> observer_cli:start().
+-else.
+top() -> not_available.
+-endif.
 
 %% @doc Start a mainnet server without payments.
 start_mainnet() ->
@@ -230,13 +238,22 @@ wallet() ->
 wallet(Location) ->
     wallet(Location, #{}).
 wallet(Location, Opts) ->
-    case file:read_file_info(Location) of
-        {ok, _} ->
-            ar_wallet:load_keyfile(Location, Opts);
-        {error, _} -> 
-            Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
-            ?event({created_new_keyfile, Location, address(Res)}),
-            Res
+    CacheKey = {?MODULE, wallet, Location},
+    case persistent_term:get(CacheKey, not_found) of
+        not_found ->
+            Wallet =
+                case file:read_file_info(Location) of
+                    {ok, _} ->
+                        ar_wallet:load_keyfile(Location, Opts);
+                    {error, _} ->
+                        Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
+                        ?event({created_new_keyfile, Location, address(Res)}),
+                        Res
+                end,
+            persistent_term:put(CacheKey, Wallet),
+            Wallet;
+        Wallet ->
+            Wallet
     end.
 
 %% @doc Get the address of a wallet. Defaults to the address of the wallet

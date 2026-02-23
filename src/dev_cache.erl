@@ -3,7 +3,7 @@
 %%% supports writing messages to the store, if the node message has the
 %%% writer's address in its `cache_writers' key.
 -module(dev_cache).
--export([read/3, write/3, link/3]).
+-export([read/3, write/3, link/3, read_from_cache/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 

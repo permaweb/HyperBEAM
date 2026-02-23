@@ -37,13 +37,13 @@ relay_with_payments() ->
             }
         ),
     % Create a message for the client to relay.
-    ClientMessage1 =
+    ClientBase =
         hb_message:commit(
             #{<<"path">> => <<"/~relay@1.0/call?relay-path=https://www.google.com">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
     % Relay the message.
-    Res = hb_http:get(HostNode, ClientMessage1, #{}),
+    Res = hb_http:get(HostNode, ClientBase, #{}),
     ?assertMatch({error, #{ <<"body">> := <<"Insufficient funds">> }}, Res),
     % Topup the client's balance.
     % Note: The fields must be in the headers, for now.
@@ -54,11 +54,11 @@ relay_with_payments() ->
                 <<"recipient">> => ClientAddress,
                 <<"amount">> => 100
             },
-            HostWallet
+            #{ priv_wallet => HostWallet }
         ),
     ?assertMatch({ok, _}, hb_http:get(HostNode, TopupMessage, #{})),
     % Relay the message again.
-    Res2 = hb_http:get(HostNode, ClientMessage1, #{}),
+    Res2 = hb_http:get(HostNode, ClientBase, #{}),
     ?assertMatch({ok, #{ <<"body">> := Bin }} when byte_size(Bin) > 10_000, Res2),
     {ok, Resp} = Res2,
     ?assert(length(hb_message:signers(Resp, #{})) > 0),
@@ -101,7 +101,7 @@ paid_wasm() ->
         ),
     % Read the WASM file from disk, post it to the host and execute it.
     {ok, WASMFile} = file:read_file(<<"test/test-64.wasm">>),
-    ClientMessage1 =
+    ClientBase =
         hb_message:commit(
             #{
                 <<"path">> =>
@@ -111,19 +111,19 @@ paid_wasm() ->
             },
             Opts#{ priv_wallet => ClientWallet }
         ),
-    {ok, Res} = hb_http:post(HostNode, ClientMessage1, Opts),
+    {ok, Res} = hb_http:post(HostNode, ClientBase, Opts),
     % Check that the message is signed by the host node.
     ?assert(length(hb_message:signers(Res, Opts)) > 0),
     ?assert(hb_message:verify(Res, all, Opts)),
     % Now we have the results, we can verify them.
     ?assertMatch(6.0, hb_ao:get(<<"output/1">>, Res, Opts)),
     % Check that the client's balance has been deducted.
-    ClientMessage2 =
+    ClientRequest =
         hb_message:commit(
             #{<<"path">> => <<"/~p4@1.0/balance">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
-    {ok, Res2} = hb_http:get(HostNode, ClientMessage2, Opts),
+    {ok, Res2} = hb_http:get(HostNode, ClientRequest, Opts),
     ?assertMatch(60, Res2).
 
 create_schedule_aos2_test_disabled() ->
@@ -172,7 +172,7 @@ create_schedule_aos2_test_disabled() ->
         <<"scheduler-location">> => hb_util:human_id(hb:address())
     },
     Wallet = hb:wallet(),
-    SignedProc = hb_message:commit(ProcMsg, Wallet),
+    SignedProc = hb_message:commit(ProcMsg, #{ priv_wallet => Wallet }),
     IDNone = hb_message:id(SignedProc, none),
     IDAll = hb_message:id(SignedProc, all),
     {ok, Res} = schedule(SignedProc, IDNone, Wallet, Node),
@@ -198,7 +198,7 @@ schedule(ProcMsg, Target, Wallet, Node) ->
                 <<"target">> => Target,
                 <<"body">> => ProcMsg
             },
-            Wallet
+            #{ priv_wallet => Wallet }
         ),
     ?event({signed_req, SignedReq}),
     hb_http:post(Node, SignedReq, #{}).
@@ -224,8 +224,8 @@ relay_schedule_ans104_test() ->
             #{
                 on => #{
                     <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
+                        <<"device">> => <<"location@1.0">>,
+                        <<"path">> => <<"node">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
                         <<"require-codec">> => <<"ans104@1.0">>,
@@ -260,12 +260,12 @@ relay_schedule_ans104_test() ->
     {ok, SchedulerLocation} =
         hb_http:get(
             Scheduler,
-            <<"/~scheduler@1.0/location">>,
+            <<"/~location@1.0/node">>,
             #{}
         ),
     ?event({scheduler_location, SchedulerLocation}),
-    dev_scheduler_cache:write_location(
-        hb_maps:get(<<"body">>, SchedulerLocation, <<"NO BODY">>, #{}),
+    dev_location_cache:write(
+        SchedulerLocation,
         #{ store => [ComputeStore] }
     ),
     % Create the relaying server.

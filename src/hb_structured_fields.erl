@@ -318,7 +318,7 @@ parse_number(<<C, R/bits>>, L, Acc) when ?IS_DIGIT(C) ->
     parse_number(R, L + 1, <<Acc/binary, C>>);
 parse_number(<<$., R/bits>>, L, Acc) ->
     parse_decimal(R, L, 0, Acc, <<>>);
-parse_number(R, L, Acc) when L =< 15 ->
+parse_number(R, _L, Acc) ->
     {binary_to_integer(Acc), R}.
 
 %% @doc Parse a decimal binary.

@@ -61,8 +61,17 @@
 verify(M1, M2, NodeOpts) ->
     ?event(snp_verify, verify_called),
     maybe
+        % In pipeline flows (e.g., /~relay@1.0/call/verify~snp@1.0), the report
+        % comes from M1 (result of previous stage). For direct calls, it may be
+        % in M2. Try M1 first, then fall back to M2.
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}} 
-            ?= extract_and_normalize_message(M2, NodeOpts),
+            ?= case extract_and_normalize_message(M1, NodeOpts) of
+                {ok, Result} -> {ok, Result};
+                {error, {report_not_found, _}} ->
+                    ?event(snp_verify, {report_not_in_m1_trying_m2}),
+                    extract_and_normalize_message(M2, NodeOpts);
+                {error, ExtractReason} -> {error, ExtractReason}
+            end,
         % Perform all validation steps
         {ok, NonceResult} ?= verify_nonce(Address, NodeMsgID, Msg, NodeOpts),
         {ok, SigResult} ?= 
@@ -216,9 +225,22 @@ extract_and_normalize_message(M2, NodeOpts) ->
                 )
             ),
         ?event({msg_with_json_report, {explicit, MsgWithJSONReport}}),
-        % Normalize the request message
-        ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
-        Report = hb_json:decode(ReportJSON),
+        % Normalize the request message. First try to get the report from the
+        % committed message. If not found (e.g., message not signed), fall back
+        % to the raw message.
+        ReportJSON = case hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts) of
+            not_found ->
+                ?event({report_not_in_committed, falling_back_to_raw}),
+                hb_ao:get(<<"report">>, RawMsg, NodeOpts);
+            Found -> Found
+        end,
+        {ok, ValidReportJSON} ?= case ReportJSON of
+            not_found -> 
+                ?event({report_not_found, {m2, M2}, {raw_msg, RawMsg}}),
+                {error, {report_not_found, <<"No 'report' key found in message">>}};
+            _ -> {ok, ReportJSON}
+        end,
+        Report = hb_json:decode(ValidReportJSON),
         Msg =
             maps:merge(
                 maps:without([<<"report">>], MsgWithJSONReport),

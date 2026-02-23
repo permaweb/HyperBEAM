@@ -55,8 +55,8 @@
 --- 3. `credit-notice' messages that do not originate from a sub-ledger's
 ---    `token' are evaluated for parity of source code with the receiving
 ---     ledger. This is achieved by comparing the `from-base' field of the
----     credit-notice message with `process/id&commitments=none' on the receiving
----     ledger.
+---     credit-notice message with `process/id&committers=none' on the
+---     receiving ledger.
 
 --- Utility functions:
 
@@ -318,7 +318,7 @@ local function validate_new_peer_ledger(base, request)
     status, expected =
         ao.resolve(
             proc,
-            { path = "id", commitments = "none" }
+            { path = "id", committers = "none" }
         )
     ao.event({ "Expected `from-base`", { status = status, expected = expected } })
     -- Check if the `from-base' field is present in the assignment.
@@ -866,18 +866,25 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    ao.event({ "compute called",
-        { balance = base.balance, ledgers = base.ledgers } })
-
-    assignment.body.action = string.lower(assignment.body.action or "")
+    local action = string.lower(assignment.body.action or "")
+    ao.event(
+        {
+            "compute called",
+            {
+                balance = base.balance,
+                ledgers = base.ledgers,
+                action = action
+            }
+        }
+    )
     
-    if assignment.body.action == "credit-notice" then
+    if action == "credit-notice" then
         return _G["credit-notice"](base, assignment)
-    elseif assignment.body.action == "transfer" then
+    elseif action == "transfer" then
         return transfer(base, assignment)
-    elseif assignment.body.action == "register" then
+    elseif action == "register" then
         return register(base, assignment)
-    elseif assignment.body.action == "register-remote" then
+    elseif action == "register-remote" then
         return _G["register-remote"](base, assignment)
     else
         -- Handle unknown `action' values.

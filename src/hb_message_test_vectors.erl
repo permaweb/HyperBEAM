@@ -9,7 +9,7 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_structured_fields_test(
+    sign_node_message_test(
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
@@ -25,7 +25,9 @@ test_codecs() ->
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
-        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true }
+        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
+        <<"tx@1.0">>,
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -35,6 +37,7 @@ suite_test_opts() ->
     [
         #{
             name => normal,
+            parallel => true,
             desc => <<"Default opts">>,
             opts => test_opts(normal)
         }
@@ -206,6 +209,15 @@ suite_name(CodecSpec) when is_map(CodecSpec) ->
         true -> << CodecName/binary, " (bundle)">>
     end.
 
+is_device_codec(Devices, Codec) when is_list(Devices) ->
+    lists:any(fun(Device) -> is_device_codec(Device, Codec) end, Devices);
+is_device_codec(Device, Codec) when Device == Codec ->
+    true;
+is_device_codec(Device, #{ <<"device">> := Codec }) when Device == Codec ->
+    true;
+is_device_codec(Device, Codec) ->
+    false.
+
 %%% Codec-specific/misc. tests
 
 %% @doc Tests a message transforming function to ensure that it is idempotent.
@@ -334,13 +346,13 @@ minimization_test() ->
     ?assertEqual(1, hb_maps:size(MinimizedMsg)).
 
 match_modes_test() ->
-    Msg1 = #{ <<"a">> => 1, <<"b">> => 2 },
-    Msg2 = #{ <<"a">> => 1 },
-    Msg3 = #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 3 },
-    ?assert(hb_message:match(Msg1, Msg2, only_present)),
-    ?assert(hb_message:match(Msg2, Msg1, strict) =/= true),
-    ?assert(hb_message:match(Msg1, Msg3, primary)),
-    ?assert(hb_message:match(Msg3, Msg1, primary) =/= true).
+    Base = #{ <<"a">> => 1, <<"b">> => 2 },
+    Req = #{ <<"a">> => 1 },
+    Res = #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 3 },
+    ?assert(hb_message:match(Base, Req, only_present)),
+    ?assert(hb_message:match(Req, Base, strict) =/= true),
+    ?assert(hb_message:match(Base, Res, primary)),
+    ?assert(hb_message:match(Res, Base, primary) =/= true).
 
 basic_message_codec_test(Codec, Opts) ->
     Msg = #{ <<"normal_key">> => <<"NORMAL_VALUE">> },
@@ -470,6 +482,13 @@ message_with_large_keys_test(Codec, Opts) ->
 %% tests a large portion of the complex type encodings that HyperBEAM uses
 %% together.
 verify_nested_complex_signed_test(Codec, Opts) ->
+    % L1 TXs can not be nested inside each other, so we'll commit the nested
+    % message as an ANS104 message instead.
+    NestedCodec = case Codec of
+        <<"tx@1.0">> -> <<"ans104@1.0">>;
+        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        _ -> Codec
+    end,
     Msg =
         hb_message:commit(#{
             <<"path">> => <<"schedule">>,
@@ -493,7 +512,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
                                 >>
                         },
                         Opts,
-                        Codec
+                        NestedCodec
                     )
             },
             Opts,
@@ -518,10 +537,15 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     ?assert(MatchRes),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     % % Ensure that both of the messages can be verified (and retreived).
-    FoundInner = hb_maps:get(<<"body">>, Msg, not_found, Opts),
+    FoundInner =
+        hb_message:normalize_commitments(
+            hb_maps:get(<<"body">>, Msg, not_found, Opts),
+            Opts
+        ),
     LoadedFoundInner = hb_cache:ensure_all_loaded(FoundInner, Opts),
     % Verify that the fully loaded version of the inner message, and the one
     % gained by applying `hb_maps:get` match and verify.
+    ?event({match,{inner, Inner}, {found_inner, FoundInner}}),
     ?assert(hb_message:match(Inner, FoundInner, primary, Opts)),
     ?assert(hb_message:match(FoundInner, LoadedFoundInner, primary, Opts)),
     ?assert(hb_message:verify(Inner, all, Opts)),
@@ -531,9 +555,9 @@ verify_nested_complex_signed_test(Codec, Opts) ->
 %% @doc Check that large keys and data fields are correctly handled together.
 nested_message_with_large_keys_and_content_test(Codec, Opts) ->
     MainBodyKey =
-        case Codec of
-            <<"ans104@1.0">> -> <<"data">>;
-            _ -> <<"body">>
+        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
+            true -> <<"data">>;
+            false -> <<"body">>
         end,
     Msg = #{
         <<"normal_key">> => <<"normal_value">>,
@@ -581,13 +605,20 @@ simple_signed_nested_message_test(Codec, Opts) ->
     ?assert(hb_message:verify(Decoded, all, Opts)).
 
 signed_nested_message_with_child_test(Codec, Opts) ->
+    % L1 TXs can not be nested inside each other, so we'll commit the nested
+    % message as an ANS104 message instead.
+    NestedCodec = case Codec of
+        <<"tx@1.0">> -> <<"ans104@1.0">>;
+        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        _ -> Codec
+    end,
     Msg = #{
         <<"outer-a">> => <<"1">>,
         <<"nested">> =>
             hb_message:commit(
                 #{ <<"inner-b">> => <<"1">>, <<"inner-list">> => [1, 2, 3] },
                 Opts,
-                Codec
+                NestedCodec
             ),
         <<"outer-c">> => <<"3">>
     },
@@ -625,9 +656,9 @@ empty_body_test(Codec, Opts) ->
 %% tags).
 nested_message_with_large_content_test(Codec, Opts) ->
     MainBodyKey =
-        case Codec of
-            <<"ans104@1.0">> -> <<"data">>;
-            _ -> <<"body">>
+        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
+            true -> <<"data">>;
+            false -> <<"body">>
         end,
     Msg = #{
         <<"depth">> => <<"outer">>,
@@ -648,9 +679,9 @@ nested_message_with_large_content_test(Codec, Opts) ->
 %% @doc Test that we can convert a 3 layer nested message into a tx record and back.
 deeply_nested_message_with_content_test(Codec, Opts) ->
     MainBodyKey =
-        case Codec of
-            <<"ans104@1.0">> -> <<"data">>;
-            _ -> <<"body">>
+        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
+            true -> <<"data">>;
+            false -> <<"body">>
         end,
     Msg = #{
         <<"depth">> => <<"outer">>,
@@ -672,9 +703,9 @@ deeply_nested_message_with_content_test(Codec, Opts) ->
 
 deeply_nested_message_with_only_content(Codec, Opts) ->
     MainBodyKey =
-        case Codec of
-            <<"ans104@1.0">> -> <<"data">>;
-            _ -> <<"body">>
+        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
+            true -> <<"data">>;
+            false -> <<"body">>
         end,
     Msg = #{
         <<"depth1">> => <<"outer">>,
@@ -1166,6 +1197,13 @@ deeply_nested_committed_keys_test() ->
     ).
 
 signed_with_inner_signed_message_test(Codec, Opts) ->
+    % L1 TXs can not be nested inside each other, so we'll commit the nested
+    % message as an ANS104 message instead.
+    NestedCodec = case Codec of
+        <<"tx@1.0">> -> <<"ans104@1.0">>;
+        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        _ -> Codec
+    end,
     Msg =
         hb_message:commit(
             #{
@@ -1183,19 +1221,16 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
                                     % }
                                 },
                                 Opts,
-                                Codec
+                                NestedCodec
                             ),
                         % Uncommitted keys that should be ripped out of the inner
                         % message by `with_only_committed'. These should still be
                         % present in the `with_only_committed' outer message. 
                         % For now, only `httpsig@1.0' supports stripping
                         % non-committed keys.
-                        case Codec of
-                            <<"httpsig@1.0">> ->
-                                #{ <<"f">> => 6, <<"g">> => 7};
-                            #{ <<"device">> := <<"httpsig@1.0">> } ->
-                                #{ <<"f">> => 6, <<"g">> => 7};
-                            _ -> #{}
+                        case is_device_codec(<<"httpsig@1.0">>, NestedCodec) of
+                            true -> #{ <<"f">> => 6, <<"g">> => 7};
+                            false -> #{}
                         end
                     )
             },
@@ -1213,7 +1248,10 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
     ?event({decoded, Decoded}),
 	{ok, InnerFromDecoded} =
         hb_message:with_only_committed(
-            hb_maps:get(<<"inner">>, Decoded, not_found, Opts),
+            hb_message:normalize_commitments(
+                hb_maps:get(<<"inner">>, Decoded, not_found, Opts),
+                Opts
+            ),
             Opts
         ),
     ?event({verify_inner, {original, InnerSigned}, {from_decoded, InnerFromDecoded}}),
@@ -1343,9 +1381,12 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
     skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
+skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"json@1.0">> }, _Opts) ->
     skip;
 priv_survives_conversion_test(Codec, Opts) ->
@@ -1365,21 +1406,23 @@ priv_survives_conversion_test(Codec, Opts) ->
 
 encode_balance_table(Size, Codec, Opts) ->
     Msg =
-        #{
-            hb_util:encode(crypto:strong_rand_bytes(32)) =>
-                rand:uniform(1_000_000_000_000_000)
-        ||
-            _ <- lists:seq(1, Size)
-        },
-    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
-    Decoded =
-        hb_message:uncommitted(
-            hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-            Opts
+        hb_message:commit(
+            #{
+                hb_util:encode(crypto:strong_rand_bytes(32)) =>
+                    rand:uniform(1_000_000_000_000_000)
+            ||
+                _ <- lists:seq(1, Size)
+            },
+            Opts,
+            Codec
         ),
-    ?event({decoded, {explicit, Decoded}}),
-    ?assert(hb_message:match(Msg, Decoded, if_present, Opts)).
+    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    ?event({encoded, Encoded}),
+    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?event({decoded, Decoded}),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, Opts),
+    ?event({only_committed, OnlyCommitted}),
+    ?assert(hb_message:match(Msg, OnlyCommitted, if_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
     encode_balance_table(5, Codec, Opts).
@@ -1387,6 +1430,10 @@ encode_small_balance_table_test(Codec, Opts) ->
 encode_large_balance_table_test(<<"ans104@1.0">>, _Opts) ->
     skip;
 encode_large_balance_table_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
+encode_large_balance_table_test(<<"tx@1.0">>, _Opts) ->
+    skip;
+encode_large_balance_table_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
     skip;
 encode_large_balance_table_test(Codec, Opts) ->
     encode_balance_table(1000, Codec, Opts).
@@ -1406,10 +1453,10 @@ sign_links_test(Codec, Opts) ->
     ?assert(hb_message:verify(Signed, all, Opts)).
 
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
-    SignatureType =
-        case maps:get(<<"device">>, Codec, undefined) of
-            <<"ans104@1.0">> -> <<"rsa-pss-sha256">>;
-            _ -> <<"hmac-sha256">>
+    SignatureType = 
+        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
+            true -> <<"rsa-pss-sha256">>;
+            false -> <<"hmac-sha256">>
         end,
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,

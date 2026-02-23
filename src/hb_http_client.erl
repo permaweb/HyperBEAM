@@ -14,6 +14,8 @@
 
 -define(DEFAULT_RETRIES, 0).
 -define(DEFAULT_RETRY_TIME, 1000).
+-define(DEFAULT_KEEPALIVE_TIMEOUT, 60_000).
+-define(DEFAULT_CONNECT_TIMEOUT, 60_000).
 
 %%% ==================================================================
 %%% Public interface.
@@ -196,7 +198,6 @@ record_duration(Details, Opts) ->
                             GetFormat,
                             [
                                 <<"request-method">>,
-                                <<"request-path">>,
                                 <<"status-class">>
                             ]
                         ),
@@ -281,7 +282,7 @@ init_prometheus(Opts) ->
     application:ensure_all_started([prometheus, prometheus_cowboy]),
 	prometheus_counter:new([
 		{name, gun_requests_total},
-		{labels, [http_method, route, status_class]},
+		{labels, [http_method, status_class]},
 		{
 			help,
 			"The total number of GUN requests."
@@ -292,7 +293,7 @@ init_prometheus(Opts) ->
 	prometheus_histogram:new([
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
-        {labels, [http_method, route, status_class]},
+        {labels, [http_method, status_class]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
@@ -311,13 +312,11 @@ init_prometheus(Opts) ->
 	]),
 	prometheus_counter:new([
 		{name, http_client_downloaded_bytes_total},
-		{help, "The total amount of bytes requested via HTTP, per remote endpoint"},
-		{labels, [route]}
+		{help, "The total amount of bytes requested via HTTP, per remote endpoint"}
 	]),
 	prometheus_counter:new([
 		{name, http_client_uploaded_bytes_total},
-		{help, "The total amount of bytes posted via HTTP, per remote endpoint"},
-		{labels, [route]}
+		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
     ?event(started),
 	{ok, #state{ opts = Opts }}.
@@ -521,7 +520,7 @@ open_connection(#{ peer := Peer }, Opts) ->
                     keepalive =>
                         hb_opts:get(
                             http_keepalive,
-                            no_keepalive_timeout,
+                            ?DEFAULT_KEEPALIVE_TIMEOUT,
                             Opts
                         )
                 },
@@ -529,7 +528,7 @@ open_connection(#{ peer := Peer }, Opts) ->
             connect_timeout =>
                 hb_opts:get(
                     http_connect_timeout,
-                    no_connect_timeout,
+                    ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
                 )
         },
@@ -580,16 +579,14 @@ reply_error([PendingRequest | PendingRequests], Reason) ->
 	ReplyTo = element(1, PendingRequest),
 	Args = element(2, PendingRequest),
 	Method = hb_maps:get(method, Args),
-	Path = hb_maps:get(path, Args),
-	record_response_status(Method, Path, {error, Reason}),
+	record_response_status(Method, {error, Reason}),
 	gen_server:reply(ReplyTo, {error, Reason}),
 	reply_error(PendingRequests, Reason).
 
-record_response_status(Method, Path, Response) ->
+record_response_status(Method, Response) ->
 	inc_prometheus_counter(gun_requests_total,
         [
             hb_util:list(method_to_bin(Method)),
-			Path,
 			hb_util:list(get_status_class(Response))
         ],
         1
@@ -658,7 +655,7 @@ do_gun_request(PID, Args, Opts) ->
 			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
 	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
-	record_response_status(Method, Path, Response),
+	record_response_status(Method, Response),
 	inet:stop_timer(Timer),
 	Response.
 
@@ -695,7 +692,7 @@ await_response(Args, Opts) ->
 			end;
 		{data, fin, Data} ->
 			FinData = iolist_to_binary([Acc | Data]),
-			download_metric(FinData, Args),
+			download_metric(FinData),
 			upload_metric(Args),
 			{ok,
                 hb_maps:get(status, Args, undefined, Opts),
@@ -703,16 +700,16 @@ await_response(Args, Opts) ->
                 FinData
             };
 		{error, timeout} = Response ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			log(warn, gun_await_process_down, Args, Reason, Opts),
 			Response;
 		Response ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			log(warn, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
@@ -732,17 +729,17 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
     ),
     ok.
 
-download_metric(Data, #{path := Path}) ->
+download_metric(Data) ->
 	inc_prometheus_counter(
 		http_client_downloaded_bytes_total,
-		[Path],
+        [],
 		byte_size(Data)
 	).
 
-upload_metric(#{method := post, path := Path, body := Body}) ->
+upload_metric(#{method := post, body := Body}) ->
 	inc_prometheus_counter(
 		http_client_uploaded_bytes_total,
-		[Path],
+		[],
 		byte_size(Body)
 	);
 upload_metric(_) ->

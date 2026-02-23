@@ -36,7 +36,7 @@ handle(<<"keys">>, M1, _M2, _Opts) ->
 handle(<<"set">>, M1, M2, Opts) ->
     dev_message:set(M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
-    ?event({dedup_handle, {key, Key}, {msg1, M1}, {msg2, M2}}),
+    ?event({dedup_handle, {key, Key}, {base, M1}, {req, M2}}),
     % Find the relevant parameters from the messages. We search for the
     % `dedup-key' key in the first message, and use that value as the key to
     % look for in the second message.
@@ -67,12 +67,18 @@ handle(Key, M1, M2, Opts) ->
         end,
     % Is this the first pass, if we are executing in a stack?
     FirstPass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts) == 1,
-    % Get the list of already seen subjects.
-    DedupList = hb_ao:get(<<"dedup">>, {as, <<"message@1.0">>, M1}, [], Opts),
+    % Get the trie of already seen subjects.
+    DedupTrie =
+        hb_ao:get(
+            <<"dedup">>,
+            {as, <<"message@1.0">>, M1},
+            #{ <<"device">> => <<"trie@1.0">> },
+            Opts
+        ),
     ?event({dedup_handle,
         {key, Key},
-        {msg1, M1},
-        {msg2, M2},
+        {base, M1},
+        {req, M2},
         {subject_key, SubjectKey},
         {subject, Subject}
     }),
@@ -88,22 +94,42 @@ handle(Key, M1, M2, Opts) ->
         {true, _} ->
             % If this is the first pass, we need to check if the subject has
             % already been seen.
-            SubjectID = hb_message:id(Subject, all),
-            ?event({dedup_checking, {existing, DedupList}}),
-            case lists:member(SubjectID, DedupList) of
-                true ->
-                    ?event({already_seen, SubjectID}),
-                    {skip, M1};
-                false ->
+            SubjectID = hb_message:id(Subject, signed, Opts),
+            ?event({dedup_checking, DedupTrie}),
+            case hb_ao:get(SubjectID, DedupTrie, Opts) of
+                not_found ->
                     ?event({not_seen, SubjectID}),
-                    M3 =
-                        hb_ao:set(
-                            M1,
-                            #{ <<"dedup">> => [SubjectID|DedupList] },
+                    Slot =
+                        hb_maps:get(
+                            <<"slot">>,
+                            M2,
+                            true,
                             Opts
                         ),
-                    ?event({dedup_updated, M3}),
-                    {ok, M3}
+                    {ok, NewDedupTrie} =
+                        hb_ao:resolve(
+                            DedupTrie,
+                            #{ <<"path">> => <<"set">>, SubjectID => Slot },
+                            Opts
+                        ),
+                    ?event({dedup_updated, NewDedupTrie}),
+                    hb_ao:resolve(
+                        M1,
+                        #{ 
+                            <<"path">> => <<"set">>,
+                            <<"set-mode">> => <<"explicit">>,
+                            <<"dedup">> => NewDedupTrie
+                        },
+                        Opts
+                    );
+                Value ->
+                    ?event(
+                        {already_seen,
+                            {subject, SubjectID},
+                            {dedup_value, Value}
+                        }
+                    ),
+                    {skip, M1}
             end
     end.
 
@@ -125,12 +151,12 @@ dedup_test() ->
 		<<"result">> => <<"INIT">>
 	},
     % Send the same message twice, with the same binary.
-    {ok, Msg2} = hb_ao:resolve(Msg,
+    {ok, Req} = hb_ao:resolve(Msg,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
-    {ok, Msg3} = hb_ao:resolve(Msg2,
+    {ok, Res} = hb_ao:resolve(Req,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
     % Send the same message twice, with another binary.
-    {ok, Msg4} = hb_ao:resolve(Msg3,
+    {ok, Msg4} = hb_ao:resolve(Res,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     {ok, Msg5} = hb_ao:resolve(Msg4,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
@@ -159,10 +185,10 @@ dedup_with_multipass_test() ->
         <<"passes">> => 2
 	},
     % Send the same message twice, with the same binary.
-    {ok, Msg2} = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
-    {ok, Msg3} = hb_ao:resolve(Msg2, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
+    {ok, Req} = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
+    {ok, Res} = hb_ao:resolve(Req, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
     % Send the same message twice, with another binary.
-    {ok, Msg4} = hb_ao:resolve(Msg3, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
+    {ok, Msg4} = hb_ao:resolve(Res, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     {ok, Msg5} = hb_ao:resolve(Msg4, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
     ?assertMatch(

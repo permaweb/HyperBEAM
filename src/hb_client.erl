@@ -15,19 +15,19 @@
 %% The message pair is first transformed into a singleton request, by
 %% prefixing the keys in both messages for the path segment that they relate to,
 %% and then adjusting the "Path" field from the second message.
-resolve(Node, Msg1, Msg2, Opts) ->
+resolve(Node, Base, Req, Opts) ->
     TABM2 =
         hb_ao:set(
             #{
-                <<"path">> => hb_ao:get(<<"path">>, Msg2, <<"/">>, Opts),
+                <<"path">> => hb_ao:get(<<"path">>, Req, <<"/">>, Opts),
                 <<"2.path">> => unset
             },
-        prefix_keys(<<"2.">>, Msg2, Opts),
+        prefix_keys(<<"2.">>, Req, Opts),
         Opts#{ hashpath => ignore }
     ),
     hb_http:post(
         Node,
-        hb_maps:merge(prefix_keys(<<"1.">>, Msg1, Opts), TABM2, Opts),
+        hb_maps:merge(prefix_keys(<<"1.">>, Base, Opts), TABM2, Opts),
         Opts
     ).
 
@@ -107,26 +107,22 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
+upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
+    dev_arweave:post_binary_ans104(Msg, Opts);
 upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
-    ?event({msg_to_convert, Msg}),
-    Converted = hb_message:convert(Msg, <<"ans104@1.0">>, Opts),
-    ?event({msg_to_tx_res, {converted, Converted}}),
-    Serialized = ar_bundles:serialize(Converted),
-    ?event({converted_msg_to_tx, Serialized}),
-    upload(Serialized, Opts, <<"ans104@1.0">>);
-upload(Serialized, Opts, <<"ans104@1.0">>) when is_binary(Serialized) ->
-    ?event({uploading_item, Serialized}),
-    hb_http:post(
-        hb_opts:get(bundler_ans104, not_found, Opts),
-        #{
-            <<"path">> => <<"/tx">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized
-        },
-        Opts#{
-            http_client =>
-                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
-        }
+    ?event({uploading_item, Msg}),
+    dev_arweave:post_tx(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        Msg,
+        Opts,
+        <<"ans104@1.0">>
+    );
+upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
+    dev_arweave:post_tx(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        Msg,
+        Opts,
+        <<"tx@1.0">>
     ).
 
 %%% Tests
@@ -169,7 +165,12 @@ upload_raw_ans104_with_anchor_test() ->
 
 upload_empty_message_test() ->
     Msg = #{ <<"data">> => <<"TEST">> },
-    Committed = hb_message:commit(Msg, hb:wallet(), <<"ans104@1.0">>),
+    Committed = 
+        hb_message:commit(
+            Msg,
+            #{ priv_wallet => hb:wallet() },
+            <<"ans104@1.0">>
+        ),
     Result = upload(Committed, #{}, <<"ans104@1.0">>),
     ?event({upload_result, Result}),
     ?assertMatch({ok, _}, Result).
@@ -180,7 +181,12 @@ upload_single_layer_message_test() ->
         <<"basic">> => <<"value">>,
         <<"integer">> => 1
     },
-    Committed = hb_message:commit(Msg, hb:wallet(), <<"ans104@1.0">>),
+    Committed = 
+        hb_message:commit(
+            Msg,
+            #{ priv_wallet => hb:wallet() },
+            <<"ans104@1.0">>
+        ),
     Result = upload(Committed, #{}, <<"ans104@1.0">>),
     ?event({upload_result, Result}),
     ?assertMatch({ok, _}, Result).

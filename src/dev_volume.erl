@@ -38,7 +38,7 @@ info(_) ->
     #{ exports => [<<"info">>, <<"mount">>, <<"public_key">>] }.
 
 %% @doc HTTP info response providing information about this device
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
     ?event(debug_volume, {info, http_request, starting}),
     InfoBody = #{
         <<"description">> => 

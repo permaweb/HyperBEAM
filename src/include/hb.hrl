@@ -13,6 +13,8 @@
 -define(AO_CORE_KEYS, [<<"path">>, <<"hashpath">>, <<"priv">>]).
 %% @doc Keys that can be regenerated losslessly.
 -define(REGEN_KEYS, [<<"unsigned_id">>, <<"content-digest">>]).
+%% @doc Prefix for ans104 and tx fields that are committed.
+-define(FIELD_PREFIX, <<"field-">>).
 
 %% @doc Record used for parsing relevant components of a cursor-browsable
 %% response.

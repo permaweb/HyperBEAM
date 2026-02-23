@@ -44,6 +44,12 @@ from(Map, Req, Opts) when is_map(Map) ->
 
 %% @doc Convert a TABM to a flat map.
 to(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
+to(List, Req, Opts) when is_list(List) ->
+    to(
+        hb_util:list_to_numbered_message(List),
+        Req,
+        Opts
+    );
 to(Map, Req, Opts) when is_map(Map) ->
     Res = 
         maps:fold(

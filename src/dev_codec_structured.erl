@@ -196,7 +196,7 @@ to(TABM0, Req, Opts) ->
                     {ok, Type} ->
                         Acc#{ RawKey => decode_value(Type, BinValue) }
                 end;
-            (RawKey, ChildTABM, Acc) when is_map(ChildTABM) ->
+            (RawKey, ChildTABM, Acc) when is_map(ChildTABM) or is_list(ChildTABM) ->
                 % Decode the child TABM
                 Acc#{
                     RawKey => hb_util:ok(to(ChildTABM, Req, Opts))

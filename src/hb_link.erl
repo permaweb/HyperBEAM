@@ -204,7 +204,7 @@ offload_linked_message_test() ->
     ?event(linkify, {test_recvd_linkified, {msg, Structured}}),
     Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
     ?event(linkify, {test_recvd_loaded, {msg, Loaded}}),
-    ?assertEqual(Msg, Loaded).
+    ?assert(hb_message:match(Msg, Loaded, primary, Opts)).
 
 offload_list_test() ->
     Opts = #{},
@@ -213,6 +213,6 @@ offload_list_test() ->
     },
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     Linkified = normalize(TABM, offload, Opts),
-    Msg2 = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
-    Res = hb_cache:ensure_all_loaded(Msg2, Opts),
+    Req = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
+    Res = hb_cache:ensure_all_loaded(Req, Opts),
     ?assertEqual(Msg, Res).
