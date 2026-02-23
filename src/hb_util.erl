@@ -375,10 +375,10 @@ find_target_path(Msg, Opts) ->
 template_matches(ToMatch, Template, Opts) when is_map(Template) ->
     case find_target_path(Template, Opts) of
         no_path ->
-            template_map_match(ToMatch, Template, Opts);
+            template_message_match(ToMatch, Template, Opts);
         {TargetKey, Regex} ->
             template_regex_match(ToMatch, hb_ao:normalize_key(Regex), Opts) andalso
-                template_map_match(
+                template_message_match(
                     ToMatch,
                     hb_maps:remove(TargetKey, Template, Opts),
                     Opts
@@ -393,7 +393,7 @@ template_regex_match(ToMatch, Regex, Opts) ->
         {_TargetKey, MsgPath} -> hb_path:regex_matches(MsgPath, Regex)
     end.
 
-template_map_match(ToMatch, TemplateWithoutPath, Opts) ->
+template_message_match(ToMatch, TemplateWithoutPath, Opts) ->
     case hb_message:match(TemplateWithoutPath, ToMatch, primary, Opts) of
         {mismatch, value, _Key, _Val1, _Val2} -> false;
         Match -> Match
