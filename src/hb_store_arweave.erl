@@ -4,11 +4,9 @@
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
 %%% Indexing API:
--export([write_offset/5, path/1]).
+-export([write_offset/5]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
--define(ARWEAVE_INDEX_PATH, <<"~arweave@2.9/offset">>).
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -20,42 +18,57 @@ scope(_) -> scope().
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, ID) ->
-    Type = case hb_store:read(IndexStore, path(ID)) of
-        {ok, _Offset} -> simple;
-        _ -> not_found
-    end,
+    Type =
+        case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+            {ok, _Offset} -> simple;
+            _ -> not_found
+        end,
     ?event({type, {id, {explicit, ID}}, {type, Type}}),
     Type.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_store:read(IndexStore, path(ID)) of
-        {ok, Binary} ->
-            [IsTX, StartOffset, Length] = binary:split(Binary, <<":">>, [global]),
-            Loaded = case hb_util:bool(IsTX) of
-                true ->
-                    load_bundle(ID,
-                        hb_util:int(StartOffset), hb_util:int(Length), StoreOpts);
-                false ->
-                    load_item(
-                        hb_util:int(StartOffset), hb_util:int(Length), StoreOpts)
-            end,
+    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+        {ok, OffsetBinary} ->
+            {Version, CodecName, StartOffset, Length} =
+                hb_store_arweave_offset:decode(OffsetBinary),
+            Loaded =
+                case CodecName of
+                    <<"ans104@1.0">> ->
+                        load_item(StartOffset, Length, StoreOpts);
+                    <<"tx@1.0">> ->
+                        load_bundle(ID, StartOffset, Length, StoreOpts)
+                end,
             case Loaded of
                 {ok, _Message} ->
-                    ?event({{read, ok},
-                        {id, {explicit, ID}},
-                        {is_tx, IsTX},
-                        {start_offset, StartOffset},
-                        {length, Length}});
+                    ?event(
+                        arweave_offsets,
+                        {read_ok,
+                            {id, {explicit, ID}},
+                            {format_version, Version},
+                            {type, CodecName},
+                            {start_offset, StartOffset},
+                            {length, Length}
+                        }
+                    );
                 {error, Reason} ->
-                    ?event({{read, error}, 
-                        {id, {explicit, ID}}, 
-                        {is_tx, IsTX},
-                        {start_offset, StartOffset},
-                        {length, Length},
-                        {reason, Reason}})
+                    ?event(
+                        arweave_offsets,
+                        {read_error, 
+                            {id, {explicit, ID}},
+                            {format_version, Version},
+                            {type, CodecName},
+                            {start_offset, StartOffset},
+                            {length, Length},
+                            {reason, Reason}
+                        }
+                    )
             end,
             Loaded;
         not_found ->
+            ?event(
+                arweave_offsets,
+                {miss, {id, {explicit, ID}}}
+            ),
             {error, not_found}
     end.
 
@@ -113,31 +126,24 @@ read_chunks(StartOffset, Length, Opts) ->
     ).
 
 write_offset(
-        #{ <<"index-store">> := IndexStore }, ID, IsTX, StartOffset, Length) ->
-    IsTxInt = hb_util:bool_int(IsTX),
-    Value = <<
-        (hb_util:bin(IsTxInt))/binary,
-        ":",
-        (hb_util:bin(StartOffset))/binary,
-        ":",
-        (hb_util:bin(Length))/binary
-    >>,
-    ?event(store_arweave_debug, 
+        #{ <<"index-store">> := IndexStore },
+        ID,
+        CodecName,
+        StartOffset,
+        Length
+    ) ->
+    Value = hb_store_arweave_offset:encode(CodecName, StartOffset, Length),
+    ?event(
+        store_arweave_debug, 
         {writing_offset, 
             {id, {explicit, ID}},
-            {is_tx, IsTX},
+            {type, CodecName},
             {start_offset, StartOffset},
             {length, Length},
-            {value, {explicit, Value}}}),
-    hb_store:write(IndexStore, path(ID), Value).
-
-path(ID) ->
-    <<
-        ?ARWEAVE_INDEX_PATH/binary,
-        "/",
-        (hb_util:bin(ID))/binary
-    >>.
-
+            {value, {explicit, Value}}
+        }
+    ),
+    hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
 %%% Tests
 
@@ -150,7 +156,7 @@ write_read_tx_test() ->
     EndOffset = 363524457284025,
     Size = 8387,
     StartOffset = EndOffset - Size,
-    ok = write_offset(Opts, ID, true, StartOffset, Size),
+    ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
     {ok, Bundle} = read(Opts, ID),
     ?assert(hb_message:verify(Bundle, all, #{})),
     {ok, Child} =
@@ -183,9 +189,7 @@ write_read_fake_bundle_tx_test() ->
     ID = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>,
     Size = 2,
     StartOffset = 155309918167286,
-    ok = write_offset(Opts, ID, true, StartOffset, Size),
+    ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
     {ok, TX} = read(Opts, ID),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
-
-%% XXX TODO: write/read for data item

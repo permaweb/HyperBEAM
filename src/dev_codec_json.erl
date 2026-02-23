@@ -54,9 +54,14 @@ from(JSON, Req, Opts) ->
             Opts
         ),
     ?event(debug_json, {structured, Structured}, Opts),
-    {ok, TABM} = dev_codec_structured:from(Structured, Req, Opts),
-    ?event(debug_json, {tabm, TABM}, Opts),
-    {ok, TABM}.
+    case hb_maps:get(<<"accept-codec">>, Req, undefined, Opts) of
+        <<"structured@1.0">> -> {ok, Structured};
+        _ ->
+            % Re-encode the structured message back to TABM for the caller.
+            {ok, TABM} = dev_codec_structured:from(Structured, Req, Opts),
+            ?event(debug_json, {tabm, TABM}, Opts),
+            {ok, TABM}
+    end.
 
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 
