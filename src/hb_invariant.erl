@@ -523,7 +523,7 @@ pick(Int) when is_integer(Int) ->
 pick([]) ->
     error(cannot_pick_from_empty_list);
 pick(List) when is_list(List) ->
-    lists:nth(int(length(List)), List);
+    lists:nth(int(1, length(List)), List);
 pick(Map) when is_map(Map) andalso map_size(Map) == 0 ->
     error(cannot_pick_from_empty_map);
 pick(Map) when is_map(Map) ->
@@ -539,7 +539,8 @@ int() -> int(?INT_MAX).
 %% @doc Generate a random integer between 0 and the given maximum value --
 %% expressed either explicitly or as a named size constant.
 int(Spec) when not is_integer(Spec) -> int(num(Spec));
-int(Max) -> rand:uniform(Max).
+int(Max) when is_integer(Max), Max < 0 -> error({invalid_range, 0, Max});
+int(Max) -> rand:uniform(Max + 1) - 1.
 
 %% @doc Generate a random integer between the given minimum and maximum values --
 %% expressed either explicitly or as a named size constant.
@@ -548,15 +549,15 @@ int(Min, Max) ->
     Offset = num(Max) - Floor,
     case Offset of
         0 -> Floor;
-        _ -> Floor + rand:uniform(Offset)
+        N when N < 0 -> error({invalid_range, Min, Max});
+        _ -> Floor - 1 + rand:uniform(Offset + 1)
     end.
-
 %% @doc Convert a named size constant to an integer.
 num(Int) when is_integer(Int) -> Int;
 num(tiny) -> ?INT_TINY_MAX;
 num(small) -> ?SMALL_INT_MAX;
 num(big) -> ?BIG_INT_MAX;
-num(Max) -> Max.
+num(Max) -> error({invalid_size_spec, Max}).
 
 %% @doc Generate a random float.
 float() -> ?MODULE:float(?INT_MAX).
