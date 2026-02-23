@@ -308,7 +308,11 @@ default_message() ->
             %% partition midpoint (byte offset). Tries 4 at a time,
             %% ordered by proximity, until one returns 200.
             #{
-                <<"template">> => <<"^/arweave/chunk">>,
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/chunk">>,
+                        <<"method">> => <<"GET">>
+                    },
                 <<"nodes">> =>
                     [
                         %% Partitions 0-15
@@ -456,6 +460,55 @@ default_message() ->
                 <<"parallel">> => 2,
                 <<"responses">> => 1,
                 <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/tx">>,
+                        <<"method">> => <<"POST">>
+                    },
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://chain-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://chain-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://tip-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://tip-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://tip-4.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://tip-5.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"responses">> => 3,
+                <<"stop-after">> => false,
                 <<"admissible-status">> => 200
             },
             % Raw data requests via arweave.net gateway.
