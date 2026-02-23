@@ -406,7 +406,11 @@ match(Base, Req, Opts) ->
             {req, Req}
         }
     ),
-    TargetPath = hb_util:find_target_path(Req, Opts),
+    TargetPath =
+        case hb_util:find_target_path(Req, Opts) of
+            no_path -> no_path;
+            {_TargetKey, Path} -> Path
+        end,
     Match =
         match_routes(
             Req#{ <<"path">> => TargetPath },
