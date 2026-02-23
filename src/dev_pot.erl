@@ -481,7 +481,7 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
             RevokeAmount = min(Amount, LargestDelegation),
             case undelegate(Addr, LargestDelegationAddr, ResourceID, RevokeAmount, S, Opts) of
                 {error, _} = Err -> Err;
-                S0 -> liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts)
+                {ok, S0} -> liquidate(Addr, ResourceID, Amount - RevokeAmount, S0, Opts)
             end
     end.
 
@@ -519,11 +519,11 @@ delegate(State, Assignment, Opts) ->
             ),
         NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
         StateWithT = State#{ <<"t">> := NewT },
-        case delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts) of
-            {error, _} = Err -> Err;
-            NewState -> {ok, NewState}
-        end
+        {ok, NewState} ?=
+            delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
+        {ok, NewState}
     else
+        {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
@@ -541,7 +541,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
     S2 = drip_user(ToAddr, S1, Opts),
     % Self-delegation is a noop
     case FromAddr =:= ToAddr of
-        true -> S2;
+        true -> {ok, S2};
         false ->
             DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
             case DelegatorDeposit >= Amount of
@@ -639,7 +639,15 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             S7,
                             Opts
                         ),
-                    send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S8, Opts)
+                    {ok,
+                        send_delegation_notice(
+                            FromAddr,
+                            ToAddr,
+                            ResourceID,
+                            Amount,
+                            S8,
+                            Opts
+                        )}
             end
     end.
 
@@ -653,11 +661,11 @@ undelegate(State, Assignment, Opts) ->
         {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
         NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
         StateWithT = State#{ <<"t">> := NewT },
-        case undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts) of
-            {error, _} = Err -> Err;
-            NewState -> {ok, NewState}
-        end
+        {ok, NewState} ?=
+            undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
+        {ok, NewState}
     else
+        {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
 undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
@@ -702,7 +710,7 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                     S1 = drip_user(ToAddr, S0, Opts),
                     % Self-undelegation is a noop
                     case FromAddr =:= ToAddr of
-                        true -> S1;
+                        true -> {ok, S1};
                         false ->
                             NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S1, Opts),
                             S2 =
@@ -776,14 +784,15 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                                     S5,
                                     Opts
                                 ),
-                            send_delegation_notice(
-                                FromAddr,
-                                ToAddr,
-                                ResourceID,
-                                -Amount,
-                                S6,
-                                Opts
-                            )
+                            {ok,
+                                send_delegation_notice(
+                                    FromAddr,
+                                    ToAddr,
+                                    ResourceID,
+                                    -Amount,
+                                    S6,
+                                    Opts
+                                )}
                     end
             end
     end.
