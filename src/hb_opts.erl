@@ -195,7 +195,6 @@ default_message() ->
             #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
             #{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
-            #{<<"name">> => <<"ssl-cert@1.0">>, <<"module">> => dev_ssl_cert},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},

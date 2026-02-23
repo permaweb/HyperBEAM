@@ -77,7 +77,7 @@
 -spec try_mount_encrypted_volume(term(), map()) -> ok.
 
 %% Encryption helper specs
--spec encrypt_data(term(), map()) -> 
+-spec encrypt_data(binary(), map()) -> 
     {ok, {binary(), binary()}} | {error, term()}.
 -spec decrypt_data(binary(), binary(), map()) -> 
     {ok, binary()} | {error, term()}.
@@ -278,8 +278,8 @@ key(_M1, _M2, Opts) ->
         {{KeyType, Priv, Pub}, _PubKey} = Wallet,
         ?event(green_zone, 
             {get_key, wallet, hb_util:human_id(ar_wallet:to_address(Pub))}),
-        % Encrypt the node's private key using the helper function
-        {ok, {EncryptedData, IV}} ?= encrypt_data({KeyType, Priv, Pub}, Opts),
+        % Encrypt the node's private key (encode term so encrypt is binary-only)
+        {ok, {EncryptedData, IV}} ?= encrypt_data(term_to_binary({KeyType, Priv, Pub}), Opts),
         ?event(green_zone, {get_key, encrypt, complete}),
         build_key_response(EncryptedData, IV)
     else
@@ -913,16 +913,15 @@ update_node_identity(GreenZoneWallet, Opts) ->
 %%
 %% @param InitOpts Initial configuration options
 %% @returns {ok, Req} with prepared request, or {error, Reason}
-default_zone_required_opts(_Opts) ->
+default_zone_required_opts(Opts) ->
     #{
-        % trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
-        % load_remote_devices => hb_opts:get(load_remote_devices, false, Opts),
-        % preload_devices => hb_opts:get(preload_devices, [], Opts),
-        % % store => hb_opts:get(store, [], Opts),
-        % routes => hb_opts:get(routes, [], Opts),
-        % on => hb_opts:get(on, undefined, Opts),
-        % scheduling_mode => disabled,
-        % initialized => permanent
+        trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
+        load_remote_devices => hb_opts:get(load_remote_devices, false, Opts),
+        preload_devices => hb_opts:get(preload_devices, [], Opts),
+        routes => hb_opts:get(routes, [], Opts),
+        on => hb_opts:get(on, undefined, Opts),
+        scheduling_mode => disabled,
+        initialized => permanent
     }.
 
 %% @doc Replace values of <<"self">> in a configuration map with 
@@ -931,12 +930,14 @@ default_zone_required_opts(_Opts) ->
 %% This function iterates through all key-value pairs in the configuration map.
 %% If a value is <<"self">>, it replaces that value with the result of
 %% hb_opts:get(Key, not_found, Opts) where Key is the corresponding key.
+%% The result is passed through hb_cache:ensure_all_loaded/2 so any lazy links
+%% in the config or in the fetched Opts values are resolved.
 %%
 %% @param Config The configuration map to process
 %% @param Opts The options map to fetch replacement values from
-%% @returns A new map with <<"self">> values replaced
+%% @returns A new map with <<"self">> values replaced and lazy links resolved
 replace_self_values(Config, Opts) ->
-    maps:map(
+    Replaced = maps:map(
         fun(Key, Value) ->
             case Value of
                 <<"self">> ->
@@ -946,7 +947,8 @@ replace_self_values(Config, Opts) ->
             end
         end,
         Config
-    ).
+    ),
+    hb_cache:ensure_all_loaded(Replaced, Opts).
 
 %% @doc Returns `true' if the request is signed by a trusted node.
 %%
@@ -1064,17 +1066,16 @@ try_mount_encrypted_volume(Key, Opts) ->
 
 %% @doc Encrypt data using AES-256-GCM with the green zone shared key.
 %%
-%% This function provides a standardized way to encrypt data using the
-%% green zone AES key from the node's configuration. It generates a random IV 
-%% and returns the encrypted data with authentication tag, ready for base64 
-%% encoding and transmission.
+%% Accepts only binary payloads. Encrypt and decrypt are reciprocal for
+%% binaries: decrypt_data(Enc, IV, Opts) returns the same binary passed to
+%% encrypt_data. Encoding/decoding (e.g. term_to_binary/binary_to_term) is
+%% the caller's responsibility.
 %%
-%% @param Data The data to encrypt (will be converted to binary via 
-%%             term_to_binary)
+%% @param Data Binary to encrypt (non-binary returns {error, not_binary})
 %% @param Opts Server configuration options containing priv_green_zone_aes
 %% @returns {ok, {EncryptedData, IV}} where EncryptedData includes the auth tag,
-%%          or {error, Reason} if no AES key or encryption fails
-encrypt_data(Data, Opts) ->
+%%          or {error, Reason} if no AES key, non-binary data, or encryption fails
+encrypt_data(Data, Opts) when is_binary(Data) ->
     case hb_opts:get(priv_green_zone_aes, undefined, Opts) of
         undefined ->
             {error, no_green_zone_aes_key};
@@ -1082,17 +1083,12 @@ encrypt_data(Data, Opts) ->
             try
                 % Generate random IV
                 IV = crypto:strong_rand_bytes(16),
-                % Convert data to binary if needed
-                DataBin = case is_binary(Data) of
-                    true -> Data;
-                    false -> term_to_binary(Data)
-                end,
                 % Encrypt using AES-256-GCM
                 {EncryptedData, Tag} = crypto:crypto_one_time_aead(
                     aes_256_gcm,
                     AESKey,
                     IV,
-                    DataBin,
+                    Data,
                     <<>>,
                     true
                 ),
@@ -1103,13 +1099,14 @@ encrypt_data(Data, Opts) ->
                 Error:Reason ->
                     {error, {encryption_failed, Error, Reason}}
             end
-    end.
+    end;
+encrypt_data(_Data, _Opts) ->
+    {error, not_binary}.
 
 %% @doc Decrypt data using AES-256-GCM with the green zone shared key.
 %%
-%% This function provides a standardized way to decrypt data that was
-%% encrypted with encrypt_data/2. It expects the encrypted data to include
-%% the 16-byte authentication tag at the end.
+%% Returns the same binary that was passed to encrypt_data/2. Decoding
+%% (e.g. binary_to_term) is the caller's responsibility.
 %%
 %% @param Combined The encrypted data with authentication tag appended
 %% @param IV The initialization vector used during encryption
