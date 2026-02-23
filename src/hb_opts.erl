@@ -26,7 +26,7 @@
 -define(DEFAULT_PRINT_OPTS,
     [
         error, http_error, cron_error,
-        http_short, compute_short, push_short, copycat_short
+        http_short, compute_short, push_short, copycat_short, bundler_short
     ]
 ).
 -endif.

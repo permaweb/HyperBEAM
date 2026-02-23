@@ -9,6 +9,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
+
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
@@ -275,7 +277,9 @@ request(Method, Path, Extra, Opts) ->
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
-            Opts
+            Opts#{
+                cache_control => [<<"no-cache">>, <<"no-store">>]
+            }
         ),
     to_message(Path, Res, Opts).
 
@@ -314,17 +318,25 @@ to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) -
         }
     ),
     {ok, Body};
-to_message(Path = <<"/block/", _/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
-    Block = hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts),
+to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, Block} =
+        dev_codec_json:from(
+            Body,
+            #{ <<"accept-codec">> => <<"structured@1.0">> },
+            Opts
+        ),
+    CacheRes =
+        case hb_opts:get(arweave_index_blocks, true, Opts) of
+            true -> dev_arweave_block_cache:write(Block, Opts);
+            false -> skipped
+        end,
     ?event(
-        {arweave_block_response,
-            {path, Path},
-            {block, Block}
-        }
-    ),
-    CacheRes = dev_arweave_block_cache:write(Block, Opts),
-    ?event(
-        {cached_arweave_block,
+        debug_arweave_index,
+        {
+            if CacheRes == skipped -> skipped_caching_arweave_block;
+            true -> cached_arweave_block
+            end,
             {path, Path},
             {result, CacheRes}
         }
