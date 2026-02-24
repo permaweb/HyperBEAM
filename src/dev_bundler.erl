@@ -304,7 +304,6 @@ unsigned_dataitem_test() ->
 idle_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    % NodeOpts redirects arweave gateway requests to the mock server.
     {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             price => {200, integer_to_binary(Price)},
@@ -318,26 +317,40 @@ idle_test() ->
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store()
         }),
-        %% Upload 1 data items across 2 chunks.
-        Item1 = new_data_item(1, floor(1.5 * ?DATA_CHUNK_SIZE)),
-        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
-        % Wait just to give the server a chance to post a transaction
-        % (but it shouldn't)
+        % Test posting each of the supported signature types
+        RSAWallet = ar_wallet:new({rsa, 65537}),
+        EdDSAWallet = ar_wallet:new({eddsa, ed25519}),
+        % ECDSAWallet = ar_wallet:new({ecdsa, secp256k1}),
+        ItemSize = floor(1.5 * ?DATA_CHUNK_SIZE),
+        Item1 = new_data_item(1, ItemSize, RSAWallet),
+        Item2 = new_data_item(2, ItemSize, EdDSAWallet),
+        {ok, SolanaBin} =
+            file:read_file(<<"test/arbundles.js/ans104-item-solana.bin">>),
+        Item3 = ar_bundles:deserialize(SolanaBin),
+        % Item4 = new_data_item(4, ItemSize, ECDSAWallet),
+        Items = [Item1, Item2, Item3],
+        lists:foreach(
+            fun(Item) ->
+                ?event(debug_test, {posting_item, Item}),
+                ?assertMatch({ok, _}, post_data_item(Node, Item, ClientOpts))
+            end,
+            Items
+        ),
         timer:sleep(150),
         ?assertEqual(0, length(hb_mock_server:get_requests(tx, 0, ServerHandle))),
         ?assertEqual(0, length(hb_mock_server:get_requests(chunk, 0, ServerHandle))),
-        % Wait gain to give the server a chance to trip the max idle time.
-        % It should *now* post a transaction.
         timer:sleep(300),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
-        %% Wait for expected chunks
-        Proofs = hb_mock_server:get_requests(chunk, 2, ServerHandle),
-        ?assertEqual(2, length(Proofs)),
-        assert_bundle(Node, [Item1], Anchor, Price, hd(TXs), Proofs, ClientOpts),
+        %% 2x 1.5 chunk items + 1 small solana item = 4 chunks
+        ExpectedChunks = 4,
+        Proofs = hb_mock_server:get_requests(
+            chunk, ExpectedChunks, ServerHandle),
+        ?assertEqual(ExpectedChunks, length(Proofs)),
+        assert_bundle(
+            Node, Items, Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
-        %% Always cleanup, even if test fails
         stop_test_servers(ServerHandle)
     end.
 
@@ -607,6 +620,9 @@ test_api_error(Responses) ->
     end.
 
 new_data_item(Index, Size) ->
+    new_data_item(Index, Size, hb:wallet()).
+
+new_data_item(Index, Size, Wallet) ->
     Data = rand:bytes(Size),
     Tag = <<"tag", (integer_to_binary(Index))/binary>>,
     Value = <<"value", (integer_to_binary(Index))/binary>>,
@@ -615,7 +631,7 @@ new_data_item(Index, Size) ->
             data = Data,
             tags = [{Tag, Value}]
         },
-        hb:wallet()
+        Wallet
     ).
 
 post_data_item(Node, Item, Opts) ->
