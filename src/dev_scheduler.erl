@@ -1746,7 +1746,7 @@ http_get_schedule_test_() ->
 
 http_get_legacy_schedule_test_() ->
 	    {timeout, 60, fun() ->
-	        Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
+	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
 	        {ok, Res} =
 	            hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary, "&to=3">>, Opts),
@@ -1756,7 +1756,7 @@ http_get_legacy_schedule_test_() ->
 
 http_get_legacy_slot_test_() ->
     {timeout, 60, fun() ->
-        Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
+        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
         Res = hb_http:get(Node, <<"/~scheduler@1.0/slot&target=", Target/binary>>, Opts),
         ?assertMatch({ok, #{ <<"current">> := Slot }} when Slot > 0, Res)
@@ -1764,7 +1764,7 @@ http_get_legacy_slot_test_() ->
 
 http_get_legacy_schedule_slot_range_test_() ->
 	    {timeout, 60, fun() ->
-	        Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,
+	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
 	        {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary,
 	            "&from=0&to=3">>, Opts),
@@ -1776,7 +1776,7 @@ http_get_legacy_schedule_slot_range_test_() ->
 
 http_get_legacy_schedule_as_aos2_test_() ->
     {timeout, 60, fun() ->
-        Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
+        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
         {ok, Res} =
 	            hb_http:get(
