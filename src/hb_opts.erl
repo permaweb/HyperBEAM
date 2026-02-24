@@ -646,7 +646,7 @@ mimic_default_types(Map, Mode, Opts) ->
             NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
                 case hb_maps:get(NewKey, Default, not_found, Opts) of
-                    not_found -> Value;
+                    not_found -> deep_mimic_default_types(Value, Mode, Opts);
                     DefaultValue when is_atom(DefaultValue) ->
                         hb_util:atom(Value);
                     DefaultValue when is_integer(DefaultValue) ->
@@ -655,12 +655,17 @@ mimic_default_types(Map, Mode, Opts) ->
                         hb_util:float(Value);
                     DefaultValue when is_binary(DefaultValue) ->
                         Value;
-                    _ -> Value
+                    _ ->
+                        deep_mimic_default_types(Value, Mode, Opts)
                 end,
             {NewKey, NewValue}
         end,
         hb_maps:to_list(Map, Opts)
     )).
+
+deep_mimic_default_types(Map, Mode, #{deep := true} = Opts) when is_map(Map) ->
+    mimic_default_types(Map, Mode, Opts);
+deep_mimic_default_types(Map, _, _) -> Map.
 
 %% @doc Find a given identity from the `identities' map, and return the options
 %% merged with the sub-options for that identity.

@@ -16,6 +16,7 @@
 -define(DEFAULT_KEEPALIVE_TIMEOUT, 60_000).
 -define(DEFAULT_CONNECT_TIMEOUT, 60_000).
 -define(DEFAULT_429_BACKOFF_MS, 5000).
+-define(DEFAULT_RETRY, 3).
 -define(RATE_LIMIT_ETS, hb_http_client_rate_limits).
 -define(CONNECTIONS_ETS, hb_http_client_connections).
 -define(CONN_STATUS_ETS, hb_http_client_conn_status).
@@ -495,7 +496,11 @@ init_prometheus() ->
 
 handle_call(ok, _From, State) ->
     {reply, ok, State};
-handle_call({get_connection, ConnKey, Args, _Opts}, From, State) ->
+handle_call({get_connection, ConnKey, Args, Opts}, From, State) ->
+    ArgsOpts = maps:get(opts, Args, #{}),
+    HttpOpts = maps:get(opts,     hb_opts:mimic_default_types(Opts, existing, #{deep => true}), #{}),
+    MergedHttpOpts = maps:merge(ArgsOpts, HttpOpts),
+    MergedArgs = Args#{opts => MergedHttpOpts},
     %% ConnKey = {Peer, ConnType, Index} where ConnType is 'read' or 'write'
     %% and Index is 1..PoolSize for round-robin distribution
     %% Double-check ETS to handle race conditions
@@ -507,16 +512,16 @@ handle_call({get_connection, ConnKey, Args, _Opts}, From, State) ->
                     {reply, {ok, PID}, State};
                 [{PID, {connecting, PendingRequests}, MonitorRef, ConnKey}] ->
                     %% Add to pending requests list
-                    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, [{From, Args} | PendingRequests]}, MonitorRef, ConnKey}),
+                    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, [{From, MergedArgs} | PendingRequests]}, MonitorRef, ConnKey}),
                     {noreply, State};
                 [] ->
                     %% Status not found, PID is stale - remove and create new
                     ets:delete(?CONNECTIONS_ETS, ConnKey),
-                    create_new_connection(ConnKey, Args, From, State)
+                    create_new_connection(ConnKey, MergedArgs, From, State)
             end;
         [] ->
             %% No connection exists, create one
-            create_new_connection(ConnKey, Args, From, State)
+            create_new_connection(ConnKey, MergedArgs, From, State)
     end;
 
 handle_call(Request, _From, State) ->
@@ -755,7 +760,11 @@ open_connection(#{ peer := Peer }, Opts) ->
                             Opts
                         )
                 },
-            retry => 3,
+            retry => hb_opts:get(
+                    http_retry,
+                    ?DEFAULT_RETRY,
+                    Opts
+                ),
             connect_timeout =>
                 hb_opts:get(
                     http_connect_timeout,
