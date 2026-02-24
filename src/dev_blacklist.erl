@@ -26,16 +26,16 @@
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
-    ensure_cache_table(),
     case is_match(HookReq, Opts) of
         false -> {ok, HookReq};
-        ID -> {error, block_response(ID)}
+        ID -> {ok, HookReq#{ <<"body">> => [block_response(ID)] }}
     end.
 
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
+    ensure_cache_table(Opts),
     IDs = collect_ids(Msg, Opts),
-    case lists:filter(fun(ID) -> not ets:lookup(?CACHE_TABLE, ID) /= [] end, IDs) of
+    case lists:filter(fun(ID) -> ets:lookup(?CACHE_TABLE, ID) =/= [] end, IDs) of
         [] -> false;
         [ID|_] -> ID
     end.
@@ -49,10 +49,12 @@ refresh(_Base, _Req, Opts) ->
 
 %% @doc Fetch the blacklist and store the results in the cache table.
 update_blacklist_cache(Opts) ->
+    ensure_cache_table(Opts),
     case execute_provider(Opts) of
         {ok, Blacklist} ->
             {ok, IDs} = parse_blacklist(Blacklist, Opts),
             BlacklistID = hb_message:id(Blacklist, all, Opts),
+            ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
             {ok, insert_ids(IDs, BlacklistID, Opts)};
         {error, _} = Error ->
             Error
@@ -64,6 +66,7 @@ execute_provider(Opts) ->
     Request =
         case hb_cache:ensure_loaded(Path, Opts) of
             Msg when is_map(Msg) -> Msg;
+            List when is_list(List) -> #{ <<"body">> => List };
             Bin when is_binary(Bin) -> #{ <<"path">> => Path }
         end,
     hb_ao:resolve(Request, Opts).
@@ -134,30 +137,57 @@ insert_ids([ID | IDs], Value, Opts) when ?IS_ID(ID) ->
     end.
 
 %% @doc Ensure the cache table exists.
-ensure_cache_table() ->
+ensure_cache_table(Opts) ->
     case ets:info(?CACHE_TABLE) of
         undefined ->
-            try
-                ets:new(
-                    ?CACHE_TABLE,
-                    [
-                        named_table,
-                        set,
-                        public,
-                        {read_concurrency, true},
-                        {write_concurrency, true}
-                    ]
-                )
-            catch
-                error:badarg -> ok
-            end;
+            ets:new(
+                ?CACHE_TABLE,
+                [
+                    named_table,
+                    set,
+                    public,
+                    {read_concurrency, true},
+                    {write_concurrency, true}
+                ]
+            ),
+            update_blacklist_cache(Opts);
         _ -> ok
     end,
     ?CACHE_TABLE.
 
-%% @doc Clear the entire cache table.
-clear_cache() ->
-    case ets:info(?CACHE_TABLE) of
-        undefined -> ok;
-        _ -> ets:delete_all_objects(?CACHE_TABLE)
-    end.
+%%% Tests
+
+basic_test() ->
+    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() },
+    Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
+    Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
+    Msg3 = hb_message:commit(#{ <<"body">> => <<"test-3">> }, Opts0),
+    SignedID1 = hb_message:id(Msg1, signed, Opts0),
+    {ok, _UnsignedID1} = hb_cache:write(Msg1, Opts0),
+    {ok, UnsignedID2} = hb_cache:write(Msg2, Opts0),
+    {ok, UnsignedID3} = hb_cache:write(Msg3, Opts0),
+    Opts1 =
+        Opts0#{
+            blacklist_provider => [SignedID1, UnsignedID2],
+            on => #{
+                <<"request">> => #{
+                    <<"device">> => <<"blacklist@1.0">>,
+                    <<"path">> => <<"request">>
+                }
+            }
+        },
+    Node = hb_http_server:start_node(Opts1),
+    refresh(#{}, #{}, Opts1),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    ?event({table, ets:tab2list(?CACHE_TABLE)}),
+    ?assertMatch(
+        {error,
+            #{
+                <<"status">> := 451,
+                <<"reason">> := <<"content-policy">>
+            }},
+        hb_http:get(Node, SignedID1, Opts1)
+    ).
