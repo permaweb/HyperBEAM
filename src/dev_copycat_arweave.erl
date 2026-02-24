@@ -529,18 +529,26 @@ index_ids_test() ->
             Opts
         ),
     % WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4 is a bundle signed with
-    % an Ethereum signature which is not supported by HB as of Jan 2026.
-    % The bundle should be indexed even though we can't deserialized the
-    % bundle itself.
-    ?assertException(
-        error,
-        {badmatch, unsupported_tx_format},
-        hb_store_arweave:read(
-            StoreOpts,
-            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>)
-    ),
+    % an Ethereum signature 
+    % assert_bundle_read(
+    %     <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>,
+    %     [
+    %         {<<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>, <<"1">>},
+    %         {<<"2lmrYydmDweX2MgGH39ZEB9hKm2JqGOYmRiG3n_xh8A">>, <<"4">>}
+    %     ],
+    %     Opts
+    % ),
     % These 3 items are within the WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4
     % bundle.
+    assert_item_read(
+        <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>,
+        Opts),
+    assert_item_read(
+        <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
+        Opts),
+    assert_item_read(
+        <<"2lmrYydmDweX2MgGH39ZEB9hKm2JqGOYmRiG3n_xh8A">>,
+        Opts),
     assert_item_read(
         <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>,
         Opts),
