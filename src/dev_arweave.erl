@@ -5,7 +5,7 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_tx/3, post_tx/4, post_binary_ans104/2]).
+-export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -157,12 +157,14 @@ chunk(Base, Request, Opts) ->
 
 post_chunk(_Base, Request, Opts) ->
     Serialized = hb_json:encode(Request),
-    ?event({uploading_chunk, {explicit, Serialized}}),
+    post_json_chunk(Serialized, Opts).
+
+post_json_chunk(JSON, Opts) ->
     hb_http:post(
         hb_opts:get(gateway, not_found, Opts),
         #{
             <<"path">> => <<"/chunk">>,
-            <<"body">> => Serialized
+            <<"body">> => JSON
         },
         Opts
     ).
