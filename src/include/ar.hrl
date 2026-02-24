@@ -93,22 +93,27 @@
 -define(HASH_ALG, sha256).
 
 -define(RSA_SIGN_ALG, rsa).
+-define(RSA_SIGN_TYPE, <<"rsa-pss-sha256">>).
 -define(RSA_PRIV_KEY_SZ, 4096).
 -define(RSA_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
 
 -define(ECDSA_SIGN_ALG, ecdsa).
+-define(ECDSA_SIGN_TYPE, <<"ecdsa-secp256k1-sha256">>).
 -define(ECDSA_TYPE_BYTE, <<2>>).
 -define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
 
 -define(EDDSA_SIGN_ALG, eddsa).
+-define(EDDSA_SIGN_TYPE, <<"ed25519-sha512">>).
 -define(EDDSA_TYPE_BYTE, <<3>>).
 -define(EDDSA_KEY_TYPE, {?EDDSA_SIGN_ALG, ed25519}).
 
 -define(SOLANA_SIGN_ALG, solana).
+-define(SOLANA_SIGN_TYPE, <<"solana">>).
 -define(SOLANA_TYPE_BYTE, <<4>>).
 -define(SOLANA_KEY_TYPE, solana).
 
 -define(TYPED_ETHEREUM_SIGN_ALG, typed_ethereum).
+-define(TYPED_ETHEREUM_SIGN_TYPE, <<"typed_ethereum">>).
 -define(TYPED_ETHEREUM_TYPE_BYTE, <<7>>).
 -define(TYPED_ETHEREUM_KEY_TYPE, typed_ethereum).
 

@@ -222,18 +222,18 @@ normalize_data_root(Item = #tx{data = Bin, format = 2})
     Item#tx{data_root = ar_tx:data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
 
-serialize_sig_type({rsa, 65537}) -> <<"rsa-pss-sha256">>;
-serialize_sig_type({ecdsa, secp256k1}) -> <<"ecdsa-secp256k1-sha256">>;
-serialize_sig_type(?EDDSA_KEY_TYPE) -> <<"ed25519-sha512">>;
-serialize_sig_type(?SOLANA_KEY_TYPE) -> <<"solana">>;
-serialize_sig_type(?TYPED_ETHEREUM_KEY_TYPE) -> <<"typed-ethereum">>;
+serialize_sig_type({rsa, 65537}) -> ?RSA_SIGN_TYPE;
+serialize_sig_type({ecdsa, secp256k1}) -> ?ECDSA_SIGN_TYPE;
+serialize_sig_type(?EDDSA_KEY_TYPE) -> ?EDDSA_SIGN_TYPE;
+serialize_sig_type(?SOLANA_KEY_TYPE) -> ?SOLANA_SIGN_TYPE;
+serialize_sig_type(?TYPED_ETHEREUM_KEY_TYPE) -> ?TYPED_ETHEREUM_SIGN_TYPE;
 serialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
     throw({invalid_signature_type, Type}).
 
-deserialize_sig_type(<<"rsa-pss-sha256">>) -> {rsa, 65537};
-deserialize_sig_type(<<"ecdsa-secp256k1-sha256">>) -> {ecdsa, secp256k1};
-deserialize_sig_type(<<"ed25519-sha512">>) -> ?EDDSA_KEY_TYPE;
+deserialize_sig_type(?RSA_SIGN_TYPE) -> {rsa, 65537};
+deserialize_sig_type(?ECDSA_SIGN_TYPE) -> {ecdsa, secp256k1};
+deserialize_sig_type(?EDDSA_SIGN_TYPE) -> ?EDDSA_KEY_TYPE;
 deserialize_sig_type(<<"unsigned-sha256">>) -> {rsa, 65537};
 deserialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
