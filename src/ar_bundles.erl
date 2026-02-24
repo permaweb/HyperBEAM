@@ -139,7 +139,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.owner, [0, 32, 42, 65, byte_size(?DEFAULT_OWNER)]),
+        hb_util:check_size(TX#tx.owner, [0, 32, 33, 42, 65, byte_size(?DEFAULT_OWNER)]),
         {invalid_field, owner, TX#tx.owner}
     ),
     hb_util:ok_or_throw(TX,
@@ -333,10 +333,13 @@ encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
 encode_signature_type({eddsa, ed25519}) ->
     <<2, 0>>;
+% encode_signature_type({ecdsa, secp256k1}) ->
+%     <<3, 0>>;
 encode_signature_type(solana) ->
     <<4, 0>>;
-encode_signature_type(_) ->
-    unsupported_tx_format.
+encode_signature_type(SigType) ->
+    ?event(warning, {error_encoding_signature_type, {sig_type, SigType}}),
+    {unsupported_tx_format, SigType}.
 
 %% @doc Encode an optional field (target, anchor) with a presence byte.
 encode_optional_field(<<>>) ->
@@ -538,17 +541,18 @@ decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) 
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {{eddsa, ed25519}, Signature, Owner, Rest};
-decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
-    {{ecdsa, secp256k1}, Signature, Owner, Rest};
+% decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
+%     {{ecdsa, secp256k1}, Signature, Owner, Rest};
 decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {solana, Signature, Owner, Rest};
 decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
     {typed_ethereum, Signature, Owner, Rest};
 decode_signature(Other) ->
+    SigType = binary:part(Other, 0, 2),
     ?event(warning, {error_decoding_signature,
-        {sig_type, {explicit, binary:part(Other, 0, 2)}},
+        {sig_type, {explicit, SigType}},
         {binary, Other}}),
-    unsupported_tx_format.
+    {unsupported_tx_format, SigType}.
 
 %% @doc Decode tags from a binary format using Apache Avro.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
