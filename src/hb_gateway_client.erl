@@ -434,7 +434,7 @@ l2_dataitem_test() ->
         not_found,
         Opts
     ),
-    ?assertEqual(<<"rsa-pss-sha256">>, CommitmentType),
+    ?assertEqual(?RSA_SIGN_TYPE, CommitmentType),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
 
@@ -451,7 +451,7 @@ l2_dataitem_ed25519_test() ->
         not_found,
         Opts
     ),
-    ?assertEqual(<<"ed25519-sha512">>, CommitmentType),
+    ?assertEqual(?EDDSA_SIGN_TYPE, CommitmentType),
     CommitmentCommitter = hb_util:deep_get(
         [<<"commitments">>, ID, <<"committer">>],
         Res,

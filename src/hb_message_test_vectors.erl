@@ -25,7 +25,7 @@ test_codecs() ->
         <<"ans104@1.0">>,
         #{
             <<"device">> => <<"ans104@1.0">>,
-            <<"type">> => <<"ed25519-sha512">>,
+            <<"type">> => ?EDDSA_SIGN_TYPE,
             <<"with-opts">> => [ed25519]
         },
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
@@ -1490,7 +1490,7 @@ sign_links_test(Codec, Opts) ->
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     SignatureType = 
         case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
-            true -> <<"rsa-pss-sha256">>;
+            true -> ?RSA_SIGN_TYPE;
             false -> <<"hmac-sha256">>
         end,
     Msg = #{
@@ -1687,7 +1687,7 @@ bundled_ordering_test(_Codec, _Opts) ->
 
 rsa_wallet_not_match_message_ed25519_type_test() ->
     Opts = #{priv_wallet => ar_wallet:new(?RSA_KEY_TYPE)},
-    SignatureType = <<"ed25519-sha512">>,
+    SignatureType = ?EDDSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
     ?assertThrow(wrong_wallet_to_sign,
         hb_message:commit(
@@ -1698,7 +1698,7 @@ rsa_wallet_not_match_message_ed25519_type_test() ->
 
 ed25519_wallet_not_match_message_rsa_type_test() ->
     Opts = #{priv_wallet => ar_wallet:new(?EDDSA_KEY_TYPE)},
-    SignatureType = <<"rsa-pss-sha256">>,
+    SignatureType = ?RSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
     ?assertThrow(wrong_wallet_to_sign,
         hb_message:commit(

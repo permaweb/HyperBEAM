@@ -511,7 +511,7 @@ parse_alg_test() ->
             #{}),
         #{
             <<"commitment-device">> => <<"ans104@1.0">>,
-            <<"type">> => <<"rsa-pss-sha256">>
+            <<"type">> => ?RSA_SIGN_TYPE
         }
     ).
 
@@ -538,7 +538,7 @@ escaped_value_test() ->
             }
         },
         <<"signature">> => hb_util:encode(Signature),
-        <<"type">> => <<"rsa-pss-sha256">>
+        <<"type">> => ?RSA_SIGN_TYPE
     },
     SigInfo = commitments_to_siginfo(#{}, #{ ID => Commitment }, #{}),
     Commitments = siginfo_to_commitments(SigInfo, #{}, #{}),
