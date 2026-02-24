@@ -108,6 +108,10 @@
 -define(SOLANA_TYPE_BYTE, <<4>>).
 -define(SOLANA_KEY_TYPE, solana).
 
+-define(TYPED_ETHEREUM_SIGN_ALG, typed_ethereum).
+-define(TYPED_ETHEREUM_TYPE_BYTE, <<7>>).
+-define(TYPED_ETHEREUM_KEY_TYPE, typed_ethereum).
+
 %% The default key type used by transactions that do not specify a signature type.
 -define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
 
