@@ -253,7 +253,11 @@ json_to_message(Resp, Opts) when is_map(Resp) ->
                             )
                     ]
                 ),
-            <<"patches">> => lists:map(fun(Patch) -> tags_to_map(Patch, Opts) end, Patches),
+            <<"patches">> =>
+                lists:map(
+                    fun(Patch) -> tags_to_message(Patch, Opts) end,
+                    Patches
+                ),
             <<"data">> => Data
         },
     {ok, Output};
