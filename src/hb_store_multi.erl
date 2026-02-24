@@ -4,12 +4,16 @@
 %%% Expects a store options message of the following form:
 %%%      /stores/1..n: Sub-store definition messages.
 %%%      /confirmations: Number of confirmations to require for write operations.
+%%% Each sub-store may additionally specify:
+%%%      /num_workers: Number of worker processes to spawn for the store (default: 1).
 -module(hb_store_multi).
 -behaviour(hb_store).
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([read/2, type/2, list/2, match/2]).
 -export([write/3, make_group/2, make_link/3]).
 -include_lib("eunit/include/eunit.hrl").
+
+-define(DEFAULT_STORE_WORKERS, 1).
 
 %%% Initialization and teardown functions.
 
@@ -33,7 +37,9 @@ stop(StoreOpts) ->
         []
     ),
     lists:foreach(
-        fun(#{ <<"worker">> := Worker }) -> Worker ! stop end,
+        fun(#{ <<"workers">> := Workers }) ->
+            lists:foreach(fun(Worker) -> Worker ! stop end, Workers)
+        end,
         Stores
     ).
 
@@ -174,11 +180,17 @@ make_group(StoreOpts, Path) ->
 %%% Worker operations.
 
 %% @doc Start a worker process for each store and return the updated store options.
+%% The number of workers per store is controlled by the `num_workers' key in
+%% the store options (default: 1).
 store_with_workers(StoreOpts = #{ <<"stores">> := Stores }) ->
     StoreOpts#{
         <<"stores">> :=
             lists:map(
-                fun(Store) -> Store#{ <<"worker">> => start_worker(Store) } end,
+                fun(Store) ->
+                    NumWorkers = maps:get(<<"num_workers">>, Store, ?DEFAULT_STORE_WORKERS),
+                    Workers = [start_worker(Store) || _ <- lists:seq(1, NumWorkers)],
+                    Store#{ <<"workers">> => Workers }
+                end,
                 Stores
             )
     }.
@@ -205,9 +217,10 @@ operation(Required, Stores, Function, Args) ->
         )
     ).
 
-%% @doc Dispatch an operation to a specific worker process, returning the ref
-%% that can be used to collect the result.
-dispatch(#{ <<"worker">> := Worker }, Function, Args) ->
+%% @doc Dispatch an operation to a worker process chosen at random from the
+%% store's pool, returning the ref that can be used to collect the result.
+dispatch(#{ <<"workers">> := Workers }, Function, Args) ->
+    Worker = lists:nth(rand:uniform(length(Workers)), Workers),
     dispatch(Worker, Function, Args);
 dispatch(Worker, Function, Args) ->
     Ref = make_ref(),
