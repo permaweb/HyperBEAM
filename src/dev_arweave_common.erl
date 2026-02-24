@@ -234,6 +234,8 @@ serialize_sig_type(Type) ->
 deserialize_sig_type(?RSA_SIGN_TYPE) -> {rsa, 65537};
 deserialize_sig_type(?ECDSA_SIGN_TYPE) -> {ecdsa, secp256k1};
 deserialize_sig_type(?EDDSA_SIGN_TYPE) -> ?EDDSA_KEY_TYPE;
+deserialize_sig_type(?SOLANA_SIGN_TYPE) -> ?SOLANA_KEY_TYPE;
+deserialize_sig_type(?TYPED_ETHEREUM_SIGN_TYPE) -> ?TYPED_ETHEREUM_KEY_TYPE;
 deserialize_sig_type(<<"unsigned-sha256">>) -> {rsa, 65537};
 deserialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
