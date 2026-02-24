@@ -27,6 +27,7 @@
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_keys/2]).
+-export([base58_encode/1]).
 -include("include/hb.hrl").
 
 
@@ -241,6 +242,8 @@ native_id(Wallet = {_Priv, _Pub}) ->
 %% is returned as is.
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
+    Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
@@ -821,3 +824,19 @@ lower_case_keys(Map, Opts) ->
         Map,
         Opts
     ).
+
+%% @doc Base58 encode.
+base58_encode(<<0, Rest/binary>>) ->
+    Encoded = base58_encode(Rest),
+    <<$1, Encoded/binary>>;
+base58_encode(Bin) when is_binary(Bin) ->
+    base58_encode_int(binary:decode_unsigned(Bin)).
+
+base58_encode_int(0) ->
+    <<>>;
+base58_encode_int(N) ->
+    Alphabet = <<"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz">>,
+    Rem = N rem 58,
+    Char = binary:at(Alphabet, Rem),
+    Rest = base58_encode_int(N div 58),
+    <<Rest/binary, Char>>.

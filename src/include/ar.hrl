@@ -104,6 +104,10 @@
 -define(EDDSA_TYPE_BYTE, <<3>>).
 -define(EDDSA_KEY_TYPE, {?EDDSA_SIGN_ALG, ed25519}).
 
+-define(SOLANA_SIGN_ALG, solana).
+-define(SOLANA_TYPE_BYTE, <<4>>).
+-define(SOLANA_KEY_TYPE, solana).
+
 %% The default key type used by transactions that do not specify a signature type.
 -define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
 
