@@ -103,8 +103,8 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         end,
     SignatureType =
         case maps:get(<<"type">>, Commitment) of
-            <<"rsa-pss-sha256">> -> {rsa, 65537};
-            <<"ed25519-sha512">> -> {eddsa, ed25519};
+            ?RSA_SIGN_TYPE -> {rsa, 65537};
+            ?EDDSA_SIGN_TYPE -> {eddsa, ed25519};
             <<"unsigned-sha256">> -> {rsa, 65537};
             Type ->
                 ?event(error, {signature_type, {type, Type}}),
@@ -129,7 +129,6 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         tags = Tags
     },
     FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
-
 
 %% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
 %% recreating the original order of the tags.

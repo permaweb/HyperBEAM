@@ -15,8 +15,8 @@
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
-    commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
-commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    commit(Msg, Req#{ <<"type">> => ?RSA_SIGN_TYPE }, Opts);
+commit(Msg, Req = #{ <<"type">> := ?RSA_SIGN_TYPE }, Opts) ->
     ?event({committing, {msg, Msg}, {req, Req}}),
     % Convert the given message to an L1 TX record, sign it, and convert
     % it back to a structured message.
@@ -347,7 +347,7 @@ happy_tx_test() ->
             <<"data">>, <<"tag1">>, <<"tag2">>, <<"type">>,
             <<"anchor">>,
             <<"quantity">>, <<"reward">>, <<"target">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>,
         <<"field-target">> => hb_util:encode(Target),
         <<"field-anchor">> => hb_util:encode(Anchor),
@@ -388,7 +388,7 @@ data_header_but_no_data_test() ->
         <<"committed">> => [
             <<"tag1">>, <<"anchor">>, <<"quantity">>, <<"reward">>,
             <<"target">>, <<"data_root">>, <<"data_size">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>,
         <<"field-target">> => hb_util:encode(Target),
         <<"field-anchor">> => hb_util:encode(Anchor),
@@ -445,7 +445,7 @@ data_tag_with_data_test() ->
                 <<"value">> => <<"tagdata">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -498,7 +498,7 @@ data_tag_no_data_test() ->
                 <<"value">> => <<"tagdata">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -537,7 +537,7 @@ tag_name_case_test() ->
                 <<"value">> => <<"test-value">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -585,7 +585,7 @@ duplicated_tag_name_test() ->
                 <<"value">> => <<"test-value-2">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -713,7 +713,7 @@ tags_and_fields_test() ->
                 <<"value">> => <<"100">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -819,7 +819,7 @@ tags_no_fields_test() ->
                 <<"value">> => <<"100">>
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
@@ -930,7 +930,7 @@ non_conforming_fields_test() ->
                 <<"value">> => Target
             }
         },
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, SignedCommitment).
@@ -954,7 +954,7 @@ ao_data_key_test() ->
     SignedCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"body">>, <<"tag1">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, SignedCommitment).
@@ -974,7 +974,7 @@ unsorted_tags_test() ->
     SignedCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"z">>, <<"a">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"false">>
     },
     % Only do a signed test since we don't need the tag order to be preserved
@@ -1022,7 +1022,7 @@ nested_data_tabm_test() ->
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"data">>, <<"tag">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"true">>,
         <<"bundle-format">> => <<"binary">>,
         <<"bundle-version">> => <<"2.0.0">>,
@@ -1070,7 +1070,7 @@ nested_non_data_key_tabm_test() ->
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"tag1">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"true">>,
         <<"bundle-format">> => <<"binary">>,
         <<"bundle-version">> => <<"2.0.0">>,
@@ -1136,7 +1136,7 @@ nested_multiple_tabm_test() ->
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"data">>, <<"tag1">>],
-        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"type">> => ?RSA_SIGN_TYPE,
         <<"bundle">> => <<"true">>,
         <<"bundle-format">> => <<"binary">>,
         <<"bundle-version">> => <<"2.0.0">>,
