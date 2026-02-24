@@ -23,7 +23,8 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
             {ok, _Offset} -> simple;
             _ -> not_found
         end,
-    ?event({type, {id, {explicit, ID}}, {type, Type}}),
+    ?event(store_arweave_debug,
+        {type, {id, {explicit, ID}}, {type, Type}}),
     Type.
 
 read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
