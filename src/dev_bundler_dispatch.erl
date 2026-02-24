@@ -515,14 +515,7 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     },
     try
         Serialized = hb_json:encode(Request),
-        Response = hb_http:post(
-            hb_opts:get(gateway, not_found, Opts),
-            #{
-                <<"path">> => <<"/chunk">>,
-                <<"body">> => Serialized
-            },
-            Opts
-        ),
+        Response = dev_arweave:post_json_chunk(Serialized, Opts),
         case Response of
             {ok, _} -> {ok, proof_posted};
             {error, Reason} -> {error, Reason}
