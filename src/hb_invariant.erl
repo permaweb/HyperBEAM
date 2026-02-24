@@ -557,7 +557,7 @@ num(Int) when is_integer(Int) -> Int;
 num(tiny) -> ?INT_TINY_MAX;
 num(small) -> ?SMALL_INT_MAX;
 num(big) -> ?BIG_INT_MAX;
-num(Max) -> error({invalid_size_spec, Max}).
+num(Other) -> error({invalid_size_spec, Other}).
 
 %% @doc Generate a random float.
 float() -> ?MODULE:float(?INT_MAX).
