@@ -223,6 +223,8 @@ routes(M1, M2, Opts) ->
 %%     By-Weight: According to the node's `weight' key.
 %%       Nearest: According to the distance of the node's wallet address to the
 %%                base message's hashpath.
+%%         Range: Determine a subset of nodes based on the `min' and `max' keys
+%%                of the node, and the `Route-By` key in the request.
 %% </pre>
 %% `By-Base' will ensure that all traffic for the same hashpath is routed to the
 %% same node, minimizing work duplication, while `Random' ensures a more even
@@ -536,6 +538,22 @@ choose(N, <<"Nearest-Integer">>, #{ <<"path">> := Path }, Nodes, Opts)
     );
 choose(N, <<"Nearest-Integer">>, RouteBy, Nodes, Opts) ->
     choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> => RouteBy }, Nodes, Opts);
+choose(N, <<"Range">>, #{ <<"route-by">> := RouteBy }, Nodes, Opts) ->
+    element(
+        1,
+        lists:split(
+            N,
+            lists:filter(
+                fun(Node) ->
+                    Min = hb_maps:get(<<"min">>, Node, undefined, Opts),
+                    Max = hb_maps:get(<<"max">>, Node, infinity, Opts),
+                    (Min == undefined orelse RouteBy >= hb_util:int(Min)) andalso
+                        (Max == infinity orelse RouteBy =< hb_util:int(Max))
+                end,
+                Nodes
+            )
+        )
+    );
 choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts)
         when is_binary(HashPath) ->
     choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
