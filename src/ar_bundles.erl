@@ -103,6 +103,10 @@ verify_item(DataItem) ->
     ValidID = verify_data_item_id(DataItem),
     ValidSignature = verify_data_item_signature(DataItem),
     ValidTags = verify_data_item_tags(DataItem),
+    ?event(debug, {verify_item,
+        {id, ValidID},
+        {signature, ValidSignature},
+        {tags, ValidTags}}),
     ValidID andalso ValidSignature andalso ValidTags.
 
 %%%===================================================================
@@ -199,7 +203,8 @@ data_item_signature_data(RawItem) ->
     ]).
 
 get_signature_type({rsa, 65537}) -> "1";
-get_signature_type({eddsa, ed25519}) -> "2".
+get_signature_type({eddsa, ed25519}) -> "2";
+get_signature_type(solana) -> "4".
 
 %% @doc Verify the data item's ID matches the signature.
 verify_data_item_id(DataItem) ->
@@ -326,6 +331,8 @@ encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
 encode_signature_type({eddsa, ed25519}) ->
     <<2, 0>>;
+encode_signature_type(solana) ->
+    <<4, 0>>;
 encode_signature_type(_) ->
     unsupported_tx_format.
 
@@ -529,8 +536,10 @@ decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) 
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {{eddsa, ed25519}, Signature, Owner, Rest};
+decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
+    {solana, Signature, Owner, Rest};
 decode_signature(Other) ->
-    ?event({error_decoding_signature,
+    ?event(warning, {error_decoding_signature,
         {sig_type, {explicit, binary:part(Other, 0, 2)}},
         {binary, Other}}),
     unsupported_tx_format.
@@ -1095,5 +1104,15 @@ deserialize_ed25519_transaction_test() ->
     ?assertEqual([{<<"Content-Type">>,<<"image/png">>}], Deserialized#tx.tags),
     ?assertEqual(<<"ZbExyvGrJKOJTJcHMtKzoOZVCQBkjZ+5">>, Deserialized#tx.anchor),
     ?assertEqual(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>,
+        hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assert(verify_item(Deserialized)).
+
+deserialize_solana_transaction_test() ->
+    % ans104-item-ed25519.bin is dataitem hXKqH_9rkYZ7LwvVps81uKNZd_i36WZjlp4Wnc5BkiE
+    {ok, Serialized} = file:read_file(<<"test/arbundles.js/ans104-item-solana.bin">>),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual([], Deserialized#tx.tags),
+    ?assertEqual(<<"e/GCI2gwfkcyXG6Q3n3CVuA0zT4EmSSf">>, Deserialized#tx.anchor),
+    ?assertEqual(<<"GGuACHp2FbtB4wwT5TmPCU6W5FGa3wB1vqno4gsKsxHz">>,
         hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
     ?assert(verify_item(Deserialized)).
