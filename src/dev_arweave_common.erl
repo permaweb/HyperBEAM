@@ -225,6 +225,7 @@ normalize_data_root(Item) -> Item.
 serialize_sig_type({rsa, 65537}) -> <<"rsa-pss-sha256">>;
 serialize_sig_type({ecdsa, secp256k1}) -> <<"ecdsa-secp256k1-sha256">>;
 serialize_sig_type(?EDDSA_KEY_TYPE) -> <<"ed25519-sha512">>;
+serialize_sig_type(?SOLANA_KEY_TYPE) -> <<"solana">>;
 serialize_sig_type(Type) ->
     ?event(error, {signature_type, {type, Type}}),
     throw({invalid_signature_type, Type}).
