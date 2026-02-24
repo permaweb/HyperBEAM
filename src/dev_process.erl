@@ -333,6 +333,8 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
 
 %% @doc Compute a single slot for a process, given an initialized state.
 compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
+    % Reset per-process LMDB timing accumulators so we capture only this slot.
+    hb_store_lmdb:take_stats(),
     {PrepTimeMicroSecs, {ok, Slot, PreparedState, Req}} =
         timer:tc(
             fun() ->
@@ -379,6 +381,24 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                 {ok, NewProcStateMsgWithSlot},
                 Opts
             ),
+            % Snapshot trie/map sizes before writing — external_size is a fast
+            % in-memory term measurement, no LMDB I/O needed.
+            RawDedup = hb_ao:get(<<"dedup">>, NewProcStateMsgWithSlot, #{},
+                                 Opts#{ hashpath => ignore }),
+            RawBalances = hb_ao:get(<<"balances">>, NewProcStateMsgWithSlot, #{},
+                                    Opts#{ hashpath => ignore }),
+            DedupEntries = case RawDedup of
+                M when is_map(M) ->
+                    % Subtract the trie device key (always present)
+                    max(0, maps:size(M) - 1);
+                _ -> 0
+            end,
+            DedupBytes = erlang:external_size(RawDedup),
+            BalancesEntries = case RawBalances of
+                B when is_map(B) -> maps:size(B);
+                _ -> 0
+            end,
+            BalancesBytes = erlang:external_size(RawBalances),
             {StoreTimeMicroSecs, ProcStateWithSnapshot} =
                 timer:tc(
                     fun() ->
@@ -392,6 +412,19 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                         )
                     end
                 ),
+            % Collect per-slot LMDB read/write stats accumulated since the
+            % reset at the top of this function.
+            #{
+                read_count  := LMDBReads,
+                read_us     := LMDBReadUs,
+                write_count := LMDBWrites,
+                write_us    := LMDBWriteUs
+            } = hb_store_lmdb:take_stats(),
+            % Collect dedup and balances serialization times from hb_cache.
+            #{
+                dedup_write_us    := DedupWriteUs,
+                balances_write_us := BalancesWriteUs
+            } = hb_cache:take_cache_stats(),
             ?event(compute_short,
                 {computed_slot,
                     {proc_id, ProcID},
@@ -400,6 +433,16 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {prep_ms, PrepTimeMicroSecs div 1000},
                     {execution_ms, RuntimeMicroSecs div 1000},
                     {store_ms, StoreTimeMicroSecs div 1000},
+                    {lmdb_reads, LMDBReads},
+                    {lmdb_read_us, LMDBReadUs},
+                    {lmdb_writes, LMDBWrites},
+                    {lmdb_write_us, LMDBWriteUs},
+                    {dedup_entries, DedupEntries},
+                    {dedup_bytes, DedupBytes},
+                    {dedup_write_us, DedupWriteUs},
+                    {balances_entries, BalancesEntries},
+                    {balances_bytes, BalancesBytes},
+                    {balances_write_us, BalancesWriteUs},
                     {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
                         hb_ao:get(

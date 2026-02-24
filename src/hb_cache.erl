@@ -43,6 +43,7 @@
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
+-export([take_cache_stats/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -345,6 +346,27 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     ),
     % Link the commitments base to `base/commitments`.
     hb_store:make_link(Store, CommitmentsBase, <<Base/binary, "/commitments">>);
+%% @doc Timed write_key for the dedup trie — accumulates wall-time in the
+%% process dictionary so dev_process can report it per-slot.
+write_key(Base, <<"dedup">> = Key, HPAlg, Value, Store, Opts) ->
+    {Us, Result} = timer:tc(fun() ->
+        KeyHashPath = hb_path:hashpath(Base, hb_path:to_binary(Key), HPAlg, Opts),
+        {ok, Path} = do_write_message(Value, Store, Opts),
+        hb_store:make_link(Store, Path, KeyHashPath),
+        {ok, Path}
+    end),
+    cache_bump(dedup_write_us, Us),
+    Result;
+%% @doc Timed write_key for the balances map.
+write_key(Base, <<"balances">> = Key, HPAlg, Value, Store, Opts) ->
+    {Us, Result} = timer:tc(fun() ->
+        KeyHashPath = hb_path:hashpath(Base, hb_path:to_binary(Key), HPAlg, Opts),
+        {ok, Path} = do_write_message(Value, Store, Opts),
+        hb_store:make_link(Store, Path, KeyHashPath),
+        {ok, Path}
+    end),
+    cache_bump(balances_write_us, Us),
+    Result;
 write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     KeyHashPath =
         hb_path:hashpath(
@@ -356,6 +378,25 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     {ok, Path} = do_write_message(Value, Store, Opts),
     hb_store:make_link(Store, Path, KeyHashPath),
     {ok, Path}.
+
+%% @doc Accumulate a timing value in the calling process's dictionary.
+cache_bump(Key, N) ->
+    erlang:put(Key, case erlang:get(Key) of undefined -> N; V -> V + N end).
+
+%% @doc Read and reset a single cache timing accumulator.
+take_cache_stat(Key) ->
+    case erlang:get(Key) of
+        undefined -> 0;
+        V -> erlang:put(Key, 0), V
+    end.
+
+%% @doc Read and reset all per-slot cache timing stats. Called from dev_process
+%% after store_result to capture dedup and balances serialization times.
+take_cache_stats() ->
+    #{
+        dedup_write_us    => take_cache_stat(dedup_write_us),
+        balances_write_us => take_cache_stat(balances_write_us)
+    }.
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents

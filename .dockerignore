@@ -1,0 +1,15 @@
+# Large runtime data — never needed at build time
+cache-*
+*.lmdb
+*.mdb
+
+# Local build artifacts (image builds from source)
+_build/
+
+# Secrets and local config (mounted as volumes at runtime)
+hyperbeam-key.json
+config.json
+
+# Dev tooling
+.git/
+scripts/

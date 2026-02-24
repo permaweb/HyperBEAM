@@ -24,6 +24,8 @@
 -export([read/2, write/3, list/2, match/2]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
+%% Per-process timing stats (accumulated across LMDB calls in the current process)
+-export([take_stats/0]).
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
@@ -146,18 +148,24 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
-    case elmdb:put(DBInstance, Path, Value) of
-        ok -> ok;
-        {error, Type, Description} ->
-            ?event(
-                error,
-                {lmdb_error,
-                    {type, Type},
-                    {description, Description}
-                }
-            ),
-            retry
-    end.
+    {Time, Res} = timer:tc(fun() ->
+        case elmdb:put(DBInstance, Path, Value) of
+            ok -> ok;
+            {error, Type, Description} ->
+                ?event(
+                    error,
+                    {lmdb_error,
+                        {type, Type},
+                        {description, Description}
+                    }
+                ),
+                retry
+        end
+    end),
+    hb_event:increment(lmdb_write_us, <<"total">>, #{}, Time),
+    lmdb_bump(lmdb_write_count, 1),
+    lmdb_bump(lmdb_write_us, Time),
+    Res.
 
 %% @doc Read a value from the database by key, with automatic link resolution.
 %%
@@ -242,11 +250,17 @@ to_path(PathParts) ->
 %% Returns {ok, Value} or not_found.
 read_direct(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:get(DBInstance, Path) of
-        {ok, Value} -> {ok, Value};
-        {error, not_found} -> not_found;  % Normalize error format
-        not_found -> not_found  % Handle both old and new format
-    end.
+    {Time, Res} = timer:tc(fun() ->
+        case elmdb:get(DBInstance, Path) of
+            {ok, Value} -> {ok, Value};
+            {error, not_found} -> not_found;
+            not_found -> not_found
+        end
+    end),
+    hb_event:increment(lmdb_read_us, <<"total">>, #{}, Time),
+    lmdb_bump(lmdb_read_count, 1),
+    lmdb_bump(lmdb_read_us, Time),
+    Res.
 
 %% @doc Read a value directly from the database with link resolution.
 %% This is the internal implementation that handles actual database reads.
@@ -551,6 +565,37 @@ resolve(Opts, PathParts) when is_list(PathParts) ->
             to_path(PathParts)
     end;
 resolve(_,_) -> not_found.
+
+%% @doc Read and reset the per-process LMDB timing accumulators.
+%%
+%% Returns a map of {read_count, read_us, write_count, write_us} reflecting
+%% all elmdb:get and elmdb:put calls made in the current Erlang process since
+%% the last call to take_stats/0 (or since the process started).  Calling this
+%% function also resets all four counters back to zero, so successive calls
+%% from a slot-computation loop each report only the *delta* for that slot.
+%%
+%% Because LMDB NIF calls execute synchronously in the calling process, the
+%% process-dictionary counters are an accurate per-slot view with no locking
+%% or cross-process coordination overhead.
+-spec take_stats() -> #{ atom() => non_neg_integer() }.
+take_stats() ->
+    #{
+        read_count  => lmdb_reset(lmdb_read_count),
+        read_us     => lmdb_reset(lmdb_read_us),
+        write_count => lmdb_reset(lmdb_write_count),
+        write_us    => lmdb_reset(lmdb_write_us)
+    }.
+
+%% @doc Increment a process-local counter used by the timing accumulators.
+lmdb_bump(Key, N) ->
+    erlang:put(Key, case erlang:get(Key) of undefined -> N; V -> V + N end).
+
+%% @doc Read and zero a process-local counter.
+lmdb_reset(Key) ->
+    case erlang:get(Key) of
+        undefined -> 0;
+        V -> erlang:put(Key, 0), V
+    end.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 find_env(Opts) -> hb_store:find(Opts).
