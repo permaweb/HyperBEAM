@@ -4,7 +4,7 @@ This guide is for operators who are already running a production HyperBEAM node 
 
 ## Prerequisites
 
-If you started your node using the default device list in [hb_opts.erl](../src/hb_opts.erl), both `~location@1.0` and `~scheduler@1.0` are already onboarded — no additional configuration is required to enable them.
+If you started your node using the default device list in [hb_opts.erl](~/src/hb_opts.erl), both `~location@1.0` and `~scheduler@1.0` are already onboarded — no additional configuration is required to enable them.
 
 ## Announcing Your Scheduler Location
 
