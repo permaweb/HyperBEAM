@@ -157,9 +157,9 @@ enqueue_task(Task, State) ->
     State#state{task_queue = queue:in(Task, Queue)}.
 
 %% @doc Format a task for logging.
-format_task(#task{bundle_id = BundleID, type = post_tx, data = CommittedTX}) ->
+format_task(#task{bundle_id = BundleID, type = post_tx, data = DataItems}) ->
     {post_tx, {timestamp, format_timestamp()}, {bundle, BundleID},
-        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
+        {num_items, length(DataItems)}};
 format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
     {build_proofs, {timestamp, format_timestamp()}, {bundle, BundleID},
         {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
@@ -426,6 +426,8 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
                     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
                     Opts),
+                ?event(bundler_short, {posting_tx,
+                    {tx, {explicit, hb_message:id(Committed, signed, Opts)}}}),
                 PostTXResponse = hb_ao:resolve(
                     #{ <<"device">> => <<"arweave@2.9">> },
                     Committed#{
@@ -464,6 +466,10 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         DataSize = TX#tx.data_size,
         Mode = ar_tx:chunking_mode(TX#tx.format),
         Chunks = ar_tx:chunk_binary(Mode, ?DATA_CHUNK_SIZE, Data),
+        ?event(bundler_short, {building_proofs,
+            {bundle, Task#task.bundle_id},
+            {data_size, DataSize},
+            {num_chunks, length(Chunks)}}),
         SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
         SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
         {_Root, DataTree} = ar_merkle:generate_tree(SizeTaggedChunkIDs),

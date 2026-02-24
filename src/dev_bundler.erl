@@ -42,8 +42,6 @@ item(_Base, Req, Opts) ->
                 ok ->
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
-                     ?event(bundler_short, {queueing_item, 
-                        {id, {explicit, ItemID}}}),
                     ServerPID ! {item, Item},
                     {ok, #{
                         <<"id">> => ItemID,
@@ -170,9 +168,17 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
 %% Note: Item has already been verified and cached before reaching here.
 add_to_queue(Item, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
     ItemSize = erlang:external_size(Item),
+    NewQueue = [Item | Queue],
+    NewBytes = Bytes + ItemSize,
+    ?event(bundler_short, {queueing_item, 
+        {id, {explicit, hb_message:id(Item, signed, Opts)}},
+        {size, erlang:external_size(Item)},
+        {queue_size, length(NewQueue)},
+        {queue_bytes, NewBytes}
+    }),
     State#{
-        queue => [Item | Queue],
-        bytes => Bytes + ItemSize
+        queue => NewQueue,
+        bytes => NewBytes
     }.
 
 %% @doc Dispatch the queue if it is ready.
