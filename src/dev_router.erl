@@ -218,6 +218,9 @@ routes(M1, M2, Opts) ->
 %% the load distribution strategy and choose a node. Supported strategies:
 %% <pre>
 %%           All: Return all nodes (default).
+%%    Shuffled-X: A shuffling strategy is a variation of any other strategy in
+%%                which the resulting nodes of the `X' strategy are randomly
+%%                re-ordered before being returned.
 %%        Random: Distribute load evenly across all nodes, non-deterministically.
 %%       By-Base: According to the base message's hashpath.
 %%     By-Weight: According to the node's `weight' key.
@@ -459,6 +462,11 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
 choose(_, _, _, [], _) -> [];
+choose(N, <<"Shuffled-", NextStrategy/binary>>, Msg, Nodes, Opts) ->
+    % A shuffling strategy is a variation of any other strategy in which the
+    % resulting nodes of the `NextStrategy' are randomly re-ordered before being
+    % returned.
+    choose(N, <<"Random">>, Msg, choose(N, NextStrategy, Msg, Nodes, Opts), Opts);
 choose(N, <<"Random">>, _, Nodes, _Opts) ->
     Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
     [Node | choose(N - 1, <<"Random">>, nop, lists:delete(Node, Nodes), _Opts)];
