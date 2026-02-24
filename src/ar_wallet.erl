@@ -195,7 +195,9 @@ to_address(PubKey, {?ECDSA_SIGN_ALG, secp256k1}) ->
 to_address(PubKey, {?EDDSA_SIGN_ALG, ed25519}) ->
     to_eddsa_address(PubKey);
 to_address(PubKey, solana) ->
-    to_solana_address(PubKey).
+    to_solana_address(PubKey);
+to_address(PubKey, typed_ethereum) ->
+    to_ecdsa_address(PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.
