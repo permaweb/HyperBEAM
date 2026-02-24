@@ -258,7 +258,7 @@ result_to_message(ExpectedID, Item, Opts) ->
 	SignatureType =
         case byte_size(Signature) of
             64 -> {eddsa, ed25519};
-            65 -> {ecdsa, 256};
+            65 -> {ecdsa, secp256k1};
             512 -> {rsa, 65537};
             _ -> unsupported_tx_signature_type
         end,
