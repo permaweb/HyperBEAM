@@ -232,8 +232,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts) ->
             assemble_chunks(Sorted, Offset);
         Gaps ->
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            % warning, {gap}
-            ?event(arweave_debug, {fetch_chunk_gaps,
+            ?event(warning, {fetch_chunk_gap_handling_untested,
                 {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Concurrency, Opts) of
                 {ok, NewInfos} ->
@@ -1258,17 +1257,30 @@ get_mid_chunk_pre_split_test() ->
     ok.
 
 get_pre_split_small_chunks_test() ->
-    %% https://arweave.net/tx/AEyMrWypJlbb-qEjRnDx2BdojioeIiP7nNEk_dt_s7c
-    %% 4WCcMTK6-2EPnYPhaTOFRE5SjRxjEEiF-vuzSHZkhKc
-    %% hZDHBvaoBeimDyv7I7u3K6KKw0pZErbQdm0jmpxDDA8
-    %%  PmRVp7LiMYEUHpRx0fAUlkq4qM0YHDjZFKtZuIFn_to
-    %% _pZRN9Cc0L1_hzIcVKUSzncrUa94Z5wrCyA7tJsO3I8
-    %% n_6H16UO483J5m9WoY6tacF0wrzeSy6oMvuqnNb3vqk
-    %% FB6gtDUB4frHyATjN-HouFcVIbFFuq8CiJMRyhWeqkU
-    %% 4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY
-    TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
-    EndOffset = 11741031646397,
-    ExpectedLength = 810774,
+    assert_chunk_range(
+        <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+        11_741_031_646_397,
+        810774,
+        <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+    ).
+
+% get_post_split_small_chunks_test() ->
+%     assert_chunk_range(
+%         <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+%         11_741_031_646_397,
+%         810774,
+%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+%     ).
+
+% large_tx_test() ->
+%     assert_chunk_range(
+%         <<"l1ETZJ2DoJ06lF4gOLVdmNU4xx_s_r_t7q_g6CjYxjA">>,
+%         384469518731512,
+%         52865026,
+%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+%     ).
+
+assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
     StartOffset = EndOffset - ExpectedLength,
     Opts = #{},
     T1 = erlang:monotonic_time(millisecond),
@@ -1282,8 +1294,9 @@ get_pre_split_small_chunks_test() ->
         Opts
     ),
     T2 = erlang:monotonic_time(millisecond),
-    ?event(debug_test, {chunk_range_resolve,
+    ?event(debug_performance, {chunk_range_resolve,
         {elapsed_ms, T2 - T1},
+        {tx, TXID},
         {offset, StartOffset + 1},
         {length, ExpectedLength}
     }),
@@ -1302,12 +1315,22 @@ get_pre_split_small_chunks_test() ->
         {expected_length, ExpectedLength},
         {chunk_size, byte_size(Data)},
         {raw_size, byte_size(RawData)},
-        {match, Data =:= RawData}
+        {match, Data =:= RawData},
+        {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
     }),
-    file:write_file("/tmp/chunk_data.bin", Data),
-    file:write_file("/tmp/raw_data.bin", RawData),
     ?assertEqual(RawData, Data),
-    ?assertEqual(
-        <<"nX42FsO_pFOOxrjcmNHz9TGQZg91NQvW_nxmYUhPihc">>,
-        hb_util:encode(crypto:hash(sha256, Data))),
+    ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
+    {ok, TXHeader} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => TXID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ),
+    ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
+    ?assert(hb_message:verify(TXHeader, all, Opts)),
+    TXWithData = TXHeader#{ <<"data">> => Data },
+    ?assert(hb_message:verify(TXWithData, all, Opts)),
     ok.
