@@ -757,7 +757,7 @@ remote_slot(<<"ao.N.1">>, ProcID, Node, Opts) ->
 remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
     % The process is running on a testnet AO-Core scheduler, so we need to use
     % `/processes/procID/latest' to get the current slot.
-    Path = << ProcID/binary, "/latest?proc-id=", ProcID/binary>>,
+    Path = << ProcID/binary, "/latest?process-id=", ProcID/binary>>,
     ?event({getting_slot_from_ao_core_remote, {path, {string, Path}}}),
     case hb_http:get(Node, Path, Opts#{ http_client => httpc }) of
         {ok, Res} ->
@@ -955,7 +955,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 >>;
             <<"ao.TN.1">> ->
                 <<
-                    ProcID/binary, "?proc-id=", ProcID/binary,
+                    ProcID/binary, "?process-id=", ProcID/binary,
                     FromBin/binary, ToParam/binary,
                     "&limit=", (hb_util:bin(?MAX_ASSIGNMENT_QUERY_LEN))/binary
                 >>
@@ -1229,7 +1229,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
         {ok, Body} ->
             ?event({encoded_for_legacy_scheduler, {encoded, Body}}),
             PostMsg = #{
-                <<"path">> => P = <<"/?proc-id=", ProcID/binary>>,
+                <<"path">> => P = <<"/?process-id=", ProcID/binary>>,
                 <<"body">> => Body,
                 <<"method">> => <<"POST">>
             },
