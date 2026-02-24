@@ -171,9 +171,10 @@ fetch_and_process_block(Current, To, Opts) ->
 
 %% @doc Process a block.
 process_block(BlockRes, Current, To, Opts) ->
-    ?event(copycat_debug, {{processing_block, Current}, {block, BlockRes}}),
     case BlockRes of
         {ok, Block} ->
+            ?event(copycat_debug, {{processing_block, Current},
+                {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
             case maybe_index_ids(Block, Opts) of
                 {block_skipped, Results} ->
                     TotalTXs = maps:get(total_txs, Results, 0),
@@ -192,7 +193,7 @@ process_block(BlockRes, Current, To, Opts) ->
                     SkippedTXs = maps:get(skipped_count, Results, 0),
                     ?event(
                         copycat_short,
-                        {arweave_block_cached,
+                        {arweave_block_indexed,
                             {height, Current},
                             {items_indexed, ItemsIndexed},
                             {total_txs, TotalTXs},
