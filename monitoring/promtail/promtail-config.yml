@@ -21,8 +21,6 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_name']
         regex: '/(.*)'
         target_label: container
-      - source_labels: ['__meta_docker_container_id']
-        target_label: container_id
       - source_labels: ['__meta_docker_container_log_stream']
         target_label: stream
     pipeline_stages:
