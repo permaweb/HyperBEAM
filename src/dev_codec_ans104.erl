@@ -31,15 +31,15 @@ deserialize(TX, Req, Opts) when is_record(TX, tx) ->
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
-    commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
-commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= <<"rsa-pss-sha256">> orelse Type =:= <<"ed25519-sha512">> ->
+    commit(Msg, Req#{ <<"type">> => ?RSA_SIGN_TYPE }, Opts);
+commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= ?RSA_SIGN_TYPE orelse Type =:= ?EDDSA_SIGN_TYPE ->
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
     case {hb_opts:get(priv_wallet, no_viable_wallet, Opts), Type} of
-        {{{?RSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, <<"rsa-pss-sha256">>} ->
+        {{{?RSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?RSA_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
-        {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, <<"ed25519-sha512">>} ->
+        {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?EDDSA_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
         {{{WalletType, _, _}, _}, _Type} ->
             ?event(warning, {wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}}),
@@ -819,7 +819,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?event(debug_test, {committed, Label, {explicit, Committed}}),
     ?assert(hb_message:verify(Committed, all, Opts), Label),
     {ok, _, CommittedCommitment} = hb_message:commitment(
-        #{ <<"type">> => <<"rsa-pss-sha256">> }, Committed, Opts),
+        #{ <<"type">> => ?RSA_SIGN_TYPE }, Committed, Opts),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
@@ -842,7 +842,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
     {ok, _, DecodedCommitment} = hb_message:commitment(
-        #{ <<"type">> => <<"rsa-pss-sha256">> }, Decoded, Opts),
+        #{ <<"type">> => ?RSA_SIGN_TYPE }, Decoded, Opts),
     ?assertEqual(
         [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
         Label),
