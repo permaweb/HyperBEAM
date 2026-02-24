@@ -1076,6 +1076,8 @@ get_status_class({error, {down, shutdown}}) ->
     <<"down_shutdown">>;
 get_status_class({error, {stream_error, closed}}) ->
     <<"stream_closed">>;
+get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->
+    <<"stream_closed">>;
 get_status_class(208) ->
 	<<"already_processed">>;
 get_status_class(404) ->
