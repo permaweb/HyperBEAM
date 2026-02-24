@@ -339,18 +339,15 @@ request(Method, Path, Extra, LogExtra, Opts) ->
             },
             Opts
         ),
-    case Res of
-        {error, {no_viable_responses, AllResponses}} ->
-            to_message(Path, Method, best_response(AllResponses), LogExtra, Opts);
-        _ ->
-            to_message(Path, Method, Res, LogExtra, Opts)
-    end.
+    to_message(Path, Method, best_response(Res), LogExtra, Opts).
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
+best_response({error, {no_viable_responses, Responses}}) ->
+    best_response(Responses);
 best_response([]) ->
     {error, no_viable_responses};
-best_response(Responses) ->
+best_response(Responses) when is_list(Responses) ->
     Sorted = lists:sort(
         fun({_, ResponseA}, {_, ResponseB}) ->
             StatusA = maps:get(<<"status">>, ResponseA, 999),
@@ -359,7 +356,9 @@ best_response(Responses) ->
         end,
         Responses
     ),
-    hd(Sorted).
+    hd(Sorted);
+best_response(Response) ->
+    Response.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
@@ -583,14 +582,97 @@ post_tx_message_test() ->
     ?assertEqual(<<"Transaction verification failed.">>, Body),
     ok.
 
-post_tx_json_test() ->
+post_tx_json_failure_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
-    ClientOpts =
-        #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => hb:wallet()
-        },
+    ClientOpts = post_tx_json_client_opts(),
+    Response = post_tx_json_request(Server, ClientOpts),
+    % The transaction is invalid because it has insufficient balance, only
+    % way we'll know that is if the HB node successfully posted the tx to
+    % an arweave node.
+    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
+    {error, #{ <<"body">> := Body }} = Response,
+    ?assertEqual(<<"Transaction verification failed.">>, Body),
+    ok.
+
+post_tx_json_success_test() ->
+    {Response, Node1Posts, Node2Posts} =
+        post_tx_json_two_node_test({200, <<"OK-1">>}, {200, <<"OK-2">>}),
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Response),
+    ?assertEqual(1, length(Node1Posts)),
+    ?assertEqual(1, length(Node2Posts)),
+    ok.
+
+post_tx_json_mixed_status_prefers_success_test() ->
+    {Response, Node1Posts, Node2Posts} =
+        post_tx_json_two_node_test(
+            {400, <<"Transaction verification failed.">>},
+            {200, <<"OK-2">>}
+        ),
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Response),
+    ?assertEqual(1, length(Node1Posts)),
+    ?assertEqual(1, length(Node2Posts)),
+    ok.
+
+post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
+    {ok, MockNode1, MockHandle1} = hb_mock_server:start([
+        {"/tx", tx, Node1TxResponse}
+    ]),
+    {ok, MockNode2, MockHandle2} = hb_mock_server:start([
+        {"/tx", tx, Node2TxResponse}
+    ]),
+    Server = hb_http_server:start_node(
+        post_tx_json_two_node_server_opts(MockNode1, MockNode2)
+    ),
+    ClientOpts = post_tx_json_client_opts(),
+    try
+        Response = post_tx_json_request(Server, ClientOpts),
+        Node1Posts = hb_mock_server:get_requests(tx, 1, MockHandle1),
+        Node2Posts = hb_mock_server:get_requests(tx, 1, MockHandle2),
+        {Response, Node1Posts, Node2Posts}
+    after
+        hb_mock_server:stop(MockHandle1),
+        hb_mock_server:stop(MockHandle2)
+    end.
+
+post_tx_json_two_node_server_opts(MockNode1, MockNode2) ->
+    #{
+        store => [hb_test_utils:test_store()],
+        routes => [
+            #{
+                <<"template">> =>
+                    #{
+                        <<"path">> => <<"^/arweave/tx">>,
+                        <<"method">> => <<"POST">>
+                    },
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => MockNode1,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => MockNode2,
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"responses">> => 2,
+                <<"stop-after">> => false,
+                <<"admissible-status">> => 200
+            }
+        ]
+    }.
+
+post_tx_json_client_opts() ->
+    #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    }.
+
+post_tx_json_payload(ClientOpts) ->
     Msg =
         hb_message:commit(
             #{
@@ -602,25 +684,20 @@ post_tx_json_test() ->
         ),
     TX = hb_message:convert(Msg, <<"tx@1.0">>, <<"structured@1.0">>, ClientOpts),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
-    Serialized = hb_json:encode(JSON),
-    Response =
-        hb_http:post(
-            Server,
-            #{
-                <<"device">> => <<"arweave@2.9">>,
-                <<"path">> => <<"/tx?codec-device=tx@1.0">>,
-                <<"content-type">> => <<"application/json">>,
-                <<"body">> => Serialized
-            },
-            ClientOpts
-        ),
-    % The transaction is invalid because it has insufficient balance, only
-    % way we'll know that is if the HB node successfully posted the tx to
-    % an arweave node.
-    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
-    {error, #{ <<"body">> := Body }} = Response,
-    ?assertEqual(<<"Transaction verification failed.">>, Body),
-    ok.
+    hb_json:encode(JSON).
+
+post_tx_json_request(Server, ClientOpts) ->
+    Serialized = post_tx_json_payload(ClientOpts),
+    hb_http:post(
+        Server,
+        #{
+            <<"device">> => <<"arweave@2.9">>,
+            <<"path">> => <<"/tx?codec-device=tx@1.0">>,
+            <<"content-type">> => <<"application/json">>,
+            <<"body">> => Serialized
+        },
+        ClientOpts
+    ).
 
 get_tx_basic_data_test() ->
     {ok, Structured} = hb_ao:resolve(
