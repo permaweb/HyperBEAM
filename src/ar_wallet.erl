@@ -159,7 +159,11 @@ verify({{KeyAlg, KeyCrv}, Pub}, Data, Sig, _DigestType)
     Pass andalso PubExtracted =:= Pub;
 verify({{KeyAlg, Curve}, Pub}, Data, Sig, _DigestType) when
       byte_size(Pub) == 32 andalso byte_size(Sig) == 64 andalso Curve =:= ed25519 andalso KeyAlg =:= ?EDDSA_SIGN_ALG ->
-    crypto:verify(eddsa, none, Data, Sig, [Pub, Curve]).
+    crypto:verify(eddsa, none, Data, Sig, [Pub, Curve]);
+verify({solana, Pub}, Data, Sig, _DigestType) when
+      byte_size(Pub) == 32 andalso byte_size(Sig) == 64 ->
+    HexData = hb_util:to_hex(Data),
+    crypto:verify(eddsa, none, HexData, Sig, [Pub, ed25519]).
 
 %% @doc Find a public key from a wallet.
 to_pubkey(Pubkey) ->
@@ -189,7 +193,9 @@ to_address(PubKey, {?ECDSA_SIGN_ALG, secp256k1}) ->
 	%% (same as RSA). The keccak-based Ethereum address is used elsewhere.
 	hash_address(PubKey);
 to_address(PubKey, {?EDDSA_SIGN_ALG, ed25519}) ->
-    to_eddsa_address(PubKey).
+    to_eddsa_address(PubKey);
+to_address(PubKey, solana) ->
+    to_solana_address(PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.
@@ -351,6 +357,8 @@ to_ecdsa_address(PubKey) ->
 to_eddsa_address(PubKey) ->
     hash_address(PubKey).
 
+to_solana_address(PubKey) ->
+    hb_util:base58_encode(PubKey).
 %%%===================================================================
 %%% Private functions.
 %%%===================================================================
