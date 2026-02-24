@@ -139,7 +139,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.owner, [0, 32,  byte_size(?DEFAULT_OWNER)]),
+        hb_util:check_size(TX#tx.owner, [0, 32, 42, 65, byte_size(?DEFAULT_OWNER)]),
         {invalid_field, owner, TX#tx.owner}
     ),
     hb_util:ok_or_throw(TX,
@@ -204,7 +204,9 @@ data_item_signature_data(RawItem) ->
 
 get_signature_type({rsa, 65537}) -> "1";
 get_signature_type({eddsa, ed25519}) -> "2";
-get_signature_type(solana) -> "4".
+get_signature_type({ecdsa, secp256k1}) -> "3";
+get_signature_type(solana) -> "4";
+get_signature_type(typed_ethereum) -> "7".
 
 %% @doc Verify the data item's ID matches the signature.
 verify_data_item_id(DataItem) ->
@@ -536,8 +538,12 @@ decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) 
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {{eddsa, ed25519}, Signature, Owner, Rest};
+decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
+    {{ecdsa, secp256k1}, Signature, Owner, Rest};
 decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {solana, Signature, Owner, Rest};
+decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
+    {typed_ethereum, Signature, Owner, Rest};
 decode_signature(Other) ->
     ?event(warning, {error_decoding_signature,
         {sig_type, {explicit, binary:part(Other, 0, 2)}},
