@@ -4,7 +4,7 @@ This guide is for operators who are already running a production HyperBEAM node 
 
 ## Prerequisites
 
-If you started your node using the default device list, both `~location@1.0` and `~scheduler@1.0` are already onboarded — no additional configuration is required to enable them.
+If you started your node using the default device list in [hb_opts.erl](../src/hb_opts.erl), both `~location@1.0` and `~scheduler@1.0` are already onboarded — no additional configuration is required to enable them.
 
 ## Announcing Your Scheduler Location
 
@@ -18,7 +18,7 @@ curl -sS -H 'Accept: application/json' http://127.0.0.1:8734/~location@1.0/node
 
 ### What Success Looks Like
 
-A successful call returns an **HTTP 200 OK** response from `~location@1.0`. This publishes a transaction to the network announcing your scheduler's location.
+A successful call returns an **HTTP 200 OK** response from `~location@1.0` in the node logs. This publishes a transaction to the network announcing your scheduler's location.
 
 ## Emitted Transaction Tags
 
