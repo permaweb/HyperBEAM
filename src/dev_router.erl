@@ -218,11 +218,16 @@ routes(M1, M2, Opts) ->
 %% the load distribution strategy and choose a node. Supported strategies:
 %% <pre>
 %%           All: Return all nodes (default).
+%%    Shuffled-X: A shuffling strategy is a variation of any other strategy in
+%%                which the resulting nodes of the `X' strategy are randomly
+%%                re-ordered before being returned.
 %%        Random: Distribute load evenly across all nodes, non-deterministically.
 %%       By-Base: According to the base message's hashpath.
 %%     By-Weight: According to the node's `weight' key.
 %%       Nearest: According to the distance of the node's wallet address to the
 %%                base message's hashpath.
+%%         Range: Determine a subset of nodes based on the `min' and `max' keys
+%%                of the node, and the `Route-By` key in the request.
 %% </pre>
 %% `By-Base' will ensure that all traffic for the same hashpath is routed to the
 %% same node, minimizing work duplication, while `Random' ensures a more even
@@ -457,6 +462,11 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
 choose(_, _, _, [], _) -> [];
+choose(N, <<"Shuffled-", NextStrategy/binary>>, Msg, Nodes, Opts) ->
+    % A shuffling strategy is a variation of any other strategy in which the
+    % resulting nodes of the `NextStrategy' are randomly re-ordered before being
+    % returned.
+    choose(N, <<"Random">>, Msg, choose(N, NextStrategy, Msg, Nodes, Opts), Opts);
 choose(N, <<"Random">>, _, Nodes, _Opts) ->
     Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
     [Node | choose(N - 1, <<"Random">>, nop, lists:delete(Node, Nodes), _Opts)];
@@ -536,6 +546,18 @@ choose(N, <<"Nearest-Integer">>, #{ <<"path">> := Path }, Nodes, Opts)
     );
 choose(N, <<"Nearest-Integer">>, RouteBy, Nodes, Opts) ->
     choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> => RouteBy }, Nodes, Opts);
+choose(N, <<"Range">>, #{ <<"route-by">> := RouteBy }, Nodes, Opts) ->
+    FilteredNodes =
+        lists:filter(
+            fun(Node) ->
+                Min = hb_maps:get(<<"min">>, Node, undefined, Opts),
+                Max = hb_maps:get(<<"max">>, Node, infinity, Opts),
+                (Min == undefined orelse RouteBy >= hb_util:int(Min)) andalso
+                    (Max == infinity orelse RouteBy =< hb_util:int(Max))
+            end,
+            Nodes
+        ),
+    lists:sublist(FilteredNodes, min(length(FilteredNodes), N));
 choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts)
         when is_binary(HashPath) ->
     choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
@@ -1455,6 +1477,98 @@ weighted_random_strategy_test() ->
     ?event(debug_weighted_random, {proportion_of_first_host, ProportionOfFirstHost}),
     ?assert(ProportionOfFirstHost < 0.05),
     ?assert(ProportionOfFirstHost >= 0.0001).
+
+shuffled_strategy_test() ->
+    Opts = #{},
+    Nodes =
+        [
+            #{ <<"id">> => 1, <<"center">> => 100 },
+            #{ <<"id">> => 2, <<"center">> => 200 },
+            #{ <<"id">> => 3, <<"center">> => 300 },
+            #{ <<"id">> => 4, <<"center">> => 400 }
+        ],
+    % First, test that without shuffling the nodes are in the `Nearest-Integer'.
+    ?assertMatch(
+        [#{ <<"id">> := 3 }, #{ <<"id">> := 2 }],
+        choose(2, <<"Nearest-Integer">>, #{ <<"route-by">> => 251 }, Nodes, Opts)
+    ),
+    % Next, test that if we re-run the same strategy many times, we get at least
+    % some results that break the non-shuffled order. We would always expect 
+    % that the first node will be the one with the lowest center value, but
+    % instead we get at least one result in 100 that returns the higher-center
+    % value.
+    ?assert(
+        lists:member(
+            2,
+            [
+                maps:get(
+                    <<"id">>,
+                    hd(choose(
+                        2,
+                        <<"Shuffled-Nearest-Integer">>,
+                        #{ <<"route-by">> => 1 },
+                        Nodes,
+                        Opts
+                    ))
+                )
+            ||
+                _ <- lists:seq(1, 100)
+            ]
+        )
+    ).
+        
+range_limited_route_filtering_test() ->
+    Opts = #{},
+    Nodes = [
+        #{ <<"id">> => 0, <<"max">> => 20 },
+        #{ <<"id">> => 1, <<"min">> => 0, <<"max">> => 49 },
+        #{ <<"id">> => 2, <<"min">> => 48, <<"max">> => 99 },
+        #{ <<"id">> => 3, <<"min">> => 48 }
+    ],
+    AllPresent =
+        fun(IDs, SelectedNodes) ->
+            SelectedIDs = [ maps:get(<<"id">>, Node) || Node <- SelectedNodes ],
+            ?event({selected_ids, SelectedIDs}),
+            lists:all(
+                fun(ID) -> lists:member(ID, SelectedIDs) end,
+                IDs
+            )
+        end,
+    ?assert(
+        AllPresent(
+            [0, 1],
+            choose(2, <<"Range">>, #{ <<"route-by">> => 15 }, Nodes, Opts)
+        )
+    ),
+    ?assert(
+        AllPresent(
+            [1, 2, 3],
+            choose(4, <<"Range">>, #{ <<"route-by">> => 49 }, Nodes, Opts)
+        )
+    ),
+    ?assert(
+        AllPresent(
+            [3],
+            choose(2, <<"Range">>, #{ <<"route-by">> => 9001 }, Nodes, Opts)
+        )
+    ),
+    lists:foreach(
+        fun(_) ->
+            ?assert(
+                AllPresent(
+                    [0, 1],
+                    choose(
+                        2,
+                        <<"Shuffled-Range">>,
+                        #{ <<"route-by">> => 10 },
+                        Nodes,
+                        Opts
+                    )
+                )
+            )
+        end,
+        lists:seq(1, 10)
+    ).
 
 strategy_suite_test_() ->
     lists:map(
