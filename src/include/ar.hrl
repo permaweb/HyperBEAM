@@ -112,6 +112,11 @@
 -define(SOLANA_TYPE_BYTE, <<4>>).
 -define(SOLANA_KEY_TYPE, solana).
 
+-define(ETHEREUM_SIGN_ALG, ethereum).
+-define(ETHEREUM_SIGN_TYPE, <<"ethereum">>).
+-define(ETHEREUM_TYPE_BYTE, <<3>>).
+-define(ETHEREUM_KEY_TYPE, ethereum).
+
 -define(TYPED_ETHEREUM_SIGN_ALG, typed_ethereum).
 -define(TYPED_ETHEREUM_SIGN_TYPE, <<"typed_ethereum">>).
 -define(TYPED_ETHEREUM_TYPE_BYTE, <<7>>).

@@ -28,6 +28,11 @@ test_codecs() ->
             <<"type">> => ?EDDSA_SIGN_TYPE,
             <<"with-opts">> => [ed25519]
         },
+        #{
+            <<"device">> => <<"ans104@1.0">>,
+            <<"type">> => ?ETHEREUM_SIGN_TYPE,
+            <<"with-opts">> => [ecdsa]
+        },
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
@@ -50,7 +55,12 @@ suite_test_opts() ->
             name => ed25519,
             desc => <<"ED25519 opts">>,
             opts => test_opts(ed25519)
-        }
+        },
+        #{
+            name => ecdsa,
+            desc => <<"ECDSA opts">>,
+            opts => test_opts(ecdsa)
+         }
     ].
 suite_test_opts(OptsName) ->
     [ O || O = #{ name := OName } <- suite_test_opts(), OName == OptsName ].
@@ -64,7 +74,12 @@ test_opts(ed25519) ->
     #{
         store => hb_test_utils:test_store(),
         priv_wallet => ar_wallet:new({eddsa, ed25519})
-    }.
+    };
+test_opts(ecdsa) ->
+    #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => ar_wallet:new({ecdsa, secp256k1})
+     }.
  
 test_suite() ->
     [

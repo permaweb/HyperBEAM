@@ -32,7 +32,7 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => ?RSA_SIGN_TYPE }, Opts);
-commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= ?RSA_SIGN_TYPE orelse Type =:= ?EDDSA_SIGN_TYPE ->
+commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= ?RSA_SIGN_TYPE orelse Type =:= ?EDDSA_SIGN_TYPE orelse Type =:= ?ETHEREUM_SIGN_TYPE ->
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
@@ -40,6 +40,8 @@ commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= ?RSA_SIGN_TYPE or
         {{{?RSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?RSA_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
         {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?EDDSA_SIGN_TYPE} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{?ECDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?ETHEREUM_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
         {{{WalletType, _, _}, _}, _Type} ->
             ?event(warning, {wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}}),
