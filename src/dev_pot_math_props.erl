@@ -10,7 +10,7 @@ exponentiation_test() ->
             states => fun(_) -> {hb_invariant:int(tiny), hb_invariant:int(8)} end,
             requests =>
                 fun({X, Y}, _Opts) ->
-                    {ok, dev_pot_math:bignum_exp(X, Y)}
+                    {pow, {ok, dev_pot_math:bignum_exp(X, Y)}}
                 end,
             properties =>
                 [
@@ -28,7 +28,7 @@ large_exponentiation_test() ->
             states => fun(_) -> {hb_invariant:int(200), hb_invariant:int(200)} end,
             requests =>
                 fun({X, Y}, _Opts) ->
-                    {ok, dev_pot_math:bignum_exp(X, Y)}
+                    {pow, {ok, dev_pot_math:bignum_exp(X, Y)}}
                 end,
             properties =>
                 [
