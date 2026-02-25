@@ -296,7 +296,7 @@ default_message() ->
                         <<"method">> => <<"GET">>
                     },
                 <<"nodes">> => ?DATA_NODES ++ ?TIP_NODES,
-                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> => length(?DATA_NODES ++ ?TIP_NODES),
                 <<"parallel">> => 4,
                 <<"responses">> => 1,
@@ -310,7 +310,7 @@ default_message() ->
                         <<"method">> => <<"POST">>
                     },
                 <<"nodes">> => ?DATA_NODES ++ ?TIP_NODES,
-                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> => length(?DATA_NODES ++ ?TIP_NODES),
                 <<"parallel">> => 5,
                 <<"responses">> => 3, %% keep going until we get 3x 200s
@@ -401,6 +401,8 @@ default_message() ->
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
         ans104_trust_gql => true,
+        % Number of chunks to fetch in parallel when loading a TX or dataitem.
+        chunk_fetch_concurrency => 10,
         http_extra_opts =>
             #{
                 force_message => true,

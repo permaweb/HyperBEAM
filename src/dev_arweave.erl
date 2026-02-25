@@ -171,14 +171,10 @@ post_json_chunk(JSON, Opts) ->
 
 get_chunk_range(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
-    % Default to 1 to ensure a single chunk is read.
     Length = hb_util:int(hb_ao:get(<<"length">>, Request, 1, Opts)),
-    case get_chunk_range(Offset, Length, Opts, [], 0) of
+    case fetch_chunk_range(Offset, Length, Opts) of
         {ok, Chunks} ->
             Data = iolist_to_binary(Chunks),
-            % When no `length` is specified, we'll read only a single chunk.
-            % If `length` is specified, we'll read until we've accumulated
-            % `length` or more bytes, and then truncate down to `length` bytes.
             case hb_maps:is_key(<<"length">>, Request, Opts) of
                 true ->
                     {ok, binary:part(Data, 0, Length)};
@@ -189,33 +185,207 @@ get_chunk_range(_Base, Request, Opts) ->
             {error, Reason}
     end.
 
-get_chunk_range(_Offset, Length, _Opts, Chunks, Size)
-        when Size >= Length ->
-    {ok, lists:reverse(Chunks)};
-get_chunk_range(Offset, Length, Opts, Chunks, Size) ->
-    case get_chunk(Offset, Opts) of
-        {ok, JSON} ->
-            Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-            ChunkSize = byte_size(Chunk),
-            AbsoluteEndOffset = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
-            AbsoluteStartOffset = AbsoluteEndOffset - ChunkSize + 1,
-            StartGap = Offset - AbsoluteStartOffset,
-            TruncatedLength = ChunkSize - StartGap,
-            SlicedChunk = binary:part(Chunk, StartGap, TruncatedLength),
-            get_chunk_range(
-                AbsoluteEndOffset + 1,
-                Length,
-                Opts,
-                [SlicedChunk | Chunks],
-                Size + byte_size(SlicedChunk)
-            );
-        {error, Reason} ->
-            {error, Reason}
+%% @doc Fetch a range of chunks in parallel. Dispatches to pre-threshold or
+%% post-threshold algorithm depending on the offset. A single TX/data-item
+%% cannot span the strict data split threshold, so mixed ranges are rejected.
+fetch_chunk_range(Offset, Length, Opts) ->
+    EndOffset = Offset + Length - 1,
+    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
+    ?event(arweave_debug, {fetch_chunk_range,
+        {length, Length}, {start_offset, Offset}, {end_offset, EndOffset},
+        {concurrency, Concurrency}}),
+    case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
+          EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
+        {true, true} ->
+            fetch_post_threshold(Offset, EndOffset, Concurrency, Opts);
+        {false, false} ->
+            fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts);
+        {false, true} ->
+            {error, chunk_range_spans_strict_data_split_threshold}
+    end.
+
+%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. A single pass at
+%% DATA_CHUNK_SIZE increments covers all chunks.
+fetch_post_threshold(Offset, EndOffset, Concurrency, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case fetch_and_collect(Offsets, Concurrency, Opts) of
+        {ok, ChunkInfos} -> assemble_chunks(ChunkInfos, Offset);
+        Error -> Error
+    end.
+
+%% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
+%% DATA_CHUNK_SIZE increments, then iteratively fill gaps until contiguous.
+fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case fetch_and_collect(Offsets, Concurrency, Opts) of
+        {ok, ChunkInfos} ->
+            fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts);
+        Error -> Error
+    end.
+
+%% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
+%% of each gap until the entire range [Offset, EndOffset] is covered.
+fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts) ->
+    Sorted = dedup_and_sort(ChunkInfos),
+    case find_gaps(Sorted, Offset, EndOffset) of
+        [] ->
+            assemble_chunks(Sorted, Offset);
+        Gaps ->
+            GapOffsets = [Start || {Start, _End} <- Gaps],
+            ?event(warning, {fetch_chunk_gap_handling_untested,
+                {gap_offsets, GapOffsets}}),
+            case fetch_and_collect(GapOffsets, Concurrency, Opts) of
+                {ok, NewInfos} ->
+                    fill_gaps(
+                        Sorted ++ NewInfos,
+                        Offset, EndOffset, Concurrency, Opts
+                    );
+                Error -> Error
+            end
+    end.
+
+%% @doc Fetch chunks at the given offsets in parallel and parse the responses
+%% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
+fetch_and_collect(Offsets, Concurrency, Opts) ->
+    Results = parallel_map(
+        Offsets,
+        fun(O) -> get_chunk(O, Opts) end,
+        Concurrency
+    ),
+    collect_chunk_infos(Results).
+
+%% @doc Generate a list of offsets from Start to End (inclusive) stepping by
+%% Step bytes. Used to produce candidate query offsets at 256KiB increments.
+generate_offsets(Start, End, Step) ->
+    generate_offsets_acc(Start, End, Step, []).
+
+generate_offsets_acc(Current, End, _Step, Acc) when Current > End ->
+    Offsets = lists:reverse(Acc),
+    ?event(arweave_debug, {fetch_chunk_offsets, {offsets, Offsets}}),
+    Offsets;
+generate_offsets_acc(Current, End, Step, Acc) ->
+    generate_offsets_acc(Current + Step, End, Step, [Current | Acc]).
+
+%% @doc Parse a list of chunk fetch results into chunk info tuples.
+%% Fails fast on the first error.
+collect_chunk_infos(Results) ->
+    collect_chunk_infos_acc(Results, []).
+
+collect_chunk_infos_acc([], Acc) ->
+    {ok, lists:reverse(Acc)};
+collect_chunk_infos_acc([{ok, JSON} | Rest], Acc) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
+    AbsStart = AbsEnd - byte_size(Chunk) + 1,
+    ?event(arweave_debug, {collect_chunk_infos, {abs_start, AbsStart}, {abs_end, AbsEnd}, {size, byte_size(Chunk)}}),
+    collect_chunk_infos_acc(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
+collect_chunk_infos_acc([{error, Reason} | _], _Acc) ->
+    {error, Reason}.
+
+%% @doc Sort chunk infos by start offset and remove duplicates. Two queries
+%% landing in the same chunk produce identical entries; we deduplicate by
+%% absolute_end_offset which uniquely identifies a chunk in the weave.
+dedup_and_sort(ChunkInfos) ->
+    Sorted = lists:sort(
+        fun({StartA, _, _}, {StartB, _, _}) -> StartA =< StartB end,
+        ChunkInfos
+    ),
+    dedup_by_end(Sorted, #{}).
+
+dedup_by_end([], _Seen) ->
+    [];
+dedup_by_end([{_Start, End, _Data} = Info | Rest], Seen) ->
+    case maps:is_key(End, Seen) of
+        true -> dedup_by_end(Rest, Seen);
+        false -> [Info | dedup_by_end(Rest, Seen#{End => true})]
+    end.
+
+%% @doc Find byte ranges within [RangeStart, RangeEnd] not covered by any
+%% chunk. Returns a list of {GapStart, GapEnd} tuples.
+find_gaps(SortedChunks, RangeStart, RangeEnd) ->
+    find_gaps_acc(SortedChunks, RangeStart, RangeEnd, []).
+
+find_gaps_acc([], Pos, RangeEnd, Gaps) when Pos =< RangeEnd ->
+    lists:reverse([{Pos, RangeEnd} | Gaps]);
+find_gaps_acc([], _Pos, _RangeEnd, Gaps) ->
+    lists:reverse(Gaps);
+find_gaps_acc([{ChunkStart, ChunkEnd, _} | Rest], Pos, RangeEnd, Gaps) ->
+    NewGaps = case ChunkStart > Pos of
+        true -> [{Pos, ChunkStart - 1} | Gaps];
+        false -> Gaps
+    end,
+    find_gaps_acc(Rest, max(Pos, ChunkEnd + 1), RangeEnd, NewGaps).
+
+%% @doc Assemble chunk infos into a list of contiguous binaries suitable for
+%% iolist_to_binary. The first chunk is sliced if it starts before Offset.
+assemble_chunks(ChunkInfos, Offset) ->
+    Sorted = dedup_and_sort(ChunkInfos),
+    Binaries = lists:map(
+        fun({ChunkStart, _ChunkEnd, Data}) ->
+            case ChunkStart < Offset of
+                true ->
+                    Skip = Offset - ChunkStart,
+                    binary:part(Data, Skip, byte_size(Data) - Skip);
+                false ->
+                    Data
+            end
+        end,
+        Sorted
+    ),
+    {ok, Binaries}.
+
+%% @doc Concurrency-limited parallel map. Spawns up to MaxWorkers processes
+%% and refills the pool as workers complete. Returns results in input order.
+parallel_map(Items, Fun, MaxWorkers) ->
+    Parent = self(),
+    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
+    {ToSpawn, Remaining} = lists:split(
+        min(length(ItemsWithRefs), MaxWorkers),
+        ItemsWithRefs
+    ),
+    ActiveRefs =
+        [spawn_pmap_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
+    ResultsMap =
+        pmap_collect(ActiveRefs, Remaining, Fun, Parent, #{}),
+    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+
+spawn_pmap_worker({Item, Ref}, Fun, Parent) ->
+    spawn(fun() -> Parent ! {pmap_result, Ref, Fun(Item)} end),
+    Ref.
+
+pmap_collect([], [], _Fun, _Parent, Results) ->
+    Results;
+pmap_collect(Active, Remaining, Fun, Parent, Results) ->
+    receive
+        {pmap_result, Ref, Result} ->
+            NewResults = Results#{Ref => Result},
+            NewActive = lists:delete(Ref, Active),
+            case Remaining of
+                [] ->
+                    pmap_collect(
+                        NewActive, [], Fun, Parent, NewResults
+                    );
+                [Next | Rest] ->
+                    NextRef = spawn_pmap_worker(Next, Fun, Parent),
+                    pmap_collect(
+                        [NextRef | NewActive], Rest,
+                        Fun, Parent, NewResults
+                    )
+            end
     end.
 
 get_chunk(Offset, Opts) ->
+    % Note: it's possible that we will need to add the x-bucket-based-offset
+    % header to *some* queries. When querying L1 TX chunks from after the
+    % strict data split threshold, in theory that header is needed. But I
+    % haven't found a TX which requires it. However, including the header
+    % when querying some *dataitems* does cause an error. So for now we will
+    % leaeve the header out and continue to search for a case where it is
+    % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+    request(<<"GET">>, Path, #{
+        <<"route-by">> => Offset
+    }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -332,6 +502,8 @@ request(Method, Path, Opts) ->
 request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
+    ?event(arweave_debug, {request,
+        {method, Method}, {path, Path}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
             Extra#{
@@ -1088,4 +1260,104 @@ get_mid_chunk_pre_split_test() ->
         <<"mgSfqsNapn_BXpbnIHtdeu3rQyvrjBaS0c7rEbUbtBU">>,
         hb_util:encode(crypto:hash(sha256, Data))
     ),
+    ok.
+
+get_pre_split_small_chunks_test() ->
+    assert_chunk_range(
+        <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+        11_741_031_646_397,
+        810774,
+        <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+    ).
+
+get_post_split_small_chunks_test() ->
+    assert_chunk_range(
+        <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
+        146_563_435_390_439,
+        541937,
+        <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>
+    ).
+
+%% @doc this test fails if the chunks are queried with
+%% the `x-bucket-based-offset' header set. I believe it is because
+%% bucket-based offset should only be used when querying an L1 TX
+bucket_based_offset_test() ->
+    Offset = 376836461101675,
+    Length = 116247,
+    ExpectedID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+    {ok, SerializedItem} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset + 1,
+            <<"length">> => Length
+        },
+        #{}
+    ),
+    Item = ar_bundles:deserialize(SerializedItem),
+    ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id)),
+    ?assert(ar_bundles:verify_item(Item)),
+    ok.
+
+% large_tx_test() ->
+%     assert_chunk_range(
+%         <<"GX2bvdo736wJPR1GmIkyW9GRk3JdXQ_aAd1ozX1d450">>,
+%         378161418083672,
+%         42040418,
+%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+%     ).
+
+assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
+    StartOffset = EndOffset - ExpectedLength,
+    Opts = #{},
+    T1 = erlang:monotonic_time(millisecond),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => StartOffset+1,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    T2 = erlang:monotonic_time(millisecond),
+    ?event(debug_performance, {chunk_range_resolve,
+        {elapsed_ms, T2 - T1},
+        {tx, TXID},
+        {offset, StartOffset + 1},
+        {length, ExpectedLength}
+    }),
+    {ok, RawData} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => TXID
+        },
+        Opts
+    ),
+    ?event(debug_test, {chunk_vs_raw_comparison,
+        {tx, TXID},
+        {start_offset, StartOffset},
+        {end_offset, EndOffset},
+        {expected_length, ExpectedLength},
+        {chunk_size, byte_size(Data)},
+        {raw_size, byte_size(RawData)},
+        {match, Data =:= RawData},
+        {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
+    }),
+    ?assertEqual(RawData, Data),
+    ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
+    {ok, TXHeader} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => TXID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ),
+    ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
+    ?assert(hb_message:verify(TXHeader, all, Opts)),
+    TXWithData = TXHeader#{ <<"data">> => Data },
+    ?assert(hb_message:verify(TXWithData, all, Opts)),
     ok.
