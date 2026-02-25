@@ -528,15 +528,12 @@ index_ids_test() ->
             <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
             Opts
         ),
-    % WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4 an L1 TX bundle that
-    % contains an item signed with an ECDSA signature so we can't verify
-    % the full bundle. But we can check some of the items within it.
-    ?assertException(
-        error,
-        {badmatch,{unsupported_tx_format,<<3,0>>}},
+    ?assertMatch(
+        {ok, _},
         hb_store_arweave:read(
             StoreOpts,
-            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>)
+            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
+        )
     ),
     assert_item_read(
         <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
