@@ -619,18 +619,27 @@ choose_count(RawChoose, Nodes) ->
     min(NormalizedChoose, length(Nodes)).
 
 normalize_strategy(RawStrategy) ->
-    case hb_util:to_lower(hb_util:bin(RawStrategy)) of
-        <<"all">> -> <<"All">>;
-        <<"random">> -> <<"Random">>;
-        <<"by-base">> -> <<"By-Base">>;
-        <<"by_base">> -> <<"By-Base">>;
-        <<"by-weight">> -> <<"By-Weight">>;
-        <<"by_weight">> -> <<"By-Weight">>;
-        <<"nearest">> -> <<"Nearest">>;
-        <<"nearest-integer">> -> <<"Nearest-Integer">>;
-        <<"nearest_integer">> -> <<"Nearest-Integer">>;
-        _ -> <<"All">>
+    Lower = hb_util:to_lower(hb_util:bin(RawStrategy)),
+    case Lower of
+        <<"shuffled-", Rest/binary>> ->
+            <<"Shuffled-", (normalize_strategy_base(Rest))/binary>>;
+        <<"shuffled_", Rest/binary>> ->
+            <<"Shuffled-", (normalize_strategy_base(Rest))/binary>>;
+        _ ->
+            normalize_strategy_base(Lower)
     end.
+
+normalize_strategy_base(<<"all">>) -> <<"All">>;
+normalize_strategy_base(<<"random">>) -> <<"Random">>;
+normalize_strategy_base(<<"by-base">>) -> <<"By-Base">>;
+normalize_strategy_base(<<"by_base">>) -> <<"By-Base">>;
+normalize_strategy_base(<<"by-weight">>) -> <<"By-Weight">>;
+normalize_strategy_base(<<"by_weight">>) -> <<"By-Weight">>;
+normalize_strategy_base(<<"nearest">>) -> <<"Nearest">>;
+normalize_strategy_base(<<"nearest-integer">>) -> <<"Nearest-Integer">>;
+normalize_strategy_base(<<"nearest_integer">>) -> <<"Nearest-Integer">>;
+normalize_strategy_base(<<"range">>) -> <<"Range">>;
+normalize_strategy_base(_) -> <<"All">>.
 
 route_integer(Int, _Opts) when is_integer(Int) ->
     Int;
