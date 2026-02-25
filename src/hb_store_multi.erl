@@ -4,6 +4,8 @@
 %%% Expects a store options message of the following form:
 %%%      /stores/1..n: Sub-store definition messages.
 %%%      /confirmations: Number of confirmations to require for write operations.
+%%%      /workers-per-store: Number of worker processes to spawn for each store
+%%%                          (default: 3). Work is distributed evenly across each.
 %%% Each sub-store may additionally specify:
 %%%      /num_workers: Number of worker processes to spawn for the store (default: 1).
 -module(hb_store_multi).
@@ -13,7 +15,7 @@
 -export([write/3, make_group/2, make_link/3]).
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_STORE_WORKERS, 1).
+-define(DEFAULT_STORE_WORKERS, 3).
 
 %%% Initialization and teardown functions.
 
@@ -187,7 +189,12 @@ store_with_workers(StoreOpts = #{ <<"stores">> := Stores }) ->
         <<"stores">> :=
             lists:map(
                 fun(Store) ->
-                    NumWorkers = maps:get(<<"num_workers">>, Store, ?DEFAULT_STORE_WORKERS),
+                    NumWorkers =
+                        maps:get(
+                            <<"workers-per-store">>,
+                            Store,
+                            ?DEFAULT_STORE_WORKERS
+                        ),
                     Workers = [start_worker(Store) || _ <- lists:seq(1, NumWorkers)],
                     Store#{ <<"workers">> => Workers }
                 end,
