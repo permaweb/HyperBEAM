@@ -525,8 +525,8 @@ best_response([]) ->
 best_response(Responses) when is_list(Responses) ->
     Sorted = lists:sort(
         fun({_, ResponseA}, {_, ResponseB}) ->
-            StatusA = maps:get(<<"status">>, ResponseA, 999),
-            StatusB = maps:get(<<"status">>, ResponseB, 999),
+            StatusA = response_status(ResponseA),
+            StatusB = response_status(ResponseB),
             StatusA =< StatusB
         end,
         Responses
@@ -535,17 +535,28 @@ best_response(Responses) when is_list(Responses) ->
 best_response(Response) ->
     Response.
 
+response_status(Response) when is_map(Response) ->
+    maps:get(<<"status">>, Response, 999);
+response_status(_Response) ->
+    999.
+
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
     event_request(Path, Method, 404, LogExtra),
     {error, not_found};
-to_message(Path, Method, {error, Response}, LogExtra, _Opts) ->
+to_message(Path, Method, {error, Response}, LogExtra, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, client_error),
     event_request(Path, Method, Status, LogExtra),
     {error, Response};
-to_message(Path, Method, {failure, Response}, LogExtra, _Opts) ->
+to_message(Path, Method, {error, Response}, LogExtra, _Opts) ->
+    event_request(Path, Method, client_error, LogExtra),
+    {error, Response};
+to_message(Path, Method, {failure, Response}, LogExtra, _Opts) when is_map(Response) ->
     Status = maps:get(<<"status">>, Response, server_error),
     event_request(Path, Method, Status, LogExtra),
+    {error, server_error};
+to_message(Path, Method, {failure, _Response}, LogExtra, _Opts) ->
+    event_request(Path, Method, server_error, LogExtra),
     {error, server_error};
 to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
     Status = maps:get(<<"status">>, Response, 200),
@@ -801,6 +812,36 @@ post_tx_json_mixed_status_prefers_success_test() ->
     ?assertEqual(1, length(Node1Posts)),
     ?assertEqual(1, length(Node2Posts)),
     ok.
+
+best_response_handles_failed_connect_entries_test() ->
+    FailedConnect =
+        {failed_connect,
+            [
+                {to_address, {"tip-4.arweave.xyz", 1984}},
+                {inet, [inet], etimedout}
+            ]
+        },
+    Responses = [
+        {error, FailedConnect},
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"OK-2">> }}
+    ],
+    ?assertEqual(
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"OK-2">> }},
+        best_response(Responses)
+    ).
+
+best_response_non_map_error_round_trips_test() ->
+    FailedConnect =
+        {failed_connect,
+            [
+                {to_address, {"tip-4.arweave.xyz", 1984}},
+                {inet, [inet], etimedout}
+            ]
+        },
+    ?assertEqual(
+        {error, FailedConnect},
+        to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
+    ).
 
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
     {ok, MockNode1, MockHandle1} = hb_mock_server:start([
