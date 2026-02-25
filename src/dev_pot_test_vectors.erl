@@ -96,6 +96,18 @@ pot_state_empty(EmptyResources, MintCap, MintPropN, MintPropD) ->
         <<"balances">> => #{}
     }.
 
+delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts) ->
+    case dev_pot:delegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts) of
+        {ok, NewState} -> NewState;
+        Other -> Other
+    end.
+
+undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts) ->
+    case dev_pot:undelegate(FromAddr, ToAddr, ResourceID, Amount, State, Opts) of
+        {ok, NewState} -> NewState;
+        Other -> Other
+    end.
+
 mint_quantity_test() ->
     ?assertEqual(50, dev_pot_math:minted_between(0, 100, 1, 2, 0, 1)),
     ?assertEqual(75, dev_pot_math:minted_between(0, 100, 1, 2, 0, 2)),
@@ -293,7 +305,7 @@ simple_delegation_test() ->
         <<"total-weighted-units">> => 250
     },
     % Alice delegates 20 hydrogen to Bob
-    S1 = dev_pot:delegate(Alice, Bob, ResourceHydrogen, 20, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceHydrogen, 20, S0, Opts),
     ?assertEqual(
         20,
         hb_ao:get(
@@ -335,7 +347,7 @@ simple_delegation_test() ->
         )
     ),
     % Alice undelegates 10 hydrogen from Bob
-    S2 = dev_pot:undelegate(Alice, Bob, ResourceHydrogen, 10, S1, Opts),
+    S2 = undelegate(Alice, Bob, ResourceHydrogen, 10, S1, Opts),
     ?assertEqual(
         10,
         hb_ao:get(
@@ -377,7 +389,7 @@ simple_delegation_test() ->
         )
     ),
     % Bob delegates 21 oxygen to Alice
-    S3 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 21, S2, Opts),
+    S3 = delegate(Bob, Alice, ResourceOxygen, 21, S2, Opts),
     ?assertEqual(
         21,
         hb_ao:get(
@@ -410,10 +422,10 @@ delegation_liquidation_test() ->
                 {Charlie, 0}
             ]
         ),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 1, S0, Opts),
-    S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 1, S1, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 1, S0, Opts),
+    S2 = delegate(Bob, Charlie, ResourceOxygen, 1, S1, Opts),
     report(S2, Opts),
-    S3 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
+    S3 = undelegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
     ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S3, Opts)).
@@ -435,14 +447,14 @@ multiple_delegations_liquidation_test() ->
                 {Denis, 0}
             ]
         ),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 2, S0, Opts),
-    S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 1, S1, Opts),
-    S3 = dev_pot:delegate(Bob, Denis, ResourceOxygen, 1, S2, Opts),
-    S4 = dev_pot:delegate(Denis, Alice, ResourceOxygen, 1, S3, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 2, S0, Opts),
+    S2 = delegate(Bob, Charlie, ResourceOxygen, 1, S1, Opts),
+    S3 = delegate(Bob, Denis, ResourceOxygen, 1, S2, Opts),
+    S4 = delegate(Denis, Alice, ResourceOxygen, 1, S3, Opts),
     report(S4, Opts),
     ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
     ?assertEqual(1, dev_pot:get_deposit(Charlie, ResourceOxygen, S4, Opts)),
-    S5 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 2, S4, Opts),
+    S5 = undelegate(Alice, Bob, ResourceOxygen, 2, S4, Opts),
     ?assertEqual(2, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Charlie, ResourceOxygen, S5, Opts)),
@@ -461,14 +473,14 @@ cyclic_delegations_test() ->
                 {Bob, 0}
             ]
         ),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 1, S0, Opts),
-    S2 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 1, S1, Opts),
-    S3 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
-    S4 = dev_pot:delegate(Bob, Alice, ResourceOxygen, 1, S3, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 1, S0, Opts),
+    S2 = delegate(Bob, Alice, ResourceOxygen, 1, S1, Opts),
+    S3 = delegate(Alice, Bob, ResourceOxygen, 1, S2, Opts),
+    S4 = delegate(Bob, Alice, ResourceOxygen, 1, S3, Opts),
     ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)),
     report(S4, Opts),
-    S5 = dev_pot:undelegate(Bob, Alice, ResourceOxygen, 1, S4, Opts),
+    S5 = undelegate(Bob, Alice, ResourceOxygen, 1, S4, Opts),
     report(S5, Opts),
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
     ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)).
@@ -489,9 +501,9 @@ deposit_removal_while_delegated_test() ->
             ]
         
         ),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 3, S0, Opts),
-    S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 2, S1, Opts),
-    S3 = dev_pot:delegate(Charlie, Alice, ResourceOxygen, 1, S2, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 3, S0, Opts),
+    S2 = delegate(Bob, Charlie, ResourceOxygen, 2, S1, Opts),
+    S3 = delegate(Charlie, Alice, ResourceOxygen, 1, S2, Opts),
     report(S1, Opts),
     ?assertEqual(1, dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts)),
     ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
@@ -685,7 +697,7 @@ delegate_zero_amount_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     ?assertError(
         function_clause, 
-        dev_pot:delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
+        delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
     ).
 
 delegate_to_self_test() ->
@@ -694,7 +706,7 @@ delegate_to_self_test() ->
     Opts = #{},
     % Alice delegates to herself - should work but is a no-op in practice
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    S1 = dev_pot:delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
+    S1 = delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
     % After delegating to self, deposit should still be 10 (5 removed, 5 added back)
     ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     % Self delegation is a noop, so no delegation record should be written
@@ -718,7 +730,7 @@ delegate_entire_balance_test() ->
     Opts = #{},
     % Delegate 100% of deposits
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     ?assertEqual(10, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)).
 
@@ -730,7 +742,7 @@ delegate_exceeds_available_balance_rejected_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     ?assertMatch(
         {error, <<"Delegation amount exceeds available deposit.">>},
-        dev_pot:delegate(Alice, Bob, ResourceOxygen, 15, S0, Opts)
+        delegate(Alice, Bob, ResourceOxygen, 15, S0, Opts)
     ).
 
 %%% Delegation Chain Tests
@@ -751,10 +763,10 @@ deep_delegation_chain_test() ->
         {Denis, 0},
         {Eve, 0}
     ]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
-    S2 = dev_pot:delegate(Bob, Charlie, ResourceOxygen, 10, S1, Opts),
-    S3 = dev_pot:delegate(Charlie, Denis, ResourceOxygen, 10, S2, Opts),
-    S4 = dev_pot:delegate(Denis, Eve, ResourceOxygen, 10, S3, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
+    S2 = delegate(Bob, Charlie, ResourceOxygen, 10, S1, Opts),
+    S3 = delegate(Charlie, Denis, ResourceOxygen, 10, S2, Opts),
+    S4 = delegate(Denis, Eve, ResourceOxygen, 10, S3, Opts),
     % Final state: Alice:0, Bob:0, Charlie:0, Denis:0, Eve:10
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S4, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S4, Opts)),
@@ -776,11 +788,11 @@ wide_delegation_tree_test() ->
         {Alice, 10}, {Bob, 0}, {Charlie, 0},
         {Denis, 0}, {Eve, 0}, {Frank, 0}
     ]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 2, S0, Opts),
-    S2 = dev_pot:delegate(Alice, Charlie, ResourceOxygen, 2, S1, Opts),
-    S3 = dev_pot:delegate(Alice, Denis, ResourceOxygen, 2, S2, Opts),
-    S4 = dev_pot:delegate(Alice, Eve, ResourceOxygen, 2, S3, Opts),
-    S5 = dev_pot:delegate(Alice, Frank, ResourceOxygen, 2, S4, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 2, S0, Opts),
+    S2 = delegate(Alice, Charlie, ResourceOxygen, 2, S1, Opts),
+    S3 = delegate(Alice, Denis, ResourceOxygen, 2, S2, Opts),
+    S4 = delegate(Alice, Eve, ResourceOxygen, 2, S3, Opts),
+    S5 = delegate(Alice, Frank, ResourceOxygen, 2, S4, Opts),
     % Alice should have 0 left, each delegate has 2
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S5, Opts)),
     ?assertEqual(2, dev_pot:get_deposit(Bob, ResourceOxygen, S5, Opts)),
@@ -805,7 +817,7 @@ total_deposits_conservation_test() ->
         dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts) +
         dev_pot:get_deposit(Bob, ResourceOxygen, S2, Opts)),
     % Delegate
-    S3 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S2, Opts),
+    S3 = delegate(Alice, Bob, ResourceOxygen, 5, S2, Opts),
     ?assertEqual(TotalAfterDeposits,
         dev_pot:get_deposit(Alice, ResourceOxygen, S3, Opts) +
         dev_pot:get_deposit(Bob, ResourceOxygen, S3, Opts)),
@@ -843,7 +855,7 @@ liquidate_partial_delegation_test() ->
     Opts = #{},
     % Overdraw is less than largest delegation - should partially liquidate
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     % Alice tries to withdraw 3, but has 0 deposits. Should liquidate 3 from Bob
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 3, S1, Opts),
     report(S2, Opts),
@@ -874,7 +886,7 @@ liquidate_exact_delegation_test() ->
     Opts = #{},
     % Overdraw equals largest delegation - should fully liquidate one
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     S2 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S1, Opts),
     ?assertEqual(0, dev_pot:get_deposit(Alice, ResourceOxygen, S2, Opts)),
     ?assertEqual(0, dev_pot:get_deposit(Bob, ResourceOxygen, S2, Opts)),
@@ -914,9 +926,9 @@ liquidate_requiring_multiple_delegations_test() ->
                 {Denis, 0}
             ]
         ),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
-    S2 = dev_pot:delegate(Alice, Charlie, ResourceOxygen, 5, S1, Opts),
-    S3 = dev_pot:delegate(Alice, Denis, ResourceOxygen, 5, S2, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
+    S2 = delegate(Alice, Charlie, ResourceOxygen, 5, S1, Opts),
+    S3 = delegate(Alice, Denis, ResourceOxygen, 5, S2, Opts),
     % Alice has 0 deposits, 3 delegations of 5 each. Try to withdraw 12
     S4 = dev_pot:withdraw(Alice, ResourceOxygen, 12, S3, Opts),
     % After withdrawal, alice should have 0 (withdrew everything)
@@ -935,9 +947,12 @@ liquidate_insufficient_delegations_test() ->
     Opts =#{},
     % Overdraw exceeds total delegations - what happens?
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 10, S0, Opts),
     % Alice has 0 deposits, 10 delegated to Bob. Try to withdraw 15 - impossible
-    ?assertError(_, dev_pot:withdraw(Alice, ResourceOxygen, 15, S1, Opts)).
+    ?assertMatch(
+        {error, <<"Insufficient delegated balance to liquidate.">>},
+        dev_pot:withdraw(Alice, ResourceOxygen, 15, S1, Opts)
+    ).
 
 undelegate_more_than_delegated_test() ->
     Alice = <<"alice">>,
@@ -946,9 +961,25 @@ undelegate_more_than_delegated_test() ->
     Opts =#{},
     % Try to revoke more than was delegated
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
     % Delegation record shows 5, try to undelegate 10
-    ?assertError(_, dev_pot:undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)).
+    ?assertMatch(
+        {error, <<"Undelegation amount exceeds existing delegation.">>},
+        undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)
+    ).
+
+undelegate_exceeds_delegated_rejected_with_recipient_buffer_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    % Bob starts with own deposits, this should still reject over undelegation
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 20}]),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0, Opts),
+    ?assertMatch(
+        {error, <<"Undelegation amount exceeds existing delegation.">>},
+        undelegate(Alice, Bob, ResourceOxygen, 10, S1, Opts)
+    ).
 
 %%% Weight Change Scenarios
 
@@ -1137,7 +1168,7 @@ delegate_negative_amount_test() ->
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     ?assertError(
         function_clause, 
-        dev_pot:delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
+        delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
     ).
 
 deposit_to_nonexistent_resource_test() ->
@@ -1161,7 +1192,7 @@ delegation_notice_message_format_test() ->
     % Verify delegation notice has correct format
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
     Outbox = hb_ao:get(<<"results/outbox">>, S1, [], Opts),
     ?assertEqual(1, length(Outbox)),
     [Notice] = Outbox,
@@ -1184,8 +1215,8 @@ undelegate_notice_has_negative_quantity_test() ->
     % Undelegation notice should have negative or zero quantity
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
-    S2 = dev_pot:undelegate(Alice, Bob, ResourceOxygen, 5, S1, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
+    S2 = undelegate(Alice, Bob, ResourceOxygen, 5, S1, Opts),
     Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
@@ -1202,8 +1233,8 @@ multiple_delegations_outbox_order_test() ->
     % Multiple delegations should appear in outbox in order
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 20}, {Bob, 0}, {Charlie, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
-    S1 = dev_pot:delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
-    S2 = dev_pot:delegate(Alice, Charlie, ResourceOxygen, 5, S1, Opts),
+    S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
+    S2 = delegate(Alice, Charlie, ResourceOxygen, 5, S1, Opts),
     Outbox = hb_ao:get(<<"results/outbox">>, S2, [], Opts),
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first: [Charlie (S2), Bob (S1)]
