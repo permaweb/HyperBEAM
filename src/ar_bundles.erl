@@ -204,7 +204,7 @@ data_item_signature_data(RawItem) ->
 
 get_signature_type({rsa, 65537}) -> "1";
 get_signature_type({eddsa, ed25519}) -> "2";
-get_signature_type({ecdsa, secp256k1}) -> "3";
+get_signature_type(ethereum) -> "3";
 get_signature_type(solana) -> "4";
 get_signature_type(typed_ethereum) -> "7".
 
@@ -333,8 +333,8 @@ encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
 encode_signature_type({eddsa, ed25519}) ->
     <<2, 0>>;
-% encode_signature_type({ecdsa, secp256k1}) ->
-%     <<3, 0>>;
+encode_signature_type(ethereum) ->
+    <<3, 0>>;
 encode_signature_type(solana) ->
     <<4, 0>>;
 encode_signature_type(SigType) ->
@@ -541,8 +541,8 @@ decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) 
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {{eddsa, ed25519}, Signature, Owner, Rest};
-% decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
-%     {{ecdsa, secp256k1}, Signature, Owner, Rest};
+decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
+    {ethereum, Signature, Owner, Rest};
 decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {solana, Signature, Owner, Rest};
 decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
@@ -1124,5 +1124,24 @@ deserialize_solana_transaction_test() ->
     ?assertEqual([], Deserialized#tx.tags),
     ?assertEqual(<<"e/GCI2gwfkcyXG6Q3n3CVuA0zT4EmSSf">>, Deserialized#tx.anchor),
     ?assertEqual(<<"GGuACHp2FbtB4wwT5TmPCU6W5FGa3wB1vqno4gsKsxHz">>,
+        hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assert(verify_item(Deserialized)).
+
+deserialize_ethereum_transaction_test() ->
+    % ans104-item-ethereum.bin is dataitem te5MPrOxPqXrVygIQgzp4ZgImLN8CW-qPaI_olhlWyx
+    {ok, Serialized} = file:read_file(<<"test/arbundles.js/ans104-item-ethereum.bin">>),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual(ethereum, Deserialized#tx.signature_type),
+    ExpectedTags = [
+        {<<"Content-Type">>, <<"application/json">>},
+        {<<"App-Name">>, <<"Rodeo">>},
+        {<<"Token-Contract">>, <<"0xB6e822C6D5E0dEC983d76F28E56616057f88380f">>},
+        {<<"Token-Id">>, <<"328">>},
+        {<<"Chain-Id">>, <<"8453">>}
+    ],
+    ?assertEqual(ExpectedTags, Deserialized#tx.tags),
+    ?assertEqual(<<"zZHoADuo74sWmhEF0V-D4sxa4rj3rUR5_r7tSpWSmtY">>, b64fast:encode(Deserialized#tx.anchor)),
+    erlang:display(hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assertEqual(<<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
         hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
     ?assert(verify_item(Deserialized)).
