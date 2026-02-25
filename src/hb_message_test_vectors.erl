@@ -1704,7 +1704,9 @@ rsa_wallet_not_match_message_ed25519_type_test() ->
     Opts = #{priv_wallet => ar_wallet:new(?RSA_KEY_TYPE)},
     SignatureType = ?EDDSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
-    ?assertThrow(wrong_wallet_to_sign,
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?EDDSA_SIGN_TYPE},
+                 {wallet_type, {rsa,65537}}},
         hb_message:commit(
             Msg,
             Opts,
@@ -1715,18 +1717,22 @@ ed25519_wallet_not_match_message_rsa_type_test() ->
     Opts = #{priv_wallet => ar_wallet:new(?EDDSA_KEY_TYPE)},
     SignatureType = ?RSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
-    ?assertThrow(wrong_wallet_to_sign,
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?RSA_SIGN_TYPE},
+                 {wallet_type, {eddsa,ed25519}}},
         hb_message:commit(
             Msg,
             Opts,
             #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
         )).
 
-ecdsa_wallet_not_match_message_rsa_type_test() ->
-    Opts = #{priv_wallet => ar_wallet:new(?ECDSA_KEY_TYPE)},
-    SignatureType = <<"rsa-pss-sha256">>,
+ethereum_wallet_not_match_message_rsa_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
+    SignatureType = ?RSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
-    ?assertThrow(wrong_wallet_to_sign,
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?RSA_SIGN_TYPE},
+                 {wallet_type, ethereum}},
         hb_message:commit(
             Msg,
             Opts,
