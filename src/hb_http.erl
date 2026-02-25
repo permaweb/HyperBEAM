@@ -666,35 +666,42 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 hb_maps:without([<<"body">>], EncMessage, Opts),
                 hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
             };
-        {_, <<"ans104@1.0">>, _} ->
+        {_, TXType, _} when TXType == <<"ans104@1.0">> orelse TXType == <<"tx@1.0">> ->
             % The `ans104@1.0' codec is a binary format, so we must serialize
             % the message to a binary before sending it.
+            Record =
+                hb_message:convert(
+                    hb_message:with_only_committers(
+                        Message,
+                        hb_message:signers(Message, Opts),
+                        Opts
+                    ),
+                    #{
+                        <<"device">> => Codec,
+                        <<"bundle">> =>
+                            hb_util:atom(
+                                hb_ao:get(
+                                    <<"accept-bundle">>,
+                                    {as, <<"message@1.0">>, TABMReq},
+                                    true,
+                                    Opts
+                                )
+                            )
+                    },
+                    <<"structured@1.0">>,
+                    Opts#{ topic => ao_internal }
+                ),
+            ?event(debug_enc, {record, Record}, Opts),
+            Serialized =
+                case hb_maps:get(<<"accept-return">>, TABMReq, false, Opts) of
+                    <<"data">> -> Record#tx.data;
+                    _ -> ar_bundles:serialize(Record)
+                end,
+            ?event(debug_enc, {returning, Serialized}, Opts),
             {
                 Status,
                 BaseHdrs,
-                ar_bundles:serialize(
-                    hb_message:convert(
-                        hb_message:with_only_committers(
-                            Message,
-                            hb_message:signers(Message, Opts),
-							Opts
-                        ),
-                        #{
-                            <<"device">> => <<"ans104@1.0">>,
-                            <<"bundle">> =>
-                                hb_util:atom(
-                                    hb_ao:get(
-                                        <<"accept-bundle">>,
-                                        {as, <<"message@1.0">>, TABMReq},
-                                        true,
-                                        Opts
-                                    )
-                                )
-                        },
-                        <<"structured@1.0">>,
-                        Opts#{ topic => ao_internal }
-                    )
-                )
+                Serialized
             };
         {_, <<"manifest@1.0">>, _} ->
             MessageID = hb_message:id(Message, signed, Opts),
@@ -757,6 +764,12 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 %% AO device format (`device@1.0').
 accept_to_codec(OriginalReq, Opts) ->
     accept_to_codec(OriginalReq, undefined, Opts).
+% accept_to_codec(#{ <<"require-codec">> := <<"as-signed">> }, Reply, Opts) when Reply =/= undefined ->
+%     ?event(debug_commitment, {require_codec, {as_signed, Reply}}),
+%     case hb_message:commitment(#{ <<"committer">> => '_' }, Reply, Opts) of
+%         {ok, _, #{ <<"commitment-device">> := Device }} -> Device;
+%         _ -> throw({no_viable_commitment, Reply})
+%     end;
 accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
     mime_to_codec(RequiredCodec, Opts);
 accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when ?IS_LINK(Link) ->

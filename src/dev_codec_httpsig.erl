@@ -486,7 +486,7 @@ signature_params_line(RawCommitment, Opts) ->
             [<<"signature">>, <<"signature-input">>],
             RawCommitment
         ),
-    ?event(debug_enc, {signature_params_line, {commitment, Commitment}}),
+    ?event({signature_params_line, {commitment, Commitment}}),
 	hb_util:bin(
         hb_structured_fields:list(
             [
