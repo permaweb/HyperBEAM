@@ -115,6 +115,12 @@ default_message() ->
         %% What HTTP client should the node use?
         %% Options: gun, httpc
         http_client => gun,
+        %% Should the HTTP client automatically follow 3xx redirects?
+        http_follow_redirects => true,
+        %% For the gun HTTP client, to mitigate resource exhaustion attacks, what's
+        %% the maximum number of automatic 3xx redirects we'll allow when
+        %% http_follow_redirects = true?
+        gun_max_redirects => 5,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation,
@@ -190,6 +196,7 @@ default_message() ->
             #{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
+            #{<<"name">> => <<"ssl-cert@1.0">>, <<"module">> => dev_ssl_cert},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
