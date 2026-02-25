@@ -256,44 +256,7 @@ maybe_index_ids(Block, Opts) ->
 %% Uses arweave_index_workers from Opts to determine max concurrency (default 1 = sequential).
 parallel_map(Items, Fun, Opts) ->
     MaxWorkers = max(1, hb_opts:get(arweave_index_workers, 1, Opts)),
-    Parent = self(),
-    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
-    % Spawn initial batch up to MaxWorkers
-    {ToSpawn, Remaining} = lists:split(min(length(ItemsWithRefs), MaxWorkers), ItemsWithRefs),
-    ActiveRefs = [spawn_worker(ItemWithRef, Fun, Parent) || ItemWithRef <- ToSpawn],
-    % Wait for workers to complete and refill pool, collecting results
-    ResultsMap = parallel_map_wait(ActiveRefs, Remaining, Fun, MaxWorkers, Parent, #{}),
-    % Return results in order by matching refs (inspired by pmap pattern)
-    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
-
-%% @doc Spawn a worker process for a single item.
-spawn_worker({Item, Ref}, Fun, Parent) ->
-    spawn(fun() ->
-        Result = Fun(Item),
-        Parent ! {pmap_work, Ref, Result}
-    end),
-    Ref.
-
-%% @doc Wait for workers to complete and refill the pool as slots become available.
-parallel_map_wait([], [], _Fun, _MaxWorkers, _Parent, ResultsMap) ->
-    ResultsMap;
-parallel_map_wait(ActiveRefs, Remaining, Fun, MaxWorkers, Parent, ResultsMap) ->
-    receive
-        {pmap_work, CompletedRef, Result} ->
-            % Store result and remove completed ref
-            NewResultsMap = ResultsMap#{CompletedRef => Result},
-            NewActiveRefs = lists:delete(CompletedRef, ActiveRefs),
-            case Remaining of
-                [] ->
-                    % No more items, just wait for remaining workers
-                    parallel_map_wait(NewActiveRefs, [], Fun, MaxWorkers, Parent, NewResultsMap);
-                _ ->
-                    % Spawn replacement worker
-                    [NextItemWithRef | NewRemaining] = Remaining,
-                    NextRef = spawn_worker(NextItemWithRef, Fun, Parent),
-                    parallel_map_wait([NextRef | NewActiveRefs], NewRemaining, Fun, MaxWorkers, Parent, NewResultsMap)
-            end
-    end.
+    hb_pmap:parallel_map(Items, Fun, MaxWorkers).
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
