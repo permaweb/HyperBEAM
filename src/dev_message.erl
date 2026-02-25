@@ -979,7 +979,9 @@ set_ignore_undefined_test() ->
 verify_test_() ->
 	{foreach, fun () -> ok end, fun (_) -> ok end, [
 		{"RSA", fun () -> test_verify(?RSA_KEY_TYPE) end},
-		{"EDSSA", fun () -> test_verify(?EDDSA_KEY_TYPE) end}
+		{"EDDSA", fun () -> test_verify(?EDDSA_KEY_TYPE) end},
+        {"Solana", fun () -> test_verify(?SOLANA_KEY_TYPE) end},
+        {"Ethereum", fun () -> test_verify(?ETHEREUM_KEY_TYPE) end}
 	]}.
 
 test_verify(KeyType) ->
