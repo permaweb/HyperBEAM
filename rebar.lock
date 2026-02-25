@@ -17,6 +17,10 @@
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"6.0.3">>},0},
  {<<"prometheus_cowboy">>,{pkg,<<"prometheus_cowboy">>,<<"0.2.0">>},0},
  {<<"prometheus_httpd">>,{pkg,<<"prometheus_httpd">>,<<"2.1.15">>},0},
+ {<<"prometheus_ranch">>,
+  {git,"https://github.com/permaweb/prometheus_ranch.git",
+       {ref,"73f16ed9856972ced3fb8f4168004fffe742d5b2"}},
+  0},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},0}]}.
 [
 {pkg_hash,[
