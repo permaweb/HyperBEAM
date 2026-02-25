@@ -566,11 +566,11 @@ index_ids_test() ->
     assert_item_read(
         <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
         Opts),
-    % Another bundle with an unsupported signature should be indexed even if
+    % Another bundle with an unsupported avro codec should be indexed even if
     % it can't be deserialized.
     ?assertException(
         error,
-        {badmatch, {unsupported_tx_format,<<3,0>>}},
+        {badmatch,<<"\"address\":\"0x124e64C9Ed898d4A8B130F6ACb76b33E21CD711c\"", _/binary>>},
         hb_store_arweave:read(
             StoreOpts,
             <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
