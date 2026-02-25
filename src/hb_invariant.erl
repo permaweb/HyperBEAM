@@ -532,12 +532,15 @@ pick(Min, Max, Forbidden) when is_list(Forbidden) ->
     Floor = num(Min),
     Ceil = num(Max),
     case Ceil < Floor of
-        true -> error({invalid_range, Min, Max});
+        true ->
+            error({invalid_range, Min, Max});
         false ->
-            Valid = [X || X <- lists:seq(Floor, Ceil), not lists:member(X, Forbidden)],
-            case Valid of
+            Candidates = lists:seq(Floor, Ceil),
+            Allowed =
+                [X || X <- Candidates, not lists:member(X, Forbidden)],
+            case Allowed of
                 [] -> error(cannot_pick_from_fully_forbidden_range);
-                _ -> pick(Valid)
+                _ -> pick(Allowed)
             end
     end.
 %% @doc Generate a random integer.
