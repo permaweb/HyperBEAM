@@ -4,7 +4,7 @@
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
 %%% Indexing API:
--export([write_offset/5]).
+-export([write_offset/5, read_chunks/2, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,24 +27,28 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
         {type, {id, {explicit, ID}}, {type, Type}}),
     Type.
 
-read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
-        {ok, OffsetBinary} ->
-            {Version, CodecName, StartOffset, Length} =
-                hb_store_arweave_offset:decode(OffsetBinary),
+read(StoreOpts, Path) ->
+    case read_offset(StoreOpts, Path) of
+        {ok,
+            #{
+                <<"version">> := Version,
+                <<"codec-name">> := CodecName,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ->
             Loaded =
                 case CodecName of
                     <<"ans104@1.0">> ->
                         load_item(StartOffset, Length, StoreOpts);
                     <<"tx@1.0">> ->
-                        load_tx(ID, StartOffset, Length, StoreOpts)
+                        load_tx(Path, StartOffset, Length, StoreOpts)
                 end,
             case Loaded of
                 {ok, _Message} ->
                     ?event(
                         arweave_offsets,
                         {read_ok,
-                            {id, {explicit, ID}},
+                            {id, {explicit, Path}},
                             {format_version, Version},
                             {type, CodecName},
                             {start_offset, StartOffset},
@@ -55,7 +59,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                     ?event(
                         arweave_offsets,
                         {read_error, 
-                            {id, {explicit, ID}},
+                            {id, {explicit, Path}},
                             {format_version, Version},
                             {type, CodecName},
                             {start_offset, StartOffset},
@@ -65,13 +69,30 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                     )
             end,
             Loaded;
+        {error, not_found} ->
+            not_found
+    end.
+
+read_offset(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
+    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+        {ok, OffsetBinary} ->
+            {Version, CodecName, StartOffset, Length} =
+                hb_store_arweave_offset:decode(OffsetBinary),
+            {ok, #{
+                <<"version">> => Version,
+                <<"codec-name">> => CodecName,
+                <<"start-offset">> => StartOffset,
+                <<"length">> => Length
+            }};
         not_found ->
             ?event(
                 arweave_offsets,
                 {miss, {id, {explicit, ID}}}
             ),
             {error, not_found}
-    end.
+    end;
+read_offset(_, _NonID) ->
+    not_found.
 
 load_item(StartOffset, Length, Opts) ->
     case read_chunks(StartOffset, Length, Opts) of
@@ -95,11 +116,13 @@ load_tx(ID, StartOffset, Length, Opts) ->
         #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
         Opts
     ),
-    TXHeader = hb_message:convert(
-        StructuredTXHeader,
-        <<"tx@1.0">>,
-        <<"structured@1.0">>,
-        Opts),
+    TXHeader =
+        hb_message:convert(
+            StructuredTXHeader,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
     case read_chunks(StartOffset, Length, Opts) of
         {ok, SerializedItem} ->
             {
@@ -111,6 +134,16 @@ load_tx(ID, StartOffset, Length, Opts) ->
                     Opts
                 )
             };
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Read the chunks of an Arweave transaction, or the full encoded bytes of
+%% an item.
+read_chunks(ID, Opts = #{ arweave_index_store := IndexStore }) ->
+    case read_offset(#{ <<"index-store">> => IndexStore }, ID) of
+        {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
+            read_chunks(StartOffset, Length, Opts);
         {error, Reason} ->
             {error, Reason}
     end.

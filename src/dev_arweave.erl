@@ -125,7 +125,7 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
 
 %% @doc Get a transaction from the Arweave node, as indicated by the
 %% `tx` key in the request or base message. By default, this embeds the data
-%% payload. Set `exclude_data` to true to return just the header.
+%% payload. Set `arweave_exclude_data` to true to return just the header.
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
@@ -133,7 +133,28 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
-                Opts#{ exclude_data => exclude_data(Base, Request, Opts) }
+                Opts#{
+                    arweave_exclude_data =>
+                        hb_util:bool(
+                            request_get(
+                                <<"exclude-data">>,
+                                Base,
+                                Request,
+                                false,
+                                Opts
+                            )
+                        ),
+                    arweave_decode_data =>
+                        hb_util:bool(
+                            request_get(
+                                <<"decode">>,
+                                Base,
+                                Request,
+                                true,
+                                Opts
+                            )
+                        )
+                }
             )
     end.
 
@@ -147,7 +168,12 @@ raw(Base, Request, Opts) ->
 
 %% @doc Retrieve the data of a transaction from Arweave.
 data(TXID, Opts) ->
-    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
+    case hb_store_arweave:read_chunks(TXID, Opts) of
+        {ok, Data} ->
+            {ok, Data};
+        _ ->
+            request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts)
+    end.
 
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
@@ -461,17 +487,12 @@ find_txid(Base, Request, Opts) ->
         Opts
     ).
 
-exclude_data(Base, Request, Opts) ->
-    RawValue =
-        hb_ao:get_first(
-            [
-                {Request, <<"exclude-data">>},
-                {Base, <<"exclude-data">>}
-            ],
-            false,
-            Opts
-        ),
-    hb_util:bool(RawValue).
+request_get(Key, Base, Request, Default, Opts) ->
+    hb_ao:get_first(
+        [{Request, Key}, {Base, Key}],
+        Default,
+        Opts
+    ).
 
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
@@ -553,13 +574,17 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             {tx, TXHeader}
         }
     ),
-    case hb_opts:get(exclude_data, false, Opts) of
+    case hb_opts:get(arweave_exclude_data, false, Opts) of
         true ->
             {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
         false ->
             case data(TXID, Opts) of
                 {ok, RawData} ->
-                    TX = TXHeader#tx{ data = RawData },
+                    TX =
+                        case hb_opts:get(arweave_decode_data, true, Opts) of
+                            true -> TXHeader#tx{ data = RawData };
+                            false -> RawData
+                        end,
                     {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
                 {error, not_found} ->
                     {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
