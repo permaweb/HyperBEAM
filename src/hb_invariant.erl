@@ -569,9 +569,12 @@ num(Other) -> error({invalid_size_spec, Other}).
 float() -> ?MODULE:float(?INT_MAX).
 %% @doc Generate a random float between 0 and the given maximum value --
 %% expressed either explicitly or as a named size constant.
-float(small) -> rand:uniform_real() * (2 * ?SMALL_INT_MAX);
-float(big) -> rand:uniform_real() * (2 * ?BIG_INT_MAX);
-float(Max) -> rand:uniform_real() * (2 * Max).
+float(Max) when is_number(Max), Max < 0 -> error({invalid_range, 0, Max});
+float(Max) when is_number(Max) -> rand:uniform_real() * Max;
+float(tiny) -> rand:uniform_real() * num(tiny);
+float(small) -> rand:uniform_real() * num(small);
+float(big) -> rand:uniform_real() * num(big);
+float(Other) -> error({invalid_size_spec, Other}).
 
 %% @doc Generate a random string.
 string() -> string(?STRING_MAX_LENGTH).
