@@ -128,6 +128,8 @@ sign({{KeyAlg, KeyCrv}, Priv, _Pub}, Data, _DigestType)
     secp256k1_nif:sign(Data, Priv);
 sign({KeyType = {KeyAlg, Curve}, Priv, _Pub}, Data, _DigestType) when KeyType =:= {?EDDSA_SIGN_ALG, ed25519} ->
     crypto:sign(KeyAlg, none, Data, [Priv, Curve]);
+sign({ethereum, Priv, Pub}, Data, _DigestType) ->
+    secp256k1_nif:sign(Data, Priv, ethereum);
 sign({{KeyType, Priv, Pub}, {KeyType, Pub}}, Data, DigestType) ->
     sign({KeyType, Priv, Pub}, Data, DigestType).
 
@@ -160,6 +162,9 @@ verify({{KeyAlg, KeyCrv}, Pub}, Data, Sig, _DigestType)
 verify({{KeyAlg, Curve}, Pub}, Data, Sig, _DigestType) when
       byte_size(Pub) == 32 andalso byte_size(Sig) == 64 andalso Curve =:= ed25519 andalso KeyAlg =:= ?EDDSA_SIGN_ALG ->
     crypto:verify(eddsa, none, Data, Sig, [Pub, Curve]);
+verify({ethereum, Pub}, Data, Sig, _DigestType) ->
+    {Pass, PubExtracted} = secp256k1_nif:ecrecover(Data, Sig, ethereum),
+    Pass andalso PubExtracted =:= compress_ecdsa_pubkey(Pub);
 verify({solana, Pub}, Data, Sig, _DigestType) when
       byte_size(Pub) == 32 andalso byte_size(Sig) == 64 ->
     HexData = hb_util:to_hex(Data),
@@ -194,6 +199,8 @@ to_address(PubKey, {?EDDSA_SIGN_ALG, ed25519}) ->
     to_eddsa_address(PubKey);
 to_address(PubKey, solana) ->
     to_solana_address(PubKey);
+to_address(PubKey, ethereum) ->
+    to_ecdsa_address(PubKey);
 to_address(PubKey, typed_ethereum) ->
     to_ecdsa_address(PubKey).
 
