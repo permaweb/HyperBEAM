@@ -44,8 +44,11 @@ type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
 type(_, _) -> not_found.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
+    case hb_prometheus:measure_and_report(
+        fun () -> hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) end,
+        hb_store_arweave_index_check_duration_seconds
+     ) of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
@@ -117,7 +120,7 @@ do_read(StoreOpts, ID) ->
     end.
 
 load_item(StartOffset, Length, Opts) ->
-    {Duration, Result} = timer:tc(fun () ->
+    hb_prometheus:measure_and_report(fun () ->
         case read_chunks(StartOffset, Length, Opts) of
             {ok, SerializedItem} ->
                 {
@@ -132,12 +135,10 @@ load_item(StartOffset, Length, Opts) ->
             {error, Reason} ->
                 {error, Reason}
         end
-    end,native),
-    record_chunk_fetch_metric(Duration, load_item),
-    Result.
+    end,hb_store_arweave_chunk_fetch_duration_seconds, [load_item]).
 
 load_tx(ID, StartOffset, Length, Opts) ->
-    {Duration, Result} = timer:tc(fun () ->
+    hb_prometheus:measure_and_report(fun () ->
         {ok, StructuredTXHeader} = hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
@@ -162,9 +163,7 @@ load_tx(ID, StartOffset, Length, Opts) ->
             {error, Reason} ->
                 {error, Reason}
         end
-    end, native),
-    record_chunk_fetch_metric(Duration, load_tx),
-    Result.
+    end,hb_store_arweave_chunk_fetch_duration_seconds, [load_tx]).
 
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
@@ -197,6 +196,7 @@ write_offset(
     ),
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
+%% @doc Record partition that are requested
 record_partition_metric(Offset) ->
     spawn(fun () ->
         case application:get_application(prometheus) of
@@ -204,22 +204,6 @@ record_partition_metric(Offset) ->
             _ ->
                 Partition = binary_to_integer(Offset) div ?PARTITION_SIZE,
                 prometheus_counter:inc(hb_store_arweave_requests_partition, [Partition], 1)
-        end
-    end).
-
-record_index_check_metric(Duration) ->
-    record_metric(hb_store_arweave_index_check_duration_seconds, [], Duration).
-
-record_chunk_fetch_metric(Duration, Type) ->
-    record_metric(hb_store_arweave_chunk_fetch_duration_seconds, [Type], Duration).
-
-record_metric(Metric, Labels, Duration) ->
-    spawn(fun () ->
-        case application:get_application(prometheus) of
-            undefined ->
-                ok;
-            _ ->
-                prometheus_histogram:observe(Metric, Labels, Duration)
         end
     end).
 
