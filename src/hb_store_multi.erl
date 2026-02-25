@@ -181,12 +181,16 @@ make_group(StoreOpts, Path) ->
 %% @doc Start worker processes for each store and return the updated store options.
 %% The number of workers per store is controlled by the `num_workers' key in
 %% the store options (default: 1).
-store_with_workers(StoreOpts = #{ <<"stores">> := Stores }) ->
-    StoreOpts#{
+store_with_workers(MultiStoreOpts = #{ <<"stores">> := Stores }) ->
+    GlobalNumWorkers = maps:get(<<"num_workers">>, MultiStoreOpts, ?DEFAULT_STORE_WORKERS),
+    MultiStoreOpts#{
         <<"stores">> :=
             lists:map(
                 fun(Store) ->
-                    NumWorkers = maps:get(<<"num_workers">>, Store, ?DEFAULT_STORE_WORKERS),
+                    NumWorkers = case maps:get(<<"num_workers">>, Store, undefined) of 
+                                     undefined -> GlobalNumWorkers;
+                                     Value -> Value
+                                 end,
                     Workers = [start_worker(Store) || _ <- lists:seq(1, NumWorkers)],
                     Store#{ <<"workers">> => Workers }
                 end,
