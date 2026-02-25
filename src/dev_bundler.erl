@@ -320,15 +320,15 @@ idle_test() ->
         % Test posting each of the supported signature types
         RSAWallet = ar_wallet:new({rsa, 65537}),
         EdDSAWallet = ar_wallet:new({eddsa, ed25519}),
-        % ECDSAWallet = ar_wallet:new({ecdsa, secp256k1}),
+        ECDSAWallet = ar_wallet:new({ecdsa, secp256k1}),
         ItemSize = floor(1.5 * ?DATA_CHUNK_SIZE),
         Item1 = new_data_item(1, ItemSize, RSAWallet),
         Item2 = new_data_item(2, ItemSize, EdDSAWallet),
         {ok, SolanaBin} =
             file:read_file(<<"test/arbundles.js/ans104-item-solana.bin">>),
         Item3 = ar_bundles:deserialize(SolanaBin),
-        % Item4 = new_data_item(4, ItemSize, ECDSAWallet),
-        Items = [Item1, Item2, Item3],
+        Item4 = new_data_item(4, ItemSize, ECDSAWallet),
+        Items = [Item1, Item2, Item3, Item4],
         lists:foreach(
             fun(Item) ->
                 ?event(debug_test, {posting_item, Item}),

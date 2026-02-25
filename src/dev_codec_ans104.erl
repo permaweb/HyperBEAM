@@ -41,11 +41,11 @@ commit(Msg, Req = #{ <<"type">> := Type }, Opts) when Type =:= ?RSA_SIGN_TYPE or
             sign_tx(TX, Wallet, Opts);
         {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?EDDSA_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
-        {{{?ECDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?ETHEREUM_SIGN_TYPE} ->
+        {{{?ETHEREUM_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?ETHEREUM_SIGN_TYPE} ->
             sign_tx(TX, Wallet, Opts);
         {{{WalletType, _, _}, _}, _Type} ->
             ?event(warning, {wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}}),
-            throw(wrong_wallet_to_sign)
+            throw({wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}})
     end;
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.

@@ -17,7 +17,7 @@
 
 new() ->
     new({rsa, 65537}).
-new(KeyType) when KeyType =:= {rsa, 65537} orelse KeyType =:= {eddsa, ed25519} ->
+new(KeyType) when KeyType =:= {rsa, 65537} orelse KeyType =:= {eddsa, ed25519} orelse KeyType =:= ethereum ->
     case request_pooled_wallet(KeyType) of
         {ok, Wallet} -> Wallet;
         timeout -> generate_wallet(KeyType)
@@ -39,6 +39,9 @@ generate_wallet(KeyType = {KeyAlg, KeyCrv}) when KeyAlg =:= ?ECDSA_SIGN_ALG anda
     {OrigPub, Priv} = crypto:generate_key(ecdh, KeyCrv),
     Pub = compress_ecdsa_pubkey(OrigPub),
     {{KeyType, Priv, Pub}, {KeyType, Pub}};
+generate_wallet(ethereum)  ->
+    {Pub, Priv} = crypto:generate_key(ecdh, secp256k1),
+    {{ethereum, Priv, Pub}, {ethereum, Pub}};
 generate_wallet(KeyType = {KeyAlg, Curve}) when KeyType =:= {?EDDSA_SIGN_ALG, ed25519} ->
     {Pub, Priv} = crypto:generate_key(KeyAlg, Curve),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
@@ -105,7 +108,9 @@ wallet_pool_name({rsa, 65537}) ->
 wallet_pool_name({?EDDSA_SIGN_ALG, ed25519}) ->
     ar_wallet_pool_ed25519;
 wallet_pool_name({?ECDSA_SIGN_ALG, secp256k1}) ->
-    ar_wallet_pool_ecdsa_secp256k1.
+    ar_wallet_pool_ecdsa_secp256k1;
+wallet_pool_name(ethereum) ->
+    ar_wallet_pool_ethereum.
 
 %% @doc Sign some data with a private key.
 sign(Key, Data) ->
@@ -225,6 +230,11 @@ new_keyfile(KeyType, WalletName) ->
                 {CompressedPub, Prv, Ky};
             {?EDDSA_SIGN_ALG, ed25519} ->
                 {{_, Prv, Pb}, _} = new(KeyType),
+                PrivKey = {KeyType, Prv, Pb},
+                Ky = to_json(PrivKey),
+                {Pb, Prv, Ky};
+            ethereum ->
+                {Pb, Prv} = crypto:generate_key(ecdh, secp256k1),
                 PrivKey = {KeyType, Prv, Pb},
                 Ky = to_json(PrivKey),
                 {Pb, Prv, Ky}
