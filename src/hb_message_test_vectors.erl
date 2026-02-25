@@ -219,21 +219,22 @@ codec_test_suite(Codecs) ->
                         binary_to_list(
                             << (suite_name(CodecSpec))/binary, ": ", Desc/binary >>
                         ),
-                    OptsType = case is_map(CodecSpec) of 
-                                   true -> maps:get(<<"with-opts">>, CodecSpec, normal);
-                                   false -> normal
-                               end,
-                        TestSpecificOpts = test_opts(OptsType),
-                            {
-                                true,
-                                {
-                                    Desc,
-                                    TestName,
-                                    fun(_SuiteOpts) ->
-                                        Test(CodecSpec, TestSpecificOpts)
-                                    end
-                                }
-                            }
+                    OptsType = 
+                        case is_map(CodecSpec) of 
+                            true -> maps:get(<<"with-opts">>, CodecSpec, normal);
+                            false -> normal
+                        end,
+                    TestSpecificOpts = test_opts(OptsType),
+                    {
+                        true,
+                        {
+                            Desc,
+                            TestName,
+                            fun(_SuiteOpts) ->
+                                Test(CodecSpec, TestSpecificOpts)
+                            end
+                        }
+                    }
                 end,
                 test_suite()
             )

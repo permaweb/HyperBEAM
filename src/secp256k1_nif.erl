@@ -15,6 +15,7 @@ sign_recoverable(_Digest, _PrivateBytes) ->
 recover_pk_and_verify(_Digest, _Signature) ->
 	erlang:nif_error(nif_not_loaded).
 
+%% @doc DigestType can be `sha256` or `ethereum`.
 sign(Msg, PrivBytes) ->
     sign(Msg, PrivBytes, sha256).
 sign(Msg, PrivBytes, DigestType) ->
@@ -22,6 +23,7 @@ sign(Msg, PrivBytes, DigestType) ->
 	{ok, Signature} = sign_recoverable(Digest, PrivBytes),
 	Signature.
 
+%% @doc DigestType can be `sha256` or `ethereum`.
 ecrecover(Msg, Signature) ->
     ecrecover(Msg, Signature, sha256).
 ecrecover(Msg, Signature, DigestType) ->
