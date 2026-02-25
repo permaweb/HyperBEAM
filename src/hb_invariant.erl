@@ -529,11 +529,17 @@ pick(Map) when is_map(Map) andalso map_size(Map) == 0 ->
 pick(Map) when is_map(Map) ->
     pick(maps:values(Map)).
 pick(Min, Max, Forbidden) when is_list(Forbidden) ->
-    case lists:member(X = int(Min, Max), Forbidden) of
-      true -> pick(Min, Max, Forbidden);
-      false -> X
+    Floor = num(Min),
+    Ceil = num(Max),
+    case Ceil < Floor of
+        true -> error({invalid_range, Min, Max});
+        false ->
+            Valid = [X || X <- lists:seq(Floor, Ceil), not lists:member(X, Forbidden)],
+            case Valid of
+                [] -> error(cannot_pick_from_fully_forbidden_range);
+                _ -> pick(Valid)
+            end
     end.
-
 %% @doc Generate a random integer.
 int() -> int(?INT_MAX).
 %% @doc Generate a random integer between 0 and the given maximum value --
