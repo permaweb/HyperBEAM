@@ -205,7 +205,7 @@ fetch_chunk_range(Offset, Length, Opts) ->
     end.
 
 %% @doc Post-threshold: chunks occupy fixed 256KiB buckets. A single pass at
-%% DATA_CHUNK_SIZE increments with x-bucket-based-offset covers all chunks.
+%% DATA_CHUNK_SIZE increments covers all chunks.
 fetch_post_threshold(Offset, EndOffset, Concurrency, Opts) ->
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Concurrency, Opts) of
@@ -375,10 +375,16 @@ pmap_collect(Active, Remaining, Fun, Parent, Results) ->
     end.
 
 get_chunk(Offset, Opts) ->
+    % Note: it's possible that we will need to add the x-bucket-based-offset
+    % header to *some* queries. When querying L1 TX chunks from after the
+    % strict data split threshold, in theory that header is needed. But I
+    % haven't found a TX which requires it. However, including the header
+    % when querying some *dataitems* does cause an error. So for now we will
+    % leaeve the header out and continue to search for a case where it is
+    % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{
-        <<"route-by">> => Offset,
-        <<"x-bucket-based-offset">> => <<"true">>
+        <<"route-by">> => Offset
     }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
@@ -1264,13 +1270,34 @@ get_pre_split_small_chunks_test() ->
         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
     ).
 
-% get_post_split_small_chunks_test() ->
-%     assert_chunk_range(
-%         <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
-%         11_741_031_646_397,
-%         810774,
-%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
-%     ).
+get_post_split_small_chunks_test() ->
+    assert_chunk_range(
+        <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
+        146_563_435_390_439,
+        541937,
+        <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>
+    ).
+
+%% @doc this test fails if the chunks are queried with
+%% the `x-bucket-based-offset' header set. I believe it is because
+%% bucket-based offset should only be used when querying an L1 TX
+bucket_based_offset_test() ->
+    Offset = 376836461101675,
+    Length = 116247,
+    ExpectedID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+    {ok, SerializedItem} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset + 1,
+            <<"length">> => Length
+        },
+        #{}
+    ),
+    Item = ar_bundles:deserialize(SerializedItem),
+    ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id)),
+    ?assert(ar_bundles:verify_item(Item)),
+    ok.
 
 % large_tx_test() ->
 %     assert_chunk_range(

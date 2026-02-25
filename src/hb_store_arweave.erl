@@ -37,7 +37,7 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                     <<"ans104@1.0">> ->
                         load_item(StartOffset, Length, StoreOpts);
                     <<"tx@1.0">> ->
-                        load_bundle(ID, StartOffset, Length, StoreOpts)
+                        load_tx(ID, StartOffset, Length, StoreOpts)
                 end,
             case Loaded of
                 {ok, _Message} ->
@@ -89,7 +89,7 @@ load_item(StartOffset, Length, Opts) ->
             {error, Reason}
     end.
 
-load_bundle(ID, StartOffset, Length, Opts) ->
+load_tx(ID, StartOffset, Length, Opts) ->
     {ok, StructuredTXHeader} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
