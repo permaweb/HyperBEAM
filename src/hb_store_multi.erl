@@ -4,10 +4,10 @@
 %%% Expects a store options message of the following form:
 %%%      /stores/1..n: Sub-store definition messages.
 %%%      /confirmations: Number of confirmations to require for write operations.
-%%%      /workers-per-store: Number of worker processes to spawn for each store
+%%%      /num-workers-per-store: Number of worker processes to spawn for each store
 %%%                          (default: 3). Work is distributed evenly across each.
-%%% Each sub-store may additionally specify:
-%%%      /num_workers: Number of worker processes to spawn for the store (default: 1).
+%%% Each sub-store may additionally specify (will override num-workers-per-store):
+%%%      /num-workers: Number of worker processes to spawn for the store (default: 3).
 -module(hb_store_multi).
 -behaviour(hb_store).
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
@@ -182,21 +182,31 @@ make_group(StoreOpts, Path) ->
 %%% Worker operations.
 
 %% @doc Start a worker process for each store and return the updated store options.
-%% The number of workers per store is controlled by the `num_workers' key in
-%% the store options (default: 1).
-store_with_workers(StoreOpts = #{ <<"stores">> := Stores }) ->
-    StoreOpts#{
+%% The number of workers per store is controlled by the `num-workers' key in
+%% the store options, or globally in the multi store with `num-workers-per-store' 
+%% (default: 3).
+store_with_workers(MultiStoreOpts = #{ <<"stores">> := Stores }) ->
+    GlobalWorkersPerStore =
+        maps:get(
+            <<"num-workers-per-store">>,
+            MultiStoreOpts,
+            ?DEFAULT_STORE_WORKERS
+        ),
+    MultiStoreOpts#{
         <<"stores">> :=
             lists:map(
-                fun(Store) ->
-                    NumWorkers =
-                        maps:get(
-                            <<"workers-per-store">>,
-                            Store,
-                            ?DEFAULT_STORE_WORKERS
-                        ),
-                    Workers = [start_worker(Store) || _ <- lists:seq(1, NumWorkers)],
-                    Store#{ <<"workers">> => Workers }
+                fun(StoreOpts) ->
+                    StoreNumWorkers =
+                        case maps:get(
+                            <<"num-workers">>,
+                            StoreOpts,
+                            undefined
+                        ) of
+                            undefined -> GlobalWorkersPerStore;
+                            NumWorkers -> NumWorkers
+                        end,
+                    Workers = [start_worker(StoreOpts) || _ <- lists:seq(1, StoreNumWorkers)],
+                    StoreOpts#{ <<"workers">> => Workers }
                 end,
                 Stores
             )
