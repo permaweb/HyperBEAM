@@ -320,14 +320,14 @@ idle_test() ->
         % Test posting each of the supported signature types
         RSAWallet = ar_wallet:new({rsa, 65537}),
         EdDSAWallet = ar_wallet:new({eddsa, ed25519}),
-        ECDSAWallet = ar_wallet:new({ecdsa, secp256k1}),
+        EthereumWallet = ar_wallet:new(ethereum),
         ItemSize = floor(1.5 * ?DATA_CHUNK_SIZE),
         Item1 = new_data_item(1, ItemSize, RSAWallet),
         Item2 = new_data_item(2, ItemSize, EdDSAWallet),
         {ok, SolanaBin} =
             file:read_file(<<"test/arbundles.js/ans104-item-solana.bin">>),
         Item3 = ar_bundles:deserialize(SolanaBin),
-        Item4 = new_data_item(4, ItemSize, ECDSAWallet),
+        Item4 = new_data_item(4, ItemSize, EthereumWallet),
         Items = [Item1, Item2, Item3, Item4],
         lists:foreach(
             fun(Item) ->
@@ -342,8 +342,8 @@ idle_test() ->
         timer:sleep(300),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
-        %% 2x 1.5 chunk items + 1 small solana item = 4 chunks
-        ExpectedChunks = 4,
+        %% 2x 1.5 chunk items + 1 small solana item + 1.5 Ethereum = 5 chunks
+        ExpectedChunks = 5,
         Proofs = hb_mock_server:get_requests(
             chunk, ExpectedChunks, ServerHandle),
         ?assertEqual(ExpectedChunks, length(Proofs)),
