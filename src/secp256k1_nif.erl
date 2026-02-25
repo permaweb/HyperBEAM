@@ -28,7 +28,7 @@ ecrecover(Msg, Signature) ->
     ecrecover(Msg, Signature, sha256).
 ecrecover(Msg, Signature, DigestType) ->
 	Digest = digest_message(DigestType, Msg),
-    NormalizedSig = normalize_signature(Signature),
+    NormalizedSig = normalize_signature(Signature, DigestType),
 	case recover_pk_and_verify(Digest, NormalizedSig) of
 		{ok, true, PubKey} -> {true, PubKey};
 		{ok, false, _PubKey} -> {false, <<>>};
@@ -39,11 +39,10 @@ digest_message(sha256, Msg) -> crypto:hash(sha256, Msg);
 digest_message(ethereum, Msg) -> ethereum_hash(Msg).
 
 %% @doc Normalize Ethereum v values: 27/28 -> 0/1
-normalize_signature(Signature) ->
-	case Signature of
-		<<Compact:64/binary, V:8>> when V >= 27 -> <<Compact/binary, (V - 27):8>>;
-		_ -> Signature
-	end.
+normalize_signature(<<Compact:64/binary, V:8>>, ethereum) when V >= 27 -> 
+    <<Compact/binary, (V - 27):8>>;
+normalize_signature(Signature, _) -> 
+    Signature.
 
 %% @doc Ethereum EIP-191 personal_sign hash:
 %% keccak256("\x19Ethereum Signed Message:\n" + len(msg) + msg)
