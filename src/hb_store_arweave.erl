@@ -10,6 +10,12 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(PARTITION_SIZE, 3_600_000_000_000).
+
+start(#{<<"index-store">> := IndexStore}) ->
+    init_prometheus(),
+    hb_store:start(IndexStore).
+
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
 scope() -> remote.
@@ -32,7 +38,7 @@ type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
             {ok, _Offset} -> simple;
             _ -> not_found
         end,
-    ?event(store_arweave_debug,
+    ?event(debug_store_arweave,
         {type, {id, {explicit, ID}}, {type, Type}}),
     Type;
 type(_, _) -> not_found.
@@ -111,46 +117,54 @@ do_read(StoreOpts, ID) ->
     end.
 
 load_item(StartOffset, Length, Opts) ->
-    case read_chunks(StartOffset, Length, Opts) of
-        {ok, SerializedItem} ->
-            {
-                ok,
-                hb_message:convert(
-                    ar_bundles:deserialize(SerializedItem),
-                    <<"structured@1.0">>,
-                    <<"ans104@1.0">>,
-                    Opts
-                )
-            };
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    {Duration, Result} = timer:tc(fun () ->
+        case read_chunks(StartOffset, Length, Opts) of
+            {ok, SerializedItem} ->
+                {
+                    ok,
+                    hb_message:convert(
+                        ar_bundles:deserialize(SerializedItem),
+                        <<"structured@1.0">>,
+                        <<"ans104@1.0">>,
+                        Opts
+                    )
+                };
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end,native),
+    record_chunk_fetch_metric(Duration, load_item),
+    Result.
 
 load_tx(ID, StartOffset, Length, Opts) ->
-    {ok, StructuredTXHeader} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
-        Opts
-    ),
-    TXHeader = hb_message:convert(
-        StructuredTXHeader,
-        <<"tx@1.0">>,
-        <<"structured@1.0">>,
-        Opts),
-    case read_chunks(StartOffset, Length, Opts) of
-        {ok, SerializedItem} ->
-            {
-                ok,
-                hb_message:convert(
-                    TXHeader#tx{ data = SerializedItem },
-                    <<"structured@1.0">>,
-                    <<"tx@1.0">>,
-                    Opts
-                )
-            };
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    {Duration, Result} = timer:tc(fun () ->
+        {ok, StructuredTXHeader} = hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
+            Opts
+        ),
+        TXHeader = hb_message:convert(
+            StructuredTXHeader,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts),
+        case read_chunks(StartOffset, Length, Opts) of
+            {ok, SerializedItem} ->
+                {
+                    ok,
+                    hb_message:convert(
+                        TXHeader#tx{ data = SerializedItem },
+                        <<"structured@1.0">>,
+                        <<"tx@1.0">>,
+                        Opts
+                    )
+                };
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end, native),
+    record_chunk_fetch_metric(Duration, load_tx),
+    Result.
 
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
@@ -172,7 +186,7 @@ write_offset(
     ) ->
     Value = hb_store_arweave_offset:encode(CodecName, StartOffset, Length),
     ?event(
-        store_arweave_debug, 
+        debug_store_arweave,
         {writing_offset, 
             {id, {explicit, ID}},
             {type, CodecName},
@@ -182,6 +196,60 @@ write_offset(
         }
     ),
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
+
+record_partition_metric(Offset) ->
+    spawn(fun () ->
+        case application:get_application(prometheus) of
+            undefined -> ok;
+            _ ->
+                Partition = binary_to_integer(Offset) div ?PARTITION_SIZE,
+                prometheus_counter:inc(hb_store_arweave_requests_partition, [Partition], 1)
+        end
+    end).
+
+record_index_check_metric(Duration) ->
+    record_metric(hb_store_arweave_index_check_duration_seconds, [], Duration).
+
+record_chunk_fetch_metric(Duration, Type) ->
+    record_metric(hb_store_arweave_chunk_fetch_duration_seconds, [Type], Duration).
+
+record_metric(Metric, Labels, Duration) ->
+    spawn(fun () ->
+        case application:get_application(prometheus) of
+            undefined ->
+                ok;
+            _ ->
+                prometheus_histogram:observe(Metric, Labels, Duration)
+        end
+    end).
+
+init_prometheus() ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try
+                prometheus_histogram:declare([
+                    {name, hb_store_arweave_index_check_duration_seconds},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]},
+                    {help, "How much it takes to check the index"}
+                ]),
+                prometheus_histogram:declare([
+                    {name, hb_store_arweave_chunk_fetch_duration_seconds},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
+                    {labels, [type]},
+                    {help, "How much it takes to check the index"}
+                ]),
+                prometheus_counter:declare([
+                    {name, hb_store_arweave_requests_partition},
+                    {labels, [partition]},
+                    {help, "Partition where chunks are being requested"}
+                ]),
+                ok
+            catch
+                error:mfa_already_exists -> ok;
+                _:_ -> ok
+            end
+    end.
 
 %%% Tests
 
