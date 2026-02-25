@@ -57,6 +57,7 @@
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
 }).
+-define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
 -define(ENV_KEYS,
     #{
         priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
@@ -141,7 +142,7 @@ default_message() ->
         %% Options: aggressive, lazy
         compute_mode => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
-        gateway => <<"https://arweave.net">>,
+        gateway => ?DEFAULT_GATEWAY,
         bundler_ans104 => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
         priv_key_location => <<"hyperbeam-key.json">>,
@@ -300,7 +301,7 @@ default_message() ->
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
                         },
                         #{
-                            <<"prefix">> => <<"https://arweave.net">>,
+                            <<"prefix">> => ?DEFAULT_GATEWAY,
                             <<"opts">> => #{ http_client => gun, protocol => http2 }
                         }
                     ]
@@ -353,7 +354,7 @@ default_message() ->
                 <<"node">> =>
                     #{
                         <<"match">> => <<"^/arweave">>,
-                        <<"with">> => <<"https://arweave.net">>,
+                        <<"with">> => ?DEFAULT_GATEWAY,
                         <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             },
@@ -371,7 +372,7 @@ default_message() ->
                 <<"template">> => <<"/raw">>,
                 <<"node">> =>
                     #{
-                        <<"prefix">> => <<"https://arweave.net">>,
+                        <<"prefix">> => ?DEFAULT_GATEWAY,
                         <<"opts">> => #{ http_client => gun, protocol => http2 }
                     }
             }
@@ -387,7 +388,7 @@ default_message() ->
                     <<"store-module">> => hb_store_arweave,
                     <<"name">> => <<"cache-arweave">>,
                     <<"index-store">> => [?DEFAULT_PRIMARY_STORE],
-                    <<"arweave-node">> => <<"https://arweave.net">>
+                    <<"arweave-node">> => ?DEFAULT_GATEWAY
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
