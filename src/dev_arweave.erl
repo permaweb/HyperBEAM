@@ -190,7 +190,7 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
-    Concurrency = hb_opts:get(chunk_fetch_concurrency, 20, Opts),
+    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
     ?event(arweave_debug, {fetch_chunk_range,
         {length, Length}, {start_offset, Offset}, {end_offset, EndOffset},
         {concurrency, Concurrency}}),
@@ -1274,9 +1274,9 @@ get_pre_split_small_chunks_test() ->
 
 % large_tx_test() ->
 %     assert_chunk_range(
-%         <<"l1ETZJ2DoJ06lF4gOLVdmNU4xx_s_r_t7q_g6CjYxjA">>,
-%         384469518731512,
-%         52865026,
+%         <<"GX2bvdo736wJPR1GmIkyW9GRk3JdXQ_aAd1ozX1d450">>,
+%         378161418083672,
+%         42040418,
 %         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
 %     ).
 
