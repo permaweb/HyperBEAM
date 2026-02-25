@@ -190,55 +190,57 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
-    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
     ?event(arweave_debug, {fetch_chunk_range,
-        {length, Length}, {start_offset, Offset}, {end_offset, EndOffset},
-        {concurrency, Concurrency}}),
+        {length, Length}, {start_offset, Offset}, {end_offset, EndOffset}}),
     case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
           EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
         {true, true} ->
-            fetch_post_threshold(Offset, EndOffset, Concurrency, Opts);
+            fetch_post_threshold(Offset, EndOffset, Opts);
         {false, false} ->
-            fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts);
+            fetch_pre_threshold(Offset, EndOffset, Opts);
         {false, true} ->
             {error, chunk_range_spans_strict_data_split_threshold}
     end.
 
 %% @doc Post-threshold: chunks occupy fixed 256KiB buckets. A single pass at
 %% DATA_CHUNK_SIZE increments covers all chunks.
-fetch_post_threshold(Offset, EndOffset, Concurrency, Opts) ->
+fetch_post_threshold(Offset, EndOffset, Opts) ->
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Concurrency, Opts) of
+    case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} -> assemble_chunks(ChunkInfos, Offset);
         Error -> Error
     end.
 
 %% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
 %% DATA_CHUNK_SIZE increments, then iteratively fill gaps until contiguous.
-fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts) ->
+fetch_pre_threshold(Offset, EndOffset, Opts) ->
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Concurrency, Opts) of
+    case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
-            fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts);
+            fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
         Error -> Error
     end.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
 %% of each gap until the entire range [Offset, EndOffset] is covered.
-fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts) ->
-    Sorted = dedup_and_sort(ChunkInfos),
+fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
+    Sorted = sort_chunks(ChunkInfos),
     case find_gaps(Sorted, Offset, EndOffset) of
         [] ->
             assemble_chunks(Sorted, Offset);
         Gaps ->
+            % WARNING: the find_gaps logic is untested in production and may not
+            % be needed. We have yet to find an L1 TX that is chunked in such
+            % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(warning, {fetch_chunk_gap_handling_untested,
-                {gap_offsets, GapOffsets}}),
-            case fetch_and_collect(GapOffsets, Concurrency, Opts) of
+            ?event(warning,
+                {fetch_chunk_gap_handling_untested,
+                    {gap_offsets, GapOffsets}}),
+            case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
                     fill_gaps(
                         Sorted ++ NewInfos,
-                        Offset, EndOffset, Concurrency, Opts
+                        Offset, EndOffset, Opts
                     );
                 Error -> Error
             end
@@ -246,84 +248,102 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts) ->
 
 %% @doc Fetch chunks at the given offsets in parallel and parse the responses
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
-fetch_and_collect(Offsets, Concurrency, Opts) ->
-    Results = parallel_map(
+fetch_and_collect(Offsets, Opts) ->
+    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
+    Results = hb_pmap:parallel_map(
         Offsets,
         fun(O) -> get_chunk(O, Opts) end,
         Concurrency
     ),
-    collect_chunk_infos(Results).
+    collect_chunks(Results).
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
 generate_offsets(Start, End, Step) ->
-    generate_offsets_acc(Start, End, Step, []).
+    generate_offsets(Start, End, Step, []).
 
-generate_offsets_acc(Current, End, _Step, Acc) when Current > End ->
+generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets = lists:reverse(Acc),
     ?event(arweave_debug, {fetch_chunk_offsets, {offsets, Offsets}}),
     Offsets;
-generate_offsets_acc(Current, End, Step, Acc) ->
-    generate_offsets_acc(Current + Step, End, Step, [Current | Acc]).
+generate_offsets(Current, End, Step, Acc) ->
+    generate_offsets(Current + Step, End, Step, [Current | Acc]).
 
 %% @doc Parse a list of chunk fetch results into chunk info tuples.
 %% Fails fast on the first error.
-collect_chunk_infos(Results) ->
-    collect_chunk_infos_acc(Results, []).
+collect_chunks(Results) ->
+    collect_chunks(Results, []).
 
-collect_chunk_infos_acc([], Acc) ->
+collect_chunks([], Acc) ->
     {ok, lists:reverse(Acc)};
-collect_chunk_infos_acc([{ok, JSON} | Rest], Acc) ->
+collect_chunks([{ok, JSON} | Rest], Acc) ->
     Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
     AbsStart = AbsEnd - byte_size(Chunk) + 1,
-    ?event(arweave_debug, {collect_chunk_infos, {abs_start, AbsStart}, {abs_end, AbsEnd}, {size, byte_size(Chunk)}}),
-    collect_chunk_infos_acc(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
-collect_chunk_infos_acc([{error, Reason} | _], _Acc) ->
+    ?event(arweave_debug, 
+        {collect_chunks,
+            {abs_start, AbsStart}, 
+            {abs_end, AbsEnd},
+            {size, byte_size(Chunk)}}),
+    collect_chunks(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
+collect_chunks([{error, Reason} | _], _Acc) ->
     {error, Reason}.
 
-%% @doc Sort chunk infos by start offset and remove duplicates. Two queries
-%% landing in the same chunk produce identical entries; we deduplicate by
-%% absolute_end_offset which uniquely identifies a chunk in the weave.
-dedup_and_sort(ChunkInfos) ->
+%% @doc Sort chunk infos by start offset. If duplicate starts appear, log a
+%% warning since this should not happen.
+sort_chunks(ChunkInfos) ->
     Sorted = lists:sort(
-        fun({StartA, _, _}, {StartB, _, _}) -> StartA =< StartB end,
+        fun({StartA, EndA, _}, {StartB, EndB, _}) ->
+            case StartA =:= StartB of
+                true ->
+                    % This should never happen. Logging rather than ignoring
+                    % "just in case".
+                    ?event(
+                        warning,
+                        {duplicate_chunk_start_offset,
+                            {start, StartA},
+                            {left_end, EndA},
+                            {right_end, EndB}
+                        }
+                    );
+                false ->
+                    ok
+            end,
+            StartA =< StartB
+        end,
         ChunkInfos
     ),
-    dedup_by_end(Sorted, #{}).
-
-dedup_by_end([], _Seen) ->
-    [];
-dedup_by_end([{_Start, End, _Data} = Info | Rest], Seen) ->
-    case maps:is_key(End, Seen) of
-        true -> dedup_by_end(Rest, Seen);
-        false -> [Info | dedup_by_end(Rest, Seen#{End => true})]
-    end.
+    Sorted.
 
 %% @doc Find byte ranges within [RangeStart, RangeEnd] not covered by any
 %% chunk. Returns a list of {GapStart, GapEnd} tuples.
+%% WARNING: the find_gaps logic is untested in production and may not be 
+%%          needed. We have yet to find an L1 TX that is chunked in such
+%%          a way as to create gaps when using our naive 256KiB chunking.
 find_gaps(SortedChunks, RangeStart, RangeEnd) ->
-    find_gaps_acc(SortedChunks, RangeStart, RangeEnd, []).
+    find_gaps(SortedChunks, RangeStart, RangeEnd, []).
 
-find_gaps_acc([], Pos, RangeEnd, Gaps) when Pos =< RangeEnd ->
+find_gaps([], Pos, RangeEnd, Gaps) when Pos =< RangeEnd ->
     lists:reverse([{Pos, RangeEnd} | Gaps]);
-find_gaps_acc([], _Pos, _RangeEnd, Gaps) ->
+find_gaps([], _Pos, _RangeEnd, Gaps) ->
     lists:reverse(Gaps);
-find_gaps_acc([{ChunkStart, ChunkEnd, _} | Rest], Pos, RangeEnd, Gaps) ->
+find_gaps([{ChunkStart, ChunkEnd, _} | Rest], Pos, RangeEnd, Gaps) ->
     NewGaps = case ChunkStart > Pos of
         true -> [{Pos, ChunkStart - 1} | Gaps];
         false -> Gaps
     end,
-    find_gaps_acc(Rest, max(Pos, ChunkEnd + 1), RangeEnd, NewGaps).
+    find_gaps(Rest, max(Pos, ChunkEnd + 1), RangeEnd, NewGaps).
 
 %% @doc Assemble chunk infos into a list of contiguous binaries suitable for
 %% iolist_to_binary. The first chunk is sliced if it starts before Offset.
 assemble_chunks(ChunkInfos, Offset) ->
-    Sorted = dedup_and_sort(ChunkInfos),
+    Sorted = sort_chunks(ChunkInfos),
     Binaries = lists:map(
         fun({ChunkStart, _ChunkEnd, Data}) ->
             case ChunkStart < Offset of
                 true ->
+                    % The first chunk may start before the requested offset;
+                    % trim the leading bytes to start exactly at Offset.
                     Skip = Offset - ChunkStart,
                     binary:part(Data, Skip, byte_size(Data) - Skip);
                 false ->
@@ -333,46 +353,6 @@ assemble_chunks(ChunkInfos, Offset) ->
         Sorted
     ),
     {ok, Binaries}.
-
-%% @doc Concurrency-limited parallel map. Spawns up to MaxWorkers processes
-%% and refills the pool as workers complete. Returns results in input order.
-parallel_map(Items, Fun, MaxWorkers) ->
-    Parent = self(),
-    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
-    {ToSpawn, Remaining} = lists:split(
-        min(length(ItemsWithRefs), MaxWorkers),
-        ItemsWithRefs
-    ),
-    ActiveRefs =
-        [spawn_pmap_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
-    ResultsMap =
-        pmap_collect(ActiveRefs, Remaining, Fun, Parent, #{}),
-    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
-
-spawn_pmap_worker({Item, Ref}, Fun, Parent) ->
-    spawn(fun() -> Parent ! {pmap_result, Ref, Fun(Item)} end),
-    Ref.
-
-pmap_collect([], [], _Fun, _Parent, Results) ->
-    Results;
-pmap_collect(Active, Remaining, Fun, Parent, Results) ->
-    receive
-        {pmap_result, Ref, Result} ->
-            NewResults = Results#{Ref => Result},
-            NewActive = lists:delete(Ref, Active),
-            case Remaining of
-                [] ->
-                    pmap_collect(
-                        NewActive, [], Fun, Parent, NewResults
-                    );
-                [Next | Rest] ->
-                    NextRef = spawn_pmap_worker(Next, Fun, Parent),
-                    pmap_collect(
-                        [NextRef | NewActive], Rest,
-                        Fun, Parent, NewResults
-                    )
-            end
-    end.
 
 get_chunk(Offset, Opts) ->
     % Note: it's possible that we will need to add the x-bucket-based-offset
