@@ -135,7 +135,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.anchor, [0, 32]),
+        hb_util:check_size(TX#tx.anchor, [0, 32, 48]),
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
