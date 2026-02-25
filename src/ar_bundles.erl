@@ -204,7 +204,6 @@ data_item_signature_data(RawItem) ->
 
 get_signature_type({rsa, 65537}) -> "1";
 get_signature_type({eddsa, ed25519}) -> "2";
-get_signature_type({ecdsa, secp256k1}) -> "3";
 get_signature_type(ethereum) -> "3";
 get_signature_type(solana) -> "4";
 get_signature_type(typed_ethereum) -> "7".
