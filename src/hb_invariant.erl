@@ -523,23 +523,33 @@ pick(Int) when is_integer(Int) ->
 pick([]) ->
     error(cannot_pick_from_empty_list);
 pick(List) when is_list(List) ->
-    lists:nth(int(length(List)), List);
+    lists:nth(int(1, length(List)), List);
 pick(Map) when is_map(Map) andalso map_size(Map) == 0 ->
     error(cannot_pick_from_empty_map);
 pick(Map) when is_map(Map) ->
     pick(maps:values(Map)).
 pick(Min, Max, Forbidden) when is_list(Forbidden) ->
-    case lists:member(X = int(Min, Max), Forbidden) of
-      true -> pick(Min, Max, Forbidden);
-      false -> X
+    Floor = num(Min),
+    Ceil = num(Max),
+    case Ceil < Floor of
+        true ->
+            error({invalid_range, Min, Max});
+        false ->
+            Candidates = lists:seq(Floor, Ceil),
+            Allowed =
+                [X || X <- Candidates, not lists:member(X, Forbidden)],
+            case Allowed of
+                [] -> error(cannot_pick_from_fully_forbidden_range);
+                _ -> pick(Allowed)
+            end
     end.
-
 %% @doc Generate a random integer.
 int() -> int(?INT_MAX).
 %% @doc Generate a random integer between 0 and the given maximum value --
 %% expressed either explicitly or as a named size constant.
 int(Spec) when not is_integer(Spec) -> int(num(Spec));
-int(Max) -> rand:uniform(Max).
+int(Max) when is_integer(Max), Max < 0 -> error({invalid_range, 0, Max});
+int(Max) -> rand:uniform(Max + 1) - 1.
 
 %% @doc Generate a random integer between the given minimum and maximum values --
 %% expressed either explicitly or as a named size constant.
@@ -548,23 +558,26 @@ int(Min, Max) ->
     Offset = num(Max) - Floor,
     case Offset of
         0 -> Floor;
-        _ -> Floor + rand:uniform(Offset)
+        N when N < 0 -> error({invalid_range, Min, Max});
+        _ -> Floor - 1 + rand:uniform(Offset + 1)
     end.
-
 %% @doc Convert a named size constant to an integer.
 num(Int) when is_integer(Int) -> Int;
 num(tiny) -> ?INT_TINY_MAX;
 num(small) -> ?SMALL_INT_MAX;
 num(big) -> ?BIG_INT_MAX;
-num(Max) -> Max.
+num(Other) -> error({invalid_size_spec, Other}).
 
 %% @doc Generate a random float.
 float() -> ?MODULE:float(?INT_MAX).
 %% @doc Generate a random float between 0 and the given maximum value --
 %% expressed either explicitly or as a named size constant.
-float(small) -> rand:uniform_real() * (2 * ?SMALL_INT_MAX);
-float(big) -> rand:uniform_real() * (2 * ?BIG_INT_MAX);
-float(Max) -> rand:uniform_real() * (2 * Max).
+float(Max) when is_number(Max), Max < 0 -> error({invalid_range, 0, Max});
+float(Max) when is_number(Max) -> rand:uniform_real() * Max;
+float(tiny) -> rand:uniform_real() * num(tiny);
+float(small) -> rand:uniform_real() * num(small);
+float(big) -> rand:uniform_real() * num(big);
+float(Other) -> error({invalid_size_spec, Other}).
 
 %% @doc Generate a random string.
 string() -> string(?STRING_MAX_LENGTH).
