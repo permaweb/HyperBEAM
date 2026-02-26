@@ -26,6 +26,7 @@
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
+    ?event({hook_req, HookReq}),
     case is_match(HookReq, Opts) of
         false -> {ok, HookReq};
         ID -> {ok, HookReq#{ <<"body">> => [block_response(ID)] }}
@@ -43,6 +44,7 @@ is_match(Msg, Opts) ->
 %% @doc Force a reload of the blacklist cache. Returns the number of newly 
 %% inserted IDs.
 refresh(_Base, _Req, Opts) ->
+    ?event({refresh_blacklist_cache, Opts}),
     update_blacklist_cache(Opts).
 
 %%% Internal
@@ -53,20 +55,22 @@ update_blacklist_cache(Opts) ->
     case execute_provider(Opts) of
         {ok, Blacklist} ->
             {ok, IDs} = parse_blacklist(Blacklist, Opts),
+            ?event({parsed_blacklist, {ids, IDs}}),
             BlacklistID = hb_message:id(Blacklist, all, Opts),
             ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
             {ok, insert_ids(IDs, BlacklistID, Opts)};
         {error, _} = Error ->
+            ?event({execute_provider_error, Error}),
             Error
     end.
 
 %% @doc Execute the blacklist provider, returning the result.
 execute_provider(Opts) ->
     Path = hb_opts:get(blacklist_provider, ?DEFAULT_PROVIDER, Opts),
+    ?event({execute_provider, {path, Path}}),
     Request =
         case hb_cache:ensure_loaded(Path, Opts) of
             Msg when is_map(Msg) -> Msg;
-            List when is_list(List) -> #{ <<"body">> => List };
             Bin when is_binary(Bin) -> #{ <<"path">> => Path }
         end,
     hb_ao:resolve(Request, Opts).
@@ -140,6 +144,7 @@ insert_ids([ID | IDs], Value, Opts) when ?IS_ID(ID) ->
 ensure_cache_table(Opts) ->
     case ets:info(?CACHE_TABLE) of
         undefined ->
+            ?event({creating_table, ?CACHE_TABLE}),
             ets:new(
                 ?CACHE_TABLE,
                 [
@@ -151,13 +156,15 @@ ensure_cache_table(Opts) ->
                 ]
             ),
             update_blacklist_cache(Opts);
-        _ -> ok
+        _ ->
+            ?event({table_exists, ?CACHE_TABLE}),
+            ok
     end,
     ?CACHE_TABLE.
 
 %%% Tests
 
-basic_test() ->
+setup_test_env() ->
     Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() },
     Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
     Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
@@ -166,14 +173,42 @@ basic_test() ->
     {ok, _UnsignedID1} = hb_cache:write(Msg1, Opts0),
     {ok, UnsignedID2} = hb_cache:write(Msg2, Opts0),
     {ok, UnsignedID3} = hb_cache:write(Msg3, Opts0),
+    Blacklist =
+        #{
+            <<"data-protocol">> => <<"content-policy">>,
+            <<"body">> => <<SignedID1/binary, "\n", UnsignedID2/binary, "\n">>
+        },
+    BlacklistMsg = hb_message:commit(Blacklist, Opts0),
+    {ok, BlacklistID} = hb_cache:write(BlacklistMsg, Opts0),
+    {ok, #{
+        opts => Opts0,
+        signed1=> SignedID1,
+        unsigned2=> UnsignedID2,
+        unsigned3 => UnsignedID3,
+        blacklist => BlacklistID
+    }}.
+
+basic_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        unsigned2 := UnsignedID2,
+        unsigned3 := UnsignedID3,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    ?event(
+        {setup_test_env,
+            {opts, Opts0},
+            {signed_id1, SignedID1},
+            {unsigned_id2, UnsignedID2},
+            {unsigned_id3, UnsignedID3}
+        }
+    ),
     Opts1 =
         Opts0#{
-            blacklist_provider => [SignedID1, UnsignedID2],
+            blacklist_provider => BlacklistID,
             on => #{
-                <<"request">> => #{
-                    <<"device">> => <<"blacklist@1.0">>,
-                    <<"path">> => <<"request">>
-                }
+                <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
             }
         },
     Node = hb_http_server:start_node(Opts1),
