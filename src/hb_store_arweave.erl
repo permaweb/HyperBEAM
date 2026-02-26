@@ -5,7 +5,7 @@
 -export([scope/0, scope/1, type/2, read/2]).
 -export([start/1, read_with_type/2, resolve/2]).
 %%% Indexing API:
--export([write_offset/5]).
+-export([write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -36,25 +36,59 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
         {type, {id, {explicit, ID}}, {type, Type}}),
     Type.
 
-read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
-    {IndexDuration, IndexResponse} = timer:tc(
-        fun () -> hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) end, 
-        native
-    ),
-    record_index_check_metric(IndexDuration),
-    case IndexResponse of
+%% @doc Read the offset of the data at the given key.
+read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
+    {Time, Result} =
+        timer:tc(
+            fun () ->
+                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID))
+            end,
+            native
+        ),
+    record_index_check_metric(Time),
+    case Result of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
+            {ok, #{
+                <<"version">> => Version,
+                <<"codec-device">> => CodecName,
+                <<"start-offset">> => StartOffset,
+                <<"length">> => Length
+            }};
+        _ -> not_found
+    end.
+
+read(StoreOpts, ID) ->
+    case read_offset(StoreOpts, ID) of
+        {ok,
+            #{
+                <<"version">> := Version,
+                <<"codec-device">> := CodecName,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ->
             record_partition_metric(StartOffset),
             Loaded =
                 case CodecName of
                     <<"ans104@1.0">> ->
-                        {LoadDuration, LoadedMsg} = timer:tc(fun () -> load_item(StartOffset, Length, StoreOpts) end, native),
+                        {LoadDuration, LoadedMsg} =
+                            timer:tc(
+                                fun () ->
+                                    load_item(StartOffset, Length, StoreOpts)
+                                end,
+                                native
+                            ),
                         record_chunk_fetch_metric(LoadDuration, load_bundle),
                         LoadedMsg;
                     <<"tx@1.0">> ->
-                        {LoadDuration, LoadedMsg} = timer:tc(fun () -> load_tx(ID, StartOffset, Length, StoreOpts) end, native),
+                        {LoadDuration, LoadedMsg} =
+                            timer:tc(
+                                fun () ->
+                                    load_tx(ID, StartOffset, Length, StoreOpts)
+                                end,
+                                native
+                            ),
                         record_chunk_fetch_metric(LoadDuration, load_item),
                         LoadedMsg
                 end,
@@ -137,7 +171,7 @@ load_item(StartOffset, Length, Opts) ->
             {
                 ok,
                 hb_message:convert(
-                    ar_bundles:deserialize(SerializedItem, Opts),
+                    ar_bundles:deserialize(SerializedItem),
                     <<"structured@1.0">>,
                     <<"ans104@1.0">>,
                     Opts

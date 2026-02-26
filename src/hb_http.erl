@@ -236,7 +236,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
         {result_is_ans104, {headers, Headers}, {body, Body}},
         Opts
     ),
-    try ar_bundles:deserialize(Body, Opts) of
+    try ar_bundles:deserialize(Body) of
         Deserialized ->
             {
                 hb_http_client:response_status_to_atom(Status),
@@ -909,7 +909,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             ),
             httpsig_to_tabm_singleton(PrimitiveMsg, Req, Body, Opts);
         <<"ans104@1.0">> ->
-            Item = ar_bundles:deserialize(Body, Opts),
+            Item = ar_bundles:deserialize(Body),
             ?event(debug_accept,
                 {deserialized_ans104,
                     {item, Item},
