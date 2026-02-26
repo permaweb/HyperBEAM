@@ -96,8 +96,11 @@ units_to_distribute(State, Opts) ->
     CycleProportionDenominator =
         hb_util:int(hb_maps:get(<<"cycle-proportion-denominator">>, State, Opts)),
     Remaining = MintTotal - AlreadyMinted,
-    (Remaining * CycleProportionNumerator) div CycleProportionDenominator.
-
+    case CycleProportionDenominator of
+        0 -> throw({error, zero_denominator_division});
+        _ -> (Remaining * CycleProportionNumerator) div CycleProportionDenominator
+    end.
+    
 %% @doc Return the number of units to distribute accross the addresses in each
 %% resource of the state.
 units_per_resource(TotalToDistribute, State, Opts) ->
@@ -113,12 +116,19 @@ units_per_resource(TotalToDistribute, State, Opts) ->
             Resources
         ),
     TotalWeights = lists:sum(hb_maps:values(ResourceWeights)),
-    hb_maps:map(
-        fun(_Resource, Weight) ->
-            (TotalToDistribute * Weight) div TotalWeights
-        end,
-        ResourceWeights
-    ).
+    case {map_size(ResourceWeights), TotalWeights} of
+        {0, _} ->
+            ResourceWeights;
+        {_, 0} ->
+            throw({error, zero_denominator_division});
+        _ ->
+            hb_maps:map(
+                fun(_Resource, Weight) ->
+                    (TotalToDistribute * Weight) div TotalWeights
+                end,
+                ResourceWeights
+            )
+    end.
 
 %% @doc Return the number of units to distribute for each address in a resource.
 distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
@@ -134,13 +144,22 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                 hb_maps:map(
                     fun(_Address, AddressDetails) ->
                         hb_util:int(
-                            hb_maps:get(<<"quantity">>, AddressDetails, 0, Opts)
+                            hb_maps:get(
+                                <<"quantity">>,
+                                AddressDetails,
+                                0,
+                                Opts
+                            )
                         )
                     end,
                     Accounts
                 )
             )
         ),
+    case TotalQuantity of
+        0 -> throw({error, zero_denominator_division});
+        _ -> ok
+    end,
     ?event(debug, {total_quantity, TotalQuantity}),
     hb_maps:values(
         hb_maps:map(
@@ -148,7 +167,12 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                 % Gather details for the address.
                 Quantity =
                     hb_util:int(
-                        hb_maps:get(<<"quantity">>, AddressDetails, 0, Opts)
+                        hb_maps:get(
+                            <<"quantity">>,
+                            AddressDetails,
+                            0,
+                            Opts
+                        )
                     ),
                 Recipient =
                     hb_maps:get(
