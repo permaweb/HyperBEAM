@@ -141,7 +141,8 @@ get_tx(Base, Request, Opts) ->
 %% Does not deserialize the message, nor return signature information. Included
 %% only for compatibility with the legacy Arweave gateway `/raw` endpoint.
 raw(Base, Request, Opts) ->
-    case find_key(<<"raw">>, Base, Request, not_found, Opts) of
+    ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
+    case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
             ?event(
@@ -151,7 +152,12 @@ raw(Base, Request, Opts) ->
             % Read the data from the local cache.
             IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
-                {ok, Index = #{ <<"codec-device">> := <<"ans104@1.0">> }} ->
+                {ok,
+                    #{
+                        <<"codec-device">> := <<"ans104@1.0">>,
+                        <<"start-offset">> := StartOffset,
+                        <<"length">> := Length
+                    }} ->
                     % Indexed messages of codec `ans104@1.0' are stored with
                     % the `offset` referencing the start of the *header*.
                     % Subsequently, we read the chunks and then deserialize
@@ -159,9 +165,13 @@ raw(Base, Request, Opts) ->
                     % contain a bundle.
                     ?event(
                         debug_raw,
-                        {found_offset, {id, TXID}, {index, Index}}
+                        {found_offset,
+                            {id, TXID},
+                            {start_offset, StartOffset},
+                            {length, Length}
+                        }
                     ),
-                    case get_chunk_range(Index, Opts) of
+                    case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
                         {ok, Data} ->
                             TX = ar_bundles:deserialize_item_wrapper(Data),
                             ?event(
@@ -180,16 +190,25 @@ raw(Base, Request, Opts) ->
                             }};
                         Error -> Error
                     end;
-                {ok, Index = #{ <<"codec-device">> := <<"tx@1.0">> }} ->
+                {ok,
+                    #{
+                        <<"codec-device">> := <<"tx@1.0">>,
+                        <<"start-offset">> := StartOffset,
+                        <<"length">> := Length
+                    }} ->
                     % Indexed messages of codec `tx@1.0' are stored with
                     % the `offset` referencing the start of the data.
                     % Subsequently, we read the chunks and return them
                     % as-is.
                     ?event(
                         debug_raw,
-                        {found_offset, {id, TXID}, {index, Index}}
+                        {found_offset,
+                            {id, TXID},
+                            {start_offset, StartOffset},
+                            {length, Length}
+                        }
                     ),
-                    case get_chunk_range(Index, Opts) of
+                    case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
                         {ok, Data} ->
                             ?event(
                                 debug_raw,
@@ -240,14 +259,6 @@ raw(Base, Request, Opts) ->
                     ),
                     Error
             end
-    end.
-
-%% @doc Case-insensitively find a key in a list and return its value.
-list_find(_Key, [], Default) -> Default;
-list_find(Key, [{XKey, Value} | Rest], Default) ->
-    NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(XKey)),
-    if NormalizedKey =:= Key -> Value;
-    true -> list_find(Key, Rest, Default)
     end.
 
 %% @doc Case-insensitively find a key in a list and return its value.
@@ -565,12 +576,10 @@ tx_anchor(_Base, _Request, Opts) ->
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
 %% base message.
 find_txid(Base, Request, Opts) ->
-    hb_ao:get_first(
-        [
-            {Request, <<"tx">>},
-            {Base, <<"tx">>}
-        ],
-        not_found,
+    hb_maps:get(
+        <<"tx">>,
+        Request,
+        hb_maps:get(<<"tx">>, Base, not_found, Opts),
         Opts
     ).
 
