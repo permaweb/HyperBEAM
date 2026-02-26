@@ -261,13 +261,22 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
     true -> list_find(Key, Rest, Default)
     end.
 
-%% @doc Retrieve the data of a transaction from Arweave.
+%% @doc Retrieve the data of an Arweave message that has been indexed.
 data(TXID, Opts) ->
-    case hb_store_arweave:read_chunks(TXID, Opts) of
-        {ok, Data} ->
-            {ok, Data};
-        _ ->
-            request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts)
+    ArweaveStoreOpts = hb_opts:get(arweave_index_store, no_store, Opts),
+    case hb_store_arweave:read_offset(ArweaveStoreOpts, TXID) of
+        {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
+            chunk(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"chunk">>,
+                    <<"offset">> => StartOffset + 1,
+                    <<"length">> => Length
+                },
+                Opts
+            );
+        not_found ->
+            {error, not_found}
     end.
 
 chunk(Base, Request, Opts) ->
