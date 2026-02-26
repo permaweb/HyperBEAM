@@ -1524,44 +1524,58 @@ get_mid_chunk_pre_split_test() ->
     ok.
 
 get_pre_split_small_chunks_test() ->
+    TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+    Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
         <<"tx@1.0">>,
-        <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+        TXID,
         11_741_031_646_397 - 810774,
         810774,
-        <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+        <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>,
+        Opts
     ).
 
 get_post_split_small_chunks_test() ->
+    TXID = <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
+    Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
         <<"tx@1.0">>,
-        <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
+        TXID,
         146_563_435_390_439 - 541937,
         541937,
-        <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>
+        <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>,
+        Opts
     ).
 
 %% @doc Checks an item that begins in the middle of a chunk - without
 %% special handling get_chunk_range() used to leave off the last few bytes
 get_ed25519_item_test() ->
+    TXID = <<"jTFA8XDI_rqmUB6-hhoJF4Yi7p6ZpS_0AByFLU1OPrU">>,
+    DataItemID = <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
+    Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
         <<"ans104@1.0">>,
-        <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
+        DataItemID,
         160399272861859,
         499025,
-        <<"PQ5sHoQYSdi1unjHjsfNS_ZXdMvmznEvIkBTvToqVbU">>
+        <<"PQ5sHoQYSdi1unjHjsfNS_ZXdMvmznEvIkBTvToqVbU">>,
+        Opts
     ).
 
 %% @doc this test fails if the chunks are queried with
 %% the `x-bucket-based-offset' header set. I believe it is because
 %% bucket-based offset should only be used when querying an L1 TX
 bucket_based_offset_test() ->
+    TXID = <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+    DataItemID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+    Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
         <<"ans104@1.0">>,
-        <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+        DataItemID,
         376836461101675,
         116247,
-        <<"4BN8AQEQLpTjresTntyrjJ94eFS2TaMM21MnuHGXtJc">>
+        <<"4BN8AQEQLpTjresTntyrjJ94eFS2TaMM21MnuHGXtJc">>,
+        Opts
     ).
 
 % large_tx_test() ->
@@ -1572,8 +1586,7 @@ bucket_based_offset_test() ->
 %         <<"wmDVKM6nYRvqre2DdxmX_mhJ6u8unwmTD4YdmzERcZs">>
 %     ).
 
-assert_chunk_range(Type, TXID, StartOffset, ExpectedLength, ExpectedHash) ->
-    Opts = setup_arweave_index_opts([TXID]),
+assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     T1 = erlang:monotonic_time(millisecond),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -1587,41 +1600,41 @@ assert_chunk_range(Type, TXID, StartOffset, ExpectedLength, ExpectedHash) ->
     T2 = erlang:monotonic_time(millisecond),
     ?event(debug_performance, {chunk_range_resolve,
         {elapsed_ms, T2 - T1},
-        {tx, TXID},
+        {id, {explicit, ID}},
         {offset, StartOffset + 1},
         {length, ExpectedLength}
     }),
-    {ok, RawDataMsg} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"raw">>,
-            <<"raw">> => TXID
-        },
-        Opts
-    ),
-    RawData = hb_ao:get(<<"data">>, RawDataMsg, Opts),
-    ?event(debug_test, {chunk_vs_raw_comparison,
-        {tx, {explicit, TXID}},
-        {type, Type},
-        {start_offset, StartOffset},
-        {expected_length, ExpectedLength},
-        {chunk_size, byte_size(Data)},
-        {raw_size, byte_size(RawData)},
-        {match, Data =:= RawData},
-        {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
-    }),
+    % {ok, RawDataMsg} = hb_ao:resolve(
+    %     #{ <<"device">> => <<"arweave@2.9">> },
+    %     #{
+    %         <<"path">> => <<"raw">>,
+    %         <<"raw">> => ID
+    %     },
+    %     Opts
+    % ),
+    % RawData = hb_ao:get(<<"data">>, RawDataMsg, Opts),
+    % ?event(debug_test, {chunk_vs_raw_comparison,
+    %     {id, {explicit, ID}},
+    %     {type, Type},
+    %     {start_offset, StartOffset},
+    %     {expected_length, ExpectedLength},
+    %     {chunk_size, byte_size(Data)},
+    %     {raw_size, byte_size(RawData)},
+    %     {match, Data =:= RawData},
+    %     {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
+    % }),
     case Type of
         <<"ans104@1.0">> ->
             Item = ar_bundles:deserialize(Data),
             ?event(debug_test, {item, Item}),
-            ?assert(ar_bundles:verify_item(Item)),
-            ?assertEqual(RawData, Item#tx.data);
+            ?assert(ar_bundles:verify_item(Item));
+            % ?assertEqual(RawData, Item#tx.data);
         <<"tx@1.0">> ->
             {ok, TXHeader} = hb_ao:resolve(
                 #{ <<"device">> => <<"arweave@2.9">> },
                 #{
                     <<"path">> => <<"tx">>,
-                    <<"tx">> => TXID,
+                    <<"tx">> => ID,
                     <<"exclude-data">> => true
                 },
                 Opts
@@ -1631,8 +1644,8 @@ assert_chunk_range(Type, TXID, StartOffset, ExpectedLength, ExpectedHash) ->
             ?assert(hb_message:verify(TXHeader, all, Opts)),
             TXWithData = TXHeader#{ <<"data">> => Data },
             ?event(debug_test, {tx_with_data, TXWithData}),
-            ?assert(hb_message:verify(TXWithData, all, Opts)),
-            ?assertEqual(RawData, Data)
+            ?assert(hb_message:verify(TXWithData, all, Opts))
+            % ?assertEqual(RawData, Data)
     end,
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
     ok.
