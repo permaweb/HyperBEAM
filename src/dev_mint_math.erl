@@ -126,15 +126,7 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
     % Get the accounts from the balance messages. Note that we are careful to
     % ensure that the hashpath is not generated and that we do not write to the
     % store, such that no IDs or writes are performed.
-    {ok, Accounts} =
-        hb_ao:resolve(
-            BalanceMessages,
-            <<"from">>,
-            Opts#{
-                hashpath => ignore,
-                cache_control => [<<"no-cache">>, <<"no-store">>]
-            }
-        ),
+    Accounts = resolve_accounts(BalanceMessages, Opts),
     ?event(debug, {addresses, Accounts}),
     TotalQuantity =
         lists:sum(
@@ -186,6 +178,88 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
         ),
         Opts
     ).
+
+resolve_accounts(BalanceMessages, Opts) ->
+    ResolveOpts =
+        Opts#{
+            hashpath => ignore,
+            cache_control => [<<"no-cache">>, <<"no-store">>]
+        },
+    case hb_ao:resolve(BalanceMessages, <<"from">>, ResolveOpts) of
+        {ok, Accounts} when is_map(Accounts), map_size(Accounts) > 0 ->
+            Accounts;
+        _ ->
+            Parsed = resolve_flattened_accounts(BalanceMessages, Opts),
+            case map_size(Parsed) of
+                0 -> throw({accounts_resolve_failed, {error, not_found}});
+                _ -> Parsed
+            end
+    end.
+
+resolve_flattened_accounts(BalanceMessages, Opts) ->
+    Keys = hb_ao:keys(BalanceMessages, Opts),
+    RawAccounts =
+        lists:foldl(
+            fun(Key, Acc) ->
+                case parse_balance_key(Key) of
+                    {ok, Account, <<"quantity">>} ->
+                        Qty = hb_util:int(hb_ao:get(Key, BalanceMessages, 0, Opts)),
+                        put_account_field(Account, <<"quantity">>, Qty, Acc);
+                    {ok, Account, <<"recipient">>} ->
+                        Recipient = hb_ao:get(Key, BalanceMessages, Account, Opts),
+                        put_account_field(Account, <<"recipient">>, Recipient, Acc);
+                    ignore ->
+                        Acc
+                end
+            end,
+            #{},
+            Keys
+        ),
+    maps:map(
+        fun(Account, Details) ->
+            #{
+                <<"quantity">> => hb_util:int(maps:get(<<"quantity">>, Details, 0)),
+                <<"recipient">> => maps:get(<<"recipient">>, Details, Account)
+            }
+        end,
+        RawAccounts
+    ).
+
+put_account_field(Account, Field, Value, Accounts) ->
+    Current = maps:get(Account, Accounts, #{}),
+    Accounts#{ Account => Current#{ Field => Value } }.
+
+parse_balance_key(Key) when is_binary(Key) ->
+    case binary:split(Key, <<"/">>, [global]) of
+        [Account, <<"quantity">>] when byte_size(Account) > 0 ->
+            {ok, Account, <<"quantity">>};
+        [Account, <<"recipient">>] when byte_size(Account) > 0 ->
+            {ok, Account, <<"recipient">>};
+        _ ->
+            parse_concatenated_balance_key(Key)
+    end.
+
+parse_concatenated_balance_key(Key) ->
+    case split_suffix(Key, <<"quantity">>) of
+        {ok, Account} ->
+            {ok, Account, <<"quantity">>};
+        error ->
+            case split_suffix(Key, <<"recipient">>) of
+                {ok, Account} -> {ok, Account, <<"recipient">>};
+                error -> ignore
+            end
+    end.
+
+split_suffix(Key, Suffix) ->
+    KeySize = byte_size(Key),
+    SuffixSize = byte_size(Suffix),
+    case KeySize > SuffixSize andalso
+            binary:part(Key, KeySize - SuffixSize, SuffixSize) =:= Suffix of
+        true ->
+            {ok, binary:part(Key, 0, KeySize - SuffixSize)};
+        false ->
+            error
+    end.
 
 %% @doc Calculate the total number of units to mint from a list of distributions.
 distributions_to_total_units(Distributions, Opts) ->
