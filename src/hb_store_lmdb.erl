@@ -658,7 +658,7 @@ init_prometheus() ->
                 prometheus_histogram:declare([
                     {name, hb_store_lmdb_duration_seconds},
                     {labels, [function, store_name]},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
                     {help, "Duration of lmdb operations in microseconds"}
                 ]),
                 prometheus_counter:new([
