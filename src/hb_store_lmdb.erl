@@ -219,12 +219,11 @@ read(#{<<"name">> := Name} = Opts, Path) ->
             Duration
         )
     end),
-    ?event(lmdb_store, 
+    ?event(debug_lmdb_store, 
     {read, 
         {key, Path},
         {name, Name}, 
         {duration, erlang:convert_time_unit(Duration, native, microsecond)}}),
-
     case ReadResult of
         {ok, Value} -> 
             name_hit_metrics(Name),
