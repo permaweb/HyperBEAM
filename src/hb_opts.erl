@@ -31,6 +31,21 @@
 ).
 -endif.
 
+%%% Default name resolvers. In test mode, we do not use any name resolvers, but
+%%% in-production mode we preload the ARNS snapshot as a baseline.
+-ifndef(TEST).
+-define(DEFAULT_NAME_RESOLVERS,
+    [
+        <<
+            "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
+                "~json@1.0/deserialize&target=data"
+        >>
+    ]
+).
+-else.
+-define(DEFAULT_NAME_RESOLVERS, []).
+-endif.
+
 -ifdef(AO_PROFILING).
 -define(DEFAULT_TRACE_TYPE, ao).
 -else.
@@ -249,6 +264,7 @@ default_message() ->
             initrd, append,
             vmm_type, guest_features
         ],
+        name_resolvers => ?DEFAULT_NAME_RESOLVERS,
         routes => [
             %% Local CU routes.
             #{
@@ -532,19 +548,25 @@ default_message() ->
             routes => []
         },
         on => #{
-            <<"request">> => #{
-                <<"device">> => <<"auth-hook@1.0">>,
-                <<"path">> => <<"request">>,
-                <<"when">> => #{
-                    <<"keys">> => [<<"authorization">>, <<"!">>]
-                },
-                <<"secret-provider">> =>
+            <<"request">> =>
+                [
                     #{
-                        <<"device">> => <<"http-auth@1.0">>,
-                        <<"access-control">> =>
-                            #{ <<"device">> => <<"http-auth@1.0">> }
+                        <<"device">> => <<"auth-hook@1.0">>,
+                        <<"path">> => <<"request">>,
+                        <<"when">> => #{
+                            <<"keys">> => [<<"authorization">>, <<"!">>]
+                        },
+                        <<"secret-provider">> =>
+                            #{
+                                <<"device">> => <<"http-auth@1.0">>,
+                                <<"access-control">> =>
+                                    #{ <<"device">> => <<"http-auth@1.0">> }
+                            }
+                    },
+                    #{
+                        <<"device">> => <<"name@1.0">>
                     }
-            }
+                ]
         },
         scheduler_default_commitment_spec => <<"httpsig@1.0">>,
         genesis_wasm_import_authorities =>
