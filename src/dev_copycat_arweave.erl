@@ -216,7 +216,7 @@ process_block(BlockRes, Current, To, Opts) ->
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_ids(Block, Opts) ->
     TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
-    case hb_opts:get(arweave_index_ids, false, Opts) of
+    case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
             {block_skipped, #{
                 items_count => 0,
