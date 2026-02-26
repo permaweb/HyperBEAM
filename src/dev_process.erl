@@ -439,6 +439,11 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                 dedup_write_us    := DedupWriteUs,
                 balances_write_us := BalancesWriteUs
             } = hb_cache:take_cache_stats(),
+            % Collect normalize_keys overhead accumulated during execution.
+            #{
+                normalize_keys_us    := NormKeysUs,
+                normalize_keys_count := NormKeysCount
+            } = hb_ao:take_normalize_stats(),
             ?event(compute_short,
                 {computed_slot,
                     {proc_id, ProcID},
@@ -462,6 +467,8 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {balances_entries, BalancesEntries},
                     {balances_bytes, BalancesBytes},
                     {balances_write_us, BalancesWriteUs},
+                    {normalize_keys_us, NormKeysUs},
+                    {normalize_keys_count, NormKeysCount},
                     {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
                         hb_ao:get(

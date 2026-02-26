@@ -96,6 +96,7 @@
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3, resolve_many/2]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
+-export([take_normalize_stats/0]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
 -export([keys/1, keys/2, keys/3]).
@@ -350,7 +351,7 @@ resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
     % Normalize lists to numbered maps (base=1) if necessary.
     ?event(ao_core, {stage, 1, list_normalize}, Opts),
     resolve_stage(1,
-        normalize_keys(Base, Opts),
+        timed_normalize_keys(Base, Opts),
         Req,
         Opts
     );
@@ -361,8 +362,8 @@ resolve_stage(1, RawBase, RawReq, Opts) ->
     % Normalize the path to a private key containing the list of remaining
     % keys to resolve.
     ?event(ao_core, {stage, 1, normalize}, Opts),
-    Base = normalize_keys(RawBase, Opts),
-    Req = normalize_keys(RawReq, Opts),
+    Base = timed_normalize_keys(RawBase, Opts),
+    Req = timed_normalize_keys(RawReq, Opts),
     resolve_stage(2, Base, Req, Opts);
 resolve_stage(2, Base, Req, Opts) ->
     ?event(ao_core, {stage, 2, cache_lookup}, Opts),
@@ -1193,6 +1194,26 @@ normalize_keys(Map, Opts) when is_map(Map) ->
         )
     );
 normalize_keys(Other, _Opts) -> Other.
+
+%% @doc Timed wrapper around normalize_keys/2. Accumulates call count and
+%% wall-clock time in the calling process's dictionary so dev_process can
+%% report per-slot totals in the computed_slot log event.
+timed_normalize_keys(Msg, Opts) ->
+    {Us, Result} = timer:tc(fun() -> normalize_keys(Msg, Opts) end),
+    erlang:put(normalize_keys_us,
+        case erlang:get(normalize_keys_us) of undefined -> Us; PrevUs -> PrevUs + Us end),
+    erlang:put(normalize_keys_count,
+        case erlang:get(normalize_keys_count) of undefined -> 1; PrevN -> PrevN + 1 end),
+    Result.
+
+%% @doc Read and reset the per-slot normalize_keys accumulators. Called from
+%% dev_process after execution to capture the total normalize_keys overhead.
+take_normalize_stats() ->
+    Us = case erlang:get(normalize_keys_us) of undefined -> 0; V1 -> V1 end,
+    N  = case erlang:get(normalize_keys_count) of undefined -> 0; V2 -> V2 end,
+    erlang:put(normalize_keys_us, 0),
+    erlang:put(normalize_keys_count, 0),
+    #{normalize_keys_us => Us, normalize_keys_count => N}.
 
 %% @doc The execution options that are used internally by this module
 %% when calling itself.
