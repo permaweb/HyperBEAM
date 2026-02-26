@@ -91,15 +91,16 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             )
     end.
 
-record_partition_metric(Offset) ->
+record_partition_metric(Offset) when is_integer(Offset) ->
     spawn(fun () -> 
         case application:get_application(prometheus) of
             undefined -> ok;
             _ ->
-                Partition = binary_to_integer(Offset) div ?PARTITION_SIZE,
+                Partition = Offset div ?PARTITION_SIZE,
                 prometheus_counter:inc(hb_store_arweave_requests_partition, [Partition], 1)
         end
-    end).
+    end);
+record_partition_metric(_) -> ok.
 
 record_index_check_metric(Duration) ->
     record_metric(hb_store_arweave_index_check_duration_seconds, [], Duration).

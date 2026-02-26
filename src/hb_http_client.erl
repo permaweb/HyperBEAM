@@ -1061,6 +1061,8 @@ get_status_class({error, econnrefused}) ->
 	<<"econnrefused">>;
 get_status_class({error, {shutdown,econnrefused}}) ->
 	<<"shutdown_econnrefused">>;
+get_status_class({error, {down, {shutdown, econnrefused}}}) ->
+    <<"shutdown_econnrefused">>;
 get_status_class({error, {shutdown,ehostunreach}}) ->
 	<<"shutdown_ehostunreach">>;
 get_status_class({error, {shutdown,normal}}) ->
