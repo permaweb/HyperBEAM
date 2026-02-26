@@ -7,7 +7,7 @@
 -export([start/0]).
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, reply/4, accept_to_codec/2]).
--export([req_to_tabm_singleton/3]).
+-export([req_to_tabm_singleton/3, response_status_to_atom/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
