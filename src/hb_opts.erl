@@ -37,8 +37,8 @@
 -define(DEFAULT_NAME_RESOLVERS,
     [
         <<
-            "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
-                "~json@1.0/deserialize&target=data"
+            "4DnLccQGh0zfyNdEBQSbuB3cMXmnTr5uF9j5GgXl2Rg",
+            "~process@1.0/compute/records"
         >>
     ]
 ).
