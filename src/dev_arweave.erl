@@ -314,6 +314,11 @@ get_chunk_range(_Base, Request, Opts) ->
             Data = iolist_to_binary(Chunks),
             case hb_maps:is_key(<<"length">>, Request, Opts) of
                 true ->
+                    ?event(debug_test, {get_chunk_range,
+                        {offset, Offset},
+                        {byte_size, byte_size(Data)},
+                        {length, Length}
+                    }),
                     {ok, binary:part(Data, 0, Length)};
                 false ->
                     {ok, Data}
@@ -339,19 +344,43 @@ fetch_chunk_range(Offset, Length, Opts) ->
             {error, chunk_range_spans_strict_data_split_threshold}
     end.
 
-%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. A single pass at
-%% DATA_CHUNK_SIZE increments covers all chunks.
+%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. Query at
+%% DATA_CHUNK_SIZE increments up to EndOffset, and if the assembled data is
+%% still short, fetch exactly one additional tail chunk. This can happen
+%% when a dataiem starts in the middle of a chunk, the initial set of
+%% offsets generated doesn't know this and so leaves off a single chunk at
+%% the end.
+%% 
+%% Note: we don't want to *always* query an extra chunk because if it doesn't
+%% exist, dev_arweave will consider the dataitem missing.
 fetch_post_threshold(Offset, EndOffset, Opts) ->
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> assemble_chunks(ChunkInfos, Offset);
+        {ok, ChunkInfos} ->
+            % Check for one additional tail chunk if needed.
+            Sorted = sort_chunks(ChunkInfos),
+            {ok, Binaries} = assemble_chunks(Sorted, Offset),
+            ExpectedLength = EndOffset - Offset + 1,
+            case iolist_size(Binaries) < ExpectedLength of
+                false ->
+                    {ok, Binaries};
+                true ->
+                    ExtraOffset = lists:last(Offsets) + ?DATA_CHUNK_SIZE,
+                    case fetch_and_collect([ExtraOffset], Opts) of
+                        {ok, ExtraInfos} ->
+                            assemble_chunks(Sorted ++ ExtraInfos, Offset);
+                        Error ->
+                            Error
+                    end
+            end;
         Error -> Error
     end.
 
 %% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
-%% DATA_CHUNK_SIZE increments, then iteratively fill gaps until contiguous.
+%% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
+%% iteratively fill gaps until contiguous.
 fetch_pre_threshold(Offset, EndOffset, Opts) ->
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    Offsets = generate_offsets(Offset, EndOffset + ?DATA_CHUNK_SIZE, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
             fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
@@ -482,6 +511,13 @@ assemble_chunks(ChunkInfos, Offset) ->
                     % The first chunk may start before the requested offset;
                     % trim the leading bytes to start exactly at Offset.
                     Skip = Offset - ChunkStart,
+                    ?event(debug_test, {assemble_chunks,
+                        {skip, Skip},
+                        {chunk_start, ChunkStart},
+                        {offset, Offset},
+                        {byte_size, byte_size(Data)},
+                        {length, byte_size(Data) - Skip}
+                    }),
                     binary:part(Data, Skip, byte_size(Data) - Skip);
                 false ->
                     Data
@@ -1489,40 +1525,44 @@ get_mid_chunk_pre_split_test() ->
 
 get_pre_split_small_chunks_test() ->
     assert_chunk_range(
+        <<"tx@1.0">>,
         <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
-        11_741_031_646_397,
+        11_741_031_646_397 - 810774,
         810774,
         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
     ).
 
 get_post_split_small_chunks_test() ->
     assert_chunk_range(
+        <<"tx@1.0">>,
         <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
-        146_563_435_390_439,
+        146_563_435_390_439 - 541937,
         541937,
         <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>
+    ).
+
+%% @doc Checks an item that begins in the middle of a chunk - without
+%% special handling get_chunk_range() used to leave off the last few bytes
+get_ed25519_item_test() ->
+    assert_chunk_range(
+        <<"ans104@1.0">>,
+        <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
+        160399272861859,
+        499025,
+        <<"PQ5sHoQYSdi1unjHjsfNS_ZXdMvmznEvIkBTvToqVbU">>
     ).
 
 %% @doc this test fails if the chunks are queried with
 %% the `x-bucket-based-offset' header set. I believe it is because
 %% bucket-based offset should only be used when querying an L1 TX
 bucket_based_offset_test() ->
-    Offset = 376836461101675,
-    Length = 116247,
-    ExpectedID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
-    {ok, SerializedItem} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => Offset + 1,
-            <<"length">> => Length
-        },
-        #{}
-    ),
-    Item = ar_bundles:deserialize(SerializedItem),
-    ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id)),
-    ?assert(ar_bundles:verify_item(Item)),
-    ok.
+    assert_chunk_range(
+        <<"ans104@1.0">>,
+        <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+        376836461101675,
+        116247,
+        <<"4BN8AQEQLpTjresTntyrjJ94eFS2TaMM21MnuHGXtJc">>
+    ).
 
 % large_tx_test() ->
 %     assert_chunk_range(
@@ -1532,8 +1572,7 @@ bucket_based_offset_test() ->
 %         <<"wmDVKM6nYRvqre2DdxmX_mhJ6u8unwmTD4YdmzERcZs">>
 %     ).
 
-assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
-    StartOffset = EndOffset - ExpectedLength,
+assert_chunk_range(Type, TXID, StartOffset, ExpectedLength, ExpectedHash) ->
     Opts = setup_arweave_index_opts([TXID]),
     T1 = erlang:monotonic_time(millisecond),
     {ok, Data} = hb_ao:resolve(
@@ -1562,28 +1601,38 @@ assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
     ),
     RawData = hb_ao:get(<<"data">>, RawDataMsg, Opts),
     ?event(debug_test, {chunk_vs_raw_comparison,
-        {tx, TXID},
+        {tx, {explicit, TXID}},
+        {type, Type},
         {start_offset, StartOffset},
-        {end_offset, EndOffset},
         {expected_length, ExpectedLength},
         {chunk_size, byte_size(Data)},
         {raw_size, byte_size(RawData)},
         {match, Data =:= RawData},
         {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
     }),
-    ?assertEqual(RawData, Data),
+    case Type of
+        <<"ans104@1.0">> ->
+            Item = ar_bundles:deserialize(Data),
+            ?event(debug_test, {item, Item}),
+            ?assert(ar_bundles:verify_item(Item)),
+            ?assertEqual(RawData, Item#tx.data);
+        <<"tx@1.0">> ->
+            {ok, TXHeader} = hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"tx">>,
+                    <<"tx">> => TXID,
+                    <<"exclude-data">> => true
+                },
+                Opts
+            ),
+            ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
+            ?event(debug_test, {tx_header, TXHeader}),
+            ?assert(hb_message:verify(TXHeader, all, Opts)),
+            TXWithData = TXHeader#{ <<"data">> => Data },
+            ?event(debug_test, {tx_with_data, TXWithData}),
+            ?assert(hb_message:verify(TXWithData, all, Opts)),
+            ?assertEqual(RawData, Data)
+    end,
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
-    {ok, TXHeader} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"tx">>,
-            <<"tx">> => TXID,
-            <<"exclude-data">> => true
-        },
-        Opts
-    ),
-    ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
-    ?assert(hb_message:verify(TXHeader, all, Opts)),
-    TXWithData = TXHeader#{ <<"data">> => Data },
-    ?assert(hb_message:verify(TXWithData, all, Opts)),
     ok.
