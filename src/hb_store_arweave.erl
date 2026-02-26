@@ -4,7 +4,7 @@
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
 %%% Indexing API:
--export([write_offset/5]).
+-export([write_offset/5, read_offset/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,11 +27,30 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
         {type, {id, {explicit, ID}}, {type, Type}}),
     Type.
 
-read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
+%% @doc Read the offset of the data at the given key.
+read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
     case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
+            {ok, #{
+                <<"version">> => Version,
+                <<"codec-device">> => CodecName,
+                <<"start-offset">> => StartOffset,
+                <<"length">> => Length
+            }};
+        not_found -> not_found
+    end.
+
+read(StoreOpts, ID) ->
+    case read_offset(StoreOpts, ID) of
+        {ok,
+            #{
+                <<"version">> := Version,
+                <<"codec-device">> := CodecName,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ->
             Loaded =
                 case CodecName of
                     <<"ans104@1.0">> ->

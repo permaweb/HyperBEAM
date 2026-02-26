@@ -137,15 +137,128 @@ get_tx(Base, Request, Opts) ->
             )
     end.
 
-%% @doc Get raw transaction data from the Arweave node, as indicated by the
-%% `tx` key in the request or base message.
+%% @doc Get raw transaction *data* and `content-type` of an Arweave message.
+%% Does not deserialize the message, nor return signature information. Included
+%% only for compatibility with the legacy Arweave gateway `/raw` endpoint.
 raw(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
+    case find_key(<<"raw">>, Base, Request, not_found, Opts) of
         not_found -> {error, not_found};
-        TXID -> data(TXID, Opts)
+        TXID ->
+            ?event(
+                debug_raw,
+                {found_txid, {id, TXID}}
+            ),
+            % Read the data from the local cache.
+            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+            case hb_store_arweave:read_offset(IndexStore, TXID) of
+                {ok, Index = #{ <<"codec-device">> := <<"ans104@1.0">> }} ->
+                    % Indexed messages of codec `ans104@1.0' are stored with
+                    % the `offset` referencing the start of the *header*.
+                    % Subsequently, we read the chunks and then deserialize
+                    % only the wrapper, yielding a #tx record that may
+                    % contain a bundle.
+                    ?event(
+                        debug_raw,
+                        {found_offset, {id, TXID}, {index, Index}}
+                    ),
+                    case get_chunk_range(Index, Opts) of
+                        {ok, Data} ->
+                            TX = ar_bundles:deserialize_item_wrapper(Data),
+                            ?event(
+                                debug_raw,
+                                {deserialized_raw, {id, TXID}, {tx, TX}}
+                            ),
+                            ContentType =
+                                list_find(
+                                    <<"content-type">>,
+                                    TX#tx.tags,
+                                    <<"application/octet-stream">>
+                                ),
+                            {ok, #{
+                                <<"content-type">> => ContentType,
+                                <<"data">> => Data
+                            }};
+                        Error -> Error
+                    end;
+                {ok, Index = #{ <<"codec-device">> := <<"tx@1.0">> }} ->
+                    % Indexed messages of codec `tx@1.0' are stored with
+                    % the `offset` referencing the start of the data.
+                    % Subsequently, we read the chunks and return them
+                    % as-is.
+                    ?event(
+                        debug_raw,
+                        {found_offset, {id, TXID}, {index, Index}}
+                    ),
+                    case get_chunk_range(Index, Opts) of
+                        {ok, Data} ->
+                            ?event(
+                                debug_raw,
+                                {fetched_chunks, {id, TXID}, {data, Data}}
+                            ),
+                            {ok, StructuredTXHeader} =
+                                get_tx(
+                                    #{ <<"tx">> => TXID },
+                                    #{ <<"exclude-data">> => true },
+                                    Opts
+                                ),
+                            ContentType =
+                                hb_ao:get(
+                                    <<"content-type">>,
+                                    StructuredTXHeader,
+                                    <<"application/octet-stream">>,
+                                    Opts#{
+                                        cache_control =>
+                                            [<<"no-cache">>, <<"no-store">>]
+                                    }
+                                ),
+                            ?event(
+                                debug_raw,
+                                {content_type_and_data,
+                                    {id, TXID},
+                                    {content_type, ContentType},
+                                    {data, Data}
+                                }
+                            ),
+                            {
+                                ok,
+                                #{
+                                    <<"content-type">> => ContentType,
+                                    <<"data">> => Data
+                                }
+                            };
+                        Error ->
+                            ?event(
+                                debug_raw,
+                                {error, {id, TXID}, {returned, Error}}
+                            ),
+                            Error
+                    end;
+                Error ->
+                    ?event(
+                        debug_raw,
+                        {error, {id, TXID}, {returned, Error}}
+                    ),
+                    Error
+            end
     end.
 
-%% @doc Retrieve the data of a transaction from Arweave.
+%% @doc Case-insensitively find a key in a list and return its value.
+list_find(_Key, [], Default) -> Default;
+list_find(Key, [{XKey, Value} | Rest], Default) ->
+    NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(XKey)),
+    if NormalizedKey =:= Key -> Value;
+    true -> list_find(Key, Rest, Default)
+    end.
+
+%% @doc Case-insensitively find a key in a list and return its value.
+list_find(_Key, [], Default) -> Default;
+list_find(Key, [{XKey, Value} | Rest], Default) ->
+    NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(XKey)),
+    if NormalizedKey =:= Key -> Value;
+    true -> list_find(Key, Rest, Default)
+    end.
+
+%% @doc Retrieve the data of an Arweave message that has been indexed.
 data(TXID, Opts) ->
     request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
