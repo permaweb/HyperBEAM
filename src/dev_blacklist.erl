@@ -33,8 +33,27 @@
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
     case is_match(HookReq, Opts) of
-        false -> {ok, HookReq};
-        ID -> {ok, HookReq#{ <<"body">> => [block_response(ID)] }}
+        false ->
+            ?event(blacklist, {allowed, HookReq}, Opts),
+            {ok, HookReq};
+        ID ->
+            ?event(blacklist, {blocked, ID}, Opts),
+            {
+                ok,
+                HookReq#{
+                    <<"body">> =>
+                        [#{
+                            <<"status">> => 451,
+                            <<"reason">> => <<"content-policy">>,
+                            <<"blocked-id">> => ID,
+                            <<"body">> =>
+                                <<
+                                    "Requested message blocked by this node's ",
+                                    "content policy. Blocked ID: ", ID/binary
+                                >>
+                        }]
+                }
+            }
     end.
 
 %% @doc Check if the message contains any blacklisted IDs.
@@ -58,7 +77,14 @@ refresh(Base, Req, Opts) ->
 %% @doc Fetch the blacklist and store the results in the cache table.
 maybe_refresh(Opts) ->
     ensure_cache_table(Opts),
-    MinWait = hb_util:int(hb_opts:get(blacklist_refresh_frequency, ?DEFAULT_MIN_WAIT, Opts)),
+    MinWait =
+        hb_util:int(
+            hb_opts:get(
+                blacklist_refresh_frequency,
+                ?DEFAULT_MIN_WAIT,
+                Opts
+            )
+        ),
     Time = erlang:system_time(second),
     case hb_opts:get(blacklist_last_refresh, 0, Opts) of
         LastRefresh when (Time - LastRefresh) > MinWait ->
@@ -102,7 +128,6 @@ parse_blacklist(Body, _Opts) when is_list(Body) ->
     {ok, lists:filtermap(fun parse_blacklist_line/1, Body)};
 parse_blacklist(Msg, Opts) when is_map(Msg) ->
     maybe
-        {ok, <<"content-policy">>} ?= hb_maps:find(<<"data-protocol">>, Msg, Opts),
         {ok, Body} = hb_maps:find(<<"body">>, Msg, Opts),
         parse_blacklist(Body, Opts)
     end;
@@ -140,14 +165,6 @@ collect_ids(List, Acc, Opts) when is_list(List) ->
         List
     );
 collect_ids(_Other, Acc, _Opts) -> Acc.
-
-block_response(BlockedID) ->
-    #{
-        <<"status">> => 451,
-        <<"body">> => <<"Requested message blocked by this node's content policy.">>,
-        <<"reason">> => <<"content-policy">>,
-        <<"blocked-id">> => BlockedID
-    }.
 
 %% @doc Insert a list of IDs into the cache table, returning the number of new IDs
 %% inserted. Each ID is inserted as a key with the current timestamp as the value.
