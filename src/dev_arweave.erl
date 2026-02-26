@@ -1041,6 +1041,71 @@ post_tx_json_request(Server, ClientOpts) ->
         ClientOpts
     ).
 
+%% @doc Build isolated test opts and pre-index the blocks for the given TXIDs.
+setup_arweave_index_opts(TXIDs) ->
+    TestStore = hb_test_utils:test_store(hb_store_ets, <<"arweave-index">>),
+    IndexStore = #{ <<"index-store">> => [TestStore] },
+    Opts = #{
+        store => [TestStore],
+        arweave_index_ids => true,
+        arweave_index_store => IndexStore
+    },
+    % Either: Index the blocks containing the TXs...
+    % lists:foreach(
+    %     fun(Block) -> ok = index_test_block(Block, Opts) end,
+    %     lists:usort([tx_index_block(TXID) || TXID <- TXIDs])
+    % ),
+    % ...or: Index the TXs directly. This depends on the `/tx/<TXID>/offset`
+    % endpoint being available in the `/arweave` routes.
+    lists:foreach(
+        fun(TXID) -> ok = index_test_tx(TXID, IndexStore, Opts) end,
+        TXIDs
+    ),
+    Opts.
+
+index_test_block(Block, Opts) ->
+    BlockBin = hb_util:bin(Block),
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&from=",
+                BlockBin/binary,
+                "&to=",
+                BlockBin/binary
+            >>,
+            Opts#{ arweave_index_ids => true }
+        ),
+    ok.
+
+index_test_tx(TXID, IndexStore, Opts) ->
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    StartOffset = EndOffset - Size,
+    ok =
+        hb_store_arweave:write_offset(
+            IndexStore,
+            TXID,
+            <<"tx@1.0">>,
+            StartOffset,
+            Size
+        ),
+    ?assertMatch({ok, _}, hb_store_arweave:read_offset(IndexStore, TXID)),
+    ok.
+
+tx_index_block(<<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>) -> 1749502;
+tx_index_block(<<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>) -> 1289677;
+tx_index_block(<<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>) -> 753012;
+tx_index_block(<<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>) -> 1233918.
+
 get_tx_basic_data_test() ->
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -1099,17 +1164,19 @@ get_tx_split_chunk_test() ->
     ok.
 
 get_tx_basic_data_exclude_data_test() ->
+    TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
-            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"tx">> => TXID,
             <<"exclude-data">> => true
         },
-        #{}
+        Opts
     ),
     ?event(debug_test, {structured_tx, Structured}),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
     ExpectedMsg = #{
         <<"reward">> => <<"482143296">>,
@@ -1117,32 +1184,35 @@ get_tx_basic_data_exclude_data_test() ->
         <<"content-type">> => <<"application/json">>
     },
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
-    {ok, Data} = hb_ao:resolve(
+    {ok, RawData} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"raw">>,
-            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
+            <<"raw">> => TXID
         },
-        #{}
+        Opts
     ),
+    Data = hb_ao:get(<<"data">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
-    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
     ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
     ok.
 
 get_tx_data_tag_exclude_data_test() ->
+    TXID = <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
+    Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
-            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
+            <<"tx">> => TXID,
             <<"exclude-data">> => true
         },
-        #{}
+        Opts
     ),
     ?event(debug_test, {structured_tx, Structured}),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
     ExpectedMsg = #{
         <<"reward">> => <<"630923958">>,
@@ -1150,16 +1220,17 @@ get_tx_data_tag_exclude_data_test() ->
         <<"content-type">> => <<"application/json">>
     },
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
-    {ok, Data} = hb_ao:resolve(
+    {ok, RawData} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"raw">>,
-            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>
+            <<"raw">> => TXID
         },
-        #{}
+        Opts
     ),
+    Data = hb_ao:get(<<"data">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
-    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
     ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
     ok.
@@ -1463,7 +1534,7 @@ bucket_based_offset_test() ->
 
 assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
     StartOffset = EndOffset - ExpectedLength,
-    Opts = #{},
+    Opts = setup_arweave_index_opts([TXID]),
     T1 = erlang:monotonic_time(millisecond),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -1481,14 +1552,15 @@ assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
         {offset, StartOffset + 1},
         {length, ExpectedLength}
     }),
-    {ok, RawData} = hb_ao:resolve(
+    {ok, RawDataMsg} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"raw">>,
-            <<"tx">> => TXID
+            <<"raw">> => TXID
         },
         Opts
     ),
+    RawData = hb_ao:get(<<"data">>, RawDataMsg, Opts),
     ?event(debug_test, {chunk_vs_raw_comparison,
         {tx, TXID},
         {start_offset, StartOffset},
