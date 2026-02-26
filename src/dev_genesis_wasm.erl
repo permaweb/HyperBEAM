@@ -26,30 +26,18 @@ normalize(Msg, Req, Opts) ->
     end.
 
 %% @doc Genesis-wasm device compute handler.
-%% Normal compute execution through external CU with state persistence
+%% Normal compute execution through external CU with state persistence.
+%% Note: patch@1.0 is applied inside do_compute (via delegate_request), so
+%% we return the result directly without a second patch pass.
 compute(Msg, Req, Opts) ->
-    % Validate whether the genesis-wasm feature is enabled.
     case delegate_request(Msg, Req, Opts) of
         {ok, Res} ->
-            % Resolve the `patch@1.0' device.
-            {ok, Msg4} =
-                hb_ao:resolve(
-                    Res,
-                    {
-                        as,
-                        <<"patch@1.0">>,
-                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
-                    },
-                    Opts
-                ),
-            ?event({genesis_wasm_patched_message, Msg4}),
-            % Return the patched message.
-            {ok, Msg4};
+            ?event({genesis_wasm_patched_message, Res}),
+            {ok, Res};
         {skip, Res} ->
             ?event({genesis_wasm_skipping_duplicate, {req, Req}, {res, Res}, {msg, Msg}}),
             {ok, Msg};
         {error, Error} ->
-            % Return the error.
             {error, Error}
     end.
 
@@ -78,12 +66,18 @@ delegate_request(Msg, Req, Opts) ->
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(State, Req, Opts) ->
     maybe
-        {ok, State2} ?=
-            hb_ao:resolve(
-                State,
-                {as, <<"dedup@1.0">>, Req},
-                Opts
-            ),
+        {DedupUs, DedupResult} =
+            timer:tc(fun() ->
+                hb_ao:resolve(
+                    State,
+                    {as, <<"dedup@1.0">>, Req},
+                    % hashpath => ignore: dedup is an internal check that
+                    % does not need cryptographic path linking.
+                    Opts#{ hashpath => ignore }
+                )
+            end),
+        erlang:put(dedup_us, DedupUs),
+        {ok, State2} ?= DedupResult,
         ?event(dedup_short,
             {continue,
                 {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
@@ -92,22 +86,35 @@ do_compute(State, Req, Opts) ->
                 {input, hb_ao:get(<<"body/data">>, Req, no_input, Opts)}
             }
         ),
-        {ok, State3} ?=
-            hb_ao:resolve(
-                State2,
-                {as, <<"delegated-compute@1.0">>, Req},
-                Opts
-            ),
-        {ok, State4} ?=
-            hb_ao:resolve(
-                State3,
-                {
-                    as,
-                    <<"patch@1.0">>,
-                    Req#{ <<"patch-from">> => <<"/results/outbox">> }
-                },
-                Opts
-            ),
+        {DelegatedUs, DelegatedResult} =
+            timer:tc(fun() ->
+                hb_ao:resolve(
+                    State2,
+                    {as, <<"delegated-compute@1.0">>, Req},
+                    % hashpath => ignore: the CU call result will be
+                    % committed when the final state is written.
+                    Opts#{ hashpath => ignore }
+                )
+            end),
+        erlang:put(delegated_us, DelegatedUs),
+        {ok, State3} ?= DelegatedResult,
+        {PatchUs, PatchResult} =
+            timer:tc(fun() ->
+                hb_ao:resolve(
+                    State3,
+                    {
+                        as,
+                        <<"patch@1.0">>,
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                    },
+                    % hashpath => ignore: patch is an internal intermediate
+                    % transformation; cryptographic path linking is not needed
+                    % here and avoids a full normalize_keys pass on the state.
+                    Opts#{ hashpath => ignore }
+                )
+            end),
+        erlang:put(patch_us, PatchUs),
+        {ok, State4} ?= PatchResult,
         ?event(dedup_short,
             {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
         ),

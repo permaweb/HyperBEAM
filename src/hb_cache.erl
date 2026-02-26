@@ -273,10 +273,8 @@ write(Bin, Opts) when is_binary(Bin) ->
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
-    % Return the path.
     Path = generate_binary_path(Bin, Opts),
     hb_store:write(Store, Path, Bin),
-    %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
     do_write_message(
@@ -290,8 +288,8 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     AllIDs = calculate_all_ids(Msg, Opts),
     AltIDs = AllIDs -- [UncommittedID],
-    MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
+    MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     % Write all of the keys of the message into the store.
     hb_store:make_group(Store, UncommittedID),
     maps:map(
@@ -300,10 +298,9 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
         end,
         maps:without([<<"priv">>], Msg)
     ),
-    % Optionally store the message into the match index, if the index is configured.
+    % Optionally store the message into the match index, if configured.
     dev_match:write(AllIDs, Msg, Opts),
-    % Write the commitments to the store, linking each commitment ID to the
-    % uncommitted message.
+    % Link each commitment ID to the uncommitted message.
     lists:map(
         fun(AltID) ->
             ?event(debug_cache,

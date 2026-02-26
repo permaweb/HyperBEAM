@@ -190,8 +190,8 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
                     {req, Req}
                 }
             ),
-            {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
             Raw = hb_json:decode(JSONRes, Opts),
+            {ok, Msg} = dev_json_iface:json_to_message(Raw, Opts),
             {ok,
                 hb_ao:set(
                     Base,

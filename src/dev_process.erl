@@ -379,6 +379,22 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
         V -> V
     end,
     erlang:erase(wasm_cu_us),
+    % Read dedup and patch phase durations stored by dev_genesis_wasm:do_compute.
+    DedupPhaseUs = case erlang:get(dedup_us) of
+        undefined -> 0;
+        V2 -> V2
+    end,
+    erlang:erase(dedup_us),
+    PatchPhaseUs = case erlang:get(patch_us) of
+        undefined -> 0;
+        V3 -> V3
+    end,
+    erlang:erase(patch_us),
+    DelegatedPhaseUs = case erlang:get(delegated_us) of
+        undefined -> 0;
+        V4 -> V4
+    end,
+    erlang:erase(delegated_us),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
@@ -453,6 +469,9 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {execution_ms, RuntimeMicroSecs div 1000},
                     {store_ms, StoreTimeMicroSecs div 1000},
                     {wasm_cu_ms, WasmCUUs div 1000},
+                    {dedup_phase_ms, DedupPhaseUs div 1000},
+                    {delegated_phase_ms, DelegatedPhaseUs div 1000},
+                    {patch_phase_ms, PatchPhaseUs div 1000},
                     {exec_lmdb_reads, ExecLMDBReads},
                     {exec_lmdb_read_us, ExecLMDBReadUs},
                     {exec_lmdb_writes, ExecLMDBWrites},

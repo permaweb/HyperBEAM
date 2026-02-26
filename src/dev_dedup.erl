@@ -14,9 +14,13 @@
 %%% subject.
 %%%
 %%% This device runs on the first pass of the `compute' key call if executed
-%%% in a stack, and not in subsequent passes. Currently the device stores its
-%%% list of already seen items in memory, but at some point it will likely make
-%%% sense to drop them in the cache.
+%%% in a stack, and not in subsequent passes.
+%%%
+%%% When a store is available in Opts, this device stores dedup entries as flat
+%%% LMDB key-value pairs (O(1) per check/write) rather than in a trie embedded
+%%% in M1. This avoids the O(trie_size) HMAC re-sign + LMDB re-write cost per
+%%% slot. The trie-based fallback is retained for backward-compatibility when no
+%%% store is available (e.g. in unit tests).
 -module(dev_dedup).
 -export([info/1]).
 -include_lib("eunit/include/eunit.hrl").
@@ -67,14 +71,6 @@ handle(Key, M1, M2, Opts) ->
         end,
     % Is this the first pass, if we are executing in a stack?
     FirstPass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts) == 1,
-    % Get the trie of already seen subjects.
-    DedupTrie =
-        hb_ao:get(
-            <<"dedup">>,
-            {as, <<"message@1.0">>, M1},
-            #{ <<"device">> => <<"trie@1.0">> },
-            Opts
-        ),
     ?event({dedup_handle,
         {key, Key},
         {base, M1},
@@ -92,45 +88,148 @@ handle(Key, M1, M2, Opts) ->
             % check.
             {ok, M1};
         {true, _} ->
-            % If this is the first pass, we need to check if the subject has
-            % already been seen.
             SubjectID = hb_message:id(Subject, signed, Opts),
-            ?event({dedup_checking, DedupTrie}),
-            case hb_ao:get(SubjectID, DedupTrie, Opts) of
-                not_found ->
-                    ?event({not_seen, SubjectID}),
-                    Slot =
-                        hb_maps:get(
-                            <<"slot">>,
-                            M2,
-                            true,
-                            Opts
-                        ),
-                    {ok, NewDedupTrie} =
-                        hb_ao:resolve(
-                            DedupTrie,
-                            #{ <<"path">> => <<"set">>, SubjectID => Slot },
-                            Opts
-                        ),
-                    ?event({dedup_updated, NewDedupTrie}),
-                    hb_ao:resolve(
-                        M1,
-                        #{ 
-                            <<"path">> => <<"set">>,
-                            <<"set-mode">> => <<"explicit">>,
-                            <<"dedup">> => NewDedupTrie
-                        },
-                        Opts
-                    );
-                Value ->
-                    ?event(
-                        {already_seen,
-                            {subject, SubjectID},
-                            {dedup_value, Value}
-                        }
-                    ),
-                    {skip, M1}
+            ?event({dedup_checking, SubjectID}),
+            % Try flat LMDB first (O(1)), fall back to trie when no store.
+            case try_flat_dedup(SubjectID, M1, M2, Opts) of
+                {flat, Result} -> Result;
+                no_store -> trie_dedup(SubjectID, M1, M2, Opts)
             end
+    end.
+
+%% @doc Attempt O(1) dedup via flat LMDB key-value store.
+%% Returns `{flat, Result}' on success, or `no_store' if no store is available.
+%%
+%% A process-dictionary guard prevents infinite recursion: computing the
+%% ProcID namespace key requires looking up the `process' key, which can
+%% re-enter this function through the device stack. On recursive entry we
+%% return `no_store' immediately so the caller falls back to the trie path.
+try_flat_dedup(SubjectID, M1, M2, Opts) ->
+    case erlang:get(dev_dedup_resolving) of
+        true ->
+            % Recursive entry – skip flat LMDB to avoid infinite loop.
+            no_store;
+        _ ->
+            erlang:put(dev_dedup_resolving, true),
+            Result = try do_flat_dedup(SubjectID, M1, M2, Opts)
+                     catch _:_ -> no_store
+                     end,
+            erlang:erase(dev_dedup_resolving),
+            Result
+    end.
+
+do_flat_dedup(SubjectID, M1, M2, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    case {Store, proc_id_direct(M1, Opts)} of
+        {no_viable_store, _} ->
+            no_store;
+        {_, no_proc} ->
+            % No stable process definition key in M1 — cannot safely
+            % namespace the flat LMDB key. Fall back to trie.
+            no_store;
+        {_, ProcID} ->
+            DedupKey = hb_store:path(Store, [<<"dedup">>, ProcID, SubjectID]),
+            case hb_store:read(Store, DedupKey) of
+                {ok, _} ->
+                    % Already seen via flat LMDB record.
+                    ?event({already_seen_flat, {subject, SubjectID}}),
+                    {flat, {skip, M1}};
+                not_found ->
+                    % Not in flat LMDB; also check old trie as migration
+                    % fallback for subjects seen before this optimisation
+                    % was deployed.
+                    OldTrie = hb_ao:get(
+                        <<"dedup">>,
+                        {as, <<"message@1.0">>, M1},
+                        not_found,
+                        Opts
+                    ),
+                    AlreadySeen =
+                        case OldTrie of
+                            not_found -> false;
+                            T -> hb_ao:get(SubjectID, T, Opts) =/= not_found
+                        end,
+                    case AlreadySeen of
+                        true ->
+                            ?event({already_seen_trie_migrated, {subject, SubjectID}}),
+                            {flat, {skip, M1}};
+                        false ->
+                            Slot = hb_maps:get(<<"slot">>, M2, true, Opts),
+                            _ = hb_store:write(Store, DedupKey,
+                                slot_to_bin(Slot)),
+                            ?event({not_seen_flat, {subject, SubjectID}, {slot, Slot}}),
+                            % Return M1 with the old trie-based dedup entry removed.
+                            % Dedup state now lives in LMDB; carrying the old trie
+                            % in M1 inflates the snapshot and slows serialization.
+                            {flat, {ok, maps:remove(<<"dedup">>, M1)}}
+                    end
+            end
+    end.
+
+%% @doc Derive a stable process namespace ID using direct Erlang map access
+%% (no device dispatch) to avoid re-entering the device handler recursively.
+%% Returns `no_proc' when M1 has no `<<"process">>' key, which causes the
+%% caller to fall back to the trie path. In production M1 is the process
+%% state which always carries a top-level `<<"process">>' key pointing to
+%% the immutable process definition (stable across all slots).
+proc_id_direct(M1, Opts) ->
+    case maps:find(<<"process">>, M1) of
+        {ok, Process} when is_map(Process) ->
+            hb_message:id(Process, unsigned, Opts);
+        _ ->
+            no_proc
+    end.
+
+%% @doc Convert a slot value (integer or binary) to a binary suitable for
+%% storage as an LMDB value.
+slot_to_bin(Slot) when is_integer(Slot) -> integer_to_binary(Slot);
+slot_to_bin(Slot) when is_binary(Slot)  -> Slot;
+slot_to_bin(Slot) -> list_to_binary(io_lib:format("~p", [Slot])).
+
+%% @doc Original trie-based dedup. Used as fallback when no store is available.
+trie_dedup(SubjectID, M1, M2, Opts) ->
+    DedupTrie =
+        hb_ao:get(
+            <<"dedup">>,
+            {as, <<"message@1.0">>, M1},
+            #{ <<"device">> => <<"trie@1.0">> },
+            Opts
+        ),
+    ?event({dedup_checking_trie, DedupTrie}),
+    case hb_ao:get(SubjectID, DedupTrie, Opts) of
+        not_found ->
+            ?event({not_seen_trie, SubjectID}),
+            Slot =
+                hb_maps:get(
+                    <<"slot">>,
+                    M2,
+                    true,
+                    Opts
+                ),
+            {ok, NewDedupTrie} =
+                hb_ao:resolve(
+                    DedupTrie,
+                    #{ <<"path">> => <<"set">>, SubjectID => Slot },
+                    Opts
+                ),
+            ?event({dedup_updated_trie, NewDedupTrie}),
+            hb_ao:resolve(
+                M1,
+                #{
+                    <<"path">> => <<"set">>,
+                    <<"set-mode">> => <<"explicit">>,
+                    <<"dedup">> => NewDedupTrie
+                },
+                Opts
+            );
+        Value ->
+            ?event(
+                {already_seen_trie,
+                    {subject, SubjectID},
+                    {dedup_value, Value}
+                }
+            ),
+            {skip, M1}
     end.
 
 %%% Tests
@@ -168,7 +267,7 @@ dedup_test() ->
 
 dedup_with_multipass_test() ->
     % Create a stack with a dedup device and 2 devices that will append to a
-    % `Result' key and a `Multipass' device that will repeat the message for 
+    % `Result' key and a `Multipass' device that will repeat the message for
     % an additional pass. We want to ensure that Multipass is not hindered by
     % the dedup device.
 	Msg = #{
