@@ -1325,7 +1325,7 @@ bucket_based_offset_test() ->
 %         <<"GX2bvdo736wJPR1GmIkyW9GRk3JdXQ_aAd1ozX1d450">>,
 %         378161418083672,
 %         42040418,
-%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+%         <<"wmDVKM6nYRvqre2DdxmX_mhJ6u8unwmTD4YdmzERcZs">>
 %     ).
 
 assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
