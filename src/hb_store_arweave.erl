@@ -4,7 +4,7 @@
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
 %%% Indexing API:
--export([write_offset/5, read_offset/2]).
+-export([write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
