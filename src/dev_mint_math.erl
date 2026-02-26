@@ -97,7 +97,7 @@ units_to_distribute(State, Opts) ->
         hb_util:int(hb_maps:get(<<"cycle-proportion-denominator">>, State, Opts)),
     Remaining = MintTotal - AlreadyMinted,
     case CycleProportionDenominator of
-        0 -> throw({error, zero_denominator_division});
+        0 -> throw({error, zero_cycle_proportion_denominator});
         _ -> (Remaining * CycleProportionNumerator) div CycleProportionDenominator
     end.
     
@@ -120,7 +120,7 @@ units_per_resource(TotalToDistribute, State, Opts) ->
         {0, _} ->
             ResourceWeights;
         {_, 0} ->
-            throw({error, zero_denominator_division});
+            throw({error, zero_total_resource_weights});
         _ ->
             hb_maps:map(
                 fun(_Resource, Weight) ->
@@ -157,7 +157,7 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
             )
         ),
     case TotalQuantity of
-        0 -> throw({error, zero_denominator_division});
+        0 -> throw({error, zero_total_resource_quantity});
         _ -> ok
     end,
     ?event(debug, {total_quantity, TotalQuantity}),
