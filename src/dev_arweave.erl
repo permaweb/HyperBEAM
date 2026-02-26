@@ -127,13 +127,23 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
 %% `tx` key in the request or base message. By default, this embeds the data
 %% payload. Set `exclude_data` to true to return just the header.
 get_tx(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
+    case find_key(<<"tx">>, Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
-                Opts#{ exclude_data => exclude_data(Base, Request, Opts) }
+                Opts#{
+                    exclude_data =>
+                        hb_util:bool(
+                            find_key(
+                                <<"exclude-data">>,
+                                Base,
+                                Request,
+                                Opts
+                            )
+                        )
+                }
             )
     end.
 
@@ -142,16 +152,18 @@ get_tx(Base, Request, Opts) ->
 %% only for compatibility with the legacy Arweave gateway `/raw` endpoint.
 raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
-    case find_txid(Base, Request, Opts) of
+    case find_key(<<"raw">>, Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
-            ?event(
-                debug_raw,
-                {found_txid, {id, TXID}}
-            ),
             % Read the data from the local cache.
             IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
+                not_found ->
+                    ?event(
+                        arweave,
+                        {raw_read_failed, {id, TXID}},
+                        Opts
+                    );
                 {ok,
                     #{
                         <<"codec-device">> := <<"ans104@1.0">>,
@@ -188,7 +200,13 @@ raw(Base, Request, Opts) ->
                                 <<"content-type">> => ContentType,
                                 <<"data">> => Data
                             }};
-                        Error -> Error
+                        Error ->
+                            ?event(
+                                arweave,
+                                {raw_read_chunks_failed, {id, TXID}, {error, Error}},
+                                Opts
+                            ),
+                            Error
                     end;
                 {ok,
                     #{
@@ -247,17 +265,12 @@ raw(Base, Request, Opts) ->
                             };
                         Error ->
                             ?event(
-                                debug_raw,
-                                {error, {id, TXID}, {returned, Error}}
+                                arweave,
+                                {raw_read_chunks_failed, {id, TXID}, {error, Error}},
+                                Opts
                             ),
                             Error
-                    end;
-                Error ->
-                    ?event(
-                        debug_raw,
-                        {error, {id, TXID}, {returned, Error}}
-                    ),
-                    Error
+                    end
             end
     end.
 
@@ -487,9 +500,7 @@ get_chunk(Offset, Opts) ->
     % leaeve the header out and continue to search for a case where it is
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, #{
-        <<"route-by">> => Offset
-    }, Opts).
+    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -575,11 +586,11 @@ tx_anchor(_Base, _Request, Opts) ->
 
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
 %% base message.
-find_txid(Base, Request, Opts) ->
+find_key(Key, Base, Request, Opts) ->
     hb_maps:get(
-        <<"tx">>,
+        Key,
         Request,
-        hb_maps:get(<<"tx">>, Base, not_found, Opts),
+        hb_maps:get(Key, Base, not_found, Opts),
         Opts
     ).
 

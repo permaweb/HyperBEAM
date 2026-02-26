@@ -39,7 +39,7 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
                 <<"start-offset">> => StartOffset,
                 <<"length">> => Length
             }};
-        not_found -> not_found
+        _ -> not_found
     end.
 
 read(StoreOpts, ID) ->
