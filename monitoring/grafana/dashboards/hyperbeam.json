@@ -371,6 +371,21 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wasm_cu_ms"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
@@ -379,6 +394,11 @@
           "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `execution_ms: (?P<execution_ms>\\d+)` | unwrap execution_ms [$__interval]))",
           "legendFormat": "execution_ms",
           "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `wasm_cu_ms: (?P<wasm_cu_ms>\\d+)` | unwrap wasm_cu_ms [$__interval]))",
+          "legendFormat": "wasm_cu_ms",
+          "refId": "D"
         },
         {
           "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_ms: (?P<store_ms>\\d+)` | unwrap store_ms [$__interval]))",
@@ -426,7 +446,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "lmdb_write_us"
+              "options": "exec_lmdb_write_us"
             },
             "properties": [
               {
@@ -442,14 +462,24 @@
       },
       "targets": [
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_read_us: (?P<lmdb_read_us>\\d+)` | unwrap lmdb_read_us [$__interval]))",
-          "legendFormat": "lmdb_read_us",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval]))",
+          "legendFormat": "exec_lmdb_read_us",
           "refId": "A"
         },
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_write_us: (?P<lmdb_write_us>\\d+)` | unwrap lmdb_write_us [$__interval]))",
-          "legendFormat": "lmdb_write_us",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval]))",
+          "legendFormat": "exec_lmdb_write_us",
           "refId": "B"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_read_us: (?P<store_lmdb_read_us>\\d+)` | unwrap store_lmdb_read_us [$__interval]))",
+          "legendFormat": "store_lmdb_read_us",
+          "refId": "C"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_write_us: (?P<store_lmdb_write_us>\\d+)` | unwrap store_lmdb_write_us [$__interval]))",
+          "legendFormat": "store_lmdb_write_us",
+          "refId": "D"
         }
       ]
     },
@@ -487,7 +517,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "lmdb_writes"
+              "options": "exec_lmdb_writes"
             },
             "properties": [
               {
@@ -503,14 +533,24 @@
       },
       "targets": [
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_reads: (?P<lmdb_reads>\\d+)` | unwrap lmdb_reads [$__interval]))",
-          "legendFormat": "lmdb_reads",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]))",
+          "legendFormat": "exec_lmdb_reads",
           "refId": "A"
         },
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_writes: (?P<lmdb_writes>\\d+)` | unwrap lmdb_writes [$__interval]))",
-          "legendFormat": "lmdb_writes",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]))",
+          "legendFormat": "exec_lmdb_writes",
           "refId": "B"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_reads: (?P<store_lmdb_reads>\\d+)` | unwrap store_lmdb_reads [$__interval]))",
+          "legendFormat": "store_lmdb_reads",
+          "refId": "C"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_writes: (?P<store_lmdb_writes>\\d+)` | unwrap store_lmdb_writes [$__interval]))",
+          "legendFormat": "store_lmdb_writes",
+          "refId": "D"
         }
       ]
     },
@@ -564,13 +604,13 @@
       },
       "targets": [
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_read_us: (?P<lmdb_read_us>\\d+)` | unwrap lmdb_read_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_reads: (?P<lmdb_reads>\\d+)` | unwrap lmdb_reads [$__interval]))",
-          "legendFormat": "avg_read_us",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]))",
+          "legendFormat": "avg_exec_read_us",
           "refId": "A"
         },
         {
-          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_write_us: (?P<lmdb_write_us>\\d+)` | unwrap lmdb_write_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `lmdb_writes: (?P<lmdb_writes>\\d+)` | unwrap lmdb_writes [$__interval]))",
-          "legendFormat": "avg_write_us",
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]))",
+          "legendFormat": "avg_exec_write_us",
           "refId": "B"
         }
       ]
@@ -1020,7 +1060,7 @@
       },
       "targets": [
         {
-          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `lmdb_reads: (?P<lmdb_reads>\\d+)` | unwrap lmdb_reads [$__interval]) by (action)",
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]) by (action)",
           "legendFormat": "{{action}}",
           "refId": "A"
         }
@@ -1059,7 +1099,7 @@
       },
       "targets": [
         {
-          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `lmdb_writes: (?P<lmdb_writes>\\d+)` | unwrap lmdb_writes [$__interval]) by (action)",
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]) by (action)",
           "legendFormat": "{{action}}",
           "refId": "A"
         }
@@ -1098,7 +1138,7 @@
       },
       "targets": [
         {
-          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `lmdb_read_us: (?P<lmdb_read_us>\\d+)` | unwrap lmdb_read_us [$__interval]) by (action) + avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `lmdb_write_us: (?P<lmdb_write_us>\\d+)` | unwrap lmdb_write_us [$__interval]) by (action)",
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval]) by (action) + avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval]) by (action)",
           "legendFormat": "{{action}}",
           "refId": "A"
         }

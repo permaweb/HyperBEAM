@@ -85,18 +85,22 @@ do_compute(ProcID, Req, Opts) ->
             Opts
         ),
     ?event({do_compute_body, {aos2, {string, Body}}}),
-    % Send to external CU via relay using /result endpoint
-    Response =
-        do_relay(
-            <<"POST">>,
-            <<"/result/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary>>,
-            Body,
-            AOS2,
-            Opts#{
-                hashpath => ignore,
-                cache_control => [<<"no-store">>, <<"no-cache">>]
-            }
-        ),
+    % Time the CU HTTP call and stash the duration in the process dict so
+    % dev_process:compute_slot can read it back as wasm_cu_ms.
+    {CUMicroSecs, Response} =
+        timer:tc(fun() ->
+            do_relay(
+                <<"POST">>,
+                <<"/result/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary>>,
+                Body,
+                AOS2,
+                Opts#{
+                    hashpath => ignore,
+                    cache_control => [<<"no-store">>, <<"no-cache">>]
+                }
+            )
+        end),
+    erlang:put(wasm_cu_us, CUMicroSecs),
     extract_json_res(Response, Opts).
 
 %% @doc Execute dry-run computation on a remote machine via relay and use

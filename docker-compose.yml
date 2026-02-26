@@ -2,6 +2,9 @@ services:
 
   # ── HyperBEAM node ─────────────────────────────────────────────────────────
   hyperbeam:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: hyperbeam-edge:latest
     container_name: hyperbeam
     restart: unless-stopped

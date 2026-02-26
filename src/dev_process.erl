@@ -365,6 +365,20 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
         },
         Opts
     ),
+    % Take LMDB stats accumulated during prep + execution phases, resetting
+    % the per-process accumulators so store_result is measured separately.
+    #{
+        read_count  := ExecLMDBReads,
+        read_us     := ExecLMDBReadUs,
+        write_count := ExecLMDBWrites,
+        write_us    := ExecLMDBWriteUs
+    } = hb_store_lmdb:take_stats(),
+    % Read the CU HTTP call duration stored by dev_delegated_compute:do_compute.
+    WasmCUUs = case erlang:get(wasm_cu_us) of
+        undefined -> 0;
+        V -> V
+    end,
+    erlang:erase(wasm_cu_us),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
@@ -412,13 +426,13 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                         )
                     end
                 ),
-            % Collect per-slot LMDB read/write stats accumulated since the
-            % reset at the top of this function.
+            % Collect LMDB stats for the store phase only (exec phase stats
+            % were already taken above before the case).
             #{
-                read_count  := LMDBReads,
-                read_us     := LMDBReadUs,
-                write_count := LMDBWrites,
-                write_us    := LMDBWriteUs
+                read_count  := StoreLMDBReads,
+                read_us     := StoreLMDBReadUs,
+                write_count := StoreLMDBWrites,
+                write_us    := StoreLMDBWriteUs
             } = hb_store_lmdb:take_stats(),
             % Collect dedup and balances serialization times from hb_cache.
             #{
@@ -433,10 +447,15 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {prep_ms, PrepTimeMicroSecs div 1000},
                     {execution_ms, RuntimeMicroSecs div 1000},
                     {store_ms, StoreTimeMicroSecs div 1000},
-                    {lmdb_reads, LMDBReads},
-                    {lmdb_read_us, LMDBReadUs},
-                    {lmdb_writes, LMDBWrites},
-                    {lmdb_write_us, LMDBWriteUs},
+                    {wasm_cu_ms, WasmCUUs div 1000},
+                    {exec_lmdb_reads, ExecLMDBReads},
+                    {exec_lmdb_read_us, ExecLMDBReadUs},
+                    {exec_lmdb_writes, ExecLMDBWrites},
+                    {exec_lmdb_write_us, ExecLMDBWriteUs},
+                    {store_lmdb_reads, StoreLMDBReads},
+                    {store_lmdb_read_us, StoreLMDBReadUs},
+                    {store_lmdb_writes, StoreLMDBWrites},
+                    {store_lmdb_write_us, StoreLMDBWriteUs},
                     {dedup_entries, DedupEntries},
                     {dedup_bytes, DedupBytes},
                     {dedup_write_us, DedupWriteUs},
