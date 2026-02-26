@@ -3,7 +3,7 @@
 -export([id/1, id/2, hd/1, member/2, find/2]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
--export([serialize/1, deserialize/1, serialize_bundle/3]).
+-export([serialize/1, deserialize/1, deserialize_item_wrapper/1, serialize_bundle/3]).
 -export([data_item_signature_data/1]).
 -export([bundle_header_size/1, decode_bundle_header/1]).
 -include("include/hb.hrl").
@@ -424,24 +424,30 @@ deserialize(Item) when is_record(Item, tx) ->
 deserialize(Binary) ->
     deserialize_item(Binary).
 
+%% @doc Deserialize an item and unbundle it if it is a bundle, returning a #tx
+%% with possibly deeply nested items in the #tx.data field.
 deserialize_item(Binary) ->
+    maybe_unbundle(deserialize_item_wrapper(Binary)).
+
+%% @doc Deserialize only the _wrapper_ of an item, leaving the data unprocessed
+%% in the case that it is a bundle. It may be unbundled by calling `maybe_unbundle/1'
+%% at any later point.
+deserialize_item_wrapper(Binary) ->
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
     {Tags, Data} = decode_tags(Rest3),
-    maybe_unbundle(
-        dev_arweave_common:reset_ids(#tx{
-            format = ans104,
-            signature_type = SignatureType,
-            signature = Signature,
-            owner = Owner,
-            target = Target,
-            anchor = Anchor,
-            tags = Tags,
-            data = Data,
-            data_size = byte_size(Data)
-        })
-    ).
+    dev_arweave_common:reset_ids(#tx{
+        format = ans104,
+        signature_type = SignatureType,
+        signature = Signature,
+        owner = Owner,
+        target = Target,
+        anchor = Anchor,
+        tags = Tags,
+        data = Data,
+        data_size = byte_size(Data)
+    }).
 
 maybe_unbundle(Item) ->
     case dev_arweave_common:type(Item) of

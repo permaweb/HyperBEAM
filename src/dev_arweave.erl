@@ -127,7 +127,7 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
 %% `tx` key in the request or base message. By default, this embeds the data
 %% payload. Set `arweave_exclude_data` to true to return just the header.
 get_tx(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
+    case find_key(<<"tx">>, Base, Request, not_found, Opts) of
         not_found -> {error, not_found};
         TXID ->
             request(
@@ -136,21 +136,11 @@ get_tx(Base, Request, Opts) ->
                 Opts#{
                     arweave_exclude_data =>
                         hb_util:bool(
-                            request_get(
+                            find_key(
                                 <<"exclude-data">>,
                                 Base,
                                 Request,
                                 false,
-                                Opts
-                            )
-                        ),
-                    arweave_decode_data =>
-                        hb_util:bool(
-                            request_get(
-                                <<"decode">>,
-                                Base,
-                                Request,
-                                true,
                                 Opts
                             )
                         )
@@ -158,12 +148,117 @@ get_tx(Base, Request, Opts) ->
             )
     end.
 
-%% @doc Get raw transaction data from the Arweave node, as indicated by the
-%% `tx` key in the request or base message.
+%% @doc Get raw transaction *data* and `content-type` of an Arweave message.
+%% Does not deserialize the message, nor return signature information. Included
+%% only for compatibility with the legacy Arweave gateway `/raw` endpoint.
 raw(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
+    case find_key(<<"raw">>, Base, Request, not_found, Opts) of
         not_found -> {error, not_found};
-        TXID -> data(TXID, Opts)
+        TXID ->
+            ?event(
+                debug_raw,
+                {found_txid, {id, TXID}}
+            ),
+            % Read the data from the local cache.
+            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+            case hb_store_arweave:read_offset(IndexStore, TXID) of
+                {ok, Index = #{ <<"codec-device">> := <<"ans104@1.0">> }} ->
+                    % Indexed messages of codec `ans104@1.0' are stored with
+                    % the `offset` referencing the start of the *header*.
+                    % Subsequently, we read the chunks and then deserialize
+                    % only the wrapper, yielding a #tx record that may
+                    % contain a bundle.
+                    ?event(
+                        debug_raw,
+                        {found_offset, {id, TXID}, {index, Index}}
+                    ),
+                    case get_chunk_range(Index, Opts) of
+                        {ok, Data} ->
+                            TX = ar_bundles:deserialize_item_wrapper(Data),
+                            ?event(
+                                debug_raw,
+                                {deserialized_raw, {id, TXID}, {tx, TX}}
+                            ),
+                            ContentType =
+                                list_find(
+                                    <<"content-type">>,
+                                    TX#tx.tags,
+                                    <<"application/octet-stream">>
+                                ),
+                            {ok, #{
+                                <<"content-type">> => ContentType,
+                                <<"data">> => Data
+                            }};
+                        Error -> Error
+                    end;
+                {ok, Index = #{ <<"codec-device">> := <<"tx@1.0">> }} ->
+                    % Indexed messages of codec `tx@1.0' are stored with
+                    % the `offset` referencing the start of the data.
+                    % Subsequently, we read the chunks and return them
+                    % as-is.
+                    ?event(
+                        debug_raw,
+                        {found_offset, {id, TXID}, {index, Index}}
+                    ),
+                    case get_chunk_range(Index, Opts) of
+                        {ok, Data} ->
+                            ?event(
+                                debug_raw,
+                                {fetched_chunks, {id, TXID}, {data, Data}}
+                            ),
+                            {ok, StructuredTXHeader} =
+                                get_tx(
+                                    #{ <<"tx">> => TXID },
+                                    #{ <<"exclude-data">> => true },
+                                    Opts
+                                ),
+                            ContentType =
+                                hb_ao:get(
+                                    <<"content-type">>,
+                                    StructuredTXHeader,
+                                    <<"application/octet-stream">>,
+                                    Opts#{
+                                        cache_control =>
+                                            [<<"no-cache">>, <<"no-store">>]
+                                    }
+                                ),
+                            ?event(
+                                debug_raw,
+                                {content_type_and_data,
+                                    {id, TXID},
+                                    {content_type, ContentType},
+                                    {data, Data}
+                                }
+                            ),
+                            {
+                                ok,
+                                #{
+                                    <<"content-type">> => ContentType,
+                                    <<"data">> => Data
+                                }
+                            };
+                        Error ->
+                            ?event(
+                                debug_raw,
+                                {error, {id, TXID}, {returned, Error}}
+                            ),
+                            Error
+                    end;
+                Error ->
+                    ?event(
+                        debug_raw,
+                        {error, {id, TXID}, {returned, Error}}
+                    ),
+                    Error
+            end
+    end.
+
+%% @doc Case-insensitively find a key in a list and return its value.
+list_find(_Key, [], Default) -> Default;
+list_find(Key, [{XKey, Value} | Rest], Default) ->
+    NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(XKey)),
+    if NormalizedKey =:= Key -> Value;
+    true -> list_find(Key, Rest, Default)
     end.
 
 %% @doc Retrieve the data of a transaction from Arweave.
@@ -195,20 +290,35 @@ post_json_chunk(JSON, Opts) ->
         Opts
     ).
 
+%% @doc Returns the data for a range of bytes in the Arweave network. May be
+%% called with a `Base` and `Request` message, or just a `Request` message.
+%% Additionally, the `Request' message may be of the `Index` entry form returned
+%% by `hb_store_arweave:read_offset'.
+get_chunk_range(Request, Opts) ->
+    get_chunk_range(undefined, Request, Opts).
 get_chunk_range(_Base, Request, Opts) ->
-    Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
+    Offset =
+        hb_util:int(
+            hb_maps:get(
+                <<"offset">>,
+                Request,
+                hb_maps:get(
+                    <<"start-offset">>,
+                    Request,
+                    Opts
+                ),
+                Opts
+            )
+        ),
     Length = hb_util:int(hb_ao:get(<<"length">>, Request, 1, Opts)),
     case fetch_chunk_range(Offset, Length, Opts) of
         {ok, Chunks} ->
-            Data = iolist_to_binary(Chunks),
+            Data = hb_util:bin(Chunks),
             case hb_maps:is_key(<<"length">>, Request, Opts) of
-                true ->
-                    {ok, binary:part(Data, 0, Length)};
-                false ->
-                    {ok, Data}
+                true -> {ok, binary:part(Data, 0, Length)};
+                false -> {ok, Data}
             end;
-        {error, Reason} ->
-            {error, Reason}
+        {error, Reason} -> {error, Reason}
     end.
 
 %% @doc Fetch a range of chunks in parallel. Dispatches to pre-threshold or
@@ -389,9 +499,7 @@ get_chunk(Offset, Opts) ->
     % leaeve the header out and continue to search for a case where it is
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, #{
-        <<"route-by">> => Offset
-    }, Opts).
+    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -475,19 +583,7 @@ tx_anchor(_Base, _Request, Opts) ->
 
 %%% Internal Functions
 
-%% @doc Find the transaction ID to retrieve from Arweave based on the request or
-%% base message.
-find_txid(Base, Request, Opts) ->
-    hb_ao:get_first(
-        [
-            {Request, <<"tx">>},
-            {Base, <<"tx">>}
-        ],
-        not_found,
-        Opts
-    ).
-
-request_get(Key, Base, Request, Default, Opts) ->
+find_key(Key, Base, Request, Default, Opts) ->
     hb_ao:get_first(
         [{Request, Key}, {Base, Key}],
         Default,
@@ -579,12 +675,8 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
         false ->
             case data(TXID, Opts) of
-                {ok, RawData} ->
-                    TX =
-                        case hb_opts:get(arweave_decode_data, true, Opts) of
-                            true -> TXHeader#tx{ data = RawData };
-                            false -> RawData
-                        end,
+                {ok, Data} ->
+                    TX = TXHeader#tx{ data = Data },
                     {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
                 {error, not_found} ->
                     {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
