@@ -1184,12 +1184,51 @@
       ]
     },
     {
+      "id": 34,
+      "title": "WASM CU Time by Action (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `wasm_cu_ms: (?P<wasm_cu_ms>\\d+)` | unwrap wasm_cu_ms [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "id": 20,
       "title": "Compute Errors",
       "type": "logs",
       "gridPos": {
         "x": 0,
-        "y": 65,
+        "y": 73,
         "w": 24,
         "h": 6
       },
@@ -1219,7 +1258,7 @@
       "type": "logs",
       "gridPos": {
         "x": 0,
-        "y": 71,
+        "y": 79,
         "w": 24,
         "h": 8
       },
