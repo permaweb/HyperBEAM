@@ -21,8 +21,13 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(CACHE_TABLE, ?MODULE).
--define(DEFAULT_PROVIDER, #{ <<"body">> => [] }).
+-define(DEFAULT_PROVIDER,
+    #{
+        <<"data-protocol">> => <<"content-policy">>,
+        <<"body">> => #{ <<"body">> => <<>> }
+    }
+).
+-define(DEFAULT_MIN_WAIT, 60).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
@@ -34,23 +39,37 @@ request(_Base, HookReq, Opts) ->
 
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
-    ensure_cache_table(Opts),
+    maybe_refresh(Opts),
     IDs = collect_ids(Msg, Opts),
-    case lists:filter(fun(ID) -> ets:lookup(?CACHE_TABLE, ID) =/= [] end, IDs) of
+    MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
+    case lists:filter(MatchesFromIDs, IDs) of
         [] -> false;
         [ID|_] -> ID
     end.
 
 %% @doc Force a reload of the blacklist cache. Returns the number of newly 
 %% inserted IDs.
-refresh(_Base, _Req, Opts) ->
-    ?event({refresh_blacklist_cache, Opts}),
-    update_blacklist_cache(Opts).
+refresh(Base, Req, Opts) ->
+    ?event({refresh_called, {base, Base}, {req, Req}}),
+    maybe_refresh(Opts).
 
 %%% Internal
 
 %% @doc Fetch the blacklist and store the results in the cache table.
-update_blacklist_cache(Opts) ->
+maybe_refresh(Opts) ->
+    ensure_cache_table(Opts),
+    MinWait = hb_util:int(hb_opts:get(blacklist_refresh_frequency, ?DEFAULT_MIN_WAIT, Opts)),
+    Time = erlang:system_time(second),
+    case hb_opts:get(blacklist_last_refresh, 0, Opts) of
+        LastRefresh when (Time - LastRefresh) > MinWait ->
+            fetch_and_insert_ids(Opts),
+            hb_http_server:set_opts(Opts#{ blacklist_last_refresh => Time });
+        _ ->
+            skip_update
+    end.
+
+%% @doc Fetch the blacklist and insert the IDs into the cache table.
+fetch_and_insert_ids(Opts) ->
     ensure_cache_table(Opts),
     case execute_provider(Opts) of
         {ok, Blacklist} ->
@@ -58,7 +77,8 @@ update_blacklist_cache(Opts) ->
             ?event({parsed_blacklist, {ids, IDs}}),
             BlacklistID = hb_message:id(Blacklist, all, Opts),
             ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
-            {ok, insert_ids(IDs, BlacklistID, Opts)};
+            Table = cache_table_name(Opts),
+            {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
         {error, _} = Error ->
             ?event({execute_provider_error, Error}),
             Error
@@ -131,22 +151,23 @@ block_response(BlockedID) ->
 
 %% @doc Insert a list of IDs into the cache table, returning the number of new IDs
 %% inserted. Each ID is inserted as a key with the current timestamp as the value.
-insert_ids([], _Value, _Opts) -> 0;
-insert_ids([ID | IDs], Value, Opts) when ?IS_ID(ID) ->
-    case ets:lookup(?CACHE_TABLE, ID) of
+insert_ids([], _Value, _Table, _Opts) -> 0;
+insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
+    case ets:lookup(Table, ID) of
         [] ->
-            ets:insert(?CACHE_TABLE, {ID, Value}),
-            1 + insert_ids(IDs, Value, Opts);
-        _ -> insert_ids(IDs, Value, Opts)
+            ets:insert(Table, {ID, Value}),
+            1 + insert_ids(IDs, Value, Table, Opts);
+        _ -> insert_ids(IDs, Value, Table, Opts)
     end.
 
 %% @doc Ensure the cache table exists.
 ensure_cache_table(Opts) ->
-    case ets:info(?CACHE_TABLE) of
+    TableName = cache_table_name(Opts),
+    case ets:info(TableName) of
         undefined ->
-            ?event({creating_table, ?CACHE_TABLE}),
+            ?event({creating_table, TableName}),
             ets:new(
-                ?CACHE_TABLE,
+                TableName,
                 [
                     named_table,
                     set,
@@ -155,12 +176,18 @@ ensure_cache_table(Opts) ->
                     {write_concurrency, true}
                 ]
             ),
-            update_blacklist_cache(Opts);
+            fetch_and_insert_ids(Opts);
         _ ->
-            ?event({table_exists, ?CACHE_TABLE}),
+            ?event({table_exists, TableName}),
             ok
     end,
-    ?CACHE_TABLE.
+    TableName.
+
+%% @doc Calculate the name of the cache table given the `Opts`.
+cache_table_name(Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Address = hb_util:human_id(Wallet),
+    binary_to_atom(<<"~blacklist@1.0/cache/", Address/binary>>).
 
 %%% Tests
 
@@ -180,6 +207,15 @@ setup_test_env() ->
         },
     BlacklistMsg = hb_message:commit(Blacklist, Opts0),
     {ok, BlacklistID} = hb_cache:write(BlacklistMsg, Opts0),
+    ?event(
+        {test_env_setup,
+            {opts, Opts0},
+            {signed_id1, SignedID1},
+            {unsigned_id2, UnsignedID2},
+            {unsigned_id3, UnsignedID3},
+            {blocked, [SignedID1, UnsignedID2]}
+        }
+    ),
     {ok, #{
         opts => Opts0,
         signed1=> SignedID1,
@@ -188,22 +224,15 @@ setup_test_env() ->
         blacklist => BlacklistID
     }}.
 
+%% @doc Test the blacklist device with a static blacklist that is in the local
+%% store.
 basic_test() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
-        unsigned2 := UnsignedID2,
         unsigned3 := UnsignedID3,
         blacklist := BlacklistID
     }} = setup_test_env(),
-    ?event(
-        {setup_test_env,
-            {opts, Opts0},
-            {signed_id1, SignedID1},
-            {unsigned_id2, UnsignedID2},
-            {unsigned_id3, UnsignedID3}
-        }
-    ),
     Opts1 =
         Opts0#{
             blacklist_provider => BlacklistID,
@@ -212,12 +241,10 @@ basic_test() ->
             }
         },
     Node = hb_http_server:start_node(Opts1),
-    refresh(#{}, #{}, Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
-    ?event({table, ets:tab2list(?CACHE_TABLE)}),
     ?assertMatch(
         {error,
             #{
@@ -225,4 +252,44 @@ basic_test() ->
                 <<"reason">> := <<"content-policy">>
             }},
         hb_http:get(Node, SignedID1, Opts1)
+    ),
+    ok.
+
+%% @doc Test the blacklist device with a blacklist that is provided via HTTP.
+blacklist_from_external_http_test() ->
+    {ok, #{
+        opts := RemoteOpts = #{ store := RootStore },
+        signed1 := SignedID1,
+        unsigned3 := UnsignedID3,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    % Start a node that we will ask to provide the blacklist via HTTP.
+    BlacklistHostNode = hb_http_server:start_node(RemoteOpts),
+    % Start a node that will use the blacklist host node to provide the blacklist
+    % via HTTP.
+    NodeOpts = 
+        #{
+            store => RootStore,
+            priv_wallet => ar_wallet:new(),
+            blacklist_provider =>
+                <<
+                    "/~relay@1.0/call?relay-method=GET&relay-path=",
+                        BlacklistHostNode/binary, BlacklistID/binary
+                >>,
+            on => #{
+                <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+            }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, NodeOpts)
+    ),
+    ?assertMatch(
+        {error,
+            #{
+                <<"status">> := 451,
+                <<"reason">> := <<"content-policy">>
+            }},
+        hb_http:get(Node, SignedID1, NodeOpts)
     ).
