@@ -333,8 +333,8 @@ encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
 encode_signature_type({eddsa, ed25519}) ->
     <<2, 0>>;
-% encode_signature_type({ecdsa, secp256k1}) ->
-%     <<3, 0>>;
+encode_signature_type({ecdsa, secp256k1}) ->
+    <<3, 0>>;
 encode_signature_type(solana) ->
     <<4, 0>>;
 encode_signature_type(SigType) ->
@@ -551,8 +551,8 @@ decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) 
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {{eddsa, ed25519}, Signature, Owner, Rest};
-% decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
-%     {{ecdsa, secp256k1}, Signature, Owner, Rest};
+decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
+    {{ecdsa, secp256k1}, Signature, Owner, Rest};
 decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
     {solana, Signature, Owner, Rest};
 decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
