@@ -88,7 +88,8 @@ read(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             ?event(
                 arweave_offsets,
                 {miss, {id, {explicit, ID}}}
-            )
+            ),
+            {error, not_found}
     end.
 
 record_partition_metric(Offset) when is_integer(Offset) ->
