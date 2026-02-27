@@ -244,7 +244,7 @@ maybe_set(Map1, Map2, Opts) ->
 cache_source_to_cache_settings({opts, Opts}, _) ->
     CCMap = specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)),
     case hb_opts:get(hashpath, update, Opts) of
-        ignore -> CCMap#{ <<"store">> => false };
+        ignore -> CCMap#{ <<"store">> => false, <<"lookup">> => false };
         _ -> CCMap
     end;
 cache_source_to_cache_settings(Msg, Opts) ->

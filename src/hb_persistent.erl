@@ -101,8 +101,15 @@ do_monitor(Group, Last, Opts) ->
 %% @doc Register the process to lead an execution if none is found, otherwise
 %% signal that we should await resolution.
 find_or_register(Base, Req, Opts) ->
-    GroupName = group(Base, Req, Opts),
-    find_or_register(GroupName, Base, Req, Opts).
+    case {hb_opts:get(await_inprogress, false, Opts), hb_opts:get(spawn_worker, false, Opts)} of
+        {false, false} ->
+            % Neither deduplication nor worker spawning is requested.
+            % Skip the expensive group() computation (phash2 over full state).
+            {leader, ungrouped_exec};
+        _ ->
+            GroupName = group(Base, Req, Opts),
+            find_or_register(GroupName, Base, Req, Opts)
+    end.
 find_or_register(ungrouped_exec, _Base, _Req, _Opts) ->
     {leader, ungrouped_exec};
 find_or_register(GroupName, _Base, _Req, Opts) ->
