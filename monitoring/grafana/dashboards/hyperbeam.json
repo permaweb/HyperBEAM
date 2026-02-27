@@ -2,7 +2,7 @@
   "title": "HyperBEAM Node",
   "uid": "hyperbeam-main",
   "schemaVersion": 38,
-  "version": 2,
+  "version": 3,
   "refresh": "10s",
   "time": {
     "from": "now-30m",
@@ -21,7 +21,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -60,9 +60,9 @@
       "title": "Target Slot",
       "type": "stat",
       "gridPos": {
-        "x": 4,
+        "x": 3,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -101,9 +101,9 @@
       "title": "Slot Lag",
       "type": "stat",
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -163,9 +163,9 @@
       "title": "Slots / min",
       "type": "stat",
       "gridPos": {
-        "x": 12,
+        "x": 9,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -221,9 +221,9 @@
       "title": "Compute Errors (last 1h)",
       "type": "stat",
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -275,9 +275,9 @@
       "title": "Slot Size (bytes)",
       "type": "stat",
       "gridPos": {
-        "x": 20,
+        "x": 15,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 3
       },
       "datasource": {
@@ -308,6 +308,93 @@
           "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `computed_slot_size: (?P<computed_slot_size>\\d+)` | unwrap computed_slot_size [$__interval]))",
           "legendFormat": "size",
           "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "ETA to Catch Up",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 3
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "decimals": 0
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "loki-ds",
+            "type": "loki"
+          },
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `target_slot: (?P<target_slot>\\d+)` | unwrap target_slot [$__interval])) - max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `slot: (?P<slot>\\d+), target_slot` | unwrap slot [$__interval]))",
+          "legendFormat": "lag",
+          "refId": "A",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "loki-ds",
+            "type": "loki"
+          },
+          "expr": "sum(rate({container=\"hyperbeam\"} |= \"computed_slot,\" [1m])) * 60",
+          "legendFormat": "slots/min",
+          "refId": "B",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "reduce",
+          "reducer": "last",
+          "expression": "A",
+          "refId": "C",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "reduce",
+          "reducer": "last",
+          "expression": "B",
+          "refId": "D",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "math",
+          "expression": "$C / $D * 60",
+          "refId": "E"
         }
       ]
     },
