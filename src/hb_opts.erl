@@ -314,9 +314,14 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"GET">>
                     },
-                <<"nodes">> => ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> =>
+                    ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
                 <<"strategy">> => <<"Shuffled-Range">>,
-                <<"choose">> => length(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"choose">> =>
+                    length(
+                        ?ARWEAVE_BOOTSTRAP_DATA_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                    ),
                 <<"parallel">> => 4,
                 <<"responses">> => 1,
                 <<"stop-after">> => true,
@@ -328,9 +333,14 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> => ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> =>
+                    ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
                 <<"strategy">> => <<"Shuffled-Range">>,
-                <<"choose">> => length(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"choose">> =>
+                    length(
+                        ?ARWEAVE_BOOTSTRAP_DATA_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                    ),
                 <<"parallel">> => 5,
                 <<"responses">> => 3, %% keep going until we get 3x 200s
                 <<"stop-after">> => true,
@@ -342,7 +352,8 @@ default_message() ->
                         <<"path">> => <<"^/arweave/tx">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> =>
+                    ?ARWEAVE_BOOTSTRAP_CHAIN_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
                 <<"parallel">> => true,
                 <<"responses">> => 3,
                 <<"stop-after">> => false,
