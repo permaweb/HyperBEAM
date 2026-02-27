@@ -3,7 +3,7 @@
 -module(hb_http_client).
 -behaviour(gen_server).
 -include("include/hb.hrl").
--export([start_link/1, response_status_to_atom/1, request/2]).
+-export([start_link/1, init_prometheus/0, response_status_to_atom/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -283,7 +283,8 @@ init(Opts) ->
             ),
             try
                 application:ensure_all_started([prometheus, prometheus_cowboy]),
-                init_prometheus(Opts)
+                init_prometheus(),
+                {ok, #state{ opts = Opts }}
             catch
                 Type:Reason:Stack ->
                     ?event(warning,
@@ -298,9 +299,8 @@ init(Opts) ->
         false -> {ok, #state{ opts = Opts }}
     end.
 
-init_prometheus(Opts) ->
-    application:ensure_all_started([prometheus, prometheus_cowboy]),
-	prometheus_counter:new([
+init_prometheus() ->
+	hb_prometheus:declare(counter, [
 		{name, gun_requests_total},
 		{labels, [http_method, status_class]},
 		{
@@ -308,9 +308,9 @@ init_prometheus(Opts) ->
 			"The total number of GUN requests."
 		}
 	]),
-	prometheus_gauge:new([{name, outbound_connections},
+	hb_prometheus:declare(gauge, [{name, outbound_connections},
 		{help, "The current number of the open outbound network connections"}]),
-	prometheus_histogram:new([
+	hb_prometheus:declare(histogram, [
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
         {labels, [http_method, status_class]},
@@ -321,7 +321,7 @@ init_prometheus(Opts) ->
             "throttling, etc...)"
 		}
 	]),
-	prometheus_histogram:new([
+	hb_prometheus:declare(histogram, [
 		{name, http_client_get_chunk_duration_seconds},
 		{buckets, [0.1, 1, 10, 60]},
         {labels, [status_class, peer]},
@@ -330,16 +330,15 @@ init_prometheus(Opts) ->
 			"The total duration of an HTTP GET chunk request made to a peer."
 		}
 	]),
-	prometheus_counter:new([
+	hb_prometheus:declare(counter, [
 		{name, http_client_downloaded_bytes_total},
 		{help, "The total amount of bytes requested via HTTP, per remote endpoint"}
 	]),
-	prometheus_counter:new([
+	hb_prometheus:declare(counter, [
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
-    ?event(started),
-	{ok, #state{ opts = Opts }}.
+	ok.
 
 handle_call({get_connection, Args, Opts}, From,
 		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
@@ -512,7 +511,7 @@ inc_prometheus_gauge(Name) ->
         _ ->
             try prometheus_gauge:inc(Name)
             catch _:_ ->
-                init_prometheus(#{}),
+                init_prometheus(),
                 prometheus_gauge:inc(Name)
             end
     end.
