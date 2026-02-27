@@ -348,7 +348,7 @@ fetch_chunk_range(Offset, Length, Opts) ->
 %% @doc Post-threshold: chunks occupy fixed 256KiB buckets. Query at
 %% DATA_CHUNK_SIZE increments up to EndOffset, and if the assembled data is
 %% still short, fetch exactly one additional tail chunk. This can happen
-%% when a dataiem starts in the middle of a chunk, the initial set of
+%% when a dataitem starts in the middle of a chunk, the initial set of
 %% offsets generated doesn't know this and so leaves off a single chunk at
 %% the end.
 %% 
@@ -381,7 +381,7 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
 %% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
 %% iteratively fill gaps until contiguous.
 fetch_pre_threshold(Offset, EndOffset, Opts) ->
-    Offsets = generate_offsets(Offset, EndOffset + ?DATA_CHUNK_SIZE, ?DATA_CHUNK_SIZE),
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
             fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
@@ -400,11 +400,18 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             % be needed. We have yet to find an L1 TX that is chunked in such
             % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
+            ?event(arweave_debug, {fill_gaps, 
+                {offset, Offset},
+                {end_offset, EndOffset},
+                {chunks, [{Start, End, byte_size(Chunk)} || {Start, End, Chunk} <- Sorted]},
+                {gap_offsets, GapOffsets}
+            }),
             ?event(warning,
                 {fetch_chunk_gap_handling_untested,
                     {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
+                    ?event(arweave_debug, {fill_gaps, NewInfos}),
                     fill_gaps(
                         Sorted ++ NewInfos,
                         Offset, EndOffset, Opts
@@ -653,7 +660,7 @@ request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
     ?event(arweave_debug, {request,
-        {method, Method}, {path, Path}, {log_extra, LogExtra}}),
+        {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
             Extra#{
@@ -1549,6 +1556,30 @@ get_post_split_small_chunks_test() ->
         Opts
     ).
 
+get_pre_split_gap_test() ->
+    TXID = <<"VexuG68KCNpw21fGZw1ycRCYBtQMHhl274zGDBh3kQE">>,
+    Opts = setup_arweave_index_opts([TXID]),
+    assert_chunk_range(
+        <<"tx@1.0">>,
+        TXID,
+        13308109889261 - 8789723,
+        8789723,
+        <<"X6sbQdUyKTQ8LGzmleWU_jxO8Oda7S_bshDDKP_Mnqs">>,
+        Opts
+    ).
+
+get_pre_split_small_tx_test() ->
+    TXID = <<"K4C4dLZ7V4ffYJcR9JtVQwIXCTLD1mMCUaPbHuUdFgw">>,
+    Opts = setup_arweave_index_opts([TXID]),
+    assert_chunk_range(
+        <<"tx@1.0">>,
+        TXID,
+        12778619748052 - 1444,
+        1444,
+        <<"o7gJm-FgmWcIvbDiFxDaL56WkJIWQCwsN95Z8zNjEO8">>,
+        Opts
+    ).
+
 %% @doc Checks an item that begins in the middle of a chunk - without
 %% special handling get_chunk_range() used to leave off the last few bytes
 get_ed25519_item_test() ->
@@ -1649,5 +1680,6 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
             ?assert(hb_message:verify(TXWithData, all, Opts))
             % ?assertEqual(RawData, Data)
     end,
+    ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
     ok.
