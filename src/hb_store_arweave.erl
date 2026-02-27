@@ -2,7 +2,7 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/2, read/2]).
+-export([scope/0, scope/1, type/2, read/2, start/1]).
 %%% Unused Store API:
 -export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
@@ -22,33 +22,40 @@ scope() -> remote.
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
+%% @doc Resolve a key path in the Arweave store, ignoring other paths.
 resolve(_, ID) when ?IS_ID(ID) -> ID;
 resolve(_, _) -> not_found.
 
+%% @doc Unsupported.
 write(_, _, _) -> not_found.
+
+%% @doc Unsupported.
 make_link(_, _, _) -> not_found.
+
+%% @doc Unsupported.
 make_group(_, _) -> not_found.
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
-    Type =
-        case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
-            {ok, _Offset} -> simple;
-            _ -> not_found
-        end,
-    ?event(debug_store_arweave,
-        {type, {id, {explicit, ID}}, {type, Type}}),
-    Type;
+    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+        {ok, _Offset} -> simple;
+        _ -> not_found
+    end;
 type(_, _) -> not_found.
 
 %% @doc Read the offset of the data at the given key.
 read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_prometheus:measure_and_report(
-        fun () -> hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) end,
-        hb_store_arweave_index_check_duration_seconds
-     ) of
+    init_prometheus(),
+    ReadRes =
+        hb_prometheus:measure_and_report(
+            fun() ->
+                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID))
+            end,
+            hb_store_arweave_index_check_duration_seconds
+        ),
+    case ReadRes of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
@@ -63,12 +70,17 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
     end;
 read_offset(_, _) -> not_found.
 
+%% @doc Read the data at the given key, reading the `local-store' first if
+%% available.
 read(StoreOpts, ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
         not_found -> do_read(StoreOpts, ID)
     end.
 
+%% @doc Read the data at the given key, reading the provided Arweave index store
+%% as a source of offsets. After offsets have been found, the data is loaded
+%% through the `~arweave@2.9` device -- either as an ANS-104 item or a TX.
 do_read(StoreOpts, ID) ->
     case read_offset(StoreOpts, ID) of
         {ok,
@@ -120,52 +132,72 @@ do_read(StoreOpts, ID) ->
             {error, not_found}
     end.
 
+%% @doc Load an ANS-104 item from the given start offset and length.
+%% Returns an `ok' tuple with the deserialized item, or an `error' tuple with
+%% the reason. The `StartOffset` is the precise starting byte of the item _header_,
+%% not the data segment. The `Length` covers the full size of the item, including
+%% header.
 load_item(StartOffset, Length, Opts) ->
-    hb_prometheus:measure_and_report(fun () ->
-        case read_chunks(StartOffset, Length, Opts) of
-            {ok, SerializedItem} ->
-                {
-                    ok,
-                    hb_message:convert(
-                        ar_bundles:deserialize(SerializedItem),
-                        <<"structured@1.0">>,
-                        <<"ans104@1.0">>,
-                        Opts
-                    )
-                };
-            {error, Reason} ->
-                {error, Reason}
-        end
-    end,hb_store_arweave_chunk_fetch_duration_seconds, [load_item]).
+    hb_prometheus:measure_and_report(
+        fun() ->
+            case read_chunks(StartOffset, Length, Opts) of
+                {ok, SerializedItem} ->
+                    {
+                        ok,
+                        hb_message:convert(
+                            ar_bundles:deserialize(SerializedItem),
+                            <<"structured@1.0">>,
+                            <<"ans104@1.0">>,
+                            Opts
+                        )
+                    };
+                {error, Reason} ->
+                    {error, Reason}
+            end
+        end,
+        hb_store_arweave_chunk_fetch_duration_seconds,
+        [load_item]
+    ).
 
+%% @doc Load a TX from the given start offset and length. The `StartOffset' is
+%% the start of the first chunk of the data and runs for the length of the data
+%% segment, ignoring header size.
 load_tx(ID, StartOffset, Length, Opts) ->
-    hb_prometheus:measure_and_report(fun () ->
-        {ok, StructuredTXHeader} = hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9">> },
-            #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
-            Opts
-        ),
-        TXHeader = hb_message:convert(
-            StructuredTXHeader,
-            <<"tx@1.0">>,
-            <<"structured@1.0">>,
-            Opts),
-        case read_chunks(StartOffset, Length, Opts) of
-            {ok, SerializedItem} ->
-                {
-                    ok,
-                    hb_message:convert(
-                        TXHeader#tx{ data = SerializedItem },
-                        <<"structured@1.0">>,
-                        <<"tx@1.0">>,
-                        Opts
-                    )
-                };
-            {error, Reason} ->
-                {error, Reason}
-        end
-    end,hb_store_arweave_chunk_fetch_duration_seconds, [load_tx]).
+    hb_prometheus:measure_and_report(
+        fun() ->
+            {ok, StructuredTXHeader} = hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
+                Opts
+            ),
+            TXHeader =
+                hb_message:convert(
+                    StructuredTXHeader,
+                    <<"tx@1.0">>,
+                    <<"structured@1.0">>,
+                    Opts
+                ),
+            case read_chunks(StartOffset, Length, Opts) of
+                {ok, SerializedItem} ->
+                    {
+                        ok,
+                        hb_message:convert(
+                            TXHeader#tx{ data = SerializedItem },
+                            <<"structured@1.0">>,
+                            <<"tx@1.0">>,
+                            Opts
+                        )
+                    };
+                {error, Reason} ->
+                    {error, Reason}
+            end
+        end,
+        hb_store_arweave_chunk_fetch_duration_seconds,
+        [load_tx]
+    ).
 
+%% @doc Read the chunks from the given start offset and length using the 
+%% `~arweave@2.9` device.
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -177,6 +209,7 @@ read_chunks(StartOffset, Length, Opts) ->
         Opts
     ).
 
+%% @doc Write offset information to the index store.
 write_offset(
         #{ <<"index-store">> := IndexStore },
         ID,
@@ -197,44 +230,54 @@ write_offset(
     ),
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
-%% @doc Record partition that are requested
+%% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset) when is_integer(Offset) ->
-    spawn(fun () ->
-        case application:get_application(prometheus) of
-            undefined -> ok;
-            _ ->
-                Partition = Offset div ?PARTITION_SIZE,
-                prometheus_counter:inc(hb_store_arweave_requests_partition, [Partition], 1)
-        end
-    end).
-
-init_prometheus() ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try
-                prometheus_histogram:declare([
-                    {name, hb_store_arweave_index_check_duration_seconds},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]},
-                    {help, "How much it takes to check the index"}
-                ]),
-                prometheus_histogram:declare([
-                    {name, hb_store_arweave_chunk_fetch_duration_seconds},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
-                    {labels, [type]},
-                    {help, "How much it takes to check the index"}
-                ]),
-                prometheus_counter:declare([
-                    {name, hb_store_arweave_requests_partition},
-                    {labels, [partition]},
-                    {help, "Partition where chunks are being requested"}
-                ]),
-                ok
-            catch
-                error:mfa_already_exists -> ok;
-                _:_ -> ok
+    spawn(
+        fun () ->
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    Partition = Offset div ?PARTITION_SIZE,
+                    prometheus_counter:inc(
+                        hb_store_arweave_requests_partition,
+                        [Partition],
+                        1
+                    )
             end
-    end.
+        end
+    ).
+
+%% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
+%% `start/1' of the store.
+init_prometheus() ->
+    hb_prometheus:declare(
+        histogram,
+        [
+            {name, hb_store_arweave_index_check_duration_seconds},
+            {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]},
+            {help, "How much it takes to check the index"}
+        ]
+    ),
+    hb_prometheus:declare(
+        histogram,
+        [
+            {name, hb_store_arweave_chunk_fetch_duration_seconds},
+            {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]},
+            {labels, [type]},
+            {help, "How much it takes to check the index"}
+        ]
+    ),
+    hb_prometheus:declare(
+        counter,
+        [
+            {name, hb_store_arweave_requests_partition},
+            {labels, [partition]},
+            {help, "Partition where chunks are being requested"}
+        ]
+    ),
+    % We also depend on the HTTP client, so we ensure its prometheus metrics are
+    % initialized, too.
+    hb_http_client:init_prometheus().
 
 %%% Tests
 
@@ -258,7 +301,15 @@ write_read_tx_test() ->
         ),
     ?assert(hb_message:verify(Child, all, #{})),
     ExpectedChild = #{
-        <<"data">> => <<"{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\"tickedRewardDistributions\":[],\"newPruneGatewaysResults\":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\"gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\"prunedGateways\":[],\"slashedGateways\":[],\"gatewayStakeWithdrawing\":0}]}">>,
+        <<"data">> =>
+            <<
+                "{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\""
+                ":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\""
+                "tickedRewardDistributions\":[],\"newPruneGatewaysResults\""
+                ":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\""
+                "gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\""
+                "prunedGateways\":[],\"slashedGateways\":[],\""
+                "gatewayStakeWithdrawing\":0}]}">>,
         <<"data-protocol">> => <<"ao">>,
         <<"from-module">> => <<"cbn0KKrBZH7hdNkNokuXLtGryrWM--PjSTBqIzw9Kkk">>,
         <<"from-process">> => <<"agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA">>,
