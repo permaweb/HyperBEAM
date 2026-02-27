@@ -248,4 +248,8 @@ max_ttl_test() ->
     ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>)),
     timer:sleep(1250),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
+    hb_store:write(StoreOpts, <<"a">>, <<"c">>),
+    ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>)),
+    timer:sleep(1250),
+    ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
     hb_store:stop(StoreOpts).
