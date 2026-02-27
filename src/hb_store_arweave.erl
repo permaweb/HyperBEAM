@@ -17,7 +17,7 @@ scope(_) -> scope().
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(#{ <<"index-store">> := IndexStore }, ID) ->
+type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
     Type =
         case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
             {ok, _Offset} -> simple;
@@ -25,10 +25,11 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
         end,
     ?event(store_arweave_debug,
         {type, {id, {explicit, ID}}, {type, Type}}),
-    Type.
+    Type;
+type(_, _) -> not_found.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
+read_offset(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
     case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
@@ -40,7 +41,8 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
                 <<"length">> => Length
             }};
         _ -> not_found
-    end.
+    end;
+read_offset(_, _) -> not_found.
 
 read(StoreOpts, ID) ->
     case read_offset(StoreOpts, ID) of
