@@ -4,7 +4,7 @@
 %%% been written to the remote node. In that case, the node would probably want
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
--export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
+-export([scope/1, type/2, read/2, write/3, make_link/3, make_group/2, resolve/2]).
 %%% Public utilities.
 -export([maybe_cache/2, maybe_cache/3, read_local_cache/2]).
 -include("include/hb.hrl").
@@ -138,6 +138,8 @@ read_local_cache(StoreOpts, ID) ->
 %% @param Key The key to write.
 %% @param Value The value to store.
 %% @returns {ok, Path} on success or {error, Reason} on failure.
+write(#{ <<"read-only">> := true }, _Key, _Value) ->
+    not_found;
 write(Opts = #{ <<"node">> := Node }, Key, Value) ->
     ?event({write, {node, Node}, {key, Key}, {value, Value}}),
     WriteMsg = #{
@@ -165,6 +167,8 @@ write(Opts = #{ <<"node">> := Node }, Key, Value) ->
 %% Constructs an HTTP POST link request. If a wallet is provided,
 %% the message is signed. Returns {ok, Path} on HTTP 200, or
 %% {error, Reason} on failure.
+make_link(#{ <<"read-only">> := true }, _Source, _Destination) ->
+    not_found;
 make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
     ?event({make_remote_link, {node, Node}, {source, Source},
                                   {destination, Destination}}),
@@ -188,6 +192,9 @@ make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
             ?event(store_remote_node, {make_link_error, {error, Err}}),
             {error, Err}
     end.
+
+%% @doc Remote store `make_group/2' is a no-op.
+make_group(_StoreOpts, _Path) -> not_found.
 
 %%%--------------------------------------------------------------------
 %%% Tests
