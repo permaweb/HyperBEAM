@@ -28,22 +28,30 @@ arweave(_Base, Request, Opts) ->
 parse_range(Request, Opts) ->
     From =
         case hb_maps:find(<<"from">>, Request, Opts) of
-            {ok, Height} -> Height;
+            {ok, Height} ->
+                RequestedFrom = hb_util:int(Height),
+                case RequestedFrom < 0 of
+                    true -> latest_height(Opts) + RequestedFrom;
+                    false -> RequestedFrom
+                end;
             error ->
-                case hb_ao:resolve(
-                    <<?ARWEAVE_DEVICE/binary, "/current/height">>,
-                    Opts
-                ) of
-                    {ok, LatestHeight} -> LatestHeight;
-                    {error, _} -> 0
-                end
+                latest_height(Opts)
         end,
     To =
         case hb_maps:find(<<"to">>, Request, Opts) of
             {ok, ToHeight} -> hb_util:int(ToHeight);
             error -> undefined
         end,
-    {hb_util:int(From), To}.
+    {From, To}.
+
+latest_height(Opts) ->
+    case hb_ao:resolve(
+        <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+        Opts
+    ) of
+        {ok, ResolvedHeight} -> hb_util:int(ResolvedHeight);
+        {error, _} -> 0
+    end.
 
 %% @doc Check if a transaction ID is indexed in the arweave index store.
 is_tx_indexed(TXID, Opts) ->
@@ -647,6 +655,16 @@ block_with_large_integer_test() ->
     assert_item_read(<<"UXpcKTl6Mh34eTFSgny4NcIqoUjBcgYIcMqromcS6_Q">>, Opts),
     ok.
 
+empty_block_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1865858,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+            Opts
+        ),
+    ok.
+
 % ecdsa_no_data_test() ->
 %     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
 %     {ok, 1827904} =
@@ -920,6 +938,53 @@ auto_stop_partial_index_test() ->
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ok.
 
+negative_from_parse_range_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, Tip} =
+        hb_ao:resolve(
+            <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+            Opts
+        ),
+    {From, To} = parse_range(#{ <<"from">> => <<"-3">> }, Opts),
+    ?assertEqual(hb_util:int(Tip) - 3, From),
+    ?assertEqual(undefined, To),
+    ok.
+
+negative_from_index_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Tip = latest_height(Opts),
+    StopBlock = 1827942,
+    StartBlock = 1827943,
+    OffsetFromTip = Tip - StartBlock,
+    ?assert(OffsetFromTip > 0),
+    NegativeFrom = <<"-", (hb_util:bin(OffsetFromTip))/binary>>,
+    {ok, StopBlock} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(StopBlock))/binary, "&"
+                "to=", (hb_util:bin(StopBlock))/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    {ok, StopBlock} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", NegativeFrom/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    ?assert(has_any_indexed_tx(StartBlock, Opts)),
+    NextBlock = highest_contiguous_indexed_block(StopBlock, 50, Opts),
+    ?assertEqual(StartBlock, NextBlock),
+    assert_indexed_range(NextBlock, StopBlock, Opts),
+    ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
+    ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
+    ok.
+
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
     StoreOpts = #{ <<"index-store">> => [TestStore] },
@@ -1000,3 +1065,28 @@ has_any_indexed_tx(Height, Opts) ->
         {error, _} ->
             false
     end.
+
+highest_contiguous_indexed_block(StartBlock, MaxLookahead, Opts) ->
+    highest_contiguous_indexed_block(
+        StartBlock + 1,
+        StartBlock + MaxLookahead,
+        StartBlock,
+        Opts
+    ).
+
+highest_contiguous_indexed_block(Current, Max, LastIndexed, _Opts)
+        when Current > Max ->
+    LastIndexed;
+highest_contiguous_indexed_block(Current, Max, LastIndexed, Opts) ->
+    case has_any_indexed_tx(Current, Opts) of
+        true ->
+            highest_contiguous_indexed_block(Current + 1, Max, Current, Opts);
+        false ->
+            LastIndexed
+    end.
+
+assert_indexed_range(From, To, _Opts) when From < To ->
+    ok;
+assert_indexed_range(From, To, Opts) ->
+    ?assert(has_any_indexed_tx(From, Opts)),
+    assert_indexed_range(From - 1, To, Opts).
