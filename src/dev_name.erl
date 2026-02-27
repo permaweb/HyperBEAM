@@ -44,7 +44,7 @@ resolve(Key, _, Req, Opts) ->
 match_resolver(_Key, [], _Opts) -> 
     not_found;
 match_resolver(Key, [Resolver | Resolvers], Opts) ->
-    case execute_resolver(Key, Resolver, Opts) of
+    case catch execute_resolver(Key, Resolver, Opts) of
         {ok, Value} ->
             ?event({resolver_found, {key, Key}, {value, Value}}),
             {ok, Value};
