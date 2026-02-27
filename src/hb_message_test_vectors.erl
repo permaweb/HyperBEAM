@@ -53,12 +53,12 @@ suite_test_opts() ->
         },
         #{
             name => ed25519,
-            desc => <<"ED25519 opts">>,
+            desc => <<"Ed25519 opts">>,
             opts => test_opts(ed25519)
         },
         #{
             name => ecdsa,
-            desc => <<"Ethereum opts">>,
+            desc => <<"Secp256k1 (Ethereum) opts">>,
             opts => test_opts(ethereum)
          }
     ].

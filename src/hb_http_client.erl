@@ -123,6 +123,7 @@ httpc_req(Args, Opts) ->
                     HeaderKV
                 };
             _ ->
+                upload_metric(Body),
                 {
                     URL,
                     HeaderKV,
@@ -135,6 +136,7 @@ httpc_req(Args, Opts) ->
 	StartTime = os:system_time(millisecond),
     case httpc:request(Method, Request, [], HTTPCOpts) of
         {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+            download_metric(RespBody),
 	        EndTime = os:system_time(millisecond),
             RespHeaders =
                 [
@@ -160,7 +162,7 @@ httpc_req(Args, Opts) ->
 gun_req(Args, Opts) ->
     gun_req(Args, false, Opts).
 gun_req(Args, ReestablishedConnection, Opts) ->
-	StartTime = os:system_time(millisecond),
+	StartTime = os:system_time(native),
 	#{ peer := Peer, path := Path, method := Method } = Args,
 	Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
@@ -181,7 +183,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             Error ->
                 Error
 	    end,
-	EndTime = os:system_time(millisecond),
+	EndTime = os:system_time(native),
 	%% Only log the metric for the top-level call to req/2 - not the recursive call
 	%% that happens when the connection is reestablished.
 	case ReestablishedConnection of
@@ -208,7 +210,13 @@ record_duration(Details, Opts) ->
             % First, write to prometheus if it is enabled. Prometheus works
             % only with strings as lists, so we encode the data before granting
             % it.
-            GetFormat = fun(Key) -> hb_util:list(maps:get(Key, Details)) end,
+            GetFormat =
+                fun
+                    (<<"request-category">>) ->
+                        path_to_category(maps:get(<<"request-path">>, Details));
+                    (Key) ->
+                        hb_util:list(maps:get(Key, Details))
+                end,
             case application:get_application(prometheus) of
                 undefined -> ok;
                 _ ->
@@ -218,7 +226,8 @@ record_duration(Details, Opts) ->
                             GetFormat,
                             [
                                 <<"request-method">>,
-                                <<"status-class">>
+                                <<"status-class">>,
+                                <<"request-category">>
                             ]
                         ),
                         maps:get(<<"duration">>, Details)
@@ -302,7 +311,7 @@ init(Opts) ->
 init_prometheus() ->
 	hb_prometheus:declare(counter, [
 		{name, gun_requests_total},
-		{labels, [http_method, status_class]},
+		{labels, [http_method, status_class, category]},
 		{
 			help,
 			"The total number of GUN requests."
@@ -313,7 +322,7 @@ init_prometheus() ->
 	hb_prometheus:declare(histogram, [
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
-        {labels, [http_method, status_class]},
+        {labels, [http_method, status_class, category]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
@@ -603,10 +612,13 @@ reply_error([PendingRequest | PendingRequests], Reason) ->
 	reply_error(PendingRequests, Reason).
 
 record_response_status(Method, Response) ->
+    record_response_status(Method, Response, undefined).
+record_response_status(Method, Response, Path) ->
 	inc_prometheus_counter(gun_requests_total,
         [
             hb_util:list(method_to_bin(Method)),
-			hb_util:list(get_status_class(Response))
+			hb_util:list(get_status_class(Response)),
+            hb_util:list(path_to_category(Path))
         ],
         1
     ).
@@ -629,6 +641,8 @@ method_to_bin(trace) ->
 	<<"TRACE">>;
 method_to_bin(patch) ->
 	<<"PATCH">>;
+method_to_bin(Method) when is_binary(Method) ->
+    Method;
 method_to_bin(_) ->
 	<<"unknown">>.
 
@@ -674,7 +688,7 @@ do_gun_request(PID, Args, Opts) ->
 			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
 	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
-	record_response_status(Method, Response),
+	record_response_status(Method, Response, Path),
 	inet:stop_timer(Timer),
 	Response.
 
@@ -719,20 +733,21 @@ await_response(Args, Opts) ->
                 FinData
             };
 		{error, timeout} = Response ->
-			record_response_status(Method, Response),
+			record_response_status(Method, Response, Path),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
-			record_response_status(Method, Response),
+			record_response_status(Method, Response, Path),
 			log(warn, gun_await_process_down, Args, Reason, Opts),
 			Response;
 		Response ->
-			record_response_status(Method, Response),
+			record_response_status(Method, Response, Path),
 			log(warn, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
 
+%% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
     ?event(
         http,
@@ -748,6 +763,7 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
     ),
     ok.
 
+%% @doc Record instances of downloaded bytes from the remote server.
 download_metric(Data) ->
 	inc_prometheus_counter(
 		http_client_downloaded_bytes_total,
@@ -755,7 +771,12 @@ download_metric(Data) ->
 		byte_size(Data)
 	).
 
-upload_metric(#{method := post, body := Body}) ->
+%% @doc Record instances of uploaded bytes to the remote server.
+upload_metric(#{method := Method, body := Body}) when is_atom(Method) ->
+    upload_metric(#{ method => hb_util:bin(Method), body => Body });
+upload_metric(#{ method := <<"POST">>, body := Body}) -> upload_metric(Body);
+upload_metric(#{ method := <<"PUT">>, body := Body}) -> upload_metric(Body);
+upload_metric(Body) when is_binary(Body) ->
 	inc_prometheus_counter(
 		http_client_uploaded_bytes_total,
 		[],
@@ -768,28 +789,52 @@ upload_metric(_) ->
 % gun_requests_total metrics.
 get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 	get_status_class(Status);
+get_status_class({ok, Status, _RespHeaders, _Body}) ->
+    get_status_class(Status);
 get_status_class({error, connection_closed}) ->
-	<<"connection_closed">>;
+	<<"connection-closed">>;
 get_status_class({error, connect_timeout}) ->
-	<<"connect_timeout">>;
+	<<"connect-timeout">>;
 get_status_class({error, timeout}) ->
 	<<"timeout">>;
 get_status_class({error,{shutdown,timeout}}) ->
-	<<"shutdown_timeout">>;
+	<<"shutdown-timeout">>;
 get_status_class({error, econnrefused}) ->
 	<<"econnrefused">>;
 get_status_class({error, {shutdown,econnrefused}}) ->
-	<<"shutdown_econnrefused">>;
+	<<"shutdown-econnrefused">>;
+get_status_class({error, {down, {shutdown, econnrefused}}}) ->
+    <<"shutdown-econnrefused">>;
 get_status_class({error, {shutdown,ehostunreach}}) ->
-	<<"shutdown_ehostunreach">>;
+	<<"shutdown-ehostunreach">>;
 get_status_class({error, {shutdown,normal}}) ->
-	<<"shutdown_normal">>;
+	<<"shutdown-normal">>;
 get_status_class({error, {closed,_}}) ->
 	<<"closed">>;
 get_status_class({error, noproc}) ->
 	<<"noproc">>;
+get_status_class({error, {connection_error, {stream_closed, _Message}}}) ->
+    <<"stream-closed">>;
+get_status_class({error, {stream_error, {stream_error, too_many_streams, _Message}}}) ->
+    <<"too-many-streams">>;
+get_status_class({error, {stream_error, {stream_error, refused_stream, _Message}}}) ->
+    <<"refused-stream">>;
+get_status_class({error, {stream_error, {goaway, no_error, _Message}}}) ->
+    <<"go-away">>;
+get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
+    <<"closed-einval">>;
+get_status_class({error, {down, shutdown}}) ->
+    <<"down-shutdown">>;
+get_status_class({error, {stream_error, closed}}) ->
+    <<"stream-closed">>;
+get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->
+    <<"stream-closed">>;
 get_status_class(208) ->
-	<<"already_processed">>;
+	<<"already-processed">>;
+get_status_class(404) ->
+	<<"not-found">>;
+get_status_class(429) ->
+	<<"too-many-requests">>;
 get_status_class(Data) when is_integer(Data), Data > 0 ->
 	hb_util:bin(prometheus_http:status_class(Data));
 get_status_class(Data) when is_binary(Data) ->
@@ -798,8 +843,24 @@ get_status_class(Data) when is_binary(Data) ->
 			<<"unknown">>;
 		Status ->
 			get_status_class(Status)
-	end;
+		end;
 get_status_class(Data) when is_atom(Data) ->
 	atom_to_binary(Data);
-get_status_class(_) ->
+get_status_class(StatusClass) ->
+    ?event(warning, {unknown_status_class, {status_class, StatusClass}}),
 	<<"unknown">>.
+
+%% @doc Convert path to category for grafana labels.
+path_to_category(Path) ->
+    case Path of
+        <<"/graphql">> -> <<"GraphQL">>;
+        <<"/raw", _/binary>> -> <<"Raw">>;
+        <<"/tx", _/binary>> -> <<"TX">>;
+        <<"/chunk", _/binary>> -> <<"Chunk">>;
+        <<"/block/height/", _/binary>> -> <<"Block Height">>;
+        <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
+        undefined -> <<"unknown">>;
+        _ ->
+            ?event(warning, {unknown_path_to_assign_category, {path, Path}}),
+            <<"unknown">>
+    end.
