@@ -436,7 +436,7 @@ handle_info({gun_error, PID, Reason},
 			{noreply, State#state{ status_by_pid = StatusByPID2, pid_by_peer = PIDByPeer2 }}
 	end;
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams},
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams},
 			#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
 	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
