@@ -43,7 +43,10 @@ minted_between(Minted, Max, PropN, PropD, LastT, T) ->
     Remaining = Max - Minted,
     NComplementOverTime = bignum_exp(PropD - PropN, Steps),
     DOverTime = bignum_exp(PropD, Steps),
-    (Remaining * (DOverTime - NComplementOverTime)) div DOverTime.
+    case DOverTime of
+        0 -> throw({error, division_with_zero_denominator});
+        _ -> (Remaining * (DOverTime - NComplementOverTime)) div DOverTime
+    end.
 
 bignum_exp(_, 0) -> 1;
 bignum_exp(X, Y) ->
