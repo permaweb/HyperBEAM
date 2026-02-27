@@ -10,10 +10,10 @@
 %% @doc Determine if we should execute the next mint cycle.
 should_mint(State, Req, Opts) ->
     % Gather the current state of the mint process.
-    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
-    PeriodMs = hb_util:int(hb_maps:get(<<"period">>, State, Opts)),
-    StartTimeMs = hb_util:int(hb_maps:get(<<"start-time">>, State, Opts)),
-    CurrentTimeMs = hb_util:int(hb_maps:get(<<"timestamp">>, Req, Opts)),
+    Cycle = required_int(hb_maps:get(<<"cycle">>, State, not_found, Opts)),
+    PeriodMs = required_int(hb_maps:get(<<"period">>, State, not_found, Opts)),
+    StartTimeMs = required_int(hb_maps:get(<<"start-time">>, State, not_found, Opts)),
+    CurrentTimeMs = required_int(hb_maps:get(<<"timestamp">>, Req, not_found, Opts)),
     % Calculate whether we have exceeded the timestamp of the next cycle.
     NextCycleTimeMs = StartTimeMs + (Cycle * PeriodMs),
     CurrentTimeMs >= NextCycleTimeMs.
@@ -21,8 +21,8 @@ should_mint(State, Req, Opts) ->
 %% @doc Perform a single mint cycle, returning a new state containing updated 
 %% metadata and instructions to the `Client` address.
 mint(State, _Req, Opts) ->
-    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
-    AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, Opts)),
+    Cycle = required_int(hb_maps:get(<<"cycle">>, State, not_found, Opts)),
+    AlreadyMinted = required_int(hb_maps:get(<<"minted">>, State, not_found, Opts)),
     ?event(debug,
         {starting_mint_cycle,
             {already_minted, AlreadyMinted},
@@ -89,12 +89,14 @@ mint(State, _Req, Opts) ->
 
 %% @doc Return the total number of units to distribute.
 units_to_distribute(State, Opts) ->
-    MintTotal = hb_util:int(hb_maps:get(<<"mint-total">>, State, Opts)),
-    AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, Opts)),
+    MintTotal = required_int(hb_maps:get(<<"mint-total">>, State, not_found, Opts)),
+    AlreadyMinted = required_int(hb_maps:get(<<"minted">>, State, not_found, Opts)),
     CycleProportionNumerator =
-        hb_util:int(hb_maps:get(<<"cycle-proportion">>, State, Opts)),
+        required_int(hb_maps:get(<<"cycle-proportion">>, State, not_found, Opts)),
     CycleProportionDenominator =
-        hb_util:int(hb_maps:get(<<"cycle-proportion-denominator">>, State, Opts)),
+        required_int(
+            hb_maps:get(<<"cycle-proportion-denominator">>, State, not_found, Opts)
+        ),
     Remaining = MintTotal - AlreadyMinted,
     case CycleProportionDenominator of
         0 -> throw({error, zero_cycle_proportion_denominator});
@@ -106,12 +108,12 @@ units_to_distribute(State, Opts) ->
 units_per_resource(TotalToDistribute, State, Opts) ->
     Resources =
         hb_private:reset(hb_message:uncommitted(
-            hb_maps:get(<<"resources">>, State, Opts)
+            hb_maps:get(<<"resources">>, State, not_found, Opts)
         )),
     ResourceWeights =
         hb_maps:map(
             fun(_ResourceID, Resource) ->
-                hb_util:int(hb_maps:get(<<"weight">>, Resource, Opts))
+                hb_util:int(hb_maps:get(<<"weight">>, Resource, not_found, Opts))
             end,
             Resources
         ),
@@ -289,7 +291,7 @@ split_suffix(Key, Suffix) ->
 distributions_to_total_units(Distributions, Opts) ->
     lists:sum(
         lists:map(
-            fun(D) -> hb_util:int(hb_maps:get(<<"quantity">>, D, Opts)) end,
+            fun(D) -> required_int(hb_maps:get(<<"quantity">>, D, not_found, Opts)) end,
             Distributions
         )
     ).
@@ -304,7 +306,7 @@ distributions_to_results(State, Distributions, Opts) ->
                 [
                     #{
                         <<"target">> =>
-                            hb_maps:get(<<"client">>, State, Opts),
+                            hb_maps:get(<<"client">>, State, not_found, Opts),
                         <<"action">> => <<"mint-batch">>,
                         <<"content-type">> => <<"text/csv">>,
                         <<"body">> => to_csv(Distributions, Opts)
@@ -319,10 +321,10 @@ to_csv(Msgs, Opts) ->
     hb_util:bin(
         lists:map(
             fun(M) ->
-                Recpt = hb_util:human_id(hb_maps:get(<<"recipient">>, M, Opts)),
-                Quantity = hb_util:bin(hb_maps:get(<<"quantity">>, M, Opts)),
-                Minter = hb_util:human_id(hb_maps:get(<<"minter">>, M, Opts)),
-                Reason = hb_util:human_id(hb_maps:get(<<"reason">>, M, Opts)),
+                Recpt = hb_util:human_id(hb_maps:get(<<"recipient">>, M, not_found, Opts)),
+                Quantity = hb_util:bin(hb_maps:get(<<"quantity">>, M, not_found, Opts)),
+                Minter = hb_util:human_id(hb_maps:get(<<"minter">>, M, not_found, Opts)),
+                Reason = hb_util:human_id(hb_maps:get(<<"reason">>, M, not_found, Opts)),
                 <<
                     Recpt/binary, ",",
                     Quantity/binary, ",",
@@ -333,3 +335,9 @@ to_csv(Msgs, Opts) ->
             Msgs
         )
     ).
+%% @doc Fail Fast wrapper for hb_util:safe_int.
+required_int(Value) ->
+    case hb_util:safe_int(Value) of
+        {ok, SafeInt} -> SafeInt;
+        _ -> throw({error, required_int_parse_failure})
+    end.
