@@ -14,9 +14,9 @@
 %% -> sum(distributions/n/quantity) == Minted supply after - Minted supply before.
 %% -> All distributions/n/quantity are positive integers.
 sanity_check(State, NewState, Opts) ->
-    MintedBefore = hb_maps:get(<<"minted">>, State, Opts),
-    MintedAfter = hb_maps:get(<<"minted">>, NewState, Opts),
-    TotalSupply = hb_maps:get(<<"total-supply">>, State, Opts),
+    MintedBefore = hb_maps:get(<<"minted">>, State, undefined, Opts),
+    MintedAfter = hb_maps:get(<<"minted">>, NewState, undefined, Opts),
+    TotalSupply = hb_maps:get(<<"total-supply">>, State, undefined, Opts),
     Quantities = get_quantities(NewState),
     SumQuantities = lists:sum(Quantities),
     NonNegativeInteger = fun(X) -> is_integer(X) andalso X >= 0 end,
