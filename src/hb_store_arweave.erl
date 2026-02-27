@@ -127,7 +127,21 @@ do_read(StoreOpts, ID) ->
                             {start_offset, StartOffset},
                             {length, Length}
                         }
-                    );
+                    ),
+                    Loaded;
+                {error, not_found} ->
+                    ?event(
+                        arweave_offsets,
+                        {read_error, 
+                            {id, {explicit, ID}},
+                            {format_version, Version},
+                            {type, CodecName},
+                            {start_offset, StartOffset},
+                            {length, Length},
+                            {reason, not_found}
+                        }
+                    ),
+                    not_found;
                 {error, Reason} ->
                     ?event(
                         arweave_offsets,
@@ -139,9 +153,9 @@ do_read(StoreOpts, ID) ->
                             {length, Length},
                             {reason, Reason}
                         }
-                    )
-            end,
-            Loaded;
+                    ),
+                    Loaded
+            end;
         not_found ->
             ?event(
                 arweave_offsets,
