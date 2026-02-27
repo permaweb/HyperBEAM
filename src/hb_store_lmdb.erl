@@ -49,6 +49,7 @@
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }) ->
+    init_prometheus(),
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = ensure_dir(DataDirPath),
@@ -184,9 +185,14 @@ write(Opts, Path, Value) ->
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
-read(Opts, Path) ->
+read(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Path) of
+    ReadRes = hb_prometheus:measure_and_report(
+        fun () -> read_with_links(Opts, Path) end,
+        hb_store_lmdb_duration_seconds,
+        [read, Name]
+    ),
+    case ReadRes of
         {ok, Value} -> 
             {ok, Value};
         not_found ->
@@ -593,6 +599,30 @@ reset(Opts) ->
             os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
             ensure_dir(DataDir),
             ok
+    end.
+
+init_prometheus() ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try
+                application:ensure_all_started([prometheus]),
+                prometheus_histogram:declare([
+                    {name, hb_store_lmdb_duration_seconds},
+                    {labels, [function, store_name]},
+                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
+                    {help, "Duration of lmdb operations in microseconds"}
+                ]),
+                prometheus_counter:new([
+                    {name, hb_store_lmdb_hit},
+                    {labels, [name]},
+                    {help, "LMDB name requested"}
+                ]),
+                ok
+            catch
+                error:mfa_already_exists -> ok;
+                _:_ -> ok
+            end
     end.
 
 %% @doc Test suite demonstrating basic store operations.
