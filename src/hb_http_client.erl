@@ -162,7 +162,7 @@ httpc_req(Args, Opts) ->
 gun_req(Args, Opts) ->
     gun_req(Args, false, Opts).
 gun_req(Args, ReestablishedConnection, Opts) ->
-	StartTime = os:system_time(millisecond),
+	StartTime = os:system_time(native),
 	#{ peer := Peer, path := Path, method := Method } = Args,
 	Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
@@ -183,7 +183,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             Error ->
                 Error
 	    end,
-	EndTime = os:system_time(millisecond),
+	EndTime = os:system_time(native),
 	%% Only log the metric for the top-level call to req/2 - not the recursive call
 	%% that happens when the connection is reestablished.
 	case ReestablishedConnection of
@@ -747,6 +747,7 @@ await_response(Args, Opts) ->
 			Response
 	end.
 
+%% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
     ?event(
         http,
@@ -762,6 +763,7 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
     ),
     ok.
 
+%% @doc Record instances of downloaded bytes from the remote server.
 download_metric(Data) ->
 	inc_prometheus_counter(
 		http_client_downloaded_bytes_total,
@@ -769,18 +771,11 @@ download_metric(Data) ->
 		byte_size(Data)
 	).
 
-upload_metric(#{method := post, body := Body}) ->
-	inc_prometheus_counter(
-		http_client_uploaded_bytes_total,
-		[],
-		byte_size(Body)
-	);
-upload_metric(#{method := <<"POST">>, body := Body}) ->
-	inc_prometheus_counter(
-		http_client_uploaded_bytes_total,
-		[],
-		byte_size(Body)
-	);
+%% @doc Record instances of uploaded bytes to the remote server.
+upload_metric(#{method := Method, body := Body}) when is_atom(Method) ->
+    upload_metric(#{ method => hb_util:bin(Method), body => Body });
+upload_metric(#{ method := <<"POST">>, body := Body}) -> upload_metric(Body);
+upload_metric(#{ method := <<"PUT">>, body := Body}) -> upload_metric(Body);
 upload_metric(Body) when is_binary(Body) ->
 	inc_prometheus_counter(
 		http_client_uploaded_bytes_total,
@@ -797,51 +792,49 @@ get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 get_status_class({ok, Status, _RespHeaders, _Body}) ->
     get_status_class(Status);
 get_status_class({error, connection_closed}) ->
-	<<"connection_closed">>;
+	<<"connection-closed">>;
 get_status_class({error, connect_timeout}) ->
-	<<"connect_timeout">>;
+	<<"connect-timeout">>;
 get_status_class({error, timeout}) ->
 	<<"timeout">>;
 get_status_class({error,{shutdown,timeout}}) ->
-	<<"shutdown_timeout">>;
+	<<"shutdown-timeout">>;
 get_status_class({error, econnrefused}) ->
 	<<"econnrefused">>;
 get_status_class({error, {shutdown,econnrefused}}) ->
-	<<"shutdown_econnrefused">>;
+	<<"shutdown-econnrefused">>;
 get_status_class({error, {down, {shutdown, econnrefused}}}) ->
-    <<"shutdown_econnrefused">>;
+    <<"shutdown-econnrefused">>;
 get_status_class({error, {shutdown,ehostunreach}}) ->
-	<<"shutdown_ehostunreach">>;
+	<<"shutdown-ehostunreach">>;
 get_status_class({error, {shutdown,normal}}) ->
-	<<"shutdown_normal">>;
+	<<"shutdown-normal">>;
 get_status_class({error, {closed,_}}) ->
 	<<"closed">>;
 get_status_class({error, noproc}) ->
 	<<"noproc">>;
-get_status_class({error, {rate_limited, _}}) ->
-	<<"rate_limited_fast_fail">>;
 get_status_class({error, {connection_error, {stream_closed, _Message}}}) ->
-    <<"stream_closed">>;
+    <<"stream-closed">>;
 get_status_class({error, {stream_error, {stream_error, too_many_streams, _Message}}}) ->
-    <<"too_many_streams">>;
+    <<"too-many-streams">>;
 get_status_class({error, {stream_error, {stream_error, refused_stream, _Message}}}) ->
-    <<"refused_stream">>;
+    <<"refused-stream">>;
 get_status_class({error, {stream_error, {goaway, no_error, _Message}}}) ->
-    <<"goaway">>;
+    <<"go-away">>;
 get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
-    <<"closed_einval">>;
+    <<"closed-einval">>;
 get_status_class({error, {down, shutdown}}) ->
-    <<"down_shutdown">>;
+    <<"down-shutdown">>;
 get_status_class({error, {stream_error, closed}}) ->
-    <<"stream_closed">>;
+    <<"stream-closed">>;
 get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->
-    <<"stream_closed">>;
+    <<"stream-closed">>;
 get_status_class(208) ->
-	<<"already_processed">>;
+	<<"already-processed">>;
 get_status_class(404) ->
-	<<"not_found">>;
+	<<"not-found">>;
 get_status_class(429) ->
-	<<"too_many_requests">>;
+	<<"too-many-requests">>;
 get_status_class(Data) when is_integer(Data), Data > 0 ->
 	hb_util:bin(prometheus_http:status_class(Data));
 get_status_class(Data) when is_binary(Data) ->
@@ -861,11 +854,11 @@ get_status_class(StatusClass) ->
 path_to_category(Path) ->
     case Path of
         <<"/graphql">> -> <<"GraphQL">>;
-        <<"/raw", _/binary>> -> <<"RAW">>;
+        <<"/raw", _/binary>> -> <<"Raw">>;
         <<"/tx", _/binary>> -> <<"TX">>;
         <<"/chunk", _/binary>> -> <<"Chunk">>;
         <<"/block/height/", _/binary>> -> <<"Block Height">>;
-        <<"/~cache@1.0/read", _/binary>> -> <<"Cache@1.0 Read">>;
+        <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
         undefined -> <<"unknown">>;
         _ ->
             ?event(warning, {unknown_path_to_assign_category, {path, Path}}),
