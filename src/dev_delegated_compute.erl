@@ -34,7 +34,6 @@ load_state(Snapshot, Opts) ->
     Body = hb_maps:get(<<"data">>, Snapshot, not_found, Opts),
     case Body of
         not_found -> throw({error, missing_checkpoint_data});
-        <<>> -> throw({error, empty_checkpoint_data});
         _ -> ok
     end,
     Headers = hb_maps:without([<<"data">>], Snapshot, Opts),

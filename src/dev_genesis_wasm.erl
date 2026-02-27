@@ -438,7 +438,6 @@ do_import(Proc, CheckpointMessage, Opts) ->
         true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
         CheckpointData = hb_maps:get(<<"data">>, CheckpointMessage, not_found, Opts),
         true ?= CheckpointData =/= not_found orelse missing_checkpoint_data,
-        true ?= CheckpointData =/= <<>> orelse empty_checkpoint_data,
         CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, not_found, Opts),
         ProcID = dev_process_lib:process_id(Proc, #{}, Opts),
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
@@ -490,12 +489,6 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 <<"status">> => 400,
                 <<"body">> =>
                     <<"Checkpoint message is missing data.">>
-            }};
-        empty_checkpoint_data ->
-            {error, #{
-                <<"status">> => 400,
-                <<"body">> =>
-                    <<"Checkpoint message data is empty.">>
             }}
     end.
 
