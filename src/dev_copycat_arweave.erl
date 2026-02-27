@@ -85,22 +85,45 @@ list_index(From, To, Opts) ->
 list_index_blocks(Current, To, _Opts, Acc) when Current < To ->
     Acc;
 list_index_blocks(Current, To, Opts, Acc) ->
-    case dev_arweave_block_cache:read(Current, Opts) of
+    case fetch_block_header(Current, Opts) of
         {ok, Block} ->
             TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-            {IndexedTXs, NotIndexedTXs} = classify_txs(TXIDs, Opts),
-            BlockKey = hb_util:bin(Current),
-            NewAcc = Acc#{
-                BlockKey => #{
-                    <<"indexed">> => IndexedTXs,
-                    <<"not-indexed">> => NotIndexedTXs
-                }
-            },
-            list_index_blocks(Current - 1, To, Opts, NewAcc);
-        not_found ->
-            % Block not in cache, skip it
+            case TXIDs of
+                [] ->
+                    list_index_blocks(Current - 1, To, Opts, Acc);
+                _ ->
+                    {IndexedTXs, NotIndexedTXs} = classify_txs(TXIDs, Opts),
+                    case IndexedTXs of
+                        [] ->
+                            % Do not include blocks with no locally indexed TXs.
+                            list_index_blocks(Current - 1, To, Opts, Acc);
+                        _ ->
+                            BlockKey = hb_util:bin(Current),
+                            NewAcc = Acc#{
+                                BlockKey => #{
+                                    <<"indexed">> => IndexedTXs,
+                                    <<"not-indexed">> => NotIndexedTXs
+                                }
+                            },
+                            list_index_blocks(Current - 1, To, Opts, NewAcc)
+                    end
+            end;
+        {error, _} ->
             list_index_blocks(Current - 1, To, Opts, Acc)
     end.
+
+fetch_block_header(Height, Opts) ->
+    ?event(copycat_debug, {fetching_block, Height}),
+    observe_event(<<"block_header">>, fun() ->
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary,
+                "/block=",
+                (hb_util:bin(Height))/binary
+            >>,
+            Opts
+        )
+    end).
 
 %% @doc Classify transactions as indexed or not-indexed.
 classify_txs(TXIDs, Opts) ->
@@ -129,17 +152,7 @@ fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
 fetch_blocks(_Req, Current, undefined, _Opts) when Current < 0 ->
     {ok, 0};
 fetch_blocks(Req, Current, undefined, Opts) ->
-    ?event(copycat_debug, {fetching_block, Current}),
-    BlockRes = observe_event(<<"block_header">>, fun() ->
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/block=",
-                (hb_util:bin(Current))/binary
-            >>,
-            Opts
-        )
-    end),
+    BlockRes = fetch_block_header(Current, Opts),
     case is_already_indexed(BlockRes, Opts) of
         true ->
             ?event(copycat_short,
@@ -170,17 +183,7 @@ is_already_indexed({error, _}, _Opts) ->
     false.
 
 fetch_and_process_block(Current, To, Opts) ->
-    ?event(copycat_debug, {fetching_block, Current}),
-    BlockRes = observe_event(<<"block_header">>, fun() ->
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/block=",
-                (hb_util:bin(Current))/binary
-            >>,
-            Opts
-        )
-    end),
+    BlockRes = fetch_block_header(Current, Opts),
     process_block(BlockRes, Current, To, Opts).
 
 %% @doc Process a block.
@@ -1050,14 +1053,7 @@ assert_item_read(ItemID, Opts) ->
     Item.
 
 has_any_indexed_tx(Height, Opts) ->
-    case hb_ao:resolve(
-        <<
-            ?ARWEAVE_DEVICE/binary,
-            "/block=",
-            (hb_util:bin(Height))/binary
-        >>,
-        Opts
-    ) of
+    case fetch_block_header(Height, Opts) of
         {ok, Block} ->
             TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
             lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
