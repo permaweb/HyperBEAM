@@ -11,7 +11,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% The default store module to use for testing.
--define(DEFAULT_STORE_MODULE, hb_store_ets).
+-define(DEFAULT_STORE_MODULE, hb_store_volatile).
 %%% The number of seconds to run a benchmark for when no time is specified.
 -define(DEFAULT_BENCHMARK_TIME, 1).
 

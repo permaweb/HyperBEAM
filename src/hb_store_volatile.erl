@@ -1,31 +1,37 @@
-%%% @doc A lightweight in-memory HyperBEAM store backed by ETS.
+%%% @doc A lightweight in-memory HyperBEAM store backed by ETS. The store is
+%%% volatile: It does not persist data to disk ever, and -- critically -- can
+%%% be configured to expire all data periodically. This is useful for testing
+%%% and as a short-term in-memory cache, not for instances where an `ok` from
+%%% the `write` function should imply data persistence.
 %%%
 %%% This store keeps all data in-memory and does not flush to any persistent
 %%% backend. It supports the core `hb_store` interface semantics used by
 %%% `hb_store` and `hb_cache`: writes, reads, groups, links, type checks,
 %%% path resolution, and resets.
--module(hb_store_ets).
+-module(hb_store_volatile).
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([write/3, read/2, list/2, type/2, make_link/3, make_group/2, resolve/2]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(ROOT_GROUP, <<"/">>).
 -define(MAX_REDIRECTS, 32).
 
 %% @doc Start the ETS-backed store and return the store instance message.
-start(#{ <<"name">> := Name }) ->
+start(StoreOpts = #{ <<"name">> := Name }) ->
     ?event(cache_ets, {starting_ets_store, Name}),
     Parent = self(),
     spawn(
         fun() ->
-            Table = ets:new(hb_store_ets, [
+            Table = ets:new(hb_store_volatile, [
                 set,
                 public,
                 {read_concurrency, true},
                 {write_concurrency, true}
             ]),
             Parent ! {ok, #{ <<"pid">> => self(), <<"ets-table">> => Table }},
-            owner_loop()
+            maybe_start_ttl_timer(StoreOpts, self()),
+            owner_loop(StoreOpts)
         end
     ),
     receive
@@ -35,13 +41,23 @@ start(#{ <<"name">> := Name }) ->
 
 %% @doc Owner loop for the ETS store. Simply waits for a stop message and exits.
 %% Until the store is stopped, the table will remain alive.
-owner_loop() ->
+owner_loop(StoreOpts) ->
     receive
         {stop, From, Ref} ->
             From ! {ok, Ref},
             exit(normal);
+        reset ->
+            reset(StoreOpts),
+            maybe_start_ttl_timer(StoreOpts, self()),
+            owner_loop(StoreOpts);
         _ ->
-            owner_loop()
+            owner_loop(StoreOpts)
+    end.
+
+maybe_start_ttl_timer(StoreOpts, PID) ->
+    case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
+        infinity -> skip;
+        MaxTTL -> timer:send_after(hb_util:int(MaxTTL) * 1000, PID, reset)
     end.
 
 %% @doc Stop the ETS owner process (which also drops the table).
@@ -217,3 +233,19 @@ add_group_child(Table, GroupPath, Child) ->
         end,
     ets:insert(Table, {GroupPath, {group, sets:add_element(Child, Set)}}),
     ok.
+
+%%% Tests
+
+max_ttl_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-max-ttl-test">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(StoreOpts),
+    hb_store:write(StoreOpts, <<"a">>, <<"b">>),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>)),
+    timer:sleep(1250),
+    ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
+    hb_store:stop(StoreOpts).
