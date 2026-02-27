@@ -1,8 +1,8 @@
 %%% @doc A `~copycat@1.0' engine that fetches block data from an Arweave node for
-%%% replication. This engine works in _reverse_ chronological order by default,
-%%% fetching blocks from the latest known block towards the Genesis block. The
-%%% node avoids retrieving blocks that are already present in the cache using
-%%% `~arweave@2.9''s built-in caching mechanism.
+%%% replication. This engine works in _reverse_ chronological order by default.
+%%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
+%%% block where at least one TX is already indexed, then stops. If `to' is
+%%% provided, every block in the range is processed.
 -module(dev_copycat_arweave).
 -export([arweave/3]).
 -include_lib("include/hb.hrl").
@@ -17,13 +17,11 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     {From, To} = parse_range(Request, Opts),
-    Mode = hb_maps:get(<<"mode">>, Request, <<"write">>, Opts),
-    case Mode of
-        <<"write">>  -> fetch_blocks(Request, From, To, write, Opts);
-        <<"update">> -> fetch_blocks(Request, From, To, update, Opts);
+    case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+        <<"write">>  -> fetch_blocks(Request, From, To, Opts);
         <<"list">>   -> list_index(From, To, Opts);
-        _ ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, update, list">>}
+        Mode ->
+            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
     end.
 
 %% @doc Parse the range from the request.
@@ -40,8 +38,12 @@ parse_range(Request, Opts) ->
                     {error, _} -> 0
                 end
         end,
-    To = hb_maps:get(<<"to">>, Request, 0, Opts),
-    {hb_util:int(From), hb_util:int(To)}.
+    To =
+        case hb_maps:find(<<"to">>, Request, Opts) of
+            {ok, ToHeight} -> hb_util:int(ToHeight);
+            error -> undefined
+        end,
+    {hb_util:int(From), To}.
 
 %% @doc Check if a transaction ID is indexed in the arweave index store.
 is_tx_indexed(TXID, Opts) ->
@@ -57,6 +59,8 @@ is_tx_indexed(TXID, Opts) ->
 
 %% @doc List indexed blocks and transactions in the given range.
 %% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
+list_index(From, undefined, Opts) ->
+    list_index(From, 0, Opts);
 list_index(From, To, _Opts) when From < To ->
     {ok, #{
         <<"content-type">> => <<"application/json">>,
@@ -104,11 +108,10 @@ classify_txs(TXIDs, Opts) ->
         TXIDs
     ).
 
-%% @doc Fetch blocks from an Arweave node between a given range. The `Mode'
-%% parameter controls whether each block is processed unconditionally
-%% (`write`) or only when it is not already fully indexed
-%% (`update`).
-fetch_blocks(Req, Current, To, _Mode, _Opts) when Current < To ->
+%% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
+%% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
+%% is omitted, stop at the first block where any TX is already indexed.
+fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
             {reached_target, To},
@@ -116,44 +119,48 @@ fetch_blocks(Req, Current, To, _Mode, _Opts) when Current < To ->
         }
     ),
     {ok, To};
-fetch_blocks(Req, Current, To, Mode, Opts) ->
-    case should_process_block(Mode, Current, Opts) of
+fetch_blocks(_Req, Current, undefined, _Opts) when Current < 0 ->
+    {ok, 0};
+fetch_blocks(Req, Current, undefined, Opts) ->
+    ?event(copycat_debug, {fetching_block, Current}),
+    BlockRes = observe_event(<<"block_header">>, fun() ->
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary,
+                "/block=",
+                (hb_util:bin(Current))/binary
+            >>,
+            Opts
+        )
+    end),
+    case is_already_indexed(BlockRes, Opts) of
         true ->
-            observe_event(<<"block_indexed">>, fun() ->
-                fetch_and_process_block(Current, To, Opts)
-            end);
-        false ->
             ?event(copycat_short,
-                {arweave_block_already_indexed,
-                    {height, Current},
-                    {target, To}
+                {arweave_block_indexing_completed,
+                    {stop_at_indexed_block, Current},
+                    {initial_request, Req}
                 }
-            )
-    end,
-    fetch_blocks(Req, Current - 1, To, Mode, Opts).
+            ),
+            {ok, Current};
+        false ->
+            observe_event(<<"block_indexed">>, fun() ->
+                process_block(BlockRes, Current, undefined, Opts)
+            end),
+            fetch_blocks(Req, Current - 1, undefined, Opts)
+    end;
+fetch_blocks(Req, Current, To, Opts) ->
+    observe_event(<<"block_indexed">>, fun() ->
+        fetch_and_process_block(Current, To, Opts)
+    end),
+    fetch_blocks(Req, Current - 1, To, Opts).
 
-%% @doc Decide whether a block at the given height needs processing.
-%% In `write' mode every block is processed. In `update' mode a block is
-%% skipped when it already exists in the block cache and all of its TXs are
-%% present in the arweave index store.
-should_process_block(write, _Current, _Opts) -> true;
-should_process_block(update, Current, Opts) ->
-    not is_block_fully_indexed(Current, Opts).
-
-%% @doc Check if a block at a given height is fully indexed. A block is fully
-%% indexed when it exists in the block cache and every transaction ID listed in
-%% its `txs` field has a corresponding entry in the arweave index store.
-is_block_fully_indexed(Height, Opts) ->
-    case dev_arweave_block_cache:read(Height, Opts) of
-        {ok, Block} ->
-            TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-            lists:all(
-                fun(TXID) -> is_tx_indexed(TXID, Opts) end,
-                TXIDs
-            );
-        not_found ->
-            false
-    end.
+%% @doc Determine whether a fetched block is considered indexed.
+%% A block is indexed when any TX from its `txs' list is in the index.
+is_already_indexed({ok, Block}, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
+is_already_indexed({error, _}, _Opts) ->
+    false.
 
 fetch_and_process_block(Current, To, Opts) ->
     ?event(copycat_debug, {fetching_block, Current}),
@@ -819,73 +826,98 @@ list_index_test() ->
     ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
 
-%% @doc Test `mode=update` with three blocks representing three scenarios:
-%%   - Block A (1826702): Fully indexed -- should be skipped by update.
-%%   - Block B (1826701): Missing entirely (never fetched/cached) -- should
-%%     be fetched and indexed.
-%%   - Block C (1826700): Block header is cached but at least one TX is not
-%%     indexed -- should be re-fetched and fully reindexed.
-update_mode_test() ->
-    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
-    BlockA = 1826702,
-    BlockB = 1826701,
-    BlockC = 1826700,
-    %% 1. Fully index Block A using mode=write.
-    {ok, BlockA} =
+auto_stop_on_indexed_block_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    IndexedBlock = 1827941,
+    Higher1 = IndexedBlock + 1,
+    Higher2 = IndexedBlock + 2,
+    {ok, IndexedBlock} =
         hb_ao:resolve(
             <<
                 "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(BlockA))/binary, "&"
-                "to=", (hb_util:bin(BlockA))/binary, "&"
+                "from=", (hb_util:bin(IndexedBlock))/binary, "&"
+                "to=", (hb_util:bin(IndexedBlock))/binary, "&"
                 "mode=write"
             >>,
             Opts
         ),
-    %% 2. Block B: intentionally left un-fetched/un-cached (nothing to do).
-    %% 3. Block C: cache the block header but do NOT index TXs.
-    %%    We set arweave_index_ids => false so the arweave device caches the
-    %%    block but maybe_index_ids/2 skips TX indexing.
-    NoIndexOpts = Opts#{ arweave_index_ids => false },
-    {ok, BlockC} =
+    {ok, IndexedBlock} =
         hb_ao:resolve(
             <<
                 "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(BlockC))/binary, "&"
-                "to=", (hb_util:bin(BlockC))/binary, "&"
+                "from=", (hb_util:bin(Higher2))/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    ?assert(has_any_indexed_tx(Higher2, Opts)),
+    ?assert(has_any_indexed_tx(Higher1, Opts)),
+    ?assert(has_any_indexed_tx(IndexedBlock, Opts)),
+    ?assertNot(has_any_indexed_tx(IndexedBlock-1, Opts)),
+    ok.
+
+explicit_to_reindexes_all_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    IndexedBlock = 1827942,
+    LowerBlock = IndexedBlock - 1,
+    {ok, IndexedBlock} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(IndexedBlock))/binary, "&"
+                "to=", (hb_util:bin(IndexedBlock))/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    ?assertNot(has_any_indexed_tx(LowerBlock, Opts)),
+    {ok, LowerBlock} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(IndexedBlock+1))/binary, "&"
+                "to=", (hb_util:bin(LowerBlock))/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    ?assert(has_any_indexed_tx(LowerBlock, Opts)),
+    ok.
+
+%% @doc Manually write to the index to simulate a partially indexed block.
+%% This should also trigger a stop when the `to` option is omitted.
+auto_stop_partial_index_test() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    Block = 1826700,
+    HigherBlock = Block + 1,
+    NoIndexOpts = Opts#{ arweave_index_ids => false },
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(Block))/binary, "&"
+                "to=", (hb_util:bin(Block))/binary, "&"
                 "mode=write"
             >>,
             NoIndexOpts
         ),
-    %%    Now manually index all but the first TX with dummy offsets so that
-    %%    the block appears partially indexed (at least 1 TX is missing).
-    {ok, BlockCData} = dev_arweave_block_cache:read(BlockC, Opts),
-    TXIDs = hb_maps:get(<<"txs">>, BlockCData, [], Opts),
-    ?assert(length(TXIDs) > 1),
-    [_SkippedTXID | RestTXIDs] = TXIDs,
-    lists:foreach(
-        fun(TXID) ->
-            hb_store_arweave:write_offset(StoreOpts, TXID, <<"tx@1.0">>, 0, 0)
-        end,
-        RestTXIDs
-    ),
-    ?assert(is_block_fully_indexed(BlockA, Opts)),
-    ?assertNot(is_block_fully_indexed(BlockB, Opts)),
-    ?assertNot(is_block_fully_indexed(BlockC, Opts)),
-    %% --- Run mode=update over the full range ---
-    {ok, BlockC} =
+    {ok, BlockData} = dev_arweave_block_cache:read(Block, Opts),
+    TXIDs = hb_maps:get(<<"txs">>, BlockData, [], Opts),
+    ?assert(length(TXIDs) > 0),
+    [OneTXID | _] = TXIDs,
+    hb_store_arweave:write_offset(StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
+    {ok, Block} =
         hb_ao:resolve(
             <<
                 "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(BlockA))/binary, "&"
-                "to=", (hb_util:bin(BlockC))/binary, "&"
-                "mode=update"
+                "from=", (hb_util:bin(HigherBlock))/binary, "&"
+                "mode=write"
             >>,
             Opts
         ),
-    %% All three blocks should now be fully indexed.
-    ?assert(is_block_fully_indexed(BlockA, Opts)),
-    ?assert(is_block_fully_indexed(BlockB, Opts)),
-    ?assert(is_block_fully_indexed(BlockC, Opts)),
+    ?assert(has_any_indexed_tx(HigherBlock, Opts)),
+    ?assert(has_any_indexed_tx(Block, Opts)),
+    ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ok.
 
 setup_index_opts() ->
@@ -952,3 +984,19 @@ assert_item_read(ItemID, Opts) ->
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
+
+has_any_indexed_tx(Height, Opts) ->
+    case hb_ao:resolve(
+        <<
+            ?ARWEAVE_DEVICE/binary,
+            "/block=",
+            (hb_util:bin(Height))/binary
+        >>,
+        Opts
+    ) of
+        {ok, Block} ->
+            TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+            lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
+        {error, _} ->
+            false
+    end.
