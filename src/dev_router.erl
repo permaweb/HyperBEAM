@@ -566,7 +566,12 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) when is_binary(HashPath) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_maps:get(<<"wallet">>, Node, Opts),
+                Wallet = 
+                    case hb_maps:get(<<"wallet">>, Node, not_found, Opts) of
+                        W when is_binary(W) -> W;
+                        not_found -> throw({error, wallet_not_found});
+                        _ -> throw({error, invalid_wallet})
+                    end,
                 Salt =
                     case hb_maps:find(<<"salt">>, Node, Opts) of
                         {ok, S} -> <<":", S/binary>>;
@@ -771,12 +776,21 @@ preprocess(Base, RawReq, Opts) ->
                     _ ->
                         Req
                 end,
+            UserPath =
+                case hb_maps:get(<<"path">>, Req, not_found, Opts) of
+                    P when is_binary(P), byte_size(P) > 0 ->
+                        P;
+                    not_found ->
+                        throw({error, missing_user_path});
+                    _ ->
+                        throw({error, invalid_user_path})
+                end,
             RelayReq =
                 #{
                     <<"device">> => <<"apply@1.0">>,
                     <<"path">> => <<"user-path">>,
                     <<"source">> => <<"user-message">>,
-                    <<"user-path">> => hb_maps:get(<<"path">>, Req, Opts),
+                    <<"user-path">> => UserPath,
                     <<"user-message">> => UserReqWithCommit
                 },
             ?event(debug_preprocess, {prepared_relay_req, RelayReq}),
