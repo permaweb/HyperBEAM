@@ -24,20 +24,16 @@ representations regarding the programs that operate inside the AO-Core protocol.
 models (`devices`) to be executed inside the AO-Core protocol, while enabling their
 states and inputs to be calculated and committed to in a unified format.
 
-## What is HyperBeam?
+## Contributing
 
-HyperBeam is a client implementation of the AO-Core protocol, written in Erlang.
-It can be seen as the 'node' software for the decentralized operating system that
-AO enables; abstracting hardware provisioning and details from the execution of
-individual programs.
+HyperBEAM is developed as an open source implementation of the AO-Core protocol 
+by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
 
-HyperBEAM node operators can offer the services of their machine to others inside
-the network by electing to execute any number of different `devices`, charging 
-users for their computation as necessary.
+To get started building on HyperBEAM, check out the 
+[hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md) and [contribution](./CONTRIBUTING.md)
+guides.
 
-Each HyperBEAM node is configured using the `~meta@1.0` device, which provides
-an interface for specifying the node's hardware, supported devices, metering and
-payments information, amongst other configuration options.
+# Building and Running HyperBEAM
 
 ## Getting Started
 
@@ -127,17 +123,12 @@ installation is working properly.
 HyperBEAM can be configured using a `~meta@1.0` device, which is initialized
  using either command line arguments or a configuration file.
 
-### Configuration with `config.flat`
+### Configuration with `config.json`
 
-The simplest way to configure HyperBEAM is using the `config.flat` file:
-
-1. A file named `config.flat` is already included in the project directory
-2. Update to include your configuration values:
-
-```
-port: 10000
-priv_key_location: /path/to/wallet.json
-```
+The simplest way to configure HyperBEAM is using the `config.json` file. It allows
+you to configure various aspects of the node's execution environment via 
+modification of the environmental parameters of the node. Visit 
+`~meta@1.0/info/format~hyperbuddy@1.0` for a list of available configuration options.
 
 3. Start HyperBEAM with `rebar3 shell`
 
@@ -149,7 +140,7 @@ settings in the startup log.
 For production environments, you can create a standalone release:
 
 ```bash
-rebar3 release
+HB_CONFIG=path-to-config.json rebar3 release
 ```
 
 This creates a release in `_build/default/rel/hb` that can be deployed independently.
@@ -290,11 +281,3 @@ python3 -m http.server 8000
 ```
 
 For more details on the documentation structure, how to contribute, and other information, please see the [full documentation README](./docs/README.md).
-
-## Contributing
-
-HyperBEAM is developed as an open source implementation of the AO-Core protocol 
-by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
-
-To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md)
-guide.

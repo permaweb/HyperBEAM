@@ -77,7 +77,6 @@ delegate_request(Msg, Req, Opts) ->
 
 %% @doc Handle normal compute execution with state persistence (GET method).
 do_compute(State, Req, Opts) ->
-    ?event(debug_test, {do_compute, {state, State}, {req, Req}}),
     maybe
         {ok, State2} ?=
             hb_ao:resolve(
@@ -110,7 +109,9 @@ do_compute(State, Req, Opts) ->
                 },
                 Opts
             ),
-        ?event(debug_genesis, {computed_result, State4}, Opts),
+        ?event(dedup_short,
+            {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
+        ),
         {ok, State4}
     else
         {error, Error} ->
@@ -589,10 +590,9 @@ import_legacy_checkpoint() ->
         ExpectedSlot,
         hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
     ),
-    ?assertMatch(
-        #{ <<"data">> := Data } when byte_size(Data) > 0,
-        hb_maps:get(<<"snapshot">>, ProcWithCheckpoint)
-    ),
+    Snapshot = hb_maps:get(<<"snapshot">>, ProcWithCheckpoint, not_found, Opts),
+    SnapshotData = hb_maps:get(<<"data">>, Snapshot, not_found, Opts),
+    ?assert(byte_size(SnapshotData) > 0),
     ?assertMatch(
         {ok, Slot, _} when Slot > 0,
         dev_process_cache:latest(ProcID, Opts)
@@ -814,7 +814,6 @@ dedup_test() ->
             <<"schedule">>,
             Opts
         ),
-    ?event(debug_test, {dedup_test, {scheduler_res, SchedulerRes}}),
     % Assert successful double schedule
     ?assertEqual(
         hb_private:reset(

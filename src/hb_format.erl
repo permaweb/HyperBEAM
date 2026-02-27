@@ -494,6 +494,7 @@ maybe_short(X, Opts, _Indent) ->
 is_multiline(Str) ->
     lists:member($\n, Str).
 
+-ifndef(QUIET).
 %% @doc Format and print an indented string to standard error.
 eunit_print(FmtStr, FmtArgs) ->
     io:format(
@@ -501,6 +502,9 @@ eunit_print(FmtStr, FmtArgs) ->
         "~n~s ",
         [indent(FmtStr ++ "...", FmtArgs, #{}, 4)]
     ).
+-else.
+eunit_print(_FmtStr, _FmtArgs) -> skipped_print.
+-endif.
 
 %% @doc Print the trace of the current stack, up to the first non-hyperbeam
 %% module. Prints each stack frame on a new line, until it finds a frame that
