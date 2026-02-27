@@ -54,6 +54,12 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
 read_offset(_, _) -> not_found.
 
 read(StoreOpts, ID) ->
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+        {ok, Message} -> {ok, Message};
+        not_found -> do_read(StoreOpts, ID)
+    end.
+
+do_read(StoreOpts, ID) ->
     case read_offset(StoreOpts, ID) of
         {ok,
             #{
@@ -70,7 +76,8 @@ read(StoreOpts, ID) ->
                         load_tx(ID, StartOffset, Length, StoreOpts)
                 end,
             case Loaded of
-                {ok, _Message} ->
+                {ok, Message} ->
+                    hb_store_remote_node:maybe_cache(StoreOpts, Message),
                     ?event(
                         arweave_offsets,
                         {read_ok,
