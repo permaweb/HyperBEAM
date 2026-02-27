@@ -78,6 +78,7 @@ scope(_) -> scope().
 reset(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ets:delete_all_objects(Table),
+    ?event(store_volatile, {volatile_reset, {table, Table}}),
     ok.
 
 %% @doc Write a value at the key path.
@@ -85,6 +86,7 @@ write(Opts, RawKey, Value) ->
     Key = hb_store:join(RawKey),
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ensure_parent_groups(Table, Key),
+    ?event(store_volatile, {volatile_write, {key, Key}}),
     ets:insert(Table, {Key, {raw, Value}}),
     ok.
 
@@ -97,10 +99,13 @@ read_resolved(_Opts, _Key, Depth) when Depth > ?MAX_REDIRECTS ->
 read_resolved(Opts, Key, Depth) ->
     case lookup_entry(Opts, Key) of
         {raw, Value} ->
+            ?event(store_volatile, {volatile_hit, {key, Key}}),
             {ok, Value};
         {link, Link} ->
+            ?event(store_volatile, {volatile_hit, {key, Key}}),
             read_resolved(Opts, hb_store:join(Link), Depth + 1);
         _ ->
+            ?event(store_volatile, {volatile_miss, {key, Key}}),
             not_found
     end.
 
