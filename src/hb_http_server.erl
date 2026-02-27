@@ -378,74 +378,55 @@ handle_request(RawReq, Body, ServerID) ->
     Req = RawReq#{ start_time => StartTime },
     NodeMsg = get_opts(#{ http_server => ServerID }),
     put(server_id, ServerID),
-    case {cowboy_req:path(RawReq), cowboy_req:qs(RawReq)} of
-        {<<"/">>, <<>>} ->
-            % If the request is for the root path, serve a redirect to the default 
-            % request of the node.
-            Req2 = cowboy_req:reply(
-                302,
-                #{
-                    <<"location">> =>
-                        hb_opts:get(
-                            default_request,
-                            <<"/~hyperbuddy@1.0/index">>,
-                            NodeMsg
-                        )
-                },
-                RawReq
-            ),
-            {ok, Req2, no_state};
-        _ ->
-            % The request is of normal AO-Core form, so we parse it and invoke
-            % the meta@1.0 device to handle it.
-            ?event(http,
-                {
-                    http_inbound,
-                    {cowboy_req, {explicit, Req}, {body, {string, Body}}}
-                }
-            ),
-            % Parse the HTTP request into HyerBEAM's message format.
-            try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
-                ReqSingleton ->
-                    try
-                        CommitmentCodec =
-                            hb_http:accept_to_codec(ReqSingleton, NodeMsg),
-                        ?event(http,
-                            {parsed_singleton,
-                                {req_singleton, ReqSingleton},
-                                {accept_codec, CommitmentCodec}},
-                            #{}
-                        ),
-                        % Invoke the meta@1.0 device to handle the request.
-                        {ok, Res} =
-                            dev_meta:handle(
-                                NodeMsg#{
-                                    commitment_device => CommitmentCodec
-                                },
-                                ReqSingleton
-                            ),
-                        hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
-                    catch
-                        Type:Details:Stacktrace ->
-                            handle_error(
-                                Req,
-                                ReqSingleton,
-                                Type,
-                                Details,
-                                Stacktrace,
-                                NodeMsg
-                            )
-                    end
-            catch ParseError:ParseDetails:ParseStacktrace ->
-                handle_error(
-                    Req,
-                    #{},
-                    ParseError,
-                    ParseDetails,
-                    ParseStacktrace,
-                    NodeMsg
-                )
+    % The request is of normal AO-Core form, so we parse it and invoke
+    % the meta@1.0 device to handle it.
+    ?event(http,
+        {
+            http_inbound,
+            {cowboy_req, {explicit, Req}, {body, {string, Body}}}
+        }
+    ),
+    % Parse the HTTP request into HyerBEAM's message format.
+    try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
+        ReqSingleton ->
+            try
+                CommitmentCodec =
+                    hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+                ?event(http,
+                    {parsed_singleton,
+                        {req_singleton, ReqSingleton},
+                        {accept_codec, CommitmentCodec}},
+                    #{}
+                ),
+                % Invoke the meta@1.0 device to handle the request.
+                {ok, Res} =
+                    dev_meta:handle(
+                        NodeMsg#{
+                            commitment_device => CommitmentCodec
+                        },
+                        ReqSingleton
+                    ),
+                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+            catch
+                Type:Details:Stacktrace ->
+                    handle_error(
+                        Req,
+                        ReqSingleton,
+                        Type,
+                        Details,
+                        Stacktrace,
+                        NodeMsg
+                    )
             end
+    catch ParseError:ParseDetails:ParseStacktrace ->
+        handle_error(
+            Req,
+            #{},
+            ParseError,
+            ParseDetails,
+            ParseStacktrace,
+            NodeMsg
+        )
     end.
 
 %% @doc Return a 500 error response to the client.

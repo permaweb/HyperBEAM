@@ -224,6 +224,18 @@ handle_resolve(Req, Msgs, NodeMsg) ->
     ),
     LoadedMsgs = hb_cache:ensure_all_loaded(Msgs, NodeMsg),
     case resolve_hook(<<"request">>, Req, LoadedMsgs, NodeMsg) of
+        {ok, []} ->
+            {ok,
+                #{
+                    <<"status">> => 307,
+                    <<"body">> => <<"Redirecting to default request.">>,
+                    <<"location">> => hb_opts:get(
+                        default_request,
+                        <<"/~hyperbuddy@1.0/index">>,
+                        NodeMsg
+                    )
+                }
+            };
         {ok, PreProcessedMsg} ->
             ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
