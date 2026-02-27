@@ -3,6 +3,8 @@
 -module(hb_store_arweave).
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
+%%% Unused Store API:
+-export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
 -export([write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
@@ -13,6 +15,13 @@
 scope() -> remote.
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
+
+resolve(_, ID) when ?IS_ID(ID) -> ID;
+resolve(_, _) -> not_found.
+
+write(_, _, _) -> not_found.
+make_link(_, _, _) -> not_found.
+make_group(_, _) -> not_found.
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
