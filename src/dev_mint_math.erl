@@ -10,10 +10,10 @@
 %% @doc Determine if we should execute the next mint cycle.
 should_mint(State, Req, Opts) ->
     % Gather the current state of the mint process.
-    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, undefined, Opts)),
-    PeriodMs = hb_util:int(hb_maps:get(<<"period">>, State, undefined, Opts)),
-    StartTimeMs = hb_util:int(hb_maps:get(<<"start-time">>, State, undefined, Opts)),
-    CurrentTimeMs = hb_util:int(hb_maps:get(<<"timestamp">>, Req, undefined, Opts)),
+    Cycle = required_int(hb_maps:get(<<"cycle">>, State, undefined, Opts)),
+    PeriodMs = required_int(hb_maps:get(<<"period">>, State, undefined, Opts)),
+    StartTimeMs = required_int(hb_maps:get(<<"start-time">>, State, undefined, Opts)),
+    CurrentTimeMs = required_int(hb_maps:get(<<"timestamp">>, Req, undefined, Opts)),
     % Calculate whether we have exceeded the timestamp of the next cycle.
     NextCycleTimeMs = StartTimeMs + (Cycle * PeriodMs),
     CurrentTimeMs >= NextCycleTimeMs.
@@ -21,8 +21,8 @@ should_mint(State, Req, Opts) ->
 %% @doc Perform a single mint cycle, returning a new state containing updated 
 %% metadata and instructions to the `Client` address.
 mint(State, _Req, Opts) ->
-    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, undefined, Opts)),
-    AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, undefined, Opts)),
+    Cycle = required_int(hb_maps:get(<<"cycle">>, State, undefined, Opts)),
+    AlreadyMinted = required_int(hb_maps:get(<<"minted">>, State, undefined, Opts)),
     ?event(debug,
         {starting_mint_cycle,
             {already_minted, AlreadyMinted},
@@ -335,3 +335,9 @@ to_csv(Msgs, Opts) ->
             Msgs
         )
     ).
+%% @doc Fail Fast wrapper for hb_util:safe_int.
+required_int(Value) ->
+    case hb_util:safe_int(Value) of
+        {ok, SafeInt} -> SafeInt;
+        _ -> throw({error, invalid_integer_default})
+    end.
