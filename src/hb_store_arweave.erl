@@ -52,6 +52,7 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
+            record_partition_metric(StartOffset),
             {ok, #{
                 <<"version">> => Version,
                 <<"codec-device">> => CodecName,
