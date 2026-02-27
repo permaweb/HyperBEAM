@@ -6,16 +6,14 @@
         <<"min">> => 0,
         <<"max">> => 57_600_000_000_000,
         <<"center">> => 28_800_000_000_000,
-        <<"with">> => <<"http://data-1.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-1.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 0,
         <<"max">> => 57_600_000_000_000,
         <<"center">> => 28_800_000_000_000,
-        <<"with">> => <<"http://data-13.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-13.arweave.xyz:1984">>
     },
     %% Partitions 0-3
     #{
@@ -23,8 +21,7 @@
         <<"min">> => 0,
         <<"max">> => 14_400_000_000_000,
         <<"center">> => 7_200_000_000_000,
-        <<"with">> => <<"http://data-2.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-2.arweave.xyz:1984">>
     },
     %% Partitions 4-7
     #{
@@ -32,8 +29,7 @@
         <<"min">> => 14_400_000_000_000,
         <<"max">> => 28_800_000_000_000,
         <<"center">> => 21_600_000_000_000,
-        <<"with">> => <<"http://data-3.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-3.arweave.xyz:1984">>
     },
     %% Partitions 8-11
     #{
@@ -41,8 +37,7 @@
         <<"min">> => 28_800_000_000_000,
         <<"max">> => 43_200_000_000_000,
         <<"center">> => 36_000_000_000_000,
-        <<"with">> => <<"http://data-4.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-4.arweave.xyz:1984">>
     },
     %% Partitions 12-15
     #{
@@ -50,8 +45,7 @@
         <<"min">> => 43_200_000_000_000,
         <<"max">> => 57_600_000_000_000,
         <<"center">> => 50_400_000_000_000,
-        <<"with">> => <<"http://data-5.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-5.arweave.xyz:1984">>
     },
     %% Partitions 16-31
     #{
@@ -59,32 +53,28 @@
         <<"min">> => 57_600_000_000_000,
         <<"max">> => 115_200_000_000_000,
         <<"center">> => 86_400_000_000_000,
-        <<"with">> => <<"http://data-2.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-2.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 57_600_000_000_000,
         <<"max">> => 115_200_000_000_000,
         <<"center">> => 86_400_000_000_000,
-        <<"with">> => <<"http://data-3.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-3.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 57_600_000_000_000,
         <<"max">> => 115_200_000_000_000,
         <<"center">> => 86_400_000_000_000,
-        <<"with">> => <<"http://data-14.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-14.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 57_600_000_000_000,
         <<"max">> => 115_200_000_000_000,
         <<"center">> => 86_400_000_000_000,
-        <<"with">> => <<"http://data-15.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-15.arweave.xyz:1984">>
     },
     %% Partitions 32-47
     #{
@@ -92,32 +82,28 @@
         <<"min">> => 115_200_000_000_000,
         <<"max">> => 172_800_000_000_000,
         <<"center">> => 144_000_000_000_000,
-        <<"with">> => <<"http://data-4.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-4.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 115_200_000_000_000,
         <<"max">> => 172_800_000_000_000,
         <<"center">> => 144_000_000_000_000,
-        <<"with">> => <<"http://data-5.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-5.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 115_200_000_000_000,
         <<"max">> => 172_800_000_000_000,
         <<"center">> => 144_000_000_000_000,
-        <<"with">> => <<"http://data-16.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-16.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 115_200_000_000_000,
         <<"max">> => 172_800_000_000_000,
         <<"center">> => 144_000_000_000_000,
-        <<"with">> => <<"http://data-17.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://data-17.arweave.xyz:1984">>
     }
     % Exclude these data nodes for now since their partitions are covered 
     % by the tip nodes (and the tip nodes are faster to read from).
@@ -190,40 +176,35 @@
         <<"min">> => 172_800_000_000_000,
         <<"max">> => 388_800_000_000_000,
         <<"center">> => 280_800_000_000_000,
-        <<"with">> => <<"http://tip-1.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://tip-1.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 172_800_000_000_000,
         <<"max">> => 388_800_000_000_000,
         <<"center">> => 280_800_000_000_000,
-        <<"with">> => <<"http://tip-2.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://tip-2.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 172_800_000_000_000,
         <<"max">> => 388_800_000_000_000,
         <<"center">> => 280_800_000_000_000,
-        <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://tip-3.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 172_800_000_000_000,
         <<"max">> => 388_800_000_000_000,
         <<"center">> => 280_800_000_000_000,
-        <<"with">> => <<"http://tip-4.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://tip-4.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
         <<"min">> => 172_800_000_000_000,
         <<"max">> => 388_800_000_000_000,
         <<"center">> => 280_800_000_000_000,
-        <<"with">> => <<"http://tip-5.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://tip-5.arweave.xyz:1984">>
     }
 ]).
 
@@ -231,12 +212,10 @@
 [
     #{
         <<"match">> => <<"^/arweave">>,
-        <<"with">> => <<"http://chain-1.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://chain-1.arweave.xyz:1984">>
     },
     #{
         <<"match">> => <<"^/arweave">>,
-        <<"with">> => <<"http://chain-2.arweave.xyz:1984">>,
-        <<"opts">> => #{ http_client => gun, protocol => http2 }
+        <<"with">> => <<"http://chain-2.arweave.xyz:1984">>
     }
 ]).

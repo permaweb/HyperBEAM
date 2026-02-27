@@ -18,6 +18,7 @@
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
+-include("include/hb_opts.hrl").
 -include("include/hb_arweave_nodes.hrl").
 
 %%% Environment variables that can be used to override the default message.
@@ -63,6 +64,7 @@
     <<"store-module">> => hb_store_lmdb
 }).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
+-define(DEFAULT_HTTP_OPTS, #{http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2}).
 -define(ENV_KEYS,
     #{
         priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
@@ -136,7 +138,7 @@ default_message() ->
         initialized => true,
         %% What HTTP client should the node use?
         %% Options: gun, httpc
-        http_client => gun,
+        http_client => ?DEFAULT_HTTP_CLIENT,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation,
@@ -320,8 +322,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"GET">>
                     },
-                <<"nodes">> =>
-                    ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> => add_opts(?DATA_NODES ++ ?TIP_NODES),
                 <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> =>
                     length(
@@ -339,8 +340,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> =>
-                    ?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> => add_opts(?DATA_NODES ++ ?TIP_NODES),
                 <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> =>
                     length(
@@ -358,8 +358,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/tx">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> =>
-                    ?ARWEAVE_BOOTSTRAP_CHAIN_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES,
+                <<"nodes">> => add_opts(?CHAIN_NODES ++ ?TIP_NODES),
                 <<"parallel">> => true,
                 <<"responses">> => 3,
                 <<"stop-after">> => false,
@@ -379,7 +378,7 @@ default_message() ->
             %% the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
-                <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES,
+                <<"nodes">> => add_opts(?CHAIN_NODES),
                 <<"parallel">> => true,
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200
@@ -862,6 +861,17 @@ ensure_node_history(Opts, RequiredOpts) ->
             ?event({validate_node_history_items, validation_failed, unknown}),
             {error, validation_failed}
     end.
+
+%% @doc Util to add opts to nodes.
+add_opts(Items) ->
+    add_opts(Items, ?DEFAULT_HTTP_OPTS).
+add_opts(Items, Opts) ->
+    lists:map(
+        fun (Item) when is_map(Item) -> 
+            Item#{<<"opts">> => Opts}
+        end, 
+        Items
+    ).
 
 %%% Tests
 
