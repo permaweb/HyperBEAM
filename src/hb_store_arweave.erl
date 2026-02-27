@@ -198,12 +198,12 @@ write_offset(
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
 %% @doc Record partition that are requested
-record_partition_metric(Offset) ->
+record_partition_metric(Offset) when is_integer(Offset) ->
     spawn(fun () ->
         case application:get_application(prometheus) of
             undefined -> ok;
             _ ->
-                Partition = binary_to_integer(Offset) div ?PARTITION_SIZE,
+                Partition = Offset div ?PARTITION_SIZE,
                 prometheus_counter:inc(hb_store_arweave_requests_partition, [Partition], 1)
         end
     end).
