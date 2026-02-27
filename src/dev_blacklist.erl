@@ -22,10 +22,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_PROVIDER,
-    #{
+    [#{
         <<"data-protocol">> => <<"content-policy">>,
         <<"body">> => #{ <<"body">> => <<>> }
-    }
+    }]
 ).
 -define(DEFAULT_MIN_WAIT, 60).
 
@@ -97,29 +97,32 @@ maybe_refresh(Opts) ->
 %% @doc Fetch the blacklist and insert the IDs into the cache table.
 fetch_and_insert_ids(Opts) ->
     ensure_cache_table(Opts),
-    case execute_provider(Opts) of
-        {ok, Blacklist} ->
-            {ok, IDs} = parse_blacklist(Blacklist, Opts),
-            ?event({parsed_blacklist, {ids, IDs}}),
-            BlacklistID = hb_message:id(Blacklist, all, Opts),
-            ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
-            Table = cache_table_name(Opts),
-            {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
-        {error, _} = Error ->
-            ?event({execute_provider_error, Error}),
-            Error
+    case hb_opts:get(blacklist_provider, no_provider, Opts) of
+        no_provider -> {ok, 0};
+        Provider ->
+            case execute_provider(Provider, Opts) of
+                {ok, Blacklist} ->
+                    {ok, IDs} = parse_blacklist(Blacklist, Opts),
+                    ?event({parsed_blacklist, {ids, IDs}}),
+                    BlacklistID = hb_message:id(Blacklist, all, Opts),
+                    ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
+                    Table = cache_table_name(Opts),
+                    {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
+                {error, _} = Error ->
+                    ?event({execute_provider_error, Error}),
+                    Error
+            end
     end.
 
 %% @doc Execute the blacklist provider, returning the result.
-execute_provider(Opts) ->
-    Path = hb_opts:get(blacklist_provider, ?DEFAULT_PROVIDER, Opts),
-    ?event({execute_provider, {path, Path}}),
-    Request =
-        case hb_cache:ensure_loaded(Path, Opts) of
-            Msg when is_map(Msg) -> Msg;
-            Bin when is_binary(Bin) -> #{ <<"path">> => Path }
-        end,
-    hb_ao:resolve(Request, Opts).
+execute_provider(Provider, Opts) ->
+    ?event({execute_provider, {provider, Provider}}),
+    case hb_cache:ensure_loaded(Provider, Opts) of
+        Bin when is_binary(Bin) ->
+            hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
+        Msgs when is_list(Msgs) ->
+            hb_ao:resolve_many(Msgs, Opts)
+    end.
 
 %% @doc Parse the blacklist body, returning a list of IDs.
 parse_blacklist(Link, Opts) when ?IS_LINK(Link) ->
@@ -269,6 +272,25 @@ basic_test() ->
                 <<"reason">> := <<"content-policy">>
             }},
         hb_http:get(Node, SignedID1, Opts1)
+    ),
+    ok.
+
+%% @doc Ensure that the default provider does not block any requests.
+default_provider_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        unsigned3 := UnsignedID3
+    }} = setup_test_env(),
+    Opts1 = Opts0#{ blacklist_provider => ?DEFAULT_PROVIDER },
+    Node = hb_http_server:start_node(Opts1),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    ?assertMatch(
+        {ok, <<"test-1">>},
+        hb_http:get(Node, <<SignedID1/binary, "/body">>, Opts1)
     ),
     ok.
 

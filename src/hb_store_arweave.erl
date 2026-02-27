@@ -3,6 +3,8 @@
 -module(hb_store_arweave).
 %%% Store API:
 -export([scope/0, scope/1, type/2, read/2]).
+%%% Unused Store API:
+-export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
 -export([write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
@@ -14,10 +16,17 @@ scope() -> remote.
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
+resolve(_, ID) when ?IS_ID(ID) -> ID;
+resolve(_, _) -> not_found.
+
+write(_, _, _) -> not_found.
+make_link(_, _, _) -> not_found.
+make_group(_, _) -> not_found.
+
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(#{ <<"index-store">> := IndexStore }, ID) ->
+type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
     Type =
         case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
             {ok, _Offset} -> simple;
@@ -25,10 +34,11 @@ type(#{ <<"index-store">> := IndexStore }, ID) ->
         end,
     ?event(store_arweave_debug,
         {type, {id, {explicit, ID}}, {type, Type}}),
-    Type.
+    Type;
+type(_, _) -> not_found.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
+read_offset(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
     case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
@@ -40,9 +50,16 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
                 <<"length">> => Length
             }};
         _ -> not_found
-    end.
+    end;
+read_offset(_, _) -> not_found.
 
 read(StoreOpts, ID) ->
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+        {ok, Message} -> {ok, Message};
+        not_found -> do_read(StoreOpts, ID)
+    end.
+
+do_read(StoreOpts, ID) ->
     case read_offset(StoreOpts, ID) of
         {ok,
             #{
@@ -59,7 +76,8 @@ read(StoreOpts, ID) ->
                         load_tx(ID, StartOffset, Length, StoreOpts)
                 end,
             case Loaded of
-                {ok, _Message} ->
+                {ok, Message} ->
+                    hb_store_remote_node:maybe_cache(StoreOpts, Message),
                     ?event(
                         arweave_offsets,
                         {read_ok,
