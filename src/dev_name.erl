@@ -46,7 +46,7 @@ match_resolver(_Key, [], _Opts) ->
 match_resolver(Key, [Resolver | Resolvers], Opts) ->
     case catch execute_resolver(Key, Resolver, Opts) of
         {ok, Value} ->
-            ?event({resolver_found, {key, Key}, {value, Value}}),
+            ?event({resolver_found, {key, Key}, {value, {string, Value}}}),
             {ok, Value};
         _ ->
             match_resolver(Key, Resolvers, Opts)
@@ -71,21 +71,25 @@ execute_resolver(Key, Resolver, Opts) when is_map(Resolver) ->
 %% @doc Implements an `on/request' compatible hook that resolves names given in
 %% the `host` key to their corresponding ID and prepends it to the execution path.
 request(HookMsg, HookReq, Opts) ->
-    ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}, {opts, Opts}}),
+    ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}}),
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
         {ok, Name} ?= name_from_host(Host, hb_opts:get(host, no_host, Opts)),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
-        {ok, [OldBase|Rest]} ?= hb_maps:find(<<"body">>, HookReq, Opts),
-        ModReq = [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest],
+        ModReq =
+            case hb_maps:find(<<"body">>, HookReq, Opts) of
+                {ok, [OldBase|Rest]} ->
+                    [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest];
+                {ok, []} ->
+                    [ResolvedMsg]
+            end,
         ?event(
             {request_with_prepended_path,
                 {name, Name},
                 {full_host, Host},
                 {resolved_msg, ResolvedMsg},
-                {to_execute, ModReq},
-                {res, hb_ao:resolve_many(ModReq, Opts)}
+                {to_execute, ModReq}
             }
         ),
         {ok, #{ <<"body">> => ModReq }}
