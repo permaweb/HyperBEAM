@@ -246,17 +246,25 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %% 
 %% Returns {ok, Value} or not_found.
-read_direct(Opts, Path) ->
+read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;  % Normalize error format
         not_found -> not_found; % Handle both old and new format
         {error, transaction_error, Message} = Err -> 
-            ?event(lmdb_store, {transaction_error, {path, Path}, {message, Message}}),
+            ?event(lmdb_store, 
+                {transaction_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {message, Message}}),
             Err;
         {error, database_error, ErrorMessage} = Err ->
-            ?event(lmdb_store, {database_error, {path, Path}, {msg, ErrorMessage}}),
+            ?event(lmdb_store, 
+                {database_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {msg, ErrorMessage}}),
             Err
     end.
 
