@@ -129,7 +129,7 @@ do_read(StoreOpts, ID) ->
                 arweave_offsets,
                 {miss, {id, {explicit, ID}}}
             ),
-            {error, not_found}
+            not_found
     end.
 
 %% @doc Load an ANS-104 item from the given start offset and length.
