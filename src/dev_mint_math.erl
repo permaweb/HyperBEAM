@@ -89,12 +89,12 @@ mint(State, _Req, Opts) ->
 
 %% @doc Return the total number of units to distribute.
 units_to_distribute(State, Opts) ->
-    MintTotal = hb_util:int(hb_maps:get(<<"mint-total">>, State, undefined, Opts)),
-    AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, undefined, Opts)),
+    MintTotal = required_int(hb_maps:get(<<"mint-total">>, State, undefined, Opts)),
+    AlreadyMinted = required_int(hb_maps:get(<<"minted">>, State, undefined, Opts)),
     CycleProportionNumerator =
-        hb_util:int(hb_maps:get(<<"cycle-proportion">>, State, undefined, Opts)),
+        required_int(hb_maps:get(<<"cycle-proportion">>, State, undefined, Opts)),
     CycleProportionDenominator =
-        hb_util:int(
+        required_int(
             hb_maps:get(<<"cycle-proportion-denominator">>, State, undefined, Opts)
         ),
     Remaining = MintTotal - AlreadyMinted,
@@ -291,7 +291,7 @@ split_suffix(Key, Suffix) ->
 distributions_to_total_units(Distributions, Opts) ->
     lists:sum(
         lists:map(
-            fun(D) -> hb_util:int(hb_maps:get(<<"quantity">>, D, undefined, Opts)) end,
+            fun(D) -> required_int(hb_maps:get(<<"quantity">>, D, undefined, Opts)) end,
             Distributions
         )
     ).
