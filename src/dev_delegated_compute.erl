@@ -20,7 +20,7 @@ normalize(Base, _Req, Opts) ->
         error -> {ok, Base};
         {ok, Snapshot} ->
             Unset = hb_ao:set(Base, #{ <<"snapshot">> => unset }, Opts),
-            case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
+            case hb_maps:get(<<"type">>, Snapshot, not_found, Opts) == <<"Checkpoint">> of
                 false -> Unset;
                 true ->
                     load_state(Snapshot, Opts),
@@ -31,7 +31,12 @@ normalize(Base, _Req, Opts) ->
 %% @doc Attempt to load a snapshot into the delegated compute server.
 load_state(Snapshot, Opts) ->
     ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
-    Body = hb_maps:get(<<"data">>, Snapshot, Opts),
+    Body = hb_maps:get(<<"data">>, Snapshot, not_found, Opts),
+    case Body of
+        not_found -> throw({error, missing_checkpoint_data});
+        <<>> -> throw({error, empty_checkpoint_data});
+        _ -> ok
+    end,
     Headers = hb_maps:without([<<"data">>], Snapshot, Opts),
     Res = do_relay(
         <<"POST">>,
