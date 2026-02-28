@@ -194,7 +194,8 @@ read(#{<<"name">> := Name} = Opts, Path) ->
             [read, Name]
         ),
     case ReadRes of
-        {ok, Value} -> 
+        {ok, Value} ->
+            name_hit_metrics(Name),
             {ok, Value};
         not_found ->
             try
@@ -609,6 +610,10 @@ reset(Opts) ->
             ensure_dir(DataDir),
             ok
     end.
+
+%% @doc Increment the hit metrics for the current store's name.
+name_hit_metrics(Name) ->
+    prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1).
 
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
