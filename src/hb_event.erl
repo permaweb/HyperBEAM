@@ -66,10 +66,12 @@ should_print(Topic, Opts) ->
 %% would otherwise cause heavy performance costs.
 increment(Topic, Message, Opts) ->
     increment(Topic, Message, Opts, 1).
+increment(ids, _Message, _Opts, _Count) -> ignored;
 increment(global, _Message, _Opts, _Count) -> ignored;
 increment(linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_id, _Message, _Opts, _Count) -> ignored;
+increment(debug_enc, _Message, _Opts, _Count) -> ignored;
 increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
 increment(ao_core, _Message, _Opts, _Count) -> ignored;
 increment(ao_internal, _Message, _Opts, _Count) -> ignored;

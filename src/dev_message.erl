@@ -109,7 +109,7 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(ids, regenerating_id),
+            ?event(debug_id, regenerating_id),
             calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
@@ -124,7 +124,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(ids, returning_existing_ids),
+            ?event(debug_id, returning_existing_ids),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
