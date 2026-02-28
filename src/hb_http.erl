@@ -503,7 +503,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReplyDuration = EndTime - ReplyStartTime,
     record_request_metric(
       ReqDuration * 1000000,
-      ReplyDuration * 100000,
+      ReplyDuration * 1000000,
       Status
     ),
     ?event(http, {reply_headers, {explicit, PostStreamReq}}),
@@ -1113,7 +1113,7 @@ init_prometheus() ->
 			help,
 			"The total duration of an hb_http:reply call. This starts when a response"
             "is ready to send back to the client and ends when the message is deliver"
-            "to the client. "
+            "to the client."
 		}
 	]),
     hb_prometheus:declare(histogram, [
