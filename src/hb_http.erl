@@ -14,6 +14,7 @@
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
 
 start() ->
+    init_prometheus(),
     httpc:set_options([{max_keep_alive_length, 0}]),
     ok.
 
@@ -471,6 +472,7 @@ reply(Req, TABMReq, Message, Opts) ->
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
+    ReplyStartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
     {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
     {Status, HeadersBeforeCors, EncodedBody} =
@@ -497,12 +499,18 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
     EndTime = os:system_time(millisecond),
+    ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
+    ReplyDuration = EndTime - ReplyStartTime,
+    record_request_metric(
+      ReqDuration * 1000000,
+      ReplyDuration * 100000,
+      Status
+    ),
     ?event(http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_short,
         {sent,
             {status, Status},
-            {ip, {string, real_ip(Req, Opts)}},
-            {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
+            {duration, ReqDuration},
             {method, cowboy_req:method(Req)},
             {path,
                 {string,
@@ -1089,6 +1097,59 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
             );
         IP -> IP
     end.
+
+%%% Metrics
+
+init_prometheus() ->
+    hb_prometheus:declare(histogram, [
+		{name, http_request_server_reply_duration_seconds},
+        {labels, [status_code]},
+		{buckets, [0.001, 0.0025, 0.005,
+                    0.01, 0.025, 0.05,
+                    0.1, 0.25, 0.5,
+                    1, 2.5, 5,
+                    10, 30, 60]},
+		{
+			help,
+			"The total duration of an hb_http:reply call. This starts when a response"
+            "is ready to send back to the client and ends when the message is deliver"
+            "to the client. "
+		}
+	]),
+    hb_prometheus:declare(histogram, [
+		{name, http_request_server_duration_seconds},
+        {labels, [status_code]},
+		{buckets, [0.001, 0.0025, 0.005,
+                    0.01, 0.025, 0.05,
+                    0.1, 0.25, 0.5,
+                    1, 2.5, 5,
+                    10, 30, 60]},
+		{
+			help,
+			"The total duration of an hb_http_server request call." 
+		}
+	]).
+
+record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
+    spawn(
+        fun() ->
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    prometheus_histogram:observe(
+                        http_request_server_duration_seconds,
+                        [StatusCode],
+                        TotalDuration
+                    ),
+                    prometheus_histogram:observe(
+                        http_request_server_reply_duration_seconds,
+                        [StatusCode],
+                        ReplyDuration
+                    )
+            end,
+            ok
+        end
+    ).
 
 %%% Tests
 
