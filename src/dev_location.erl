@@ -320,13 +320,13 @@ write_foreign(Base, RawReq, Opts) ->
             )
             orelse {error, <<"Invalid location record type.">>},
         true ?=
-            (hb_maps:get(<<"url">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"url">>, MaybeLocation, not_found, Opts) =/= not_found)
             orelse {error, <<"Missing location record URL.">>},
         true ?=
-            (hb_maps:get(<<"nonce">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"nonce">>, MaybeLocation, not_found, Opts) =/= not_found)
             orelse {error, <<"Missing location record nonce.">>},
         true ?=
-            (hb_maps:get(<<"time-to-live">>, MaybeLocation, Opts) =/= not_found)
+            (hb_maps:get(<<"time-to-live">>, MaybeLocation, not_found, Opts) =/= not_found)
             orelse {error, <<"Missing location record time-to-live.">>},
         Nonce = hb_util:int(hb_ao:get(<<"nonce">>, MaybeLocation, 0, Opts)),
         SignerChecks =
