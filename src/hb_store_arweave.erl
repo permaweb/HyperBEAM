@@ -129,23 +129,10 @@ do_read(StoreOpts, ID) ->
                         }
                     ),
                     Loaded;
-                {error, not_found} ->
-                    ?event(
-                        arweave_offsets,
-                        {read_error, 
-                            {id, {explicit, ID}},
-                            {format_version, Version},
-                            {type, CodecName},
-                            {start_offset, StartOffset},
-                            {length, Length},
-                            {reason, not_found}
-                        }
-                    ),
-                    not_found;
                 {error, Reason} ->
                     ?event(
                         arweave_offsets,
-                        {read_error, 
+                        {read_chunks_not_found, 
                             {id, {explicit, ID}},
                             {format_version, Version},
                             {type, CodecName},
@@ -154,7 +141,9 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
-                    Loaded
+                    if Reason =:= not_found -> not_found;
+                    true -> {error, Reason}
+                    end
             end;
         not_found ->
             ?event(
