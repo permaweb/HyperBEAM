@@ -610,28 +610,18 @@ reset(Opts) ->
     end.
 
 init_prometheus() ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try
-                application:ensure_all_started([prometheus]),
-                prometheus_histogram:declare([
-                    {name, hb_store_lmdb_duration_seconds},
-                    {labels, [function, store_name]},
-                    {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
-                    {help, "Duration of lmdb operations in microseconds"}
-                ]),
-                prometheus_counter:new([
-                    {name, hb_store_lmdb_hit},
-                    {labels, [name]},
-                    {help, "LMDB name requested"}
-                ]),
-                ok
-            catch
-                error:mfa_already_exists -> ok;
-                _:_ -> ok
-            end
-    end.
+    hb_prometheus:declare(histogram, [
+        {name, hb_store_lmdb_duration_seconds},
+        {labels, [function, store_name]},
+        {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
+        {help, "Duration of lmdb operations in microseconds"}
+    ]),
+    hb_prometheus:declare(counter, [
+        {name, hb_store_lmdb_hit},
+        {labels, [name]},
+        {help, "LMDB name requested"}
+    ]),
+    ok.
 
 %% @doc Test suite demonstrating basic store operations.
 %%

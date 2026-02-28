@@ -66,7 +66,6 @@ type(_, _) -> not_found.
 
 %% @doc Read the offset of the data at the given key.
 read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
-    init_prometheus(),
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
