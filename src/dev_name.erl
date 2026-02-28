@@ -79,10 +79,16 @@ request(HookMsg, HookReq, Opts) ->
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
         ModReq =
             case hb_maps:find(<<"body">>, HookReq, Opts) of
-                {ok, [OldBase|Rest]} ->
-                    [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest];
                 {ok, []} ->
-                    [ResolvedMsg]
+                    % If the body is an empty list, the user has requested `/`
+                    % on a message we have resolved via the `host` key. We
+                    % return the resolved message as-is.
+                    [ResolvedMsg];
+                {ok, [OldBase|Rest]} ->
+                    % The user has requested an execution on top of the path.
+                    % We overlay the resolved message onto the old base and
+                    % return the result.
+                    [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest]
             end,
         ?event(
             {request_with_prepended_path,
@@ -120,6 +126,8 @@ name_from_host(ReqHost, RawNodeHost) ->
 
 %% @doc Merge the base message with the resolved message, ensuring that `~` as
 %% device specifiers are preserved.
+overlay_loaded({as, DevID, Base}, Resolved, _Opts) when is_binary(Base) ->
+    {as, DevID, Resolved};
 overlay_loaded({as, DevID, Base}, Resolved, Opts) ->
     {as, DevID, hb_maps:merge(Base, Resolved, Opts)};
 overlay_loaded(Base, Resolved, Opts) ->
