@@ -187,11 +187,12 @@ read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
 read(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    ReadRes = hb_prometheus:measure_and_report(
-        fun () -> read_with_links(Opts, Path) end,
-        hb_store_lmdb_duration_seconds,
-        [read, Name]
-    ),
+    ReadRes =
+        hb_prometheus:measure_and_report(
+            fun() -> read_with_links(Opts, Path) end,
+            hb_store_lmdb_duration_seconds,
+            [read, Name]
+        ),
     case ReadRes of
         {ok, Value} -> 
             {ok, Value};
