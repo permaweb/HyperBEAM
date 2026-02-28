@@ -66,16 +66,16 @@ decode(Binary) ->
 
 %% @doc Encode the type of the data.
 encode_type(<<"tx@1.0">>) -> 0;
-encode_type(<<"~ans102@1.0">>) -> 1;
+encode_type(<<"ans102@1.0">>) -> 1;
 encode_type(<<"ans104@1.0">>) -> 2;
-encode_type(<<"~httpsig@1.0">>) -> 3;
+encode_type(<<"httpsig@1.0">>) -> 3;
 encode_type(Type) -> throw({cannot_encode_type, Type}).
 
 %% @doc Decode the type of the data to a binary codec name.
 decode_type(0) -> <<"tx@1.0">>;
-decode_type(1) -> <<"~ans102@1.0">>;
+decode_type(1) -> <<"ans102@1.0">>;
 decode_type(2) -> <<"ans104@1.0">>;
-decode_type(3) -> <<"~httpsig@1.0">>;
+decode_type(3) -> <<"httpsig@1.0">>;
 decode_type(Type) -> throw({cannot_decode_type, Type}).
 
 %% @doc Encode the format of the offset. See the module documentation for the

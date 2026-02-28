@@ -857,6 +857,7 @@ path_to_category(Path) ->
         <<"/raw", _/binary>> -> <<"Raw">>;
         <<"/tx", _/binary>> -> <<"TX">>;
         <<"/chunk", _/binary>> -> <<"Chunk">>;
+        <<"/price/", _/binary>> -> <<"Price">>;
         <<"/block/height/", _/binary>> -> <<"Block Height">>;
         <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
         undefined -> <<"unknown">>;

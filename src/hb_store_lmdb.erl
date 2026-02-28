@@ -49,6 +49,7 @@
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }) ->
+    init_prometheus(),
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = ensure_dir(DataDirPath),
@@ -184,14 +185,21 @@ write(Opts, Path, Value) ->
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
-read(Opts, Path) ->
+read(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Path) of
-        {ok, Value} -> 
+    ReadRes =
+        hb_prometheus:measure_and_report(
+            fun() -> read_with_links(Opts, Path) end,
+            hb_store_lmdb_duration_seconds,
+            [read, Name]
+        ),
+    case ReadRes of
+        {ok, Value} ->
+            name_hit_metrics(Name),
             {ok, Value};
         not_found ->
             try
-                PathParts = binary:split(Path, <<"/">>, [global]),
+                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
                 case resolve_path_links(Opts, PathParts) of
                     {ok, ResolvedPathParts} ->
                         ResolvedPathBin = to_path(ResolvedPathParts),
@@ -206,7 +214,7 @@ read(Opts, Path) ->
                             resolve_path_links_failed, 
                             {class, Class},
                             {reason, Reason},
-                            {stacktrace, Stacktrace},
+                            {stacktrace, {trace, Stacktrace}},
                             {path, Path}
                         }
                     ),
@@ -240,12 +248,26 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %% 
 %% Returns {ok, Value} or not_found.
-read_direct(Opts, Path) ->
+read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;  % Normalize error format
-        not_found -> not_found  % Handle both old and new format
+        not_found -> not_found; % Handle both old and new format
+        {error, transaction_error, Message} = Err -> 
+            ?event(lmdb_store, 
+                {transaction_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {message, Message}}),
+            Err;
+        {error, database_error, ErrorMessage} = Err ->
+            ?event(lmdb_store, 
+                {database_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {msg, ErrorMessage}}),
+            Err
     end.
 
 %% @doc Read a value directly from the database with link resolution.
@@ -588,6 +610,24 @@ reset(Opts) ->
             ensure_dir(DataDir),
             ok
     end.
+
+%% @doc Increment the hit metrics for the current store's name.
+name_hit_metrics(Name) ->
+    prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1).
+
+init_prometheus() ->
+    hb_prometheus:declare(histogram, [
+        {name, hb_store_lmdb_duration_seconds},
+        {labels, [function, store_name]},
+        {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
+        {help, "Duration of lmdb operations in microseconds"}
+    ]),
+    hb_prometheus:declare(counter, [
+        {name, hb_store_lmdb_hit},
+        {labels, [name]},
+        {help, "LMDB name requested"}
+    ]),
+    ok.
 
 %% @doc Test suite demonstrating basic store operations.
 %%

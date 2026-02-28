@@ -1081,12 +1081,13 @@ post_tx_json_request(Server, ClientOpts) ->
 %% @doc Build isolated test opts and pre-index the blocks for the given TXIDs.
 setup_arweave_index_opts(TXIDs) ->
     TestStore = hb_test_utils:test_store(hb_store_volatile, <<"arweave-index">>),
-    IndexStore = #{ <<"index-store">> => [TestStore] },
+    IndexStore = #{ <<"module">> => hb_store_arweave, <<"index-store">> => [TestStore] },
     Opts = #{
         store => [TestStore],
         arweave_index_ids => true,
         arweave_index_store => IndexStore
     },
+    application:ensure_all_started(hb),
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
     %     fun(Block) -> ok = index_test_block(Block, Opts) end,
