@@ -450,9 +450,10 @@ match_routes(#{ <<"path">> := Explicit = <<"https://", _/binary>> }, _, _, _) ->
     #{ <<"node">> => Explicit, <<"reference">> => <<"explicit">> };
 match_routes(_, _, [], _) -> no_matches;
 match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
-    XM = hb_ao:get(XKey, Routes, Opts),
+    NormRoutes = hb_ao:normalize_keys(Routes, Opts),
+    XM = hb_maps:get(hb_ao:normalize_key(XKey), NormRoutes, not_found, Opts),
     Template =
-        hb_ao:get(
+        hb_maps:get(
             <<"template">>,
             XM,
             #{},
