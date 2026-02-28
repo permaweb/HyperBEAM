@@ -156,14 +156,15 @@ raw(Base, Request, Opts) ->
         not_found -> {error, not_found};
         TXID ->
             % Read the data from the local cache.
-            IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+            IndexStore = hb_store_arweave:store_from_opts(Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
                 not_found ->
                     ?event(
                         arweave,
                         {raw_read_failed, {id, TXID}},
                         Opts
-                    );
+                    ),
+                    {error, not_found};
                 {ok,
                     #{
                         <<"codec-device">> := <<"ans104@1.0">>,
