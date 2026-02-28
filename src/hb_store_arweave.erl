@@ -6,12 +6,31 @@
 %%% Unused Store API:
 -export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
--export([write_offset/5, read_offset/2, read_chunks/3]).
+-export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(PARTITION_SIZE, 3_600_000_000_000).
 
+%% @doc Find the first Arweave store from the given node message. Searches first
+%% for the `arweave_index_store' option, and if not found, searches the main
+%% `store' list for the first Arweave store with an index.
+store_from_opts(Opts) ->
+    case hb_opts:get(arweave_index_store, no_store, Opts) of
+        no_store -> first_arweave_store(hb_opts:get(store, [], Opts));
+        IndexStoreOpts -> IndexStoreOpts
+    end.
+
+%% @doc Find the first Arweave store with an index from a list of stores.
+first_arweave_store(NonList) when not is_list(NonList) ->
+    first_arweave_store([NonList]);
+first_arweave_store([]) -> no_store;
+first_arweave_store(
+    [Store = #{<<"store-module">> := ?MODULE, <<"index-store">> := _ } | _]
+) -> Store;
+first_arweave_store([_ | Rest]) -> first_arweave_store(Rest).
+
+%% @doc Start the Arweave store, and the downstream associated index store.
 start(#{<<"index-store">> := IndexStore}) ->
     init_prometheus(),
     hb_store:start(IndexStore).
