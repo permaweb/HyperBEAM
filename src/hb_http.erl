@@ -1107,34 +1107,43 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
 %%% Metrics
 
 init_prometheus() ->
-    hb_prometheus:declare(histogram, [
-		{name, http_request_server_reply_duration_seconds},
-        {labels, [status_code]},
-		{buckets, [0.001, 0.0025, 0.005,
-                    0.01, 0.025, 0.05,
-                    0.1, 0.25, 0.5,
-                    1, 2.5, 5,
-                    10, 30, 60]},
-		{
-			help,
-			"The total duration of an hb_http:reply call. This starts when a response"
-            "is ready to send back to the client and ends when the message is deliver"
-            "to the client."
-		}
-	]),
-    hb_prometheus:declare(histogram, [
-		{name, http_request_server_duration_seconds},
-        {labels, [status_code]},
-		{buckets, [0.001, 0.0025, 0.005,
-                    0.01, 0.025, 0.05,
-                    0.1, 0.25, 0.5,
-                    1, 2.5, 5,
-                    10, 30, 60]},
-		{
-			help,
-			"The total duration of an hb_http_server request call." 
-		}
-	]).
+    case application:get_application(prometheus) of
+        undefined ->
+            ok;
+        _ ->
+            try
+                hb_prometheus:declare(histogram, [
+            		{name, http_request_server_reply_duration_seconds},
+                    {labels, [status_code]},
+            		{buckets, [0.001, 0.0025, 0.005,
+                                0.01, 0.025, 0.05,
+                                0.1, 0.25, 0.5,
+                                1, 2.5, 5,
+                                10, 30, 60]},
+            		{
+            			help,
+            			"The total duration of an hb_http:reply call. This starts when a response"
+                        "is ready to send back to the client and ends when the message is deliver"
+                        "to the client."
+            		}
+            	]),
+                hb_prometheus:declare(histogram, [
+            		{name, http_request_server_duration_seconds},
+                    {labels, [status_code]},
+            		{buckets, [0.001, 0.0025, 0.005,
+                                0.01, 0.025, 0.05,
+                                0.1, 0.25, 0.5,
+                                1, 2.5, 5,
+                                10, 30, 60]},
+            		{
+            			help,
+            			"The total duration of an hb_http_server request call." 
+            		}
+            	])
+            catch
+                _:_ -> ok
+            end
+    end.
 
 record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
     spawn(
