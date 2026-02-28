@@ -197,7 +197,7 @@ read(#{<<"name">> := Name} = Opts, Path) ->
             {ok, Value};
         not_found ->
             try
-                PathParts = binary:split(Path, <<"/">>, [global]),
+                PathParts = binary:split(Path, <<"/">>, [global]) -- [<<>>],
                 case resolve_path_links(Opts, PathParts) of
                     {ok, ResolvedPathParts} ->
                         ResolvedPathBin = to_path(ResolvedPathParts),
