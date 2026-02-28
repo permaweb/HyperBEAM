@@ -829,6 +829,12 @@ get_status_class({error, {stream_error, closed}}) ->
     <<"stream-closed">>;
 get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->
     <<"stream-closed">>;
+get_status_class({error, {stream_error, closing}}) ->
+    <<"stream-closing">>;
+get_status_class({error, {down, noproc}}) ->
+    <<"noproc">>;
+get_status_class({error, {stream_error, {closed, normal}}}) ->
+    <<"stream-closed">>;
 get_status_class(208) ->
 	<<"already-processed">>;
 get_status_class(404) ->
@@ -864,7 +870,5 @@ path_to_category(Path) ->
         <<"/price", _/binary>> -> <<"Price">>;
         <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
         undefined -> <<"unknown">>;
-        _ ->
-            ?event(warning, {unknown_path_to_assign_category, {path, Path}}),
-            <<"unknown">>
+        _ -> <<"unknown">>
     end.

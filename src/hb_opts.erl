@@ -22,12 +22,17 @@
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error, cron_error, hook_error]).
+-define(DEFAULT_PRINT_OPTS,
+    [
+        error, http_error, cron_error, hook_error
+    ]
+).
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
-        error, http_error, cron_error, hook_error,
-        http_short, compute_short, push_short, copycat_short, bundler_short
+        error, http_error, cron_error, hook_error, warning,
+        http_server_short,
+        compute_short, push_short, copycat_short, bundler_short
     ]
 ).
 -endif.
