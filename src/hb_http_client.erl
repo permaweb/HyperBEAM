@@ -855,10 +855,13 @@ path_to_category(Path) ->
     case Path of
         <<"/graphql">> -> <<"GraphQL">>;
         <<"/raw", _/binary>> -> <<"Raw">>;
-        <<"/tx", _/binary>> -> <<"TX">>;
+        <<"/tx/", _/binary>> -> <<"TX">>;
+        <<"/tx_anchor", _/binary>> -> <<"TX Anchor">>;
         <<"/chunk", _/binary>> -> <<"Chunk">>;
         <<"/price/", _/binary>> -> <<"Price">>;
         <<"/block/height/", _/binary>> -> <<"Block Height">>;
+        <<"/block/current", _/binary>> -> <<"Current Block">>;
+        <<"/price", _/binary>> -> <<"Price">>;
         <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
         undefined -> <<"unknown">>;
         _ ->
