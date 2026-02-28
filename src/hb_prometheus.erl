@@ -38,10 +38,10 @@ measure_and_report(Fun, Metric) ->
 measure_and_report(Fun, Metric, Labels) ->
     ok = ensure_started(),
     Start = erlang:monotonic_time(),
-    try
-        Result = Fun(),
-        Result
+    try Fun()
     after
         DurationNative = erlang:monotonic_time() - Start,
-        prometheus_histogram:observe(Metric, Labels, DurationNative)
+        try prometheus_histogram:observe(Metric, Labels, DurationNative)
+        catch _:_ -> ok
+        end
     end.
