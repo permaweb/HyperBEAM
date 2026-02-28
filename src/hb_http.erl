@@ -472,7 +472,7 @@ reply(Req, TABMReq, Message, Opts) ->
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
-    StartEncoding = os:system_time(nanosecond),
+    ReplyStartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
     {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
     {Status, HeadersBeforeCors, EncodedBody} =
@@ -496,19 +496,31 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         }
     ),
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
-    StartReplying = os:system_time(nanosecond),
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
-    % Cowboy grants the request start time in milliseconds, so we convert it to
-    % nanoseconds for later logging.
-    StartProcessing = hb_maps:get(start_time, Req, undefined, Opts) * 1_000_000,
-    reply_metric(
-        TABMReq,
-        Req,
-        Status,
-        byte_size(EncodedBody),
-        {StartProcessing, StartEncoding, StartReplying},
-        Opts
+    EndTime = os:system_time(millisecond),
+    ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
+    ReplyDuration = EndTime - ReplyStartTime,
+    record_request_metric(
+      ReqDuration * 1000000,
+      ReplyDuration * 1000000,
+      Status
+    ),
+    ?event(http, {reply_headers, {explicit, PostStreamReq}}),
+    ?event(http_server_short,
+        {sent,
+            {status, Status},
+            {duration, ReqDuration},
+            {method, cowboy_req:method(Req)},
+            {path,
+                {string,
+                    uri_string:percent_decode(
+                        hb_maps:get(<<"path">>, TABMReq, <<"[NO PATH]">>, Opts)
+                    )
+                }
+            },
+            {body_size, byte_size(EncodedBody)}
+        }
     ),
     {ok, PostStreamReq, no_state}.
 
@@ -1090,8 +1102,8 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
 
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
-		{name, http_response_duration_seconds},
-        {labels, [status_code, method]},
+		{name, http_request_server_reply_duration_seconds},
+        {labels, [status_code]},
 		{buckets, [0.001, 0.0025, 0.005,
                     0.01, 0.025, 0.05,
                     0.1, 0.25, 0.5,
@@ -1099,12 +1111,14 @@ init_prometheus() ->
                     10, 30, 60]},
 		{
 			help,
-			"The total duration of an inbound HTTP request."
+			"The total duration of an hb_http:reply call. This starts when a response"
+            "is ready to send back to the client and ends when the message is deliver"
+            "to the client."
 		}
 	]),
     hb_prometheus:declare(histogram, [
-		{name, http_response_processing_duration_seconds},
-        {labels, [status_code, method]},
+		{name, http_request_server_duration_seconds},
+        {labels, [status_code]},
 		{buckets, [0.001, 0.0025, 0.005,
                     0.01, 0.025, 0.05,
                     0.1, 0.25, 0.5,
@@ -1112,93 +1126,25 @@ init_prometheus() ->
                     10, 30, 60]},
 		{
 			help,
-			"The duration of processing an inbound HTTP request."
-		}
-	]),
-    hb_prometheus:declare(histogram, [
-		{name, http_response_encoding_duration_seconds},
-        {labels, [status_code, method]},
-		{buckets, [0.001, 0.0025, 0.005,
-                    0.01, 0.025, 0.05,
-                    0.1, 0.25, 0.5,
-                    1, 2.5, 5,
-                    10, 30, 60]},
-		{
-			help,
-			"The duration of encoding a HTTP response."
-		}
-	]),
-    hb_prometheus:declare(histogram, [
-		{name, http_response_transfer_duration_seconds},
-        {labels, [status_code, method]},
-		{buckets, [0.001, 0.0025, 0.005,
-                    0.01, 0.025, 0.05,
-                    0.1, 0.25, 0.5,
-                    1, 2.5, 5,
-                    10, 30, 60]},
-		{
-			help,
-			"The duration of transferring a HTTP response." 
+			"The total duration of an hb_http_server request call." 
 		}
 	]).
 
-%% @doc Record the duration of a HTTP response in an async process. We write the
-%% data to prometheus if the application is enabled, as well as issuing a
-%% `http_outbound_short' event.
-reply_metric(TABMReq, Req, Status, BodySize, {ProcStart, EncStart, RepStart}, Opts) ->
+record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
     spawn(
         fun() ->
-            EndTime = os:system_time(nanosecond),
-            Duration = EndTime - ProcStart,
-            ProcessingT = EncStart - ProcStart,
-            EncodingT = RepStart - EncStart,
-            ReplyT = EndTime - RepStart,
-            Method = cowboy_req:method(Req),
-            ?event(http_server_short,
-                {sent,
-                    {status, Status},
-                    {total_ms, Duration div 1_000_000},
-                    {processing_ms, ProcessingT div 1_000_000},
-                    {encoding_ms, EncodingT div 1_000_000},
-                    {transfer_ms, ReplyT div 1_000_000},
-                    {method, cowboy_req:method(Req)},
-                    {path,
-                        {string,
-                            uri_string:percent_decode(
-                                hb_maps:get(
-                                    <<"path">>,
-                                    TABMReq,
-                                    <<"[NO PATH]">>,
-                                    Opts
-                                )
-                            )
-                        }
-                    },
-                    {body_size, BodySize}
-                }
-            ),
             case application:get_application(prometheus) of
                 undefined -> ok;
                 _ ->
                     prometheus_histogram:observe(
-                        http_response_duration_seconds,
-                        [Status, Method],
-                        Duration
+                        http_request_server_duration_seconds,
+                        [StatusCode],
+                        TotalDuration
                     ),
                     prometheus_histogram:observe(
-                        http_response_processing_duration_seconds,
-                        [Status, Method],
-                        ProcessingT
-                    ),
-                    prometheus_histogram:observe(
-                        http_response_encoding_duration_seconds,
-                        [Status, Method],
-                        EncodingT
-                    ),
-                    prometheus_histogram:observe(
-                        http_response_transfer_duration_seconds,
-                        [Status, Method],
-                        ReplyT
+                        http_request_server_reply_duration_seconds,
+                        [StatusCode],
+                        ReplyDuration
                     )
             end,
             ok
