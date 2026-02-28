@@ -55,8 +55,7 @@ latest_height(Opts) ->
 
 %% @doc Check if a transaction ID is indexed in the arweave index store.
 is_tx_indexed(TXID, Opts) ->
-    IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
-    case IndexStore of
+    case hb_store_arweave:store_from_opts(Opts) of
         no_store -> false;
         #{ <<"index-store">> := Store } ->
             case hb_store:read(Store, hb_store_arweave_offset:path(TXID)) of
@@ -278,7 +277,7 @@ parallel_map(Items, Fun, Opts) ->
 process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
-    IndexStore = hb_opts:get(arweave_index_store, no_store, Opts),
+    IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
