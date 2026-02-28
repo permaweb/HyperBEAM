@@ -212,7 +212,7 @@ read(#{<<"name">> := Name} = Opts, Path) ->
                             resolve_path_links_failed, 
                             {class, Class},
                             {reason, Reason},
-                            {stacktrace, Stacktrace},
+                            {stacktrace, {trace, Stacktrace}},
                             {path, Path}
                         }
                     ),
