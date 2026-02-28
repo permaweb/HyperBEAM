@@ -870,7 +870,5 @@ path_to_category(Path) ->
         <<"/price", _/binary>> -> <<"Price">>;
         <<"/~cache@1.0/read", _/binary>> -> <<"Remote Read">>;
         undefined -> <<"unknown">>;
-        _ ->
-            ?event(warning, {unknown_path_to_assign_category, {path, Path}}),
-            <<"unknown">>
+        _ -> <<"unknown">>
     end.
