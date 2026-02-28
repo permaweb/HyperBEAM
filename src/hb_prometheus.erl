@@ -9,12 +9,6 @@ ensure_started() ->
             application:ensure_all_started(
                 [prometheus, prometheus_cowboy, prometheus_ranch]
             ),
-            hb_util:until(
-                fun() ->
-                    application:get_application(prometheus) /= undefined
-                end,
-                fun() -> application:ensure_started(prometheus) end
-            ),
             ok;
         _ -> ok
     end.
