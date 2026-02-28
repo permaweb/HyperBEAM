@@ -252,8 +252,9 @@ default_message() ->
         debug_print_truncate => 30,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_print_verify => false,
         debug_print_metadata => true,
-        debug_print_gen_id => true,
+        debug_print_gen_id => false,
         debug_print_committers => true,
         debug_print_comm_device => true,
         debug_print_comm_type => true,
