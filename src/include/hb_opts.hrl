@@ -1,2 +1,2 @@
--define(DEFAULT_HTTP_CLIENT, httpc).
+-define(DEFAULT_HTTP_CLIENT, gun).
 
