@@ -155,6 +155,8 @@ raw(Base, Request, Opts) ->
         <<"GET">> -> get_raw(Base, Request, Opts)
     end.
 
+%% @doc Handle `HEAD /raw=ID` requests by reading the header chunk and
+%% returning the `content-type` of the item, if found.
 head_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
     case find_key(<<"raw">>, Base, Request, Opts) of
@@ -165,11 +167,17 @@ head_raw(Base, Request, Opts) ->
             case hb_store_arweave:read_offset(IndexStore, TXID) of
                 {ok,
                     #{
-                        <<"codec-device">> := <<"ans104@1.0">>,
+                        <<"codec-device">> := CodecDevice,
                         <<"start-offset">> := StartOffset,
                         <<"length">> := Length
                     }} ->
-                        do_head_raw(StartOffset, Length, Opts);
+                        CodecFun =
+                            case CodecDevice of
+                                <<"ans104@1.0">> -> fun head_raw_ans104/4;
+                                <<"tx@1.0">> -> fun head_raw_tx/4;
+                                _ -> throw({invalid_codec_device, CodecDevice})
+                            end,
+                        CodecFun(TXID, StartOffset, Length, Opts);
                 not_found ->
                     ?event(
                         arweave,
@@ -180,9 +188,41 @@ head_raw(Base, Request, Opts) ->
             end
     end.
 
-%% @doc Handle `HEAD /raw=ID` requests by reading the header chunk and
-%% returning the `content-type` of the item, if found.
-do_head_raw(ArweaveOffset, Length, Opts) ->
+%% @doc Arweave transaction headers are not part of the Arweave data tree, and
+%% thus we do not add their header bytes to the offset in order to read their
+%% data.
+head_raw_tx(TXID, StartOffset, Length, Opts) ->
+    {ok, StructuredTXHeader} =
+        get_tx(
+            #{ <<"tx">> => TXID },
+            #{ <<"exclude-data">> => true },
+            Opts
+        ),
+    ContentType =
+        hb_ao:get(
+            <<"content-type">>,
+            StructuredTXHeader,
+            <<"application/octet-stream">>,
+            Opts#{
+                cache_control =>
+                    [<<"no-cache">>, <<"no-store">>]
+            }
+        ),
+    {ok,
+        #{
+            <<"arweave-id">> => TXID,
+            <<"arweave-data-offset">> => StartOffset,
+            <<"content-type">> => ContentType,
+            <<"header-length">> => 0,
+            <<"content-length">> => Length,
+            <<"accept-ranges">> => <<"bytes">>
+        }
+    }.
+
+%% @doc ANS-104 headers are stored as part of the global Arweave data tree, so
+%% so to read the data associated with their IDs, we must first read the header
+%% chunk, deserialize it, and offset our data read from its starting offset.
+head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
     HeaderReq =
         #{
             <<"path">> => <<"chunk">>,
@@ -191,10 +231,10 @@ do_head_raw(ArweaveOffset, Length, Opts) ->
         },
     case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
         {ok, HeaderChunk} ->
-            do_head_raw(ArweaveOffset, Length, HeaderChunk, Opts);
+            do_head_raw_ans104(TXID, ArweaveOffset, Length, HeaderChunk, Opts);
         {error, Error} -> Error
     end.
-do_head_raw(_ArweaveOffset, Length, Data, _Opts) ->
+do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
     {ok, HeaderSize, HeaderTX} = ar_bundles:deserialize_header(Data),
     ContentType =
         list_find(
@@ -204,6 +244,8 @@ do_head_raw(_ArweaveOffset, Length, Data, _Opts) ->
         ),
     {ok,
         #{
+            <<"arweave-id">> => TXID,
+            <<"arweave-data-offset">> => ArweaveOffset + HeaderSize,
             <<"content-type">> => ContentType,
             <<"header-length">> => HeaderSize,
             <<"content-length">> => Length - HeaderSize,
@@ -216,167 +258,58 @@ do_head_raw(_ArweaveOffset, Length, Data, _Opts) ->
 %% only for compatibility with the legacy Arweave gateway `/raw` endpoint.
 get_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
-    case find_key(<<"raw">>, Base, Request, Opts) of
-        not_found -> {error, not_found};
-        TXID ->
-            % Read the data from the local cache.
-            IndexStore = hb_store_arweave:store_from_opts(Opts),
-            case hb_store_arweave:read_offset(IndexStore, TXID) of
-                not_found ->
-                    ?event(
-                        arweave,
-                        {raw_read_failed, {id, TXID}},
+    case head_raw(Base, Request, Opts) of
+        Err = {error, _} -> Err;
+        {ok,
+            Header = #{
+                <<"arweave-id">> := TXID,
+                <<"arweave-data-offset">> := ArweaveDataOffset,
+                <<"content-type">> := ContentType,
+                <<"content-length">> := FullContentLength
+            }
+        } ->
+        case parse_range_params(Request, Opts) of
+            {ok, StartRange, EndRange} ->
+                RangeLength = (EndRange - StartRange) + 1,
+                {ok, Data} =
+                    hb_store_arweave:read_chunks(
+                        ArweaveDataOffset + StartRange,
+                        RangeLength,
                         Opts
                     ),
-                    {error, not_found};
-                {ok,
-                    #{
-                        <<"codec-device">> := <<"ans104@1.0">>,
-                        <<"start-offset">> := StartOffset,
-                        <<"length">> := Length
-                    }} ->
-                    % Indexed messages of codec `ans104@1.0' are stored with
-                    % the `offset` referencing the start of the *header*.
-                    % Subsequently, we read the chunks and then deserialize
-                    % only the wrapper, yielding a #tx record that may
-                    % contain a bundle.
-                    ?event(
-                        debug_raw,
-                        {found_offset,
-                            {id, TXID},
-                            {start_offset, StartOffset},
-                            {length, Length}
-                        }
-                    ),
-                    case parse_range_params(Request, Opts) of
-                        {ok, StartRange, EndRange} ->
-                            % The user request is a range request. To calculate
-                            % the Arweave offset to read, we add the start range
-                            % to the item start offset (past the item header)
-                            % and read only the range end minus start bytes
-                            % from that position.
-                            {ok,
-                                #{
-                                    <<"content-type">> := ContentType,
-                                    <<"header-length">> := HeaderLength,
-                                    <<"content-length">> := FullContentLength
-                                }
-                            } = do_head_raw(StartOffset, Length, Opts),
-                            ArweaveOffset = StartOffset + HeaderLength + StartRange,
-                            RangeLength = (EndRange - StartRange) + 1,
-                            {ok, Data} =
-                                hb_store_arweave:read_chunks(
-                                    ArweaveOffset,
-                                    RangeLength,
-                                    Opts
-                                ),
-                            {
-                                ok,
-                                #{
-                                    <<"status">> => 206,
-                                    <<"content-type">> => ContentType,
-                                    <<"content-range">> =>
-                                        <<
-                                            "bytes ",
-                                            (hb_util:bin(StartRange))/binary,
-                                            "-",
-                                            (hb_util:bin(EndRange))/binary,
-                                            "/",
-                                            (hb_util:bin(FullContentLength))/binary
-                                        >>,
-                                    <<"data">> => Data
-                                }
-                            };
-                        false ->
-                            case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
-                                {ok, Data} ->
-                                    TX = ar_bundles:deserialize_item_wrapper(Data),
-                                    ?event(
-                                        debug_raw,
-                                        {deserialized_raw, {id, TXID}, {tx, TX}}
-                                    ),
-                                    ContentType =
-                                        list_find(
-                                            <<"content-type">>,
-                                            TX#tx.tags,
-                                            <<"application/octet-stream">>
-                                        ),
-                                    {ok, #{
-                                        <<"content-type">> => ContentType,
-                                        <<"data">> => Data
-                                    }};
-                                Error ->
-                                    ?event(
-                                        arweave,
-                                        {raw_read_chunks_failed, {id, TXID}, {error, Error}},
-                                        Opts
-                                    ),
-                                    Error
-                            end
-                        end;
-                {ok,
-                    #{
-                        <<"codec-device">> := <<"tx@1.0">>,
-                        <<"start-offset">> := StartOffset,
-                        <<"length">> := Length
-                    }} ->
-                    % Indexed messages of codec `tx@1.0' are stored with
-                    % the `offset` referencing the start of the data.
-                    % Subsequently, we read the chunks and return them
-                    % as-is.
-                    ?event(
-                        debug_raw,
-                        {found_offset,
-                            {id, TXID},
-                            {start_offset, StartOffset},
-                            {length, Length}
-                        }
-                    ),
-                    case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
-                        {ok, Data} ->
-                            ?event(
-                                debug_raw,
-                                {fetched_chunks, {id, TXID}, {data, Data}}
-                            ),
-                            {ok, StructuredTXHeader} =
-                                get_tx(
-                                    #{ <<"tx">> => TXID },
-                                    #{ <<"exclude-data">> => true },
-                                    Opts
-                                ),
-                            ContentType =
-                                hb_ao:get(
-                                    <<"content-type">>,
-                                    StructuredTXHeader,
-                                    <<"application/octet-stream">>,
-                                    Opts#{
-                                        cache_control =>
-                                            [<<"no-cache">>, <<"no-store">>]
-                                    }
-                                ),
-                            ?event(
-                                debug_raw,
-                                {content_type_and_data,
-                                    {id, TXID},
-                                    {content_type, ContentType},
-                                    {data, Data}
-                                }
-                            ),
-                            {
-                                ok,
-                                #{
-                                    <<"content-type">> => ContentType,
-                                    <<"data">> => Data
-                                }
-                            };
-                        Error ->
-                            ?event(
-                                arweave,
-                                {raw_read_chunks_failed, {id, TXID}, {error, Error}},
-                                Opts
-                            ),
-                            Error
-                    end
+                {
+                    ok,
+                    Header#{
+                        <<"status">> => 206,
+                        <<"content-type">> => ContentType,
+                        <<"content-length">> => RangeLength,
+                        <<"content-range">> =>
+                            <<
+                                "bytes ",
+                                (hb_util:bin(StartRange))/binary,
+                                "-",
+                                (hb_util:bin(EndRange))/binary,
+                                "/",
+                                (hb_util:bin(FullContentLength))/binary
+                            >>,
+                        <<"data">> => Data
+                    }
+                };
+            false ->
+                case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
+                    {ok, Data} ->
+                        {ok, Header#{
+                            <<"content-type">> => ContentType,
+                            <<"data">> => Data
+                        }};
+                    Error ->
+                        ?event(
+                            arweave,
+                            {raw_read_chunks_failed, {id, TXID}, {error, Error}},
+                            Opts
+                        ),
+                        Error
+                end
             end
     end.
 
@@ -1397,7 +1330,34 @@ get_tx_data_tag_exclude_data_test() ->
     ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
     ok.
 
-head_raw_test() ->
+head_raw_tx_test() ->
+    TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Opts = setup_arweave_index_opts([TXID]),
+    {ok, Result} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => TXID,
+                <<"method">> => <<"HEAD">>
+            },
+            Opts
+        ),
+    ?event({result, Result}),
+    ?assertEqual(
+        {ok, <<"application/json">>},
+        hb_maps:find(<<"content-type">>, Result, Opts)
+    ),
+    ?assertEqual(
+        {ok, 774},
+        hb_maps:find(<<"content-length">>, Result, Opts)
+    ),
+    ?assertEqual(
+        {ok, 0},
+        hb_maps:find(<<"header-length">>, Result, Opts)
+    ).
+
+head_raw_ans104_test() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
@@ -1405,7 +1365,7 @@ head_raw_test() ->
         <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary>>,
         Opts
     ),
-    {ok, RawData} =
+    {ok, Result} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{
@@ -1417,14 +1377,54 @@ head_raw_test() ->
         ),
     ?assertEqual(
         {ok, <<"application/json">>},
-        hb_maps:find(<<"content-type">>, RawData, Opts)
+        hb_maps:find(<<"content-type">>, Result, Opts)
     ),
     ?assertEqual(
         {ok, 575},
-        hb_maps:find(<<"content-length">>, RawData, Opts)
+        hb_maps:find(<<"content-length">>, Result, Opts)
     ).
 
-get_raw_range_test() ->
+get_raw_range_tx_test() ->
+    DataItemID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Opts = setup_arweave_index_opts([DataItemID]),
+    {ok, Result} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => DataItemID,
+                <<"method">> => <<"GET">>,
+                <<"range">> => <<"bytes 0-2/774">>
+            },
+            Opts
+        ),
+    ?event(debug_test, {result, Result}),
+    ?assertEqual(
+        {ok, <<"{\"d">>},
+        hb_maps:find(<<"data">>, Result, Opts)
+    ),
+    {ok, Result2} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => DataItemID,
+                <<"method">> => <<"GET">>,
+                <<"range">> => <<"bytes 100-105/774">>
+            },
+            Opts
+        ),
+    ?event(debug_test, {result2, Result2}),
+    ?assertEqual(
+        {ok, <<"application/json">>},
+        hb_maps:find(<<"content-type">>, Result2, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"ame Cr">>},
+        hb_maps:find(<<"data">>, Result2, Opts)
+    ).
+
+get_raw_range_ans104_test() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
@@ -1443,6 +1443,7 @@ get_raw_range_test() ->
             },
             Opts
         ),
+    ?event(debug_test, {result, Result}),
     ?assertEqual(
         {ok, <<"{\n">>},
         hb_maps:find(<<"data">>, Result, Opts)
@@ -1458,6 +1459,7 @@ get_raw_range_test() ->
             },
             Opts
         ),
+    ?event(debug_test, {result2, Result2}),
     ?assertEqual(
         {ok, <<"application/json">>},
         hb_maps:find(<<"content-type">>, Result2, Opts)
