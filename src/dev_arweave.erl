@@ -163,25 +163,26 @@ head_raw(Base, Request, Opts) ->
             % Read the data from the local cache.
             IndexStore = hb_store_arweave:store_from_opts(Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
-                not_found ->
-                    ?event(
-                        arweave,
-                        {raw_read_failed, {id, TXID}},
-                        Opts
-                    ),
-                    {error, not_found};
                 {ok,
                     #{
                         <<"codec-device">> := <<"ans104@1.0">>,
-                        <<"start-offset">> := StartOffset
+                        <<"start-offset">> := StartOffset,
+                        <<"length">> := Length
                     }} ->
-                        do_head_raw(StartOffset, Opts)
+                        do_head_raw(StartOffset, Length, Opts);
+                not_found ->
+                    ?event(
+                        arweave,
+                        {raw_head_offset_failed, {id, TXID}},
+                        Opts
+                    ),
+                    {error, not_found}
             end
     end.
 
 %% @doc Handle `HEAD /raw=ID` requests by reading the header chunk and
 %% returning the `content-type` of the item, if found.
-do_head_raw(ArweaveOffset, Opts) ->
+do_head_raw(ArweaveOffset, Length, Opts) ->
     HeaderReq =
         #{
             <<"path">> => <<"chunk">>,
@@ -189,10 +190,11 @@ do_head_raw(ArweaveOffset, Opts) ->
             <<"length">> => ?DATA_CHUNK_SIZE
         },
     case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
-        {ok, HeaderChunk} -> do_head_raw(ArweaveOffset, HeaderChunk, Opts);
+        {ok, HeaderChunk} ->
+            do_head_raw(ArweaveOffset, Length, HeaderChunk, Opts);
         {error, Error} -> Error
     end.
-do_head_raw(_ArweaveOffset, Data, _Opts) ->
+do_head_raw(_ArweaveOffset, Length, Data, _Opts) ->
     {ok, HeaderSize, HeaderTX} = ar_bundles:deserialize_header(Data),
     ContentType =
         list_find(
@@ -200,7 +202,13 @@ do_head_raw(_ArweaveOffset, Data, _Opts) ->
             HeaderTX#tx.tags,
             <<"application/octet-stream">>
         ),
-    {ok, #{ <<"content-type">> => ContentType, <<"header-length">> => HeaderSize }}.
+    {ok,
+        #{
+            <<"content-type">> => ContentType,
+            <<"header-length">> => HeaderSize,
+            <<"content-length">> => Length - HeaderSize
+        }
+    }.
 
 %% @doc Get raw transaction *data* and `content-type` of an Arweave message.
 %% Does not deserialize the message, nor return signature information. Included
@@ -251,7 +259,7 @@ get_raw(Base, Request, Opts) ->
                                     <<"content-type">> := ContentType,
                                     <<"header-length">> := HeaderLength
                                 }
-                            } = do_head_raw(StartOffset, Opts),
+                            } = do_head_raw(StartOffset, Length, Opts),
                             ArweaveOffset = StartOffset + HeaderLength + StartRange,
                             RangeLength = (EndRange - StartRange) + 1,
                             {ok, Data} =
@@ -263,6 +271,7 @@ get_raw(Base, Request, Opts) ->
                             {
                                 ok,
                                 #{
+                                    <<"status">> => 306,
                                     <<"content-type">> => ContentType,
                                     <<"data">> => Data
                                 }
@@ -1398,6 +1407,10 @@ head_raw_test() ->
     ?assertEqual(
         {ok, <<"application/json">>},
         hb_maps:find(<<"content-type">>, RawData, Opts)
+    ),
+    ?assertEqual(
+        {ok, 575},
+        hb_maps:find(<<"content-length">>, RawData, Opts)
     ).
 
 get_raw_range_test() ->
