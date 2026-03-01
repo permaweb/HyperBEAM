@@ -232,7 +232,7 @@ head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
     case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
         {ok, HeaderChunk} ->
             do_head_raw_ans104(TXID, ArweaveOffset, Length, HeaderChunk, Opts);
-        {error, Error} -> Error
+        {error, Error} -> {error, Error}
     end.
 do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
     {ok, HeaderSize, HeaderTX} = ar_bundles:deserialize_header(Data),
