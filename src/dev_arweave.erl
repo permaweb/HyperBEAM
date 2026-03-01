@@ -259,6 +259,7 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
 get_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
     case head_raw(Base, Request, Opts) of
+        not_found -> {error, not_found};
         Err = {error, _} -> Err;
         {ok,
             Header = #{
@@ -365,12 +366,7 @@ get_chunk_range(_Base, Request, Opts) ->
             Data = iolist_to_binary(Chunks),
             case hb_maps:is_key(<<"length">>, Request, Opts) of
                 true ->
-                    ?event(debug_test, {get_chunk_range,
-                        {offset, Offset},
-                        {byte_size, byte_size(Data)},
-                        {length, Length}
-                    }),
-                    {ok, binary:part(Data, 0, Length)};
+                    {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
                 false ->
                     {ok, Data}
             end;
@@ -383,8 +379,6 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
-    ?event(arweave_debug, {fetch_chunk_range,
-        {length, Length}, {start_offset, Offset}, {end_offset, EndOffset}}),
     case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
           EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
         {true, true} ->
@@ -450,12 +444,20 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             % be needed. We have yet to find an L1 TX that is chunked in such
             % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(arweave_debug, {fill_gaps, 
-                {offset, Offset},
-                {end_offset, EndOffset},
-                {chunks, [{Start, End, byte_size(Chunk)} || {Start, End, Chunk} <- Sorted]},
-                {gap_offsets, GapOffsets}
-            }),
+            ?event(arweave_debug,
+                {fill_gaps, 
+                    {offset, Offset},
+                    {end_offset, EndOffset},
+                    {chunks,
+                        [
+                            {Start, End, byte_size(Chunk)}
+                        ||
+                            {Start, End, Chunk} <- Sorted
+                        ]
+                    },
+                    {gap_offsets, GapOffsets}
+                }
+            ),
             ?event(warning,
                 {fetch_chunk_gap_handling_untested,
                     {gap_offsets, GapOffsets}}),
