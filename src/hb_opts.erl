@@ -322,7 +322,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"GET">>
                     },
-                <<"nodes">> => add_opts(?DATA_NODES ++ ?TIP_NODES),
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
                 <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> =>
                     length(
@@ -340,7 +340,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> => add_opts(?DATA_NODES ++ ?TIP_NODES),
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
                 <<"strategy">> => <<"Shuffled-Range">>,
                 <<"choose">> =>
                     length(
@@ -358,7 +358,7 @@ default_message() ->
                         <<"path">> => <<"^/arweave/tx">>,
                         <<"method">> => <<"POST">>
                     },
-                <<"nodes">> => add_opts(?CHAIN_NODES ++ ?TIP_NODES),
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
                 <<"parallel">> => true,
                 <<"responses">> => 3,
                 <<"stop-after">> => false,
@@ -378,7 +378,7 @@ default_message() ->
             %% the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
-                <<"nodes">> => add_opts(?CHAIN_NODES),
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
                 <<"parallel">> => true,
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200
