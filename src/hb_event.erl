@@ -8,6 +8,7 @@
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 -define(MAX_MEMORY, 1_000_000_000). % 1GB
+-define(MAX_EVENT_NAME_LENGTH, 100).
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -82,6 +83,7 @@ increment(id_base, _Message, _Opts, _Count) -> ignored;
 increment(parsing, _Message, _Opts, _Count) -> ignored;
 increment(Topic, Message, _Opts, Count) ->
     case parse_name(Topic) of
+        no_event_name -> ignored;
         <<"debug", _/binary>> -> ignored;
         TopicBin ->
             find_event_server() ! {increment, TopicBin, parse_name(Message), Count}
@@ -231,8 +233,10 @@ parse_name(Name) when is_tuple(Name) ->
     parse_name(element(1, Name));
 parse_name(Name) when is_atom(Name) ->
     atom_to_binary(Name, utf8);
-parse_name(Name) when is_binary(Name) ->
-    Name;
+parse_name(Name)
+        when is_binary(Name)
+        andalso byte_size(Name) > ?MAX_EVENT_NAME_LENGTH ->
+    no_event_name;
 parse_name(Name) when is_list(Name) ->
     iolist_to_binary(Name);
 parse_name(_) -> no_event_name.
