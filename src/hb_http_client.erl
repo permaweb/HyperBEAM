@@ -8,7 +8,8 @@
 %% Public API
 -export([request/2, response_status_to_atom/1, setup_conn/1]).
 %% GenServer
--export([start_link/1, init/1, response_status_to_atom/1, request/2]).
+-export([start_link/1, init/1]).
+-export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
 -record(state, {
 	opts = #{}
@@ -22,6 +23,7 @@
 setup_conn(Opts) ->
     ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
     ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    ?event({conn, {pool_read_num, ConnPoolReadSize}, {pool_write_num, ConnPoolWriteSize}}),
     persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
 
 start_link(Opts) ->
@@ -46,7 +48,7 @@ request(Args, RemainingRetries, Opts) ->
             StatusAtom = response_status_to_atom(Status),
             RetryResponses = hb_opts:get(http_retry_response, [], Opts),
             case lists:member(StatusAtom, RetryResponses) of
-                true -> maybe_retry(RemainingRetries, Args, Response, Opts);
+            true -> maybe_retry(RemainingRetries, Args, Response, Opts);
                 false -> Response
             end
     end.
@@ -457,10 +459,9 @@ handle_info({gun_error, PID, Reason}, State) ->
 			{noreply, State}
 	end;
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams},
-			#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case hb_maps:get(PID, StatusByPID, not_found) of
-		not_found ->
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
+	case ets:lookup(?CONN_STATUS_ETS, PID) of
+		[] ->
 			?event(warning,
                 {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
             {noreply, State};
