@@ -315,15 +315,16 @@ get_raw(Base, Request, Opts) ->
     end.
 
 %% @doc Extract the start and end range from a request.
-parse_range_params(Req, Opts) ->
-    case hb_maps:get(<<"range">>, Req, Opts) of
-        <<"bytes *", _>> -> false;
-        <<"bytes ", ByteDescriptor/binary>> ->
-            [ByteRange|_] = binary:split(ByteDescriptor, <<"/">>),
-            [Start, End] = binary:split(ByteRange, <<"-">>),
-            {ok, hb_util:int(Start), hb_util:int(End)};
-        _ ->
-            false
+parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Opts) ->
+    parse_range_params(<<"bytes ", ByteDescriptor/binary>>, Opts);
+parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
+    [ByteRange|_] = binary:split(ByteDescriptor, <<"/">>),
+    [Start, End] = binary:split(ByteRange, <<"-">>),
+    {ok, hb_util:int(Start), hb_util:int(End)};
+parse_range_params(Msg, Opts) ->
+    case hb_ao:resolve(Msg, <<"range">>, Opts#{ hashpath => ignore }) of
+        {ok, Str} -> parse_range_params(Str, Opts);
+        _ -> false
     end.
 
 %% @doc Case-insensitively find a key in a list and return its value.
