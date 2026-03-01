@@ -217,22 +217,20 @@ record_duration(Details, Opts) ->
                     (Key) ->
                         hb_util:list(maps:get(Key, Details))
                 end,
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    prometheus_histogram:observe(
-                        http_request_duration_seconds,
-                        lists:map(
-                            GetFormat,
-                            [
-                                <<"request-method">>,
-                                <<"status-class">>,
-                                <<"request-category">>
-                            ]
-                        ),
-                        maps:get(<<"duration">>, Details)
-                    )
-            end,
+            safe_prometheus(fun() ->
+                prometheus_histogram:observe(
+                    http_request_duration_seconds,
+                    lists:map(
+                        GetFormat,
+                        [
+                            <<"request-method">>,
+                            <<"status-class">>,
+                            <<"request-category">>
+                        ]
+                    ),
+                    maps:get(<<"duration">>, Details)
+                )
+            end),
             maybe_invoke_monitor(
                 Details#{ <<"path">> => <<"duration">> },
                 Opts
@@ -513,30 +511,27 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 %%% Private functions.
 %%% ==================================================================
 
-%% @doc Safe wrapper for prometheus_gauge:inc/2.
-inc_prometheus_gauge(Name) ->
+%% @doc Safely execute a prometheus operation. If the metric is not yet
+%% declared, initialize all metrics and retry once.
+safe_prometheus(Fun) ->
     case application:get_application(prometheus) of
         undefined -> ok;
         _ ->
-            try prometheus_gauge:inc(Name)
+            try Fun()
             catch _:_ ->
                 init_prometheus(),
-                prometheus_gauge:inc(Name)
+                Fun()
             end
     end.
 
-%% @doc Safe wrapper for prometheus_gauge:dec/2.
+inc_prometheus_gauge(Name) ->
+    safe_prometheus(fun() -> prometheus_gauge:inc(Name) end).
+
 dec_prometheus_gauge(Name) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ -> prometheus_gauge:dec(Name)
-    end.
+    safe_prometheus(fun() -> prometheus_gauge:dec(Name) end).
 
 inc_prometheus_counter(Name, Labels, Value) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ -> prometheus_counter:inc(Name, Labels, Value)
-    end.
+    safe_prometheus(fun() -> prometheus_counter:inc(Name, Labels, Value) end).
 
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
