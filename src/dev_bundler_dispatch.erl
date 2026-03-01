@@ -782,6 +782,41 @@ rapid_dispatch_test() ->
         cleanup_dispatcher(ServerHandle)
     end.
 
+nested_bundle_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            timer:sleep(100),
+            {200, <<"OK">>}
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_workers => 3
+        },
+        hb_http_server:start_node(Opts),
+        % Dispatch 10 bundles rapidly
+        lists:foreach(
+            fun(I) ->
+                Items = [new_data_item(I, 10, Opts)],
+                dispatch(Items, Opts)
+            end,
+            lists:seq(1, 10)
+        ),
+        
+        % Wait for all 10 TXs
+        TXs = hb_mock_server:get_requests(tx, 10, ServerHandle),
+        ?assertEqual(10, length(TXs)),
+        ok
+    after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
 one_bundle_fails_others_continue_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
@@ -1032,6 +1067,38 @@ new_data_item(Index, Size, Opts) ->
         hb:wallet()
     ),
     hb_message:convert(Item, <<"structured@1.0">>, <<"ans104@1.0">>, Opts).
+
+new_nested_bundle(Count, Size, Opts) ->
+    % Msg =
+    %     hb_message:commit(
+    %         #{
+    %             <<"body">> =>
+    %                 [
+    %                     hb_message:commit(
+    %                         #{
+    %                             <<"body">> => rand:bytes(Size)
+    %                         },
+    %                         Opts,
+    %                         <<"ans104@1.0">>
+    %                     )
+    %                     || I <- lists:seq(1, Count)
+    %                 ]
+    %         },
+    %         Opts,
+    %         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
+    %     ),
+    TX = #tx{
+        format = ans104,
+        data = [new_data_item(I, Size, Opts) || I <- lists:seq(1, Count)]
+    },
+    Signed = ar_bundles:sign_item(TX, hb:wallet()),
+    Bundle = dev_arweave_common:normalize(Signed),
+    hb_message:convert(
+        Bundle,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ).
 
 start_mock_gateway(Responses) ->
     DefaultResponse = {200, <<>>},
