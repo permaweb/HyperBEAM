@@ -206,7 +206,8 @@ do_head_raw(_ArweaveOffset, Length, Data, _Opts) ->
         #{
             <<"content-type">> => ContentType,
             <<"header-length">> => HeaderSize,
-            <<"content-length">> => Length - HeaderSize
+            <<"content-length">> => Length - HeaderSize,
+            <<"accept-ranges">> => <<"bytes">>
         }
     }.
 
@@ -257,7 +258,8 @@ get_raw(Base, Request, Opts) ->
                             {ok,
                                 #{
                                     <<"content-type">> := ContentType,
-                                    <<"header-length">> := HeaderLength
+                                    <<"header-length">> := HeaderLength,
+                                    <<"content-length">> := FullContentLength
                                 }
                             } = do_head_raw(StartOffset, Length, Opts),
                             ArweaveOffset = StartOffset + HeaderLength + StartRange,
@@ -271,8 +273,17 @@ get_raw(Base, Request, Opts) ->
                             {
                                 ok,
                                 #{
-                                    <<"status">> => 306,
+                                    <<"status">> => 206,
                                     <<"content-type">> => ContentType,
+                                    <<"content-range">> =>
+                                        <<
+                                            "bytes ",
+                                            (hb_util:bin(StartRange))/binary,
+                                            "-",
+                                            (hb_util:bin(EndRange))/binary,
+                                            "/",
+                                            (hb_util:bin(FullContentLength))/binary
+                                        >>,
                                     <<"data">> => Data
                                 }
                             };
