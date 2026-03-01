@@ -456,7 +456,8 @@ deserialize_header(Binary) ->
             target = Target,
             anchor = Anchor,
             tags = Tags,
-            data = RemainingData
+            data = RemainingData,
+            data_size = byte_size(RemainingData)
         }
     }.
 
