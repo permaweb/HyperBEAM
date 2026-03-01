@@ -1453,7 +1453,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?assert(hb_message:verify(Committed, all, Opts), Label),
     {ok, _, CommittedCommitment} = hb_message:commitment(#{}, Committed, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
+        [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, not_found, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
@@ -1475,7 +1475,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
     {ok, _, DecodedCommitment} = hb_message:commitment(#{}, Decoded, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
+        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, not_found, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, DecodedCommitment, false, Opts)),
