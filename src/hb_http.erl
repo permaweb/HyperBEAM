@@ -474,7 +474,12 @@ reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReplyStartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
-    {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
+    {ok, Req, Message} =
+        try reply_handle_cookies(InitReq, KeyNormMessage, Opts)
+        catch _Type:Error:_Stacktrace ->
+            ?event(warning, {reply_handle_cookies_error, {error, Error}}, Opts),
+            {ok, InitReq, KeyNormMessage}
+        end,
     {Status, HeadersBeforeCors, EncodedBody} =
         encode_reply(
             RawStatus,
