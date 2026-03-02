@@ -849,8 +849,12 @@ inc_prometheus_gauge(Name) ->
         _ ->
             try prometheus_gauge:inc(Name)
             catch _:_ ->
-                init_prometheus(),
-                prometheus_gauge:inc(Name)
+                try
+                    init_prometheus(),
+                    prometheus_gauge:inc(Name)
+                catch _:_ ->
+                    ok
+                end
             end
     end.
 
@@ -858,13 +862,31 @@ inc_prometheus_gauge(Name) ->
 dec_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
         undefined -> ok;
-        _ -> prometheus_gauge:dec(Name)
+        _ ->
+            try prometheus_gauge:dec(Name)
+            catch _:_ -> 
+                try
+                    init_prometheus(),
+                    prometheus_gauge:dec(Name)
+                catch _:_ ->
+                    ok
+                end
+            end
     end.
 
 inc_prometheus_counter(Name, Labels, Value) ->
     case application:get_application(prometheus) of
         undefined -> ok;
-        _ -> prometheus_counter:inc(Name, Labels, Value)
+        _ ->
+            try prometheus_counter:inc(Name, Labels, Value)
+            catch _:_ -> 
+                try
+                    init_prometheus(),
+                    prometheus_counter:inc(Name, Labels, Value)
+                catch _:_ ->
+                    ok
+                end
+            end
     end.
 
 download_metric(Data) ->
