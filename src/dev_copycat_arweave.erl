@@ -16,13 +16,104 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    {From, To} = parse_range(Request, Opts),
-    case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-        <<"write">>  -> fetch_blocks(Request, From, To, Opts);
-        <<"list">>   -> list_index(From, To, Opts);
-        Mode ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    case hb_maps:find(<<"id">>, Request, Opts) of
+        {ok, ID} ->
+            Depth = hb_util:int(hb_maps:get(<<"depth">>, Request, <<"1">>, Opts)),
+            index_id(ID, Depth, Opts);
+        error ->
+            {From, To} = parse_range(Request, Opts),
+            case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+                <<"write">>  -> fetch_blocks(Request, From, To, Opts);
+                <<"list">>   -> list_index(From, To, Opts);
+                Mode ->
+                    {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+            end
     end.
+
+index_id(_ID, Depth, _Opts) when Depth =< 0 ->
+    {ok, 0};
+index_id(ID, Depth, Opts) ->
+    Store = hb_store_arweave:store_from_opts(Opts),
+    case hb_store_arweave:read_offset(Store, ID) of
+        not_found ->
+            {error, not_found};
+        {ok, ItemOffset} ->
+            case payload_bounds(ID, ItemOffset, Opts) of
+                {error, _} = Error ->
+                    Error;
+                {ok, PayloadStart, PayloadLength} ->
+                    case download_bundle_header(
+                        PayloadStart + PayloadLength,
+                        PayloadLength,
+                        Opts
+                    ) of
+                        {ok, {BundleIndex, HeaderSize}} ->
+                            index_bundle_children(
+                                BundleIndex,
+                                PayloadStart + HeaderSize,
+                                Depth,
+                                Store,
+                                Opts
+                            );
+                        {error, _} ->
+                            {ok, 0}
+                    end
+            end
+    end.
+
+payload_bounds(_ID, #{
+    <<"codec-device">> := <<"tx@1.0">>,
+    <<"start-offset">> := StartOffset,
+    <<"length">> := Length
+}, _Opts) ->
+    {ok, StartOffset, Length};
+payload_bounds(ID, #{
+    <<"codec-device">> := <<"ans104@1.0">>
+}, Opts) ->
+    Base = #{ <<"device">> => ?ARWEAVE_DEVICE, <<"raw">> => ID },
+    case hb_ao:resolve(
+        Base,
+        #{ <<"path">> => <<"raw">>, <<"method">> => <<"HEAD">> },
+        Opts
+    ) of
+        {ok, #{
+            <<"arweave-data-offset">> := DataOffset,
+            <<"content-length">> := ContentLength
+        }} ->
+            {ok, DataOffset, ContentLength};
+        Error ->
+            Error
+    end;
+payload_bounds(_ID, _Offset, _Opts) ->
+    {error, unsupported_codec_device}.
+
+index_bundle_children(BundleIndex, StartOffset, Depth, Store, Opts) ->
+    {_FinalOffset, Count} =
+        lists:foldl(
+            fun({ItemID, Size}, {ItemStartOffset, CountAcc}) ->
+                EncodedID = hb_util:encode(ItemID),
+                hb_store_arweave:write_offset(
+                    Store,
+                    EncodedID,
+                    <<"ans104@1.0">>,
+                    ItemStartOffset,
+                    Size
+                ),
+                Descendants =
+                    case Depth > 1 of
+                        true ->
+                            case index_id(EncodedID, Depth - 1, Opts) of
+                                {ok, DescendantCount} -> DescendantCount;
+                                _ -> 0
+                            end;
+                        false -> 0
+                    end,
+                {ItemStartOffset + Size, CountAcc + 1 + Descendants}
+            end,
+            {StartOffset, 0},
+            BundleIndex
+        ),
+    {ok, Count}.
 
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
