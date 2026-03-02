@@ -1,7 +1,7 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([index/3, info/0]).
+-export([index/3, info/0, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -62,26 +62,73 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     ?event({manifest_reading_id, ID}),
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
-    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
+    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     Res = hb_ao:get(
         <<"paths/", Key/binary>>,
         {as, <<"message@1.0">>, Manifest},
         Opts
     ),
+    ?event({manifest_lookup_result, {res, Res}}),
     case Res of
         not_found ->
             %% Support materialized view in some JavaScript frameworks
             case hb_opts:get(manifest_404, fallback, Opts) of
                 error ->
+                    ?event({manifest_404_error, {key, Key}}),
                     {error, not_found};
                 fallback ->
                     ?event({manifest_fallback, {key, Key}}),
                     route(<<"index">>, M1, M2, Opts)
             end;
         _ ->
+            ?event({manifest_lookup_success, {key, Key}}),
             {ok, Res}
     end.
+
+%% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
+%% requests for legacy (non-device-tagged) manifests and casting them to
+%% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
+request(Base, Req, Opts) ->
+    ?event({on_req_manifest_detector, {base, Base}, {req, Req}}),
+    case hb_maps:find(<<"body">>, Req, Opts) of
+        {ok, [PrimaryMsg|Rest]} ->
+            case maybe_cast_manifest(PrimaryMsg, Opts) of
+                {ok, CastedMsg} ->
+                    {ok, Req#{ <<"body">> => [CastedMsg|Rest] }};
+                Error ->
+                    ?event({manifest_not_cast, {error, Error}}),
+                    Error
+            end;
+        _ ->
+            {ok, Req}
+    end.
+
+%% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
+%% no other device is specified.
+maybe_cast_manifest(ID, Opts) when ?IS_ID(ID) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} -> maybe_cast_manifest(Msg, Opts);
+        _ ->
+            ?event({message_not_found, {id, ID}}),
+            {error, not_found}
+    end;
+maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
+    case hb_maps:find(<<"device">>, Msg, Opts) of
+        {ok, X} when X == <<"manifest@1.0">> orelse X == <<"message@1.0">> ->
+            {ok, Msg};
+        _ ->
+            case hb_maps:find(<<"content-type">>, Msg, Opts) of
+                {ok, <<"application/x.arweave-manifest+json">>} ->
+                    ?event({manifest_casting, {msg, Msg}}),
+                    {ok, {as, <<"manifest@1.0">>, Msg}};
+                _ ->
+                    {ok, Msg}
+            end
+    end;
+maybe_cast_manifest(Msg, _Opts) ->
+    ?event({message_is_not_manifest, {msg, Msg}}),
+    {ok, Msg}.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
@@ -122,7 +169,14 @@ linkify(Manifest, _Opts) ->
 %%% Tests
 
 resolve_test() ->
-    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
+    Opts = #{
+        store => hb_opts:get(store, no_viable_store, #{}),
+        on => #{
+            <<"request">> => #{
+                <<"device">> => <<"manifest@1.0">>
+            }
+        }
+    },
     IndexPage = #{
         <<"content-type">> => <<"text/html">>,
         <<"body">> => <<"Page 1">>
@@ -146,7 +200,13 @@ resolve_test() ->
             <<"device">> => <<"manifest@1.0">>,
             <<"body">> => JSON
         },
+    LegacyManifestWithCT =
+        #{
+            <<"content-type">> => <<"application/x.arweave-manifest+json">>,
+            <<"body">> => JSON
+        },
     {ok, ManifestID} = hb_cache:write(ManifestMsg, Opts),
+    {ok, LegacyManifestID} = hb_cache:write(LegacyManifestWithCT, Opts),
     ?event({manifest_id, ManifestID}),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -156,6 +216,17 @@ resolve_test() ->
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
         hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
+    % Making the same requests to a node with the `request' hook enabled should
+    % yield the same results.
+    ?hr(),
+    ?event({legacy_manifest_id, LegacyManifestID}),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 1">> }},
+        hb_http:get(Node, << LegacyManifestID/binary, "/index" >>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 2">>}}, 
+        hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
 
 manifest_default_fallback_test() ->
