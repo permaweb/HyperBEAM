@@ -157,7 +157,13 @@ raw_counters() ->
 %% result in the process dictionary to avoid looking it up multiple times.
 find_event_server() ->
     case erlang:get({event_server, ?MODULE}) of
-        {cached, Pid} -> Pid;
+        {cached, Pid} ->
+            case is_process_alive(Pid) of
+                true -> Pid;
+                false ->
+                    erlang:erase({event_server, ?MODULE}),
+                    find_event_server()
+            end;
         undefined ->
             PID =
                 case hb_name:lookup(?MODULE) of
@@ -217,7 +223,11 @@ handle_events() ->
                     end;
                 _ -> ignored
             end,
-            prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
+            try
+                prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count)
+            catch _:_ ->
+                ok
+            end,
             handle_events()
     end.
 
