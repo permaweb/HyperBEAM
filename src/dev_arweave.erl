@@ -2007,7 +2007,10 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
             ?assert(hb_message:verify(TXHeader, all, Opts)),
             TXWithData = TXHeader#{ <<"data">> => Data },
             ?event(debug_test, {tx_with_data, TXWithData}),
-            ?assert(hb_message:verify(TXWithData, all, Opts))
+            ?assert(hb_message:verify(TXWithData, all, Opts)),
+            StructuredTX = hb_message:convert(TXWithData, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+            ?event(debug_test, {structured_tx, StructuredTX}),
+            ?assert(hb_message:verify(StructuredTX, all, Opts))
             % ?assertEqual(RawData, Data)
     end,
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
