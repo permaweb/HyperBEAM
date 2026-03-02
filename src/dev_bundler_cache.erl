@@ -203,6 +203,8 @@ load_bundled_items(TXID, Opts) ->
         [] -> [];
         List -> List
     end,
+    ?event(bundler_short, {recovering_bundled_items,
+        {count, length(ItemIDs)}}),
     % Filter for items belonging to this TX and load them
     lists:filtermap(
         fun(ItemIDStr) ->
@@ -364,6 +366,104 @@ load_bundled_items_test() ->
     Bundle2Items3 = lists:sort(Bundle2Items2),
     ?assertEqual(lists:sort([Item3]), Bundle2Items3),
     ok.
+
+%% @doc That when posting a bundle to the bundler all items in the bundle
+%% are accessible via optimistic cache. The bundle has the following structure:
+%%   L2Bundle (bundle)
+%%     L3Item  (leaf)
+%%     L3Bundle  (nested bundle)
+%%       L4IItem1 (leaf)
+%%       L4IItem2 (leaf)
+bundler_optimistic_cache_test() ->
+    L3Item = ar_bundles:sign_item(
+        #tx{ data = <<"l3item">>, tags = [{<<"idx">>, <<"1">>}] },
+        hb:wallet()
+    ),
+    L4Item1 = ar_bundles:sign_item(
+        #tx{ data = <<"l4item1">>, tags = [{<<"idx">>, <<"2.1">>}] },
+        hb:wallet()
+    ),
+    L4Item2 = ar_bundles:sign_item(
+        #tx{ data = <<"l4item2">>, tags = [{<<"idx">>, <<"2.2">>}] },
+        hb:wallet()
+    ),
+    % L3Bundle is itself a bundle wrapping the two L4 leaves.
+    {undefined, L3BundlePayload} = ar_bundles:serialize_bundle(
+        list, [L4Item1, L4Item2], false),
+    L3Bundle = ar_bundles:sign_item(
+        #tx{
+            data = L3BundlePayload,
+            tags = [
+                {<<"Bundle-Format">>, <<"binary">>},
+                {<<"Bundle-Version">>, <<"2.0.0">>},
+                {<<"idx">>, <<"2">>}
+            ]
+        },
+        hb:wallet()
+    ),
+    {undefined, L2BundlePayload} = ar_bundles:serialize_bundle(
+        list, [L3Item, L3Bundle], false),
+    L2Bundle = ar_bundles:sign_item(
+        #tx{
+            data = L2BundlePayload,
+            tags = [
+                {<<"Bundle-Format">>, <<"binary">>},
+                {<<"Bundle-Version">>, <<"2.0.0">>}
+            ]
+        },
+        hb:wallet()
+    ),
+    % Compute signed IDs for all items before posting.
+    L2BundleID = hb_util:encode(ar_bundles:id(L2Bundle, signed)),
+    L3ItemID   = hb_util:encode(ar_bundles:id(L3Item,   signed)),
+    L3BundleID = hb_util:encode(ar_bundles:id(L3Bundle, signed)),
+    L4Item1ID  = hb_util:encode(ar_bundles:id(L4Item1,  signed)),
+    L4Item2ID  = hb_util:encode(ar_bundles:id(L4Item2,  signed)),
+    % Start a real node with LMDB and POST the serialized bundle wrapper over HTTP.
+    Node = hb_http_server:start_node(#{
+        priv_wallet => hb:wallet(),
+        store => hb_test_utils:test_store(hb_store_lmdb)
+    }),
+    try
+        Serialized = ar_bundles:serialize(L2Bundle),
+        ?assertMatch({ok, _}, hb_http:post(
+            Node,
+            #{
+                <<"device">> => <<"bundler@1.0">>,
+                <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized
+            },
+            #{}
+        )),
+        % Every item at every nesting level must be independently readable
+        % via a bare GET /ID — the real user-facing access pattern.
+        AllItems = [
+            {l2bundle, L2BundleID},
+            {l3item,   L3ItemID},
+            {l3bundle, L3BundleID},
+            {l4item1,  L4Item1ID},
+            {l4item2,  L4Item2ID}
+        ],
+        lists:foreach(
+            fun({Label, ExpectedID}) ->
+                {ok, Msg} = hb_http:get(
+                    Node, #{ <<"path">> => <<"/", ExpectedID/binary>> }, #{}),
+                ?event(debug_test, {item_result,
+                    {label, Label}, {expected_id, ExpectedID}, {msg, Msg}}),
+                ?assert(hb_message:verify(Msg)),
+                ?assertEqual(ExpectedID, hb_message:id(Msg, signed))
+            end,
+            AllItems
+        ),
+        ok
+    after
+        case hb_name:lookup(bundler_server) of
+            undefined -> ok;
+            PID -> PID ! stop, hb_name:unregister(bundler_server)
+        end,
+        dev_bundler_dispatch:stop_dispatcher()
+    end.
 
 new_data_item(Index, SizeOrData, Opts) ->
     Data = case is_binary(SizeOrData) of
