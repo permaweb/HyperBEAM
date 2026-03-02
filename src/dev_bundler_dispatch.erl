@@ -42,7 +42,7 @@
 
 %%% Default options.
 -define(DISPATCHER_NAME, bundler_dispatcher).
--define(DEFAULT_NUM_WORKERS, 5).
+-define(DEFAULT_NUM_WORKERS, 20).
 -define(DEFAULT_RETRY_BASE_DELAY_MS, 1000).
 -define(DEFAULT_RETRY_MAX_DELAY_MS, 600000). % 10 minutes
 -define(DEFAULT_RETRY_JITTER, 0.25). % ±25% jitter
@@ -123,8 +123,13 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
-            ?event(bundler_short, {dispatching_bundle, {timestamp, format_timestamp()},
-                {bundle_id, BundleID}, {num_items, length(Items)}}),
+            ?event(bundler_short,
+                {dispatching_bundle,
+                    {timestamp, format_timestamp()},
+                    {bundle_id, BundleID},
+                    {num_items, length(Items)}
+                }
+            ),
             Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
             % Assign tasks to idle workers
@@ -234,9 +239,13 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
     % This distributes the delay across [delay * (1-jitter), delay * (1+jitter)]
     JitterFactor = (rand:uniform() * 2 - 1) * Jitter,  % Random value in [-jitter, +jitter]
     Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
-    ?event(bundler_short, {task_failed_retrying, format_task(Task),
+    ?event(
+        bundler_short,
+        {task_failed_retrying, format_task(Task),
             {reason, {explicit, Reason}}, 
-            {retry_count, RetryCount}, {delay_ms, Delay}}),
+            {retry_count, RetryCount}, {delay_ms, Delay}
+        }
+    ),
     % Update worker to idle
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
@@ -249,7 +258,6 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
 task_completed(#task{bundle_id = BundleID, type = post_tx}, Bundle, CommittedTX, State) ->
     Bundles = State#state.bundles,
     Opts = State#state.opts,
-    dev_bundler_cache:write_tx(CommittedTX, Bundle#bundle.items, Opts),
     Bundle1 = Bundle#bundle{status = tx_posted, tx = CommittedTX},
     State1 = State#state{
         bundles = maps:put(BundleID, Bundle1, Bundles)
@@ -394,13 +402,13 @@ recover_bundle(TXID, Status, State) ->
 worker_loop() ->
     receive
         {execute_task, DispatcherPID, Task} ->
-            Result = execute_task(Task),
-            case Result of
+            case execute_task(Task) of
                 {ok, Value} ->
                     DispatcherPID ! {task_complete, self(), Task, Value};
                 {error, Reason} ->
                     DispatcherPID ! {task_failed, self(), Task, Reason}
             end,
+
             worker_loop();
         stop ->
             exit(normal)
@@ -437,7 +445,13 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     Opts
                 ),
                 case PostTXResponse of
-                    {ok, _Result} -> {ok, Committed};
+                    {ok, _Result} ->
+                        dev_bundler_cache:write_tx(
+                            Committed,
+                            Items,
+                            Opts
+                        ),
+                        {ok, Committed};
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
@@ -492,6 +506,16 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
                 end
             end,
             SizeTaggedChunks
+        ),
+        % -1 because the `?event(...)' macro increments the counter by 1.
+        hb_event:increment(bundler_short, built_proofs, length(Proofs) - 1),
+        ?event(
+            bundler_short,
+            {built_proofs, 
+                {bundle, Task#task.bundle_id},
+                {num_proofs, length(Proofs)}
+            },
+            Opts
         ),
         {ok, Proofs}
     catch
