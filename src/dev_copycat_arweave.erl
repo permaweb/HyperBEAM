@@ -385,13 +385,18 @@ download_bundle_header(EndOffset, Size, Opts) ->
                 % thousands of items might require multiple chunks to fully
                 % represent the item index.
                 HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-                case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
-                    {ok, BundleHeader} ->
-                        {_ItemsBin, BundleIndex} =
-                            ar_bundles:decode_bundle_header(BundleHeader),
-                        {ok, {BundleIndex, HeaderSize}};
-                    Error ->
-                        Error
+                case HeaderSize =:= invalid_bundle_header orelse HeaderSize > Size of
+                    true ->
+                        {error, invalid_bundle_header};
+                    false ->
+                        case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
+                            {ok, BundleHeader} ->
+                                {_ItemsBin, BundleIndex} =
+                                    ar_bundles:decode_bundle_header(BundleHeader),
+                                {ok, {BundleIndex, HeaderSize}};
+                            Error ->
+                                Error
+                        end
                 end;
             Error ->
                 Error
