@@ -98,7 +98,7 @@ httpc_req(Args, Opts) ->
         443 -> "https";
         _ -> "http"
     end,
-    ?event(http_client, {httpc_req, {explicit, Args}}),
+    ?event(debug_http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
     FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
     HeaderKV =
@@ -149,7 +149,7 @@ httpc_req(Args, Opts) ->
                 ||
                     {Key, Value} <- RawRespHeaders
                 ],
-            ?event(http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+            ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
             record_duration(#{
                     <<"request-method">> => method_to_bin(Method),
                     <<"request-path">> => hb_util:bin(Path),
@@ -343,7 +343,7 @@ maybe_invoke_monitor(Details, Opts) ->
             % execute.
             ReqMsgs = hb_singleton:from(Req, Opts),
             Res = hb_ao:resolve_many(ReqMsgs, Opts),
-            ?event(http_monitor, {resolved_monitor, Res})
+            ?event(debug_http_monitor, {resolved_monitor, Res})
     end.
 
 %%% ==================================================================
@@ -484,7 +484,7 @@ handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
 					ok
 			end,
 			gun:shutdown(PID),
-            ?event(http_outbound, {gun_shutdown_after_down, {conn_key, ConnKey}}),
+            ?event(http_outbound, {gun_shutdown_after_down, {conn_key, ConnKey}, {protocol, Protocol}}),
             {noreply, State}
 	end;
 
@@ -725,7 +725,7 @@ await_response(Args, Opts) ->
 %% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
     ?event(
-        http,
+        debug_http,
         {gun_log,
             {type, Type},
             {event, Event},
