@@ -613,7 +613,9 @@ reset(Opts) ->
 
 %% @doc Increment the hit metrics for the current store's name.
 name_hit_metrics(Name) ->
-    prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1).
+    try prometheus_counter:inc(hb_store_lmdb_hit, [Name], 1)
+    catch _:_ -> ok
+    end.
 
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
