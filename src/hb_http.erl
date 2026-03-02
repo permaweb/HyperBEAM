@@ -464,7 +464,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
     Status =
-        case hb_maps:get(<<"status">>, Message, Opts) of
+        case hb_maps:get(<<"status">>, Message, not_found, Opts) of
             not_found -> 200;
             S-> S
         end,
