@@ -1154,25 +1154,24 @@ init_prometheus() ->
 	]).
 
 record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
-    spawn(
-        fun() ->
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    prometheus_histogram:observe(
-                        http_request_server_duration_seconds,
-                        [StatusCode],
-                        TotalDuration
-                    ),
-                    prometheus_histogram:observe(
-                        http_request_server_reply_duration_seconds,
-                        [StatusCode],
-                        ReplyDuration
-                    )
-            end,
-            ok
-        end
-    ).
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try
+                prometheus_histogram:observe(
+                    http_request_server_duration_seconds,
+                    [StatusCode],
+                    TotalDuration
+                ),
+                prometheus_histogram:observe(
+                    http_request_server_reply_duration_seconds,
+                    [StatusCode],
+                    ReplyDuration
+                )
+            catch _:_ ->
+                ok
+            end
+    end.
 
 %%% Tests
 
