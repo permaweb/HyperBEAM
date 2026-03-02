@@ -166,7 +166,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
     % constructed from the header key-value pair list.
     HeaderMap = hb_maps:merge(hb_maps:from_list(Headers), MaybeSetCookie, Opts),
     NormHeaderMap = hb_ao:normalize_keys(HeaderMap, Opts),
-    ?event(http_outbound,
+    ?event(debug_http_outbound,
         {normalized_response_headers, {norm_header_map, NormHeaderMap}},
         Opts
     ),
@@ -186,7 +186,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
         Key when is_binary(Key) ->
             Msg = http_response_to_httpsig(Status, NormHeaderMap, Body, Opts),
             ?event(
-                http_outbound,
+                debug_http_outbound,
                 {result_is_single_key, {key, Key}, {msg, Msg}},
                 Opts
             ),
@@ -230,7 +230,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
 
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
-    ?event(http_outbound,
+    ?event(debug_http_outbound,
         {result_is_ans104, {headers, Headers}, {body, Body}},
         Opts
     ),
@@ -261,7 +261,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
         outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts)
     end;
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
-    ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
+    ?event(debug_http_outbound, {result_is_httpsig, {body, Body}}, Opts),
     {
         hb_http_client:response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
@@ -302,7 +302,7 @@ route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) -
     % The request is a direct HTTP URL, so we need to split the path into a
     % host and path.
     URI = uri_string:parse(XPath),
-    ?event(http_outbound, {parsed_uri, {uri, {explicit, URI}}}),
+    ?event(debug_http_outbound, {parsed_uri, {uri, {explicit, URI}}}),
     Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
     % We must remove the path and host from the message, because they are not
     % valid for outbound requests. The path is retrieved from the route, and
@@ -328,10 +328,10 @@ route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) -
             Query -> [<<"?", Query/binary>>]
         end,
     Path = iolist_to_binary(PathParts),
-    ?event(http_outbound, {parsed_req, {node, Node}, {method, Method}, {path, Path}}),
+    ?event(debug_http_outbound, {parsed_req, {node, Node}, {method, Method}, {path, Path}}),
     {ok, Method, Node, Path, MsgWithoutMeta, hb_util:deep_merge(Opts, ReqOpts, Opts)};
 route_to_request(M, {ok, Routes}, Opts) ->
-    ?event(http_outbound, {found_routes, {req, M}, {routes, Routes}}),
+    ?event(debug_http_outbound, {found_routes, {req, M}, {routes, Routes}}),
     % The result is a route, so we leave it to `request' to handle it.
     Path = hb_ao:get(<<"path">>, M, <<"/">>, Opts),
     Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
@@ -362,7 +362,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                         Opts
                     ),
                 {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
-                ?event(http, {cookie_lines, CookieLines}),
+                ?event(debug_http, {cookie_lines, CookieLines}),
                 {
                     #{ <<"cookie">> => CookieLines },
                     CookieReset
@@ -411,8 +411,8 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 ),
             Body = hb_maps:get(<<"body">>, FullEncoding, <<>>, Opts),
             Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
-			?event(http, {request_headers, {explicit, {headers, Headers}}}),
-			?event(http, {request_body, {explicit, {body, Body}}}),
+			?event(debug_http, {request_headers, {explicit, {headers, Headers}}}),
+			?event(debug_http, {request_body, {explicit, {body, Body}}}),
             hb_maps:merge(
                 ReqBase,
                 #{ headers => maps:merge(MaybeCookie, Headers), body => Body },
@@ -491,7 +491,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
     EncodedHeaders = hb_private:reset(HeadersWithCors),
-    ?event(http,
+    ?event(debug_http,
         {http_replying,
             {status, {explicit, Status}},
             {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
@@ -511,7 +511,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
       ReplyDuration * 1000000,
       Status
     ),
-    ?event(http, {reply_headers, {explicit, PostStreamReq}}),
+    ?event(debug_http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_server_short,
         {sent,
             {status, Status},
@@ -597,7 +597,7 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
     Codec = accept_to_codec(TABMReq, Message, Opts),
-    ?event(http, {encoding_reply, {codec, Codec}, {message, Message}}),
+    ?event(debug_http, {encoding_reply, {codec, Codec}, {message, Message}}),
     BaseHdrs =
         hb_maps:merge(
             #{
@@ -613,7 +613,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         hb_util:atom(
             hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
         ),
-    ?event(http,
+    ?event(debug_http,
         {encoding_reply,
             {status, Status},
             {codec, Codec},
@@ -847,7 +847,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     error -> default_codec(Opts)
                 end
         end,
-    ?event(http,
+    ?event(debug_http,
         {parsing_req,
             {path, FullPath},
             {query, QueryKeys},
@@ -858,7 +858,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
     ?event({req_to_tabm_singleton, {codec, Codec}}),
     case Codec of
         <<"httpsig@1.0">> ->
-			?event(
+			?event(debug_http,
                 {req_to_tabm_singleton,
                     {request, {explicit, Req},
                     {body, {string, Body}}
@@ -897,7 +897,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             ),
             case ar_tx:verify(TX) of
                 true ->
-                    ?event(tx, {valid_tx_signature, TX}),
+                    ?event(debug_tx, {valid_tx_signature, TX}),
                     StructuredTX =
                         hb_message:convert(
                             TX,
@@ -911,7 +911,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             end;
         Codec ->
             % Assume that the codec stores the encoded message in the `body' field.
-            ?event(http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
+            ?event(debug_http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
             Decoded =
                 hb_message:convert(
                     Body,
@@ -920,7 +920,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     Opts
                 ),
             ReqMessage = hb_maps:merge(PrimitiveMsg, Decoded, Opts),
-            ?event(
+            ?event(debug_http,
                 {verifying_encoded_message,
                     {codec, Codec},
                     {body, {string, Body}},
@@ -951,7 +951,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
             ),
             Opts
         ),
-    ?event(http, {decoded, Decoded}, Opts),
+    ?event(debug_http, {decoded, Decoded}, Opts),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
     case (not ForceSignedRequests) orelse hb_message:verify(Decoded, all, Opts) of
         true ->
@@ -991,7 +991,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
 %% 1. The path in the message
 %% 2. The path in the request URI
 normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
-    ?event({adding_method_and_path_from_request, {explicit, Req}}),
+    ?event(debug_http, {adding_method_and_path_from_request, {explicit, Req}}),
     Method = cowboy_req:method(Req),
     MsgPath =
         hb_maps:get(
