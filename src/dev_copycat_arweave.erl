@@ -9,6 +9,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+-define(TX_CODEC, <<"tx@1.0">>).
+-define(ANS104_CODEC, <<"ans104@1.0">>).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -62,15 +64,15 @@ index_id(ID, Depth, Opts) ->
     end.
 
 payload_bounds(_ID, #{
-    <<"codec-device">> := <<"tx@1.0">>,
+    <<"codec-device">> := ?TX_CODEC,
     <<"start-offset">> := StartOffset,
     <<"length">> := Length
 }, _Opts) ->
     {ok, StartOffset, Length};
 payload_bounds(ID, #{
-    <<"codec-device">> := <<"ans104@1.0">>
+    <<"codec-device">> := ?ANS104_CODEC
 }, Opts) ->
-    Base = #{ <<"device">> => ?ARWEAVE_DEVICE, <<"raw">> => ID },
+    Base = #{ <<"device">> => <<"arweave@2.9">>, <<"raw">> => ID },
     case hb_ao:resolve(
         Base,
         #{ <<"path">> => <<"raw">>, <<"method">> => <<"HEAD">> },
@@ -95,7 +97,7 @@ index_bundle_children(BundleIndex, StartOffset, Depth, Store, Opts) ->
                 hb_store_arweave:write_offset(
                     Store,
                     EncodedID,
-                    <<"ans104@1.0">>,
+                    ?ANS104_CODEC,
                     ItemStartOffset,
                     Size
                 ),
