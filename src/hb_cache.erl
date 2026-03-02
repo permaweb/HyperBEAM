@@ -123,7 +123,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
         end,
     case CacheReadResult of
         {ok, LoadedMsg} ->
-            ?event(caching,
+            ?event(debug_caching,
                 {lazy_loaded,
                     {link, ID},
                     {msg, LoadedMsg},

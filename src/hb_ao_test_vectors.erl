@@ -969,7 +969,7 @@ step_hook_test(InitOpts) ->
                                 #{
                                     <<"step">> =>
                                         fun(_, Req, _) ->
-                                            ?event(ao_core, {step_hook, {self(), Ref}}),
+                                            ?event(debug_ao_core, {step_hook, {self(), Ref}}),
                                             Self ! {step, Ref},
                                             {ok, Req}
                                         end
