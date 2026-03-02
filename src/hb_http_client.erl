@@ -798,17 +798,17 @@ record_duration(Details, Opts) ->
             % First, write to prometheus if it is enabled. Prometheus works
             % only with strings as lists, so we encode the data before granting
             % it.
-            GetFormat = fun
-                (<<"request-category">>) ->
-                    path_to_category(maps:get(<<"request-path">>, Details));
-
-                (Key) -> 
-                    hb_util:list(maps:get(Key, Details)) 
-            end,
+            GetFormat =
+                fun
+                    (<<"request-category">>) ->
+                        path_to_category(maps:get(<<"request-path">>, Details));
+                    (Key) ->
+                        hb_util:list(maps:get(Key, Details))
+                end,
             case application:get_application(prometheus) of
                 undefined -> ok;
                 _ ->
-                    prometheus_histogram:observe(
+                    try prometheus_histogram:observe(
                         http_request_duration_seconds,
                         lists:map(
                             GetFormat,
@@ -820,6 +820,8 @@ record_duration(Details, Opts) ->
                         ),
                         maps:get(<<"duration">>, Details)
                     )
+                    catch _:_ -> ok
+                    end
             end,
             maybe_invoke_monitor(
                 Details#{ <<"path">> => <<"duration">> },
