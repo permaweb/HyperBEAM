@@ -9,6 +9,7 @@
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 -define(MAX_MEMORY, 1_000_000_000). % 1GB
 -define(MAX_EVENT_NAME_LENGTH, 100).
+-define(MAX_PROMETHEUS_WAIT, 300). % ~30s at 100ms intervals
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -182,19 +183,25 @@ find_event_server() ->
 
 server() ->
     await_prometheus_started(),
-    prometheus_counter:declare(
+    ensure_event_counter(),
+    handle_events().
+
+ensure_event_counter() ->
+    try prometheus_counter:declare(
         [
             {name, <<"event">>},
             {help, <<"AO-Core execution events">>},
             {labels, [topic, event]}
-        ]),
-    handle_events().
+        ])
+    catch _:_ -> ok
+    end.
+
 handle_events() ->
     receive
         {increment, TopicBin, EventName, Count} ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
-                    % Print a warning, but do so less frequently the more 
+                    % Print a warning, but do so less frequently the more
                     % overloaded the system is.
                     {memory, MemorySize} = erlang:process_info(self(), memory),
                     case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
@@ -229,19 +236,24 @@ handle_events() ->
             try
                 prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count)
             catch _:_ ->
-                ok
+                ensure_event_counter()
             end,
             handle_events()
     end.
 
-%% @doc Delay the event server until prometheus is started.
+%% @doc Delay the event server until prometheus is started. Messages
+%% accumulate in the mailbox and are processed once handle_events/0 starts.
+%% Gives up after ?MAX_PROMETHEUS_WAIT attempts to avoid unbounded mailbox
+%% growth if Prometheus never comes up.
 await_prometheus_started() ->
-    receive
-        Msg ->
-            case application:get_application(prometheus) of
-                undefined -> await_prometheus_started();
-                _ -> self() ! Msg, ok
-            end
+    await_prometheus_started(?MAX_PROMETHEUS_WAIT).
+await_prometheus_started(0) -> ok;
+await_prometheus_started(Remaining) ->
+    case application:get_application(prometheus) of
+        undefined ->
+            receive after 100 -> ok end,
+            await_prometheus_started(Remaining - 1);
+        _ -> ok
     end.
 
 parse_name(Name) when is_tuple(Name) ->
