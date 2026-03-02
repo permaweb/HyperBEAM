@@ -329,7 +329,7 @@ default_message() ->
                         ?ARWEAVE_BOOTSTRAP_DATA_NODES
                             ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
                     ),
-                <<"parallel">> => 4,
+                <<"parallel">> => 1,
                 <<"responses">> => 1,
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
