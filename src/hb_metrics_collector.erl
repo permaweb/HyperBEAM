@@ -23,7 +23,7 @@ collect_mf(_Registry, Callback) ->
         )
     ),
 
-    SystemLoad = cpu_sup:avg5(),
+    SystemLoad = safe_avg5(),
 
     Callback(
         create_gauge(
@@ -58,5 +58,30 @@ collect_metrics(process_uptime_seconds, Uptime) ->
 %%====================================================================
 %% Private Functions
 %%====================================================================
+
+%% @doc Wrapper around cpu_sup:avg5/0 with a 2-second timeout.
+%% cpu_sup:avg5/0 uses an infinity timeout to os_mon internally;
+%% if the port program stalls, it blocks the Prometheus scrape indefinitely.
+%% On timeout, the worker is killed to avoid leaking blocked processes.
+safe_avg5() ->
+    Ref = make_ref(),
+    Self = self(),
+    {Pid, MonRef} = spawn_monitor(fun() -> Self ! {Ref, catch cpu_sup:avg5()} end),
+    receive
+        {Ref, Load} when is_integer(Load) ->
+            erlang:demonitor(MonRef, [flush]),
+            Load;
+        {Ref, _} ->
+            erlang:demonitor(MonRef, [flush]),
+            0;
+        {'DOWN', MonRef, process, Pid, _} ->
+            0
+    after 2000 ->
+        exit(Pid, kill),
+        erlang:demonitor(MonRef, [flush]),
+        receive {Ref, _} -> ok after 0 -> ok end,
+        0
+    end.
+
 create_gauge(Name, Help, Data) ->
     prometheus_model_helpers:create_mf(Name, Help, gauge, ?MODULE, Data).
