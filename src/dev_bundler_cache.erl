@@ -120,6 +120,9 @@ load_unbundled_items(Opts) ->
         [] -> [];
         List -> List
     end,
+    ?event(bundler_short,
+        {recovering_all_unbundled_items, length(ItemIDs)}
+    ),
     % Filter for unbundled items and load them
     lists:filtermap(
         fun(ItemIDStr) ->
@@ -136,12 +139,18 @@ load_unbundled_items(Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event(bundler_debug, {loaded_unbundled_item,
-                                {id, {explicit, ItemIDStr}}}),
+                            ?event(bundler_short,
+                                {recovered_unbundled_item,
+                                    {id, {string, ItemIDStr}}
+                                }
+                            ),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event(bundler_short, {failed_to_load_item,
-                                {id, {explicit, ItemIDStr}}}),
+                            ?event(bundler_short,
+                                {failed_to_recover_unbundled_item,
+                                    {id, {string, ItemIDStr}}
+                                }
+                            ),
                             false
                     end;
                 _ ->
@@ -171,7 +180,13 @@ load_bundle_states(Opts) ->
                 <<>> -> false; % Empty status, ignore
                 <<"complete">> -> false; % Skip completed bundles
                 Status ->
-                    ?event(bundler_debug, {loaded_tx_state, {id, {explicit, TXID}}, {status, Status}}),
+                    ?event(
+                        bundler_debug,
+                        {loaded_tx_state,
+                            {id, {string, TXID}},
+                            {status, Status}
+                        }
+                    ),
                     {true, {TXID, Status}}
             end
         end,
@@ -204,10 +219,22 @@ load_bundled_items(TXID, Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event(bundler_debug, {loaded_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
+                            ?event(
+                                bundler_debug,
+                                {loaded_tx_item,
+                                    {tx_id, {explicit, TXID}},
+                                    {item_id, {explicit, ItemIDStr}}
+                                }
+                            ),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event(error, {failed_to_load_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
+                            ?event(
+                                error,
+                                {failed_to_load_tx_item,
+                                    {tx_id, {explicit, TXID}},
+                                    {item_id, {explicit, ItemIDStr}}
+                                }
+                            ),
                             false
                     end;
                 _ ->
