@@ -150,7 +150,10 @@ raw_counters() ->
     [].
 -else.
 raw_counters() ->
-    ets:tab2list(prometheus_counter_table).
+    ets:match_object(
+        prometheus_counter_table,
+        {{default, <<"event">>, '_', '_'}, '_', '_'}
+    ).
 -endif.
 
 %% @doc Find the event server, creating it if it doesn't exist. We cache the
