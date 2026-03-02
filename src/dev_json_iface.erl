@@ -424,9 +424,13 @@ tags_to_map(Msg, Opts) ->
     RawTags = hb_maps:get(<<"tags">>, NormMsg, [], Opts),
     TagList =
         [
-            {hb_maps:get(<<"name">>, Tag, Opts), hb_maps:get(<<"value">>, Tag, Opts)}
+            {Name, Value}
         ||
-            Tag <- RawTags
+            Tag <- RawTags,
+            Name <- [hb_maps:get(<<"name">>, Tag, not_found, Opts)],
+            Value <- [hb_maps:get(<<"value">>, Tag, not_found, Opts)],
+            Name =/= not_found,
+            Value =/= not_found
         ],
     hb_maps:from_list(TagList).
 
