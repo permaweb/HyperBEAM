@@ -488,7 +488,7 @@ handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
                 {gun_shutdown_after_down, 
                     {conn_key, ConnKey}, 
                     {protocol, Protocol}, 
-                    {killed_streams, KilledStreams},
+                    {killed_streams, length(KilledStreams)},
                     {reason, Reason}}),
             {noreply, State}
 	end;
