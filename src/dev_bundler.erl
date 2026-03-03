@@ -228,6 +228,44 @@ bundle_count_test() ->
 bundle_size_test() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
+nested_bundle_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = start_mock_gateway(
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
+    ),
+    try
+        ClientOpts = #{},
+        NodeOpts2 = maps:merge(NodeOpts, #{ bundler_max_items => 3 }),
+        Node = hb_http_server:start_node(NodeOpts2#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store()
+        }),
+        %% Upload 3 data items across 4 chunks.
+        Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        Item2 = new_data_item(2, ?DATA_CHUNK_SIZE),
+        ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
+        Item3 = new_data_item(3, floor(0.25 * ?DATA_CHUNK_SIZE)),
+        ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        %% Wait for expected chunks
+        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle),
+        ?assertEqual(4, length(Proofs)),
+        assert_bundle(
+            Node,
+            [Item1, Item2, Item3], Anchor, Price, hd(TXs), Proofs, ClientOpts),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        stop_test_servers(ServerHandle)
+    end.
+
 price_error_test() ->
     test_api_error(#{
         price => {500, <<"error">>},

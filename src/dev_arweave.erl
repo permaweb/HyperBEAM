@@ -269,6 +269,8 @@ get_raw(Base, Request, Opts) ->
                 <<"content-length">> := FullContentLength
             }
         } ->
+        ?event(debug_raw, {raw_header,
+            {header, Header}}),
         case parse_range_params(Request, Opts) of
             {ok, StartRange, EndRange} ->
                 RangeLength = (EndRange - StartRange) + 1,
@@ -380,6 +382,10 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
+    ?event(arweave_debug, {fetch_chunk_range,
+        {offset, Offset},
+        {end_offset, EndOffset},
+        {size, Length}}),
     case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
           EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
         {true, true} ->
@@ -407,11 +413,17 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
             Sorted = sort_chunks(ChunkInfos),
             {ok, Binaries} = assemble_chunks(Sorted, Offset),
             ExpectedLength = EndOffset - Offset + 1,
-            case iolist_size(Binaries) < ExpectedLength of
+            BinarySize = iolist_size(Binaries),
+            case BinarySize < ExpectedLength of
                 false ->
                     {ok, Binaries};
                 true ->
-                    ExtraOffset = lists:last(Offsets) + ?DATA_CHUNK_SIZE,
+                    ExtraOffset = min(
+                        lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
+                    ?event(arweave_debug, {fetching_extra_chunk,
+                        {binary_size, BinarySize},
+                        {expected_length, ExpectedLength},
+                        {extra_offset, ExtraOffset}}),
                     case fetch_and_collect([ExtraOffset], Opts) of
                         {ok, ExtraInfos} ->
                             assemble_chunks(Sorted ++ ExtraInfos, Offset);
@@ -572,7 +584,7 @@ assemble_chunks(ChunkInfos, Offset) ->
                     % The first chunk may start before the requested offset;
                     % trim the leading bytes to start exactly at Offset.
                     Skip = Offset - ChunkStart,
-                    ?event(debug_test, {assemble_chunks,
+                    ?event(arweave_debug, {assemble_chunks,
                         {skip, Skip},
                         {chunk_start, ChunkStart},
                         {offset, Offset},
@@ -581,6 +593,11 @@ assemble_chunks(ChunkInfos, Offset) ->
                     }),
                     binary:part(Data, Skip, byte_size(Data) - Skip);
                 false ->
+                    ?event(arweave_debug, {assemble_chunks,
+                        {chunk_start, ChunkStart},
+                        {offset, Offset},
+                        {byte_size, byte_size(Data)}
+                    }),
                     Data
             end
         end,
@@ -1788,9 +1805,8 @@ get_ed25519_item_test() ->
     ).
 
 %% @doc this test fails if the chunks are queried with
-%% the `x-bucket-based-offset' header set. I believe it is because
-%% bucket-based offset should only be used when querying an L1 TX
-bucket_based_offset_test() ->
+%% the `x-bucket-based-offset' header set.
+bucket_based_offset_fail_test() ->
     TXID = <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
     DataItemID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
     Opts = setup_arweave_index_opts([TXID]),
@@ -1801,6 +1817,128 @@ bucket_based_offset_test() ->
         116247,
         <<"4BN8AQEQLpTjresTntyrjJ94eFS2TaMM21MnuHGXtJc">>,
         Opts
+    ).
+
+%% @doc this dataitem needs the 'x-bucket-based-offset' header set OR
+%% special handling.
+bucket_based_offset_pass_test() ->
+    DataItemID = <<"cTI07T1OrF0KZEqPmZji1VTdbeKJG7kMAVlLu7KQvyw">>,
+    Opts = setup_arweave_index_opts([]),
+    assert_chunk_range(
+        <<"ans104@1.0">>,
+        DataItemID,
+        384600234780716,
+        856885,
+        <<"EVLmVPkpWZjcDtw_zX2r18O7GC85P8VmuaKNy-sDRrw">>,
+        Opts
+    ).
+
+reassemble_bundle1_test() ->
+    assert_bundle_tx(<<"c1-FkhQd-Ul-VpIMR5Vs77lK__BlzHzena2zgNh_hME">>).
+
+reassemble_bundle2_test() ->
+    assert_bundle_tx(<<"OVjj52NvyIys7u84Rv1uqRG2vswlF95QDVPSmsmlwLk">>).
+
+%% @doc This asserts that a bundle is correctly represented in the weave.
+%% It queries the L1 TX chunk range, reads the chunks, and then
+%% reassembles the bundle and nested items. This is also useful tool 
+%% debugging tool to check that a bundle is present in the weave.
+assert_bundle_tx(TXID) ->
+    application:ensure_all_started(hb),
+    Opts = #{},
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    StartOffset = EndOffset - Size,
+    ?event(debug_test, {offset_info,
+        {tx, TXID}, {start_offset, StartOffset}, {size, Size}}),
+    assert_bundle_items(TXID, StartOffset, Size, Opts).
+
+%% @doc Download, decode, and verify all items in a bundle TX. Fetches the
+%% chunk range and TX header from the arweave@2.9 device, parses the bundle
+%% header, then verifies and logs each L1 item. Recurses into nested bundles.
+assert_bundle_items(TXID, StartOffset, Size, Opts) ->
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => StartOffset + 1,
+            <<"length">> => Size
+        },
+        Opts
+    ),
+    ?event(debug_test, {chunk_data_size, byte_size(Data)}),
+    {ok, TXHeader} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => TXID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ),
+    ?event(debug_test, {l1_tx_header, TXHeader}),
+    {ItemsBin, BundleHeader} = ar_bundles:decode_bundle_header(Data),
+    lists:foldl(
+        fun({ID, ItemSize}, Offset) ->
+            ItemBin = binary:part(ItemsBin, Offset, ItemSize),
+            Item = ar_bundles:deserialize(ItemBin),
+            ?assert(ar_bundles:verify_item(Item)),
+            ?event(debug_test, {l2_bundle,
+                {id, {explicit, hb_util:encode(ID)}},
+                {size, ItemSize},
+                {tags, Item#tx.tags},
+                {data_size, Item#tx.data_size},
+                {format, Item#tx.format},
+                {signature_type, Item#tx.signature_type}
+            }),
+            case dev_arweave_common:type(Item) of
+                list -> print_nested_items(Item#tx.data);
+                _ -> ok
+            end,
+            Offset + ItemSize
+        end,
+        0,
+        BundleHeader
+    ),
+    ok.
+
+print_nested_items(DataMap) when is_map(DataMap) ->
+    maps:foreach(
+        fun(Key, Child) ->
+            ?assert(ar_bundles:verify_item(Child)),
+            ?event(debug_test, {l3_nested_item,
+                {key, Key},
+                {id, {explicit, hb_util:encode(ar_bundles:id(Child, unsigned))}},
+                {tags, Child#tx.tags},
+                {data_size, Child#tx.data_size},
+                {format, Child#tx.format},
+                {signature_type, Child#tx.signature_type}
+            })
+        end,
+        DataMap
+    );
+print_nested_items(Items) when is_list(Items) ->
+    lists:foreach(
+        fun(Child) ->
+            ?assert(ar_bundles:verify_item(Child)),
+            ?event(debug_test, {l3_nested_item,
+                {id, {explicit, hb_util:encode(ar_bundles:id(Child, unsigned))}},
+                {tags, Child#tx.tags},
+                {data_size, Child#tx.data_size},
+                {format, Child#tx.format},
+                {signature_type, Child#tx.signature_type}
+            })
+        end,
+        Items
     ).
 
 % large_tx_test() ->
