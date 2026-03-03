@@ -97,7 +97,8 @@ value_path(Other, Opts) ->
 %% @doc Write all keys in the base message to the match index. Expects the `Base'
 %% message to already be converted to a TABM.
 write(IDs, Base, Opts) ->
-    case store(Opts) of
+    Store = store(Opts),
+    case Store of
         [] -> {skip, <<"No store configured for match index.">>};
         Store ->
             IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
@@ -113,7 +114,9 @@ write(IDs, Base, Opts) ->
                                 {writing_reverse_index, {address, Address},
                                 Opts
                             }),
-                            hb_store:write(Store, Address, <<"">>)
+                            % TODO: Optimize this to avoid calling hb_message:id for each ID.
+                            UID = hb_message:id(Base, uncommitted, Opts),
+                            hb_store:write(Store, Address, UID)
                         end,
                         IDs
                     )
@@ -128,14 +131,28 @@ match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
 match(Key, Base, Opts) ->
     Store = store(Opts),
     {ok, Value} = hb_maps:find(Key, Base, Opts),
-    case hb_store:list(
-        Store,
+    Address =
         address(
             hb_ao:normalize_key(Key),
             value_path(Value, Opts)
-        )
-    ) of
-        {ok, Messages} -> {ok, Messages};
+        ),
+    ?event(match1, {match, {key, Key}, {value, Value}, {base, Base}, {address, Address}}),
+    ListAddress =
+        hb_store:list(
+            Store,
+            Address
+        ),
+    ?event(match1, {match, {list_address, ListAddress}}),
+    case ListAddress of
+        {ok, M} -> 
+            Messages = 
+                lists:map(
+                    fun(ID) ->
+                        {ID, hb_util:ok(hb_store:read(Store, <<Address/binary, "/", ID/binary>>))}
+                    end,
+                    M
+                ),
+            {ok, Messages};
         _ -> {error, not_found}
     end.
 

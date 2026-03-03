@@ -261,7 +261,7 @@ default_query([]) ->
         " } pageInfo { hasNextPage } } }">>};
 default_query(Parts) ->
     CombinedFilters = iolist_to_binary(lists:join(<<", ">>, Parts)),
-    {ok, <<"query($after: String) { transactions(after: $after, ", 
+    {ok, <<"query($after: String) { transactions(after: $after, sort: HEIGHT_ASC, ", 
             CombinedFilters/binary, 
             ") { edges { ", (hb_gateway_client:item_spec())/binary, 
         " } pageInfo { hasNextPage } } }">>}.

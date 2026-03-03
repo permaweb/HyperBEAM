@@ -45,7 +45,14 @@ info(_Opts) ->
 
 %% @doc Execute the query via GraphQL.
 graphql(Req, Base, Opts) ->
-    dev_query_graphql:handle(Req, Base, Opts).
+    {HandleMicroSecs, Res} = 
+        timer:tc(
+            fun() ->
+                dev_query_graphql:handle(Req, Base, Opts)
+            end
+        ),
+    ?event(time, {graphql_handle, {microsecs, HandleMicroSecs}}),
+    Res.
 
 %% @doc Return whether a GraphQL esponse in a message has transaction results.
 %% This key is used in HB's gateway client multirequest configuration to

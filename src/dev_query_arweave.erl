@@ -186,13 +186,16 @@ match_args(Args, Opts) when is_map(Args) ->
 match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
+    Tail = tl(Results),
+    Head = hd(Results),
+    ResolvedIDs = resolve_ids(Head, Opts),
     Matches =
         lists:foldl(
             fun(Result, Acc) ->
                 hb_util:list_with(resolve_ids(Result, Opts), Acc)
             end,
-            resolve_ids(hd(Results), Opts),
-            tl(Results)
+            ResolvedIDs,
+            Tail
         ),
     hb_util:unique(
         lists:flatten(
@@ -242,7 +245,8 @@ match(<<"id">>, ID, _Opts) ->
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
-    hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+    Template = dev_query_graphql:keys_to_template(Tags),
+    hb_cache:match(Template, Opts);
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->
@@ -299,7 +303,7 @@ all_ids(ID, Opts) ->
     case hb_store:list(Store, << ID/binary, "/commitments">>) of
         {ok, []} -> [ID];
         {ok, CommitmentIDs} -> CommitmentIDs;
-        _ -> [ID]
+        _ -> []
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be
@@ -308,15 +312,5 @@ scope(Opts) ->
     Scope = hb_opts:get(query_arweave_scope, [local], Opts),
     hb_store:scope(Opts, Scope).
 
-%% @doc Resolve a list of IDs to their store paths, using the stores provided.
-resolve_ids(IDs, Opts) ->
-    Scoped = scope(Opts),
-    lists:map(
-        fun(ID) ->
-            case hb_cache:read(ID, Opts) of
-                {ok, Msg} -> hb_message:id(Msg, uncommitted, Scoped);
-                not_found -> ID
-            end
-        end,
-        IDs
-    ).
+%% @doc Resolve a list of IDs to their unsigned ids, using the ids provided.
+resolve_ids(IDs, _Opts) -> lists:map(fun({_ID, UID}) -> UID end, IDs).

@@ -7,7 +7,7 @@
 %%% Each source is implemented as a separate engine, with `dev_copycat_[ENGINE]'
 %%% as the module name.
 -module(dev_copycat).
--export([graphql/3, arweave/3]).
+-export([graphql/3, arweave/3, scheduler/3]).
 
 %% @doc Fetch data from a GraphQL endpoint for replication. See 
 %% `dev_copycat_graphql' for implementation details.
@@ -18,3 +18,8 @@ graphql(Base, Request, Opts) ->
 %% for implementation details.
 arweave(Base, Request, Opts) ->
     dev_copycat_arweave:arweave(Base, Request, Opts).
+
+%% @doc Fetch assignments from a legacy AO scheduler for replication. See
+%% `dev_copycat_scheduler' for implementation details.
+scheduler(Base, Request, Opts) ->
+    dev_copycat_scheduler:scheduler(Base, Request, Opts).

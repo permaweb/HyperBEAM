@@ -23,7 +23,8 @@
         <<"tags">>,
         <<"name">>,
         <<"value">>,
-        <<"cursor">>
+        <<"cursor">>,
+        <<"count">>
     ]
 ).
 
@@ -102,7 +103,7 @@ handle(_Base, RawReq, Opts) ->
         ),
     ?event(
         {graphql_run_called,
-            {query, Query},
+            {query, {string, Query}},
             {operation, OpName},
             {variables, Vars}
         }
@@ -132,8 +133,10 @@ handle(_Base, RawReq, Opts) ->
                         opts => Opts
                     },
                 ?event(graphql_context_created),
-                Response = graphql:execute(Ctx, AST2),
+                {ExecuteMicroSecs, Response} = timer:tc(fun() -> graphql:execute(Ctx, AST2) end),
+                ?event(time, {graphql_execute, {microsecs, ExecuteMicroSecs}}),
                 ?event(graphql_executed),
+                ?event(graphql_response, {response, {explicit, Response}}),
                 JSON = hb_json:encode(Response),
                 ?event({graphql_response, {bytes, byte_size(JSON)}}),
                 {ok,
@@ -154,8 +157,8 @@ handle(_Base, RawReq, Opts) ->
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
 execute(#{opts := Opts}, Obj, Field, Args) ->
-    ?event({graphql_query, {object, Obj}, {field, Field}, {args, Args}}),
-    case lists:member(Field, ?MESSAGE_QUERY_KEYS) of
+    IsMember = lists:member(Field, ?MESSAGE_QUERY_KEYS),
+    case IsMember of
         true -> message_query(Obj, Field, Args, Opts);
         false -> dev_query_arweave:query(Obj, Field, Args, Opts)
     end.
@@ -214,8 +217,14 @@ message_query(Msg, Field, _Args, Opts) when Field =:= <<"keys">>; Field =:= <<"t
     Res;
 message_query(Msg, Field, _Args, Opts)
         when Field =:= <<"name">> orelse Field =:= <<"value">> ->
-    ?event({message_query_name_or_value, {object, Msg}, {field, Field}}),
-    {ok, hb_maps:get(Field, Msg, null, Opts)};
+    Value = 
+        case hb_maps:get(Field, Msg, null, Opts) of
+            % TODO: Support map values. (device-stack/1, device-stack/2)
+            V when is_map(V) -> <<"map not supported">>;
+            V -> V
+        end,
+    ?event({message_query_name_or_value, {object, Msg}, {field, Field}, {value, Value}}),
+    {ok, Value};
 message_query(Msg = #{ <<"independent_hash">> := _ }, <<"id">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"independent_hash">>, Msg, null, Opts)};
 message_query(Msg, <<"id">>, _Args, Opts) ->
@@ -223,15 +232,23 @@ message_query(Msg, <<"id">>, _Args, Opts) ->
     {ok, hb_message:id(Msg, all, Opts)};
 message_query(_Msg, <<"cursor">>, _Args, _Opts) ->
     {ok, <<"">>};
+message_query(Msg, <<"count">>, _Args, Opts) ->
+    {
+        ok,
+        case is_list(Msg) of 
+            true -> length(Msg);
+            false -> <<"Not a list.">>
+        end
+    };
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
 
 keys_to_template(Keys) ->
     maps:from_list(lists:foldl(
         fun(#{<<"name">> := Name, <<"value">> := Value}, Acc) ->
-            [{Name, Value} | Acc];
+            [{string:lowercase(Name), Value} | Acc];
         (#{<<"name">> := Name, <<"values">> := [Value]}, Acc) ->
-            [{Name, Value} | Acc];
+            [{string:lowercase(Name), Value} | Acc];
         (#{<<"name">> := Name, <<"values">> := Values}, _Acc) ->
             throw(
                 {multivalue_tag_search_not_supported, #{
