@@ -25,11 +25,13 @@ A successful call returns an **HTTP 200 OK** response from `~location@1.0` in th
 The published transaction should include tags similar to the following:
 
 ```
-Data-Protocol: ao
-Variant: ao.N.1
-Type: Scheduler-Location
-Url: https://your-node-domain.example.com
+data-Protocol: ao
+variant: ao.N.1
+type: location
+url: https://your-node-domain.example.com
 nonce: <nonce-value>
+time-to-live:  TTL
+codec-device: Codec
 ```
 
-> **Note:** The `Url` field should point to your node's publicly accessible address (for example, `https://push.forward.computer`). The `nonce` value is generated automatically.
+> **Note:** The `url` field should point to your node's publicly accessible address (for example, `https://push.forward.computer`). The `nonce` value is generated automatically.
