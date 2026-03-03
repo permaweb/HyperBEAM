@@ -281,7 +281,13 @@ matching_commitments(Field, Value, Opts) when is_binary(Value) ->
                     {ids, IDs}
                 }
             ),
-            lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
+            lists:map(
+                fun
+                ({ID, _}) -> commitment_id_to_base_id(ID, Opts);
+                (ID) -> commitment_id_to_base_id(ID, Opts) 
+                end, 
+                IDs
+            );
         not_found -> not_found
     end.
 
