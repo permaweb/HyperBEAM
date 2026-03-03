@@ -11,6 +11,9 @@
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(TX_CODEC, <<"tx@1.0">>).
 -define(ANS104_CODEC, <<"ans104@1.0">>).
+-define(DEPTH_L1_OFFSETS, 1).
+-define(DEPTH_IMMEDIATE_CHILDREN, 2).
+-define(DEPTH_RECURSION_CAP, 4).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -20,17 +23,28 @@
 arweave(_Base, Request, Opts) ->
     case hb_maps:find(<<"id">>, Request, Opts) of
         {ok, ID} ->
-            Depth = hb_util:int(hb_maps:get(<<"depth">>, Request, <<"1">>, Opts)),
+            Depth = request_depth(Request, <<"1">>, Opts),
             index_id(ID, Depth, Opts);
         error ->
             {From, To} = parse_range(Request, Opts),
+            Depth = request_depth(Request, hb_util:bin(?DEPTH_IMMEDIATE_CHILDREN), Opts),
+            WriteOpts = Opts#{ arweave_index_depth => Depth },
             case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-                <<"write">>  -> fetch_blocks(Request, From, To, Opts);
+                <<"write">>  -> fetch_blocks(Request, From, To, WriteOpts);
                 <<"list">>   -> list_index(From, To, Opts);
                 Mode ->
                     {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
             end
     end.
+
+request_depth(Request, Default, Opts) ->
+    erlang:min(
+        ?DEPTH_RECURSION_CAP,
+        erlang:max(
+            ?DEPTH_L1_OFFSETS,
+            hb_util:int(hb_maps:get(<<"depth">>, Request, Default, Opts))
+        )
+    ).
 
 index_id(_ID, Depth, _Opts) when Depth =< 0 ->
     {ok, 0};
@@ -373,6 +387,7 @@ parallel_map(Items, Fun, Opts) ->
 process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
+    IndexDepth = hb_opts:get(arweave_index_depth, ?DEPTH_IMMEDIATE_CHILDREN, Opts),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
@@ -403,19 +418,35 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                 TXEndOffset, TX#tx.data_size, Opts
             ),
             case BundleRes of
+                {ok, {_BundleIndex, _HeaderSize}} when IndexDepth =< ?DEPTH_L1_OFFSETS ->
+                    #{items_count => 0, bundle_count => 1, skipped_count => 0};
                 {ok, {BundleIndex, HeaderSize}} ->
                     % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                                EncodedID = hb_util:encode(ItemID),
                                 hb_store_arweave:write_offset(
                                     IndexStore,
-                                    hb_util:encode(ItemID),
+                                    EncodedID,
                                     <<"ans104@1.0">>,
                                     ItemStartOffset,
                                     Size
                                 ),
-                                {ItemStartOffset + Size, ItemsCountAcc + 1}
+                                Descendants =
+                                    case IndexDepth > ?DEPTH_IMMEDIATE_CHILDREN of
+                                        true ->
+                                            case index_id(
+                                                EncodedID,
+                                                IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
+                                                Opts
+                                            ) of
+                                                {ok, DescendantCount} -> DescendantCount;
+                                                _ -> 0
+                                            end;
+                                        false -> 0
+                                    end,
+                                {ItemStartOffset + Size, ItemsCountAcc + 1 + Descendants}
                             end,
                             {TXStartOffset + HeaderSize, 0},
                             BundleIndex
