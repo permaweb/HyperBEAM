@@ -23,7 +23,13 @@
 setup_conn(Opts) ->
     ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
     ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
-    ?event({conn, {pool_read_num, ConnPoolReadSize}, {pool_write_num, ConnPoolWriteSize}}),
+    ?event(
+        connection_pool,
+        {conn,
+            {pool_read_num, ConnPoolReadSize},
+            {pool_write_num, ConnPoolWriteSize}
+        }
+    ),
     persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
 
 start_link(Opts) ->
