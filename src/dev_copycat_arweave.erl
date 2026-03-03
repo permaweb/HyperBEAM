@@ -157,25 +157,27 @@ fetch_blocks(Req, Current, To, Opts) ->
     fetch_blocks_parallel(Req, Current, To, Opts).
 
 fetch_blocks_parallel(Req, From, To, Opts) ->
-    MaxWorkers = max(1, hb_opts:get(arweave_block_workers, 3, Opts)),
-    Failed = fetch_blocks_batch(From, To, MaxWorkers, Opts),
-    ?event(copycat_short,
-        {arweave_block_indexing_completed,
-            {range, {From, To}},
-            {failed_blocks, length(Failed)},
-            {initial_request, Req}
-        }
-    ),
-    case Failed of
-        [] -> ok;
-        _ ->
-            ?event(copycat_short,
-                {arweave_block_failures,
-                    {heights, Failed},
-                    {range, {From, To}}
-                }
-            )
-    end,
+    spawn(fun() ->
+        MaxWorkers = max(1, hb_opts:get(arweave_block_workers, 3, Opts)),
+        Failed = fetch_blocks_batch(From, To, MaxWorkers, Opts),
+        ?event(copycat_short,
+            {arweave_block_indexing_completed,
+                {range, {From, To}},
+                {failed_blocks, length(Failed)},
+                {initial_request, Req}
+            }
+        ),
+        case Failed of
+            [] -> ok;
+            _ ->
+                ?event(copycat_short,
+                    {arweave_block_failures,
+                        {heights, Failed},
+                        {range, {From, To}}
+                    }
+                )
+        end
+    end),
     {ok, To}.
 
 fetch_blocks_batch(Current, To, _MaxWorkers, _Opts) when Current < To ->
