@@ -197,7 +197,7 @@ new_server(RawNodeMsg) ->
                 % Attempt to start the prometheus application, if possible.
                 try
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
-                    prometheus_registry:register_collectors([hb_metrics_collector, prometheus_ranch_collector]),
+                    prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
                         metrics_callback =>
                             fun prometheus_cowboy2_instrumenter:observe/1,
