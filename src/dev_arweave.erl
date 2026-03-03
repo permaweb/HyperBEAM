@@ -83,7 +83,7 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
             CacheRes = hb_cache:write(Request, Opts),
             case CacheRes of
                 {ok, _} ->
-                    ?event(arweave_debug, {tx_cached, {msg, Request}, {status, ok}});
+                    ?event(debug_arweave, {tx_cached, {msg, Request}, {status, ok}});
                 _ ->
                     ?event(error, {tx_failed_to_cache, {msg, Request}, CacheRes})
             end;
@@ -382,7 +382,7 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
-    ?event(arweave_debug, {fetch_chunk_range,
+    ?event(debug_arweave, {fetch_chunk_range,
         {offset, Offset},
         {end_offset, EndOffset},
         {size, Length}}),
@@ -420,7 +420,7 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
                 true ->
                     ExtraOffset = min(
                         lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(arweave_debug, {fetching_extra_chunk,
+                    ?event(debug_arweave, {fetching_extra_chunk,
                         {binary_size, BinarySize},
                         {expected_length, ExpectedLength},
                         {extra_offset, ExtraOffset}}),
@@ -457,7 +457,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             % be needed. We have yet to find an L1 TX that is chunked in such
             % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(arweave_debug,
+            ?event(debug_arweave,
                 {fill_gaps, 
                     {offset, Offset},
                     {end_offset, EndOffset},
@@ -476,7 +476,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
                     {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
-                    ?event(arweave_debug, {fill_gaps, NewInfos}),
+                    ?event(debug_arweave, {fill_gaps, NewInfos}),
                     fill_gaps(
                         Sorted ++ NewInfos,
                         Offset, EndOffset, Opts
@@ -503,7 +503,7 @@ generate_offsets(Start, End, Step) ->
 
 generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets = lists:reverse(Acc),
-    ?event(arweave_debug, {fetch_chunk_offsets, {offsets, Offsets}}),
+    ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
     Offsets;
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
@@ -519,7 +519,7 @@ collect_chunks([{ok, JSON} | Rest], Acc) ->
     Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
     AbsStart = AbsEnd - byte_size(Chunk) + 1,
-    ?event(arweave_debug, 
+    ?event(debug_arweave, 
         {collect_chunks,
             {abs_start, AbsStart}, 
             {abs_end, AbsEnd},
@@ -584,7 +584,7 @@ assemble_chunks(ChunkInfos, Offset) ->
                     % The first chunk may start before the requested offset;
                     % trim the leading bytes to start exactly at Offset.
                     Skip = Offset - ChunkStart,
-                    ?event(arweave_debug, {assemble_chunks,
+                    ?event(debug_arweave, {assemble_chunks,
                         {skip, Skip},
                         {chunk_start, ChunkStart},
                         {offset, Offset},
@@ -593,7 +593,7 @@ assemble_chunks(ChunkInfos, Offset) ->
                     }),
                     binary:part(Data, Skip, byte_size(Data) - Skip);
                 false ->
-                    ?event(arweave_debug, {assemble_chunks,
+                    ?event(debug_arweave, {assemble_chunks,
                         {chunk_start, ChunkStart},
                         {offset, Offset},
                         {byte_size, byte_size(Data)}
@@ -729,7 +729,7 @@ request(Method, Path, Opts) ->
 request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
-    ?event(arweave_debug, {request,
+    ?event(debug_arweave, {request,
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
@@ -792,7 +792,7 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-    ?event(arweave_debug,
+    ?event(debug_arweave,
         {arweave_tx_response,
             {path, {explicit, Path}},
             {raw_body, {explicit, Body}},

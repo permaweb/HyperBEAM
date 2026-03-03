@@ -81,6 +81,8 @@ increment(ao_subresolution, _Message, _Opts, _Count) -> ignored;
 increment(signature_base, _Message, _Opts, _Count) -> ignored;
 increment(id_base, _Message, _Opts, _Count) -> ignored;
 increment(parsing, _Message, _Opts, _Count) -> ignored;
+%% Metric being tracked by Prometheus elsewhere
+increment(http_client_short, _Message, _Opts, _Count) -> ignored;
 increment(Topic, Message, _Opts, Count) ->
     case parse_name(Topic) of
         no_event_name -> ignored;

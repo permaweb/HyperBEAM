@@ -111,7 +111,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     Duration = EndTime - StartTime,
     case Response of
         {_ErlStatus, Status, Headers, Body} ->
-            ?event(http_outbound,
+            ?event(debug_http_outbound,
                 {
                     http_response,
                     {req, Req},

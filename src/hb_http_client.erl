@@ -540,7 +540,7 @@ create_new_connection(ConnKey, Args, From, State) ->
 
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
-    ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
+    ?event(debug_http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
         #{
             http_opts =>
@@ -636,7 +636,7 @@ do_gun_request(PID, Args, Opts) ->
     Headers = HeadersWithoutCookie ++ CookieHeaders,
 	Body = hb_maps:get(body, Args, <<>>, Opts),
     ?event(
-        http_client,
+        debug_http_client,
         {gun_request,
             {method, Method},
             {path, Path},
