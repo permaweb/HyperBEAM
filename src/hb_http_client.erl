@@ -459,7 +459,7 @@ handle_info({gun_error, PID, Reason}, State) ->
 			{noreply, State}
 	end;
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
+handle_info({gun_down, PID, Protocol, Reason, KilledStreams}, State) ->
 	case ets:lookup(?CONN_STATUS_ETS, PID) of
 		[] ->
 			?event(warning,
@@ -484,7 +484,12 @@ handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
 					ok
 			end,
 			gun:shutdown(PID),
-            ?event(http_outbound, {gun_shutdown_after_down, {conn_key, ConnKey}, {protocol, Protocol}}),
+            ?event(http_outbound, 
+                {gun_shutdown_after_down, 
+                    {conn_key, ConnKey}, 
+                    {protocol, Protocol}, 
+                    {killed_streams, KilledStreams},
+                    {reason, Reason}}),
             {noreply, State}
 	end;
 
@@ -943,6 +948,8 @@ get_status_class({error, {stream_error, {closed, {error, einval}}}}) ->
     <<"closed-einval">>;
 get_status_class({error, {down, shutdown}}) ->
     <<"down-shutdown">>;
+get_status_class({error, {down, normal}}) ->
+    <<"down-normal">>;
 get_status_class({error, {stream_error, closed}}) ->
     <<"stream-closed">>;
 get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->

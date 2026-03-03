@@ -381,7 +381,7 @@ handle_request(RawReq, Body, ServerID) ->
     put(server_id, ServerID),
     % The request is of normal AO-Core form, so we parse it and invoke
     % the meta@1.0 device to handle it.
-    ?event(http,
+    ?event(debug_http,
         {
             http_inbound,
             {cowboy_req, {explicit, Req}, {body, {string, Body}}}
