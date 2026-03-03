@@ -138,7 +138,7 @@ resolve(Base, Path, Opts) when not is_map(Path) ->
 resolve(Base, Req, Opts) ->
     PathParts = hb_path:from_message(request, Req, Opts),
     ?event(
-        ao_core,
+        debug_ao_core,
         {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}
     ),
     MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
