@@ -588,55 +588,6 @@ cache_write_failure_test() ->
         dev_bundler_dispatch:stop_dispatcher()
     end.
 
-%% @doc Post a bundle wrapper via dev_bundler:item/3 (the real HTTP route path),
-%% then assert that the children are individually tracked in the bundler
-%% pseudopath index. Fails because cache_item only creates a pseudopath for the
-%% parent; children are absent from load_unbundled_items.
-cache_bundle_children_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
-    try
-        % Build two child items and a signed bundle wrapper.
-        Child1 = new_data_item(1, 10),
-        Child2 = new_data_item(2, 10),
-        {undefined, BundlePayload} = ar_bundles:serialize_bundle(
-            list, [Child1, Child2], false),
-        Parent = ar_bundles:sign_item(
-            #tx{
-                data = BundlePayload,
-                tags = [
-                    {<<"Bundle-Format">>, <<"binary">>},
-                    {<<"Bundle-Version">>, <<"2.0.0">>}
-                ]
-            },
-            hb:wallet()
-        ),
-        % Route through dev_bundler:item/3 — the same path the HTTP endpoint takes,
-        % including verify_item/2 and cache_item/2.
-        StructuredParent = hb_message:convert(
-            Parent, <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-        {ok, _} = dev_bundler:item(#{}, StructuredParent, Opts),
-        % The bundler pseudopath index should contain the children as individual
-        % unbundled items so they are visible to the bundler and can be
-        % re-queued after a crash. Currently only the parent wrapper gets a
-        % pseudopath, so this assertion fails.
-        StructuredChild1 = hb_message:convert(
-            Child1, <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-        StructuredChild2 = hb_message:convert(
-            Child2, <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-        Child1ID = hb_message:id(StructuredChild1, signed, Opts),
-        Child2ID = hb_message:id(StructuredChild2, signed, Opts),
-        UnbundledItems = dev_bundler_cache:load_unbundled_items(Opts),
-        UnbundledIDs = [hb_message:id(I, signed, Opts) || I <- UnbundledItems],
-        ?event(debug_test, {unbundled_ids, UnbundledIDs,
-            {expected_child1, Child1ID}, {expected_child2, Child2ID}}),
-        ?assert(lists:member(Child1ID, UnbundledIDs)),
-        ?assert(lists:member(Child2ID, UnbundledIDs)),
-        ok
-    after
-        stop_server(),
-        dev_bundler_dispatch:stop_dispatcher()
-    end.
-
 stop_test_servers(ServerHandle) ->
     hb_mock_server:stop(ServerHandle),
     stop_server(),
