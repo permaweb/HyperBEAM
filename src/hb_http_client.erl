@@ -535,7 +535,7 @@ terminate(Reason, _State) ->
 %% @doc Create a new connection and store it in ETS.
 create_new_connection(ConnKey, Args, From, State) ->
     MergedOpts = hb_maps:merge(State#state.opts, hb_maps:get(opts, Args, #{}), #{}),
-    {ok, PID} = open_connection(Args, MergedOpts),
+    {ok, PID} = open_connection(Args, ConnKey, MergedOpts),
     MonitorRef = monitor(process, PID),
     %% Store connection in ETS
     ets:insert(?CONNECTIONS_ETS, {ConnKey, PID}),
@@ -543,7 +543,7 @@ create_new_connection(ConnKey, Args, From, State) ->
     ets:insert(?CONN_STATUS_ETS, {PID, {connecting, [{From, Args}]}, MonitorRef, ConnKey}),
     {reply, {ok, PID}, State}.
 
-open_connection(#{ peer := Peer }, Opts) ->
+open_connection(#{ peer := Peer }, ConnKey, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
     ?event(debug_http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     KeepAlive = hb_opts:get(
@@ -585,6 +585,7 @@ open_connection(#{ peer := Peer }, Opts) ->
     ?event(http_outbound,
         {gun_open,
             {host, Host},
+            {conn_key, ConnKey},
             {port, Port},
             {protocol, Proto},
             {transport, Transport}
