@@ -90,11 +90,12 @@ read_offset(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, ID) ->
+read(StoreOpts, ID) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
         not_found -> do_read(StoreOpts, ID)
-    end.
+    end;
+read(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the provided Arweave index store
 %% as a source of offsets. After offsets have been found, the data is loaded

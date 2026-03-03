@@ -52,7 +52,7 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
 %% @returns {ok, Msg} on success or not_found if the key is missing.
-read(Opts = #{ <<"node">> := Node }, Key) ->
+read(Opts = #{ <<"node">> := Node }, Key) when ?IS_ID(Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
     HTTPRes =
         hb_http:get(
@@ -70,7 +70,10 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
-    end.
+    end;
+read(_, Key) ->
+    ?event(store_remote_node, {ignoring_non_id, {key, Key}}),
+    not_found.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
