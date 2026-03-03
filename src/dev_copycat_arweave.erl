@@ -152,7 +152,72 @@ fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
 fetch_blocks(_Req, Current, undefined, _Opts) when Current < 0 ->
     {ok, 0};
 fetch_blocks(Req, Current, undefined, Opts) ->
-    BlockRes = fetch_block_header(Current, Opts),
+    fetch_blocks(Req, Current, undefined, none, Opts);
+fetch_blocks(Req, Current, To, Opts) ->
+    fetch_blocks_parallel(Req, Current, To, Opts).
+
+fetch_blocks_parallel(Req, From, To, Opts) ->
+    MaxWorkers = max(1, hb_opts:get(arweave_block_workers, 3, Opts)),
+    Failed = fetch_blocks_batch(From, To, MaxWorkers, Opts),
+    ?event(copycat_short,
+        {arweave_block_indexing_completed,
+            {range, {From, To}},
+            {failed_blocks, length(Failed)},
+            {initial_request, Req}
+        }
+    ),
+    case Failed of
+        [] -> ok;
+        _ ->
+            ?event(copycat_short,
+                {arweave_block_failures,
+                    {heights, Failed},
+                    {range, {From, To}}
+                }
+            )
+    end,
+    {ok, To}.
+
+fetch_blocks_batch(Current, To, _MaxWorkers, _Opts) when Current < To ->
+    [];
+fetch_blocks_batch(Current, To, MaxWorkers, Opts) ->
+    BatchEnd = max(To, Current - MaxWorkers + 1),
+    Heights = lists:seq(Current, BatchEnd, -1),
+    Results = hb_pmap:parallel_map(
+        Heights,
+        fun(Height) ->
+            try
+                observe_event(<<"block_indexed">>, fun() ->
+                    fetch_and_process_block(Height, To, Opts)
+                end),
+                ok
+            catch
+                Class:Reason:Stack ->
+                    ?event(copycat_short,
+                        {arweave_block_failed,
+                            {height, Height},
+                            {class, Class},
+                            {reason, Reason},
+                            {stack, Stack}
+                        }
+                    ),
+                    {failed, Height}
+            end
+        end,
+        MaxWorkers
+    ),
+    BatchFailed = [H || {failed, H} <- Results],
+    BatchFailed ++ fetch_blocks_batch(BatchEnd - 1, To, MaxWorkers, Opts).
+
+fetch_blocks(_Req, Current, undefined, _Prefetched, _Opts) when Current < 0 ->
+    {ok, 0};
+fetch_blocks(Req, Current, undefined, Prefetched, Opts) ->
+    ensure_cutover_height(Current, Opts),
+    BlockRes =
+        case Prefetched of
+            {prefetched, Res} -> Res;
+            none -> fetch_block_header(Current, Opts)
+        end,
     case is_already_indexed(BlockRes, Opts) of
         true ->
             ?event(copycat_short,
@@ -163,24 +228,138 @@ fetch_blocks(Req, Current, undefined, Opts) ->
             ),
             {ok, Current};
         false ->
+            PrefetchInfo =
+                case Current > 0 of
+                    true -> spawn_prefetch(Current - 1, Opts);
+                    false -> none
+                end,
             observe_event(<<"block_indexed">>, fun() ->
                 process_block(BlockRes, Current, undefined, Opts)
             end),
-            fetch_blocks(Req, Current - 1, undefined, Opts)
-    end;
-fetch_blocks(Req, Current, To, Opts) ->
-    observe_event(<<"block_indexed">>, fun() ->
-        fetch_and_process_block(Current, To, Opts)
-    end),
-    fetch_blocks(Req, Current - 1, To, Opts).
+            NextPrefetched = collect_prefetch(PrefetchInfo),
+            fetch_blocks(Req, Current - 1, undefined, NextPrefetched, Opts)
+    end.
+
+spawn_prefetch(Height, Opts) ->
+    Ref = make_ref(),
+    {Pid, MonRef} = spawn_monitor(
+        fun() ->
+            Result =
+                try fetch_block_header(Height, Opts)
+                catch _:_ -> {error, prefetch_failed}
+                end,
+            exit({block_prefetch, Ref, Result})
+        end
+    ),
+    {Ref, Pid, MonRef}.
+
+collect_prefetch(none) ->
+    none;
+collect_prefetch({Ref, _Pid, MonRef}) ->
+    receive
+        {'DOWN', MonRef, process, _, {block_prefetch, Ref, Res}} ->
+            {prefetched, Res};
+        {'DOWN', MonRef, process, _, _} ->
+            none
+    end.
+
 
 %% @doc Determine whether a fetched block is considered indexed.
-%% A block is indexed when any TX from its `txs' list is in the index.
+%% Checks for a block completion marker first. For blocks at or above the
+%% cutover height, the marker is authoritative — no fallback. For blocks
+%% below the cutover, falls back to legacy per-TX check for compatibility
+%% with indexes built before markers were introduced.
 is_already_indexed({ok, Block}, Opts) ->
-    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
+    Height = hb_maps:get(<<"height">>, Block, undefined, Opts),
+    case is_block_indexed(Height, Opts) of
+        true ->
+            ?event(copycat_debug,
+                {auto_stop_check, {height, Height}, {stop_reason, marker}}),
+            true;
+        false ->
+            Cutover = read_cutover_height(Opts),
+            case Height =/= undefined andalso Cutover =/= undefined
+                    andalso Height >= Cutover of
+                true ->
+                    false;
+                false ->
+                    Legacy = legacy_is_indexed(Block, Opts),
+                    case Legacy of
+                        true ->
+                            ?event(copycat_debug,
+                                {auto_stop_check,
+                                    {height, Height},
+                                    {stop_reason, legacy_fallback}
+                                }
+                            );
+                        false -> ok
+                    end,
+                    Legacy
+            end
+    end;
 is_already_indexed({error, _}, _Opts) ->
     false.
+
+legacy_is_indexed(Block, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs).
+
+-define(BLOCK_MARKER_PREFIX, <<"block/">>).
+-define(CUTOVER_KEY, <<"block/_marker_cutover_height">>).
+
+block_indexed_path(Height) ->
+    <<?BLOCK_MARKER_PREFIX/binary, (hb_util:bin(Height))/binary>>.
+
+is_block_indexed(undefined, _Opts) ->
+    false;
+is_block_indexed(Height, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> false;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, block_indexed_path(Height)) of
+                {ok, _} -> true;
+                not_found -> false
+            end
+    end.
+
+mark_block_indexed(Height, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> ok;
+        #{ <<"index-store">> := Store } ->
+            hb_store:write(Store, block_indexed_path(Height), <<"1">>)
+    end.
+
+read_cutover_height(Opts) ->
+    case hb_opts:get(arweave_marker_cutover_height, undefined, Opts) of
+        undefined ->
+            case hb_store_arweave:store_from_opts(Opts) of
+                no_store -> undefined;
+                #{ <<"index-store">> := Store } ->
+                    case hb_store:read(Store, ?CUTOVER_KEY) of
+                        {ok, Bin} -> hb_util:int(Bin);
+                        not_found -> undefined
+                    end
+            end;
+        Override ->
+            hb_util:int(Override)
+    end.
+
+ensure_cutover_height(Height, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> ok;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, ?CUTOVER_KEY) of
+                {ok, _} -> ok;
+                not_found ->
+                    hb_store:write(
+                        Store, ?CUTOVER_KEY, hb_util:bin(Height)),
+                    ?event(copycat_short,
+                        {marker_cutover_initialized,
+                            {height, Height}
+                        }
+                    )
+            end
+    end.
 
 fetch_and_process_block(Current, To, Opts) ->
     BlockRes = fetch_block_header(Current, Opts),
@@ -208,6 +387,7 @@ process_block(BlockRes, Current, To, Opts) ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     BundleTXs = maps:get(bundle_count, Results, 0),
                     SkippedTXs = maps:get(skipped_count, Results, 0),
+                    mark_block_indexed(Current, Opts),
                     ?event(
                         copycat_short,
                         {arweave_block_indexed,
