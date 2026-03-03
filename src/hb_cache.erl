@@ -273,8 +273,12 @@ write(Bin, Opts) when is_binary(Bin) ->
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
+    % Skip if already present (content-addressed, so identical content = same path).
     Path = generate_binary_path(Bin, Opts),
-    hb_store:write(Store, Path, Bin),
+    case hb_store:type(Store, Path) of
+        not_found -> hb_store:write(Store, Path, Bin);
+        _ -> ok
+    end,
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
     do_write_message(
@@ -284,35 +288,48 @@ do_write_message(List, Store, Opts) when is_list(List) ->
     );
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     ?event(debug_cache, {writing_message, Msg}),
-    % Calculate the IDs of the message.
+    % Compute the uncommitted (unsigned) content-hash first — this is a fast
+    % hash operation with no HMAC signing. We use it to check whether this
+    % exact message node has already been written to LMDB. If it has, skip
+    % the expensive calculate_all_ids (HMAC signing) and all writes entirely.
+    % This turns the O(trie_size) resign+rewrite cost per slot into O(changed
+    % nodes only), which is critical for large tries (balance trie, etc.).
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
-    AllIDs = calculate_all_ids(Msg, Opts),
-    AltIDs = AllIDs -- [UncommittedID],
-    ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
-    MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
-    % Write all of the keys of the message into the store.
-    hb_store:make_group(Store, UncommittedID),
-    maps:map(
-        fun(Key, Value) ->
-            write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
-        end,
-        maps:without([<<"priv">>], Msg)
-    ),
-    % Optionally store the message into the match index, if configured.
-    dev_match:write(AllIDs, Msg, Opts),
-    % Link each commitment ID to the uncommitted message.
-    lists:map(
-        fun(AltID) ->
-            ?event(debug_cache,
-                {linking_commitment,
-                    {uncommitted_id, UncommittedID},
-                    {committed_id, AltID}
-            }),
-            hb_store:make_link(Store, UncommittedID, AltID)
-        end,
-        AltIDs
-    ),
-    {ok, UncommittedID}.
+    case hb_store:type(Store, UncommittedID) of
+        composite ->
+            % Node already fully written in a previous slot — skip.
+            ?event(debug_cache, {skipping_existing_message, {id, UncommittedID}}),
+            {ok, UncommittedID};
+        _ ->
+            % New or changed node — compute signed IDs and write fully.
+            AllIDs = calculate_all_ids(Msg, Opts),
+            AltIDs = AllIDs -- [UncommittedID],
+            ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
+            MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
+            % Write all of the keys of the message into the store.
+            hb_store:make_group(Store, UncommittedID),
+            maps:map(
+                fun(Key, Value) ->
+                    write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
+                end,
+                maps:without([<<"priv">>], Msg)
+            ),
+            % Optionally store the message into the match index, if configured.
+            dev_match:write(AllIDs, Msg, Opts),
+            % Link each commitment ID to the uncommitted message.
+            lists:map(
+                fun(AltID) ->
+                    ?event(debug_cache,
+                        {linking_commitment,
+                            {uncommitted_id, UncommittedID},
+                            {committed_id, AltID}
+                    }),
+                    hb_store:make_link(Store, UncommittedID, AltID)
+                end,
+                AltIDs
+            ),
+            {ok, UncommittedID}
+    end.
 
 %% @doc Write a single key for a message into the store.
 write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->

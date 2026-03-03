@@ -316,6 +316,15 @@ ensure_started(Opts) ->
                                                         Opts
                                                     )
                                                 )
+                                            },
+                                            {"PROCESS_CHECKPOINT_TRUSTED_OWNERS",
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_checkpoint_trusted_owners,
+                                                        "",
+                                                        Opts
+                                                    )
+                                                )
                                             }
                                         ]
                                     }

@@ -77,17 +77,14 @@ get(TrieNode, Req, Opts) ->
 set(Trie, Req, Opts) ->
     Insertable = hb_maps:without([<<"path">>], Req, Opts),
     KeyVals = hb_maps:to_list(Insertable, Opts),
-    {ok, do_set(Trie, KeyVals, Opts)}.
-do_set(Trie, [], Opts) ->
-    Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
-    CommittedTrie = 
-        hb_message:commit(
-            Uncommitted,
-            Opts,
-            #{ <<"type">> => <<"hmac-sha256">> }
-        ),
-    {ok, _} = hb_cache:write(CommittedTrie, Opts),
-    CommittedTrie;
+    {DoSetUs, Result} = timer:tc(fun() -> do_set(Trie, KeyVals, Opts) end),
+    erlang:put(trie_set_inner_us, DoSetUs +
+        case erlang:get(trie_set_inner_us) of undefined -> 0; TSIPrev -> TSIPrev end),
+    erlang:put(trie_set_keys, length(KeyVals) +
+        case erlang:get(trie_set_keys) of undefined -> 0; TSKPrev -> TSKPrev end),
+    {ok, Result}.
+do_set(Trie, [], _Opts) ->
+    Trie;
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
     do_set(NewTrie, KeyVals, Opts).

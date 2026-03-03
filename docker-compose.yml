@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     ports:
       - "10000:10000"
+      - "6363:6363"
     environment:
       - HB_CONFIG=config.json
     volumes:

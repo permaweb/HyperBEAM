@@ -657,14 +657,12 @@ set(Base, NewValuesMsg, Opts) ->
         )
     ),
     % Calculate if the keys to be set conflict with any committed keys.
-    {ok, CommittedKeys} =
-        committed(
-            Base,
-            #{
-                <<"committers">> => <<"all">>
-            },
-            Opts
-        ),
+    {CommittedUs, {ok, CommittedKeys}} = timer:tc(fun() ->
+        committed(Base, #{<<"committers">> => <<"all">>}, Opts)
+    end),
+    erlang:put(dev_msg_committed_us,
+        CommittedUs + case erlang:get(dev_msg_committed_us) of
+            undefined -> 0; VC -> VC end),
     ?event(message_set,
         {setting,
             {committed_keys, CommittedKeys},
@@ -687,14 +685,26 @@ set(Base, NewValuesMsg, Opts) ->
         ),
     ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
     % Combine with deep merge or if `set-mode` is `explicit' then just merge.
-    Merged =
-        hb_private:set_priv(
-            case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
-                <<"explicit">> -> maps:merge(BaseValues, NewValues);
-                _ -> do_deep_merge(BaseValues, NewValues, Opts)
-            end,
-            OriginalPriv
-        ),
+    SetMode = maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>),
+    {DeepMergeUs, MergedInner} = timer:tc(fun() ->
+        case SetMode of
+            <<"explicit">> -> maps:merge(BaseValues, NewValues);
+            _ -> do_deep_merge(BaseValues, NewValues, Opts)
+        end
+    end),
+    erlang:put(dev_msg_deep_merge_us,
+        DeepMergeUs + case erlang:get(dev_msg_deep_merge_us) of
+            undefined -> 0; VD -> VD end),
+    erlang:put(dev_msg_set_calls,
+        1 + case erlang:get(dev_msg_set_calls) of undefined -> 0; VS -> VS end),
+    MaxMergeSoFar = case erlang:get(dev_msg_max_merge_us) of undefined -> 0; V2 -> V2 end,
+    case DeepMergeUs > MaxMergeSoFar of
+        true ->
+            erlang:put(dev_msg_max_merge_us, DeepMergeUs),
+            erlang:put(dev_msg_max_merge_keys, maps:size(NewValues));
+        _ -> ok
+    end,
+    Merged = hb_private:set_priv(MergedInner, OriginalPriv),
     case OverwrittenCommittedKeys of
         [] ->
             ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
@@ -702,7 +712,13 @@ set(Base, NewValuesMsg, Opts) ->
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Base, strict, Opts) of
+            {MatchUs, MatchResult} = timer:tc(fun() ->
+                hb_message:match(Merged, Base, strict, Opts)
+            end),
+            erlang:put(dev_msg_match_us,
+                MatchUs + case erlang:get(dev_msg_match_us) of
+                    undefined -> 0; VM -> VM end),
+            case MatchResult of
                 true ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
@@ -732,22 +748,25 @@ do_deep_merge(BaseValues, NewValues, Opts) ->
             fun(Key, NewValue, {Acc, ToDeepMerge})
                     when is_map(NewValue)
                     andalso is_map(map_get(Key, Acc)) ->
-                {
-                    Acc#{
-                        Key =>
-                            hb_util:ok(
-                                hb_ao:resolve(
-                                    map_get(Key, Acc),
-                                    NewValue#{
-                                        <<"path">> => <<"set">>
-                                    },
-                                    Opts
-                                ),
-                                Opts
-                            )
-                    },
-                    ToDeepMerge
-                };
+                {ResolveUs, ResolvedVal} = timer:tc(fun() ->
+                    hb_util:ok(
+                        hb_ao:resolve(
+                            map_get(Key, Acc),
+                            NewValue#{<<"path">> => <<"set">>},
+                            Opts
+                        ),
+                        Opts
+                    )
+                end),
+                MaxKeyUs = case erlang:get(dev_msg_max_key_us) of
+                    undefined -> 0; MK -> MK end,
+                case ResolveUs > MaxKeyUs of
+                    true ->
+                        erlang:put(dev_msg_max_key_us, ResolveUs),
+                        erlang:put(dev_msg_max_key, Key);
+                    _ -> ok
+                end,
+                {Acc#{ Key => ResolvedVal }, ToDeepMerge};
             (Key, _, {Acc, ToDeepMerge}) ->
                 {Acc, [Key | ToDeepMerge]}
             end,

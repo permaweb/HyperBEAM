@@ -99,10 +99,14 @@ move(Mode, Base, Req, Opts) ->
         ?event({patch_to, PatchTo}),
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
-        {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),
+        {SourceUs, SourceResult} = timer:tc(fun() ->
+            hb_ao:resolve(FromMsg, PatchFrom, Opts)
+        end),
+        erlang:put(patch_source_us, SourceUs),
+        {ok, Source} ?= SourceResult,
         ?event({source, Source}),
         % Find all messages with the PATCH request.
-        {ToWrite, NewSourceValue} =
+        {FilterUs, {ToWrite, NewSourceValue}} = timer:tc(fun() ->
             case Mode of
                 patches ->
                     maps:fold(
@@ -132,26 +136,32 @@ move(Mode, Base, Req, Opts) ->
                     );
                 all ->
                     {Source, unset}
-            end,
+            end
+        end),
+        erlang:put(patch_filter_us, FilterUs),
         ?event({source_data, ToWrite}),
         ?event({new_data_for_source_path, NewSourceValue}),
         % Remove the source from the message and set the new source.
-        FromMsgWithoutSource =
-            hb_ao:set(
-                FromMsg,
-                PatchFrom,
-                <<"patch-error">>,
-                Opts
-            ),
-        FromMsgWithNewSource =
-            hb_ao:set(
-                FromMsgWithoutSource,
-                #{ PatchFrom => NewSourceValue },
-                Opts
-            ),
+        {ReplaceUs, {FromMsgWithoutSource, FromMsgWithNewSource}} = timer:tc(fun() ->
+            FMWS =
+                hb_ao:set(
+                    FromMsg,
+                    PatchFrom,
+                    <<"patch-error">>,
+                    Opts
+                ),
+            FMNS =
+                hb_ao:set(
+                    FMWS,
+                    #{ PatchFrom => NewSourceValue },
+                    Opts
+                ),
+            {FMWS, FMNS}
+        end),
+        erlang:put(patch_replace_us, ReplaceUs),
         % If the `mode` is `patches`, we need to remove the `method` key from
         % them, if present.
-        ToWriteMod =
+        {AccumUs, ToWriteMod} = timer:tc(fun() ->
             case Mode of
                 all -> ToWrite;
                 patches ->
@@ -170,16 +180,21 @@ move(Mode, Base, Req, Opts) ->
                         #{},
                         ToWrite
                     )
-            end,
+            end
+        end),
+        erlang:put(patch_accum_us, AccumUs),
+        erlang:put(patch_accum_count, maps:size(ToWrite)),
         ?event({to_write, ToWriteMod}),
         % Find the target to apply the patches to, and apply them.
-        PatchedResult =
+        {ApplyUs, PatchedResult} = timer:tc(fun() ->
             hb_ao:set(
                 FromMsgWithNewSource,
                 PatchTo,
                 ToWriteMod,
                 Opts
-            ),
+            )
+        end),
+        erlang:put(patch_apply_us, ApplyUs),
         % Return the patched message and the source, less the patches.
         ?event({patch_result, PatchedResult}),
         {ok, PatchedResult}

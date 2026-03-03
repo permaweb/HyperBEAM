@@ -38,55 +38,69 @@ run_as(Key, Base, Req, Opts) ->
     ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
-    {ok, PreparedMsg} =
-        hb_ao:resolve(
-            ensure_process_key(Base, Opts),
-            #{
-                <<"path">> => <<"set">>,
-                <<"device">> =>
-                    DeviceSet =
+    {SetupUs, {ok, PreparedMsg}} =
+        timer:tc(fun() ->
+            hb_ao:resolve(
+                ensure_process_key(Base, Opts),
+                #{
+                    <<"path">> => <<"set">>,
+                    <<"device">> =>
+                        DeviceSet =
+                            hb_maps:get(
+                                << Key/binary, "-device">>,
+                                Base,
+                                dev_process:default_device(Base, Key, Opts),
+                                Opts
+                            ),
+                    % Configure input prefix for proper message routing within the device
+                    <<"input-prefix">> =>
+                        case hb_maps:get(<<"input-prefix">>, Base, not_found, Opts) of
+                            not_found -> <<"process">>;
+                            Prefix -> Prefix
+                        end,
+                    % Configure output prefixes for result organization
+                    <<"output-prefixes">> =>
                         hb_maps:get(
-                            << Key/binary, "-device">>,
+                            <<Key/binary, "-output-prefixes">>,
                             Base,
-                            dev_process:default_device(Base, Key, Opts),
+                            undefined, % Undefined in set will be ignored.
                             Opts
-                        ),
-                % Configure input prefix for proper message routing within the device
-                <<"input-prefix">> =>
-                    case hb_maps:get(<<"input-prefix">>, Base, not_found, Opts) of
-                        not_found -> <<"process">>;
-                        Prefix -> Prefix
-                    end,
-                % Configure output prefixes for result organization
-                <<"output-prefixes">> =>
-                    hb_maps:get(
-                        <<Key/binary, "-output-prefixes">>,
-                        Base,
-                        undefined, % Undefined in set will be ignored.
-                        Opts
-                    )
-            },
-            Opts
-        ),
+                        )
+                },
+                Opts
+            )
+        end),
+    erlang:put(run_as_setup_us, SetupUs +
+        case erlang:get(run_as_setup_us) of undefined -> 0; V1 -> V1 end),
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
     % Execute the message through the specialized device.
-    {Status, BaseResult} =
-        hb_ao:resolve(
-            PreparedMsg,
-            Req,
-            Opts
-        ),
+    {ExecUs, {Status, BaseResult}} =
+        timer:tc(fun() ->
+            hb_ao:resolve(
+                PreparedMsg,
+                Req,
+                Opts
+            )
+        end),
+    erlang:put(run_as_exec_us, ExecUs +
+        case erlang:get(run_as_exec_us) of undefined -> 0; V2 -> V2 end),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.
-    case {Status, BaseResult} of
-        {ok, #{ <<"device">> := DeviceSet }} ->
-            {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};
-        _ ->
-            ?event({returning_base_result, BaseResult}),
-            {Status, BaseResult}
-    end.
+    {RestoreUs, RestoreResult} =
+        timer:tc(fun() ->
+            case {Status, BaseResult} of
+                {ok, #{ <<"device">> := DeviceSet }} ->
+                    {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};
+                _ ->
+                    ?event({returning_base_result, BaseResult}),
+                    {Status, BaseResult}
+            end
+        end),
+    erlang:put(run_as_restore_us, RestoreUs +
+        case erlang:get(run_as_restore_us) of undefined -> 0; V3 -> V3 end),
+    RestoreResult.
 
 %% @doc Change the message to for that has the device set as this module.
 %% In situations where the key that is `run_as' returns a message with a 
