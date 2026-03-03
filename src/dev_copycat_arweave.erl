@@ -317,16 +317,29 @@ is_block_indexed(Height, Opts) ->
         no_store -> false;
         #{ <<"index-store">> := Store } ->
             case hb_store:read(Store, block_indexed_path(Height)) of
-                {ok, _} -> true;
+                {ok, StoredBin} ->
+                    try binary_to_integer(StoredBin) of
+                        StoredDepth ->
+                            ConfiguredDepth =
+                                hb_opts:get(
+                                    arweave_index_depth, 1, Opts),
+                            StoredDepth >= ConfiguredDepth
+                    catch
+                        _:_ -> false
+                    end;
                 not_found -> false
             end
     end.
 
-mark_block_indexed(Height, Opts) ->
+mark_block_indexed(Height, Depth, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> ok;
         #{ <<"index-store">> := Store } ->
-            hb_store:write(Store, block_indexed_path(Height), <<"1">>)
+            hb_store:write(
+                Store,
+                block_indexed_path(Height),
+                integer_to_binary(Depth)
+            )
     end.
 
 read_cutover_height(Opts) ->
@@ -387,7 +400,8 @@ process_block(BlockRes, Current, To, Opts) ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     BundleTXs = maps:get(bundle_count, Results, 0),
                     SkippedTXs = maps:get(skipped_count, Results, 0),
-                    mark_block_indexed(Current, Opts),
+                    AchievedDepth = maps:get(achieved_depth, Results, 1),
+                    mark_block_indexed(Current, AchievedDepth, Opts),
                     ?event(
                         copycat_short,
                         {arweave_block_indexed,
@@ -396,6 +410,7 @@ process_block(BlockRes, Current, To, Opts) ->
                             {total_txs, TotalTXs},
                             {bundle_txs, BundleTXs},
                             {skipped_txs, SkippedTXs},
+                            {achieved_depth, AchievedDepth},
                             {target, To}
                         }
                     )
@@ -457,13 +472,16 @@ parallel_map(Items, Fun, Opts) ->
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
-    #{items_count => 0, bundle_count => 0, skipped_count => 0};
+process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, Opts) ->
+    Depth = hb_opts:get(arweave_index_depth, 1, Opts),
+    #{items_count => 0, bundle_count => 0, skipped_count => 0,
+        achieved_depth => Depth};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
+    Depth = hb_opts:get(arweave_index_depth, 1, Opts),
     ?event(copycat_debug, {writing_index,
         {id, {explicit, TXID}},
         {offset, TXStartOffset},
@@ -479,19 +497,39 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         )
     end),
     case is_bundle_tx(TX, Opts) of
-        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        false ->
+            #{items_count => 0, bundle_count => 0, skipped_count => 0,
+                achieved_depth => Depth};
         true ->
-            ?event(copycat_debug, {fetching_bundle_header, 
+            IsRedstone =
+                dev_arweave_common:tagfind(
+                    <<"Bundler-App-Name">>, TX#tx.tags, <<>>
+                ) =:= <<"Redstone">>,
+            EffectiveDepth = case IsRedstone of
+                true -> 1;
+                false -> Depth
+            end,
+            case IsRedstone of
+                true ->
+                    ?event(copycat_short,
+                        {arweave_redstone_skip,
+                            {tx_id, {explicit, TXID}},
+                            {configured_depth, Depth}
+                        }
+                    );
+                false -> ok
+            end,
+            ?event(copycat_debug, {fetching_bundle_header,
                 {tx_id, {explicit, TXID}},
                 {tx_end_offset, TXEndOffset},
-                {tx_data_size, TX#tx.data_size}
+                {tx_data_size, TX#tx.data_size},
+                {effective_depth, EffectiveDepth}
             }),
             BundleRes = download_bundle_header(
                 TXEndOffset, TX#tx.data_size, Opts
             ),
             case BundleRes of
                 {ok, {BundleIndex, HeaderSize}} ->
-                    % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
@@ -508,9 +546,42 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             BundleIndex
                         )
                     end),
-                    % Single event increment for the batch
-                    record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-                    #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+                    record_event_metrics(
+                        <<"item_indexed">>, ItemsCount, TotalTime),
+                    {NestedItems, AchievedDepth} =
+                        case EffectiveDepth > 1 of
+                            false ->
+                                {0, Depth};
+                            true ->
+                                {_FO, NC, MinAchieved, _C} =
+                                    lists:foldl(
+                                        fun({_IID, Size},
+                                                {IOffset, CAcc, MAcc,
+                                                    Cache}) ->
+                                            {ok, Count, Achieved,
+                                                NewCache} =
+                                                check_nested_bundle(
+                                                    IOffset, Size,
+                                                    EffectiveDepth - 1,
+                                                    IndexStore, TXID,
+                                                    Opts, Cache
+                                                ),
+                                            {IOffset + Size,
+                                                CAcc + Count,
+                                                min(MAcc, Achieved),
+                                                NewCache}
+                                        end,
+                                        {TXStartOffset + HeaderSize, 0,
+                                            EffectiveDepth - 1,
+                                            undefined},
+                                        BundleIndex
+                                    ),
+                                {NC, 1 + MinAchieved}
+                        end,
+                    #{items_count => ItemsCount + NestedItems,
+                        bundle_count => 1,
+                        skipped_count => 0,
+                        achieved_depth => AchievedDepth};
                 {error, Reason} ->
                     ?event(
                         copycat_short,
@@ -519,7 +590,8 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             {reason, Reason}
                         }
                     ),
-                    #{items_count => 0, bundle_count => 1, skipped_count => 1}
+                    #{items_count => 0, bundle_count => 1,
+                        skipped_count => 1, achieved_depth => 0}
             end
     end.
 
@@ -529,6 +601,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
 %% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
 %% Returns a map with keys: items_count, bundle_count, skipped_count.
 process_txs(ValidTXs, BlockStartOffset, Opts) ->
+    Depth = hb_opts:get(arweave_index_depth, 1, Opts),
     Results = parallel_map(
         ValidTXs,
         fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, Opts) end,
@@ -537,17 +610,300 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
     lists:foldl(
         fun(Result, Acc) ->
             #{
-                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
-                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
-                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
+                items_count =>
+                    maps:get(items_count, Result, 0)
+                        + maps:get(items_count, Acc, 0),
+                bundle_count =>
+                    maps:get(bundle_count, Result, 0)
+                        + maps:get(bundle_count, Acc, 0),
+                skipped_count =>
+                    maps:get(skipped_count, Result, 0)
+                        + maps:get(skipped_count, Acc, 0),
+                achieved_depth => min(
+                    maps:get(achieved_depth, Result, Depth),
+                    maps:get(achieved_depth, Acc, Depth)
+                )
             }
         end,
-        #{items_count => 0, bundle_count => 0, skipped_count => 0},
+        #{items_count => 0, bundle_count => 0, skipped_count => 0,
+            achieved_depth => Depth},
         Results
     ).
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
+
+check_nested_bundle(ItemAbsOffset, ItemSize, RemainingDepth,
+        Store, ParentID, Opts, ChunkCache) ->
+    try
+        MinSize = min(ItemSize, 262144),
+        case cached_read(ItemAbsOffset, MinSize, ChunkCache, Opts) of
+            {ok, ChunkData, NewCache} ->
+                ClampedData = case byte_size(ChunkData) > ItemSize of
+                    true -> binary:part(ChunkData, 0, ItemSize);
+                    false -> ChunkData
+                end,
+                case parse_nested_item(
+                        ClampedData, ItemAbsOffset, ItemSize,
+                        RemainingDepth, Store, ParentID, Opts) of
+                    {parse_failed, _} when ItemSize > byte_size(ClampedData) ->
+                        retry_with_larger_chunk(
+                            ItemAbsOffset, ItemSize,
+                            RemainingDepth, Store, ParentID, Opts,
+                            NewCache);
+                    {parse_failed, Reason} ->
+                        ?event(debug_copycat,
+                            {nested_item_not_bundle,
+                                {parent_id, {explicit, ParentID}},
+                                {offset, ItemAbsOffset},
+                                {reason, Reason}
+                            }
+                        ),
+                        {ok, 0, RemainingDepth, NewCache};
+                    {ok, Count, Achieved} ->
+                        {ok, Count, Achieved, NewCache}
+                end;
+            {error, Reason} ->
+                ?event(copycat_short,
+                    {nested_bundle_chunk_failed,
+                        {parent_id, {explicit, ParentID}},
+                        {offset, ItemAbsOffset},
+                        {reason, Reason}
+                    }
+                ),
+                {ok, 0, 0, ChunkCache}
+        end
+    catch
+        Class:Error:_ ->
+            ?event(copycat_short,
+                {nested_bundle_error,
+                    {parent_id, {explicit, ParentID}},
+                    {offset, ItemAbsOffset},
+                    {class, Class},
+                    {reason, Error}
+                }
+            ),
+            {ok, 0, 0, ChunkCache}
+    end.
+
+retry_with_larger_chunk(ItemAbsOffset, ItemSize,
+        RemainingDepth, Store, ParentID, Opts, PrevCache) ->
+    LargerSize = min(ItemSize, 1048576),
+    case hb_store_arweave:read_chunks(ItemAbsOffset, LargerSize, Opts) of
+        {ok, ChunkData} ->
+            NewCache = {ItemAbsOffset, ChunkData},
+            ClampedData = case byte_size(ChunkData) > ItemSize of
+                true -> binary:part(ChunkData, 0, ItemSize);
+                false -> ChunkData
+            end,
+            case parse_nested_item(
+                    ClampedData, ItemAbsOffset, ItemSize,
+                    RemainingDepth, Store, ParentID, Opts) of
+                {parse_failed, Reason} ->
+                    HaveFullItem =
+                        byte_size(ClampedData) >= ItemSize,
+                    Achieved = case HaveFullItem of
+                        true -> RemainingDepth;
+                        false -> 0
+                    end,
+                    ?event(case HaveFullItem of
+                            true -> debug_copycat;
+                            false -> copycat_short
+                        end,
+                        {nested_bundle_parse_failed_after_retry,
+                            {parent_id, {explicit, ParentID}},
+                            {offset, ItemAbsOffset},
+                            {reason, Reason},
+                            {have_full_item, HaveFullItem}
+                        }
+                    ),
+                    {ok, 0, Achieved, NewCache};
+                {ok, Count, Achieved} ->
+                    {ok, Count, Achieved, NewCache}
+            end;
+        {error, Reason} ->
+            ?event(copycat_short,
+                {nested_bundle_chunk_failed,
+                    {parent_id, {explicit, ParentID}},
+                    {offset, ItemAbsOffset},
+                    {reason, Reason}
+                }
+            ),
+            {ok, 0, 0, PrevCache}
+    end.
+
+cached_read(Offset, MinSize, undefined, Opts) ->
+    do_fetch_and_cache(Offset, MinSize, Opts);
+cached_read(Offset, MinSize, {CacheOffset, CacheData} = Cache, Opts) ->
+    CacheEnd = CacheOffset + byte_size(CacheData),
+    case Offset >= CacheOffset andalso Offset + MinSize =< CacheEnd of
+        true ->
+            Skip = Offset - CacheOffset,
+            Data = binary:part(
+                CacheData, Skip, byte_size(CacheData) - Skip),
+            {ok, Data, Cache};
+        false ->
+            do_fetch_and_cache(Offset, MinSize, Opts)
+    end.
+
+do_fetch_and_cache(Offset, MinSize, Opts) ->
+    FetchSize = max(MinSize, 262144),
+    case hb_store_arweave:read_chunks(Offset, FetchSize, Opts) of
+        {ok, Data} ->
+            {ok, Data, {Offset, Data}};
+        {error, _Reason} when FetchSize > MinSize ->
+            case hb_store_arweave:read_chunks(Offset, MinSize, Opts) of
+                {ok, Data} ->
+                    {ok, Data, {Offset, Data}};
+                {error, Reason2} ->
+                    {error, Reason2}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+parse_nested_item(ChunkData, ItemAbsOffset, ItemSize,
+        RemainingDepth, Store, ParentID, Opts) ->
+    try ar_bundles:deserialize_header(ChunkData) of
+        {ok, ANS104HeaderSize, ParsedItem} ->
+            case dev_arweave_common:type(ParsedItem) of
+                binary ->
+                    {ok, 0, RemainingDepth};
+                _BundleType ->
+                    IsRedstone =
+                        dev_arweave_common:tagfind(
+                            <<"Bundler-App-Name">>,
+                            ParsedItem#tx.tags, <<>>
+                        ) =:= <<"Redstone">>,
+                    case IsRedstone of
+                        true ->
+                            ?event(copycat_short,
+                                {nested_redstone_skip,
+                                    {parent_id, {explicit, ParentID}},
+                                    {offset, ItemAbsOffset}
+                                }
+                            );
+                        false -> ok
+                    end,
+                    ItemDataSize = ItemSize - ANS104HeaderSize,
+                    process_inner_bundle(
+                        ChunkData, ItemAbsOffset, ANS104HeaderSize,
+                        ItemDataSize, RemainingDepth, IsRedstone,
+                        Store, ParentID, Opts
+                    )
+            end;
+        _ ->
+            {parse_failed, deserialize_header_unexpected}
+    catch
+        _:_ ->
+            {parse_failed, deserialize_header_crashed}
+    end.
+
+process_inner_bundle(ChunkData, ItemAbsOffset, ANS104HeaderSize,
+        ItemDataSize, RemainingDepth, IsRedstone, Store, ParentID, Opts) ->
+    InnerData = binary:part(
+        ChunkData, ANS104HeaderSize,
+        byte_size(ChunkData) - ANS104HeaderSize
+    ),
+    case ar_bundles:bundle_header_size(InnerData) of
+        invalid_bundle_header ->
+            ?event(copycat_short,
+                {nested_bundle_invalid_header,
+                    {parent_id, {explicit, ParentID}},
+                    {offset, ItemAbsOffset}
+                }
+            ),
+            {ok, 0, 0};
+        InnerHeaderSize when InnerHeaderSize > ItemDataSize ->
+            ?event(copycat_short,
+                {nested_bundle_header_exceeds_item,
+                    {parent_id, {explicit, ParentID}},
+                    {offset, ItemAbsOffset},
+                    {inner_header_size, InnerHeaderSize},
+                    {item_data_size, ItemDataSize}
+                }
+            ),
+            {ok, 0, 0};
+        InnerHeaderSize ->
+            DataAbsOffset = ItemAbsOffset + ANS104HeaderSize,
+            case fetch_inner_header(
+                    InnerData, InnerHeaderSize, DataAbsOffset, Opts) of
+                {ok, FullHeader} ->
+                    case ar_bundles:decode_bundle_header(FullHeader) of
+                        invalid_bundle_header ->
+                            ?event(copycat_short,
+                                {nested_bundle_decode_failed,
+                                    {parent_id, {explicit, ParentID}},
+                                    {offset, ItemAbsOffset}
+                                }
+                            ),
+                            {ok, 0, 0};
+                        {_ItemsBin, InnerBundleIndex} ->
+                            index_inner_items(
+                                InnerBundleIndex,
+                                DataAbsOffset + InnerHeaderSize,
+                                RemainingDepth, IsRedstone,
+                                Store, ParentID, Opts
+                            )
+                    end;
+                {error, Reason} ->
+                    ?event(copycat_short,
+                        {nested_bundle_header_fetch_failed,
+                            {parent_id, {explicit, ParentID}},
+                            {offset, ItemAbsOffset},
+                            {reason, Reason}
+                        }
+                    ),
+                    {ok, 0, 0}
+            end
+    end.
+
+fetch_inner_header(InnerData, InnerHeaderSize, _DataAbsOffset, _Opts)
+        when InnerHeaderSize =< byte_size(InnerData) ->
+    {ok, InnerData};
+fetch_inner_header(InnerData, InnerHeaderSize, DataAbsOffset, Opts) ->
+    Needed = InnerHeaderSize - byte_size(InnerData),
+    FetchOffset = DataAbsOffset + byte_size(InnerData),
+    case hb_store_arweave:read_chunks(FetchOffset, Needed, Opts) of
+        {ok, More} -> {ok, <<InnerData/binary, More/binary>>};
+        {error, Reason} -> {error, Reason}
+    end.
+
+index_inner_items(InnerBundleIndex, DataStart, RemainingDepth,
+        IsRedstone, Store, ParentID, Opts) ->
+    {_FinalOffset, ItemsCount} = lists:foldl(
+        fun({ItemID, Size}, {Offset, Count}) ->
+            hb_store_arweave:write_offset(
+                Store,
+                hb_util:encode(ItemID),
+                <<"ans104@1.0">>,
+                Offset,
+                Size
+            ),
+            {Offset + Size, Count + 1}
+        end,
+        {DataStart, 0},
+        InnerBundleIndex
+    ),
+    case RemainingDepth > 1 andalso not IsRedstone of
+        false ->
+            {ok, ItemsCount, RemainingDepth};
+        true ->
+            {_FO, NestedCount, MinAchieved, _C} = lists:foldl(
+                fun({_IID, Size}, {Offset, NC, MinA, Cache}) ->
+                    {ok, Count, Achieved, NewCache} =
+                        check_nested_bundle(
+                            Offset, Size, RemainingDepth - 1,
+                            Store, ParentID, Opts, Cache
+                        ),
+                    {Offset + Size, NC + Count,
+                        min(MinA, Achieved), NewCache}
+                end,
+                {DataStart, 0, RemainingDepth - 1, undefined},
+                InnerBundleIndex
+            ),
+            {ok, ItemsCount + NestedCount, 1 + MinAchieved}
+    end.
 
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
