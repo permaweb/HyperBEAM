@@ -28,15 +28,19 @@ scheduler(_Base, Request, Opts) ->
             ProcID = hb_util:human_id(RawProcID),
             {From, To} = parse_range(Request, Opts),
             Node = hb_maps:get(<<"node">>, Request, ?DEFAULT_SU_NODE, Opts),
+            Cached = lists:sort(dev_scheduler_cache:list(ProcID, Opts)),
+            Gaps = gap_ranges(From, To, Cached),
             ?event(copycat_short,
                 {scheduler_replication_started,
                     {proc_id, ProcID},
                     {from, From},
                     {to, To},
-                    {node, {string, Node}}
+                    {node, {string, Node}},
+                    {cached_slots, length(Cached)},
+                    {gaps, Gaps}
                 }
             ),
-            fetch_schedule(ProcID, Node, From, To, 0, Opts);
+            fetch_gaps(ProcID, Node, Gaps, 0, Opts);
         error ->
             {error, <<"Missing required parameter: process">>}
     end.
@@ -50,6 +54,35 @@ parse_range(Request, Opts) ->
             error -> undefined
         end,
     {From, To}.
+
+%% @doc Compute the list of {GapFrom, GapTo} ranges within [From, To] that
+%% are not covered by CachedSlots (a sorted list of integers).
+%% GapTo may be `undefined' when To is `undefined' (open-ended).
+gap_ranges(From, To, CachedSlots) ->
+    InRange = [S || S <- CachedSlots,
+                    S >= From,
+                    (To =:= undefined orelse S =< To)],
+    find_gaps(From, To, InRange).
+
+find_gaps(Current, To, _Cached) when To =/= undefined, Current > To ->
+    [];
+find_gaps(Current, To, []) ->
+    [{Current, To}];
+find_gaps(Current, To, [Current | Rest]) ->
+    find_gaps(Current + 1, To, Rest);
+find_gaps(Current, To, [Next | Rest]) ->
+    [{Current, Next - 1} | find_gaps(Next + 1, To, Rest)].
+
+%% @doc Fetch each gap range in sequence, accumulating the total written count.
+fetch_gaps(_ProcID, _Node, [], Total, _Opts) ->
+    {ok, Total};
+fetch_gaps(ProcID, Node, [{GapFrom, GapTo} | Rest], Total, Opts) ->
+    case fetch_schedule(ProcID, Node, GapFrom, GapTo, 0, Opts) of
+        {ok, Written} ->
+            fetch_gaps(ProcID, Node, Rest, Total + Written, Opts);
+        {error, _} = Err ->
+            Err
+    end.
 
 %% @doc Stop when we have fetched up to (or past) the requested `to' slot.
 fetch_schedule(_ProcID, _Node, From, To, Total, _Opts)
@@ -164,13 +197,27 @@ write_assignments(ProcID, Edges, Opts) ->
                 Assignment =
                     dev_scheduler_formats:aos2_to_assignment(Edge, Opts),
                 ?event(copycat_scheduler, {writing_assignment, {assignment, Assignment}}),
+                % Propagate block-height and timestamp from the assignment
+                % onto the message body so both are GQL-queryable.
+                BlockHeight = maps:get(<<"block-height">>, Assignment, undefined),
+                Timestamp = maps:get(<<"timestamp">>, Assignment, undefined),
+                Body0 = maps:get(<<"body">>, Assignment, #{}),
+                Body1 = case BlockHeight of
+                    undefined -> Body0;
+                    BH -> Body0#{<<"block-height">> => BH}
+                end,
+                Body2 = case Timestamp of
+                    undefined -> Body1;
+                    TS -> Body1#{<<"timestamp">> => TS}
+                end,
                 % Ensure process matches the target and mark the stored
                 % format as ao.N.1 so dev_scheduler_cache:read treats it
                 % as already fully resolved (no double-conversion).
                 WithMeta = Assignment#{
                     <<"process">> => ProcID,
                     % TODO: ao.TN.1
-                    <<"variant">> => <<"ao.N.1">>
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"body">> => Body2
                 },
                 case dev_scheduler_cache:write(WithMeta, Opts) of
                     ok ->
@@ -190,6 +237,7 @@ write_assignments(ProcID, Edges, Opts) ->
                     ?event(
                         copycat_scheduler,
                         {assignment_write_failed,
+                            {assignment, Edge},
                             {class, Class},
                             {reason, CatchReason},
                             {stacktrace, Stack}
@@ -203,6 +251,34 @@ write_assignments(ProcID, Edges, Opts) ->
     ).
 
 %%% Tests
+
+%% @doc Empty cache: the full [From, To] range is returned as one gap.
+gap_ranges_empty_cache_test() ->
+    ?assertEqual([{0, 10}], gap_ranges(0, 10, [])).
+
+%% @doc Fully cached range produces no gaps.
+gap_ranges_fully_cached_test() ->
+    ?assertEqual([], gap_ranges(0, 4, [0, 1, 2, 3, 4])).
+
+%% @doc Gap in the middle of a cached range.
+gap_ranges_middle_gap_test() ->
+    ?assertEqual([{3, 5}], gap_ranges(0, 7, [0, 1, 2, 6, 7])).
+
+%% @doc Gaps at both ends of the requested range.
+gap_ranges_start_and_end_test() ->
+    ?assertEqual([{0, 2}, {6, 10}], gap_ranges(0, 10, [3, 4, 5])).
+
+%% @doc Open-ended To with empty cache: single open gap from From.
+gap_ranges_open_ended_test() ->
+    ?assertEqual([{5, undefined}], gap_ranges(5, undefined, [])).
+
+%% @doc Open-ended To with partial cache: gap starts after last cached slot.
+gap_ranges_open_ended_partial_test() ->
+    ?assertEqual([{5, undefined}], gap_ranges(0, undefined, [0, 1, 2, 3, 4])).
+
+%% @doc Cached slots outside [From, To] are ignored.
+gap_ranges_cached_outside_range_test() ->
+    ?assertEqual([{3, 7}], gap_ranges(3, 7, [0, 1, 2, 8, 9, 10])).
 
 %% @doc Basic unit test: parse_range defaults.
 parse_range_defaults_test() ->
