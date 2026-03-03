@@ -11,6 +11,10 @@
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(TX_CODEC, <<"tx@1.0">>).
 -define(ANS104_CODEC, <<"ans104@1.0">>).
+%% Depth semantics:
+%% 1 => index L1 TX IDs -> offsets only
+%% 2 => index immediate bundle children
+%% 3..N => recurse nested bundle children
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_IMMEDIATE_CHILDREN, 2).
 -define(DEPTH_RECURSION_CAP, 4).
