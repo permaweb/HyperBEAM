@@ -132,7 +132,7 @@ build_path(ProcID, From, To) ->
             ToVal ->
                 <<"&to-nonce=", (integer_to_binary(ToVal))/binary>>
         end,
-    ModFrom = max(0, From - 1),
+    ModFrom = From - 1,
     <<
         ProcID/binary,
         "?process-id=", ProcID/binary,
