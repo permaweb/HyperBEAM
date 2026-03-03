@@ -563,10 +563,7 @@ open_connection(#{ peer := Peer }, Opts) ->
                     http_connect_timeout,
                     ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
-                ),
-            transport_opts => #{
-                keepalive => true
-            }
+                )
         },
     Transport =
         case Port of
