@@ -670,7 +670,7 @@ do_gun_request(PID, Args, Opts) ->
 
 await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
-			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
+			counter := Counter, acc := Acc, method := Method, path := Path, peer := Peer } = Args,
 	case gun:await(PID, Ref, inet:timeout(Timer)) of
 		{response, fin, Status, Headers} ->
 			upload_metric(Args),
@@ -710,13 +710,13 @@ await_response(Args, Opts) ->
             };
 		{error, timeout} = Response ->
 			record_response_status(Method, Response, Path),
-            ?event(http_outbound, {gun_cancel, {path, Path}}),
+            ?event(http_outbound, {gun_cancel, {path, Path}, {peer, Peer}, {error, timeout}}),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
         {error, {connection_error,{stream_closed, Message}}} = Response ->
 			record_response_status(Method, Response, Path),
-            ?event(http_outbound, {gun_cancel, {path, Path}, {message, Message}}),
+            ?event(http_outbound, {gun_cancel, {path, Path}, {peer, Peer}, {message, Message}}),
             gun:cancel(PID, Ref),
             Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
