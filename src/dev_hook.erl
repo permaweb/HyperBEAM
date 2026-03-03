@@ -55,6 +55,7 @@
 %%% node operator to register hooks to the node and find those that are
 %%% currently active.
 -module(dev_hook).
+%%% Backend API for calling hooks, used by devices as well as AO-Core.
 -export([info/1, on/3, find/2, find/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -93,8 +94,15 @@ find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
     case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
         Handler when is_map(Handler) -> 
-            % If a single handler is found, wrap it in a list.
-            [Handler];
+            case hb_util:is_ordered_list(Handler, Opts) of
+                true ->
+                    % If the term is an ordered list message (containing only
+                    % numbered map keys sequentially), convert it to a list.
+                    hb_util:message_to_ordered_list(Handler, Opts);
+                false ->
+                    % If a single handler is found, wrap it in a list.
+                    [Handler]
+            end;
         Handlers when is_list(Handlers) -> 
             % If multiple handlers are found, return them as is
             Handlers;
@@ -119,13 +127,12 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             % If status is ok, continue with the next handler
             ?event(hook, {handler_executed_successfully, HookName, NewReq}),
             execute_handlers(HookName, Rest, NewReq, Opts);
-        {error, _} = Error ->
+        {Status, Res} ->
             % If status is error, halt execution and return the error
-            ?event({handler_error, HookName, Error}),
-            Error;
+            {Status, Res};
         Other ->
             % If status is unknown, convert to error and halt execution
-            ?event({unexpected_handler_result, HookName, Other}),
+            ?event(hook_error, {unexpected_handler_result, HookName, Other}),
             {failure,
                 <<
                     "Handler for hook `",
@@ -157,13 +164,31 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % committed before execution.
         BaseReq =
             Req#{
-                <<"path">> => hb_ao:get(<<"path">>, Handler, HookName, Opts),
-                <<"method">> => hb_ao:get(<<"method">>, Handler, <<"GET">>, Opts)
+                <<"path">> =>
+                    hb_maps:get(<<"path">>, Handler, HookName, Opts),
+                <<"method">> =>
+                    hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
-        PreparedReq =
-            case hb_ao:get(<<"hook/commit-request">>, Handler, false, Opts) of
-                true -> hb_message:commit(BaseReq, Opts);
-                false -> BaseReq
+        CommitReqBin = 
+            hb_util:bin(
+                hb_util:deep_get(
+                    <<"hook/commit-request">>,
+                    Handler,
+                    <<"false">>,
+                    Opts
+                )
+            ),
+        {PreparedBase, PreparedReq} =
+            case CommitReqBin of
+                <<"true">> ->
+                    {
+                        case hb_message:signers(Handler, Opts) of
+                            [] -> hb_message:commit(Handler, Opts);
+                            _ -> Handler
+                        end,
+                        hb_message:commit(BaseReq, Opts)
+                    };
+                <<"false">> -> {Handler, BaseReq}
             end,
         ?event(hook,
             {resolving_handler, 
@@ -175,7 +200,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % Resolve the prepared request upon the handler.
         {Status, Res} =
             hb_ao:resolve(
-                Handler,
+                PreparedBase,
                 PreparedReq,
                 Opts#{ hashpath => ignore }
             ),
@@ -186,7 +211,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 {res, Res}
             }
         ),
-        case {Status, hb_ao:get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
+        case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
             {ok, <<"error">>} -> {error, Res};
@@ -195,7 +220,14 @@ execute_handler(HookName, Handler, Req, Opts) ->
     catch
         Error:Reason:Stacktrace ->
             % If an exception occurs during execution, log it and return an error.
-            ?event(hook, {handler_exception, Error, Reason, Stacktrace}),
+            ?event(hook_error,
+                {handler_exception,
+                    {while_executing, HookName},
+                    {error, Error},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stacktrace}}
+                }
+            ),
             {failure, <<
                 "Handler for hook `",
                 (hb_ao:normalize_key(HookName))/binary,
@@ -218,7 +250,7 @@ single_handler_test() ->
     % Create a message with a mock handler that adds a key to the request.
     Handler = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler_executed">> => true }}
                 end
@@ -234,7 +266,7 @@ multiple_handlers_test() ->
     % Create mock handlers that modify the request in sequence
     Handler1 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler1">> => true }}
                 end
@@ -242,7 +274,7 @@ multiple_handlers_test() ->
     },
     Handler2 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler2">> => true }}
                 end
@@ -259,7 +291,7 @@ halt_on_error_test() ->
     % Create handlers where the second one returns an error
     Handler1 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler1">> => true }}
                 end
@@ -267,7 +299,7 @@ halt_on_error_test() ->
     },
     Handler2 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, _, _) ->
                     {error, <<"Error in handler2">>}
                 end
@@ -275,7 +307,7 @@ halt_on_error_test() ->
     },
     Handler3 = #{
         <<"device">> => #{
-            <<"test-hook">> =>
+            test_hook =>
                 fun(_, Req, _) ->
                     {ok, Req#{ <<"handler3">> => true }}
                 end

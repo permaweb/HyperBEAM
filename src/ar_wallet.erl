@@ -1,21 +1,88 @@
 -module(ar_wallet).
--export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4, to_address/1, to_address/2, new/0, new/1]).
--export([new_keyfile/2, load_keyfile/1, load_key/1]).
+-export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4]).
+-export([to_pubkey/1, to_pubkey/2, to_address/1, to_address/2, new/0, new/1]).
+-export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
+-export([to_json/1, from_json/1, from_json/2]).
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
 %%% @doc Utilities for manipulating wallets.
 
 -define(WALLET_DIR, ".").
+-define(WALLET_POOL_NAME, ar_wallet_pool).
+-define(WALLET_POOL_TARGET, 6).
 
 %%% Public interface.
 
 new() ->
     new({rsa, 65537}).
-new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
+new(KeyType = {rsa, 65537}) ->
+    case request_pooled_wallet(KeyType) of
+        {ok, Wallet} -> Wallet;
+        timeout -> generate_wallet(KeyType)
+    end.
+
+generate_wallet(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
         = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
+
+request_pooled_wallet(KeyType) ->
+    Pool = ensure_wallet_pool(KeyType),
+    Ref = make_ref(),
+    Pool ! {wallet, self(), Ref},
+    receive
+        {wallet, Ref, Wallet} -> {ok, Wallet}
+    after 30000 ->
+        timeout
+    end.
+
+ensure_wallet_pool(KeyType) ->
+    case whereis(?WALLET_POOL_NAME) of
+        undefined ->
+            Pid = spawn(fun() -> wallet_pool_loop(KeyType, queue:new(), queue:new(), 0) end),
+            case catch register(?WALLET_POOL_NAME, Pid) of
+                true -> Pid;
+                _ -> whereis(?WALLET_POOL_NAME)
+            end;
+        Pid ->
+            Pid
+    end.
+
+wallet_pool_loop(KeyType, Wallets, Waiters, InFlight) ->
+    {Wallets1, InFlight1} = maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight),
+    receive
+        {wallet, From, Ref} ->
+            case queue:out(Wallets1) of
+                {{value, Wallet}, Rest} ->
+                    From ! {wallet, Ref, Wallet},
+                    wallet_pool_loop(KeyType, Rest, Waiters, InFlight1);
+                {empty, _} ->
+                    wallet_pool_loop(KeyType, Wallets1, queue:in({From, Ref}, Waiters), InFlight1)
+            end;
+        {wallet_generated, Wallet} ->
+            case queue:out(Waiters) of
+                {{value, {From, Ref}}, RestWaiters} ->
+                    From ! {wallet, Ref, Wallet},
+                    wallet_pool_loop(KeyType, Wallets1, RestWaiters, InFlight1 - 1);
+                {empty, _} ->
+                    wallet_pool_loop(KeyType, queue:in(Wallet, Wallets1), Waiters, InFlight1 - 1)
+            end
+    end.
+
+maybe_spawn_wallet_workers(KeyType, Wallets, Waiters, InFlight) ->
+    Desired = ?WALLET_POOL_TARGET + queue:len(Waiters),
+    Available = queue:len(Wallets) + InFlight,
+    Needed = max(0, Desired - Available),
+    Parent = self(),
+    lists:foreach(
+        fun(_) ->
+            spawn(fun() -> Parent ! {wallet_generated, generate_wallet(KeyType)} end)
+        end,
+        lists:seq(1, Needed)
+    ),
+    {Wallets, InFlight + Needed}.
+
 
 %% @doc Sign some data with a private key.
 sign(Key, Data) ->
@@ -32,7 +99,9 @@ sign({{rsa, PublicExpnt}, Priv, Pub}, Data, DigestType) when PublicExpnt =:= 655
             modulus = binary:decode_unsigned(Pub),
             privateExponent = binary:decode_unsigned(Priv)
         }
-    ).
+    );
+sign({{KeyType, Priv, Pub}, {KeyType, Pub}}, Data, DigestType) ->
+    sign({KeyType, Priv, Pub}, Data, DigestType).
 
 hmac(Data) ->
     hmac(Data, sha256).
@@ -54,12 +123,22 @@ verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65
         }
     ).
 
+%% @doc Find a public key from a wallet.
+to_pubkey(Pubkey) ->
+    to_pubkey(Pubkey, ?DEFAULT_KEY_TYPE).
+to_pubkey(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
+    % Small keys are not secure, nobody is using them, the clause
+    % is for backwards-compatibility.
+    PubKey;
+to_pubkey({{_, _, PubKey}, {_, PubKey}}, {rsa, 65537}) ->
+    PubKey;
+to_pubkey(PubKey, {rsa, 65537}) ->
+    PubKey.
+
 %% @doc Generate an address from a public key.
 to_address(Pubkey) ->
     to_address(Pubkey, ?DEFAULT_KEY_TYPE).
-to_address(PubKey, _) when bit_size(PubKey) == 256 ->
-    %% Small keys are not secure, nobody is using them, the clause
-    %% is for backwards-compatibility.
+to_address(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
     PubKey;
 to_address({{_, _, PubKey}, {_, PubKey}}, _) ->
     to_address(PubKey);
@@ -78,50 +157,19 @@ new_keyfile(KeyType, WalletName) ->
             {?RSA_SIGN_ALG, PublicExpnt} ->
                 {[Expnt, Pb], [Expnt, Pb, Prv, P1, P2, E1, E2, C]} =
                     crypto:generate_key(rsa, {?RSA_PRIV_KEY_SZ, PublicExpnt}),
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"RSA">>,
-                            ext => true,
-                            e => hb_util:encode(Expnt),
-                            n => hb_util:encode(Pb),
-                            d => hb_util:encode(Prv),
-                            p => hb_util:encode(P1),
-                            q => hb_util:encode(P2),
-                            dp => hb_util:encode(E1),
-                            dq => hb_util:encode(E2),
-                            qi => hb_util:encode(C)
-                        }
-                    ),
+                PrivKey = {KeyType, Prv, Pb},
+                Ky = to_json(PrivKey),
                 {Pb, Prv, Ky};
             {?ECDSA_SIGN_ALG, secp256k1} ->
                 {OrigPub, Prv} = crypto:generate_key(ecdh, secp256k1),
-                <<4:8, PubPoint/binary>> = OrigPub,
-                PubPointMid = byte_size(PubPoint) div 2,
-                <<X:PubPointMid/binary, Y:PubPointMid/binary>> = PubPoint,
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"EC">>,
-                            crv => <<"secp256k1">>,
-                            x => hb_util:encode(X),
-                            y => hb_util:encode(Y),
-                            d => hb_util:encode(Prv)
-                        }
-                    ),
-                {compress_ecdsa_pubkey(OrigPub), Prv, Ky};
+                CompressedPub = compress_ecdsa_pubkey(OrigPub),
+                PrivKey = {KeyType, Prv, CompressedPub},
+                Ky = to_json(PrivKey),
+                {CompressedPub, Prv, Ky};
             {?EDDSA_SIGN_ALG, ed25519} ->
                 {{_, Prv, Pb}, _} = new(KeyType),
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"OKP">>,
-                            alg => <<"EdDSA">>,
-                            crv => <<"Ed25519">>,
-                            x => hb_util:encode(Pb),
-                            d => hb_util:encode(Prv)
-                        }
-                    ),
+                PrivKey = {KeyType, Prv, Pb},
+                Ky = to_json(PrivKey),
                 {Pb, Prv, Ky}
         end,
     Filename = wallet_filepath(WalletName, Pub, KeyType),
@@ -139,6 +187,12 @@ wallet_filepath2(Wallet) ->
 %% Return not_found if arweave_keyfile_[addr].json or [addr].json is not found
 %% in [data_dir]/?WALLET_DIR.
 load_key(Addr) ->
+    load_key(Addr, #{}).
+
+%% @doc Read the keyfile for the key with the given address from disk.
+%% Return not_found if arweave_keyfile_[addr].json or [addr].json is not found
+%% in [data_dir]/?WALLET_DIR.
+load_key(Addr, Opts) ->
     Path = hb_util:encode(Addr),
     case filelib:is_file(Path) of
         false ->
@@ -147,22 +201,63 @@ load_key(Addr) ->
                 false ->
                     not_found;
                 true ->
-                    load_keyfile(Path2)
+                    load_keyfile(Path2, Opts)
             end;
         true ->
-            load_keyfile(Path)
+            load_keyfile(Path, Opts)
     end.
 
 %% @doc Extract the public and private key from a keyfile.
 load_keyfile(File) ->
+    load_keyfile(File, #{}).
+
+%% @doc Extract the public and private key from a keyfile.
+load_keyfile(File, Opts) ->
     {ok, Body} = file:read_file(File),
-    Key = hb_json:decode(Body),
+    from_json(Body, Opts).
+
+%% @doc Convert a wallet private key to JSON (JWK) format
+to_json({PrivKey, _PubKey}) ->
+    to_json(PrivKey);
+to_json({{?RSA_SIGN_ALG, PublicExpnt}, Priv, Pub}) when PublicExpnt =:= 65537 ->
+    hb_json:encode(#{
+        kty => <<"RSA">>,
+        ext => true,
+        e => hb_util:encode(<<PublicExpnt:32>>),
+        n => hb_util:encode(Pub),
+        d => hb_util:encode(Priv)
+    });
+to_json({{?ECDSA_SIGN_ALG, secp256k1}, Priv, CompressedPub}) ->
+    % For ECDSA, we need to expand the compressed pubkey to get X,Y coordinates
+    % This is a simplified version - ideally we'd implement pubkey expansion
+    hb_json:encode(#{
+        kty => <<"EC">>,
+        crv => <<"secp256k1">>,
+        d => hb_util:encode(Priv)
+        % TODO: Add x and y coordinates from expanded pubkey
+    });
+to_json({{?EDDSA_SIGN_ALG, ed25519}, Priv, Pub}) ->
+    hb_json:encode(#{
+        kty => <<"OKP">>,
+        alg => <<"EdDSA">>,
+        crv => <<"Ed25519">>,
+        x => hb_util:encode(Pub),
+        d => hb_util:encode(Priv)
+    }).
+
+%% @doc Parse a wallet from JSON (JWK) format
+from_json(JsonBinary) ->
+    from_json(JsonBinary, #{}).
+
+%% @doc Parse a wallet from JSON (JWK) format with options
+from_json(JsonBinary, Opts) ->
+    Key = hb_json:decode(JsonBinary),
     {Pub, Priv, KeyType} =
-        case maps:get(<<"kty">>, Key) of
+        case hb_maps:get(<<"kty">>, Key, undefined, Opts) of
             <<"EC">> ->
-                XEncoded = maps:get(<<"x">>, Key),
-                YEncoded = maps:get(<<"y">>, Key),
-                PrivEncoded = maps:get(<<"d">>, Key),
+                XEncoded = hb_maps:get(<<"x">>, Key, undefined, Opts),
+                YEncoded = hb_maps:get(<<"y">>, Key, undefined, Opts),
+                PrivEncoded = hb_maps:get(<<"d">>, Key, undefined, Opts),
                 OrigPub = iolist_to_binary([<<4:8>>, hb_util:decode(XEncoded),
                         hb_util:decode(YEncoded)]),
                 Pb = compress_ecdsa_pubkey(OrigPub),
@@ -170,15 +265,15 @@ load_keyfile(File) ->
                 KyType = {?ECDSA_SIGN_ALG, secp256k1},
                 {Pb, Prv, KyType};
             <<"OKP">> ->
-                PubEncoded = maps:get(<<"x">>, Key),
-                PrivEncoded = maps:get(<<"d">>, Key),
+                PubEncoded = hb_maps:get(<<"x">>, Key, undefined, Opts),
+                PrivEncoded = hb_maps:get(<<"d">>, Key, undefined, Opts),
                 Pb = hb_util:decode(PubEncoded),
                 Prv = hb_util:decode(PrivEncoded),
                 KyType = {?EDDSA_SIGN_ALG, ed25519},
                 {Pb, Prv, KyType};
             _ ->
-                PubEncoded = maps:get(<<"n">>, Key),
-                PrivEncoded = maps:get(<<"d">>, Key),
+                PubEncoded = hb_maps:get(<<"n">>, Key, undefined, Opts),
+                PrivEncoded = hb_maps:get(<<"d">>, Key, undefined, Opts),
                 Pb = hb_util:decode(PubEncoded),
                 Prv = hb_util:decode(PrivEncoded),
                 KyType = {?RSA_SIGN_ALG, 65537},

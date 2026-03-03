@@ -1,8 +1,37 @@
-%%% @doc Simple utilities for testing HyperBEAM.
+%%% @doc Simple utilities for testing HyperBEAM. Includes functions for 
+%%% generating isolated (fresh) test stores, running suites of tests with
+%%% differing options, as well as executing and reporting benchmarks.
 -module(hb_test_utils).
--export([suite_with_opts/2, run/4]).
+-export([suite_with_opts/2, run/4, assert_throws/4]).
+-export([test_store/0, test_store/1, test_store/2]).
+-export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
+-export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
+-export([compare_events/3, compare_events/4, compare_events/5]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%%% The default store module to use for testing.
+-define(DEFAULT_STORE_MODULE, hb_store_ets).
+%%% The number of seconds to run a benchmark for when no time is specified.
+-define(DEFAULT_BENCHMARK_TIME, 1).
+
+%% @doc Generate a new, unique test store as an isolated context for an execution.
+test_store() ->
+    test_store(?DEFAULT_STORE_MODULE).
+test_store(Mod) ->
+    test_store(Mod, <<"default">>).
+test_store(Mod, Tag) ->
+    TestDir =
+        <<
+            "cache-TEST/run-",
+            Tag/binary, "-",
+            (integer_to_binary(erlang:system_time(millisecond)))/binary
+        >>,
+    % Wait a tiny interval to ensure that any further tests will get their own
+    % directory.
+    timer:sleep(1),
+    filelib:ensure_dir(binary_to_list(TestDir)),
+    #{ <<"store-module">> => Mod, <<"name">> => TestDir }.
 
 %% @doc Run each test in a suite with each set of options. Start and reset
 %% the store(s) for each test. Expects suites to be a list of tuples with
@@ -14,25 +43,40 @@ suite_with_opts(Suite, OptsList) ->
     lists:filtermap(
         fun(OptSpec = #{ name := _Name, opts := Opts, desc := ODesc}) ->
             Store = hb_opts:get(store, hb_opts:get(store), Opts),
-            Skip = maps:get(skip, OptSpec, []),
+            Skip = hb_maps:get(skip, OptSpec, [], Opts),
             case satisfies_requirements(OptSpec) of
                 true ->
-                    {true, {foreach,
-                        fun() ->
-                            ?event({starting, Store}),
-                            hb_store:start(Store)
-                        end,
-                        fun(_) ->
-                            %hb_store:reset(Store)
-                            ok
-                        end,
-                        [
-                            {ODesc ++ ": " ++ TestDesc, fun() -> Test(Opts) end}
-                        ||
-                            {TestAtom, TestDesc, Test} <- Suite, 
-                                not lists:member(TestAtom, Skip)
-                        ]
-                    }};
+                    Each = 
+                        {foreach,
+                            fun() ->
+                                ?event({starting, Store}),
+                                % Create and set a random server ID for the test
+                                % process.
+                                hb_http_server:set_proc_server_id(
+                                    hb_util:human_id(crypto:strong_rand_bytes(32))
+                                ),
+                                hb_store:reset(Store),
+                                hb_store:start(Store)
+                            end,
+                            fun(_) ->
+                                hb_store:reset(Store),
+                                ok
+                            end,
+                            [
+                                {
+                                    hb_util:list(ODesc)
+                                        ++ ": "
+                                        ++ hb_util:list(TestDesc),
+                                    fun() -> Test(Opts) end}
+                            ||
+                                {TestAtom, TestDesc, Test} <- Suite, 
+                                    not lists:member(TestAtom, Skip)
+                            ]
+                        },
+                    case maps:get(parallel, OptSpec, true) of
+                        true -> {true, {inparallel, Each}};
+                        false -> {true, Each}
+                    end;
                 false -> false
             end
         end,
@@ -43,7 +87,7 @@ suite_with_opts(Suite, OptsList) ->
 %% Requirements is a list of atoms, each corresponding to a module that must
 %% return true if it exposes an `enabled/0' function.
 satisfies_requirements(Requirements) when is_map(Requirements) ->
-    satisfies_requirements(maps:get(requires, Requirements, []));
+    satisfies_requirements(hb_maps:get(requires, Requirements, []));
 satisfies_requirements(Requirements) ->
     lists:all(
         fun(Req) ->
@@ -63,11 +107,157 @@ satisfies_requirements(Requirements) ->
         Requirements
     ).
 
+%% @doc Find the options from a list of options by name.
+opts_from_list(OptsName, OptsList) ->
+    hd([ O || #{ name := OName, opts := O } <- OptsList, OName == OptsName ]).
+
 %% Run a single test with a given set of options.
 run(Name, OptsName, Suite, OptsList) ->
     {_, _, Test} = lists:keyfind(Name, 1, Suite),
-    [Opts|_] =
-        [ O || #{ name := OName, opts := O } <- OptsList,
-            OName == OptsName
-        ],
-    Test(Opts).
+    Test(opts_from_list(OptsName, OptsList)).
+
+%% @doc Compares the events generated by executing a test/function with two 
+%% different sets of options.
+compare_events(Fun, Opts1, Opts2) ->
+    hb_store:reset(hb_opts:get(store, hb_opts:get(store), Opts1)),
+    hb_store:write(
+        hb_opts:get(store, hb_opts:get(store), Opts1),
+        <<"test">>,
+        <<"test">>
+    ),
+    {EventsSample1, _Res2} = hb_event:diff(
+        fun() ->
+            Fun(Opts1)
+        end
+    ),
+    hb_store:reset(hb_opts:get(store, hb_opts:get(store), Opts1)),
+    hb_store:reset(hb_opts:get(store, hb_opts:get(store), Opts2)),
+    {EventsSample2, _Res} = hb_event:diff(
+        fun() ->
+            Fun(Opts2)
+        end
+    ),
+    hb_store:reset(hb_opts:get(store, hb_opts:get(store), Opts2)),
+    EventsDiff = hb_message:diff(EventsSample1, EventsSample2, #{}),
+    ?event(
+        debug_perf,
+        {events,
+            {sample1, EventsSample1},
+            {sample2, EventsSample2},
+            {events_diff, EventsDiff}
+        }
+    ),
+    EventsDiff.
+compare_events(Fun, OptsName1, OptsName2, OptsList) ->
+    compare_events(
+        Fun,
+        opts_from_list(OptsName1, OptsList),
+        opts_from_list(OptsName2, OptsList)
+    ).
+compare_events(Name, OptsName1, OptsName2, Suite, OptsList) ->
+    {_, _, Test} = lists:keyfind(Name, 1, Suite),
+    compare_events(
+        Test,
+        opts_from_list(OptsName1, OptsList),
+        opts_from_list(OptsName2, OptsList)
+    ).
+
+%% @doc Assert that a function throws an expected exception. Needed to work around some
+%% limitations in ?assertException (e.g. no way to attach an error message to the failure)
+assert_throws(Fun, Args, ExpectedException, Label) ->
+    Error = try 
+        apply(Fun, Args),
+        failed_to_throw
+    catch
+        error:ExpectedException -> expected_exception;
+        ExpectedException -> expected_exception;
+        error:Other -> {wrong_exception, Other};
+        Other -> {wrong_exception, Other}
+    end,
+    ?assertEqual(expected_exception, Error, Label).
+
+%% @doc Run a function as many times as possible in a given amount of time.
+benchmark(Fun) ->
+    benchmark(Fun, ?DEFAULT_BENCHMARK_TIME).
+benchmark(Fun, TLen) ->
+    T0 = erlang:system_time(millisecond),
+    hb_util:until(
+        fun() -> erlang:system_time(millisecond) - T0 > (TLen * 1000) end,
+        Fun,
+        0
+    ).
+
+%% @doc Return the amount of time required to execute N iterations of a function
+%% as a fraction of a second.
+benchmark_iterations(Fun, N) ->
+    {Time, _} = timer:tc(
+        fun() ->
+            lists:foreach(
+                fun(I) -> Fun(I) end,
+                lists:seq(1, N)
+            )
+        end
+    ),
+    Time / 1_000_000.
+
+%% @doc Run multiple instances of a function in parallel for a given amount of time.
+benchmark(Fun, TLen, Procs) ->
+    Parent = self(),
+    receive _ -> worker_synchronized end,
+    StartWorker =
+        fun(_) ->
+            Ref = make_ref(),
+            spawn_link(fun() ->
+                Count = benchmark(Fun, TLen),
+                Parent ! {work_complete, Ref, Count}
+            end),
+            Ref
+        end,
+    CollectRes =
+        fun(R) ->
+            receive
+                {work_complete, R, Count} ->
+                    %?event(benchmark, {work_complete, R, Count}),
+                    Count
+            end
+        end,
+    Refs = lists:map(StartWorker, lists:seq(1, Procs)),
+    lists:sum(lists:map(CollectRes, Refs)).
+
+%% @doc Print benchmark results in a human-readable format that EUnit writes to
+%% the console. Takes a `verb` as a string and an `iterations` count (returned
+%% by the benchmark function), as well as optionally a `noun` to refer to the
+%% objects in the benchmark, and a `time` in seconds. If `time' is not
+%% provided, it defaults to the value of `?DEFAULT_BENCHMARK_TIME'.
+benchmark_print(Verb, Iterations) ->
+    benchmark_print(Verb, Iterations, ?DEFAULT_BENCHMARK_TIME).
+benchmark_print(Verb, Iterations, Time) when is_integer(Iterations) ->
+    hb_format:eunit_print(
+        "~s ~s in ~s (~s/s)",
+        [
+            Verb,
+            hb_util:human_int(Iterations),
+            format_time(Time),
+            hb_util:human_int(Iterations / Time)
+        ]
+    );
+benchmark_print(Verb, Noun, Iterations) ->
+    benchmark_print(Verb, Noun, Iterations, ?DEFAULT_BENCHMARK_TIME).
+benchmark_print(Verb, Noun, Iterations, Time) ->
+    hb_format:eunit_print(
+        "~s ~s ~s in ~s (~s ~s/s)",
+        [
+            Verb,
+            hb_util:human_int(Iterations),
+            Noun,
+            format_time(Time),
+            hb_util:human_int(Iterations / Time),
+            Noun
+        ]
+    ).
+
+%% @doc Format a time in human-readable format. Takes arguments in seconds.
+format_time(Time) when is_integer(Time) ->
+    hb_util:human_int(Time) ++ "s";
+format_time(Time) ->
+    hb_util:human_int(Time * 1000) ++ "ms".

@@ -17,7 +17,7 @@
 %%% do not want to charge for requests, so we return `ok' and do not actually
 %%% debit the user's account. Similarly, we are not interested in taking payments
 %%% from users, so we do not implement `credit/3'.
--export([debit/3]).
+-export([charge/3]).
 -include("include/hb.hrl").
 
 %% @doc Decide whether or not to service a request from a given address.
@@ -33,14 +33,14 @@ estimate(_, Msg, NodeMsg) ->
 is_admissible(Msg, NodeMsg) ->
     AllowList = hb_opts:get(faff_allow_list, [], NodeMsg),
     Req = hb_ao:get(<<"request">>, Msg, NodeMsg),
-    Signers = hb_message:signers(Req),
+    Signers = hb_message:signers(Req, NodeMsg),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),
     lists:all(
         fun(Signer) -> lists:member(Signer, AllowList) end,
         Signers
     ).
 
-%% @doc Debit the user's account if the request is allowed.
-debit(_, Req, _NodeMsg) ->
-    ?event(payment, {debit, Req}),
+%% @doc Charge the user's account if the request is allowed.
+charge(_, Req, _NodeMsg) ->
+    ?event(payment, {charge, Req}),
     {ok, true}.

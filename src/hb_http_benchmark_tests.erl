@@ -11,7 +11,7 @@
 % unsigned_resolve_benchmark_test() ->
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun() ->
 %             hb_http:post(URL,
 %                 #{
@@ -23,7 +23,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p messages through AO-Core via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -33,7 +33,7 @@
 %     BenchTime = 1,
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_Count) ->
 %             hb_http:post(
 %                 URL,
@@ -47,7 +47,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p messages via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -67,7 +67,7 @@
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _} -> 1;
@@ -76,7 +76,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -87,7 +87,7 @@
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _} -> 1;
@@ -96,7 +96,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -107,7 +107,7 @@
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(X) ->
 %             ?event({post_start, X}),
 %             case hb_http:post(URL, Msg, #{}) of
@@ -119,7 +119,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -130,7 +130,7 @@
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _ResMsg} ->
@@ -141,7 +141,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -152,11 +152,11 @@
 % %     URL = hb_http_server:start_node(#{force_signed => true}),
 % %     BenchTime = 3,
 % %     BenchWorkers = 16,
-% %     Msg1 = dev_scheduler:test_process(),
-% %     Proc = hb_ao:get(process, Msg1, #{ hashpath => ignore }),
+% %     Base = dev_scheduler:test_process(),
+% %     Proc = hb_ao:get(process, Base, #{ hashpath => ignore }),
 % %     ProcID = hb_util:id(Proc),
 % %     ?event({benchmark_start, ?MODULE}),
-% %     Iterations = hb:benchmark(
+% %     Iterations = hb_test_utils:benchmark(
 % %         fun(X) ->
 % %             MsgX = #{
 % %                 <<"device">> => <<"Scheduler@1.0">>,
@@ -179,14 +179,14 @@
 % %         BenchWorkers
 % %     ),
 % %     ?event(benchmark, {scheduled, Iterations}),
-% %     Msg3 = #{
+% %     Res = #{
 % %         <<"path">> => <<"slot">>,
 % %         <<"method">> => <<"GET">>,
 % %         <<"process">> => ProcID
 % %     },
-% %     Res = hb_http:post(URL, Msg3),
+% %     Res = hb_http:post(URL, Res),
 % %     ?event({slot_result, Res}),
-% %     hb_util:eunit_print(
+% %     hb_formatter:eunit_print(
 % %         "Scheduled ~p messages through AO-Core in ~p seconds (~.2f msg/s)",
 % %         [Iterations, BenchTime, Iterations / BenchTime]
 % %     ),

@@ -1,54 +1,90 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([info/0]).
+-export([index/3, info/0]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Use the `route/4' function as the handler for all requests, aside 
 %% from `keys' and `set', which are handled by the default resolver.
 info() ->
     #{
         default => fun route/4,
-        excludes => [keys, set]
+        excludes => [keys, set, committers]
     }.
+
+%% @doc Return the fallback index page when the manifest itself is requested.
+index(M1, M2, Opts) ->
+    ?event(debug_manifest, {index_request, {m1, M1}, {m2, M2}}),
+    case route(<<"index">>, M1, M2, Opts) of
+        {ok, Index} ->
+            ?event({manifest_index_returned, Index}),
+            {ok, Index};
+        {error, not_found} ->
+            {error, not_found}
+    end.
 
 %% @doc Route a request to the associated data via its manifest.
 route(<<"index">>, M1, M2, Opts) ->
     ?event({manifest_index, M1, M2}),
     case manifest(M1, M2, Opts) of
-        {ok, JSONStruct} ->
-            ?event({manifest_json_struct, JSONStruct}),
-            case hb_ao:resolve(JSONStruct, [<<"index">>, <<"path">>], Opts) of
-                {ok, Path} ->
+        {ok, Manifest} ->
+            % Get the path to the index page from the manifest. We make
+            % sure to use `hb_maps:get/4' to ensure that we do not recurse
+            % on the `index' key with an `ao' resolve.
+            Index =
+                hb_maps:get(
+                    <<"index">>,
+                    Manifest,
+                    #{},
+                    Opts
+                ),
+            ?event(debug_manifest,
+                {manifest_index_found,
+                    {index, Index},
+                    {manifest, Manifest}
+                }
+            ),
+            Path = hb_maps:get(<<"path">>, Index, not_found, Opts),
+            case Path of
+                not_found ->
+                    ?event({manifest_path_not_found, <<"index/path">>}),
+                    {error, not_found};
+                _ ->
                     ?event({manifest_path, Path}),
-                    route(Path, M1, M2, Opts);
-                _ -> {error, not_found}
+                    route(Path, M1, M2, Opts)
             end;
         {error, not_found} ->
+            ?event(manifest_not_parsed),
             {error, not_found}
     end;
+route(ID, _, _, Opts) when ?IS_ID(ID) ->
+    ?event({manifest_reading_id, ID}),
+    hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
-    ?event({manifest_lookup, Key}),
-    {ok, JSONStruct} = manifest(M1, M2, Opts),
-    ?event({manifest_json_struct, JSONStruct}),
-    case hb_ao:resolve(JSONStruct, [<<"paths">>, Key], Opts) of
-        {ok, Entry} ->
-            ID = maps:get(<<"id">>, Entry),
-            ?event({manifest_serving, ID}),
-            case hb_cache:read(ID, Opts) of
-                {ok, Data} ->
-                    ?event({manifest_data, Data}),
-                    {ok, Data};
-                {error, not_found} ->
-                    Fallback = hb_ao:get(JSONStruct, <<"fallback">>, Opts),
-                    FallbackID = maps:get(<<"id">>, Fallback),
-                    ?event({manifest_serving_fallback, FallbackID}),
-                    hb_cache:read(FallbackID, Opts)
+    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
+    {ok, Manifest} = manifest(M1, M2, Opts),
+    Res = hb_ao:get(
+        <<"paths/", Key/binary>>,
+        {as, <<"message@1.0">>, Manifest},
+        Opts
+    ),
+    case Res of
+        not_found ->
+            %% Support materialized view in some JavaScript frameworks
+            case hb_opts:get(manifest_404, fallback, Opts) of
+                error ->
+                    {error, not_found};
+                fallback ->
+                    ?event({manifest_fallback, {key, Key}}),
+                    route(<<"index">>, M1, M2, Opts)
             end;
-        _ -> {error, not_found}
+        _ ->
+            {ok, Res}
     end.
 
-%% @doc Find and deserialize a manifest from the given base.
+%% @doc Find and deserialize a manifest from the given base, returning a 
+%% message with the `~manifest@1.0' device.
 manifest(Base, _Req, Opts) ->
     JSON =
         hb_ao:get_first(
@@ -58,9 +94,111 @@ manifest(Base, _Req, Opts) ->
             ],
             Opts
         ),
-    ?event({manifest_json, JSON}),
-    hb_ao:resolve(
-        #{ <<"device">> => <<"json@1.0">>, <<"body">> => JSON },
-        <<"deserialize">>,
+    FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
+    {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
+    LinkifiedPaths = linkify(DeepPaths, Opts),
+    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
+    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+
+%% @doc Generate a nested message of links to content from a parsed (and
+%% structured) manifest.
+linkify(#{ <<"id">> := ID }, Opts) ->
+    LinkOptsBase = (maps:with([store], Opts))#{ scope => [local, remote]},
+    {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
+linkify(Manifest, Opts) when is_map(Manifest) ->
+    hb_maps:map(
+        fun(_Key, Val) -> linkify(Val, Opts) end,
+        Manifest,
         Opts
-    ).
+    );
+linkify(Manifest, Opts) when is_list(Manifest) ->
+    lists:map(
+        fun(Item) -> linkify(Item, Opts) end,
+        Manifest
+    );
+linkify(Manifest, _Opts) ->
+    Manifest.
+
+%%% Tests
+
+resolve_test() ->
+    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
+    IndexPage = #{
+        <<"content-type">> => <<"text/html">>,
+        <<"body">> => <<"Page 1">>
+    },
+    {ok, IndexID} = hb_cache:write(IndexPage, Opts),
+    Page2 = #{
+        <<"content-type">> => <<"text/html">>,
+        <<"body">> => <<"Page 2">>
+    },
+    {ok, Page2ID} = hb_cache:write(Page2, Opts),
+    Manifest = #{
+        <<"paths">> => #{
+            <<"nested">> => #{ <<"page2">> => #{ <<"id">> => Page2ID } },
+            <<"page1">> => #{ <<"id">> => IndexID }
+        },
+        <<"index">> => #{ <<"path">> => <<"page1">> }
+    },
+    JSON = hb_json:encode(Manifest),
+    ManifestMsg =
+        #{
+            <<"device">> => <<"manifest@1.0">>,
+            <<"body">> => JSON
+        },
+    {ok, ManifestID} = hb_cache:write(ManifestMsg, Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 1">> }},
+        hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 2">>}}, 
+        hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
+    ok.
+
+manifest_default_fallback_test() ->
+    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
+    {ok, ManifestID} = create_generic_manifest(Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 1">> }},
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+    ),
+    ok.
+
+manifest_404_error_test() ->
+    Opts = #{
+        store => hb_opts:get(store, no_viable_store, #{}),
+        manifest_404 => error
+    },
+    {ok, ManifestID} = create_generic_manifest(Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {error, not_found},
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+    ),
+    ok.
+
+create_generic_manifest(Opts) ->
+    IndexPage = #{
+        <<"content-type">> => <<"text/html">>,
+        <<"body">> => <<"Page 1">>
+    },
+    {ok, IndexID} = hb_cache:write(IndexPage, Opts),
+    Manifest = #{
+        <<"paths">> => #{
+            <<"page1">> => #{ <<"id">> => IndexID }
+        },
+        <<"index">> => #{ <<"path">> => <<"page1">> }
+    },
+    JSON = hb_json:encode(Manifest),
+    ManifestMsg =
+        #{
+            <<"device">> => <<"manifest@1.0">>,
+            <<"body">> => JSON
+        },
+    hb_cache:write(ManifestMsg, Opts).

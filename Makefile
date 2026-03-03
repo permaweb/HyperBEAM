@@ -6,9 +6,14 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
+GENESIS_WASM_BRANCH = feat/hb-unit
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
-GENESIS_WASM_SERVER_DIR = _build/genesis-wasm-server
+GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
+
+HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
+HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
+HYPERBUDDY_UI_TARGET = src/html/hyperbuddy@1.0/bundle.js
+ARWEAVE_GATEWAY = https://arweave.net
 
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug
@@ -50,11 +55,16 @@ $(WAMR_DIR):
 		--single-branch
 
 $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
-	sed -i '742a tbl_inst->is_table64 = 1;' ./_build/wamr/core/iwasm/aot/aot_runtime.c; \
+	@if ! grep -Fq 'tbl_inst->is_table64 = 1;' ./_build/wamr/core/iwasm/aot/aot_runtime.c; then \
+		awk 'NR == 742 { print; print "tbl_inst->is_table64 = 1;"; next } { print }' \
+			./_build/wamr/core/iwasm/aot/aot_runtime.c > ./_build/wamr/core/iwasm/aot/aot_runtime.c.tmp && \
+		mv ./_build/wamr/core/iwasm/aot/aot_runtime.c.tmp ./_build/wamr/core/iwasm/aot/aot_runtime.c; \
+	fi; \
 	cmake \
 		$(WAMR_FLAGS) \
 		-S $(WAMR_DIR) \
 		-B $(WAMR_DIR)/lib \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWAMR_BUILD_TARGET=$(WAMR_BUILD_TARGET) \
 		-DWAMR_BUILD_PLATFORM=$(WAMR_BUILD_PLATFORM) \
 		-DWAMR_BUILD_MEMORY64=1 \
@@ -98,9 +108,26 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "Error: Node.js is not installed. Please install Node.js before continuing."; \
 		echo "For Ubuntu/Debian, you can install it with:"; \
 		echo "  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && \\"; \
-		echo "  apt-get install -y nodejs && \\"; \
+		echo "  apt-get install -y nodejs=22.16.0-1nodesource1 --allow-downgrades && \\"; \
 		echo "  node -v && npm -v"; \
 		exit 1; \
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+# Update hyperbuddy-ui from remote bundle
+update-hyperbuddy-ui:
+	@echo "Fetching package.json from $(HYPERBUDDY_UI_REPO)..." && \
+	TX_ID=$$(curl -s "$(HYPERBUDDY_UI_PACKAGE_JSON)" | grep -o '"bundle"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4) && \
+	if [ -z "$$TX_ID" ]; then \
+		echo "Error: Could not find 'bundle' field in package.json"; \
+		exit 1; \
+	fi && \
+	echo "Found transaction ID: $$TX_ID" && \
+	if [ -f "$(HYPERBUDDY_UI_TARGET)" ]; then \
+		rm "$(HYPERBUDDY_UI_TARGET)" && \
+		echo "Removed existing bundle.js"; \
+	fi && \
+	echo "Downloading source code from Arweave..." && \
+	curl -sL "$(ARWEAVE_GATEWAY)/$$TX_ID" -o "$(HYPERBUDDY_UI_TARGET)" && \
+	echo "Successfully updated $(HYPERBUDDY_UI_TARGET)"

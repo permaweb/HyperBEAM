@@ -28,7 +28,7 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
         <<"block-height">> => hb_util:int(Height),
         <<"block-hash">> => hb_util:human_id(Hash),
         <<"assignments">> =>
-            maps:from_list(
+            hb_maps:from_list(
                 lists:map(
                     fun(Assignment) ->
                         {
@@ -93,24 +93,23 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
 cursor(Assignment, RawOpts) ->
     Opts = format_opts(RawOpts),
     hb_ao:get(<<"slot">>, Assignment, Opts).
-
 %% @doc Convert an assignment to an AOS2-compatible JSON structure.
 assignment_to_aos2(Assignment, RawOpts) ->
     Opts = format_opts(RawOpts),
     Message = hb_ao:get(<<"body">>, Assignment, Opts),
-    AssignmentWithoutBody = maps:without([<<"body">>], Assignment),
+    AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
     #{
         <<"message">> =>
-            dev_json_iface:message_to_json_struct(Message),
+            dev_json_iface:message_to_json_struct(Message, Opts),
         <<"assignment">> =>
-            dev_json_iface:message_to_json_struct(AssignmentWithoutBody)
+            dev_json_iface:message_to_json_struct(AssignmentWithoutBody, Opts)
     }.
 
 %% @doc Convert an AOS2-style JSON structure to a normalized HyperBEAM
 %% assignments response.
 aos2_to_assignments(ProcID, Body, RawOpts) ->
     Opts = format_opts(RawOpts),
-    Assignments = maps:get(<<"edges">>, Body, Opts),
+    Assignments = hb_maps:get(<<"edges">>, Body, Opts, Opts),
     ?event({raw_assignments, Assignments}),
     ParsedAssignments =
         lists:map(
@@ -135,19 +134,29 @@ aos2_to_assignments(ProcID, Body, RawOpts) ->
 %% NOTE: This method is destructive to the verifiability of the assignment.
 aos2_to_assignment(A, RawOpts) ->
     Opts = format_opts(RawOpts),
-    % Unwrap the node if it is provided
-    Node = maps:get(<<"node">>, A, A),
+    % Unwrap the node if it is provided. Handle GraphQL-style responses with edges.
+    Node = case hb_maps:get(<<"edges">>, A, undefined, Opts) of
+        [FirstEdge | _] when is_map(FirstEdge) ->
+            hb_maps:get(<<"node">>, FirstEdge, A, Opts);
+        undefined ->
+            hb_maps:get(<<"node">>, A, A, Opts);
+        _ ->
+            A
+    end,
     ?event({node, Node}),
+    AssignmentData = hb_maps:get(<<"assignment">>, Node, undefined, Opts),
+    ?event({assignment_data, AssignmentData}),
     {ok, Assignment} =
         hb_gateway_client:result_to_message(
-            aos2_normalize_data(maps:get(<<"assignment">>, Node)),
+            aos2_normalize_data(AssignmentData),
             Opts
         ),
+        ?event({result_assignment, Assignment}),
     NormalizedAssignment = aos2_normalize_types(Assignment),
     {ok, Message} =
-        case maps:get(<<"message">>, Node) of
+        case hb_maps:get(<<"message">>, Node, undefined, Opts) of
             null ->
-                MessageID = maps:get(<<"message">>, Assignment),
+                MessageID = hb_maps:get(<<"message">>, Assignment, undefined, Opts),
                 ?event(error, {scheduler_did_not_provide_message, MessageID}),
                 case hb_cache:read(MessageID, Opts) of
                     {ok, Msg} -> {ok, Msg};
@@ -164,9 +173,8 @@ aos2_to_assignment(A, RawOpts) ->
                     Opts
                 )
         end,
-    NormalizedMessage = aos2_normalize_types(Message),
     ?event({message, Message}),
-    NormalizedAssignment#{ <<"body">> => NormalizedMessage }.
+    NormalizedAssignment#{ <<"body">> => Message }.
 
 %% @doc The `hb_gateway_client' module expects all JSON structures to at least
 %% have a `data' field. This function ensures that.
@@ -199,8 +207,7 @@ aos2_normalize_types(Msg) ->
     ?event(
         {
             aos2_normalized_types,
-            {msg, Msg},
-            {anchor, hb_ao:get(<<"anchor">>, Msg, <<>>, #{})}
+            {msg, Msg}
         }
     ),
     Msg.

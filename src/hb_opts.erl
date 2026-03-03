@@ -13,10 +13,113 @@
 %%% deterministic behavior impossible, the caller should fail the execution 
 %%% with a refusal to execute.
 -module(hb_opts).
--export([get/1, get/2, get/3, load/1, load_bin/1]).
--export([default_message/0, mimic_default_types/2, validate_node_history/1, validate_node_history/3]).
+-export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
+-export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
+-export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
+
+%%% Environment variables that can be used to override the default message.
+-ifdef(TEST).
+-define(DEFAULT_PRINT_OPTS, [error, http_error, cron_error]).
+-else.
+-define(DEFAULT_PRINT_OPTS,
+    [
+        error, http_error, cron_error,
+        http_short, compute_short, push_short, copycat_short
+    ]
+).
+-endif.
+
+%%% Default name resolvers. In test mode, we do not use any name resolvers, but
+%%% in-production mode we preload the ARNS snapshot as a baseline.
+-ifndef(TEST).
+-define(DEFAULT_NAME_RESOLVERS,
+    [
+        <<
+            "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
+                "~json@1.0/deserialize&target=data"
+        >>
+    ]
+).
+-else.
+-define(DEFAULT_NAME_RESOLVERS, []).
+-endif.
+
+-ifdef(AO_PROFILING).
+-define(DEFAULT_TRACE_TYPE, ao).
+-else.
+-define(DEFAULT_TRACE_TYPE, erlang).
+-endif.
+
+-define(DEFAULT_PRIMARY_STORE, #{
+    <<"name">> => <<"cache-mainnet/lmdb">>,
+    <<"store-module">> => hb_store_lmdb
+}).
+-define(ENV_KEYS,
+    #{
+        priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
+        hb_config_location => {"HB_CONFIG", "config.flat"},
+        port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
+        mode => {"HB_MODE", fun list_to_existing_atom/1},
+        paranoid_verify =>
+            {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
+        debug_print =>
+            {
+                "HB_PRINT",
+                fun topic_list_to_atoms/1,
+                {preparsed, ?DEFAULT_PRINT_OPTS}
+            },
+        lua_scripts => {"LUA_SCRIPTS", "scripts"},
+        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
+        default_index =>
+            {
+                "HB_INDEX",
+                fun("ui") ->
+                    #{
+                        <<"device">> => <<"hyperbuddy@1.0">>
+                    };
+                   ("text") ->
+                    #{
+                        <<"device">> => <<"hyperbuddy@1.0">>,
+                        <<"path">> => <<"format">>
+                    };
+                   (Str) ->
+                    case string:tokens(Str, "/") of
+                        [Device, Path] ->
+                            #{ <<"device">> => Device, <<"path">> => Path };
+                        [Device] ->
+                            #{ <<"device">> => Device }
+                    end
+                end,
+                "ui"
+            }
+    }
+).
+
+%% @doc Convert a comma-separated list of topics, as occassionally used by `HB_*`
+%% environment variables, to a list of atoms. Additionally, will return `true' if
+%% the string is `true', `1', or `all'.
+topic_list_to_atoms({preparsed, Parsed}) -> Parsed;
+topic_list_to_atoms("false") -> [];
+topic_list_to_atoms("1") -> true;
+topic_list_to_atoms("true") -> true;
+topic_list_to_atoms("all") -> true;
+topic_list_to_atoms(Str) ->
+    lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
+
+%% @doc Return the default message with all environment variables set.
+default_message_with_env() ->
+    maps:fold(
+        fun(Key, _Spec, NodeMsg) ->
+            case global_get(Key, undefined, #{}) of
+                undefined -> NodeMsg;
+                Value -> NodeMsg#{ Key => Value }
+            end
+        end,
+        default_message(),
+        ?ENV_KEYS
+    ).
 
 %% @doc The default configuration options of the hyperbeam node.
 default_message() ->
@@ -37,7 +140,6 @@ default_message() ->
         %% Options: aggressive, lazy
         compute_mode => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
-        host => <<"localhost">>,
         gateway => <<"https://arweave.net">>,
         bundler_ans104 => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
@@ -49,22 +151,33 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
+            #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
+            #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
+            #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
+            #{<<"name">> => <<"blacklist@1.0">>, <<"module">> => dev_blacklist},
+            #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
             #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
             #{<<"name">> => <<"cacheviz@1.0">>, <<"module">> => dev_cacheviz},
+            #{<<"name">> => <<"cookie@1.0">>, <<"module">> => dev_codec_cookie},
             #{<<"name">> => <<"cron@1.0">>, <<"module">> => dev_cron},
             #{<<"name">> => <<"dedup@1.0">>, <<"module">> => dev_dedup},
             #{<<"name">> => <<"delegated-compute@1.0">>, <<"module">> => dev_delegated_compute},
             #{<<"name">> => <<"faff@1.0">>, <<"module">> => dev_faff},
             #{<<"name">> => <<"flat@1.0">>, <<"module">> => dev_codec_flat},
             #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
+            #{<<"name">> => <<"gzip@1.0">>, <<"module">> => dev_gzip},
             #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
             #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
+            #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
+            #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
+            #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
             #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
             #{<<"name">> => <<"local-name@1.0">>, <<"module">> => dev_local_name},
+            #{<<"name">> => <<"location@1.0">>, <<"module">> => dev_location},
             #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
             #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
             #{<<"name">> => <<"manifest@1.0">>, <<"module">> => dev_manifest},
@@ -78,7 +191,9 @@ default_message() ->
             #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
             #{<<"name">> => <<"poda@1.0">>, <<"module">> => dev_poda},
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
+            #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
+            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
@@ -87,9 +202,13 @@ default_message() ->
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
+            #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
+            #{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
+            #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -109,7 +228,7 @@ default_message() ->
         %% HTTP request options
         http_connect_timeout => 5000,
         http_keepalive => 120000,
-        http_request_send_timeout => 60000,
+        http_request_send_timeout => 300_000,
         port => 8734,
         wasm_allow_aot => false,
         %% Options for the relay device
@@ -118,33 +237,62 @@ default_message() ->
         commitment_device => <<"httpsig@1.0">>,
         %% Dev options
         mode => debug,
+        profiling => true,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
         node_history => [],
         debug_stack_depth => 40,
+        debug_print => false,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
-        debug_print => false,
-        stack_print_prefixes => ["hb", "dev", "ar"],
-        debug_print_trace => short, % `short' | `false'. Has performance impact.
-        short_trace_len => 5,
-        debug_metadata => true,
-        debug_ids => true,
-        debug_committers => false,
-        debug_show_priv => false,
-        snp_trusted => [],
+        debug_print_truncate => 30,
+        stack_print_prefixes => ["hb", "dev", "ar", "maps"],
+        debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_print_metadata => true,
+        debug_print_gen_id => true,
+        debug_print_committers => true,
+        debug_print_comm_device => true,
+        debug_print_comm_type => true,
+        debug_trace_type => ?DEFAULT_TRACE_TYPE,
+        short_trace_len => 20,
+        debug_show_priv => if_present,
+        debug_resolve_links => true,
+        debug_print_fail_mode => long,
+		trusted => #{},
+        snp_enforced_keys => [
+            firmware, kernel, 
+            initrd, append,
+            vmm_type, guest_features
+        ],
+        name_resolvers => ?DEFAULT_NAME_RESOLVERS,
         routes => [
+            %% Local CU routes.
             #{
-                % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/result/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
-                % Routes for GraphQL requests to use a remote GraphQL API.
+                <<"template">> => <<"/snapshot/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
+                <<"template">> => <<"/dry-run.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
+                <<"template">> => <<"/state.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            %% GraphQL: race all gateways, take the first 200.
+            #{
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
                     [
+                        #{
+                            <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
@@ -155,8 +303,193 @@ default_message() ->
                         }
                     ]
             },
+            %% Chunk requests: route to the nearest data nodes by
+            %% partition midpoint (byte offset). Tries 4 at a time,
+            %% ordered by proximity, until one returns 200.
             #{
-                % Routes for raw data requests to use a remote gateway.
+                <<"template">> => <<"^/arweave/chunk">>,
+                <<"nodes">> =>
+                    [
+                        %% Partitions 0-15
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 28_800_000_000_000,
+                            <<"with">> => <<"http://data-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 28_800_000_000_000,
+                            <<"with">> => <<"http://data-13.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 16-31
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-3.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-14.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 86_400_000_000_000,
+                            <<"with">> => <<"http://data-15.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 32-47
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-4.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-5.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-16.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 144_000_000_000_000,
+                            <<"with">> => <<"http://data-17.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 48-63
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 201_600_000_000_000,
+                            <<"with">> => <<"http://data-6.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 201_600_000_000_000,
+                            <<"with">> => <<"http://data-7.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 48-107 (tip nodes)
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-4.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 280_800_000_000_000,
+                            <<"with">> => <<"http://tip-5.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 64-126
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 343_800_000_000_000,
+                            <<"with">> => <<"http://data-8.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        %% Partitions 75-138
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-9.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-10.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-11.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"center">> => 385_200_000_000_000,
+                            <<"with">> => <<"http://data-12.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                <<"strategy">> => <<"Nearest-Integer">>,
+                <<"choose">> => 22,
+                <<"parallel">> => 4,
+                <<"responses">> => 1,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            % Raw data requests via arweave.net gateway.
+            #{
+                <<"template">> => <<"^/arweave/raw">>,
+                <<"node">> =>
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
+            },
+            %% General Arweave requests: race both chain nodes, take
+            %% the first 200.
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://chain-1.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"http://chain-2.arweave.xyz:1984">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
+            },
+            %% Raw data requests via arweave.net gateway. TODO: Update later.
+            #{
                 <<"template">> => <<"/raw">>,
                 <<"node">> =>
                     #{
@@ -167,9 +500,10 @@ default_message() ->
         ],
         store =>
             [
+                ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"prefix">> => <<"cache-mainnet">>
+                    <<"name">> => <<"cache-mainnet">>
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
@@ -179,25 +513,22 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"store">> => 
-                     [
-                        #{
-                            <<"store-module">> => hb_store_fs,
-                            <<"prefix">> => <<"cache-mainnet">>
-                         }
-                     ]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"store">> =>
-                        [
-                            #{
-                                <<"store-module">> => hb_store_fs,
-                                <<"prefix">> => <<"cache-mainnet">>
-                            }
-                        ]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
+        match_index => [?DEFAULT_PRIMARY_STORE],
+        priv_store =>
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-priv">>
+                }
+            ],
+        %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         process_now_from_cache => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
@@ -212,13 +543,49 @@ default_message() ->
         % Should the node store all signed messages?
         store_all_signed => true,
         % Should the node use persistent processes?
-        process_workers => false
+        process_workers => false,
+        % Options for the router device
+        router_opts => #{
+            routes => []
+        },
+        on => #{
+            <<"request">> =>
+                [
+                    #{
+                        <<"device">> => <<"auth-hook@1.0">>,
+                        <<"path">> => <<"request">>,
+                        <<"when">> => #{
+                            <<"keys">> => [<<"authorization">>, <<"!">>]
+                        },
+                        <<"secret-provider">> =>
+                            #{
+                                <<"device">> => <<"http-auth@1.0">>,
+                                <<"access-control">> =>
+                                    #{ <<"device">> => <<"http-auth@1.0">> }
+                            }
+                    },
+                    #{
+                        <<"device">> => <<"name@1.0">>
+                    }
+                ]
+        },
+        scheduler_default_commitment_spec => <<"httpsig@1.0">>,
+        genesis_wasm_import_authorities =>
+            [
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ],
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+        % Define the behaviour when accessing a file inside a manifest that 
+        % doesn't exists.
+        % Options:
+        % - fallback: Fallback to the index page
+        % - error: Return 404 Not Found
+        manifest_404 => fallback
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a
@@ -232,94 +599,87 @@ get(Key) -> ?MODULE:get(Key, undefined).
 get(Key, Default) -> ?MODULE:get(Key, Default, #{}).
 get(Key, Default, Opts) when is_binary(Key) ->
     try binary_to_existing_atom(Key, utf8) of
-        AtomKey -> get(AtomKey, Default, Opts)
+        AtomKey -> do_get(AtomKey, Default, Opts)
     catch
-        error:badarg -> Default
+        error:badarg -> do_get(Key, Default, Opts)
     end;
-get(Key, Default, Opts = #{ <<"only">> := Only }) ->
-    get(Key, Default, maps:remove(<<"only">>, Opts#{ only => Only }));
-get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
-    get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
-get(Key, Default, Opts = #{ only := local }) ->
+get(Key, Default, Opts) ->
+    do_get(Key, Default, Opts).
+do_get(Key, Default, Opts = #{ <<"only">> := Only }) ->
+    do_get(Key, Default, maps:remove(<<"only">>, Opts#{ only => Only }));
+do_get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
+    do_get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
+do_get(Key, Default, Opts = #{ only := local }) ->
     case maps:find(Key, Opts) of
         {ok, Value} -> Value;
         error -> 
             Default
     end;
-get(Key, Default, #{ only := global }) ->
-    case global_get(Key, hb_opts_not_found) of
+do_get(Key, Default, Opts = #{ only := global }) ->
+    case global_get(Key, hb_opts_not_found, Opts) of
         hb_opts_not_found -> Default;
         Value -> Value
     end;
-get(Key, Default, Opts = #{ prefer := global }) ->
-    case ?MODULE:get(Key, hb_opts_not_found, #{ only => global }) of
-        hb_opts_not_found -> ?MODULE:get(Key, Default, Opts#{ only => local });
+do_get(Key, Default, Opts = #{ prefer := global }) ->
+    case do_get(Key, hb_opts_not_found, #{ only => global }) of
+        hb_opts_not_found -> do_get(Key, Default, Opts#{ only => local });
         Value -> Value
     end;
-get(Key, Default, Opts = #{ prefer := local }) ->
-    case ?MODULE:get(Key, hb_opts_not_found, Opts#{ only => local }) of
+do_get(Key, Default, Opts = #{ prefer := local }) ->
+    case do_get(Key, hb_opts_not_found, Opts#{ only => local }) of
         hb_opts_not_found ->
-            ?MODULE:get(Key, Default, Opts#{ only => global });
+            do_get(Key, Default, Opts#{ only => global });
         Value -> Value
     end;
-get(Key, Default, Opts) ->
+do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
-    ?MODULE:get(Key, Default, Opts#{ prefer => local }).
+    do_get(Key, Default, Opts#{ prefer => local }).
 
--ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, "error,http_error").
--else.
--define(DEFAULT_PRINT_OPTS, "error,http_error,http_short,compute_short,push_short").
--endif.
-
--define(ENV_KEYS,
-    #{
-        priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
-        hb_config_location => {"HB_CONFIG", "config.flat"},
-        port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
-        mode => {"HB_MODE", fun list_to_existing_atom/1},
-        debug_print =>
-            {"HB_PRINT",
-                fun
-                    (Str) when Str == "1" -> true;
-                    (Str) when Str == "true" -> true;
-                    (Str) ->
-                        lists:map(fun hb_util:bin/1, string:tokens(Str, ","))
+%% @doc Get an environment variable or configuration key. Depending on whether
+%% the value is derived from an environment variable, we may be able to cache
+%% the result in the process dictionary.
+global_get(Key, Default, Opts) ->
+    case erlang:get({processed_env, Key}) of
+        {cached, Value} -> Value;
+        undefined ->
+            % Thee value is not cached, so we need to process it.
+            {IsCachable, Value} =
+                case maps:get(Key, ?ENV_KEYS, Default) of
+                    Default -> {false, config_lookup(Key, Default, Opts)};
+                    {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
+                        {true, ValParser(
+                            cached_os_env(
+                                EnvKey,
+                                normalize_default(DefaultValue)
+                            )
+                        )};
+                    {EnvKey, ValParser} when is_function(ValParser) ->
+                        case cached_os_env(EnvKey, not_found) of
+                            not_found -> {false, config_lookup(Key, Default, Opts)};
+                            V -> {true, ValParser(V)}
+                        end;
+                    {EnvKey, DefaultValue} ->
+                        {true, cached_os_env(EnvKey, DefaultValue)}
                 end,
-                ?DEFAULT_PRINT_OPTS
-            },
-        lua_scripts => {"LUA_SCRIPTS", "scripts"},
-        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests}
-    }
-).
-
-%% @doc Get an environment variable or configuration key.
-global_get(Key, Default) ->
-    case maps:get(Key, ?ENV_KEYS, Default) of
-        Default -> config_lookup(Key, Default);
-        {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
-            ValParser(cached_os_env(EnvKey, normalize_default(DefaultValue)));
-        {EnvKey, ValParser} when is_function(ValParser) ->
-            case cached_os_env(EnvKey, not_found) of
-                not_found -> config_lookup(Key, Default);
-                Value -> ValParser(Value)
-            end;
-        {EnvKey, DefaultValue} ->
-            cached_os_env(EnvKey, DefaultValue)
+            % Cache the result if it is immutable and return.
+            if IsCachable -> erlang:put({processed_env, Key}, {cached, Value});
+            true -> ok
+            end,
+            Value
     end.
 
 %% @doc Cache the result of os:getenv/1 in the process dictionary, as it never
 %% changes during the lifetime of a node.
 cached_os_env(Key, DefaultValue) ->
     case erlang:get({os_env, Key}) of
+        {cached, false} -> DefaultValue;
+        {cached, Value} -> Value;
         undefined ->
-            case os:getenv(Key) of
-                false -> DefaultValue;
-                Value ->
-                    erlang:put({os_env, Key}, Value),
-                    Value
-            end;
-        Value -> Value
+            % The process dictionary returns `undefined' for a key that is not
+            % set, so we need to check the environment and store the result.
+            erlang:put({os_env, Key}, {cached, os:getenv(Key)}),
+            % We recurse to follow the normal path.
+            cached_os_env(Key, DefaultValue)
     end.
 
 %% @doc Get an option from environment variables, optionally consulting the
@@ -334,31 +694,91 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default) -> maps:get(Key, default_message(), Default).
+config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
-load(Path) ->
+load(Path) -> load(Path, #{}).
+load(Path, Opts) ->
+    {ok, Device} = path_to_device(Path),
     case file:read_file(Path) of
         {ok, Bin} ->
-            load_bin(Bin);
+            load_bin(Device, Bin, Opts);
         _ -> {error, not_found}
     end.
-load_bin(Bin) ->
-    try dev_codec_flat:deserialize(Bin) of
-        {ok, Map} -> {ok, mimic_default_types(Map, new_atoms)}
+
+%% @doc Convert a path to a device from its file extension. If no extension is
+%% provided, we default to `flat@1.0'.
+path_to_device(Path) ->
+    case binary:split(hb_util:bin(Path), <<".">>, []) of
+        [_, Extension] ->
+            ?event(debug_node_msg,
+                {path_to_device,
+                    {path, Path},
+                    {extension, Extension}
+                }
+            ),
+            extension_to_device(Extension);
+        _ -> {ok, <<"flat@1.0">>}
+    end.
+
+%% @doc Convert a file extension to a device name.
+extension_to_device(Ext) ->
+    extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
+extension_to_device(_, []) -> {error, not_found};
+extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
+    case binary:match(Name, Ext) of
+        nomatch -> extension_to_device(Ext, Rest);
+        {0, _} -> {ok, Name}
+    end.
+
+%% @doc Parse a given binary with a device (defaulting to `flat@1.0') into a
+%% node message. Types are converted to match those in the default message, if
+%% applicable.
+load_bin(Bin, Opts) ->
+    load_bin(<<"flat@1.0">>, Bin, Opts).
+load_bin(<<"flat@1.0">>, Bin, Opts) ->
+    % Trim trailing whitespace from each line in the file.
+    Ls =
+        lists:map(
+            fun(Line) -> string:trim(Line, trailing) end,
+            binary:split(Bin, <<"\n">>, [global])
+        ),
+    try dev_codec_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
+        {ok, Map} ->
+            {ok, mimic_default_types(Map, new_atoms, Opts)}
     catch
         error:B -> {error, B}
+    end;
+load_bin(Device, Bin, Opts) ->
+    try
+        {
+            ok,
+            mimic_default_types(
+                hb_cache:ensure_all_loaded(
+                    hb_message:convert(
+                        Bin,
+                        <<"structured@1.0">>,
+                        Device,
+                        Opts#{ linkify_mode => false }
+                    ),
+                    Opts
+                ),
+                new_atoms,
+                Opts
+            )
+        }
+    catch error:B -> {error, B}
     end.
 
 %% @doc Mimic the types of the default message for a given map.
-mimic_default_types(Map, Mode) ->
-    Default = default_message(),
-    maps:from_list(lists:map(
+mimic_default_types(Map, Mode, Opts) ->
+    Default = default_message_with_env(),
+    hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
             NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
-                case maps:get(NewKey, Default, not_found) of
+                case hb_maps:get(NewKey, Default, not_found, Opts) of
                     not_found -> Value;
                     DefaultValue when is_atom(DefaultValue) ->
                         hb_util:atom(Value);
@@ -372,43 +792,69 @@ mimic_default_types(Map, Mode) ->
                 end,
             {NewKey, NewValue}
         end,
-        maps:to_list(Map)
+        hb_maps:to_list(Map, Opts)
     )).
-    
-%% @doc Validate that the node_history length is within an acceptable range.
-%% @param Opts The options map containing node_history
-%% @param MinLength The minimum acceptable length of node_history
-%% @param MaxLength The maximum acceptable length of node_history
-%% @returns `{ok, Length}' if `MinLength =< Length =< MaxLength',
-%% or `{error, Reason}' if the length is outside the range.
-validate_node_history(Opts) ->
-    validate_node_history(Opts, 1, 1).
-validate_node_history(Opts, MinLength, MaxLength) ->
-    Length = length(hb_opts:get(node_history, [], Opts)),
-    if
-        Length >= MinLength, Length =< MaxLength -> 
-            {ok, Length};
-        Length < MinLength -> 
-            {
-                error,
-                <<
-                    "Node history too short. Expected at least ",
-                    (integer_to_binary(MinLength))/binary,
-                    " entries, got ",
-                    (integer_to_binary(Length))/binary,
-                    "."
-                >>
-            };
-        true -> 
-            {
-                error,
-                <<
-                    "Node history too long. Expected at most ",
-                    (integer_to_binary(MaxLength))/binary,
-                    " entries, got ",
-                    (integer_to_binary(Length))/binary,
-                    "."
-                >>
+
+%% @doc Find a given identity from the `identities' map, and return the options
+%% merged with the sub-options for that identity.
+as(Identity, Opts) ->
+    case identities(Opts) of
+        #{ Identity := SubOpts } ->
+            ?event({found_identity_sub_opts_are, SubOpts}),
+            {ok, maps:merge(Opts, mimic_default_types(SubOpts, new_atoms, Opts))};
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Find all known IDs and their sub-options from the `priv_ids' map. Allows
+%% the identities to be named, or based on addresses. The results are normalized
+%% such that the map returned by this function contains both mechanisms for 
+%% finding an identity and its sub-options. Additionally, sub-options are also
+%% normalized such that the `address' property is present and accurate for all
+%% given identities.
+identities(Opts) ->
+    identities(hb:wallet(), Opts).
+identities(Default, Opts) ->
+    Named = ?MODULE:get(identities, #{}, Opts),
+    % Generate an address-based map of identities.
+    Addresses =
+        maps:from_list(lists:filtermap(
+            fun({_Name, SubOpts}) ->
+                case maps:find(priv_wallet, SubOpts) of
+                    {ok, Wallet} ->
+                        Addr = hb_util:human_id(ar_wallet:to_address(Wallet)),
+                        {true, {Addr, SubOpts}};
+                    error -> false
+                end
+            end,
+            maps:to_list(Named)
+        )),
+    % Merge the named and address-based maps. Normalize each result to ensure
+    % that the `address' property is present and accurate.
+    Identities =
+        maps:map(
+            fun(_NameOrID, SubOpts) ->
+                case maps:find(priv_wallet, SubOpts) of
+                    {ok, Wallet} ->
+                        SubOpts#{ <<"address">> => hb_util:human_id(Wallet) };
+                    error -> SubOpts
+                end
+            end,
+            maps:merge(Named, Addresses)
+        ),
+    ?event({identities_without_default, Identities}),
+    % Add a default identity if one is not already present.
+    DefaultWallet = ?MODULE:get(priv_wallet, Default, Opts),
+    case maps:find(DefaultID = hb_util:human_id(DefaultWallet), Identities) of
+        {ok, _} -> Identities;
+        error ->
+            Identities#{
+                DefaultID => #{
+                    priv_wallet => DefaultWallet
+                },
+                <<"default">> => #{
+                    priv_wallet => DefaultWallet
+                }
             }
     end.
 
@@ -442,6 +888,72 @@ check_required_opts(KeyValuePairs, Opts) ->
             ),
             ErrorMsg = <<"Missing required opts: ", MissingOptsStr/binary>>,
             {error, ErrorMsg}
+    end.
+
+%% @doc Ensures all items in a node history meet required configuration options.
+%%
+%% This function verifies that the first item (complete opts) contains all required
+%% configuration options and that their values match the expected format. Then it
+%% validates that subsequent history items (which represent differences) never
+%% modify any of the required keys from the first item.
+%%
+%% Validation is performed in two steps:
+%% 1. Checks that the first item has all required keys and valid values
+%% 2. Verifies that subsequent items don't modify any required keys from the first item
+%%
+%% @param Opts The complete options map (will become first item in history)
+%% @param RequiredOpts A map of options that must be present and unchanging
+%% @returns {ok, <<"valid">>} when validation passes
+%% @returns {error, <<"missing_keys">>} when required keys are missing from first item
+%% @returns {error, <<"invalid_values">>} when first item values don't match requirements
+%% @returns {error, <<"modified_required_key">>} when history items modify required keys
+%% @returns {error, <<"validation_failed">>} when other validation errors occur
+-spec ensure_node_history(NodeHistory :: list() | term(), RequiredOpts :: map()) -> 
+    {ok, binary()} | {error, binary()}.
+ensure_node_history(Opts, RequiredOpts) ->
+    ?event(validate_history_items, {required_opts, RequiredOpts}),
+    maybe
+        % Get the node history from the options
+        NodeHistory = hb_opts:get(node_history, [], Opts),
+        % Add the Opts to the node history to validate all items
+        NodeHistoryWithOpts = [ Opts | NodeHistory ],
+        % Normalize required options
+        NormalizedRequiredOpts ?= hb_ao:normalize_keys(RequiredOpts),
+        % Normalize all node history items once
+        NormalizedNodeHistory ?= lists:map(
+            fun(Item) -> 
+                hb_ao:normalize_keys(Item)
+            end,
+            NodeHistoryWithOpts
+        ),
+        % Get the first item (complete opts) and remaining items (differences)
+        [FirstItem | RemainingItems] = NormalizedNodeHistory,
+        % Step 2: Validate first item values match requirements
+        FirstItemValuesMatch = hb_message:match(NormalizedRequiredOpts, FirstItem, primary),
+        true ?= (FirstItemValuesMatch == true) orelse {error, values_invalid},
+        % Step 3: Check that remaining items don't modify required keys
+        NoRequiredKeysModified = lists:all(
+            fun(HistoryItem) ->
+                % For each required key, if it exists in this history item,
+                % it must match the value from the first item
+                hb_message:match(RequiredOpts, HistoryItem, only_present)
+            end,
+            RemainingItems
+        ),
+        true ?= NoRequiredKeysModified orelse {error, required_key_modified},
+        % If we've made it this far, everything is valid
+        ?event({validate_node_history_items, all_items_valid}),
+        {ok, valid}
+    else
+        {error, values_invalid} ->
+            ?event({validate_node_history_items, validation_failed, invalid_values}),
+            {error, invalid_values};
+        {error, required_key_modified} ->
+            ?event({validate_node_history_items, validation_failed, required_key_modified}),
+            {error, modified_required_key};
+        _ ->
+            ?event({validate_node_history_items, validation_failed, unknown}),
+            {error, validation_failed}
     end.
 
 %%% Tests
@@ -478,37 +990,167 @@ global_preference_test() ->
         ?MODULE:get(mode, undefined, Global#{ mode => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
 
-load_test() ->
+load_flat_test() ->
     % File contents:
     % port: 1234
     % host: https://ao.computer
     % await-inprogress: false
-    {ok, Conf} = load("test/config.flat"),
+    {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
-    ?assertEqual(1234, maps:get(port, Conf)),
+    ?assertEqual(1234, hb_maps:get(port, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, maps:get(await_inprogress, Conf)).
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
 
-validate_node_history_test() ->
-    % Test default values (min=1, max=1)
-    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]})),
-    ?assertEqual({error, <<"Node history too short. Expected at least 1 entries, got 0.">>}, 
-                 validate_node_history(#{})),
-    ?assertEqual({error, <<"Node history too long. Expected at most 1 entries, got 2.">>}, 
-                 validate_node_history(#{node_history => [entry1, entry2]})),
-    % Test with custom range
-    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 2)),
-    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]}, 0, 2)),
-    ?assertEqual({ok, 2}, validate_node_history(#{node_history => [entry1, entry2]}, 0, 2)),
-    % Test range validations
-    ?assertEqual({error, <<"Node history too short. Expected at least 2 entries, got 1.">>}, 
-                 validate_node_history(#{node_history => [entry1]}, 2, 4)),
-    ?assertEqual({error, <<"Node history too long. Expected at most 2 entries, got 3.">>}, 
-                 validate_node_history(#{node_history => [entry1, entry2, entry3]}, 1, 2)),
-    % Test edge cases
-    ?assertEqual({ok, 3}, validate_node_history(#{node_history => [entry1, entry2, entry3]}, 3, 3)),
-    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 0)).
+load_json_test() ->
+    {ok, Conf} = load("test/config.json", #{}),
+    ?event(debug_node_msg, {loaded, Conf}),
+    ?assertEqual(1234, hb_maps:get(port, Conf)),
+    ?assertEqual(9001, hb_maps:get(example, Conf)),
+    % A binary
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    % An atom, where the key contained a header-key `-' rather than a `_'.
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
+    % Ensure that a store with `ao-types' is loaded correctly.
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }|_],
+        hb_maps:get(store, Conf)
+    ).
+
+as_identity_test() ->
+    DefaultWallet = ar_wallet:new(),
+    TestWallet1 = ar_wallet:new(),
+    TestWallet2 = ar_wallet:new(),
+    TestID2 = hb_util:human_id(TestWallet2),
+    Opts = #{
+        test_key => 0,
+        priv_wallet => DefaultWallet,
+        identities => #{
+            <<"testname-1">> => #{
+                priv_wallet => TestWallet1,
+                test_key => 1
+            },
+            TestID2 => #{
+                priv_wallet => TestWallet2,
+                test_key => 2
+            }
+        }
+    },
+    ?event({base_opts, Opts}),
+    Identities = identities(Opts),
+    ?event({identities, Identities}),
+    % The number of identities should be 5: `default`, its ID, `testname-1`,
+    % and its ID, and just the ID of `TestWallet2`.
+    ?assertEqual(5, maps:size(Identities)),
+    % The wallets for each of the names should be the same as the wallets we
+    % provided. We also check that the settings are applied correctly.
+    ?assertMatch(
+        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        as(<<"default">>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        as(hb_util:human_id(DefaultWallet), Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        as(<<"testname-1">>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        as(hb_util:human_id(TestWallet1), Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet2, test_key := 2 }},
+        as(TestID2, Opts)
+    ).
+    
+ensure_node_history_test() ->
+    % Define some test data
+    RequiredOpts = #{
+        key1 => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            },
+        key2 => <<"value2">>
+    },
+    % Test case: All items have required options
+    ValidOpts =
+    #{
+        <<"key1">> => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            }, 
+        <<"key2">> => <<"value2">>, 
+        <<"extra">> => <<"value">>,
+        node_history => [
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }, 
+                <<"key2">> => <<"value2">>, 
+                <<"extra">> => <<"value">>
+            },
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }, 
+                <<"key2">> => <<"value2">>
+            }
+        ]
+    },
+    ?assertEqual({ok, valid}, ensure_node_history(ValidOpts, RequiredOpts)),
+    ?event({valid_items, ValidOpts}),
+    % Test Missing items
+    MissingItems = 
+    #{
+        <<"key1">> => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            }, 
+        node_history => [
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }
+                % missing key2
+
+            }
+        ]
+    },
+    ?assertEqual({error, invalid_values}, ensure_node_history(MissingItems, RequiredOpts)),
+    ?event({missing_items, MissingItems}),
+    % Test Invalid items
+    InvalidItems =
+        #{
+            <<"key1">> => 
+                #{
+                    <<"type">> => <<"string">>,
+                    <<"value">> => <<"value">>
+                }, 
+            <<"key2">> => <<"value2">>,
+            node_history =>
+                [
+                    #{
+                        <<"key1">> => 
+                            #{
+                                <<"type">> => <<"string">>,
+                                <<"value">> => <<"value2">>
+                            },
+                        <<"key2">> => <<"value3">>
+                    }
+                ]
+        },
+    ?assertEqual({error, invalid_values}, ensure_node_history(InvalidItems, RequiredOpts)).
 -endif.

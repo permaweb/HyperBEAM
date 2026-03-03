@@ -13,8 +13,8 @@ info(_M1) ->
 
 %% @doc Forward the keys function to the message device, handle all others
 %% with deduplication. We only act on the first pass.
-handle(<<"keys">>, M1, _M2, _Opts) ->
-    dev_message:keys(M1);
+handle(<<"keys">>, M1, _M2, Opts) ->
+    dev_message:keys(M1, Opts);
 handle(<<"set">>, M1, M2, Opts) ->
     dev_message:set(M1, M2, Opts);
 handle(_Key, M1, _M2, Opts) ->
@@ -28,13 +28,13 @@ handle(_Key, M1, _M2, Opts) ->
 %%% Tests
 
 basic_multipass_test() ->
-    Msg1 =
+    Base =
         #{
-            <<"device">> => <<"Multipass@1.0">>,
+            <<"device">> => <<"multipass@1.0">>,
             <<"passes">> => 2,
             <<"pass">> => 1
         },
-    Msg2 = Msg1#{ <<"pass">> => 2 },
-    ?assertMatch({pass, _}, hb_ao:resolve(Msg1, <<"Compute">>, #{})),
+    Req = Base#{ <<"pass">> => 2 },
+    ?assertMatch({pass, _}, hb_ao:resolve(Base, <<"Compute">>, #{})),
     ?event(alive),
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg2, <<"Compute">>, #{})).
+    ?assertMatch({ok, _}, hb_ao:resolve(Req, <<"Compute">>, #{})).

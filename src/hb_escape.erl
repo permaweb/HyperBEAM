@@ -1,12 +1,18 @@
-%%% @doc Escape and unescape mixed case values for use in HTTP headers.
-%%% This is necessary for encodings of AO-Core messages for transmission in 
+%%% @doc Functions for escaping and unescaping mixed case values, for use in HTTP
+%%% headers. Both percent-encoding and escaping of double-quoted strings
+%%% (`"' => `\"') are supported.
+%%%
+%%% This is necessary for encodings of AO-Core messages for transmission in
 %%% HTTP/2 and HTTP/3, because uppercase header keys are explicitly disallowed.
 %%% While most map keys in HyperBEAM are normalized to lowercase, IDs are not.
 %%% Subsequently, we encode all header keys to lowercase %-encoded URI-style
 %%% strings because transmission.
 -module(hb_escape).
--export([encode/1, decode/1, encode_keys/1, decode_keys/1]).
+-export([encode/1, decode/1, encode_keys/2, decode_keys/2]).
+-export([encode_quotes/1, decode_quotes/1]).
+-export([encode_ampersand/1]).
 -include_lib("eunit/include/eunit.hrl").
+-include("include/hb.hrl").
 
 %% @doc Encode a binary as a URI-encoded string.
 encode(Bin) when is_binary(Bin) ->
@@ -16,25 +22,47 @@ encode(Bin) when is_binary(Bin) ->
 decode(Bin) when is_binary(Bin) ->
     list_to_binary(percent_unescape(binary_to_list(Bin))).
 
+%% @doc Encode a string with escaped quotes.
+encode_quotes(String) when is_binary(String) ->
+    list_to_binary(encode_quotes(binary_to_list(String)));
+encode_quotes([]) -> [];
+encode_quotes([$\" | Rest]) -> [$\\, $\" | encode_quotes(Rest)];
+encode_quotes([C | Rest]) -> [C | encode_quotes(Rest)].
+
+%% @doc Decode a string with escaped quotes.
+decode_quotes(String) when is_binary(String) ->
+    list_to_binary(decode_quotes(binary_to_list(String)));
+decode_quotes([]) -> [];
+decode_quotes([$\\, $\" | Rest]) -> [$\" | decode_quotes(Rest)];
+decode_quotes([$\" | Rest]) -> decode_quotes(Rest);
+decode_quotes([C | Rest]) -> [C | decode_quotes(Rest)].
+
+%% @doc Encode ampersands as &amp; for XML output.
+encode_ampersand(String) when is_binary(String) ->
+    list_to_binary(encode_ampersand(binary_to_list(String)));
+encode_ampersand([]) -> [];
+encode_ampersand([$& | Rest]) -> [$&, $a, $m, $p, $; | encode_ampersand(Rest)];
+encode_ampersand([C | Rest]) -> [C | encode_ampersand(Rest)].
+
 %% @doc Return a message with all of its keys decoded.
-decode_keys(Msg) when is_map(Msg) ->
-    maps:from_list(
+decode_keys(Msg, Opts) when is_map(Msg) ->
+    hb_maps:from_list(
         lists:map(
             fun({Key, Value}) -> {decode(Key), Value} end,
-            maps:to_list(Msg)
+            hb_maps:to_list(Msg, Opts)
         )
     );
-decode_keys(Other) -> Other.
+decode_keys(Other, _Opts) -> Other.
 
 %% @doc URI encode keys in the base layer of a message. Does not recurse.
-encode_keys(Msg) when is_map(Msg) ->
-    maps:from_list(
+encode_keys(Msg, Opts) when is_map(Msg) ->
+    hb_maps:from_list(
         lists:map(
             fun({Key, Value}) -> {encode(Key), Value} end,
-            maps:to_list(Msg)
+            hb_maps:to_list(Msg, Opts)
         )
     );
-encode_keys(Other) -> Other.
+encode_keys(Other, _Opts) -> Other.
 
 %% @doc Escape a list of characters as a URI-encoded string.
 percent_escape([]) -> [];
@@ -42,7 +70,7 @@ percent_escape([C | Cs]) when C >= $a, C =< $z -> [C | percent_escape(Cs)];
 percent_escape([C | Cs]) when C >= $0, C =< $9 -> [C | percent_escape(Cs)];
 percent_escape([C | Cs]) when
         C == $.; C == $-; C == $_; C == $/;
-        C == $?; C == $&; C == $+ ->
+        C == $?; C == $& ->
     [C | percent_escape(Cs)];
 percent_escape([C | Cs]) -> [escape_byte(C) | percent_escape(Cs)].
 
@@ -78,12 +106,24 @@ escape_unescape_identity_test() ->
     TestCases = [
         <<"hello">>,
         <<"hello, world!">>,
+        <<"hello+list">>,
         <<"special@chars#here">>,
         <<"UPPERCASE">>,
         <<"MixedCASEstring">>,
         <<"12345">>,
         <<>> % Empty string
     ],
+    ?event(parsing,
+        {escape_unescape_identity_test,
+            {test_cases,
+                [
+                        {Case, {explicit, encode(Case)}}
+                    ||
+                        Case <- TestCases
+                ]
+            }
+        }
+    ),
     lists:foreach(fun(TestCase) ->
         ?assertEqual(TestCase, decode(encode(TestCase)))
     end, TestCases).

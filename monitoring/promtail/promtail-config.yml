@@ -1,0 +1,40 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: hyperbeam-docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: name
+            values: [hyperbeam]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+    pipeline_stages:
+      - docker: {}
+      # Tag lines by type so we can filter cheaply in Grafana
+      - match:
+          selector: '{container="hyperbeam"}'
+          stages:
+            - regex:
+                expression: '(?P<event_type>computed_slot|error_computing_slot|cron_every_worker_error|received)'
+            - labels:
+                event_type:
+            # Extract action from computed_slot lines (e.g. "action: Save-Observations")
+            - regex:
+                expression: 'action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)'
+            - labels:
+                action:

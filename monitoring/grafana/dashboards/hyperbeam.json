@@ -1,0 +1,1373 @@
+{
+  "title": "HyperBEAM Node",
+  "uid": "hyperbeam-main",
+  "schemaVersion": 38,
+  "version": 3,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "tags": [
+    "hyperbeam",
+    "ao"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Current Slot",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `slot: (?P<slot>\\d+), target_slot` | unwrap slot [$__interval]))",
+          "legendFormat": "slot",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Target Slot",
+      "type": "stat",
+      "gridPos": {
+        "x": 3,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `target_slot: (?P<target_slot>\\d+)` | unwrap target_slot [$__interval]))",
+          "legendFormat": "target",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Slot Lag",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10000
+              },
+              {
+                "color": "orange",
+                "value": 100000
+              },
+              {
+                "color": "red",
+                "value": 250000
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `target_slot: (?P<target_slot>\\d+)` | unwrap target_slot [$__interval])) - max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `slot: (?P<slot>\\d+), target_slot` | unwrap slot [$__interval]))",
+          "legendFormat": "lag",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Slots / min",
+      "type": "stat",
+      "gridPos": {
+        "x": 9,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate({container=\"hyperbeam\"} |= \"computed_slot,\" [1m])) * 60",
+          "legendFormat": "slots/min",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Compute Errors (last 1h)",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({container=\"hyperbeam\"} |= \"error_computing_slot\" [1h]))",
+          "legendFormat": "errors",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Slot Size (bytes)",
+      "type": "stat",
+      "gridPos": {
+        "x": 15,
+        "y": 0,
+        "w": 3,
+        "h": 3
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `computed_slot_size: (?P<computed_slot_size>\\d+)` | unwrap computed_slot_size [$__interval]))",
+          "legendFormat": "size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "ETA to Catch Up",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 3
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "text": {
+          "valueSize": 28
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "decimals": 0
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "loki-ds",
+            "type": "loki"
+          },
+          "expr": "max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `target_slot: (?P<target_slot>\\d+)` | unwrap target_slot [$__interval])) - max(last_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `slot: (?P<slot>\\d+), target_slot` | unwrap slot [$__interval]))",
+          "legendFormat": "lag",
+          "refId": "A",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "loki-ds",
+            "type": "loki"
+          },
+          "expr": "sum(rate({container=\"hyperbeam\"} |= \"computed_slot,\" [1m])) * 60",
+          "legendFormat": "slots/min",
+          "refId": "B",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "reduce",
+          "reducer": "last",
+          "expression": "A",
+          "refId": "C",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "reduce",
+          "reducer": "last",
+          "expression": "B",
+          "refId": "D",
+          "hide": true
+        },
+        {
+          "datasource": {
+            "uid": "__expr__",
+            "type": "__expr__"
+          },
+          "type": "math",
+          "expression": "$C / $D * 60",
+          "refId": "E"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Execution & Store Time (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "store_ms"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prep_ms"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wasm_cu_ms"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `execution_ms: (?P<execution_ms>\\d+)` | unwrap execution_ms [$__interval]))",
+          "legendFormat": "execution_ms",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `wasm_cu_ms: (?P<wasm_cu_ms>\\d+)` | unwrap wasm_cu_ms [$__interval]))",
+          "legendFormat": "wasm_cu_ms",
+          "refId": "D"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_ms: (?P<store_ms>\\d+)` | unwrap store_ms [$__interval]))",
+          "legendFormat": "store_ms",
+          "refId": "B"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `prep_ms: (?P<prep_ms>\\d+)` | unwrap prep_ms [$__interval]))",
+          "legendFormat": "prep_ms",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "LMDB Time per Slot (\u00b5s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "exec_lmdb_write_us"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval]))",
+          "legendFormat": "exec_lmdb_read_us",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval]))",
+          "legendFormat": "exec_lmdb_write_us",
+          "refId": "B"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_read_us: (?P<store_lmdb_read_us>\\d+)` | unwrap store_lmdb_read_us [$__interval]))",
+          "legendFormat": "store_lmdb_read_us",
+          "refId": "C"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_write_us: (?P<store_lmdb_write_us>\\d+)` | unwrap store_lmdb_write_us [$__interval]))",
+          "legendFormat": "store_lmdb_write_us",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "LMDB Ops per Slot",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "exec_lmdb_writes"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]))",
+          "legendFormat": "exec_lmdb_reads",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]))",
+          "legendFormat": "exec_lmdb_writes",
+          "refId": "B"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_reads: (?P<store_lmdb_reads>\\d+)` | unwrap store_lmdb_reads [$__interval]))",
+          "legendFormat": "store_lmdb_reads",
+          "refId": "C"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `store_lmdb_writes: (?P<store_lmdb_writes>\\d+)` | unwrap store_lmdb_writes [$__interval]))",
+          "legendFormat": "store_lmdb_writes",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Avg LMDB Latency per Op (\u00b5s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_write_us"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]))",
+          "legendFormat": "avg_exec_read_us",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval])) / avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]))",
+          "legendFormat": "avg_exec_write_us",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Slot Size (bytes)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `computed_slot_size: (?P<computed_slot_size>\\d+)` | unwrap computed_slot_size [$__interval]))",
+          "legendFormat": "slot_size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Slots / min (rate)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 2
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate({container=\"hyperbeam\"} |= \"computed_slot,\" [1m])) * 60",
+          "legendFormat": "slots/min",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "title": "Dedup Trie \u2014 Entries & Size",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dedup_bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `dedup_entries: (?P<dedup_entries>\\d+)` | unwrap dedup_entries [$__interval]))",
+          "legendFormat": "dedup_entries",
+          "refId": "A"
+        },
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `dedup_bytes: (?P<dedup_bytes>\\d+)` | unwrap dedup_bytes [$__interval]))",
+          "legendFormat": "dedup_bytes",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Balances Map \u2014 Entries & Size",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "balances_bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `balances_entries: (?P<balances_entries>\\d+)` | unwrap balances_entries [$__interval]))",
+          "legendFormat": "balances_entries",
+          "refId": "A"
+        },
+        {
+          "expr": "max(last_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `balances_bytes: (?P<balances_bytes>\\d+)` | unwrap balances_bytes [$__interval]))",
+          "legendFormat": "balances_bytes",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "title": "Trie Serialization Time (\u00b5s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s",
+          "custom": {
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "balances_write_us"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `dedup_write_us: (?P<dedup_write_us>\\d+)` | unwrap dedup_write_us [$__interval]))",
+          "legendFormat": "dedup_write_us",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(avg_over_time({container=\"hyperbeam\", event_type=\"computed_slot\"} | regexp `balances_write_us: (?P<balances_write_us>\\d+)` | unwrap balances_write_us [$__interval]))",
+          "legendFormat": "balances_write_us",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "Trie Write Time by Action (\u00b5s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `dedup_write_us: (?P<dedup_write_us>\\d+)` | unwrap dedup_write_us [$__interval]) by (action)",
+          "legendFormat": "dedup/{{action}}",
+          "refId": "A"
+        },
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `balances_write_us: (?P<balances_write_us>\\d+)` | unwrap balances_write_us [$__interval]) by (action)",
+          "legendFormat": "balances/{{action}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Execution Time by Action (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `execution_ms: (?P<execution_ms>\\d+)` | unwrap execution_ms [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Slots / min by Action",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (action) (rate({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` [1m])) * 60",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "LMDB Reads by Action",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_reads: (?P<exec_lmdb_reads>\\d+)` | unwrap exec_lmdb_reads [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "LMDB Writes by Action",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_writes: (?P<exec_lmdb_writes>\\d+)` | unwrap exec_lmdb_writes [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "LMDB Total Time by Action (\u00b5s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 57,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_read_us: (?P<exec_lmdb_read_us>\\d+)` | unwrap exec_lmdb_read_us [$__interval]) by (action) + avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `exec_lmdb_write_us: (?P<exec_lmdb_write_us>\\d+)` | unwrap exec_lmdb_write_us [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Store Time by Action (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 57,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `store_ms: (?P<store_ms>\\d+)` | unwrap store_ms [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "WASM CU Time by Action (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time({container=\"hyperbeam\"} |= \"computed_slot,\" | regexp `action: (?P<action>[A-Za-z][A-Za-z0-9_-]*)` | regexp `wasm_cu_ms: (?P<wasm_cu_ms>\\d+)` | unwrap wasm_cu_ms [$__interval]) by (action)",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Compute Errors",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 73,
+        "w": 24,
+        "h": 6
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "expr": "{container=\"hyperbeam\"} |~ \"error_computing_slot|cron_every_worker_error|HashChain\"",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Live Slot Log",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 79,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "uid": "loki-ds",
+        "type": "loki"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "targets": [
+        {
+          "expr": "{container=\"hyperbeam\"} |= \"computed_slot,\"",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

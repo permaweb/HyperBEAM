@@ -1,4 +1,4 @@
-%%% @doc An abstraction for name registration/deregistration in Hyperbeam.
+%%% @doc An abstraction for name registration/deregistration in HyperBEAM.
 %%% Its motivation is to provide a way to register names that are not necessarily
 %%% atoms, but can be any term (for example: hashpaths or `process@1.0' IDs).
 %%% An important characteristic of these functions is that they are atomic:

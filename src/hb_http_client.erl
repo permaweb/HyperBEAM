@@ -3,7 +3,7 @@
 -module(hb_http_client).
 -behaviour(gen_server).
 -include("include/hb.hrl").
--export([start_link/1, req/2]).
+-export([start_link/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -12,6 +12,11 @@
 	opts = #{}
 }).
 
+-define(DEFAULT_RETRIES, 0).
+-define(DEFAULT_RETRY_TIME, 1000).
+-define(DEFAULT_KEEPALIVE_TIMEOUT, 60_000).
+-define(DEFAULT_CONNECT_TIMEOUT, 60_000).
+
 %%% ==================================================================
 %%% Public interface.
 %%% ==================================================================
@@ -19,14 +24,42 @@
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
-req(Args, Opts) -> req(Args, false, Opts).
-req(Args, ReestablishedConnection, Opts) ->
-    case hb_opts:get(http_client, gun, Opts) of
-        gun -> gun_req(Args, ReestablishedConnection, Opts);
-        httpc -> httpc_req(Args, ReestablishedConnection, Opts)
+request(Args, Opts) ->
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
+request(Args, RemainingRetries, Opts) ->
+    case do_request(Args, Opts) of
+        {error, Details} -> maybe_retry(RemainingRetries, Args, Details, Opts);
+        {ok, Status, Headers, Body} -> {ok, Status, Headers, Body}
     end.
 
-httpc_req(Args, _, Opts) ->
+do_request(Args, Opts) ->
+    case hb_opts:get(http_client, gun, Opts) of
+        gun -> gun_req(Args, Opts);
+        httpc -> httpc_req(Args, Opts)
+    end.
+
+maybe_retry(0, _, ErrDetails, _) -> {error, ErrDetails};
+maybe_retry(Remaining, Args, ErrDetails, Opts) ->
+    RetryBaseTime = hb_opts:get(http_retry_time, ?DEFAULT_RETRY_TIME, Opts),
+    RetryTime =
+        case hb_opts:get(http_retry_mode, backoff, Opts) of
+            constant -> RetryBaseTime;
+            backoff ->
+                BaseRetries = hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts),
+                RetryBaseTime * (1 + (BaseRetries - Remaining))
+        end,
+    ?event(
+        warning,
+        {retrying_http_request,
+            {after_ms, RetryTime},
+            {error, ErrDetails},
+            {request, Args}
+        }
+    ),
+    timer:sleep(RetryTime),
+    request(Args, Remaining - 1, Opts).
+
+httpc_req(Args, Opts) ->
     #{
         peer := Peer,
         path := Path,
@@ -40,13 +73,28 @@ httpc_req(Args, _, Opts) ->
         443 -> "https";
         _ -> "http"
     end,
-    ?event(http, {httpc_req, Args}),
+    ?event(http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    FilteredHeaders = maps:remove(<<"content-type">>, Headers),
+    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
     HeaderKV =
-        [ {binary_to_list(Key), binary_to_list(Value)} || {Key, Value} <- maps:to_list(FilteredHeaders) ],
+        [
+            {binary_to_list(Key), binary_to_list(Value)}
+        ||
+            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+        ] ++
+        [
+            {<<"cookie">>, CookieLine}
+        ||
+            CookieLine <-
+                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                    Binary when is_binary(Binary) ->
+                        [Binary];
+                    List when is_list(List) ->
+                        List
+                end
+        ],
     Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
-    ContentType = maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>),
+    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
     Request =
         case Method of
             get ->
@@ -62,7 +110,7 @@ httpc_req(Args, _, Opts) ->
                     Body
                 }
         end,
-    ?event(http, {httpc_req, Method, URL, Request}),
+    ?event({http_client_outbound, Method, URL, Request}),
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
 	StartTime = os:system_time(millisecond),
     case httpc:request(Method, Request, [], HTTPCOpts) of
@@ -74,7 +122,7 @@ httpc_req(Args, _, Opts) ->
                 ||
                     {Key, Value} <- RawRespHeaders
                 ],
-            ?event(http, {httpc_resp, Status, RespHeaders, RespBody}),
+            ?event(http_client, {httpc_resp, Status, RespHeaders, RespBody}),
             record_duration(#{
                     <<"request-method">> => method_to_bin(Method),
                     <<"request-path">> => hb_util:bin(Path),
@@ -85,10 +133,12 @@ httpc_req(Args, _, Opts) ->
             ),
             {ok, Status, RespHeaders, RespBody};
         {error, Reason} ->
-            ?event(http, {httpc_error, Reason}),
+            ?event(http_client, {httpc_error, Reason}),
             {error, Reason}
     end.
 
+gun_req(Args, Opts) ->
+    gun_req(Args, false, Opts).
 gun_req(Args, ReestablishedConnection, Opts) ->
 	StartTime = os:system_time(millisecond),
 	#{ peer := Peer, path := Path, method := Method } = Args,
@@ -96,14 +146,12 @@ gun_req(Args, ReestablishedConnection, Opts) ->
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
                 ar_rate_limiter:throttle(Peer, Path, Opts),
-                case request(PID, Args, Opts) of
+                case do_gun_request(PID, Args, Opts) of
                     {error, Error} when Error == {shutdown, normal};
                             Error == noproc ->
                         case ReestablishedConnection of
-                            true ->
-                                {error, client_error};
-                            false ->
-                                req(Args, true, Opts)
+                            true -> {error, client_error};
+                            false -> gun_req(Args, true, Opts)
                         end;
                     Reply ->
                         Reply
@@ -150,7 +198,6 @@ record_duration(Details, Opts) ->
                             GetFormat,
                             [
                                 <<"request-method">>,
-                                <<"request-path">>,
                                 <<"status-class">>
                             ]
                         ),
@@ -198,7 +245,7 @@ maybe_invoke_monitor(Details, Opts) ->
                 },
             % Use the singleton parse to generate the message sequence to 
             % execute.
-            ReqMsgs = hb_singleton:from(Req),
+            ReqMsgs = hb_singleton:from(Req, Opts),
             Res = hb_ao:resolve_many(ReqMsgs, Opts),
             ?event(http_monitor, {resolved_monitor, Res})
     end.
@@ -232,9 +279,10 @@ init(Opts) ->
     end.
 
 init_prometheus(Opts) ->
+    application:ensure_all_started([prometheus, prometheus_cowboy]),
 	prometheus_counter:new([
 		{name, gun_requests_total},
-		{labels, [http_method, route, status_class]},
+		{labels, [http_method, status_class]},
 		{
 			help,
 			"The total number of GUN requests."
@@ -245,7 +293,7 @@ init_prometheus(Opts) ->
 	prometheus_histogram:new([
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
-        {labels, [http_method, route, status_class]},
+        {labels, [http_method, status_class]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
@@ -264,30 +312,29 @@ init_prometheus(Opts) ->
 	]),
 	prometheus_counter:new([
 		{name, http_client_downloaded_bytes_total},
-		{help, "The total amount of bytes requested via HTTP, per remote endpoint"},
-		{labels, [route]}
+		{help, "The total amount of bytes requested via HTTP, per remote endpoint"}
 	]),
 	prometheus_counter:new([
 		{name, http_client_uploaded_bytes_total},
-		{help, "The total amount of bytes posted via HTTP, per remote endpoint"},
-		{labels, [route]}
+		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
     ?event(started),
 	{ok, #state{ opts = Opts }}.
 
 handle_call({get_connection, Args, Opts}, From,
 		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
-	Peer = maps:get(peer, Args),
-	case maps:get(Peer, PIDPeer, not_found) of
+	Peer = hb_maps:get(peer, Args, undefined, Opts),
+	case hb_maps:get(Peer, PIDPeer, not_found, Opts) of
 		not_found ->
-			{ok, PID} = open_connection(Args, maps:merge(State#state.opts, Opts)),
+			{ok, PID} = open_connection(Args, hb_maps:merge(State#state.opts, Opts, Opts)),
 			MonitorRef = monitor(process, PID),
-			PIDPeer2 = maps:put(Peer, PID, PIDPeer),
+			PIDPeer2 = hb_maps:put(Peer, PID, PIDPeer, Opts),
 			StatusByPID2 =
-                maps:put(
+                hb_maps:put(
                     PID,
                     {{connecting, [{From, Args}]}, MonitorRef, Peer},
-					StatusByPID
+					StatusByPID,
+					Opts
                 ),
 			{
                 reply,
@@ -298,16 +345,17 @@ handle_call({get_connection, Args, Opts}, From,
                 }
             };
 		PID ->
-			case maps:get(PID, StatusByPID) of
+			case hb_maps:get(PID, StatusByPID, undefined, Opts) of
 				{{connecting, PendingRequests}, MonitorRef, Peer} ->
 					StatusByPID2 =
-                        maps:put(PID,
+                        hb_maps:put(PID,
                             {
                                 {connecting, [{From, Args} | PendingRequests]},
                                 MonitorRef,
                                 Peer
                             },
-                            StatusByPID
+                            StatusByPID,
+							Opts
                         ),
 					{noreply, State#state{ status_by_pid = StatusByPID2 }};
 				{connected, _MonitorRef, Peer} ->
@@ -324,30 +372,30 @@ handle_cast(Cast, State) ->
 	{noreply, State}.
 
 handle_info({gun_up, PID, _Protocol}, #state{ status_by_pid = StatusByPID } = State) ->
-	case maps:get(PID, StatusByPID, not_found) of
+	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
 			%% A connection timeout should have occurred.
 			{noreply, State};
 		{{connecting, PendingRequests}, MonitorRef, Peer} ->
 			[gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
-			StatusByPID2 = maps:put(PID, {connected, MonitorRef, Peer}, StatusByPID),
+			StatusByPID2 = hb_maps:put(PID, {connected, MonitorRef, Peer}, StatusByPID),
 			inc_prometheus_gauge(outbound_connections),
 			{noreply, State#state{ status_by_pid = StatusByPID2 }};
 		{connected, _MonitorRef, Peer} ->
 			?event(warning,
-                {gun_up_pid_already_exists, {peer, ar_util:format_peer(Peer)}}),
+                {gun_up_pid_already_exists, {peer, Peer}}),
 			{noreply, State}
 	end;
 
 handle_info({gun_error, PID, Reason},
 		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case maps:get(PID, StatusByPID, not_found) of
+	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
 			?event(warning, {gun_connection_error_with_unknown_pid}),
 			{noreply, State};
 		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = maps:remove(PID, StatusByPID),
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
 			Reason2 =
 				case Reason of
 					timeout ->
@@ -371,14 +419,14 @@ handle_info({gun_error, PID, Reason},
 
 handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams},
 			#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case maps:get(PID, StatusByPID, not_found) of
+	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
 			?event(warning,
                 {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
 			{noreply, State};
 		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = maps:remove(PID, StatusByPID),
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
 			Reason2 =
 				case Reason of
 					{Type, _} ->
@@ -403,12 +451,12 @@ handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStream
 
 handle_info({'DOWN', _Ref, process, PID, Reason},
 		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case maps:get(PID, StatusByPID, not_found) of
+	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
 			{noreply, State};
 		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = maps:remove(PID, StatusByPID),
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
 			case Status of
 				{connecting, PendingRequests} ->
 					reply_error(PendingRequests, Reason);
@@ -430,7 +478,7 @@ handle_info(Message, State) ->
 
 terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 	?event(info,{http_client_terminating, {reason, Reason}}),
-	maps:map(fun(PID, _Status) -> gun:shutdown(PID) end, StatusByPID),
+	hb_maps:map(fun(PID, _Status) -> gun:shutdown(PID) end, StatusByPID),
 	ok.
 
 %%% ==================================================================
@@ -441,7 +489,12 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 inc_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
         undefined -> ok;
-        _ -> prometheus_gauge:inc(Name)
+        _ ->
+            try prometheus_gauge:inc(Name)
+            catch _:_ ->
+                init_prometheus(#{}),
+                prometheus_gauge:inc(Name)
+            end
     end.
 
 %% @doc Safe wrapper for prometheus_gauge:dec/2.
@@ -460,8 +513,6 @@ inc_prometheus_counter(Name, Labels, Value) ->
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
-	ConnectTimeout =
-		hb_opts:get(http_connect_timeout, no_connect_timeout, Opts),
     BaseGunOpts =
         #{
             http_opts =>
@@ -469,12 +520,17 @@ open_connection(#{ peer := Peer }, Opts) ->
                     keepalive =>
                         hb_opts:get(
                             http_keepalive,
-                            no_keepalive_timeout,
+                            ?DEFAULT_KEEPALIVE_TIMEOUT,
                             Opts
                         )
                 },
             retry => 0,
-            connect_timeout => ConnectTimeout
+            connect_timeout =>
+                hb_opts:get(
+                    http_connect_timeout,
+                    ?DEFAULT_CONNECT_TIMEOUT,
+                    Opts
+                )
         },
     Transport =
         case Port of
@@ -510,7 +566,7 @@ parse_peer(Peer, Opts) ->
         URI = #{ host := Host } ->
             {
                 hb_util:list(Host),
-                case maps:get(scheme, URI, undefined) of
+                case hb_maps:get(scheme, URI, undefined, Opts) of
                     <<"https">> -> 443;
                     _ -> hb_opts:get(port, 8734, Opts)
                 end
@@ -522,17 +578,15 @@ reply_error([], _Reason) ->
 reply_error([PendingRequest | PendingRequests], Reason) ->
 	ReplyTo = element(1, PendingRequest),
 	Args = element(2, PendingRequest),
-	Method = maps:get(method, Args),
-	Path = maps:get(path, Args),
-	record_response_status(Method, Path, {error, Reason}),
+	Method = hb_maps:get(method, Args),
+	record_response_status(Method, {error, Reason}),
 	gen_server:reply(ReplyTo, {error, Reason}),
 	reply_error(PendingRequests, Reason).
 
-record_response_status(Method, Path, Response) ->
+record_response_status(Method, Response) ->
 	inc_prometheus_counter(gun_requests_total,
         [
             hb_util:list(method_to_bin(Method)),
-			Path,
 			hb_util:list(get_status_class(Response))
         ],
         1
@@ -559,26 +613,49 @@ method_to_bin(patch) ->
 method_to_bin(_) ->
 	<<"unknown">>.
 
-request(PID, Args, Opts) ->
+do_gun_request(PID, Args, Opts) ->
 	Timer =
         inet:start_timer(
             hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)
         ),
-	Method = maps:get(method, Args),
-	Path = maps:get(path, Args),
-	Headers = maps:get(headers, Args, []),
-	Body = maps:get(body, Args, <<>>),
-    ?event(http, {gun_request, {method, Method}, {path, Path}, {headers, Headers}, {body, Body}}),
+	Method = hb_maps:get(method, Args, undefined, Opts),
+	Path = hb_maps:get(path, Args, undefined, Opts),
+    HeaderMap = hb_maps:get(headers, Args, #{}, Opts),
+    % Normalize cookie header lines from the header map. We support both
+    % lists of cookie lines and a single cookie line.
+	HeadersWithoutCookie =
+        hb_maps:to_list(
+            hb_maps:without([<<"cookie">>], HeaderMap, Opts),
+            Opts
+        ),
+    CookieLines =
+        case hb_maps:get(<<"cookie">>, HeaderMap, [], Opts) of
+            BinCookieLine when is_binary(BinCookieLine) -> [BinCookieLine];
+            CookieLinesList -> CookieLinesList
+        end,
+    CookieHeaders = [ {<<"cookie">>, CookieLine} || CookieLine <- CookieLines ],
+    Headers = HeadersWithoutCookie ++ CookieHeaders,
+	Body = hb_maps:get(body, Args, <<>>, Opts),
+    ?event(
+        http_client,
+        {gun_request,
+            {method, Method},
+            {path, Path},
+            {headers, {explicit, Headers}},
+            {body, {explicit, {body, Body}}}
+        },
+        Opts
+    ),
 	Ref = gun:request(PID, Method, Path, Headers, Body),
 	ResponseArgs =
         #{
             pid => PID, stream_ref => Ref,
-			timer => Timer, limit => maps:get(limit, Args, infinity),
+			timer => Timer, limit => hb_maps:get(limit, Args, infinity, Opts),
 			counter => 0, acc => [], start => os:system_time(microsecond),
-			is_peer_request => maps:get(is_peer_request, Args, true)
+			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
-	Response = await_response(maps:merge(Args, ResponseArgs), Opts),
-	record_response_status(Method, Path, Response),
+	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
+	record_response_status(Method, Response),
 	inet:stop_timer(Timer),
 	Response.
 
@@ -615,24 +692,24 @@ await_response(Args, Opts) ->
 			end;
 		{data, fin, Data} ->
 			FinData = iolist_to_binary([Acc | Data]),
-			download_metric(FinData, Args),
+			download_metric(FinData),
 			upload_metric(Args),
 			{ok,
-                maps:get(status, Args),
-                maps:get(headers, Args),
+                hb_maps:get(status, Args, undefined, Opts),
+                hb_maps:get(headers, Args, undefined, Opts),
                 FinData
             };
 		{error, timeout} = Response ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			log(warn, gun_await_process_down, Args, Reason, Opts),
 			Response;
 		Response ->
-			record_response_status(Method, Path, Response),
+			record_response_status(Method, Response),
 			log(warn, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
@@ -652,17 +729,17 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
     ),
     ok.
 
-download_metric(Data, #{path := Path}) ->
+download_metric(Data) ->
 	inc_prometheus_counter(
 		http_client_downloaded_bytes_total,
-		[Path],
+        [],
 		byte_size(Data)
 	).
 
-upload_metric(#{method := post, path := Path, body := Body}) ->
+upload_metric(#{method := post, body := Body}) ->
 	inc_prometheus_counter(
 		http_client_uploaded_bytes_total,
-		[Path],
+		[],
 		byte_size(Body)
 	);
 upload_metric(_) ->

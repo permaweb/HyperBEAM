@@ -14,7 +14,7 @@
 %%% Allowing users to store and retrieve not only arbitrary bytes, but also to
 %%% perform execution of computation upon that data:
 %%% 
-%%% 	`Hyperbeam(Message1, Message2) => Message3'
+%%% 	`Hyperbeam(Base, Request) => Result'
 %%% 
 %%% When Hyperbeam executes a message, it will return a new message containing
 %%% the result of that execution, as well as signed commitments of its
@@ -82,14 +82,14 @@
 %%% modules of the hyperbeam node.
 -module(hb).
 %%% Configuration and environment:
--export([init/0, now/0, build/0]).
+-export([init/0, top/0, now/0, build/0, deploy_scripts/0]).
 %%% Base start configurations:
 -export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
 -export([topup/3, topup/4]).
 -export([start_mainnet/0, start_mainnet/1]).
 %%% Debugging tools:
 -export([no_prod/3]).
--export([read/1, read/2, debug_wait/4, profile/1, benchmark/2, benchmark/3]).
+-export([read/1, read/2, debug_wait/4]).
 %%% Node wallet and address management:
 -export([address/0, wallet/0, wallet/1]).
 -include("include/hb.hrl").
@@ -101,6 +101,14 @@ init() ->
     Old = erlang:system_flag(backtrace_depth, hb_opts:get(debug_stack_depth)),
     ?event({old_system_stack_depth, Old}),
     ok.
+
+-ifdef(AO_TOP).
+%% @doc Start a monitoring interface for the node. Presently this is offered
+%% with the `observer_cli' module atop `Recon'.
+top() -> observer_cli:start().
+-else.
+top() -> not_available.
+-endif.
 
 %% @doc Start a mainnet server without payments.
 start_mainnet() ->
@@ -123,7 +131,7 @@ start_mainnet(Opts) ->
     hb_http_server:start_node(
         FinalOpts =
             BaseOpts#{
-                store => #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-mainnet">> },
+                store => #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
                 priv_wallet => Wallet
             }
     ),
@@ -135,9 +143,9 @@ start_mainnet(Opts) ->
     io:format(
         "Started mainnet node at http://localhost:~p~n"
         "Operator: ~s~n",
-        [maps:get(port, Opts), Address]
+        [hb_maps:get(port, Opts, undefined, Opts), Address]
     ),
-    <<"http://localhost:", (integer_to_binary(maps:get(port, Opts)))/binary>>.
+    <<"http://localhost:", (integer_to_binary(hb_maps:get(port, Opts, undefined, Opts)))/binary>>.
 
 %%% @doc Start a server with a `simple-pay@1.0' pre-processor.
 start_simple_pay() ->
@@ -159,7 +167,7 @@ do_start_simple_pay(Opts) ->
         gun,
         os_mon
     ]),
-    Port = maps:get(port, Opts),
+    Port = hb_maps:get(port, Opts, undefined, Opts),
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
@@ -181,6 +189,36 @@ do_start_simple_pay(Opts) ->
     ),
     <<"http://localhost:", (integer_to_binary(Port))/binary>>.
 
+%% @doc Upload all scripts from the `scripts' directory to the node to Arweave,
+%% printing their IDs.
+deploy_scripts() ->
+    deploy_scripts("scripts/").
+deploy_scripts(Dir) ->
+    Files = filelib:wildcard(Dir ++ "*.lua"),
+    lists:foreach(fun(File) ->
+        {ok, Script} = file:read_file(File),
+        Msg =
+            hb_message:commit(
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"module">>,
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"name">> => hb_util:bin(File),
+                    <<"body">> => Script
+                },
+                wallet(),
+                <<"ans104@1.0">>
+            ),
+        {Status, _} = hb_client:upload(Msg, #{}, <<"ans104@1.0">>),
+        io:format(
+            "~s: ~s (upload status: ~p)~n",
+            [File, hb_util:id(Msg), Status]
+        )
+    end, Files),
+    ok.
+
+
 %% @doc Helper for topping up a user's balance on a simple-pay node.
 topup(Node, Amount, Recipient) ->
     topup(Node, Amount, Recipient, wallet()).
@@ -198,13 +236,24 @@ topup(Node, Amount, Recipient, Wallet) ->
 wallet() ->
     wallet(hb_opts:get(priv_key_location)).
 wallet(Location) ->
-    case file:read_file_info(Location) of
-        {ok, _} ->
-            ar_wallet:load_keyfile(Location);
-        {error, _} -> 
-            Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
-            ?event({created_new_keyfile, Location, address(Res)}),
-            Res
+    wallet(Location, #{}).
+wallet(Location, Opts) ->
+    CacheKey = {?MODULE, wallet, Location},
+    case persistent_term:get(CacheKey, not_found) of
+        not_found ->
+            Wallet =
+                case file:read_file_info(Location) of
+                    {ok, _} ->
+                        ar_wallet:load_keyfile(Location, Opts);
+                    {error, _} ->
+                        Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
+                        ?event({created_new_keyfile, Location, address(Res)}),
+                        Res
+                end,
+            persistent_term:put(CacheKey, Wallet),
+            Wallet;
+        Wallet ->
+            Wallet
     end.
 
 %% @doc Get the address of a wallet. Defaults to the address of the wallet
@@ -248,53 +297,8 @@ now() ->
 build() ->
     r3:do(compile, [{dir, "src"}]).
 
-%% @doc Utility function to start a profiling session and run a function,
-%% then analyze the results. Obviously -- do not use in production.
-profile(Fun) ->
-    eprof:start_profiling([self()]),
-    try
-        Fun()
-    after
-        eprof:stop_profiling()
-    end,
-    eprof:analyze(total).
-
 %% @doc Utility function to wait for a given amount of time, printing a debug
 %% message to the console first.
 debug_wait(T, Mod, Func, Line) ->
     ?event(wait, {debug_wait, {T, Mod, Func, Line}}),
     receive after T -> ok end.
-
-%% @doc Run a function as many times as possible in a given amount of time.
-benchmark(Fun, TLen) ->
-    T0 = erlang:system_time(millisecond),
-    hb_util:until(
-        fun() -> erlang:system_time(millisecond) - T0 > (TLen * 1000) end,
-        Fun,
-        0
-    ).
-
-%% @doc Run multiple instances of a function in parallel for a given amount of time.
-benchmark(Fun, TLen, Procs) ->
-    Parent = self(),
-    receive X -> ?event(benchmark, {start_benchmark_worker, X}) end,
-    StartWorker =
-        fun(_) ->
-            Ref = make_ref(),
-            ?event(benchmark, {start_benchmark_worker, Ref}),
-            spawn_link(fun() ->
-                Count = benchmark(Fun, TLen),
-                Parent ! {work_complete, Ref, Count}
-            end),
-            Ref
-        end,
-    CollectRes =
-        fun(R) ->
-            receive
-                {work_complete, R, Count} ->
-                    ?event(benchmark, {work_complete, R, Count}),
-                    Count
-            end
-        end,
-    Refs = lists:map(StartWorker, lists:seq(1, Procs)),
-    lists:sum(lists:map(CollectRes, Refs)).
