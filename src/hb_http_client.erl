@@ -713,7 +713,8 @@ await_response(Args, Opts) ->
 			gun:cancel(PID, Ref),
 			log(warn, gun_await_process_down, Args, Response, Opts),
 			Response;
-        {error,{connection_error,{stream_closed, Message}}} = Response ->
+        {error, {connection_error,{stream_closed, Message}}} = Response ->
+			record_response_status(Method, Response, Path),
             ?event(http_outbound, {gun_cancel, {path, Path}, {message, Message}}),
             gun:cancel(PID, Ref),
             Response;
