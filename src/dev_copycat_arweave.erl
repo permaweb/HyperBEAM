@@ -555,28 +555,15 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             false ->
                                 {0, Depth};
                             true ->
-                                {_FO, NC, MinAchieved, _C} =
-                                    lists:foldl(
-                                        fun({_IID, Size},
-                                                {IOffset, CAcc, MAcc,
-                                                    Cache}) ->
-                                            {ok, Count, Achieved,
-                                                NewCache} =
-                                                check_nested_bundle(
-                                                    IOffset, Size,
-                                                    EffectiveDepth - 1,
-                                                    IndexStore, TXID,
-                                                    Opts, Cache
-                                                ),
-                                            {IOffset + Size,
-                                                CAcc + Count,
-                                                min(MAcc, Achieved),
-                                                NewCache}
-                                        end,
-                                        {TXStartOffset + HeaderSize, 0,
-                                            EffectiveDepth - 1,
-                                            undefined},
-                                        BundleIndex
+                                ItemsWithOffsets = items_with_offsets(
+                                    BundleIndex,
+                                    TXStartOffset + HeaderSize
+                                ),
+                                {NC, MinAchieved} =
+                                    nested_parallel_check(
+                                        ItemsWithOffsets,
+                                        EffectiveDepth - 1,
+                                        IndexStore, TXID, Opts
                                     ),
                                 {NC, 1 + MinAchieved}
                         end,
@@ -634,6 +621,52 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
+
+items_with_offsets(BundleIndex, StartOffset) ->
+    {_, Items} = lists:foldl(
+        fun({IID, Size}, {Offset, Acc}) ->
+            {Offset + Size, [{IID, Size, Offset} | Acc]}
+        end,
+        {StartOffset, []},
+        BundleIndex
+    ),
+    lists:reverse(Items).
+
+nested_parallel_check(Items, RemainingDepth, Store, ParentID, Opts) ->
+    MaxWorkers = max(1, hb_opts:get(arweave_nested_workers, 10, Opts)),
+    nested_parallel_check(
+        Items, RemainingDepth, Store, ParentID,
+        Opts, MaxWorkers, {0, RemainingDepth}).
+
+nested_parallel_check([], _Depth, _Store, _ParentID, _Opts, _Max, Acc) ->
+    Acc;
+nested_parallel_check(Items, Depth, Store, ParentID, Opts, Max, {CAcc, MAcc}) ->
+    {Batch, Rest} = take_batch(Max, Items),
+    Results = hb_pmap:parallel_map(
+        Batch,
+        fun({_IID, Size, Offset}) ->
+            check_nested_bundle(
+                Offset, Size, Depth,
+                Store, ParentID, Opts, no_readahead
+            )
+        end,
+        Max
+    ),
+    NewAcc = lists:foldl(
+        fun({ok, Count, Achieved, _Cache}, {C, M}) ->
+            {C + Count, min(M, Achieved)}
+        end,
+        {CAcc, MAcc},
+        Results
+    ),
+    nested_parallel_check(
+        Rest, Depth, Store, ParentID, Opts, Max, NewAcc).
+
+take_batch(0, Rest) -> {[], Rest};
+take_batch(_N, []) -> {[], []};
+take_batch(N, [H | T]) ->
+    {Batch, Rest} = take_batch(N - 1, T),
+    {[H | Batch], Rest}.
 
 check_nested_bundle(ItemAbsOffset, ItemSize, RemainingDepth,
         Store, ParentID, Opts, ChunkCache) ->
@@ -734,8 +767,10 @@ retry_with_larger_chunk(ItemAbsOffset, ItemSize,
             {ok, 0, 0, PrevCache}
     end.
 
+cached_read(Offset, MinSize, no_readahead, Opts) ->
+    do_fetch_and_cache(Offset, MinSize, false, Opts);
 cached_read(Offset, MinSize, undefined, Opts) ->
-    do_fetch_and_cache(Offset, MinSize, Opts);
+    do_fetch_and_cache(Offset, MinSize, true, Opts);
 cached_read(Offset, MinSize, {CacheOffset, CacheData} = Cache, Opts) ->
     CacheEnd = CacheOffset + byte_size(CacheData),
     case Offset >= CacheOffset andalso Offset + MinSize =< CacheEnd of
@@ -745,11 +780,14 @@ cached_read(Offset, MinSize, {CacheOffset, CacheData} = Cache, Opts) ->
                 CacheData, Skip, byte_size(CacheData) - Skip),
             {ok, Data, Cache};
         false ->
-            do_fetch_and_cache(Offset, MinSize, Opts)
+            do_fetch_and_cache(Offset, MinSize, true, Opts)
     end.
 
-do_fetch_and_cache(Offset, MinSize, Opts) ->
-    FetchSize = max(MinSize, 262144),
+do_fetch_and_cache(Offset, MinSize, ReadAhead, Opts) ->
+    FetchSize = case ReadAhead of
+        true -> max(MinSize, 262144);
+        false -> MinSize
+    end,
     case hb_store_arweave:read_chunks(Offset, FetchSize, Opts) of
         {ok, Data} ->
             {ok, Data, {Offset, Data}};
@@ -891,20 +929,13 @@ index_inner_items(InnerBundleIndex, DataStart, RemainingDepth,
         false ->
             {ok, ItemsCount, RemainingDepth};
         true ->
-            {_FO, NestedCount, MinAchieved, _C} = lists:foldl(
-                fun({_IID, Size}, {Offset, NC, MinA, Cache}) ->
-                    {ok, Count, Achieved, NewCache} =
-                        check_nested_bundle(
-                            Offset, Size, RemainingDepth - 1,
-                            Store, ParentID, Opts, Cache
-                        ),
-                    {Offset + Size, NC + Count,
-                        min(MinA, Achieved), NewCache}
-                end,
-                {DataStart, 0, RemainingDepth - 1, undefined},
-                InnerBundleIndex
+            ItemsWithOffsets = items_with_offsets(
+                InnerBundleIndex, DataStart),
+            {NC, MinAchieved} = nested_parallel_check(
+                ItemsWithOffsets, RemainingDepth - 1,
+                Store, ParentID, Opts
             ),
-            {ok, ItemsCount + NestedCount, 1 + MinAchieved}
+            {ok, ItemsCount + NC, 1 + MinAchieved}
     end.
 
 download_bundle_header(EndOffset, Size, Opts) ->
