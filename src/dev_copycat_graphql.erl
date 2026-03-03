@@ -59,7 +59,7 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
                         {ok, ParsedMsg} =
                             hb_gateway_client:result_to_message(
                                 Struct,
-                                Opts
+                                Opts#{ download => false }
                             ),
                         {true, ParsedMsg}
                     catch

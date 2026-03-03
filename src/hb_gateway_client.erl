@@ -240,12 +240,17 @@ result_to_message(ExpectedID, Item, Opts) ->
         },
     % We have the headers, so we can get the data.
     Data =
-        case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
-            #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
-            BinData when is_binary(BinData) -> BinData;
-            _ ->
-                {ok, Bytes} = data(ExpectedID, Opts),
-                Bytes
+        case hb_opts:get(download, true, Opts) of
+            true ->
+                case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
+                    #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
+                    BinData when is_binary(BinData) -> BinData;
+                    _ ->
+                        {ok, Bytes} = data(ExpectedID, Opts),
+                        Bytes
+                end;
+            false ->
+                <<>>
         end,
     DataSize = byte_size(Data),
     ?event(gateway, {data, {id, ExpectedID}, {data, Data}, {item, Item}}, Opts),
