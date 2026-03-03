@@ -546,16 +546,16 @@ create_new_connection(ConnKey, Args, From, State) ->
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
     ?event(debug_http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
+    KeepAlive = hb_opts:get(
+        http_keepalive,
+        ?DEFAULT_KEEPALIVE_TIMEOUT,
+        Opts
+    ),
     BaseGunOpts =
         #{
             http_opts =>
                 #{
-                    keepalive =>
-                        hb_opts:get(
-                            http_keepalive,
-                            ?DEFAULT_KEEPALIVE_TIMEOUT,
-                            Opts
-                        )
+                    keepalive => KeepAlive
                 },
             retry => 0,
             connect_timeout =>
@@ -563,7 +563,10 @@ open_connection(#{ peer := Peer }, Opts) ->
                     http_connect_timeout,
                     ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
-                )
+                ),
+            transport_opts => #{
+                keepalive => true
+            }
         },
     Transport =
         case Port of
@@ -579,7 +582,7 @@ open_connection(#{ peer := Peer }, Opts) ->
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
             http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            http2 -> BaseGunOpts#{protocols => [http2]};
+            http2 -> BaseGunOpts#{protocols => [http2], http2_opts => #{keepalive => KeepAlive, keepalive_tolerance => 2}};
             http1 -> BaseGunOpts#{protocols => [http]}
         end,
     ?event(http_outbound,
