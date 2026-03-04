@@ -36,6 +36,8 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     Matches = match_args(Args, Opts),
     ?event({transactions_matches, Matches}),
+    First = hb_util:int(hb_maps:get(<<"first">>, Args, 10, Opts)),
+    Limited = lists:sublist(Matches, First),
     Messages =
         lists:filtermap(
             fun(Match) ->
@@ -44,7 +46,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
                     not_found -> false
                 end
             end,
-            Matches
+            Limited
         ),
     {ok, Messages};
 query(Obj, <<"block">>, Args, Opts) ->
