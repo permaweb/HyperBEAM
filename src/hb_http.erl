@@ -498,6 +498,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ?event(http_short,
         {sent,
             {status, Status},
+            {ip, {string, real_ip(Req, Opts)}},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {method, cowboy_req:method(Req)},
             {path,
