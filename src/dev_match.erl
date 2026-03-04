@@ -103,7 +103,7 @@ write(IDs, Base, Opts) ->
         {_, false} -> {skip, <<"Skipping match index write.">>};
         {[], _}-> {skip, <<"No store configured for match index.">>};
         {Store, _} ->
-            ?event(debug_dev_match, {writing_match, {ids, IDs}, {base, Base}, {is_assignment, IsAssignment}}),
+            ?event(debug_dev_match, {writing_match, {ids, IDs}, {base, Base}}),
             IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
             hb_maps:map(
                 fun(RawKey, Value) ->
