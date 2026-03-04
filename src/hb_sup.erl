@@ -25,12 +25,12 @@ init(Opts) ->
     StoreChildren = store_children(hb_opts:get(store, [], Opts)),
     GunChild =
         #{
-            id => hb_http_client,
-            start => {hb_http_client, start_link, [Opts]},
+            id => hb_http_client_sup,
+            start => {hb_http_client_sup, start_link, [Opts]},
             restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [hb_http_client]
+            shutdown => infinity,
+            type => supervisor,
+            modules => [hb_http_client_sup]
         },
     {ok, {SupFlags, [GunChild | StoreChildren]}}.
 
