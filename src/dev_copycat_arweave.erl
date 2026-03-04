@@ -86,7 +86,9 @@ with_filter_protocol(Request, Opts) ->
         ao ->
             Opts#{
                 arweave_filter_protocol => FilterProtocol,
-                arweave_ao_bundler_addr => hb_util:native_id(?AO_BUNDLER_ADDR)
+                ao_bundler_turbo_addr => hb_util:native_id(?AO_BUNDLER_ADDR),
+                ao_bundler_legacy_addr => hb_util:native_id(?AO_LEGACY_BUNDLER),
+                ao_legacy_authority_addr => hb_util:native_id(?AO_LEGACY_AUTHORITY)
             };
         _ ->
             Opts#{ arweave_filter_protocol => FilterProtocol }
@@ -270,17 +272,35 @@ get_ao_message_known_type(_) ->
 protocol_filter(Opts) ->
     hb_opts:get(arweave_filter_protocol, all, Opts).
 
-is_ao_bundler_tx(TX, Opts) ->
-    case hb_opts:get(arweave_ao_bundler_addr, undefined, Opts) of
-        undefined ->
-            is_ao_bundler_owner(TX);
-        AOAddr ->
-            ar_tx:get_owner_address(TX) =:= AOAddr
+ao_policy_from_l1_tx(TX, Opts) ->
+    Owner = ar_tx:get_owner_address(TX),
+    Turbo = hb_opts:get(
+        ao_bundler_turbo_addr,
+        hb_util:native_id(?AO_BUNDLER_ADDR),
+        Opts
+    ),
+    Legacy = hb_opts:get(
+        ao_bundler_legacy_addr,
+        hb_util:native_id(?AO_LEGACY_BUNDLER),
+        Opts
+    ),
+    case Owner of
+        Turbo -> turbo;
+        Legacy -> legacy;
+        _ -> none
     end.
+
+is_ao_legacy_authority_bundle(HeaderTX, Opts) ->
+    Authority = hb_opts:get(
+        ao_legacy_authority_addr,
+        hb_util:native_id(?AO_LEGACY_AUTHORITY),
+        Opts
+    ),
+    ar_tx:get_owner_address(HeaderTX) =:= Authority.
 
 should_index_l1_tx(TX, Opts) ->
     case protocol_filter(Opts) of
-        ao -> is_ao_bundler_tx(TX, Opts);
+        ao -> ao_policy_from_l1_tx(TX, Opts) =/= none;
         _ -> true
     end.
 
@@ -301,9 +321,13 @@ is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts) ->
 %% @doc Check if the TX owner is the AO
 %% bundler address. useful to optimistically
 %% identity ao parent bundles.
-is_ao_bundler_owner(TX) ->
+is_ao_bundler_owner(TX, Bundler) ->
     Owner = ar_tx:get_owner_address(TX),
-    Owner =:= hb_util:native_id(?AO_BUNDLER_ADDR).
+    case Bundler of
+        ao_bundler_turbo_addr -> Owner =:= hb_util:native_id(?AO_BUNDLER_ADDR);
+        _ -> Owner =:= hb_util:native_id(?AO_LEGACY_BUNDLER)
+    end.
+    
 
 %% @doc List indexed blocks and transactions in the given range.
 %% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
