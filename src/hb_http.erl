@@ -1043,32 +1043,26 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
-    WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
-        undefined -> NormalBody;
-        P2PPort ->
-            % Calculate the peer address from the request. We honor the 
-            % `x-real-ip' header if it is present.
-            RealIP =
-                case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
-                    undefined ->
-                        {{A, B, C, D}, _} = cowboy_req:peer(Req),
-                        hb_util:bin(
-                            io_lib:format(
-                                "~b.~b.~b.~b",
-                                [A, B, C, D]
-                            )
-                        );
-                    IP -> IP
-                end,
-            Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
-            (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
-                <<"ao-peer">> => Peer
-            }
-    end,
+    RealIP = real_ip(Req, Opts),
+    WithPrivIP = hb_private:set(NormalBody, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
     case maps:get(<<"device">>, PrimMsg, not_found) of
-        not_found -> WithPeer;
-        Device -> WithPeer#{<<"device">> => Device}
+        not_found -> WithPrivIP;
+        Device -> WithPrivIP#{<<"device">> => Device}
+    end.
+    
+%% @doc Determine the caller, honoring the `x-real-ip' header if present.
+real_ip(Req = #{ headers := RawHeaders }, Opts) ->
+    case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
+        undefined ->
+            {{A, B, C, D}, _} = cowboy_req:peer(Req),
+            hb_util:bin(
+                io_lib:format(
+                    "~b.~b.~b.~b",
+                    [A, B, C, D]
+                )
+            );
+        IP -> IP
     end.
 
 %%% Tests
