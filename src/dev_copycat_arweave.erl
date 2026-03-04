@@ -18,8 +18,29 @@
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_IMMEDIATE_CHILDREN, 2).
 -define(DEPTH_RECURSION_CAP, 4).
-%% Filters
+%% Policies filters
+-define(AO_LEGACY_AUTHORITY, <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>).
+%% policy 1: AO messages are L3 dataitems:
+%% 1- AO_BUNDLER_ADDR (Ardrive Turbo) sends bundles on Arweave (L1 txs)
+%% 2- those bundles (1) are direct parents to nested bundles (nested with AO_LEGACY_AUTHORITY as owner)
+%% 3- the (2) nested bundles are parents of L3 dataitems (ao messages)
+%% 4- full path: AO_BUNDLER_ADDR L1 TXs (bundles) -> nested bundles owner by AO_LEGACY_AUTHORITY -> ao messages
+%% example: hXztSyj_V6PXttCfzkeCWrgul7owCGcmYnz58ydgMCU
 -define(AO_BUNDLER_ADDR, <<"JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8">>).
+%% policy 2.1: AO messages are L2 dataitmes:
+%% 1- AO_LEGACY_BUNDLER sends bundles on Arweave (L1 txs)
+%% 2- those bundles are direct parents to ao messages (L2 messages, have AO_LEGACY_AUTHORITY as owner)
+%% 3- full path: L1 TXs (bundles) -> L2 dataitems (ao messages)
+%% example: 8DcCpFij5Dpfd2P7EjeGKZWSpOmpyT1COAM9MNc5VII
+
+%% policy 2.2: AO messages are L3 dataitems
+%% 1- AO_LEGACY_BUNDLER sends bundles on Arweave (L1 txs)
+%% 2- those bundles (1) are direct parents to nested bundles (nested with AO_LEGACY_AUTHORITY as owner)
+%% 3- the (2) nested bundles are parents of L3 dataitems (ao messages)
+%% 4- full path: AO_LEGACY_BUNDLER L1 TXs (bundles) -> nested bundles owner by AO_LEGACY_AUTHORITY -> ao messages
+%% example: -MpPRIUBCBsWaGebFj-BtD42GKmuw8Wmkw37t_f63-I
+-define(AO_LEGACY_BUNDLER, <<"FPjbN_btYKzcf8QASjs30v5C0FPv7XpwKXENBW8dqVw">>).
+
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
