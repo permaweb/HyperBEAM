@@ -455,6 +455,9 @@ default_message() ->
             <<"request">> =>
                 [
                     #{
+                        <<"device">> => <<"rate-limit@1.0">>
+                    },
+                    #{
                         <<"device">> => <<"auth-hook@1.0">>,
                         <<"path">> => <<"request">>,
                         <<"when">> => #{
