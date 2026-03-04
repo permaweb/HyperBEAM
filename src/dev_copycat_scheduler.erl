@@ -194,39 +194,21 @@ write_assignments(ProcID, Edges, Opts) ->
             try
                 % Fully convert: tags in node.assignment and node.message
                 % become top-level fields in the returned structured message.
-                Assignment =
-                    dev_scheduler_formats:aos2_to_assignment(Edge, Opts),
-                ?event(copycat_scheduler, {writing_assignment, {assignment, Assignment}}),
-                % Propagate block-height and timestamp from the assignment
-                % onto the message body so both are GQL-queryable.
-                BlockHeight = maps:get(<<"block-height">>, Assignment, undefined),
-                Timestamp = maps:get(<<"timestamp">>, Assignment, undefined),
-                Body0 = maps:get(<<"body">>, Assignment, #{}),
-                Body1 = case BlockHeight of
-                    undefined -> Body0;
-                    BH -> Body0#{<<"block-height">> => BH}
-                end,
-                Body2 = case Timestamp of
-                    undefined -> Body1;
-                    TS -> Body1#{<<"timestamp">> => TS}
-                end,
-                % Ensure process matches the target and mark the stored
-                % format as ao.N.1 so dev_scheduler_cache:read treats it
-                % as already fully resolved (no double-conversion).
-                WithMeta = Assignment#{
-                    <<"process">> => ProcID,
-                    % TODO: ao.TN.1
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"body">> => Body2
+                Assignment = Edge#{    
+                    <<"variant">> => <<"ao.TN.1">>,
+                    <<"slot">> => 
+                        hb_maps:get(<<"cursor">>, Edge, undefined, Opts),
+                    <<"process">> => ProcID
                 },
-                case dev_scheduler_cache:write(WithMeta, Opts) of
+                ?event(copycat_scheduler, {writing_assignment, {assignment, Assignment}}),
+                case dev_scheduler_cache:write(Assignment, Opts#{ write_match => true }) of
                     ok ->
+                        dev_match:write_assignment(Assignment, Opts),
                         Count + 1;
                     {error, WriteErr} ->
                         ?event(
                             copycat_scheduler,
                             {write_failed,
-                                {slot, maps:get(<<"slot">>, WithMeta, undefined)},
                                 {reason, WriteErr}
                             }
                         ),

@@ -321,18 +321,31 @@ scope(Opts) ->
     hb_store:scope(Opts, Scope).
 
 %% @doc Resolve a list of IDs to their unsigned ids, using the ids provided.
+% TODO: clean up
 resolve_ids(IDs, Opts) ->
     ?event({resolve_ids, IDs}),
     lists:map(
-        fun({ID, UID}) ->
-            ?event({resolve_id, {id, ID}, {uid, UID}}),
-            UID;
-        (ID) ->
+        fun({ID, <<"">>}) ->
             ?event({resolve_id, {id, ID}}),
             Scoped = scope(Opts),
-            ?event({resolve_id_scoped, {scoped, Scoped}}),
             case hb_cache:read(ID, Scoped) of
-                {ok, Msg} -> hb_message:id(Msg, uncommitted, Scoped);
+                {ok, Msg} -> 
+                    UID = hb_message:id(Msg, uncommitted, Scoped),
+                    ?event({resolve_id, {id, ID}, {uid, UID}}),
+                    UID;
+                not_found -> ID
+            end;
+        ({ID, UID}) ->
+            ?event({resolve_id, {id, ID}, {uid, <<"">>}}),
+            UID;
+        (ID) when is_binary(ID) ->
+            ?event({resolve_id, {id, ID}}),
+            Scoped = scope(Opts),
+            case hb_cache:read(ID, Scoped) of
+                {ok, Msg} -> 
+                    UID = hb_message:id(Msg, uncommitted, Scoped),
+                    ?event({resolve_id, {id, ID}, {uid, UID}}),
+                    UID;
                 not_found -> ID
             end
         end,
