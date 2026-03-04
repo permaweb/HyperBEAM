@@ -95,7 +95,12 @@ request(Base, Req, Opts) ->
         {ok, [PrimaryMsg|Rest]} ->
             case maybe_cast_manifest(PrimaryMsg, Opts) of
                 {ok, CastedMsg} ->
-                    {ok, Req#{ <<"body">> => [CastedMsg|Rest] }};
+                    %% For to go to index if no key provided.
+                    Rest2 = case Rest of 
+                        [] -> [#{<<"path">> => <<"index">>}];
+                        _ -> Rest 
+                    end,
+                    {ok, Req#{ <<"body">> => [CastedMsg|Rest2] }};
                 Error ->
                     ?event({manifest_not_cast, {error, Error}}),
                     Error
@@ -110,7 +115,7 @@ maybe_cast_manifest(ID, Opts) when ?IS_ID(ID) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} -> maybe_cast_manifest(Msg, Opts);
         _ ->
-            ?event({message_not_found, {id, ID}}),
+            ?event(maybe_cast_manifest, {message_not_found, {id, ID}}),
             {error, not_found}
     end;
 maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
@@ -120,14 +125,14 @@ maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
         _ ->
             case hb_maps:find(<<"content-type">>, Msg, Opts) of
                 {ok, <<"application/x.arweave-manifest+json">>} ->
-                    ?event({manifest_casting, {msg, Msg}}),
+                    ?event(maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
                 _ ->
                     {ok, Msg}
             end
     end;
 maybe_cast_manifest(Msg, _Opts) ->
-    ?event({message_is_not_manifest, {msg, Msg}}),
+    ?event(maybe_cast_manifest, {message_is_not_manifest, {msg, Msg}}),
     {ok, Msg}.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 

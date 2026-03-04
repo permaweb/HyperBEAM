@@ -464,7 +464,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
     Status =
-        case hb_maps:get(<<"status">>, Message, Opts) of
+        case hb_maps:get(<<"status">>, Message, not_found, Opts) of
             not_found -> 200;
             S-> S
         end,
@@ -621,11 +621,15 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             {response_message, Message}
         }
     ),
+    IsRaw = case maps:get(<<"path">>, TABMReq, undefined) of 
+        <<"~arweave@2.9/raw=", _/binary>> -> true;
+        _ -> false
+    end,
     % Codecs generally do not need to specify headers outside of the content-type,
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
     % documents, and subsequently must set its own headers.
-    case {Status, Codec, AcceptBundle} of
-        {500, <<"httpsig@1.0">>, false} ->
+    case {Status, Codec, AcceptBundle, IsRaw} of
+        {500, <<"httpsig@1.0">>, false, _} ->
             ?event(debug_accept,
                 {returning_500_error,
                     {status, Status},
@@ -639,7 +643,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        {404, <<"httpsig@1.0">>, false} ->
+        {404, <<"httpsig@1.0">>, false, _} ->
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_file(
                     <<"hyperbuddy@1.0">>,
@@ -649,7 +653,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        {_, <<"httpsig@1.0">>, _} ->
+        {_, <<"httpsig@1.0">>, _, _} ->
             TABM =
                 hb_message:convert(
                     Message,
@@ -680,7 +684,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 hb_maps:without([<<"body">>], EncMessage, Opts),
                 hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
             };
-        {_, <<"ans104@1.0">>, _} ->
+        {_, <<"ans104@1.0">>, _, _} ->
             % The `ans104@1.0' codec is a binary format, so we must serialize
             % the message to a binary before sending it.
             {
@@ -710,7 +714,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     )
                 )
             };
-        {_, <<"manifest@1.0">>, _} ->
+        {_, <<"manifest@1.0">>, _, false} ->
             MessageID = hb_message:id(Message, signed, Opts),
             {
                 307,
@@ -1430,3 +1434,111 @@ request_error_handling_test() ->
     ),
     % The result should be an error tuple, not crash with badmatch
     ?assertMatch({error, _}, Result).
+
+%% @doc Download the manifest raw data. 
+%% NOTE: This requests data to arweave node
+%% %% @doc Download the manifest raw data. 
+download_raw_manifest_test() ->
+    Opts = #{
+        arweave_index_ids => true,
+        store => [
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"name">> => <<"arewave-store">>,
+            <<"arweave-node">> => <<"https://arweave.net">>,
+            <<"index-store">> => [#{
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"cache-TEST/lmdb-index">>
+            }]
+        }
+    ]},
+    Node = hb_http_server:start_node(Opts),
+    %% Force index the block that containt the manifest TX
+    _ = hb_http:get(
+            Node,
+            #{<<"path">> => <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>},
+            #{}
+        ),
+    ?assertMatch(
+        {ok, #{<<"arweave-id">> := <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, <<"content-length">> := 5868}},
+        hb_http:get(
+            Node,
+            #{<<"path">> => <<"~arweave@2.9/raw=42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
+            #{}
+        )
+    ).
+
+%% @doc Accessing `/TXID` of a manifest transaction should access the index key.
+manifest_inner_redirect_test() ->
+    %% Define the store
+    LmdbStore = #{
+        <<"store-module">> => hb_store_lmdb,
+        <<"name">> => <<"manifest-test">>
+    },
+    %% Load transaction information to the store
+    load_and_store(LmdbStore, <<"date_item_42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    load_and_store(LmdbStore, <<"date_item_Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    %% Start node
+    Opts = #{store => LmdbStore},
+    Node = hb_http_server:start_node(Opts),
+    %% Request manifest to node.
+    ?assertMatch(
+        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+        hb_http:get(
+            Node,
+            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
+            Opts
+        )
+    ).
+
+%% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
+access_key_path_in_manifest_test() ->
+    LmdbStore = #{
+        <<"store-module">> => hb_store_lmdb,
+        <<"name">> => <<"manifest-test">>
+    },
+    load_and_store(LmdbStore, <<"date_item_42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    load_and_store(LmdbStore, <<"date_item_Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    load_and_store(LmdbStore, <<"date_item_oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
+    Opts = #{store => LmdbStore},
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _ }}},
+        hb_http:get(
+            Node,
+            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
+            Opts
+        )
+    ).
+
+%% This works with `not_found.js` but doesn't follow the logic if under a 
+%% folder structure, like `assets/not_found.js .
+manifest_should_fallback_on_not_found_path_test() ->
+    LmdbStore = #{
+        <<"store-module">> => hb_store_lmdb,
+        <<"name">> => <<"manifest-test">>
+    },
+    load_and_store(LmdbStore, <<"date_item_42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    load_and_store(LmdbStore, <<"date_item_Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    Opts = #{store => LmdbStore},
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+        hb_http:get(
+            Node,
+            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
+            Opts
+        )
+    ).
+
+%% @doc Load ans104 binary files to a store.
+load_and_store(LmdbStore, File) ->
+    Opts = #{},
+    {ok, SerializedItem} = file:read_file(File),
+    Message = hb_message:convert(
+        ar_bundles:deserialize(SerializedItem),
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ),
+    _ = hb_cache:write(Message, #{store => LmdbStore}).
