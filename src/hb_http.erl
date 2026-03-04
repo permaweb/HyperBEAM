@@ -621,15 +621,11 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             {response_message, Message}
         }
     ),
-    IsRaw = case maps:get(<<"path">>, TABMReq, undefined) of 
-        <<"~arweave@2.9/raw=", _/binary>> -> true;
-        _ -> false
-    end,
     % Codecs generally do not need to specify headers outside of the content-type,
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
     % documents, and subsequently must set its own headers.
-    case {Status, Codec, AcceptBundle, IsRaw} of
-        {500, <<"httpsig@1.0">>, false, _} ->
+    case {Status, Codec, AcceptBundle} of
+        {500, <<"httpsig@1.0">>, false} ->
             ?event(debug_accept,
                 {returning_500_error,
                     {status, Status},
@@ -643,7 +639,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        {404, <<"httpsig@1.0">>, false, _} ->
+        {404, <<"httpsig@1.0">>, false} ->
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_file(
                     <<"hyperbuddy@1.0">>,
@@ -653,7 +649,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        {_, <<"httpsig@1.0">>, _, _} ->
+        {_, <<"httpsig@1.0">>, _} ->
             TABM =
                 hb_message:convert(
                     Message,
@@ -684,7 +680,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 hb_maps:without([<<"body">>], EncMessage, Opts),
                 hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
             };
-        {_, <<"ans104@1.0">>, _, _} ->
+        {_, <<"ans104@1.0">>, _} ->
             % The `ans104@1.0' codec is a binary format, so we must serialize
             % the message to a binary before sending it.
             {
@@ -713,20 +709,6 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                         Opts#{ topic => ao_internal }
                     )
                 )
-            };
-        {_, <<"manifest@1.0">>, _, false} ->
-            MessageID = hb_message:id(Message, signed, Opts),
-            {
-                307,
-                #{
-                    <<"location">> =>
-                        <<
-                            "/",
-                            MessageID/binary,
-                            "~manifest@1.0/index"
-                        >>
-                },
-                <<"Manifesting your data...">>
             };
         _ ->
             % Other codecs are already in binary format, so we can just convert
@@ -1436,9 +1418,8 @@ request_error_handling_test() ->
     ?assertMatch({error, _}, Result).
 
 %% @doc Download the manifest raw data. 
-%% NOTE: This requests data to arweave node
-%% %% @doc Download the manifest raw data. 
-download_raw_manifest_test() ->
+%% NOTE: This test requests data to arweave node
+manifest_download_via_raw_endpoint_test() ->
     Opts = #{
         arweave_index_ids => true,
         store => [
@@ -1453,7 +1434,7 @@ download_raw_manifest_test() ->
         }
     ]},
     Node = hb_http_server:start_node(Opts),
-    %% Force index the block that containt the manifest TX
+    %% Force index the block that includes the manifest transaction
     _ = hb_http:get(
             Node,
             #{<<"path">> => <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>},
