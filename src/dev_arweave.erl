@@ -271,7 +271,6 @@ get_raw(Base, Request, Opts) ->
         } ->
         ?event(debug_raw, {raw_header,
             {header, Header}}),
-        %% TODO: This doesn't sound as a proper solution. To be improved later.
         ContentType = meaningfull_to_browser(RawContentType),
         case parse_range_params(Request, Opts) of
             {ok, StartRange, EndRange} ->
