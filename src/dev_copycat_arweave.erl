@@ -18,6 +18,8 @@
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_IMMEDIATE_CHILDREN, 2).
 -define(DEPTH_RECURSION_CAP, 4).
+%% Filters
+-define(AO_BUNDLER_ADDR, <<"JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8">>).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -25,20 +27,48 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    case hb_maps:find(<<"id">>, Request, Opts) of
+    FilteredOpts = with_filter_protocol(Request, Opts),
+    case hb_maps:find(<<"id">>, Request, FilteredOpts) of
         {ok, ID} ->
-            Depth = request_depth(Request, <<"1">>, Opts),
-            index_id(ID, Depth, Opts);
+            Depth = request_depth(Request, <<"1">>, FilteredOpts),
+            index_id(ID, Depth, FilteredOpts);
         error ->
-            {From, To} = parse_range(Request, Opts),
-            Depth = request_depth(Request, hb_util:bin(?DEPTH_IMMEDIATE_CHILDREN), Opts),
-            WriteOpts = Opts#{ arweave_index_depth => Depth },
-            case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+            {From, To} = parse_range(Request, FilteredOpts),
+            Depth =
+                request_depth(
+                    Request,
+                    hb_util:bin(?DEPTH_IMMEDIATE_CHILDREN),
+                    FilteredOpts
+                ),
+            WriteOpts = FilteredOpts#{ arweave_index_depth => Depth },
+            case hb_maps:get(<<"mode">>, Request, <<"write">>, FilteredOpts) of
                 <<"write">>  -> fetch_blocks(Request, From, To, WriteOpts);
-                <<"list">>   -> list_index(From, To, Opts);
+                <<"list">>   -> list_index(From, To, FilteredOpts);
                 Mode ->
                     {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
             end
+    end.
+
+with_filter_protocol(Request, Opts) ->
+    FilterProtocolBin =
+        hb_util:to_lower(
+            hb_util:bin(
+                hb_maps:get(<<"filter-protocol">>, Request, <<"all">>, Opts)
+            )
+        ),
+    FilterProtocol =
+        case FilterProtocolBin of
+            <<"ao">> -> ao;
+            _ -> all
+        end,
+    case FilterProtocol of
+        ao ->
+            Opts#{
+                arweave_filter_protocol => FilterProtocol,
+                arweave_ao_bundler_addr => hb_util:native_id(?AO_BUNDLER_ADDR)
+            };
+        _ ->
+            Opts#{ arweave_filter_protocol => FilterProtocol }
     end.
 
 request_depth(Request, Default, Opts) ->
@@ -112,13 +142,19 @@ index_bundle_children(BundleIndex, StartOffset, Depth, Store, Opts) ->
         lists:foldl(
             fun({ItemID, Size}, {ItemStartOffset, CountAcc}) ->
                 EncodedID = hb_util:encode(ItemID),
-                hb_store_arweave:write_offset(
-                    Store,
-                    EncodedID,
-                    ?ANS104_CODEC,
-                    ItemStartOffset,
-                    Size
-                ),
+                ShouldIndexItem = should_index_item(Depth, ItemStartOffset, Size, Opts),
+                case ShouldIndexItem of
+                    true ->
+                        hb_store_arweave:write_offset(
+                            Store,
+                            EncodedID,
+                            ?ANS104_CODEC,
+                            ItemStartOffset,
+                            Size
+                        );
+                    false ->
+                        ok
+                end,
                 Descendants =
                     case Depth > 1 of
                         true ->
@@ -128,12 +164,21 @@ index_bundle_children(BundleIndex, StartOffset, Depth, Store, Opts) ->
                             end;
                         false -> 0
                     end,
-                {ItemStartOffset + Size, CountAcc + 1 + Descendants}
+                IndexedItemCount = case ShouldIndexItem of true -> 1; false -> 0 end,
+                {ItemStartOffset + Size, CountAcc + IndexedItemCount + Descendants}
             end,
             {StartOffset, 0},
             BundleIndex
         ),
     {ok, Count}.
+
+should_index_item(1, ItemStartOffset, ItemSize, Opts) ->
+    case protocol_filter(Opts) of
+        ao -> is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts);
+        _ -> true
+    end;
+should_index_item(_Depth, _ItemStartOffset, _ItemSize, _Opts) ->
+    true.
 
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
@@ -200,6 +245,44 @@ get_ao_message_known_type(TX = #tx{}) ->
     end;
 get_ao_message_known_type(_) ->
     unknown.
+
+protocol_filter(Opts) ->
+    hb_opts:get(arweave_filter_protocol, all, Opts).
+
+is_ao_bundler_tx(TX, Opts) ->
+    case hb_opts:get(arweave_ao_bundler_addr, undefined, Opts) of
+        undefined ->
+            is_ao_bundler_owner(TX);
+        AOAddr ->
+            ar_tx:get_owner_address(TX) =:= AOAddr
+    end.
+
+should_index_l1_tx(TX, Opts) ->
+    case protocol_filter(Opts) of
+        ao -> is_ao_bundler_tx(TX, Opts);
+        _ -> true
+    end.
+
+is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts) ->
+    ReadSize = min(ItemSize, 262144),
+    case hb_store_arweave:read_chunks(ItemStartOffset, ReadSize, Opts) of
+        {ok, ChunkData} ->
+            case ar_bundles:deserialize_header(ChunkData) of
+                {ok, _HeaderSize, ParsedDataitem} ->
+                    get_ao_message_known_type(ParsedDataitem) =:= ao;
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
+
+%% @doc Check if the TX owner is the AO
+%% bundler address. useful to optimistically
+%% identity ao parent bundles.
+is_ao_bundler_owner(TX) ->
+    Owner = ar_tx:get_owner_address(TX),
+    Owner =:= hb_util:native_id(?AO_BUNDLER_ADDR).
 
 %% @doc List indexed blocks and transactions in the given range.
 %% Returns JSON with block heights as keys, each containing indexed and not-indexed lists.
@@ -417,83 +500,88 @@ parallel_map(Items, Fun, Opts) ->
 process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
-    IndexDepth = hb_opts:get(arweave_index_depth, ?DEPTH_IMMEDIATE_CHILDREN, Opts),
-    IndexStore = hb_store_arweave:store_from_opts(Opts),
-    TXID = hb_util:encode(TX#tx.id),
-    TXEndOffset = BlockStartOffset + EndOffset,
-    TXStartOffset = TXEndOffset - TX#tx.data_size,
-    ?event(copycat_debug, {writing_index,
-        {id, {explicit, TXID}},
-        {offset, TXStartOffset},
-        {size, TX#tx.data_size}
-    }),
-    observe_event(<<"item_indexed">>, fun() ->
-        hb_store_arweave:write_offset(
-            IndexStore,
-            TXID,
-            <<"tx@1.0">>,
-            TXStartOffset,
-            TX#tx.data_size
-        )
-    end),
-    case is_bundle_tx(TX, Opts) of
-        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+    case should_index_l1_tx(TX, Opts) of
+        false ->
+            #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
-            ?event(copycat_debug, {fetching_bundle_header, 
-                {tx_id, {explicit, TXID}},
-                {tx_end_offset, TXEndOffset},
-                {tx_data_size, TX#tx.data_size}
+            IndexDepth = hb_opts:get(arweave_index_depth, ?DEPTH_IMMEDIATE_CHILDREN, Opts),
+            IndexStore = hb_store_arweave:store_from_opts(Opts),
+            TXID = hb_util:encode(TX#tx.id),
+            TXEndOffset = BlockStartOffset + EndOffset,
+            TXStartOffset = TXEndOffset - TX#tx.data_size,
+            ?event(copycat_debug, {writing_index,
+                {id, {explicit, TXID}},
+                {offset, TXStartOffset},
+                {size, TX#tx.data_size}
             }),
-            BundleRes = download_bundle_header(
-                TXEndOffset, TX#tx.data_size, Opts
-            ),
-            case BundleRes of
-                {ok, {_BundleIndex, _HeaderSize}} when IndexDepth =< ?DEPTH_L1_OFFSETS ->
-                    #{items_count => 0, bundle_count => 1, skipped_count => 0};
-                {ok, {BundleIndex, HeaderSize}} ->
-                    % Batch event tracking: measure total time and count for all write_offset calls
-                    {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
-                        lists:foldl(
-                            fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
-                                EncodedID = hb_util:encode(ItemID),
-                                hb_store_arweave:write_offset(
-                                    IndexStore,
-                                    EncodedID,
-                                    <<"ans104@1.0">>,
-                                    ItemStartOffset,
-                                    Size
-                                ),
-                                Descendants =
-                                    case IndexDepth > ?DEPTH_IMMEDIATE_CHILDREN of
-                                        true ->
-                                            case index_id(
-                                                EncodedID,
-                                                IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
-                                                Opts
-                                            ) of
-                                                {ok, DescendantCount} -> DescendantCount;
-                                                _ -> 0
-                                            end;
-                                        false -> 0
-                                    end,
-                                {ItemStartOffset + Size, ItemsCountAcc + 1 + Descendants}
-                            end,
-                            {TXStartOffset + HeaderSize, 0},
-                            BundleIndex
-                        )
-                    end),
-                    % Single event increment for the batch
-                    record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-                    #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
-                {error, Reason} ->
-                    ?event(
-                        copycat_short,
-                        {arweave_bundle_skipped,
-                            {tx_id, {explicit, TXID}},
-                            {reason, Reason}
-                        }
+            observe_event(<<"item_indexed">>, fun() ->
+                hb_store_arweave:write_offset(
+                    IndexStore,
+                    TXID,
+                    <<"tx@1.0">>,
+                    TXStartOffset,
+                    TX#tx.data_size
+                )
+            end),
+            case is_bundle_tx(TX, Opts) of
+                false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+                true ->
+                    ?event(copycat_debug, {fetching_bundle_header,
+                        {tx_id, {explicit, TXID}},
+                        {tx_end_offset, TXEndOffset},
+                        {tx_data_size, TX#tx.data_size}
+                    }),
+                    BundleRes = download_bundle_header(
+                        TXEndOffset, TX#tx.data_size, Opts
                     ),
-                    #{items_count => 0, bundle_count => 1, skipped_count => 1}
+                    case BundleRes of
+                        {ok, {_BundleIndex, _HeaderSize}} when IndexDepth =< ?DEPTH_L1_OFFSETS ->
+                            #{items_count => 0, bundle_count => 1, skipped_count => 0};
+                        {ok, {BundleIndex, HeaderSize}} ->
+                            % Batch event tracking: measure total time and count for all write_offset calls
+                            {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
+                                lists:foldl(
+                                    fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                                        EncodedID = hb_util:encode(ItemID),
+                                        hb_store_arweave:write_offset(
+                                            IndexStore,
+                                            EncodedID,
+                                            <<"ans104@1.0">>,
+                                            ItemStartOffset,
+                                            Size
+                                        ),
+                                        Descendants =
+                                            case IndexDepth > ?DEPTH_IMMEDIATE_CHILDREN of
+                                                true ->
+                                                    case index_id(
+                                                        EncodedID,
+                                                        IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
+                                                        Opts
+                                                    ) of
+                                                        {ok, DescendantCount} -> DescendantCount;
+                                                        _ -> 0
+                                                    end;
+                                                false -> 0
+                                            end,
+                                        {ItemStartOffset + Size, ItemsCountAcc + 1 + Descendants}
+                                    end,
+                                    {TXStartOffset + HeaderSize, 0},
+                                    BundleIndex
+                                )
+                            end),
+                            % Single event increment for the batch
+                            record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
+                            #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+                        {error, Reason} ->
+                            ?event(
+                                copycat_short,
+                                {arweave_bundle_skipped,
+                                    {tx_id, {explicit, TXID}},
+                                    {reason, Reason}
+                                }
+                            ),
+                            #{items_count => 0, bundle_count => 1, skipped_count => 1}
+                    end
             end
     end.
 
