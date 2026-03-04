@@ -130,6 +130,14 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
+                #{
+                    <<"multirequest-admissible">> =>
+                        #{
+                            <<"device">> => <<"arweave@2.9">>,
+                            <<"path">> => <<"is-tx-admissible">>,
+                            <<"tx">> => TXID
+                        }
+                },
                 Opts#{
                     exclude_data =>
                         hb_util:bool(
@@ -143,6 +151,19 @@ get_tx(Base, Request, Opts) ->
                 }
             )
     end.
+
+%% @doc Check whether a response to a `GET /tx/ID' request is valid.
+%% The TXID is passed through the admissible message (Base), and the response
+%% (Request) is verified to have a commitment matching that TXID.
+is_tx_admissible(Base, Request, Opts) ->
+    maybe
+        {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
+        {ok, CommittedMsg} ?= hb_message:with_only_committed(Request, Opts),
+        hb_message:verify(CommittedMsg, #{ <<"commitment-ids">> => [TXID] }, Opts)
+    else
+        _ -> false
+    end.
+
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
@@ -2155,4 +2176,53 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     end,
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
+    ok.
+
+is_admissible_routed_test() ->
+    hb_http_client:init_prometheus(),
+    %% Start Node1 which serves cached messages, and Node2 which has nothing.
+    W1 = ar_wallet:new(),
+    Node1 = hb_http_server:start_node(#{ priv_wallet => W1 }),
+    Node2 = hb_http_server:start_node(#{ priv_wallet => ar_wallet:new() }),
+    %% Get Node1's opts (including its store) from cowboy env and cache messages
+    Node1ServerID = hb_util:human_id(ar_wallet:to_address(W1)),
+    Node1Opts = cowboy:get_env(Node1ServerID, node_msg, #{}),
+    Msg1 = hb_message:commit(#{ <<"a">> => 1 }, Node1Opts, <<"ans104@1.0">>),
+    {ok, Msg1RawID} = hb_cache:write(Msg1, Node1Opts),
+    Msg1ID = hb_util:human_id(Msg1RawID),
+    Msg2 = hb_message:commit(#{ <<"b">> => 1 }, Node1Opts, <<"ans104@1.0">>),
+    {ok, Msg2RawID} = hb_cache:write(Msg2, Node1Opts),
+    Msg2ID = hb_util:human_id(Msg2RawID),
+    %% Start RoutingNode with routes to both Node1 and Node2.
+    %% Node2 has no data, so admissibility checks will reject its responses.
+    %% The router will find admissible responses from Node1.
+    RoutingNode = hb_http_server:start_node(#{
+        priv_wallet => ar_wallet:new(),
+        routes => [
+            #{
+                <<"template">> => <<"^/arweave/tx">>,
+                <<"strategy">> => <<"All">>,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"/arweave/tx/">>,
+                            <<"with">> => Node1
+                        },
+                        #{
+                            <<"match">> => <<"/arweave/tx/">>,
+                            <<"with">> => Node2
+                        }
+                    ]
+            }
+        ]
+    }),
+    %% Fetch Msg1 and Msg2 via RoutingNode with admissibility verification.
+    ?assertMatch(
+        {ok, _},
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg1ID/binary>>, #{})
+    ),
+    ?assertMatch(
+        {ok, _},
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg2ID/binary>>, #{})
+    ),
     ok.
