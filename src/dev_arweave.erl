@@ -6,6 +6,7 @@
 -module(dev_arweave).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+-export([is_tx_admissible/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -133,6 +134,13 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
+                #{
+                    <<"multirequest-admissible">> =>
+                        #{
+                            <<"device">> => <<"arweave@2.9">>,
+                            <<"path">> => <<"is-tx-admissible">>
+                        }
+                },
                 Opts#{
                     exclude_data =>
                         hb_util:bool(
@@ -146,6 +154,18 @@ get_tx(Base, Request, Opts) ->
                 }
             )
     end.
+
+%% @doc Check whether a response to a `GET /tx/ID' request is valid.
+is_tx_admissible(Base, Request, Opts) ->
+    maybe
+        {ok, Path} ?= hb_maps:find(<<"path">>, Request, Opts),
+        [<<"arweave">>, <<"tx">>, TXID] ?= hb_path:term_to_path_parts(Path, Opts),
+        CommittedMsg = hb_message:with_only_committed(Request, Opts),
+        hb_message:verify(CommittedMsg, #{ <<"commitment-ids">> => [TXID] }, Opts)
+    else
+        _ -> false
+    end,
+
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
@@ -2012,4 +2032,56 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     end,
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
+    ok.
+
+is_admissible_routed_test() ->
+    ClientOpts = #{},
+    Node1Opts =
+        #{
+            store => Store1 = hb_test_utils:test_store(),
+            priv_wallet => Wallet1 = hb:wallet()
+        },
+    Node2Opts =
+        #{
+            store => Store2 = hb_test_utils:test_store(),
+            priv_wallet => Wallet2 = hb:wallet()
+        },
+    {ok, Msg1ID} =
+        hb_cache:write(
+            Msg1 = hb_message:commit(#{ <<"a">> => 1 },
+            Node1Opts,
+            <<"ans104@1.0">>)
+        ),
+    {ok, Msg2ID} =
+        hb_cache:write(
+            Msg1 = hb_message:commit(#{ <<"b">> => 1 },
+            Node1Opts,
+            <<"ans104@1.0">>)
+        ),
+    Node1 = hb_http_server:start_node(Node1Opts),
+    Node2 = hb_http_server:start_node(Node2Opts),
+    RoutingNode = hb_http_server:start_node(#{
+        store => Store3 = hb_test_utils:test_store(),
+        priv_wallet => Wallet3 = hb:wallet(),
+        routes => [
+            #{
+                <<"template">> => <<"^/arweave/tx">>,
+                <<"method">> => <<"GET">>,
+                <<"strategy">> => <<"Random">>
+                <<"nodes">> =>
+                    [
+                        Node1,
+                        Node2
+                    ]
+            }
+        ]
+    }),
+    ?assertMatch(
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"OK">> }},
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg1ID/binary>>, #{})
+    ),
+    ?assertMatch(
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"OK">> }},
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg2ID/binary>>, #{})
+    ),
     ok.
