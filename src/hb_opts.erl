@@ -194,6 +194,7 @@ default_message() ->
             #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
             #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
+            #{<<"name">> => <<"rate-limit@1.0">>, <<"module">> => dev_rate_limit},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
@@ -551,6 +552,9 @@ default_message() ->
         on => #{
             <<"request">> =>
                 [
+                    #{
+                        <<"device">> => <<"rate-limit@1.0">>
+                    },
                     #{
                         <<"device">> => <<"auth-hook@1.0">>,
                         <<"path">> => <<"request">>,
