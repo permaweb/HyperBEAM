@@ -201,9 +201,9 @@ write_assignments(ProcID, Edges, Opts) ->
                     <<"process">> => ProcID
                 },
                 ?event(copycat_scheduler, {writing_assignment, {assignment, Assignment}}),
-                case dev_scheduler_cache:write(Assignment, Opts#{ write_match => true }) of
+                case dev_scheduler_cache:write(Assignment, Opts#{ write_match => false }) of
                     ok ->
-                        dev_match:write_assignment(Assignment, Opts),
+                        dev_match:write_assignment(Assignment, Opts#{ write_match => true }),
                         Count + 1;
                     {error, WriteErr} ->
                         ?event(

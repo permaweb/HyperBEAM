@@ -96,10 +96,10 @@ query(Msg, <<"signature">>, _Args, Opts) ->
 query(Msg, <<"owner">>, _Args, Opts) ->
     ?event({query_owner, Msg}),
     case hb_message:commitments(#{ <<"committer">> => '_' }, Msg, Opts) of
-        not_found -> {ok, null};
+        not_found -> {ok, <<"Not implemented1.">>};
         Commitments ->
             case hb_maps:keys(Commitments) of
-                [] -> {ok, null};
+                [] -> {ok, <<"Not implemented2.">>};
                 [CommID | _] ->
                     {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
                     {ok, Address} = hb_maps:find(<<"committer">>, Commitment, Opts),
@@ -326,7 +326,7 @@ resolve_ids(IDs, Opts) ->
     ?event({resolve_ids, IDs}),
     lists:map(
         fun({ID, <<"">>}) ->
-            ?event({resolve_id, {id, ID}}),
+            ?event({resolve_id, {id_blank, ID}}),
             Scoped = scope(Opts),
             case hb_cache:read(ID, Scoped) of
                 {ok, Msg} -> 
@@ -336,8 +336,8 @@ resolve_ids(IDs, Opts) ->
                 not_found -> ID
             end;
         ({ID, UID}) ->
-            ?event({resolve_id, {id, ID}, {uid, <<"">>}}),
-            UID;
+            ?event({resolve_id, {id, ID}, {uid, UID}}),
+            ID;
         (ID) when is_binary(ID) ->
             ?event({resolve_id, {id, ID}}),
             Scoped = scope(Opts),
