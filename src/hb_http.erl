@@ -129,7 +129,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         Error ->
             Error
     end.
-    
 
 request_response(Method, Peer, Path, Response, Duration, Opts) ->
     {_ErlStatus, Status, Headers, Body} = Response,
@@ -1063,6 +1062,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
+    RealIP = real_ip(Req, Opts),
     WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
         undefined -> NormalBody;
         P2PPort ->
@@ -1072,24 +1072,11 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                 <<"ao-peer">> => Peer
             }
     end,
+    WithPrivIP = hb_private:set(NormalBody, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
     case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
         Device -> WithPrivIP#{<<"device">> => Device}
-    end.
-    
-%% @doc Determine the caller, honoring the `x-real-ip' header if present.
-real_ip(Req = #{ headers := RawHeaders }, Opts) ->
-    case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
-        undefined ->
-            {{A, B, C, D}, _} = cowboy_req:peer(Req),
-            hb_util:bin(
-                io_lib:format(
-                    "~b.~b.~b.~b",
-                    [A, B, C, D]
-                )
-            );
-        IP -> IP
     end.
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.

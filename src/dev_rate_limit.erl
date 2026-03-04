@@ -50,7 +50,7 @@ server_id(Opts) ->
 
 %% @doc Determine the reference of the caller.
 request_reference(Msg, Opts) ->
-    hb_maps:get(<<"ao-peer">>, Msg, undefined, Opts).
+    hb_private:get(<<"ip">>, Msg, Opts).
 
 check_limit(IP, Opts) ->
     PID = ensure_rate_limiter_started(Opts),
