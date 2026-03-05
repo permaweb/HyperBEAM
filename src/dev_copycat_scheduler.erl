@@ -194,13 +194,13 @@ write_assignments(ProcID, Edges, Opts) ->
             try
                 % Fully convert: tags in node.assignment and node.message
                 % become top-level fields in the returned structured message.
+                Slot = hb_maps:get(<<"cursor">>, Edge, undefined, Opts),
                 Assignment = Edge#{    
                     <<"variant">> => <<"ao.TN.1">>,
-                    <<"slot">> => 
-                        hb_maps:get(<<"cursor">>, Edge, undefined, Opts),
+                    <<"slot">> => Slot,
                     <<"process">> => ProcID
                 },
-                ?event(copycat_scheduler, {writing_assignment, {assignment, Assignment}}),
+                ?event(copycat_scheduler_short, {writing_assignment, {slot, Slot}}),
                 case dev_scheduler_cache:write(Assignment, Opts#{ write_match => false }) of
                     ok ->
                         dev_match:write_assignment(Assignment, Opts#{ write_match => true }),

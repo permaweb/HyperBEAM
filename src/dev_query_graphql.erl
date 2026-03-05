@@ -199,7 +199,7 @@ message_query(Msg, Field, _Args, Opts) when Field =:= <<"keys">>; Field =:= <<"t
             ),
             Opts
         ),
-    ?event({message_query_keys_or_tags, {object, Msg}, {only_keys, OnlyKeys}}),
+    ?event({message_query_keys_or_tags, {object, Msg}}),
     Res = {
         ok,
         [

@@ -332,7 +332,7 @@ resolve_ids(IDs, Opts) ->
                 {ok, Msg} -> 
                     UID = hb_message:id(Msg, uncommitted, Scoped),
                     ?event({resolve_id, {id, ID}, {uid, UID}}),
-                    UID;
+                    ID;
                 not_found -> ID
             end;
         ({ID, UID}) ->
@@ -345,7 +345,7 @@ resolve_ids(IDs, Opts) ->
                 {ok, Msg} -> 
                     UID = hb_message:id(Msg, uncommitted, Scoped),
                     ?event({resolve_id, {id, ID}, {uid, UID}}),
-                    UID;
+                    ID;
                 not_found -> ID
             end
         end,

@@ -136,13 +136,14 @@ write(IDs, Base, MaybeUID, Opts) ->
     end.
 write_assignment(Msg, Opts) ->
     Store = store(Opts),
+    ?event(debug_dev_match, {writing_full_assignment, {msg, Msg}}),
     Node = hb_maps:get(<<"node">>, Msg, undefined, Opts),
     Assignment = hb_maps:get(<<"assignment">>, Node, undefined, Opts),
     AssignmentID = hb_maps:get(<<"id">>, Assignment, undefined, Opts),
-    AssignmentUID = hb_message:id(Assignment, uncommitted, Opts),
     Message = hb_maps:get(<<"message">>, Node, undefined, Opts),
     MessageID = hb_maps:get(<<"id">>, Message, undefined, Opts),
-    MessageUID = hb_message:id(Message, uncommitted, Opts),
+    {ok, SignedAssignment} = hb_gateway_client:result_to_message(Assignment, Opts#{ download => false }),
+    {ok, SignedMessage} = hb_gateway_client:result_to_message(Message, Opts#{ download => false }),
     ?event(debug_dev_match, 
         {writing_assignment_match,
             {assignment, Assignment},
@@ -153,54 +154,10 @@ write_assignment(Msg, Opts) ->
             {message_uid, MessageUID}
         }
     ),
-    hb_maps:map(
-        fun
-            (<<"owner">>, Value) when is_map(Value)->
-                ?event(debug_dev_match, {writing_assignment_match_owner_map, {assignment_id, AssignmentID}, {value, Value}}),
-                Address = hb_maps:get(<<"address">>, Value, undefined, Opts),
-                write([AssignmentID], #{ <<"owner">> => Address }, AssignmentUID, Opts);
-            (<<"tags">>, Tags) when is_list(Tags)->
-                ?event(debug_dev_match, {writing_assignment_match_tags_map, {assignment_id, AssignmentID}, {tags, Tags}}),
-                lists:foreach(
-                    fun(Tag) ->
-                        Name = hb_maps:get(<<"name">>, Tag, undefined, Opts),
-                        Value = hb_maps:get(<<"value">>, Tag, undefined, Opts),
-                        write([AssignmentID], #{ string:lowercase(Name) => Value }, AssignmentUID, Opts)
-                    end,
-                    Tags
-                );
-            (Key, Value) ->
-                ?event(debug_dev_match, {writing_assignment_match_other, {assignment_id, AssignmentID}, {key, Key}, {value, Value}}),
-                write([AssignmentID], #{ string:lowercase(Key) => Value }, AssignmentUID, Opts)
-        end,
-        Assignment,
-        Opts  
-    ),
-    hb_maps:map(
-        fun
-            (<<"owner">>, Value) when is_map(Value)->
-                ?event(debug_dev_match, {writing_message_match_owner_map, {message_id, MessageID}, {value, Value}}),
-                Address = hb_maps:get(<<"address">>, Value, undefined, Opts),
-                write([MessageID], #{ <<"owner">> => Address }, MessageUID, Opts);
-            (<<"tags">>, Tags) when is_list(Tags)->
-                ?event(debug_dev_match, {writing_message_match_tags_map, {message_id, MessageID}, {tags, Tags}}),
-                lists:foreach(
-                    fun(Tag) ->
-                        Name = hb_maps:get(<<"name">>, Tag, undefined, Opts),
-                        Value = hb_maps:get(<<"value">>, Tag, undefined, Opts),
-                        write([MessageID], #{ string:lowercase(Name) => Value }, MessageUID, Opts)
-                    end,
-                    Tags
-                );
-            (Key, Value) ->
-                ?event(debug_dev_match, {writing_message_match_other, {message_id, MessageID}, {key, Key}, {value, Value}}),
-                write([MessageID], #{ string:lowercase(Key) => Value }, MessageUID, Opts)
-        end,
-        Message,
-        Opts  
-    ),
-
-    ok.
+    {ok, _} = hb_cache:write(SignedAssignment, Opts),
+    {ok, _} = hb_cache:write(SignedMessage, Opts),
+    write([AssignmentID], SignedAssignment, Opts),
+    write([MessageID], SignedMessage, Opts).
 
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
