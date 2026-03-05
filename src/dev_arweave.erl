@@ -154,16 +154,17 @@ get_tx(Base, Request, Opts) ->
 
 %% @doc Check whether a response to a `GET /tx/ID' request is valid.
 %% The TXID is passed through the admissible message (Base), and the response
-%% (Request) is verified to have a commitment matching that TXID.
+%% (Request) is verified to have a content hash matching that TXID.
 is_tx_admissible(Base, Request, Opts) ->
     maybe
         {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
         {ok, CommittedMsg} ?= hb_message:with_only_committed(Request, Opts),
-        hb_message:verify(CommittedMsg, #{ <<"commitment-ids">> => [TXID] }, Opts)
+        BareMsg = hb_maps:without([<<"commitments">>], CommittedMsg, Opts),
+        ContentID = hb_message:id(BareMsg, unsigned, Opts),
+        true ?= (ContentID == TXID)
     else
         _ -> false
     end.
-
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
@@ -906,7 +907,20 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 cache_control => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    to_message(Path, Method, best_response(Res), LogExtra, Opts).
+    case to_message(Path, Method, best_response(Res), LogExtra, Opts) of
+        {ok, Msg} ->
+            case hb_maps:get(
+                <<"multirequest-admissible">>, Extra, undefined, Opts
+            ) of
+                undefined -> {ok, Msg};
+                Admissible ->
+                    case is_tx_admissible(Admissible, Msg, Opts) of
+                        true -> {ok, Msg};
+                        false -> {error, not_admissible}
+                    end
+            end;
+        Error -> Error
+    end.
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
@@ -2179,50 +2193,60 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     ok.
 
 is_admissible_routed_test() ->
-    hb_http_client:init_prometheus(),
-    %% Start Node1 which serves cached messages, and Node2 which has nothing.
-    W1 = ar_wallet:new(),
-    Node1 = hb_http_server:start_node(#{ priv_wallet => W1 }),
-    Node2 = hb_http_server:start_node(#{ priv_wallet => ar_wallet:new() }),
-    %% Get Node1's opts (including its store) from cowboy env and cache messages
-    Node1ServerID = hb_util:human_id(ar_wallet:to_address(W1)),
-    Node1Opts = cowboy:get_env(Node1ServerID, node_msg, #{}),
-    Msg1 = hb_message:commit(#{ <<"a">> => 1 }, Node1Opts, <<"ans104@1.0">>),
-    {ok, Msg1RawID} = hb_cache:write(Msg1, Node1Opts),
-    Msg1ID = hb_util:human_id(Msg1RawID),
-    Msg2 = hb_message:commit(#{ <<"b">> => 1 }, Node1Opts, <<"ans104@1.0">>),
-    {ok, Msg2RawID} = hb_cache:write(Msg2, Node1Opts),
-    Msg2ID = hb_util:human_id(Msg2RawID),
-    %% Start RoutingNode with routes to both Node1 and Node2.
-    %% Node2 has no data, so admissibility checks will reject its responses.
-    %% The router will find admissible responses from Node1.
+    AliceWallet = ar_wallet:new(),
+    BobWallet = ar_wallet:new(),
+    AliceNode = hb_http_server:start_node(#{ priv_wallet => AliceWallet }),
+    BobNode = hb_http_server:start_node(#{ priv_wallet => BobWallet }),
+    AliceNodeOpts = hb_http_server:get_opts(#{
+        http_server => hb_util:human_id(ar_wallet:to_address(AliceWallet))
+    }),
+    BobNodeOpts = hb_http_server:get_opts(#{
+        http_server => hb_util:human_id(ar_wallet:to_address(BobWallet))
+    }),
+    AliceMsg = 
+        hb_message:commit(#{ 
+            <<"a">> => 1 }, 
+            AliceNodeOpts, 
+            <<"ans104@1.0">>
+        ),
+    {ok, AliceMsgRawID} = hb_cache:write(AliceMsg, AliceNodeOpts),
+    AliceMsgID = hb_util:human_id(AliceMsgRawID),
+    BobMsg = 
+        hb_message:commit(#{ 
+            <<"b">> => 1 }, 
+            BobNodeOpts, 
+            <<"ans104@1.0">>
+        ),
+    {ok, BobMsgRawID} = hb_cache:write(BobMsg, BobNodeOpts),
+    BobMsgID = hb_util:human_id(BobMsgRawID),
+    %% Start RoutingNode with routes to both AliceNode and BobNode.
     RoutingNode = hb_http_server:start_node(#{
         priv_wallet => ar_wallet:new(),
         routes => [
             #{
                 <<"template">> => <<"^/arweave/tx">>,
-                <<"strategy">> => <<"All">>,
+                <<"strategy">> => <<"Random">>,
+                <<"choose">> => 2,
+                <<"parallel">> => true,
                 <<"nodes">> =>
                     [
                         #{
                             <<"match">> => <<"/arweave/tx/">>,
-                            <<"with">> => Node1
+                            <<"with">> => AliceNode
                         },
                         #{
                             <<"match">> => <<"/arweave/tx/">>,
-                            <<"with">> => Node2
+                            <<"with">> => BobNode
                         }
                     ]
             }
         ]
     }),
-    %% Fetch Msg1 and Msg2 via RoutingNode with admissibility verification.
-    ?assertMatch(
-        {ok, _},
-        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg1ID/binary>>, #{})
-    ),
-    ?assertMatch(
-        {ok, _},
-        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", Msg2ID/binary>>, #{})
-    ),
+    %% Fetch Alice's and Bob's messages via RoutingNode with admissibility check.
+    {ok, AliceRes} =
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", AliceMsgID/binary>>, #{}),
+    ?assertMatch(#{ <<"a">> := 1 }, AliceRes),
+    {ok, BobRes} =
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", BobMsgID/binary>>, #{}),
+    ?assertMatch(#{ <<"b">> := 1 }, BobRes),
     ok.
