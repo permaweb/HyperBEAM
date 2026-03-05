@@ -24,6 +24,22 @@ arweave(_Base, Request, Opts) ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
     end.
 
+normalize_owner_id(Addr) ->
+    hb_util:native_id(hb_util:bin(Addr)).
+
+%% @doc Adds an address to the owners aliases cache in Opts, mapping
+%% Alias -> native address for fast lookup and once per address computation.
+add_owner_alias(Addr, Alias, Opts) -> 
+    ExistingAliases = maps:get(owner_aliases, Opts, #{}),
+    Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }}.
+
+%% @doc Retrieve the address of a given alias.
+resolve_owner_alias(Alias, Opts) ->
+    Aliases = maps:get(owner_aliases, Opts, #{}),
+    case maps:find(Alias, Aliases) of
+        {ok, Addr} -> {ok, Addr};
+        error -> {error, {owner_alias_not_found, Alias}}
+    end.
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
     From =
