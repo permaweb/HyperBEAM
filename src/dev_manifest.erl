@@ -162,7 +162,7 @@ maybe_cast_manifest(Msg, Opts) ->
         {ok, X} when X == <<"manifest@1.0">> -> {ok, Msg};
         _ ->
             case hb_maps:find(<<"content-type">>, Msg, Opts) of
-                {ok, <<"application/x.arweave-manifest json">>} ->
+                {ok, <<"application/x.arweave-manifest", _/binary>>} ->
                     ?event(debug_maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
                 _IgnoredContentType ->
