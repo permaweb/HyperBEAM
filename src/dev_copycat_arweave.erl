@@ -195,12 +195,20 @@ index_bundle_children(BundleIndex, StartOffset, Depth, Store, Opts) ->
         ),
     {ok, Count}.
 
-should_index_item(1, ItemStartOffset, ItemSize, Opts) ->
+should_index_item(Depth, ItemStartOffset, ItemSize, Opts) ->
+    case hb_opts:get(ao_assume_authority_children, false, Opts) of
+        true ->
+            true;
+        false ->
+            should_index_item_by_depth(Depth, ItemStartOffset, ItemSize, Opts)
+    end.
+
+should_index_item_by_depth(1, ItemStartOffset, ItemSize, Opts) ->
     case protocol_filter(Opts) of
         ao -> is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts);
         _ -> true
     end;
-should_index_item(_Depth, _ItemStartOffset, _ItemSize, _Opts) ->
+should_index_item_by_depth(_Depth, _ItemStartOffset, _ItemSize, _Opts) ->
     true.
 
 %% @doc Parse the range from the request.
@@ -285,18 +293,41 @@ should_index_l1_tx(TX, Opts) ->
     end.
 
 is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts) ->
+    case dataitem_header_at_offset(ItemStartOffset, ItemSize, Opts) of
+        {ok, ParsedDataitem} -> is_ao_message(ParsedDataitem);
+        _ -> false
+    end.
+
+dataitem_header_at_offset(ItemStartOffset, ItemSize, Opts) ->
     ReadSize = min(ItemSize, 262144),
     case hb_store_arweave:read_chunks(ItemStartOffset, ReadSize, Opts) of
         {ok, ChunkData} ->
-            case ar_bundles:deserialize_header(ChunkData) of
+            try ar_bundles:deserialize_header(ChunkData) of
                 {ok, _HeaderSize, ParsedDataitem} ->
-                    is_ao_message(ParsedDataitem);
+                    {ok, ParsedDataitem};
                 _ ->
-                    false
+                    error
+            catch _:_ ->
+                error
             end;
         _ ->
-            false
+            error
     end.
+
+should_index_ao_immediate_child({ok, HeaderTX}, Opts) ->
+    is_ao_legacy_authority_bundle(HeaderTX, Opts) orelse is_ao_message(HeaderTX);
+should_index_ao_immediate_child(_HeaderRes, _Opts) ->
+    false.
+
+is_ao_authority_bundle({ok, HeaderTX}, Opts) ->
+    is_ao_legacy_authority_bundle(HeaderTX, Opts) andalso is_bundle_tx(HeaderTX, Opts);
+is_ao_authority_bundle(_HeaderRes, _Opts) ->
+    false.
+
+is_bundle_header({ok, HeaderTX}, Opts) ->
+    is_bundle_tx(HeaderTX, Opts);
+is_bundle_header(_HeaderRes, _Opts) ->
+    false.
 
 %% @doc Check if the TX owner is the AO
 %% bundler address. useful to optimistically
@@ -530,6 +561,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
             #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
             IndexDepth = hb_opts:get(arweave_index_depth, ?DEPTH_IMMEDIATE_CHILDREN, Opts),
+            AOPolicy = ao_policy_from_l1_tx(TX, Opts),
             IndexStore = hb_store_arweave:store_from_opts(Opts),
             TXID = hb_util:encode(TX#tx.id),
             TXEndOffset = BlockStartOffset + EndOffset,
@@ -568,27 +600,109 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                                 lists:foldl(
                                     fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
                                         EncodedID = hb_util:encode(ItemID),
-                                        hb_store_arweave:write_offset(
-                                            IndexStore,
-                                            EncodedID,
-                                            <<"ans104@1.0">>,
+                                        HeaderRes = dataitem_header_at_offset(
                                             ItemStartOffset,
-                                            Size
+                                            Size,
+                                            Opts
                                         ),
+                                        ShouldIndexItem =
+                                            case protocol_filter(Opts) of
+                                                ao ->
+                                                    case AOPolicy of
+                                                        legacy -> true;
+                                                        turbo -> should_index_ao_immediate_child(HeaderRes, Opts);
+                                                        _ -> false
+                                                    end;
+                                                _ ->
+                                                    true
+                                            end,
+                                        case ShouldIndexItem of
+                                            true ->
+                                                hb_store_arweave:write_offset(
+                                                    IndexStore,
+                                                    EncodedID,
+                                                    <<"ans104@1.0">>,
+                                                    ItemStartOffset,
+                                                    Size
+                                                );
+                                            false ->
+                                                ok
+                                        end,
+                                        ChildOpts =
+                                            case protocol_filter(Opts) of
+                                                ao ->
+                                                    case AOPolicy of
+                                                        legacy ->
+                                                            case is_bundle_header(HeaderRes, Opts) of
+                                                                true ->
+                                                                    Opts#{ ao_assume_authority_children => true };
+                                                                false ->
+                                                                    Opts
+                                                            end;
+                                                        turbo ->
+                                                            case is_ao_authority_bundle(HeaderRes, Opts) of
+                                                                true ->
+                                                                    Opts#{ ao_assume_authority_children => true };
+                                                                false ->
+                                                                    Opts
+                                                            end;
+                                                        _ ->
+                                                            Opts
+                                                    end;
+                                                _ ->
+                                                    Opts
+                                            end,
                                         Descendants =
                                             case IndexDepth > ?DEPTH_IMMEDIATE_CHILDREN of
                                                 true ->
-                                                    case index_id(
-                                                        EncodedID,
-                                                        IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
-                                                        Opts
-                                                    ) of
-                                                        {ok, DescendantCount} -> DescendantCount;
-                                                        _ -> 0
+                                                    case protocol_filter(Opts) of
+                                                        ao ->
+                                                            case AOPolicy of
+                                                                legacy ->
+                                                                    case is_bundle_header(HeaderRes, Opts) of
+                                                                        true ->
+                                                                            case index_id(
+                                                                                EncodedID,
+                                                                                IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
+                                                                                ChildOpts
+                                                                            ) of
+                                                                                {ok, DescendantCount} -> DescendantCount;
+                                                                                _ -> 0
+                                                                            end;
+                                                                        false ->
+                                                                            0
+                                                                    end;
+                                                                turbo ->
+                                                                    case is_ao_authority_bundle(HeaderRes, Opts) of
+                                                                        true ->
+                                                                            case index_id(
+                                                                                EncodedID,
+                                                                                IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
+                                                                                ChildOpts
+                                                                            ) of
+                                                                                {ok, DescendantCount} -> DescendantCount;
+                                                                                _ -> 0
+                                                                            end;
+                                                                        false ->
+                                                                            0
+                                                                    end;
+                                                                _ ->
+                                                                    0
+                                                            end;
+                                                        _ ->
+                                                            case index_id(
+                                                                EncodedID,
+                                                                IndexDepth - ?DEPTH_IMMEDIATE_CHILDREN,
+                                                                Opts
+                                                            ) of
+                                                                {ok, DescendantCount} -> DescendantCount;
+                                                                _ -> 0
+                                                            end
                                                     end;
                                                 false -> 0
                                             end,
-                                        {ItemStartOffset + Size, ItemsCountAcc + 1 + Descendants}
+                                        IndexedItemCount = case ShouldIndexItem of true -> 1; false -> 0 end,
+                                        {ItemStartOffset + Size, ItemsCountAcc + IndexedItemCount + Descendants}
                                     end,
                                     {TXStartOffset + HeaderSize, 0},
                                     BundleIndex
