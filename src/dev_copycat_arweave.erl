@@ -249,26 +249,6 @@ is_ao_message(#tx{tags = Tags}) ->
     hb_util:to_lower(Value) =:= <<"ao">>;
 is_ao_message(_) ->
     false.
-%% @doc Check if a dataitem is a Redstone tx
-is_redstone_message(#tx{tags = Tags}) ->
-    Value = dev_arweave_common:tagfind(<<"Bundler-App-Name">>, Tags, <<>>),
-    hb_util:to_lower(Value) =:= <<"redstone">>;
-is_redstone_message(_) ->
-    false.
-%% @doc Get the (known) protocol type of a given dataitem
-get_ao_message_known_type(TX = #tx{}) ->
-    case is_ao_message(TX) of
-        true ->
-            ao;
-        false ->
-            case is_redstone_message(TX) of
-                true -> redstone;
-                false -> unknown
-            end
-    end;
-get_ao_message_known_type(_) ->
-    unknown.
-
 protocol_filter(Opts) ->
     hb_opts:get(arweave_filter_protocol, all, Opts).
 
@@ -310,7 +290,7 @@ is_ao_message_at_offset(ItemStartOffset, ItemSize, Opts) ->
         {ok, ChunkData} ->
             case ar_bundles:deserialize_header(ChunkData) of
                 {ok, _HeaderSize, ParsedDataitem} ->
-                    get_ao_message_known_type(ParsedDataitem) =:= ao;
+                    is_ao_message(ParsedDataitem);
                 _ ->
                     false
             end;
