@@ -6,7 +6,7 @@
 %%% GraphQL Callbacks:
 -export([execute/4, input/2]).
 %%% Submodule helpers:
--export([keys_to_template/1, test_query/3, test_query/4]).
+-export([keys_to_template/1, keys_to_templates/1, match_any/2, test_query/3, test_query/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -168,22 +168,23 @@ input(_TypeID, Val) -> {ok, Val}.
 
 %% @doc Handle a HyperBEAM `message' query.
 message_query(Obj, <<"message">>, #{<<"keys">> := Keys}, Opts) ->
-    Template = keys_to_template(Keys),
+    Templates = keys_to_templates(Keys),
     ?event(
         {graphql_execute_called,
             {object, Obj},
             {field, <<"message">>},
             {raw_keys, Keys},
-            {template, Template}
+            {templates, Templates}
         }
     ),
-    case hb_cache:match(Template, Opts) of
-        {ok, [ID | _IDs]} ->
+    IDs = match_any(Templates, Opts),
+    case IDs of
+        [ID | _] ->
             ?event({graphql_cache_match_found, ID}),
             {ok, Msg} = hb_cache:read(ID, Opts),
             ?event({graphql_cache_read, Msg}),
             {ok, Msg};
-        not_found ->
+        [] ->
             ?event(graphql_cache_match_not_found),
             {ok, #{<<"id">> => <<"not-found">>, <<"keys">> => #{}}}
     end;
@@ -243,22 +244,40 @@ message_query(Msg, <<"count">>, _Args, Opts) ->
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
 
-keys_to_template(Keys) ->
-    maps:from_list(lists:foldl(
-        fun(#{<<"name">> := Name, <<"value">> := Value}, Acc) ->
-            [{string:lowercase(Name), Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := [Value]}, Acc) ->
-            [{string:lowercase(Name), Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := Values}, _Acc) ->
-            throw(
-                {multivalue_tag_search_not_supported, #{
-                    <<"name">> => Name,
-                    <<"values">> => Values
-                }}
+%% @doc Build a list of match templates from a GQL keys/tags list.
+%% Single-value tags add one constraint to every existing template.
+%% Multi-value tags expand each existing template once per value
+%% (cartesian product), implementing OR semantics across values.
+keys_to_templates(Keys) ->
+    lists:foldl(
+        fun(#{<<"name">> := Name, <<"value">> := Value}, Templates) ->
+            Key = string:lowercase(Name),
+            [T#{Key => Value} || T <- Templates];
+        (#{<<"name">> := Name, <<"values">> := Values}, Templates) ->
+            Key = string:lowercase(Name),
+            lists:flatmap(
+                fun(T) -> [T#{Key => V} || V <- Values] end,
+                Templates
             )
         end,
-        [],
+        [#{}],
         Keys
+    ).
+
+%% @doc Convenience wrapper returning a single template (no multi-value tags).
+keys_to_template(Keys) ->
+    hd(keys_to_templates(Keys)).
+
+%% @doc Run hb_cache:match for each template and return the union of all IDs.
+match_any(Templates, Opts) ->
+    hb_util:unique(lists:flatmap(
+        fun(Template) ->
+            case hb_cache:match(Template, Opts) of
+                {ok, IDs} -> IDs;
+                not_found -> []
+            end
+        end,
+        Templates
     )).
 
 %%% Test helpers.

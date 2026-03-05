@@ -247,8 +247,8 @@ match(<<"id">>, ID, _Opts) ->
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
-    Template = dev_query_graphql:keys_to_template(Tags),
-    hb_cache:match(Template, Opts);
+    Templates = dev_query_graphql:keys_to_templates(Tags),
+    {ok, dev_query_graphql:match_any(Templates, Opts)};
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->
