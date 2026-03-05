@@ -139,17 +139,18 @@ request(Base, Req, Opts) ->
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
-load({as, _, _}, _Opts) -> skip;
 load(Msg, _Opts) when is_map(Msg) -> {ok, Msg};
+load(List, _Opts) when is_list(List) -> skip;
+load({as, _, _}, _Opts) -> skip;
 load(ID, Opts) when ?IS_ID(ID) ->
     case hb_cache:read(ID, Opts) of
-        {ok, Msg} -> {ok, Msg};
+        {ok, Msg} -> load(Msg, Opts);
         _ ->
             ?event(debug_maybe_cast_manifest, {message_load_failed, {id, ID}}),
             {error, not_found}
     end;
 load(Msg, Opts) when ?IS_LINK(Msg) ->
-    try {ok, hb_cache:ensure_loaded(Msg, Opts)}
+    try load(hb_cache:ensure_loaded(Msg, Opts), Opts)
     catch
         _ ->
             ?event(debug_maybe_cast_manifest, {message_load_failed, {link, Msg}}),
