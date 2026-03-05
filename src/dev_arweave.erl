@@ -295,7 +295,7 @@ get_raw(Base, Request, Opts) ->
                                 "/",
                                 (hb_util:bin(FullContentLength))/binary
                             >>,
-                        <<"data">> => Data
+                        <<"body">> => Data
                     }
                 };
             false ->
@@ -303,7 +303,7 @@ get_raw(Base, Request, Opts) ->
                     {ok, Data} ->
                         {ok, Header#{
                             <<"content-type">> => ContentType,
-                            <<"data">> => Data
+                            <<"body">> => Data
                         }};
                     Error ->
                         ?event(
