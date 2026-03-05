@@ -91,34 +91,65 @@ route(Key, M1, M2, Opts) ->
 %% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
 request(Base, Req, Opts) ->
     ?event({on_req_manifest_detector, {base, Base}, {req, Req}}),
-    case hb_maps:find(<<"body">>, Req, Opts) of
-        {ok, [PrimaryMsg|Rest]} ->
-            case maybe_cast_manifest(PrimaryMsg, Opts) of
-                {ok, CastedMsg} ->
-                    %% For to go to index if no key provided.
-                    Rest2 = case Rest of 
-                        [] -> [#{<<"path">> => <<"index">>}];
-                        _ -> Rest 
-                    end,
-                    {ok, Req#{ <<"body">> => [CastedMsg|Rest2] }};
-                {error, not_found} ->
-                    ?event({manifest_not_cast, {error, not_found}}),
-                    {ok, Req}
-            end;
-        _ ->
+    maybe
+        {ok, [PrimaryMsg|Rest]} ?= hb_maps:find(<<"body">>, Req, Opts),
+        {ok, Loaded} ?= load(PrimaryMsg, Opts),
+        % Must handle three cases:
+        % 1. The maybe_cast is not a manifest, so we return the *loaded* request,
+        %    such that the work to load it is not wasted.
+        % 2. The maybe_cast is a manifest, and there are no other elements of
+        %    the path, so we add the `index' path and return.
+        % 3. The maybe_cast is a manifest, and there are other elements of
+        %    the path, so we return the original request sequence with the first
+        %    message replaced with the casted manifest.
+        case {Rest, maybe_cast_manifest(Loaded, Opts)} of
+            {_, ignored} ->
+                {ok, Req#{ <<"body">> => [Loaded|Rest] }};
+            {[], {ok, Casted}} ->
+                {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
+            {_, {ok, Casted}} ->
+                {ok, Req#{ <<"body">> => [Casted|Rest] }}
+        end
+    else
+        {error, not_found} ->
+            {
+                ok,
+                Req#{
+                    <<"body">> =>
+                        [
+                            #{
+                                <<"status">> => 404,
+                                <<"body">> => <<"Not Found">>
+                            }
+                        ]
+                }
+            };
+        Error ->
+            ?event(debug_manifest, {request_ignored, {unexpected, Error}}),
+            % On other errors, we return the original request.
             {ok, Req}
     end.
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
-maybe_cast_manifest(ID, Opts) when ?IS_ID(ID) ->
+load({as, _, _}, _Opts) -> skip;
+load(Msg, _Opts) when is_map(Msg) -> {ok, Msg};
+load(ID, Opts) when ?IS_ID(ID) ->
     case hb_cache:read(ID, Opts) of
-        {ok, Msg} -> maybe_cast_manifest(Msg, Opts);
+        {ok, Msg} -> {ok, Msg};
         _ ->
-            ?event(debug_maybe_cast_manifest, {message_not_found, {id, ID}}),
+            ?event(debug_maybe_cast_manifest, {message_load_failed, {id, ID}}),
             {error, not_found}
     end;
-maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
+load(Msg, Opts) when ?IS_LINK(Msg) ->
+    try {ok, hb_cache:ensure_loaded(Msg, Opts)}
+    catch
+        _ ->
+            ?event(debug_maybe_cast_manifest, {message_load_failed, {link, Msg}}),
+            {error, not_found}
+    end.
+
+maybe_cast_manifest(Msg, Opts) ->
     case hb_maps:find(<<"device">>, Msg, Opts) of
         {ok, X} when X == <<"manifest@1.0">> orelse X == <<"message@1.0">> ->
             {ok, Msg};
@@ -127,14 +158,10 @@ maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
                 {ok, <<"application/x.arweave-manifest+json">>} ->
                     ?event(debug_maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
-                Value ->
-                    ?event(debug_maybe_cast_manifest, {manifest_casting_not_expected, Value}),
-                    {error, not_found}
+                _IgnoredContentType ->
+                    {ok, Msg}
             end
-    end;
-maybe_cast_manifest(Msg, _Opts) ->
-    ?event(debug_maybe_cast_manifest, {message_is_not_manifest, {msg, Msg}}),
-    {error, not_found}.
+    end.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
@@ -224,7 +251,6 @@ resolve_test() ->
         hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
     % Making the same requests to a node with the `request' hook enabled should
     % yield the same results.
-    ?hr(),
     ?event({legacy_manifest_id, LegacyManifestID}),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
@@ -282,7 +308,7 @@ create_generic_manifest(Opts) ->
 
 %% @doc Download the manifest raw data. 
 %% NOTE: This test requests data to arweave node
-manifest_download_via_raw_endpoint_test() ->
+manifest_download_via_raw_endpoint_test_ignore() ->
     Opts = #{
         arweave_index_ids => true,
         store => [
