@@ -129,8 +129,8 @@ type Block {
   # The block ID.
   id: ID
 
-  # The block timestamp (UTC).
-  timestamp: Int
+  # The block timestamp (UTC) as a string to accommodate millisecond precision.
+  timestamp: String
 
   # The block height.
   height: Int!

@@ -27,6 +27,21 @@ query(List, <<"edges">>, _Args, _Opts) ->
     {ok, [{ok, Msg} || Msg <- List]};
 query(Msg, <<"node">>, _Args, _Opts) ->
     {ok, Msg};
+query(Msg, <<"block">>, _Args, _Opts) ->
+    ?event(debug_block, {block_msg, Msg}),
+    BlockHeight = 
+        int_or_null(hb_maps:get(<<"block-height">>, Msg, null, _Opts)),
+    BlockTimestamp = str_or_null(hb_maps:get(<<"timestamp">>, Msg, null, _Opts)),
+    ?event(debug_block, {block_height, {explicit, BlockHeight}}),
+    ?event(debug_block, {block_timestamp, {explicit, BlockTimestamp}}),
+    case {BlockHeight, BlockTimestamp} of
+        {null, _} -> {ok, null};
+        {_, null} -> {ok, null};
+        {_, _} -> {ok, #{
+            <<"height">> => BlockHeight,
+            <<"timestamp">> => BlockTimestamp
+        }}
+    end;
 query(Obj, <<"transaction">>, Args, Opts) ->
     case query(Obj, <<"transactions">>, Args, Opts) of
         {ok, []} -> {ok, null};
@@ -40,9 +55,9 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     Matches = match_args(Args, Opts),
     ?event({transactions_matches, Matches}),
+    Sort = hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts),
     First = hb_util:int(hb_maps:get(<<"first">>, Args, 10, Opts)),
-    Limited = lists:sublist(Matches, First),
-    Messages =
+    AllMessages =
         lists:filtermap(
             fun(Match) ->
                 case hb_cache:read(Match, Opts) of
@@ -50,8 +65,11 @@ query(Obj, <<"transactions">>, Args, Opts) ->
                     not_found -> false
                 end
             end,
-            Limited
+            Matches
         ),
+    ?event(debug_all_messages, {all_messages, AllMessages}),
+    Sorted = sort_by_height(AllMessages, Sort, Opts),
+    Messages = lists:sublist(Sorted, First),
     {ok, #{<<"count">> => length(Matches), <<"messages">> => Messages}};
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
@@ -81,10 +99,14 @@ query(Obj, <<"blocks">>, Args, Opts) ->
     {ok, Blocks};
 query(Block, <<"previous">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"previous_block">>, Block, null, Opts)};
+query(#{<<"height">> := H}, <<"height">>, _Args, _Opts) ->
+    {ok, H};
 query(Block, <<"height">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"height">>, Block, null, Opts)};
+query(#{<<"timestamp">> := T}, <<"timestamp">>, _Args, _Opts) ->
+    {ok, str_or_null(T)};
 query(Block, <<"timestamp">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"timestamp">>, Block, null, Opts)};
+    {ok, str_or_null(hb_maps:get(<<"timestamp">>, Block, null, Opts))};
 query(Msg, <<"signature">>, _Args, Opts) ->
     % Return the signature of the transaction.
     % Other TX access methods are defined below.
@@ -355,3 +377,34 @@ resolve_ids(IDs, Opts) ->
         end,
         IDs
     ).
+
+%% @doc Sort messages by block height. Messages with null block-height are excluded.
+sort_by_height(Messages, Sort, Opts) ->
+    WithHeight =
+        lists:map(
+            fun(Msg) ->
+                {
+                    int_or_null(
+                        hb_maps:get(<<"block-height">>, Msg, null, Opts)
+                    ),
+                    Msg
+                }
+            end,
+            Messages
+        ),
+    Sorted =
+        case Sort of
+            <<"HEIGHT_ASC">> ->
+                lists:sort(fun({A, _}, {B, _}) -> A =< B end, WithHeight);
+            <<"HEIGHT_DESC">> ->
+                lists:sort(fun({A, _}, {B, _}) -> A >= B end, WithHeight);
+            _ -> WithHeight
+        end,
+    [Msg || {_, Msg} <- Sorted].
+
+int_or_null(null) -> null;
+int_or_null(Int) -> hb_util:int(Int).
+
+str_or_null(null) -> null;
+str_or_null(V) when is_binary(V) -> V;
+str_or_null(V) -> integer_to_binary(hb_util:int(V)).
