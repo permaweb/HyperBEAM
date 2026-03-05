@@ -29,16 +29,62 @@ normalize_owner_id(Addr) ->
 
 %% @doc Adds an address to the owners aliases cache in Opts, mapping
 %% Alias -> native address for fast lookup and once per address computation.
-add_owner_alias(Addr, Alias, Opts) -> 
+add_owner_alias(Addr, Alias, Opts) when is_binary(Alias) -> 
     ExistingAliases = maps:get(owner_aliases, Opts, #{}),
-    Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }}.
+    Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }};
+add_owner_alias(_Addr, Alias, _Opts) ->
+    throw({invalid_owner_alias, Alias}).
 
 %% @doc Retrieve the address of a given alias.
-resolve_owner_alias(Alias, Opts) ->
+resolve_owner_alias(Alias, Opts) when is_binary(Alias) ->
     Aliases = maps:get(owner_aliases, Opts, #{}),
     case maps:find(Alias, Aliases) of
         {ok, Addr} -> {ok, Addr};
         error -> {error, {owner_alias_not_found, Alias}}
+    end;
+resolve_owner_alias(Alias, _Opts) ->
+    {error, {invalid_owner_alias, Alias}}.
+
+parse_owner_filter(Request, Opts) ->
+    case resolve_owner_filter_value(
+        <<"include-owner">>,
+        <<"include-owner-alias">>,
+        Request,
+        Opts
+    ) of
+        {error, _} = Error ->
+            Error;
+        {ok, IncludeOwner} ->
+            case resolve_owner_filter_value(
+                <<"exclude-owner">>,
+                <<"exclude-owner-alias">>,
+                Request,
+                Opts
+            ) of
+                {error, _} = Error ->
+                    Error;
+                {ok, ExcludeOwner} ->
+                    {ok, #{
+                        include_owner => IncludeOwner,
+                        exclude_owner => ExcludeOwner
+                    }}
+            end
+    end.
+
+resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
+    case hb_maps:find(AliasKey, Request, Opts) of
+        {ok, Alias} ->
+            case resolve_owner_alias(Alias, Opts) of
+                {ok, Addr} -> {ok, normalize_owner_id(Addr)};
+                {error, _} = Error -> Error
+            end;
+        error ->
+            case hb_maps:find(OwnerKey, Request, Opts) of
+                {ok, Owner} ->
+                    {ok, normalize_owner_id(Owner)};
+                error ->
+                    {ok, undefined}
+            end
     end.
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
