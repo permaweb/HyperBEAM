@@ -311,9 +311,7 @@ parse_bare_item(<<"?0", R/bits>>) ->
     {false, R};
 parse_bare_item(<<"?1", R/bits>>) ->
     % Parse a boolean true.
-    {true, R};
-parse_bare_item(<<>>) -> 
-    {{binary, <<>>}, <<>>}.
+    {true, R}.
 
 %% @doc Parse an integer or decimal binary.
 parse_number(<<C, R/bits>>, L, Acc) when ?IS_DIGIT(C) ->

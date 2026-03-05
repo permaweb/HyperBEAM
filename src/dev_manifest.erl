@@ -1,7 +1,7 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([index/3, info/0, request/3]).
+-export([index/3, info/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -62,7 +62,7 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     ?event({manifest_reading_id, ID}),
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
-    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
+    ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, M2}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     {ok, Res} = maps:find(<<"paths">>, Manifest),
     case maps:get(Key, Res, no_path_match) of
@@ -70,7 +70,6 @@ route(Key, M1, M2, Opts) ->
             % Support materialized view in some JavaScript frameworks.
             case hb_opts:get(manifest_404, fallback, Opts) of
                 error ->
-                    ?event({manifest_404_error, {key, Key}}),
                     {error, not_found};
                 fallback ->
                     ?event({manifest_fallback, {key, Key}}),
@@ -202,14 +201,7 @@ linkify(Manifest, _Opts) ->
 %%% Tests
 
 resolve_test() ->
-    Opts = #{
-        store => hb_opts:get(store, no_viable_store, #{}),
-        on => #{
-            <<"request">> => #{
-                <<"device">> => <<"manifest@1.0">>
-            }
-        }
-    },
+    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     IndexPage = #{
         <<"content-type">> => <<"text/html">>,
         <<"body">> => <<"Page 1">>
