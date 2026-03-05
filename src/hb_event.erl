@@ -74,6 +74,8 @@ increment(debug_linkify, _Message, _Opts, _Count) -> ignored;
 increment(debug_id, _Message, _Opts, _Count) -> ignored;
 increment(debug_enc, _Message, _Opts, _Count) -> ignored;
 increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
+increment(message_set, _Message, _Opts, _Count) -> ignored;
+increment(read_cached, _Message, _Opts, _Count) -> ignored;
 increment(ao_core, _Message, _Opts, _Count) -> ignored;
 increment(ao_internal, _Message, _Opts, _Count) -> ignored;
 increment(ao_devices, _Message, _Opts, _Count) -> ignored;
