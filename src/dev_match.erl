@@ -148,10 +148,8 @@ write_assignment(Msg, Opts) ->
         {writing_assignment_match,
             {assignment, Assignment},
             {assignment_id, AssignmentID},
-            {assignment_uid, AssignmentUID},
             {message, Message},
-            {message_id, MessageID},
-            {message_uid, MessageUID}
+            {message_id, MessageID}
         }
     ),
     {ok, _} = hb_cache:write(SignedAssignment, Opts),
