@@ -94,6 +94,7 @@ request(Base, Req, Opts) ->
     maybe
         {ok, [PrimaryMsg|Rest]} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Loaded} ?= load(PrimaryMsg, Opts),
+        ?event(debug_manifest, {loaded, Loaded}),
         % Must handle three cases:
         % 1. The maybe_cast is not a manifest, so we return the *loaded* request,
         %    such that the work to load it is not wasted.
@@ -104,14 +105,20 @@ request(Base, Req, Opts) ->
         %    message replaced with the casted manifest.
         case {Rest, maybe_cast_manifest(Loaded, Opts)} of
             {_, ignored} ->
+                ?event(
+                    debug_manifest,
+                    {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}),
                 {ok, Req#{ <<"body">> => [Loaded|Rest] }};
             {[], {ok, Casted}} ->
+                ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
                 {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
             {_, {ok, Casted}} ->
+                ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
                 {ok, Req#{ <<"body">> => [Casted|Rest] }}
         end
     else
         {error, not_found} ->
+            ?event(debug_manifest, {not_found_on_load, {req, Req}}),
             {
                 ok,
                 Req#{
@@ -151,15 +158,14 @@ load(Msg, Opts) when ?IS_LINK(Msg) ->
 
 maybe_cast_manifest(Msg, Opts) ->
     case hb_maps:find(<<"device">>, Msg, Opts) of
-        {ok, X} when X == <<"manifest@1.0">> orelse X == <<"message@1.0">> ->
-            {ok, Msg};
+        {ok, X} when X == <<"manifest@1.0">> -> {ok, Msg};
         _ ->
             case hb_maps:find(<<"content-type">>, Msg, Opts) of
-                {ok, <<"application/x.arweave-manifest+json">>} ->
+                {ok, <<"application/x.arweave-manifest json">>} ->
                     ?event(debug_maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
                 _IgnoredContentType ->
-                    {ok, Msg}
+                    ignored
             end
     end.
 
