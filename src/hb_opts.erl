@@ -375,7 +375,7 @@ default_message() ->
                         <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             },
-            %% General Arweave requests: race both chain nodes, take
+            %% General Arweave requests: race all chain nodes, take
             %% the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
