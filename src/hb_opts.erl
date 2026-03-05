@@ -269,7 +269,7 @@ default_message() ->
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_show_priv => if_present,
-        debug_resolve_links => true,
+        debug_resolve_links => false,
         debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
