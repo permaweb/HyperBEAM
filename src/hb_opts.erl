@@ -31,6 +31,7 @@
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
+        dev_manifest, http, hb_gateway_client,
         error, http_error, cron_error, hook_error, warning,
         http_server_short,
         compute_short, push_short, copycat_short, bundler_short
@@ -268,7 +269,7 @@ default_message() ->
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_show_priv => if_present,
-        debug_resolve_links => true,
+        debug_resolve_links => false,
         debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
@@ -374,7 +375,7 @@ default_message() ->
                         <<"opts">> => #{ http_client => httpc, protocol => http2 }
                     }
             },
-            %% General Arweave requests: race both chain nodes, take
+            %% General Arweave requests: race all chain nodes, take
             %% the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
