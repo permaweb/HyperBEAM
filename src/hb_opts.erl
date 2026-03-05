@@ -472,9 +472,6 @@ default_message() ->
                     },
                     #{
                         <<"device">> => <<"name@1.0">>
-                    },
-                    #{
-                        <<"device">> => <<"manifest@1.0">>
                     }
                 ]
         },

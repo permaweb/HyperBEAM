@@ -958,7 +958,7 @@ format_key(true, Committed, Key, ToPrint, Opts) ->
     case lists:member(NormKey = hb_ao:normalize_key(Key, Opts), Committed) of
         true when ToPrint == undefined -> <<"* ", NormKey/binary>>;
         true -> <<"* ", ToPrint/binary>>;
-        false -> format_key(false, Committed, Key, ToPrint, Opts)
+        false -> format_key(false, Committed, Key, undefined, Opts)
     end.
 
 %% @doc Return a formatted list of short IDs, given a raw list of IDs.
