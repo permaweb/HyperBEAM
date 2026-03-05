@@ -265,13 +265,12 @@ get_raw(Base, Request, Opts) ->
             Header = #{
                 <<"arweave-id">> := TXID,
                 <<"arweave-data-offset">> := ArweaveDataOffset,
-                <<"content-type">> := RawContentType,
+                <<"content-type">> := ContentType,
                 <<"content-length">> := FullContentLength
             }
         } ->
         ?event(debug_raw, {raw_header,
             {header, Header}}),
-        ContentType = meaningfull_to_browser(RawContentType),
         case parse_range_params(Request, Opts) of
             {ok, StartRange, EndRange} ->
                 RangeLength = (EndRange - StartRange) + 1,
@@ -316,13 +315,6 @@ get_raw(Base, Request, Opts) ->
                 end
             end
     end.
-
-%% @doc Not all content types are meaningfull to a browser. 
-%% Manifest are handled internally, so we avoid to return when 
-%% requesting RAW.
-meaningfull_to_browser(<<"application/x.arweave-manifest+json">>) -> <<"">>;
-meaningfull_to_browser(ContentType) ->
-    ContentType.
 
 %% @doc Extract the start and end range from a request.
 parse_range_params(<<"bytes=", ByteDescriptor/binary>>, Opts) ->
