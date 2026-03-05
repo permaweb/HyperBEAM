@@ -23,8 +23,7 @@
         <<"tags">>,
         <<"name">>,
         <<"value">>,
-        <<"cursor">>,
-        <<"count">>
+        <<"cursor">>
     ]
 ).
 

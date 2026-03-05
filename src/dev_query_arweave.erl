@@ -19,6 +19,10 @@
 ).
 
 %% @doc Handle an Arweave GraphQL query for either transactions or blocks.
+query(#{<<"messages">> := Messages}, <<"edges">>, _Args, _Opts) ->
+    {ok, [{ok, Msg} || Msg <- Messages]};
+query(#{<<"messages">> := _} = Conn, <<"count">>, _Args, _Opts) ->
+    {ok, maps:get(<<"count">>, Conn)};
 query(List, <<"edges">>, _Args, _Opts) ->
     {ok, [{ok, Msg} || Msg <- List]};
 query(Msg, <<"node">>, _Args, _Opts) ->
@@ -48,7 +52,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
             end,
             Limited
         ),
-    {ok, Messages};
+    {ok, #{<<"count">> => length(Matches), <<"messages">> => Messages}};
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
         {ok, []} -> {ok, null};
