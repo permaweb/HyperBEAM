@@ -8,6 +8,7 @@
 -export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 -export([is_tx_admissible/3]).
 -include("include/hb.hrl").
+-include("include/hb_arweave_nodes.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
@@ -165,7 +166,10 @@ is_tx_admissible(Base, Request, Opts) ->
         {ok, CommittedMsg} ?= hb_message:with_only_committed(Request, Opts),
         BareMsg = hb_maps:without([<<"commitments">>], CommittedMsg, Opts),
         ContentID = hb_message:id(BareMsg, unsigned, Opts),
-        true ?= (ContentID == TXID)
+        true ?=
+            ((ContentID == TXID) orelse 
+            (hb_message:id(CommittedMsg, all, Opts) == TXID)) 
+            % and (hb_message:verify(CommittedMsg, all, Opts))
     else
         _ -> false
     end.
@@ -2112,3 +2116,41 @@ is_admissible_routed_test() ->
         hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", BobMsgID/binary>>, #{}),
     ?assertMatch(#{ <<"b">> := 1 }, BobRes),
     ok.
+
+is_admissible_real_gateway_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        RouteOpts = #{
+            priv_wallet => ar_wallet:new(),
+            routes => [
+                #{
+                    <<"template">> => <<"^/arweave/tx">>,
+                    <<"strategy">> => <<"Random">>,
+                    <<"choose">> => 10,
+                    <<"parallel">> => true,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES
+                },
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES,
+                    <<"parallel">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+        {ok, Res} = get_tx(
+            #{ <<"tx">> => TXID, <<"exclude-data">> => true },
+            #{},
+            RouteOpts
+        ),
+        ?assertMatch(#{ <<"reward">> := <<"482143296">> }, Res),
+        ?assertMatch(
+            #{ <<"anchor">> :=
+                <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>
+            },
+            Res
+        ),
+        ?assertMatch(#{ <<"content-type">> := <<"application/json">> }, Res),
+        ok
+    end}.
