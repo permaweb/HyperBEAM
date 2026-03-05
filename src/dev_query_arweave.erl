@@ -43,9 +43,11 @@ query(Msg, <<"block">>, _Args, _Opts) ->
         }}
     end;
 query(Obj, <<"transaction">>, Args, Opts) ->
+    ?event(debug_transaction, {transaction_obj, Obj}),
     case query(Obj, <<"transactions">>, Args, Opts) of
         {ok, []} -> {ok, null};
-        {ok, [Msg|_]} -> {ok, Msg}
+        {ok, [Msg|_]} -> {ok, Msg};
+        {ok, #{<<"count">> := _, <<"messages">> := [Msg|_]}} -> {ok, Msg}
     end;
 query(Obj, <<"transactions">>, Args, Opts) ->
     ?event({transactions_query,
