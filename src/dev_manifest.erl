@@ -101,9 +101,9 @@ request(Base, Req, Opts) ->
                         _ -> Rest 
                     end,
                     {ok, Req#{ <<"body">> => [CastedMsg|Rest2] }};
-                Error ->
-                    ?event({manifest_not_cast, {error, Error}}),
-                    Error
+                {error, not_found} ->
+                    ?event({manifest_not_cast, {error, not_found}}),
+                    {ok, Req}
             end;
         _ ->
             {ok, Req}
@@ -115,7 +115,7 @@ maybe_cast_manifest(ID, Opts) when ?IS_ID(ID) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} -> maybe_cast_manifest(Msg, Opts);
         _ ->
-            ?event(maybe_cast_manifest, {message_not_found, {id, ID}}),
+            ?event(debug_maybe_cast_manifest, {message_not_found, {id, ID}}),
             {error, not_found}
     end;
 maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
@@ -125,15 +125,16 @@ maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
         _ ->
             case hb_maps:find(<<"content-type">>, Msg, Opts) of
                 {ok, <<"application/x.arweave-manifest+json">>} ->
-                    ?event(maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
+                    ?event(debug_maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
-                _ ->
-                    {ok, Msg}
+                Value ->
+                    ?event(debug_maybe_cast_manifest, {manifest_casting_not_expected, Value}),
+                    {error, not_found}
             end
     end;
 maybe_cast_manifest(Msg, _Opts) ->
-    ?event(maybe_cast_manifest, {message_is_not_manifest, {msg, Msg}}),
-    {ok, Msg}.
+    ?event(debug_maybe_cast_manifest, {message_is_not_manifest, {msg, Msg}}),
+    {error, not_found}.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
