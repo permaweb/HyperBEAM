@@ -765,12 +765,6 @@ accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when
         Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
         Opts
     );
-accept_to_codec(
-        _,
-        #{ <<"content-type">> := <<"application/x.arweave-manifest", _/binary>> },
-        _Opts
-    ) ->
-    <<"manifest@1.0">>;
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
