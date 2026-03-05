@@ -212,6 +212,10 @@
 [
     #{
         <<"match">> => <<"^/arweave">>,
+        <<"with">> => <<"http://chain-3.arweave.xyz:1984">>
+    },
+    #{
+        <<"match">> => <<"^/arweave">>,
         <<"with">> => <<"http://chain-1.arweave.xyz:1984">>
     },
     #{
