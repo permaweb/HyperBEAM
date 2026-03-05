@@ -463,7 +463,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
     Status =
-        case hb_maps:get(<<"status">>, Message, not_found, Opts) of
+        case hb_ao:get(<<"status">>, Message, Opts) of
             not_found -> 200;
             S-> S
         end,
@@ -719,6 +719,20 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     )
                 )
             };
+        {_, <<"manifest@1.0">>, _} ->
+            MessageID = hb_message:id(Message, signed, Opts),
+            {
+                307,
+                #{
+                    <<"location">> =>
+                        <<
+                            "/",
+                            MessageID/binary,
+                            "~manifest@1.0/index"
+                        >>
+                },
+                <<"Manifesting your data...">>
+            };
         _ ->
             % Other codecs are already in binary format, so we can just convert
             % the message to the codec. We also include all of the top-level 
@@ -774,6 +788,12 @@ accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when
         Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
         Opts
     );
+accept_to_codec(
+        _,
+        #{ <<"content-type">> := <<"application/x.arweave-manifest", _/binary>> },
+        _Opts
+    ) ->
+    <<"manifest@1.0">>;
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
