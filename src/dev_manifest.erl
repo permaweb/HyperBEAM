@@ -127,6 +127,9 @@ maybe_cast_manifest(Msg, Opts) when is_map(Msg) orelse ?IS_LINK(Msg) ->
                 {ok, <<"application/x.arweave-manifest+json">>} ->
                     ?event(maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
                     {ok, {as, <<"manifest@1.0">>, Msg}};
+                {ok, <<"application/x.arweave-manifest json">>} ->
+                    ?event(maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
+                    {ok, {as, <<"manifest@1.0">>, Msg}};
                 _ ->
                     {ok, Msg}
             end
