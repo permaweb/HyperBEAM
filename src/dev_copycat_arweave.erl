@@ -5,7 +5,7 @@
 %%% provided, every block in the range is processed.
 -module(dev_copycat_arweave).
 -export([arweave/3]).
--export([add_owner_alias/3, resolve_owner_alias/2, set_memory_safe_cap/2, get_memory_safe_cap/1]).
+-export([add_owner_alias/3, resolve_owner_alias/2, set_memory_safe_cap/2, get_memory_safe_cap/1, set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -39,6 +39,15 @@ arweave(_Base, Request, Opts) ->
 %% bundle processing. in bytes.
 set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
     Opts#{copycat_memory_cap => Cap}.
+
+set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
+    Opts#{copycat_depth_recursion_cap => Cap}.
+
+get_depth_recursion_cap(Opts) ->
+    case maps:get(copycat_depth_recursion_cap, Opts, not_found) of
+        not_found -> ?DEPTH_RECURSION_CAP;
+        Cap -> Cap
+    end.
 
 get_memory_safe_cap(Opts) ->
     case maps:get(copycat_memory_cap, Opts, not_found) of
@@ -167,13 +176,14 @@ process_l1_request(TXID, Request, Opts) ->
     end.
 
 request_depth(Request, Default, Opts) ->
+    MaxRecursionCap = get_depth_recursion_cap(Opts),
     RequestedDepth =
         case hb_maps:get(<<"depth">>, Request, Default, Opts) of
-            <<"safe_max">> -> ?DEPTH_RECURSION_CAP;
+            <<"safe_max">> -> MaxRecursionCap;
             Value -> hb_util:int(Value)
         end,
     erlang:min(
-        ?DEPTH_RECURSION_CAP,
+        MaxRecursionCap,
         erlang:max(
             ?DEPTH_L1_OFFSETS,
             RequestedDepth
