@@ -4,11 +4,11 @@ const { ArweaveSigner, createData } = require("@dha-team/arbundles");
 
 // Configuration
 const BUNDLER_URL = "http://localhost:8734";
-const WALLET_PATH = "../../hyperbeam-key.json";
+const DEFAULT_WALLET = "../../hyperbeam-key.json";
 const CONCURRENT_UPLOADS = 100; // Number of parallel uploads
 
-async function performanceTest(itemCount, bytesPerItem = 0) {
-  const wallet = require(WALLET_PATH);
+async function performanceTest(walletPath, itemCount, bytesPerItem = 0) {
+  const wallet = require(path.resolve(walletPath));
   const signer = new ArweaveSigner(wallet);
   const endpoint = `${BUNDLER_URL}/~bundler@1.0/item?codec-device=ans104@1.0`;
 
@@ -132,24 +132,28 @@ async function performanceTest(itemCount, bytesPerItem = 0) {
 
 // Main execution
 if (require.main === module) {
-  const itemCount = parseInt(process.argv[2], 10);
-  const bytesPerItem = parseInt(process.argv[3], 10) || 0;
-  
+  // If the first arg looks like a number, treat it as itemCount and use the default wallet
+  const firstIsNumber = !isNaN(parseInt(process.argv[2], 10));
+  const walletPath = firstIsNumber ? DEFAULT_WALLET : (process.argv[2] || DEFAULT_WALLET);
+  const itemCount   = parseInt(firstIsNumber ? process.argv[2] : process.argv[3], 10);
+  const bytesPerItem = parseInt(firstIsNumber ? process.argv[3] : process.argv[4], 10) || 0;
+
   if (!itemCount || itemCount < 1 || isNaN(itemCount)) {
-    console.error("Usage: node upload-items.js <number_of_items> [bytes_per_item]");
+    console.error("Usage: node upload-items.js [wallet_path] <number_of_items> [bytes_per_item]");
     console.error("");
     console.error("Arguments:");
+    console.error("  wallet_path      - Path to Arweave wallet JSON (default: ../../hyperbeam-key.json)");
     console.error("  number_of_items  - Number of data items to create and upload");
     console.error("  bytes_per_item   - Minimum size of each item in bytes (optional)");
     console.error("");
     console.error("Examples:");
     console.error("  node upload-items.js 100");
-    console.error("  node upload-items.js 100 1024     # 100 items, ~1KB each");
-    console.error("  node upload-items.js 50 10485760  # 50 items, ~10MB each");
+    console.error("  node upload-items.js 100 1024");
+    console.error("  node upload-items.js /path/to/wallet.json 100 1024");
     process.exit(1);
   }
 
-  performanceTest(itemCount, bytesPerItem)
+  performanceTest(walletPath, itemCount, bytesPerItem)
     .then(() => {
       process.exit(0);
     })
