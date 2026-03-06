@@ -1307,7 +1307,8 @@ get_tx_basic_data_exclude_data_test() ->
         },
         Opts
     ),
-    Data = hb_ao:get(<<"data">>, RawData, Opts),
+    ?event(debug_test, {raw_data, RawData}),
+    Data = hb_ao:get(<<"body">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
@@ -1343,7 +1344,7 @@ get_tx_data_tag_exclude_data_test() ->
         },
         Opts
     ),
-    Data = hb_ao:get(<<"data">>, RawData, Opts),
+    Data = hb_ao:get(<<"body">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
@@ -1421,7 +1422,7 @@ get_raw_range_tx_test() ->
     ?event(debug_test, {result, Result}),
     ?assertEqual(
         {ok, <<"{\"d">>},
-        hb_maps:find(<<"data">>, Result, Opts)
+        hb_maps:find(<<"body">>, Result, Opts)
     ),
     {ok, Result2} =
         hb_ao:resolve(
@@ -1441,7 +1442,7 @@ get_raw_range_tx_test() ->
     ),
     ?assertEqual(
         {ok, <<"ame Cr">>},
-        hb_maps:find(<<"data">>, Result2, Opts)
+        hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
 get_raw_range_ans104_test() ->
@@ -1466,7 +1467,7 @@ get_raw_range_ans104_test() ->
     ?event(debug_test, {result, Result}),
     ?assertEqual(
         {ok, <<"{\n">>},
-        hb_maps:find(<<"data">>, Result, Opts)
+        hb_maps:find(<<"body">>, Result, Opts)
     ),
     {ok, Result2} =
         hb_ao:resolve(
@@ -1486,7 +1487,7 @@ get_raw_range_ans104_test() ->
     ),
     ?assertEqual(
         {ok, <<"t #972">>},
-        hb_maps:find(<<"data">>, Result2, Opts)
+        hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
 get_tx_rsa_nested_bundle_test() ->
