@@ -6,10 +6,15 @@
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
+-export([add_owner_alias/3, resolve_owner_alias/2, set_memory_safe_cap/2, get_memory_safe_cap/1, set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+-define(DEPTH_L1_OFFSETS, 1).
+-define(DEPTH_RECURSION_CAP, 4).
+%% 1GB in bytes
+-define(MEMORY_SAFE_CAP, 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -17,18 +22,259 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    case parse_range(Request, Opts) of
-        {error, unavailable} ->
-            {error, unavailable};
-        {ok, {From, To}} ->
-            case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-                <<"write">> -> fetch_blocks(Request, From, To, Opts);
-                <<"list">> -> list_index(From, To, Opts);
-                Mode ->
-                    {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+        <<"write">> ->
+            case hb_maps:find(<<"id">>, Request, Opts) of
+                {ok, TXID} -> process_l1_request(TXID, Request, Opts);
+                error ->
+                    case parse_range(Request, Opts) of
+                        {error, unavailable} -> {error, unavailable};
+                        {ok, {From, To}} -> fetch_blocks(Request, From, To, Opts)
+                    end
+            end;
+        <<"list">> ->
+            case parse_range(Request, Opts) of
+                {error, unavailable} -> {error, unavailable};
+                {ok, {From, To}} -> list_index(From, To, Opts)
+            end;
+        Mode ->
+            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    end.
+%% @doc Set safe memory resource allocation cap for the in-memory
+%% bundle processing. in bytes.
+set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
+    Opts#{copycat_memory_cap => Cap}.
+%% @doc Set bundles descendant recursion cap, avoids recursion
+%% in very nested bundles (very rare).
+set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
+    Opts#{copycat_depth_recursion_cap => Cap}.
+%% @doc Get the set depth recursion cap. if not set, defaults to ?DEPTH_RECURSION_CAP
+get_depth_recursion_cap(Opts) ->
+    case maps:get(copycat_depth_recursion_cap, Opts, not_found) of
+        not_found -> ?DEPTH_RECURSION_CAP;
+        Cap -> Cap
+    end.
+%% @doc Get the L1 TX data size that gets handled in-memory
+%% defaults to ?MEMORY_SAFE_CAP if not set.
+get_memory_safe_cap(Opts) ->
+    case maps:get(copycat_memory_cap, Opts, not_found) of
+        not_found -> ?MEMORY_SAFE_CAP;
+        Cap -> Cap
+    end.
+%% @doc Normalize an owner address into the native ID form used for comparisons.
+normalize_owner_id(Addr) ->
+    hb_util:native_id(hb_util:bin(Addr)).
+
+%% @doc Adds an address to the owners aliases cache in Opts, mapping
+%% Alias -> native address for fast lookup and once per address computation.
+add_owner_alias(Addr, Alias, Opts) when is_binary(Alias) -> 
+    ExistingAliases = maps:get(owner_aliases, Opts, #{}),
+    Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }};
+add_owner_alias(_Addr, Alias, _Opts) ->
+    throw({invalid_owner_alias, Alias}).
+
+%% @doc Retrieve the address of a given alias.
+resolve_owner_alias(Alias, Opts) when is_binary(Alias) ->
+    Aliases = maps:get(owner_aliases, Opts, #{}),
+    case maps:find(Alias, Aliases) of
+        {ok, Addr} -> {ok, Addr};
+        error -> {error, {owner_alias_not_found, Alias}}
+    end;
+resolve_owner_alias(Alias, _Opts) ->
+    {error, {invalid_owner_alias, Alias}}.
+%% @doc Parse include/exclude owner filters from the request.
+%% Supports direct owner values and owner aliases.
+parse_owner_filter(Request, Opts) ->
+    case resolve_owner_filter_value(
+        <<"include-owner">>,
+        <<"include-owner-alias">>,
+        Request,
+        Opts
+    ) of
+        {error, _} = Error ->
+            Error;
+        {ok, IncludeOwner} ->
+            case resolve_owner_filter_value(
+                <<"exclude-owner">>,
+                <<"exclude-owner-alias">>,
+                Request,
+                Opts
+            ) of
+                {error, _} = Error ->
+                    Error;
+                {ok, ExcludeOwner} ->
+                    {ok, #{
+                        include_owner => IncludeOwner,
+                        exclude_owner => ExcludeOwner
+                    }}
             end
     end.
+%% @doc Resolve one owner filter value from either a direct owner param or
+%% a comma-separated owner alias param. Alias takes precedence.
+resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
+    case hb_maps:find(AliasKey, Request, Opts) of
+        {ok, Alias} ->
+            resolve_owner_aliases(Alias, Opts);
+        error ->
+            case hb_maps:find(OwnerKey, Request, Opts) of
+                {ok, Owner} ->
+                    {ok, normalize_owner_id(Owner)};
+                error ->
+                    {ok, undefined}
+            end
+    end.
+%% @doc Resolve one or more comma-separated owner aliases into normalized owner IDs.
+resolve_owner_aliases(Alias, Opts) ->
+    case
+        lists:filter(
+            fun(Part) -> byte_size(Part) > 0 end,
+            binary:split(hb_util:bin(Alias), <<",">>, [global])
+        )
+    of
+        [SingleAlias] ->
+            case resolve_owner_alias(SingleAlias, Opts) of
+                {ok, Addr} -> {ok, normalize_owner_id(Addr)};
+                {error, _} = Error -> Error
+            end;
+        Aliases ->
+            resolve_owner_aliases(Aliases, Opts, [])
+    end.
+%% @doc Resolve a list of owner aliases into normalized owner IDs.
+resolve_owner_aliases([], _Opts, Acc) ->
+    {ok, lists:reverse(Acc)};
+resolve_owner_aliases([Alias | Rest], Opts, Acc) ->
+    case resolve_owner_alias(Alias, Opts) of
+        {ok, Addr} ->
+            resolve_owner_aliases(Rest, Opts, [normalize_owner_id(Addr) | Acc]);
+        {error, _} = Error ->
+            Error
+    end.
+%% @doc Parse an L1 tag filter from `Name:Value` form.
+parse_tag_filter(Key, Request, Opts) ->
+    case hb_maps:find(Key, Request, Opts) of
+        {ok, Tag} ->
+            case binary:split(hb_util:bin(Tag), <<":">>, [global]) of
+                [Name, Value]
+                        when byte_size(Name) > 0 andalso byte_size(Value) > 0 ->
+                    {ok, #{name => Name, value => Value}};
+                _ ->
+                    {error, invalid_tag_filter}
+            end;
+        error ->
+            {ok, undefined}
+    end.
+%% @doc Process the `id=...` copycat path for an already indexed L1 TX.
+%% applies L1-level owner/tag filters on the lightweight TX header first, then,
+%% if the TX passes and is a bundle, loads the full L1 payload once and indexes
+%% descendants in-memory (under the ?MEMORY_SAFE_CAP limit) up to the requested safe depth
+%% (defaults to full recursion till the set copycat_depth_recursion_cap).
+process_l1_request(TXID, Request, Opts) ->
+    Depth = request_depth(Request, <<"safe_max">>, Opts),
+    case parse_owner_filter(Request, Opts) of
+        {error, _} = Error ->
+            Error;
+        {ok, OwnerFilters} ->
+            case parse_tag_filter(<<"include-tag">>, Request, Opts) of
+                {error, _} = Error ->
+                    Error;
+                {ok, IncludeTag} ->
+                    case parse_tag_filter(<<"exclude-tag">>, Request, Opts) of
+                        {error, _} = Error ->
+                            Error;
+                        {ok, ExcludeTag} ->
+                            {ok,
+                                process_l1_candidate(
+                                    TXID,
+                                    OwnerFilters#{
+                                        include_tag => IncludeTag,
+                                        exclude_tag => ExcludeTag
+                                    },
+                                    Depth,
+                                    Opts
+                                )}
+                    end
+            end
+    end.
+%% @doc Parse the requested recursion depth and clamp it to the configured safe cap.
+%% `safe_max` resolves to the current copycat depth recursion cap.
+request_depth(Request, Default, Opts) ->
+    MaxRecursionCap = get_depth_recursion_cap(Opts),
+    RequestedDepth =
+        case hb_maps:get(<<"depth">>, Request, Default, Opts) of
+            <<"safe_max">> -> MaxRecursionCap;
+            Value -> hb_util:int(Value)
+        end,
+    erlang:min(
+        MaxRecursionCap,
+        erlang:max(
+            ?DEPTH_L1_OFFSETS,
+            RequestedDepth
+        )
+    ).
+%% @doc Return the first matching L1 filter reason for a TX header, or `pass`.
+l1_filter_reason(TX, Filters) ->
+    IncludeOwner = maps:get(include_owner, Filters, undefined),
+    ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
+    IncludeTag = maps:get(include_tag, Filters, undefined),
+    ExcludeTag = maps:get(exclude_tag, Filters, undefined),
+    Owner = ar_tx:get_owner_address(TX),
+    case owner_matches_filter(Owner, IncludeOwner) of
+        false when IncludeOwner =/= undefined ->
+            include_owner_mismatch;
+        _ ->
+            case owner_matches_filter(Owner, ExcludeOwner) of
+                true ->
+                    exclude_owner_match;
+                false ->
+                    case IncludeTag of
+                        undefined ->
+                            case ExcludeTag of
+                                undefined -> pass;
+                                _ ->
+                                    case has_tag_pair(TX, ExcludeTag) of
+                                        true -> exclude_tag_match;
+                                        false -> pass
+                                    end
+                            end;
+                        _ ->
+                            case has_tag_pair(TX, IncludeTag) of
+                                false -> include_tag_mismatch;
+                                true ->
+                                    case ExcludeTag of
+                                        undefined -> pass;
+                                        _ ->
+                                            case has_tag_pair(TX, ExcludeTag) of
+                                                true -> exclude_tag_match;
+                                                false -> pass
+                                            end
+                                    end
+                            end
+                    end
+            end
+    end.
+%% @doc Match an owner against an undefined, single-owner, or multi-owner filter.
+owner_matches_filter(_Owner, undefined) ->
+    false;
+owner_matches_filter(Owner, Owners) when is_list(Owners) ->
+    lists:member(Owner, Owners);
+owner_matches_filter(Owner, FilterOwner) ->
+    Owner =:= FilterOwner.
 
+has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
+    TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
+    case TagValue of
+        not_found ->
+            false;
+        _ ->
+            LowerTagValue = hb_util:to_lower(TagValue),
+            LowerValue = hb_util:to_lower(Value),
+            case LowerTagValue of
+                LowerValue -> true;
+                _ -> false
+            end
+end;
+has_tag_pair(_, _) ->
+    false.
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
     maybe
@@ -400,6 +646,248 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
         #{items_count => 0, bundle_count => 0, skipped_count => 0},
         Results
     ).
+
+%% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
+process_l1_candidate(TXID, Filters, Depth, Opts) ->
+    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
+    NormalizedTXID = hb_util:native_id(TXID),
+    EncodedTXID = hb_util:encode(NormalizedTXID),
+    IndexStore = hb_store_arweave:store_from_opts(Opts),
+    case hb_store_arweave:read_offset(IndexStore, NormalizedTXID) of
+        {ok,
+            #{
+                <<"codec-device">> := <<"tx@1.0">>,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ->
+            case resolve_tx_header(EncodedTXID, Opts) of
+                {ok, TX} ->
+                    case l1_filter_reason(TX, Filters) of
+                        pass ->
+                            case is_bundle_tx(TX, Opts) of
+                                false ->
+                                    ?event(
+                                        copycat_short,
+                                        {arweave_tx_skipped,
+                                            {tx_id, {explicit, EncodedTXID}},
+                                            {reason, not_bundle}
+                                }
+                                    ),
+                                    Skipped;
+                                true ->
+                                    case Length =< get_memory_safe_cap(Opts) of
+                                        false ->
+                                            ?event(
+                                                copycat_short,
+                                                {arweave_bundle_skipped,
+                                                    {tx_id, {explicit, EncodedTXID}},
+                                                    {reason, memory_safe_cap_exceeded}
+                                                }
+                                            ),
+                                            #{
+                                                items_count => 0,
+                                                bundle_count => 1,
+                                                skipped_count => 1
+                                            };
+                                        true ->
+                                            case hb_store_arweave:read_chunks(
+                                                StartOffset,
+                                                Length,
+                                                Opts
+                                            ) of
+                                                {ok, BundleData} ->
+                                                    {TotalTime, IndexRes} = timer:tc(
+                                                        fun() ->
+                                                            index_bundle_bytes(
+                                                                BundleData,
+                                                                StartOffset,
+                                                                Depth,
+                                                                IndexStore,
+                                                                Opts
+                                                            )
+                                                        end
+                                                    ),
+                                                    case IndexRes of
+                                                        {ok, ItemsCount} ->
+                                                            record_event_metrics(
+                                                                <<"item_indexed">>,
+                                                                ItemsCount,
+                                                                TotalTime
+                                                            ),
+                                                            #{
+                                                                items_count => ItemsCount,
+                                                                bundle_count => 1,
+                                                                skipped_count => 0
+                                                            };
+                                                        {error, Reason} ->
+                                                            ?event(
+                                                                copycat_short,
+                                                                {arweave_bundle_skipped,
+                                                                    {tx_id, {explicit, EncodedTXID}},
+                                                                    {reason, Reason}
+                                                                }
+                                                            ),
+                                                            #{
+                                                                items_count => 0,
+                                                                bundle_count => 1,
+                                                                skipped_count => 1
+                                                            }
+                                                    end;
+                                                {error, Reason} ->
+                                                    ?event(
+                                                        copycat_short,
+                                                        {arweave_bundle_skipped,
+                                                            {tx_id, {explicit, EncodedTXID}},
+                                                            {reason, Reason}
+                                                        }
+                                                    ),
+                                                    #{
+                                                        items_count => 0,
+                                                        bundle_count => 1,
+                                                        skipped_count => 1
+                                                    };
+                                                not_found ->
+                                                    ?event(
+                                                        copycat_short,
+                                                        {arweave_bundle_skipped,
+                                                            {tx_id, {explicit, EncodedTXID}},
+                                                            {reason, not_found}
+                                                        }
+                                                    ),
+                                                    #{
+                                                        items_count => 0,
+                                                        bundle_count => 1,
+                                                        skipped_count => 1
+                                                    }
+                                            end
+                                    end
+                            end;
+                        FilterReason ->
+                            ?event(
+                                copycat_short,
+                                {arweave_tx_skipped,
+                                    {tx_id, {explicit, EncodedTXID}},
+                                    {reason, FilterReason}
+                                }
+                            ),
+                            Skipped
+                    end;
+                error ->
+                    Skipped
+            end;
+        {ok, _OtherOffset} ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, not_tx}
+                }
+            ),
+            Skipped;
+        not_found ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, missing_offset}
+                }
+            ),
+            Skipped
+    end.
+
+index_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
+        when Depth =< 0 ->
+    {ok, 0};
+index_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
+    case ar_bundles:decode_bundle_header(BundleData) of
+        invalid_bundle_header ->
+            {error, invalid_bundle_header};
+        {ItemsBin, BundleIndex} ->
+            HeaderSize = byte_size(BundleData) - byte_size(ItemsBin),
+            index_bundle_items(
+                BundleIndex,
+                ItemsBin,
+                BundleStartOffset + HeaderSize,
+                Depth,
+                Store,
+                Opts,
+                0
+            )
+    end.
+
+%% @doc Index bundle children from decoded bundle bytes and recurse descendants in-memory.
+index_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
+    {ok, Count};
+index_bundle_items(
+    [{ItemID, Size} | Rest],
+    ItemsBin,
+    ItemStartOffset,
+    Depth,
+    Store,
+    Opts,
+    Count
+) when byte_size(ItemsBin) >= Size ->
+    ItemBinary = binary:part(ItemsBin, 0, Size),
+    hb_store_arweave:write_offset(
+        Store,
+        hb_util:encode(ItemID),
+        <<"ans104@1.0">>,
+        ItemStartOffset,
+        Size
+    ),
+    DescendantCount =
+        case Depth > 1 of
+            true ->
+                index_bundle_descendants(
+                    ItemBinary,
+                    ItemStartOffset,
+                    Depth - 1,
+                    Store,
+                    Opts
+                );
+            false ->
+                0
+        end,
+    index_bundle_items(
+        Rest,
+        binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),
+        ItemStartOffset + Size,
+        Depth,
+        Store,
+        Opts,
+        Count + 1 + DescendantCount
+    );
+index_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
+    {error, invalid_bundle_header}.
+
+%% @doc Recurse into a nested bundle data item from in-memory bytes.
+index_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
+        when Depth =< 0 ->
+    0;
+index_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
+    try ar_bundles:deserialize_header(ItemBinary) of
+        {ok, HeaderSize, HeaderTX} ->
+            case is_bundle_tx(HeaderTX, Opts) of
+                true ->
+                    case index_bundle_bytes(
+                        HeaderTX#tx.data,
+                        ItemStartOffset + HeaderSize,
+                        Depth,
+                        Store,
+                        Opts
+                    ) of
+                        {ok, Count} -> Count;
+                        _ -> 0
+                    end;
+                false ->
+                    0
+            end;
+        _ ->
+            0
+    catch
+        _:_ ->
+            0
+    end.
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
