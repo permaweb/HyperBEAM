@@ -36,7 +36,6 @@ start() ->
             hb_opts:default_message_with_env(),
             Loaded
         ),
-    hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
@@ -186,7 +185,11 @@ new_server(RawNodeMsg) ->
         env => #{ dispatch => Dispatcher, node_msg => NodeMsgWithID },
         stream_handlers => [cowboy_stream_h],
         max_connections => infinity,
-        idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg)
+        idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg),
+        max_received_frame_rate =>
+            {hb_opts:get(h2_max_received_frame_rate, 10000, NodeMsg), 10000},
+        max_reset_stream_rate =>
+            {hb_opts:get(h2_max_reset_stream_rate, 10, NodeMsg), 10000}
     },
     PrometheusOpts =
         case hb_opts:get(prometheus, not hb_features:test(), NodeMsg) of
