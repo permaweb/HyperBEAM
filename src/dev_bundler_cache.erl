@@ -458,11 +458,7 @@ bundler_optimistic_cache_test() ->
         ),
         ok
     after
-        case hb_name:lookup(bundler_server) of
-            undefined -> ok;
-            PID -> PID ! stop, hb_name:unregister(bundler_server)
-        end,
-        dev_bundler_dispatch:stop_dispatcher()
+        dev_bundler:stop_server()
     end.
 
 new_data_item(Index, SizeOrData, Opts) ->

@@ -15,8 +15,9 @@
 %%% available for reading instantly (`optimistically'), even before the
 %%% transaction is dispatched.
 -module(dev_bundler).
--export([tx/3, item/3]).
+-export([tx/3, item/3, ensure_server/1, stop_server/0, get_state/0]).
 -include("include/hb.hrl").
+-include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Default options.
@@ -114,59 +115,84 @@ stop_server() ->
             hb_name:unregister(?SERVER_NAME)
     end.
 
+%% @doc Return the current bundler server state for tests.
+get_state() ->
+    case hb_name:lookup(?SERVER_NAME) of
+        undefined -> undefined;
+        PID ->
+            PID ! {get_state, self(), Ref = make_ref()},
+            receive
+                {state, Ref, State} -> State
+            after 1000 -> timeout
+            end
+    end.
+
 %% @doc Initialize the bundler server.
 init(Opts) ->
-    % Start the dispatcher to recover any in-progress bundles
-    dev_bundler_dispatch:ensure_dispatcher(Opts),
-    % Recover any unbundled items from cache
+    NumWorkers = hb_opts:get(bundler_workers, ?DEFAULT_NUM_WORKERS, Opts),
+    Workers = lists:map(
+        fun(_) ->
+            WorkerPID = spawn_link(fun dev_bundler_dispatch:worker_loop/0),
+            {WorkerPID, idle}
+        end,
+        lists:seq(1, NumWorkers)
+    ),
     {UnbundledItems, RecoveredBytes} = recover_unbundled_items(Opts),
-    InitialState = #{
-        max_size => hb_opts:get(
-            bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
-        max_idle_time => hb_opts:get(
+    InitialState = #state{
+        max_size = hb_opts:get(bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
+        max_idle_time = hb_opts:get(
             bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
-        max_items => hb_opts:get(
-            bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
-        queue => UnbundledItems,
-        bytes => RecoveredBytes
+        max_items = hb_opts:get(bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
+        queue = UnbundledItems,
+        bytes = RecoveredBytes,
+        workers = maps:from_list(Workers),
+        task_queue = queue:new(),
+        bundles = #{},
+        opts = Opts
     },
-    % If recovered items are ready to dispatch, do so immediately
-    State = maybe_dispatch(InitialState, Opts),
-    server(State, Opts).
+    State = maybe_dispatch(recover_bundles(InitialState)),
+    server(assign_tasks(State), Opts).
 
 %% @doc Recover unbundled items from cache and calculate their total size.
 %% Returns {Items, TotalBytes}.
 recover_unbundled_items(Opts) ->
     UnbundledItems = dev_bundler_cache:load_unbundled_items(Opts),
     ?event(bundler_short, {recovered_unbundled_items, length(UnbundledItems)}),
-    % Calculate total bytes for recovered items
-    RecoveredBytes = lists:foldl(
-        fun(Item, Acc) ->
-            Acc + erlang:external_size(Item)
-        end,
-        0,
-        UnbundledItems
-    ),
+    RecoveredBytes = queue_bytes(UnbundledItems),
     {UnbundledItems, RecoveredBytes}.
 
-%% @doc The main loop of the bundler server. Simply waits for messages to be
-%% added to the queue, and then dispatches them when the queue is large enough.
-server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
+%% @doc The main loop of the bundler server.
+server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
     receive
         {item, Item} ->
-            server(maybe_dispatch(add_to_queue(Item, State, Opts), Opts), Opts);
+            State1 = add_to_queue(Item, State, Opts),
+            server(assign_tasks(maybe_dispatch(State1)), Opts);
+        {task_complete, WorkerPID, Task, Result} ->
+            State1 = handle_task_complete(WorkerPID, Task, Result, State),
+            server(assign_tasks(State1), Opts);
+        {task_failed, WorkerPID, Task, Reason} ->
+            State1 = handle_task_failed(WorkerPID, Task, Reason, State),
+            server(assign_tasks(State1), Opts);
+        {retry_task, Task} ->
+            State1 = enqueue_task(Task, State),
+            server(assign_tasks(State1), Opts);
+        {get_state, From, Ref} ->
+            From ! {state, Ref, State},
+            server(State, Opts);
         stop ->
+            maps:foreach(
+                fun(WorkerPID, _) -> WorkerPID ! stop end,
+                State#state.workers
+            ),
             exit(normal)
     after MaxIdleTime ->
-        Q = maps:get(queue, State),
-        dev_bundler_dispatch:dispatch(Q, Opts),
-        server(State#{ queue => [] }, Opts)
+        server(assign_tasks(dispatch_queue(State)), Opts)
     end.
 
 %% @doc Add an item to the queue. Update the state with the new queue
 %% and approximate total byte size of the queue.
 %% Note: Item has already been verified and cached before reaching here.
-add_to_queue(Item, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
+add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes}, Opts) ->
     ItemSize = erlang:external_size(Item),
     NewQueue = [Item | Queue],
     NewBytes = Bytes + ItemSize,
@@ -176,28 +202,20 @@ add_to_queue(Item, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
     }),
-    State#{
-        queue => NewQueue,
-        bytes => NewBytes
-    }.
+    State#state{queue = NewQueue, bytes = NewBytes}.
 
 %% @doc Dispatch the queue if it is ready.
 %% Only dispatches up to max_items at a time to respect the limit.
-maybe_dispatch(State = #{queue := Q, max_items := MaxItems}, Opts) ->
-    case dispatchable(State, Opts) of
+maybe_dispatch(State = #state{queue = Q, max_items = MaxItems}) ->
+    case dispatchable(State) of
         true ->
-            % Only dispatch up to max_items, keep the rest in queue
             {ToDispatch, Remaining} = split_queue(Q, MaxItems),
-            dev_bundler_dispatch:dispatch(ToDispatch, Opts),
-            % Recalculate bytes for remaining items
-            RemainingBytes = lists:foldl(
-                fun(Item, Acc) -> Acc + erlang:external_size(Item) end,
-                0,
-                Remaining
-            ),
-            NewState = State#{queue => Remaining, bytes => RemainingBytes},
-            % Check if we should dispatch again (in case we have more than max_items)
-            maybe_dispatch(NewState, Opts);
+            State1 = dispatch_items(ToDispatch, State),
+            NewState = State1#state{
+                queue = Remaining,
+                bytes = queue_bytes(Remaining)
+            },
+            maybe_dispatch(NewState);
         false -> State
     end.
 
@@ -209,14 +227,279 @@ split_queue(Queue, MaxItems) ->
     {ToDispatch, Remaining}.
 
 %% @doc Returns whether the queue is dispatchable.
-dispatchable(#{ queue := Q, max_items := MaxLen }, _Opts)
-        when length(Q) >= MaxLen ->
+dispatchable(#state{queue = Q, max_items = MaxLen}) when length(Q) >= MaxLen ->
     true;
-dispatchable(#{ bytes := Bytes, max_size := MaxSize }, _Opts)
-        when Bytes >= MaxSize ->
+dispatchable(#state{bytes = Bytes, max_size = MaxSize}) when Bytes >= MaxSize ->
     true;
-dispatchable(_State, _Opts) ->
+dispatchable(_State) ->
     false.
+
+%% @doc Return the total size of a queue of items.
+queue_bytes(Items) ->
+    lists:foldl(
+        fun(Item, Acc) -> Acc + erlang:external_size(Item) end,
+        0,
+        Items
+    ).
+
+%% @doc Dispatch all currently queued items immediately.
+dispatch_queue(State = #state{queue = []}) ->
+    State;
+dispatch_queue(State = #state{queue = Queue}) ->
+    dispatch_items(Queue, State#state{queue = [], bytes = 0}).
+
+%% @doc Create a bundle and enqueue its initial post task.
+dispatch_items([], State) ->
+    State;
+dispatch_items(Items, State = #state{bundles = Bundles, opts = Opts}) ->
+    BundleID = make_ref(),
+    Bundle = #bundle{
+        id = BundleID,
+        items = Items,
+        status = initializing,
+        tx = undefined,
+        proofs = #{},
+        start_time = erlang:timestamp()
+    },
+    State1 = State#state{
+        bundles = maps:put(BundleID, Bundle, Bundles)
+    },
+    ?event(
+        bundler_short,
+        {dispatching_bundle,
+            {timestamp, dev_bundler_dispatch:format_timestamp()},
+            {bundle_id, BundleID},
+            {num_items, length(Items)}
+        }
+    ),
+    Task = #task{
+        bundle_id = BundleID,
+        type = post_tx,
+        data = Items,
+        opts = Opts
+    },
+    enqueue_task(Task, State1).
+
+%% @doc Enqueue a task for worker execution.
+enqueue_task(Task, State = #state{task_queue = Queue}) ->
+    State#state{task_queue = queue:in(Task, Queue)}.
+
+%% @doc Assign pending tasks to all idle workers.
+assign_tasks(State = #state{workers = Workers}) ->
+    IdleWorkers = maps:filter(
+        fun(_, Status) -> Status =:= idle end,
+        Workers
+    ),
+    assign_tasks(maps:keys(IdleWorkers), State).
+
+assign_tasks([], State) ->
+    State;
+assign_tasks([WorkerPID | Rest], State = #state{workers = Workers, task_queue = Queue}) ->
+    case queue:out(Queue) of
+        {{value, Task}, Queue1} ->
+            WorkerPID ! {execute_task, self(), Task},
+            State1 = State#state{
+                task_queue = Queue1,
+                workers = maps:put(WorkerPID, {busy, Task}, Workers)
+            },
+            assign_tasks(Rest, State1);
+        {empty, _} ->
+            State
+    end.
+
+%% @doc Handle successful task completion.
+handle_task_complete(WorkerPID, Task, Result, State = #state{
+        workers = Workers,
+        bundles = Bundles
+    }) ->
+    #task{bundle_id = BundleID} = Task,
+    ?event(bundler_debug, {task_complete, dev_bundler_dispatch:format_task(Task)}),
+    State1 = State#state{
+        workers = maps:put(WorkerPID, idle, Workers)
+    },
+    case maps:get(BundleID, Bundles, undefined) of
+        undefined ->
+            ?event(bundler_short, {bundle_not_found, BundleID}),
+            State1;
+        Bundle ->
+            task_completed(Task, Bundle, Result, State1)
+    end.
+
+%% @doc Handle task failure and schedule a retry.
+handle_task_failed(WorkerPID, Task, Reason, State = #state{
+        workers = Workers,
+        opts = Opts
+    }) ->
+    RetryCount = Task#task.retry_count,
+    BaseDelay = hb_opts:get(
+        retry_base_delay_ms, ?DEFAULT_RETRY_BASE_DELAY_MS, Opts),
+    MaxDelay = hb_opts:get(
+        retry_max_delay_ms, ?DEFAULT_RETRY_MAX_DELAY_MS, Opts),
+    Jitter = hb_opts:get(retry_jitter, ?DEFAULT_RETRY_JITTER, Opts),
+    BaseDelayWithBackoff = min(BaseDelay * (1 bsl RetryCount), MaxDelay),
+    JitterFactor = (rand:uniform() * 2 - 1) * Jitter,
+    Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
+    ?event(
+        bundler_short,
+        {task_failed_retrying,
+            dev_bundler_dispatch:format_task(Task),
+            {reason, {explicit, Reason}},
+            {retry_count, RetryCount},
+            {delay_ms, Delay}
+        }
+    ),
+    Task1 = Task#task{retry_count = RetryCount + 1},
+    erlang:send_after(Delay, self(), {retry_task, Task1}),
+    State#state{
+        workers = maps:put(WorkerPID, idle, Workers)
+    }.
+
+%% @doc Apply task completion effects to server state.
+task_completed(#task{bundle_id = BundleID, type = post_tx}, Bundle, CommittedTX, State) ->
+    Bundles = State#state.bundles,
+    Opts = State#state.opts,
+    Bundle1 = Bundle#bundle{status = tx_posted, tx = CommittedTX},
+    State1 = State#state{
+        bundles = maps:put(BundleID, Bundle1, Bundles)
+    },
+    BuildProofsTask = #task{
+        bundle_id = BundleID,
+        type = build_proofs,
+        data = CommittedTX,
+        opts = Opts
+    },
+    enqueue_task(BuildProofsTask, State1);
+task_completed(#task{bundle_id = BundleID, type = build_proofs}, Bundle, Proofs, State) ->
+    Bundles = State#state.bundles,
+    Opts = State#state.opts,
+    case Proofs of
+        [] ->
+            bundle_complete(Bundle, State);
+        _ ->
+            ProofsMap = maps:from_list([
+                {maps:get(offset, Proof), #proof{proof = Proof, status = pending}}
+                || Proof <- Proofs
+            ]),
+            Bundle1 = Bundle#bundle{
+                proofs = ProofsMap,
+                status = proofs_built
+            },
+            State1 = State#state{
+                bundles = maps:put(BundleID, Bundle1, Bundles)
+            },
+            lists:foldl(
+                fun(ProofData, StateAcc) ->
+                    ProofTask = #task{
+                        bundle_id = BundleID,
+                        type = post_proof,
+                        data = ProofData,
+                        opts = Opts
+                    },
+                    enqueue_task(ProofTask, StateAcc)
+                end,
+                State1,
+                Proofs
+            )
+    end;
+task_completed(
+        #task{bundle_id = BundleID, type = post_proof, data = ProofData},
+        Bundle,
+        _Result,
+        State
+    ) ->
+    Bundles = State#state.bundles,
+    Offset = maps:get(offset, ProofData),
+    Proofs = Bundle#bundle.proofs,
+    Proofs1 = maps:update_with(
+        Offset,
+        fun(Proof) -> Proof#proof{status = seeded} end,
+        Proofs
+    ),
+    Bundle1 = Bundle#bundle{proofs = Proofs1},
+    State1 = State#state{
+        bundles = maps:put(BundleID, Bundle1, Bundles)
+    },
+    AllSeeded = lists:all(
+        fun(#proof{status = Status}) -> Status =:= seeded end,
+        maps:values(Proofs1)
+    ),
+    case AllSeeded of
+        true ->
+            bundle_complete(Bundle1, State1);
+        false ->
+            State1
+    end.
+
+%% @doc Mark a bundle as complete and remove it from state.
+bundle_complete(Bundle, State = #state{opts = Opts}) ->
+    ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
+    ElapsedTime =
+        timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
+    ?event(
+        bundler_short,
+        {bundle_complete,
+            {bundle_id, Bundle#bundle.id},
+            {timestamp, dev_bundler_dispatch:format_timestamp()},
+            {tx, {explicit, hb_message:id(Bundle#bundle.tx, signed, Opts)}},
+            {elapsed_time_s, ElapsedTime}
+        }
+    ),
+    State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
+
+%% @doc Recover in-progress bundles from cache after a crash.
+recover_bundles(State = #state{opts = Opts}) ->
+    lists:foldl(
+        fun({TXID, Status}, StateAcc) ->
+            recover_bundle(TXID, Status, StateAcc)
+        end,
+        State,
+        dev_bundler_cache:load_bundle_states(Opts)
+    ).
+
+%% @doc Recover a single bundle and enqueue any follow-up work.
+recover_bundle(TXID, Status, State = #state{opts = Opts}) ->
+    ?event(
+        bundler_short,
+        {recovering_bundle,
+            {tx_id, {explicit, TXID}},
+            {status, Status}
+        }
+    ),
+    try
+        CommittedTX = dev_bundler_cache:load_tx(TXID, Opts),
+        Items = dev_bundler_cache:load_bundled_items(TXID, Opts),
+        BundleID = make_ref(),
+        Bundle = #bundle{
+            id = BundleID,
+            items = Items,
+            status = tx_posted,
+            tx = CommittedTX,
+            proofs = #{},
+            start_time = erlang:timestamp()
+        },
+        Bundles = State#state.bundles,
+        State1 = State#state{
+            bundles = maps:put(BundleID, Bundle, Bundles)
+        },
+        Task = #task{
+            bundle_id = BundleID,
+            type = build_proofs,
+            data = CommittedTX,
+            opts = Opts
+        },
+        enqueue_task(Task, State1)
+    catch
+        _:Error:Stack ->
+            ?event(
+                bundler_short,
+                {failed_to_recover_bundle,
+                    {tx_id, {explicit, TXID}},
+                    {error, Error},
+                    {stack, Stack}
+                }
+            ),
+            State
+    end.
 
 %%%===================================================================
 %%% Tests
@@ -516,6 +799,458 @@ recover_respects_max_items_test() ->
         stop_test_servers(ServerHandle)
     end.
 
+complete_task_sequence_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 2,
+            retry_base_delay_ms => 100,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [
+            new_structured_data_item(1, 10, Opts),
+            new_structured_data_item(2, 10, Opts)
+        ],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        ?assertEqual(1, length(Proofs)),
+        State = get_state(),
+        ?assertNotEqual(undefined, State),
+        ?assertNotEqual(timeout, State),
+        Workers = State#state.workers,
+        IdleWorkers = [
+            PID
+            || {PID, Status} <- maps:to_list(Workers), Status =:= idle
+        ],
+        ?assertEqual(maps:size(Workers), length(IdleWorkers)),
+        Queue = State#state.task_queue,
+        ?assert(queue:is_empty(Queue)),
+        Bundles = State#state.bundles,
+        ?assertEqual(0, maps:size(Bundles)),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
+
+recover_bundles_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store()
+        },
+        hb_http_server:start_node(Opts),
+        Item1 = new_structured_data_item(1, 10, Opts),
+        Item2 = new_structured_data_item(2, 10, Opts),
+        Item3 = new_structured_data_item(3, 10, Opts),
+        ok = dev_bundler_cache:write_item(Item1, Opts),
+        ok = dev_bundler_cache:write_item(Item2, Opts),
+        ok = dev_bundler_cache:write_item(Item3, Opts),
+        {ok, TX} = dev_codec_tx:to(
+            lists:reverse([Item1, Item2, Item3]), #{}, #{}),
+        CommittedTX = hb_message:convert(
+            TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+        ok = dev_bundler_cache:write_tx(CommittedTX, [Item1, Item2, Item3], Opts),
+        Item4 = new_structured_data_item(4, 10, Opts),
+        ok = dev_bundler_cache:write_item(Item4, Opts),
+        {ok, TX2} = dev_codec_tx:to(lists:reverse([Item4]), #{}, #{}),
+        CommittedTX2 = hb_message:convert(
+            TX2, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+        ok = dev_bundler_cache:write_tx(CommittedTX2, [Item4], Opts),
+        ok = dev_bundler_cache:complete_tx(CommittedTX2, Opts),
+        ensure_server(Opts),
+        State = get_state(),
+        ?assertEqual(1, maps:size(State#state.bundles)),
+        [Bundle] = maps:values(State#state.bundles),
+        ?assertNotEqual(undefined, Bundle#bundle.start_time),
+        ?assertEqual(#{}, Bundle#bundle.proofs),
+        RecoveredItems = [
+            hb_message:with_commitments(
+                #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
+            || Item <- Bundle#bundle.items
+        ],
+        ?assertEqual(
+            lists:sort([Item1, Item2, Item3]),
+            lists:sort(RecoveredItems)
+        ),
+        ?assertEqual(tx_posted, Bundle#bundle.status),
+        ?assert(hb_message:verify(Bundle#bundle.tx)),
+        ?assertEqual(
+            hb_message:id(CommittedTX, signed, Opts),
+            hb_message:id(Bundle#bundle.tx, signed, Opts)
+        ),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
+
+post_tx_price_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    FailCount = 3,
+    setup_test_counter(price_attempts_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => fun(_Req) ->
+            Count = increment_test_counter(price_attempts_counter) - 1,
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, <<"12345">>}
+            end
+        end,
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        FinalCount = get_test_counter(price_attempts_counter),
+        ?assertEqual(FailCount + 1, FinalCount),
+        ok
+    after
+        cleanup_test_counter(price_attempts_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+post_tx_anchor_failure_retry_test() ->
+    Price = 12345,
+    FailCount = 3,
+    setup_test_counter(anchor_attempts_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => fun(_Req) ->
+            Count = increment_test_counter(anchor_attempts_counter) - 1,
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, hb_util:encode(rand:bytes(32))}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        FinalCount = get_test_counter(anchor_attempts_counter),
+        ?assertEqual(FailCount + 1, FinalCount),
+        ok
+    after
+        cleanup_test_counter(anchor_attempts_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+post_tx_post_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 4,
+    setup_test_counter(tx_attempts_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Count = increment_test_counter(tx_attempts_counter) - 1,
+            case Count < FailCount of
+                true -> {400, <<"Transaction verification failed">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle),
+        ?assertEqual(FailCount + 1, length(TXs)),
+        FinalCount = get_test_counter(tx_attempts_counter),
+        ?assertEqual(FailCount + 1, FinalCount),
+        ok
+    after
+        cleanup_test_counter(tx_attempts_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+post_proof_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 2,
+    setup_test_counter(chunk_attempts_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        chunk => fun(_Req) ->
+            Count = increment_test_counter(chunk_attempts_counter) - 1,
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 50,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [new_structured_data_item(1, floor(4.5 * ?DATA_CHUNK_SIZE), Opts)],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        Chunks = hb_mock_server:get_requests(chunk, FailCount + 5, ServerHandle),
+        ?assertEqual(FailCount + 5, length(Chunks)),
+        FinalCount = get_test_counter(chunk_attempts_counter),
+        ?assertEqual(FailCount + 5, FinalCount),
+        ok
+    after
+        cleanup_test_counter(chunk_attempts_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+rapid_dispatch_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            timer:sleep(100),
+            {200, <<"OK">>}
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            bundler_workers => 3
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        lists:foreach(
+            fun(I) ->
+                Items = [new_structured_data_item(I, 10, Opts)],
+                submit_test_items(Items, Opts)
+            end,
+            lists:seq(1, 10)
+        ),
+        TXs = hb_mock_server:get_requests(tx, 10, ServerHandle),
+        ?assertEqual(10, length(TXs)),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
+
+one_bundle_fails_others_continue_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    setup_test_counter(mixed_attempts_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Count = increment_test_counter(mixed_attempts_counter) - 1,
+            case Count of
+                0 -> {200, <<"OK">>};
+                _ -> {400, <<"fail">>}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 100,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items1 = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items1, Opts),
+        Items2 = [new_structured_data_item(2, 10, Opts)],
+        submit_test_items(Items2, Opts),
+        TXs = hb_mock_server:get_requests(tx, 5, ServerHandle),
+        ?assert(length(TXs) >= 5, length(TXs)),
+        ok
+    after
+        cleanup_test_counter(mixed_attempts_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+parallel_task_execution_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    SleepTime = 120,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        chunk => fun(_Req) ->
+            timer:sleep(SleepTime),
+            {200, <<"OK">>}
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            bundler_workers => 5
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        lists:foreach(
+            fun(I) ->
+                Items = [new_structured_data_item(I, 10, Opts)],
+                submit_test_items(Items, Opts)
+            end,
+            lists:seq(1, 10)
+        ),
+        StartTime = erlang:system_time(millisecond),
+        Chunks = hb_mock_server:get_requests(chunk, 10, ServerHandle),
+        ElapsedTime = erlang:system_time(millisecond) - StartTime,
+        ?assertEqual(10, length(Chunks)),
+        ?assert(ElapsedTime < 2000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
+
+exponential_backoff_timing_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 5,
+    setup_test_counter(backoff_cap_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Timestamp = erlang:system_time(millisecond),
+            Attempt = increment_test_counter(backoff_cap_counter),
+            Count = Attempt - 1,
+            add_test_attempt_timestamp(backoff_cap_counter, Attempt, Timestamp),
+            case Count < FailCount of
+                true -> {400, <<"fail">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 100,
+            retry_max_delay_ms => 500,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items, Opts),
+        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle, 5000),
+        ?assertEqual(FailCount + 1, length(TXs)),
+        Timestamps = test_attempt_timestamps(backoff_cap_counter),
+        ?assertEqual(6, length(Timestamps)),
+        [T1, T2, T3, T4, T5, T6] = Timestamps,
+        Delay1 = T2 - T1,
+        Delay2 = T3 - T2,
+        Delay3 = T4 - T3,
+        Delay4 = T5 - T4,
+        Delay5 = T6 - T5,
+        ?assert(Delay1 >= 70 andalso Delay1 =< 200, Delay1),
+        ?assert(Delay2 >= 150 andalso Delay2 =< 300, Delay2),
+        ?assert(Delay3 >= 300 andalso Delay3 =< 500, Delay3),
+        ?assert(Delay4 >= 400 andalso Delay4 =< 700, Delay4),
+        ?assert(Delay5 >= 400 andalso Delay5 =< 700, Delay5),
+        ok
+    after
+        cleanup_test_counter(backoff_cap_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
+independent_task_retry_counts_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    setup_test_counter(independent_retry_counter),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Count = increment_test_counter(independent_retry_counter) - 1,
+            case Count < 2 of
+                true -> {400, <<"fail">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 100,
+            retry_jitter => 0
+        },
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),
+        Items1 = [new_structured_data_item(1, 10, Opts)],
+        submit_test_items(Items1, Opts),
+        hb_mock_server:get_requests(tx, 3, ServerHandle),
+        Items2 = [new_structured_data_item(2, 10, Opts)],
+        submit_test_items(Items2, Opts),
+        TotalAttempts = 4,
+        TXs = hb_mock_server:get_requests(tx, TotalAttempts, ServerHandle),
+        ?assertEqual(TotalAttempts, length(TXs)),
+        ok
+    after
+        cleanup_test_counter(independent_retry_counter),
+        stop_test_servers(ServerHandle)
+    end.
+
 invalid_item_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
@@ -584,14 +1319,12 @@ cache_write_failure_test() ->
             <<"error">> := <<"cache_write_failed">>}}, Result),
         ok
     after
-        stop_server(),
-        dev_bundler_dispatch:stop_dispatcher()
+        stop_server()
     end.
 
 stop_test_servers(ServerHandle) ->
     hb_mock_server:stop(ServerHandle),
-    stop_server(),
-    dev_bundler_dispatch:stop_dispatcher().
+    stop_server().
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
@@ -659,6 +1392,24 @@ test_api_error(Responses) ->
 
 new_data_item(Index, Size) ->
     new_data_item(Index, Size, hb:wallet()).
+
+new_structured_data_item(Index, Size, Opts) ->
+    hb_message:convert(
+        new_data_item(Index, Size),
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ).
+
+submit_test_items([], _Opts) ->
+    ok;
+submit_test_items(Items, Opts) ->
+    lists:foreach(
+        fun(Item) ->
+            ?assertMatch({ok, _}, item(#{}, Item, Opts))
+        end,
+        Items
+    ).
 
 new_data_item(Index, Size, Wallet) ->
     Data = rand:bytes(Size),
@@ -781,3 +1532,34 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+setup_test_counter(Table) ->
+    cleanup_test_counter(Table),
+    ets:new(Table, [named_table, public, set]),
+    ok.
+
+cleanup_test_counter(Table) ->
+    case ets:info(Table) of
+        undefined -> ok;
+        _ -> ets:delete(Table), ok
+    end.
+
+increment_test_counter(Table) ->
+    ets:update_counter(Table, Table, {2, 1}, {Table, 0}).
+
+get_test_counter(Table) ->
+    case ets:lookup(Table, Table) of
+        [{_, Value}] -> Value;
+        [] -> 0
+    end.
+
+add_test_attempt_timestamp(Table, Attempt, Timestamp) ->
+    ets:insert(Table, {{Table, Attempt}, Timestamp}).
+
+test_attempt_timestamps(Table) ->
+    TimestampEntries = [
+        {Attempt, Timestamp}
+        || {{Prefix1, Attempt}, Timestamp} <- ets:tab2list(Table),
+            Prefix1 =:= Table
+    ],
+    [Timestamp || {_, Timestamp} <- lists:sort(TimestampEntries)].
