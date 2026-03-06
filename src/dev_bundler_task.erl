@@ -1,32 +1,12 @@
-%%% @doc A dispatcher for the bundler device (dev_bundler). This module
-%%% manages a worker pool to handle bundle building, TX posting, proof
-%%% generation, and chunk seeding. Server-side dispatch state lives in
-%%% `dev_bundler'; this module only owns worker execution.
--module(dev_bundler_dispatch).
--export([worker_loop/0, format_task/1, format_timestamp/0]).
+%%% @doc Implements the different bundling primitives:
+%%% - post_tx: Building and posting an L1 transaction
+%%% - build_proofs:Chunking up the bundle data and building the chunk proofs
+%%% - post_proof: Seeding teh chunks to the Arweave network
+-module(dev_bundler_task).
+-export([worker_loop/0, log_task/3, format_timestamp/0]).
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
-%% @doc Format a task for logging.
-format_task(#task{bundle_id = BundleID, type = post_tx, data = DataItems}) ->
-    {post_tx, {timestamp, format_timestamp()}, {bundle, BundleID},
-        {num_items, length(DataItems)}};
-format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
-    {build_proofs, {timestamp, format_timestamp()}, {bundle, BundleID},
-        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
-format_task(#task{bundle_id = BundleID, type = post_proof, data = Proof}) ->
-    Offset = maps:get(offset, Proof),
-    {post_proof, {timestamp, format_timestamp()}, {bundle, BundleID},
-        {offset, Offset}}.
-
-%% @doc Format erlang:timestamp() as a user-friendly RFC3339 string with milliseconds.
-format_timestamp() ->
-    {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
-    Millisecs = (MegaSecs * 1000000 + Secs) * 1000 + (MicroSecs div 1000),
-    calendar:system_time_to_rfc3339(Millisecs, [{unit, millisecond}, {offset, "Z"}]).
-
-%%% Worker implementation
 
 %% @doc Worker loop - executes tasks and reports back to dispatcher.
 worker_loop() ->
@@ -47,7 +27,7 @@ worker_loop() ->
 %% @doc Execute a specific task.
 execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
-        ?event(bundler_debug, {execute_task, format_task(Task)}),
+        ?event(bundler_debug, log_task(executing_task, Task, [])),
         % Get price and anchor
         {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
         DataSize = TX#tx.data_size,
@@ -85,23 +65,22 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
-                ?event(bundle_short, {post_tx_failed,
-                    format_task(Task),
-                    {price, PriceErr},
-                    {anchor, AnchorErr}}),
+                ?event(bundle_short,
+                    log_task(task_failed, Task, [
+                        {price, PriceErr},
+                        {anchor, AnchorErr}
+                    ])),
                 {error, {PriceErr, AnchorErr}}
         end
     catch
-        _:Err:_Stack -> 
-            ?event(bundle_short, {post_tx_failed,
-                format_task(Task),
-                {error, Err}}),
+        _:Err:_Stack ->
+            ?event(bundle_short, log_task(task_failed, Task, [{error, Err}])),
             {error, Err}
     end;
 
 execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task) ->
     try
-        ?event(bundler_debug, {execute_task, format_task(Task)}),
+        ?event(bundler_debug, log_task(executing_task, Task, [])),
         % Calculate chunks and proofs
         TX = hb_message:convert(
             CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
@@ -141,7 +120,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         hb_event:increment(bundler_short, built_proofs, length(Proofs) - 1),
         ?event(
             bundler_short,
-            {built_proofs, 
+            {built_proofs,
                 {bundle, Task#task.bundle_id},
                 {num_proofs, length(Proofs)}
             },
@@ -150,16 +129,14 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         {ok, Proofs}
     catch
         _:Err:_Stack ->
-            ?event(bundler_short, {build_proofs_failed,
-                format_task(Task),
-                {error, Err}}),
+            ?event(bundler_short, log_task(task_failed, Task, [{error, Err}])),
             {error, Err}
     end;
 
 execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     #{chunk := Chunk, data_path := DataPath, offset := Offset,
       data_size := DataSize, data_root := DataRoot} = Proof,
-    ?event(bundler_debug, {execute_task, format_task(Task)}),
+    ?event(bundler_debug, log_task(executing_task, Task, [])),
     Request = #{
         <<"chunk">> => hb_util:encode(Chunk),
         <<"data_path">> => hb_util:encode(DataPath),
@@ -176,9 +153,7 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack ->
-            ?event(bundler_short, {post_proof_failed,
-                format_task(Task),
-                {error, Err}}),
+            ?event(bundler_short, log_task(task_failed, Task, [{error, Err}])),
             {error, Err}
     end.
 
@@ -196,3 +171,40 @@ get_anchor(Opts) ->
         Opts
     ).
 
+%%%===================================================================
+%%% Logging
+%%%===================================================================
+
+%% @doc Return a complete task event tuple for logging.
+log_task(Event, Task, ExtraLogs) ->
+    erlang:list_to_tuple([Event | format_task(Task) ++ ExtraLogs]).
+
+%% @doc Format a task for logging.
+format_task(#task{bundle_id = BundleID, type = post_tx, data = DataItems}) ->
+    [
+        {task_type, post_tx},
+        {timestamp, format_timestamp()},
+        {bundle, BundleID},
+        {num_items, length(DataItems)}
+    ];
+format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
+    [
+        {task_type, build_proofs},
+        {timestamp, format_timestamp()},
+        {bundle, BundleID},
+        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}
+    ];
+format_task(#task{bundle_id = BundleID, type = post_proof, data = Proof}) ->
+    Offset = maps:get(offset, Proof),
+    [
+        {task_type, post_proof},
+        {timestamp, format_timestamp()},
+        {bundle, BundleID},
+        {offset, Offset}
+    ].
+
+%% @doc Format erlang:timestamp() as a user-friendly RFC3339 string with milliseconds.
+format_timestamp() ->
+    {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
+    Millisecs = (MegaSecs * 1000000 + Secs) * 1000 + (MicroSecs div 1000),
+    calendar:system_time_to_rfc3339(Millisecs, [{unit, millisecond}, {offset, "Z"}]).
