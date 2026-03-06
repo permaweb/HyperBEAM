@@ -43,7 +43,7 @@ item(_Base, Req, Opts) ->
                 ok ->
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
-                    ServerPID ! {item, Item},
+                    ServerPID ! {enqueue_item, Item},
                     {ok, #{
                         <<"id">> => ItemID,
                         <<"timestamp">> => erlang:system_time(millisecond)
@@ -132,41 +132,36 @@ init(Opts) ->
     NumWorkers = hb_opts:get(bundler_workers, ?DEFAULT_NUM_WORKERS, Opts),
     Workers = lists:map(
         fun(_) ->
-            WorkerPID = spawn_link(fun dev_bundler_dispatch:worker_loop/0),
+            WorkerPID = spawn_link(fun dev_bundler_task:worker_loop/0),
             {WorkerPID, idle}
         end,
         lists:seq(1, NumWorkers)
     ),
-    {UnbundledItems, RecoveredBytes} = recover_unbundled_items(Opts),
     InitialState = #state{
         max_size = hb_opts:get(bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
         max_idle_time = hb_opts:get(
             bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
         max_items = hb_opts:get(bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
-        queue = UnbundledItems,
-        bytes = RecoveredBytes,
+        queue = [],
+        bytes = 0,
         workers = maps:from_list(Workers),
         task_queue = queue:new(),
         bundles = #{},
         opts = Opts
     },
-    State = maybe_dispatch(recover_bundles(InitialState)),
-    server(assign_tasks(State), Opts).
-
-%% @doc Recover unbundled items from cache and calculate their total size.
-%% Returns {Items, TotalBytes}.
-recover_unbundled_items(Opts) ->
-    UnbundledItems = dev_bundler_cache:load_unbundled_items(Opts),
-    ?event(bundler_short, {recovered_unbundled_items, length(UnbundledItems)}),
-    RecoveredBytes = queue_bytes(UnbundledItems),
-    {UnbundledItems, RecoveredBytes}.
+    dev_bundler_recovery:recover_unbundled_items(self(), Opts),
+    dev_bundler_recovery:recover_bundles(self(), Opts),
+    server(assign_tasks(InitialState), Opts).
 
 %% @doc The main loop of the bundler server.
 server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
     receive
-        {item, Item} ->
+        {enqueue_item, Item} ->
             State1 = add_to_queue(Item, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
+        {recover_bundle, CommittedTX, Items} ->
+            State1 = recover_bundle(CommittedTX, Items, State),
+            server(assign_tasks(State1), Opts);
         {task_complete, WorkerPID, Task, Result} ->
             State1 = handle_task_complete(WorkerPID, Task, Result, State),
             server(assign_tasks(State1), Opts);
@@ -189,7 +184,7 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
         server(assign_tasks(dispatch_queue(State)), Opts)
     end.
 
-%% @doc Add an item to the queue. Update the state with the new queue
+%% @doc Add an enqueue_item to the queue. Update the state with the new queue
 %% and approximate total byte size of the queue.
 %% Note: Item has already been verified and cached before reaching here.
 add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes}, Opts) ->
@@ -210,7 +205,7 @@ maybe_dispatch(State = #state{queue = Q, max_items = MaxItems}) ->
     case dispatchable(State) of
         true ->
             {ToDispatch, Remaining} = split_queue(Q, MaxItems),
-            State1 = dispatch_items(ToDispatch, State),
+            State1 = create_bundle(ToDispatch, State),
             NewState = State1#state{
                 queue = Remaining,
                 bytes = queue_bytes(Remaining)
@@ -246,12 +241,12 @@ queue_bytes(Items) ->
 dispatch_queue(State = #state{queue = []}) ->
     State;
 dispatch_queue(State = #state{queue = Queue}) ->
-    dispatch_items(Queue, State#state{queue = [], bytes = 0}).
+    create_bundle(Queue, State#state{queue = [], bytes = 0}).
 
 %% @doc Create a bundle and enqueue its initial post task.
-dispatch_items([], State) ->
+create_bundle([], State) ->
     State;
-dispatch_items(Items, State = #state{bundles = Bundles, opts = Opts}) ->
+create_bundle(Items, State = #state{bundles = Bundles, opts = Opts}) ->
     BundleID = make_ref(),
     Bundle = #bundle{
         id = BundleID,
@@ -267,7 +262,7 @@ dispatch_items(Items, State = #state{bundles = Bundles, opts = Opts}) ->
     ?event(
         bundler_short,
         {dispatching_bundle,
-            {timestamp, dev_bundler_dispatch:format_timestamp()},
+            {timestamp, dev_bundler_task:format_timestamp()},
             {bundle_id, BundleID},
             {num_items, length(Items)}
         }
@@ -313,7 +308,7 @@ handle_task_complete(WorkerPID, Task, Result, State = #state{
         bundles = Bundles
     }) ->
     #task{bundle_id = BundleID} = Task,
-    ?event(bundler_debug, {task_complete, dev_bundler_dispatch:format_task(Task)}),
+    ?event(bundler_debug, dev_bundler_task:log_task(task_complete, Task, [])),
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
     },
@@ -341,12 +336,11 @@ handle_task_failed(WorkerPID, Task, Reason, State = #state{
     Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
     ?event(
         bundler_short,
-        {task_failed_retrying,
-            dev_bundler_dispatch:format_task(Task),
+        dev_bundler_task:log_task(task_failed_retrying, Task, [
             {reason, {explicit, Reason}},
             {retry_count, RetryCount},
             {delay_ms, Delay}
-        }
+        ])
     ),
     Task1 = Task#task{retry_count = RetryCount + 1},
     erlang:send_after(Delay, self(), {retry_task, Task1}),
@@ -439,67 +433,35 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
         bundler_short,
         {bundle_complete,
             {bundle_id, Bundle#bundle.id},
-            {timestamp, dev_bundler_dispatch:format_timestamp()},
+            {timestamp, dev_bundler_task:format_timestamp()},
             {tx, {explicit, hb_message:id(Bundle#bundle.tx, signed, Opts)}},
             {elapsed_time_s, ElapsedTime}
         }
     ),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
-%% @doc Recover in-progress bundles from cache after a crash.
-recover_bundles(State = #state{opts = Opts}) ->
-    lists:foldl(
-        fun({TXID, Status}, StateAcc) ->
-            recover_bundle(TXID, Status, StateAcc)
-        end,
-        State,
-        dev_bundler_cache:load_bundle_states(Opts)
-    ).
-
 %% @doc Recover a single bundle and enqueue any follow-up work.
-recover_bundle(TXID, Status, State = #state{opts = Opts}) ->
-    ?event(
-        bundler_short,
-        {recovering_bundle,
-            {tx_id, {explicit, TXID}},
-            {status, Status}
-        }
-    ),
-    try
-        CommittedTX = dev_bundler_cache:load_tx(TXID, Opts),
-        Items = dev_bundler_cache:load_bundled_items(TXID, Opts),
-        BundleID = make_ref(),
-        Bundle = #bundle{
-            id = BundleID,
-            items = Items,
-            status = tx_posted,
-            tx = CommittedTX,
-            proofs = #{},
-            start_time = erlang:timestamp()
-        },
-        Bundles = State#state.bundles,
-        State1 = State#state{
-            bundles = maps:put(BundleID, Bundle, Bundles)
-        },
-        Task = #task{
-            bundle_id = BundleID,
-            type = build_proofs,
-            data = CommittedTX,
-            opts = Opts
-        },
-        enqueue_task(Task, State1)
-    catch
-        _:Error:Stack ->
-            ?event(
-                bundler_short,
-                {failed_to_recover_bundle,
-                    {tx_id, {explicit, TXID}},
-                    {error, Error},
-                    {stack, Stack}
-                }
-            ),
-            State
-    end.
+recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
+    BundleID = make_ref(),
+    Bundle = #bundle{
+        id = BundleID,
+        items = Items,
+        status = tx_posted,
+        tx = CommittedTX,
+        proofs = #{},
+        start_time = erlang:timestamp()
+    },
+    Bundles = State#state.bundles,
+    State1 = State#state{
+        bundles = maps:put(BundleID, Bundle, Bundles)
+    },
+    Task = #task{
+        bundle_id = BundleID,
+        type = build_proofs,
+        data = CommittedTX,
+        opts = Opts
+    },
+    enqueue_task(Task, State1).
 
 %%%===================================================================
 %%% Tests
@@ -734,29 +696,6 @@ dispatch_blocking_test() ->
         stop_test_servers(ServerHandle)
     end.
 
-recover_unbundled_items_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
-    % Create and cache some items
-    Item1 = hb_message:convert(new_data_item(1, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-    Item2 = hb_message:convert(new_data_item(2, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-    Item3 = hb_message:convert(new_data_item(3, 10), <<"structured@1.0">>, <<"ans104@1.0">>, Opts),
-    ok = dev_bundler_cache:write_item(Item1, Opts),
-    ok = dev_bundler_cache:write_item(Item2, Opts),
-    ok = dev_bundler_cache:write_item(Item3, Opts),
-    % Bundle Item2 with a fake TX
-    FakeTX = ar_tx:sign(#tx{format = 2, tags = [{<<"test">>, <<"tx">>}]}, hb:wallet()),
-    StructuredTX = hb_message:convert(FakeTX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
-    ok = dev_bundler_cache:write_tx(StructuredTX, [Item2], Opts),
-    % Now recover unbundled items
-    {RecoveredItems, RecoveredBytes} = recover_unbundled_items(Opts),
-    ?assertEqual(3924, RecoveredBytes),
-    RecoveredItems2 = [
-        hb_message:with_commitments(
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
-        || Item <- RecoveredItems],
-    ?assertEqual(lists:sort([Item1, Item3]), lists:sort(RecoveredItems2)),
-    ok.
-
 %% @doc Test that items are recovered and posted while respecting the
 %% max_items limit.
 recover_respects_max_items_test() ->
@@ -847,6 +786,10 @@ recover_bundles_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        chunk => fun(_Req) ->
+            timer:sleep(250),
+            {200, <<"OK">>}
+        end,
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -876,25 +819,20 @@ recover_bundles_test() ->
         ok = dev_bundler_cache:complete_tx(CommittedTX2, Opts),
         ensure_server(Opts),
         State = get_state(),
-        ?assertEqual(1, maps:size(State#state.bundles)),
-        [Bundle] = maps:values(State#state.bundles),
-        ?assertNotEqual(undefined, Bundle#bundle.start_time),
-        ?assertEqual(#{}, Bundle#bundle.proofs),
-        RecoveredItems = [
-            hb_message:with_commitments(
-                #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
-            || Item <- Bundle#bundle.items
-        ],
-        ?assertEqual(
-            lists:sort([Item1, Item2, Item3]),
-            lists:sort(RecoveredItems)
+        ?assertNotEqual(undefined, State),
+        ?assertNotEqual(timeout, State),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 200),
+        ?assertEqual([], TXs),
+        ?assert(
+            hb_util:wait_until(
+                fun() ->
+                    dev_bundler_cache:load_bundle_states(Opts) =:= []
+                end,
+                2000
+            )
         ),
-        ?assertEqual(tx_posted, Bundle#bundle.status),
-        ?assert(hb_message:verify(Bundle#bundle.tx)),
-        ?assertEqual(
-            hb_message:id(CommittedTX, signed, Opts),
-            hb_message:id(Bundle#bundle.tx, signed, Opts)
-        ),
+        FinalState = get_state(),
+        ?assertEqual(0, maps:size(FinalState#state.bundles)),
         ok
     after
         stop_test_servers(ServerHandle)

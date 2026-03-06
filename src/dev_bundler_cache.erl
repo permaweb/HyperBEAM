@@ -7,17 +7,18 @@
 %%%
 %%% Recovery flow:
 %%%   1. Load unbundled items (where bundle = <<>>) back into dev_bundler queue
-%%%   2. Load TX states and reconstruct dev_bundler_dispatch bundles
+%%%   2. Load TX states and reconstruct in-progress bundler bundles
 %%%   3. Enqueue appropriate tasks based on status
 -module(dev_bundler_cache).
 -export([
     write_item/2,
     write_tx/3,
     complete_tx/2,
-    load_unbundled_items/1,
     load_bundle_states/1,
-    load_bundled_items/2,
-    load_tx/2
+    load_tx/2,
+    load_items/2,
+    load_items/4,
+    list_item_ids/1
 ]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -55,11 +56,13 @@ get_item_bundle(Item, Opts) when is_map(Item) ->
 %% @doc Construct the pseudopath for an item's bundle reference.
 %% Item should be a structured message.
 item_path(Item, Opts) when is_map(Item) ->
+    item_path(item_id(Item, Opts), Opts);
+item_path(ItemID, Opts) when is_binary(ItemID) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     hb_store:path(Store, [
         ?BUNDLER_PREFIX,
         <<"item">>,
-        item_id(Item, Opts),
+        ItemID,
         <<"bundle">>
     ]).
 
@@ -110,57 +113,6 @@ tx_path(TX, Opts) ->
 
 %%% Recovery operations
 
-%% @doc Load all unbundled items (where bundle = <<>>) from cache.
-%% Returns list of actual Item messages for re-queuing.
-load_unbundled_items(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
-    % List all item IDs
-    ItemIDs = case hb_cache:list(ItemsPath, Opts) of
-        [] -> [];
-        List -> List
-    end,
-    ?event(bundler_short,
-        {recovering_all_unbundled_items, length(ItemIDs)}
-    ),
-    % Filter for unbundled items and load them
-    lists:filtermap(
-        fun(ItemIDStr) ->
-            % Read the bundle pseudopath directly
-            BundlePath = hb_store:path(Store, [
-                ?BUNDLER_PREFIX,
-                <<"item">>,
-                ItemIDStr,
-                <<"bundle">>
-            ]),
-            case read_pseudopath(BundlePath, Opts) of
-                {ok, <<>>} ->
-                    % Unbundled item - load it fully (resolve all links)
-                    case hb_cache:read(ItemIDStr, Opts) of
-                        {ok, Item} ->
-                            FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event(bundler_short,
-                                {recovered_unbundled_item,
-                                    {id, {string, ItemIDStr}}
-                                }
-                            ),
-                            {true, FullyLoadedItem};
-                        _ ->
-                            ?event(bundler_short,
-                                {failed_to_recover_unbundled_item,
-                                    {id, {string, ItemIDStr}}
-                                }
-                            ),
-                            false
-                    end;
-                _ ->
-                    % Already bundled or not found
-                    false
-            end
-        end,
-        ItemIDs
-    ).
-
 %% @doc Load all bundle TX states from cache.
 %% Returns list of {TXID, Status} tuples.
 load_bundle_states(Opts) ->
@@ -193,60 +145,6 @@ load_bundle_states(Opts) ->
         TXIDs
     ).
 
-%% @doc Load all data items associated with a bundle TX.
-%% Uses the item pseudopaths to find items with matching tx-id.
-load_bundled_items(TXID, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
-    % List all item IDs
-    ItemIDs = case hb_cache:list(ItemsPath, Opts) of
-        [] -> [];
-        List -> List
-    end,
-    ?event(bundler_short, {recovering_bundled_items,
-        {count, length(ItemIDs)}}),
-    % Filter for items belonging to this TX and load them
-    lists:filtermap(
-        fun(ItemIDStr) ->
-            % Read the bundle pseudopath directly
-            BundlePath = hb_store:path(Store, [
-                ?BUNDLER_PREFIX,
-                <<"item">>,
-                ItemIDStr,
-                <<"bundle">>
-            ]),
-            case read_pseudopath(BundlePath, Opts) of
-                {ok, BundleTXID} when BundleTXID =:= TXID ->
-                    % This item belongs to our bundle - load it fully (resolve all links)
-                    case hb_cache:read(ItemIDStr, Opts) of
-                        {ok, Item} ->
-                            FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event(
-                                bundler_debug,
-                                {loaded_tx_item,
-                                    {tx_id, {explicit, TXID}},
-                                    {item_id, {explicit, ItemIDStr}}
-                                }
-                            ),
-                            {true, FullyLoadedItem};
-                        _ ->
-                            ?event(
-                                error,
-                                {failed_to_load_tx_item,
-                                    {tx_id, {explicit, TXID}},
-                                    {item_id, {explicit, ItemIDStr}}
-                                }
-                            ),
-                            false
-                    end;
-                _ ->
-                    % Doesn't belong to this bundle or not found
-                    false
-            end
-        end,
-        ItemIDs
-    ).
-
 %% @doc Load a TX from cache by its ID.
 load_tx(TXID, Opts) ->
     ?event(bundler_debug, {load_tx, {tx_id, {explicit, TXID}}}),
@@ -274,6 +172,47 @@ read_pseudopath(Path, Opts) ->
         {ok, Value} -> {ok, Value};
         _ -> not_found
     end.
+
+%% @doc List all cached bundler item IDs.
+list_item_ids(Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
+    case hb_cache:list(ItemsPath, Opts) of
+        [] -> [];
+        List -> List
+    end.
+
+%% @doc Load all items whose bundle pseudopath matches BundleID.
+load_items(BundleID, Opts) ->
+    load_items(
+        BundleID,
+        Opts,
+        fun(_ItemID, _Item) -> ok end,
+        fun(_ItemID) -> ok end
+    ).
+
+%% @doc Load all items whose bundle pseudopath matches BundleID and invoke callbacks.
+load_items(BundleID, Opts, OnLoaded, OnFailed) ->
+    lists:filtermap(
+        fun(ItemID) ->
+            BundlePath = item_path(ItemID, Opts),
+            case read_pseudopath(BundlePath, Opts) of
+                {ok, BundleID} ->
+                    case hb_cache:read(ItemID, Opts) of
+                        {ok, Item} ->
+                            FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
+                            OnLoaded(ItemID, FullyLoadedItem),
+                            {true, FullyLoadedItem};
+                        _ ->
+                            OnFailed(ItemID),
+                            false
+                    end;
+                _ ->
+                    false
+            end
+        end,
+        list_item_ids(Opts)
+    ).
 
 %%% Tests
 
@@ -306,7 +245,7 @@ load_unbundled_items_test() ->
     % Link item2 to a bundle, leave others unbundled
     ok = write_tx(TX, [Item2], Opts),
     % Load unbundled items
-    UnbundledItems1 = load_unbundled_items(Opts),
+    UnbundledItems1 = load_items(<<>>, Opts),
     UnbundledItems2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
@@ -348,7 +287,7 @@ load_bundled_items_test() ->
     ok = write_tx(TX1, [Item1, Item2], Opts),
     ok = write_tx(TX2, [Item3], Opts),
     % Load items for bundle 1
-    Bundle1Items1 = load_bundled_items(tx_id(TX1, Opts), Opts),
+    Bundle1Items1 = load_items(tx_id(TX1, Opts), Opts),
     Bundle1Items2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
@@ -357,7 +296,7 @@ load_bundled_items_test() ->
     Bundle1Items3 = lists:sort(Bundle1Items2),
     ?assertEqual(lists:sort([Item1, Item2]), Bundle1Items3),
     % Load items for bundle 2
-    Bundle2Items1 = load_bundled_items(tx_id(TX2, Opts), Opts),
+    Bundle2Items1 = load_items(tx_id(TX2, Opts), Opts),
     Bundle2Items2 = [
         hb_message:with_commitments(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
