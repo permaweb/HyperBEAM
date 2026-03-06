@@ -841,6 +841,9 @@ load_as_test(Opts) ->
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
+    % There is a race condition where we write to the store and a 
+    % reset happens making not read the written value.
+    timer:sleep(10),
     {ok, ID} = hb_cache:write(Msg, Opts),
     {ok, ReadMsg} = hb_cache:read(ID, Opts),
     ?assert(hb_message:match(Msg, ReadMsg, primary, Opts)),

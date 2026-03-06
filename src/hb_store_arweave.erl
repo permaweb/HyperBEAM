@@ -304,6 +304,7 @@ init_prometheus() ->
 %%% Tests
 
 write_read_tx_test() ->
+    application:ensure_all_started(hb),
     Store = [hb_test_utils:test_store()],
     Opts = #{ 
         <<"index-store">> => Store 
@@ -346,6 +347,7 @@ write_read_tx_test() ->
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
+    application:ensure_all_started(hb),
     Store = [hb_test_utils:test_store()],
     Opts = #{ 
         <<"index-store">> => Store 
