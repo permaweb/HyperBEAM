@@ -749,7 +749,7 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
 
 init_prometheus() ->
     application:ensure_all_started([prometheus, prometheus_cowboy]),
-	prometheus_counter:new([
+	prometheus_counter:declare([
 		{name, gun_requests_total},
 		{labels, [http_method, status_class, category]},
 		{
@@ -757,9 +757,9 @@ init_prometheus() ->
 			"The total number of GUN requests."
 		}
 	]),
-	prometheus_gauge:new([{name, outbound_connections},
+	prometheus_gauge:declare([{name, outbound_connections},
 		{help, "The current number of the open outbound network connections"}]),
-	prometheus_histogram:new([
+	prometheus_histogram:declare([
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
         {labels, [http_method, status_class, category]},
@@ -770,7 +770,7 @@ init_prometheus() ->
             "throttling, etc...)"
 		}
 	]),
-	prometheus_histogram:new([
+	prometheus_histogram:declare([
 		{name, http_client_get_chunk_duration_seconds},
 		{buckets, [0.1, 1, 10, 60]},
         {labels, [status_class, peer]},
@@ -779,11 +779,11 @@ init_prometheus() ->
 			"The total duration of an HTTP GET chunk request made to a peer."
 		}
 	]),
-	prometheus_counter:new([
+	prometheus_counter:declare([
 		{name, http_client_downloaded_bytes_total},
 		{help, "The total amount of bytes requested via HTTP, per remote endpoint"}
 	]),
-	prometheus_counter:new([
+	prometheus_counter:declare([
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
