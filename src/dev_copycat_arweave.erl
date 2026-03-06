@@ -144,16 +144,16 @@ resolve_owner_aliases([Alias | Rest], Opts, Acc) ->
         {error, _} = Error ->
             Error
     end.
-%% @doc Parse an L1 exclude-tag filter from `Name:Value` form.
-parse_exclude_tag(Request, Opts) ->
-    case hb_maps:find(<<"exclude-tag">>, Request, Opts) of
+%% @doc Parse an L1 tag filter from `Name:Value` form.
+parse_tag_filter(Key, Request, Opts) ->
+    case hb_maps:find(Key, Request, Opts) of
         {ok, Tag} ->
             case binary:split(hb_util:bin(Tag), <<":">>, [global]) of
                 [Name, Value]
                         when byte_size(Name) > 0 andalso byte_size(Value) > 0 ->
                     {ok, #{name => Name, value => Value}};
                 _ ->
-                    {error, invalid_exclude_tag}
+                    {error, invalid_tag_filter}
             end;
         error ->
             {ok, undefined}
@@ -169,17 +169,25 @@ process_l1_request(TXID, Request, Opts) ->
         {error, _} = Error ->
             Error;
         {ok, OwnerFilters} ->
-            case parse_exclude_tag(Request, Opts) of
+            case parse_tag_filter(<<"include-tag">>, Request, Opts) of
                 {error, _} = Error ->
                     Error;
-                {ok, ExcludeTag} ->
-                    {ok,
-                        process_l1_candidate(
-                            TXID,
-                            OwnerFilters#{ exclude_tag => ExcludeTag },
-                            Depth,
-                            Opts
-                        )}
+                {ok, IncludeTag} ->
+                    case parse_tag_filter(<<"exclude-tag">>, Request, Opts) of
+                        {error, _} = Error ->
+                            Error;
+                        {ok, ExcludeTag} ->
+                            {ok,
+                                process_l1_candidate(
+                                    TXID,
+                                    OwnerFilters#{
+                                        include_tag => IncludeTag,
+                                        exclude_tag => ExcludeTag
+                                    },
+                                    Depth,
+                                    Opts
+                                )}
+                    end
             end
     end.
 %% @doc Parse the requested recursion depth and clamp it to the configured safe cap.
@@ -202,6 +210,7 @@ request_depth(Request, Default, Opts) ->
 l1_filter_reason(TX, Filters) ->
     IncludeOwner = maps:get(include_owner, Filters, undefined),
     ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
+    IncludeTag = maps:get(include_tag, Filters, undefined),
     ExcludeTag = maps:get(exclude_tag, Filters, undefined),
     Owner = ar_tx:get_owner_address(TX),
     case owner_matches_filter(Owner, IncludeOwner) of
@@ -212,12 +221,28 @@ l1_filter_reason(TX, Filters) ->
                 true ->
                     exclude_owner_match;
                 false ->
-                    case ExcludeTag of
-                        undefined -> pass;
+                    case IncludeTag of
+                        undefined ->
+                            case ExcludeTag of
+                                undefined -> pass;
+                                _ ->
+                                    case has_tag_pair(TX, ExcludeTag) of
+                                        true -> exclude_tag_match;
+                                        false -> pass
+                                    end
+                            end;
                         _ ->
-                            case has_tag_pair(TX, ExcludeTag) of
-                                true -> exclude_tag_match;
-                                false -> pass
+                            case has_tag_pair(TX, IncludeTag) of
+                                false -> include_tag_mismatch;
+                                true ->
+                                    case ExcludeTag of
+                                        undefined -> pass;
+                                        _ ->
+                                            case has_tag_pair(TX, ExcludeTag) of
+                                                true -> exclude_tag_match;
+                                                false -> pass
+                                            end
+                                    end
                             end
                     end
             end
