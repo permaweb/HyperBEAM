@@ -72,17 +72,12 @@ request(_, Msg, Opts) ->
             ),
             % Transform the given request into a request to return a 429 status
             % code and response.
-            {ok,
+            {error,
                 #{
-                    <<"body">> =>
-                        [
-                            #{
-                                <<"status">> => 429,
-                                <<"reason">> => <<"rate-limited">>,
-                                <<"body">> => <<"Rate limit exceeded.">>,
-                                <<"retry-after">> => RetryAfterBin
-                            }
-                        ]
+                    <<"status">> => 429,
+                    <<"reason">> => <<"rate-limited">>,
+                    <<"body">> => <<"Rate limit exceeded.">>,
+                    <<"retry-after">> => RetryAfterBin
                 }
             };
         false ->
@@ -166,7 +161,12 @@ server_loop(State) ->
         {request, PID, Reference} ->
             NewState = debit(Reference, 1, State, Now = erlang:system_time(millisecond)),
             ?event({state_after_debit, NewState}),
-            PID ! {incremented, account_balance(Reference, NewState, Now)},
+            Balance = account_balance(Reference, NewState, Now),
+            ?event(
+                rate_limit_short,
+                {rate_limit_debited, {target, Reference}, {balance, Balance}}
+            ),
+            PID ! {incremented, Balance},
             server_loop(NewState);
         {balance, PID, Reference} ->
             PID ! {balance, account_balance(Reference, State)},
