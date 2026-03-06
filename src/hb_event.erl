@@ -409,6 +409,7 @@ parse_name(_) -> no_event_name.
 
 %%% Benchmark tests
 
+-define(BENCHMARK_DURATION, 0.25).
 %% @doc Benchmark the performance of a full log of an event.
 benchmark_event_test() ->
     Iterations =
@@ -416,9 +417,9 @@ benchmark_event_test() ->
             fun() ->
                 log(test_module, {test, 1})
             end,
-            0.25
+            ?BENCHMARK_DURATION
         ),
-    hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations),
+    hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
 
@@ -432,9 +433,9 @@ benchmark_print_lookup_test() ->
                 should_print(print, test_module, DefaultOpts)
                     orelse should_print(print, test_event, DefaultOpts)
             end,
-            0.25
+            ?BENCHMARK_DURATION
         ),
-    hb_test_utils:benchmark_print(<<"Looked-up">>, <<"topics">>, Iterations),
+    hb_test_utils:benchmark_print(<<"Looked-up">>, <<"topics">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
 
@@ -443,9 +444,9 @@ benchmark_increment_test() ->
     Iterations =
         hb_test_utils:benchmark(
             fun() -> increment(test_module, {test, 1}, #{}) end,
-            0.25
+            ?BENCHMARK_DURATION
         ),
-    hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations),
+    hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
 
