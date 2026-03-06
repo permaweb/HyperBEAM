@@ -86,6 +86,20 @@ resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
                     {ok, undefined}
             end
     end.
+
+parse_exclude_tag(Request, Opts) ->
+    case hb_maps:find(<<"exclude-tag">>, Request, Opts) of
+        {ok, Tag} ->
+            case binary:split(hb_util:bin(Tag), <<":">>, [global]) of
+                [Name, Value]
+                        when byte_size(Name) > 0 andalso byte_size(Value) > 0 ->
+                    {ok, #{name => Name, value => Value}};
+                _ ->
+                    {error, invalid_exclude_tag}
+            end;
+        error ->
+            {ok, undefined}
+    end.
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
     From =
