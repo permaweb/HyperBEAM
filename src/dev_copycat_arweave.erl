@@ -5,13 +5,15 @@
 %%% provided, every block in the range is processed.
 -module(dev_copycat_arweave).
 -export([arweave/3]).
--export([add_owner_alias/3, resolve_owner_alias/2]).
+-export([add_owner_alias/3, resolve_owner_alias/2, set_memory_safe_cap/2, get_memory_safe_cap/1]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_RECURSION_CAP, 4).
+%% 1GB in bytes
+-define(MEMORY_SAFE_CAP, 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -33,7 +35,17 @@ arweave(_Base, Request, Opts) ->
         Mode ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
     end.
+%% @doc Set safe memory resource allocation cap for the in-memory
+%% bundle processing. in bytes.
+set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
+    Opts#{copycat_memory_cap => Cap}.
 
+get_memory_safe_cap(Opts) ->
+    case maps:get(copycat_memory_cap, Opts, not_found) of
+        not_found -> ?MEMORY_SAFE_CAP;
+        Cap -> Cap
+    end.
+    
 normalize_owner_id(Addr) ->
     hb_util:native_id(hb_util:bin(Addr)).
 
@@ -112,7 +124,7 @@ parse_exclude_tag(Request, Opts) ->
     end.
 
 process_l1_request(TXID, Request, Opts) ->
-    Depth = request_depth(Request, <<"1">>, Opts),
+    Depth = request_depth(Request, <<"safe_max">>, Opts),
     case parse_owner_filter(Request, Opts) of
         {error, _} = Error ->
             Error;
@@ -132,16 +144,18 @@ process_l1_request(TXID, Request, Opts) ->
     end.
 
 request_depth(Request, Default, Opts) ->
+    RequestedDepth =
+        case hb_maps:get(<<"depth">>, Request, Default, Opts) of
+            <<"safe_max">> -> ?DEPTH_RECURSION_CAP;
+            Value -> hb_util:int(Value)
+        end,
     erlang:min(
         ?DEPTH_RECURSION_CAP,
         erlang:max(
             ?DEPTH_L1_OFFSETS,
-            hb_util:int(hb_maps:get(<<"depth">>, Request, Default, Opts))
+            RequestedDepth
         )
     ).
-
-passes_l1_filters(TX, Filters) ->
-    l1_filter_reason(TX, Filters) =:= pass.
 
 l1_filter_reason(TX, Filters) ->
     IncludeOwner = maps:get(include_owner, Filters, undefined),
@@ -590,35 +604,64 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
                                     ),
                                     Skipped;
                                 true ->
-                                    case hb_store_arweave:read_chunks(
-                                        StartOffset,
-                                        Length,
-                                        Opts
-                                    ) of
-                                        {ok, BundleData} ->
-                                            {TotalTime, IndexRes} = timer:tc(
-                                                fun() ->
-                                                    index_bundle_bytes(
-                                                        BundleData,
-                                                        StartOffset,
-                                                        Depth,
-                                                        IndexStore,
-                                                        Opts
-                                                    )
-                                                end
+                                    case Length =< get_memory_safe_cap(Opts) of
+                                        false ->
+                                            ?event(
+                                                copycat_short,
+                                                {arweave_bundle_skipped,
+                                                    {tx_id, {explicit, EncodedTXID}},
+                                                    {reason, memory_safe_cap_exceeded}
+                                                }
                                             ),
-                                            case IndexRes of
-                                                {ok, ItemsCount} ->
-                                                    record_event_metrics(
-                                                        <<"item_indexed">>,
-                                                        ItemsCount,
-                                                        TotalTime
+                                            #{
+                                                items_count => 0,
+                                                bundle_count => 1,
+                                                skipped_count => 1
+                                            };
+                                        true ->
+                                            case hb_store_arweave:read_chunks(
+                                                StartOffset,
+                                                Length,
+                                                Opts
+                                            ) of
+                                                {ok, BundleData} ->
+                                                    {TotalTime, IndexRes} = timer:tc(
+                                                        fun() ->
+                                                            index_bundle_bytes(
+                                                                BundleData,
+                                                                StartOffset,
+                                                                Depth,
+                                                                IndexStore,
+                                                                Opts
+                                                            )
+                                                        end
                                                     ),
-                                                    #{
-                                                        items_count => ItemsCount,
-                                                        bundle_count => 1,
-                                                        skipped_count => 0
-                                                    };
+                                                    case IndexRes of
+                                                        {ok, ItemsCount} ->
+                                                            record_event_metrics(
+                                                                <<"item_indexed">>,
+                                                                ItemsCount,
+                                                                TotalTime
+                                                            ),
+                                                            #{
+                                                                items_count => ItemsCount,
+                                                                bundle_count => 1,
+                                                                skipped_count => 0
+                                                            };
+                                                        {error, Reason} ->
+                                                            ?event(
+                                                                copycat_short,
+                                                                {arweave_bundle_skipped,
+                                                                    {tx_id, {explicit, EncodedTXID}},
+                                                                    {reason, Reason}
+                                                                }
+                                                            ),
+                                                            #{
+                                                                items_count => 0,
+                                                                bundle_count => 1,
+                                                                skipped_count => 1
+                                                            }
+                                                    end;
                                                 {error, Reason} ->
                                                     ?event(
                                                         copycat_short,
@@ -631,34 +674,21 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
                                                         items_count => 0,
                                                         bundle_count => 1,
                                                         skipped_count => 1
+                                                    };
+                                                not_found ->
+                                                    ?event(
+                                                        copycat_short,
+                                                        {arweave_bundle_skipped,
+                                                            {tx_id, {explicit, EncodedTXID}},
+                                                            {reason, not_found}
+                                                        }
+                                                    ),
+                                                    #{
+                                                        items_count => 0,
+                                                        bundle_count => 1,
+                                                        skipped_count => 1
                                                     }
-                                            end;
-                                        {error, Reason} ->
-                                            ?event(
-                                                copycat_short,
-                                                {arweave_bundle_skipped,
-                                                    {tx_id, {explicit, EncodedTXID}},
-                                                    {reason, Reason}
-                                                }
-                                            ),
-                                            #{
-                                                items_count => 0,
-                                                bundle_count => 1,
-                                                skipped_count => 1
-                                            };
-                                        not_found ->
-                                            ?event(
-                                                copycat_short,
-                                                {arweave_bundle_skipped,
-                                                    {tx_id, {explicit, EncodedTXID}},
-                                                    {reason, not_found}
-                                                }
-                                            ),
-                                            #{
-                                                items_count => 0,
-                                                bundle_count => 1,
-                                                skipped_count => 1
-                                            }
+                                            end
                                     end
                             end;
                         FilterReason ->
