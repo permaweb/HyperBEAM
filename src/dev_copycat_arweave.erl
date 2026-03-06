@@ -96,10 +96,7 @@ parse_owner_filter(Request, Opts) ->
 resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
     case hb_maps:find(AliasKey, Request, Opts) of
         {ok, Alias} ->
-            case resolve_owner_alias(Alias, Opts) of
-                {ok, Addr} -> {ok, normalize_owner_id(Addr)};
-                {error, _} = Error -> Error
-            end;
+            resolve_owner_aliases(Alias, Opts);
         error ->
             case hb_maps:find(OwnerKey, Request, Opts) of
                 {ok, Owner} ->
@@ -107,6 +104,32 @@ resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
                 error ->
                     {ok, undefined}
             end
+    end.
+
+resolve_owner_aliases(Alias, Opts) ->
+    case
+        lists:filter(
+            fun(Part) -> byte_size(Part) > 0 end,
+            binary:split(hb_util:bin(Alias), <<",">>, [global])
+        )
+    of
+        [SingleAlias] ->
+            case resolve_owner_alias(SingleAlias, Opts) of
+                {ok, Addr} -> {ok, normalize_owner_id(Addr)};
+                {error, _} = Error -> Error
+            end;
+        Aliases ->
+            resolve_owner_aliases(Aliases, Opts, [])
+    end.
+
+resolve_owner_aliases([], _Opts, Acc) ->
+    {ok, lists:reverse(Acc)};
+resolve_owner_aliases([Alias | Rest], Opts, Acc) ->
+    case resolve_owner_alias(Alias, Opts) of
+        {ok, Addr} ->
+            resolve_owner_aliases(Rest, Opts, [normalize_owner_id(Addr) | Acc]);
+        {error, _} = Error ->
+            Error
     end.
 
 parse_exclude_tag(Request, Opts) ->
@@ -162,56 +185,31 @@ l1_filter_reason(TX, Filters) ->
     ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
     ExcludeTag = maps:get(exclude_tag, Filters, undefined),
     Owner = ar_tx:get_owner_address(TX),
-    case IncludeOwner of
-        undefined ->
-            case ExcludeOwner of
-                undefined ->
-                    case ExcludeTag of
-                        undefined -> pass;
-                        _ ->
-                            case has_tag_pair(TX, ExcludeTag) of
-                                true -> exclude_tag_match;
-                                false -> pass
-                            end
-                    end;
-                Owner ->
-                    exclude_owner_match;
-                _ ->
-                    case ExcludeTag of
-                        undefined -> pass;
-                        _ ->
-                            case has_tag_pair(TX, ExcludeTag) of
-                                true -> exclude_tag_match;
-                                false -> pass
-                            end
-                    end
-            end;
-        Owner ->
-            case ExcludeOwner of
-                undefined ->
-                    case ExcludeTag of
-                        undefined -> pass;
-                        _ ->
-                            case has_tag_pair(TX, ExcludeTag) of
-                                true -> exclude_tag_match;
-                                false -> pass
-                            end
-                    end;
-                Owner ->
-                    exclude_owner_match;
-                _ ->
-                    case ExcludeTag of
-                        undefined -> pass;
-                        _ ->
-                            case has_tag_pair(TX, ExcludeTag) of
-                                true -> exclude_tag_match;
-                                false -> pass
-                            end
-                    end
-            end;
+    case owner_matches_filter(Owner, IncludeOwner) of
+        false when IncludeOwner =/= undefined ->
+            include_owner_mismatch;
         _ ->
-            include_owner_mismatch
+            case owner_matches_filter(Owner, ExcludeOwner) of
+                true ->
+                    exclude_owner_match;
+                false ->
+                    case ExcludeTag of
+                        undefined -> pass;
+                        _ ->
+                            case has_tag_pair(TX, ExcludeTag) of
+                                true -> exclude_tag_match;
+                                false -> pass
+                            end
+                    end
+            end
     end.
+
+owner_matches_filter(_Owner, undefined) ->
+    false;
+owner_matches_filter(Owner, Owners) when is_list(Owners) ->
+    lists:member(Owner, Owners);
+owner_matches_filter(Owner, FilterOwner) ->
+    Owner =:= FilterOwner.
 
 has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
     TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
