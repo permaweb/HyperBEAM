@@ -10,6 +10,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+-define(DEPTH_L1_OFFSETS, 1).
+-define(DEPTH_RECURSION_CAP, 4).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -110,6 +112,7 @@ parse_exclude_tag(Request, Opts) ->
     end.
 
 process_l1_request(TXID, Request, Opts) ->
+    Depth = request_depth(Request, <<"1">>, Opts),
     case parse_owner_filter(Request, Opts) of
         {error, _} = Error ->
             Error;
@@ -122,10 +125,20 @@ process_l1_request(TXID, Request, Opts) ->
                         process_l1_candidate(
                             TXID,
                             OwnerFilters#{ exclude_tag => ExcludeTag },
+                            Depth,
                             Opts
                         )}
             end
     end.
+
+request_depth(Request, Default, Opts) ->
+    erlang:min(
+        ?DEPTH_RECURSION_CAP,
+        erlang:max(
+            ?DEPTH_L1_OFFSETS,
+            hb_util:int(hb_maps:get(<<"depth">>, Request, Default, Opts))
+        )
+    ).
 
 passes_l1_filters(TX, Filters) ->
     l1_filter_reason(TX, Filters) =:= pass.
@@ -550,7 +563,7 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
     ).
 
 %% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
-process_l1_candidate(TXID, Filters, Opts) ->
+process_l1_candidate(TXID, Filters, Depth, Opts) ->
     Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
@@ -573,15 +586,80 @@ process_l1_candidate(TXID, Filters, Opts) ->
                                         {arweave_tx_skipped,
                                             {tx_id, {explicit, EncodedTXID}},
                                             {reason, not_bundle}
-                                        }
+                                }
                                     ),
                                     Skipped;
                                 true ->
-                                    process_tx(
-                                        {{TX, <<>>}, StartOffset + Length},
-                                        0,
+                                    case hb_store_arweave:read_chunks(
+                                        StartOffset,
+                                        Length,
                                         Opts
-                                    )
+                                    ) of
+                                        {ok, BundleData} ->
+                                            {TotalTime, IndexRes} = timer:tc(
+                                                fun() ->
+                                                    index_bundle_bytes(
+                                                        BundleData,
+                                                        StartOffset,
+                                                        Depth,
+                                                        IndexStore,
+                                                        Opts
+                                                    )
+                                                end
+                                            ),
+                                            case IndexRes of
+                                                {ok, ItemsCount} ->
+                                                    record_event_metrics(
+                                                        <<"item_indexed">>,
+                                                        ItemsCount,
+                                                        TotalTime
+                                                    ),
+                                                    #{
+                                                        items_count => ItemsCount,
+                                                        bundle_count => 1,
+                                                        skipped_count => 0
+                                                    };
+                                                {error, Reason} ->
+                                                    ?event(
+                                                        copycat_short,
+                                                        {arweave_bundle_skipped,
+                                                            {tx_id, {explicit, EncodedTXID}},
+                                                            {reason, Reason}
+                                                        }
+                                                    ),
+                                                    #{
+                                                        items_count => 0,
+                                                        bundle_count => 1,
+                                                        skipped_count => 1
+                                                    }
+                                            end;
+                                        {error, Reason} ->
+                                            ?event(
+                                                copycat_short,
+                                                {arweave_bundle_skipped,
+                                                    {tx_id, {explicit, EncodedTXID}},
+                                                    {reason, Reason}
+                                                }
+                                            ),
+                                            #{
+                                                items_count => 0,
+                                                bundle_count => 1,
+                                                skipped_count => 1
+                                            };
+                                        not_found ->
+                                            ?event(
+                                                copycat_short,
+                                                {arweave_bundle_skipped,
+                                                    {tx_id, {explicit, EncodedTXID}},
+                                                    {reason, not_found}
+                                                }
+                                            ),
+                                            #{
+                                                items_count => 0,
+                                                bundle_count => 1,
+                                                skipped_count => 1
+                                            }
+                                    end
                             end;
                         FilterReason ->
                             ?event(
@@ -614,6 +692,98 @@ process_l1_candidate(TXID, Filters, Opts) ->
                 }
             ),
             Skipped
+    end.
+
+index_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
+        when Depth =< 0 ->
+    {ok, 0};
+index_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
+    case ar_bundles:decode_bundle_header(BundleData) of
+        invalid_bundle_header ->
+            {error, invalid_bundle_header};
+        {ItemsBin, BundleIndex} ->
+            HeaderSize = byte_size(BundleData) - byte_size(ItemsBin),
+            index_bundle_items(
+                BundleIndex,
+                ItemsBin,
+                BundleStartOffset + HeaderSize,
+                Depth,
+                Store,
+                Opts,
+                0
+            )
+    end.
+
+index_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
+    {ok, Count};
+index_bundle_items(
+    [{ItemID, Size} | Rest],
+    ItemsBin,
+    ItemStartOffset,
+    Depth,
+    Store,
+    Opts,
+    Count
+) when byte_size(ItemsBin) >= Size ->
+    ItemBinary = binary:part(ItemsBin, 0, Size),
+    hb_store_arweave:write_offset(
+        Store,
+        hb_util:encode(ItemID),
+        <<"ans104@1.0">>,
+        ItemStartOffset,
+        Size
+    ),
+    DescendantCount =
+        case Depth > 1 of
+            true ->
+                index_bundle_descendants(
+                    ItemBinary,
+                    ItemStartOffset,
+                    Depth - 1,
+                    Store,
+                    Opts
+                );
+            false ->
+                0
+        end,
+    index_bundle_items(
+        Rest,
+        binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),
+        ItemStartOffset + Size,
+        Depth,
+        Store,
+        Opts,
+        Count + 1 + DescendantCount
+    );
+index_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
+    {error, invalid_bundle_header}.
+
+index_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
+        when Depth =< 0 ->
+    0;
+index_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
+    try ar_bundles:deserialize_header(ItemBinary) of
+        {ok, HeaderSize, HeaderTX} ->
+            case is_bundle_tx(HeaderTX, Opts) of
+                true ->
+                    case index_bundle_bytes(
+                        HeaderTX#tx.data,
+                        ItemStartOffset + HeaderSize,
+                        Depth,
+                        Store,
+                        Opts
+                    ) of
+                        {ok, Count} -> Count;
+                        _ -> 0
+                    end;
+                false ->
+                    0
+            end;
+        _ ->
+            0
+    catch
+        _:_ ->
+            0
     end.
 
 is_bundle_tx(TX, _Opts) ->
