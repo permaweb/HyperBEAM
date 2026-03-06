@@ -17,10 +17,17 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    {From, To} = parse_range(Request, Opts),
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-        <<"write">>  -> fetch_blocks(Request, From, To, Opts);
-        <<"list">>   -> list_index(From, To, Opts);
+        <<"write">>  ->
+            case hb_maps:find(<<"id">>, Request, Opts) of
+                {ok, TXID} -> process_l1_request(TXID, Request, Opts);
+                error ->
+                    {From, To} = parse_range(Request, Opts),
+                    fetch_blocks(Request, From, To, Opts)
+            end;
+        <<"list">>   ->
+            {From, To} = parse_range(Request, Opts),
+            list_index(From, To, Opts);
         Mode ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
     end.
@@ -100,6 +107,24 @@ parse_exclude_tag(Request, Opts) ->
             end;
         error ->
             {ok, undefined}
+    end.
+
+process_l1_request(TXID, Request, Opts) ->
+    case parse_owner_filter(Request, Opts) of
+        {error, _} = Error ->
+            Error;
+        {ok, OwnerFilters} ->
+            case parse_exclude_tag(Request, Opts) of
+                {error, _} = Error ->
+                    Error;
+                {ok, ExcludeTag} ->
+                    {ok,
+                        process_l1_candidate(
+                            TXID,
+                            OwnerFilters#{ exclude_tag => ExcludeTag },
+                            Opts
+                        )}
+            end
     end.
 
 passes_l1_filters(TX, Filters) ->
@@ -488,6 +513,73 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
         #{items_count => 0, bundle_count => 0, skipped_count => 0},
         Results
     ).
+
+%% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
+process_l1_candidate(TXID, Filters, Opts) ->
+    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
+    NormalizedTXID = hb_util:native_id(TXID),
+    EncodedTXID = hb_util:encode(NormalizedTXID),
+    IndexStore = hb_store_arweave:store_from_opts(Opts),
+    case hb_store_arweave:read_offset(IndexStore, NormalizedTXID) of
+        {ok,
+            #{
+                <<"codec-device">> := <<"tx@1.0">>,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ->
+            case resolve_tx_header(EncodedTXID, Opts) of
+                {ok, TX} ->
+                    case passes_l1_filters(TX, Filters) of
+                        false ->
+                            ?event(
+                                copycat_short,
+                                {arweave_tx_skipped,
+                                    {tx_id, {explicit, EncodedTXID}},
+                                    {reason, l1_filter}
+                                }
+                            ),
+                            Skipped;
+                        true ->
+                            case is_bundle_tx(TX, Opts) of
+                                false ->
+                                    ?event(
+                                        copycat_short,
+                                        {arweave_tx_skipped,
+                                            {tx_id, {explicit, EncodedTXID}},
+                                            {reason, not_bundle}
+                                        }
+                                    ),
+                                    Skipped;
+                                true ->
+                                    process_tx(
+                                        {{TX, <<>>}, StartOffset + Length},
+                                        0,
+                                        Opts
+                                    )
+                            end
+                    end;
+                error ->
+                    Skipped
+            end;
+        {ok, _OtherOffset} ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, not_tx}
+                }
+            ),
+            Skipped;
+        not_found ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, missing_offset}
+                }
+            ),
+            Skipped
+    end.
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
