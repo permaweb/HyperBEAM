@@ -1102,10 +1102,13 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     end,
     WithPrivIP = hb_private:set(NormalBody, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
-    case maps:get(<<"device">>, PrimMsg, not_found) of
+    WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
         Device -> WithPrivIP#{<<"device">> => Device}
-    end.
+    end,
+    % Add host
+    Host = cowboy_req:host(Req),
+    WithDevice#{<<"host">> => Host}.
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
 real_ip(Req = #{ headers := RawHeaders }, Opts) ->
