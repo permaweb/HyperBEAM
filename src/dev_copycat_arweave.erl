@@ -39,22 +39,24 @@ arweave(_Base, Request, Opts) ->
 %% bundle processing. in bytes.
 set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
     Opts#{copycat_memory_cap => Cap}.
-
+%% @doc Set bundles descendant recursion cap, avoids recursion
+%% in very nested bundles (very rare).
 set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
     Opts#{copycat_depth_recursion_cap => Cap}.
-
+%% @doc Get the set depth recursion cap. if not set, defaults to ?DEPTH_RECURSION_CAP
 get_depth_recursion_cap(Opts) ->
     case maps:get(copycat_depth_recursion_cap, Opts, not_found) of
         not_found -> ?DEPTH_RECURSION_CAP;
         Cap -> Cap
     end.
-
+%% @doc Get the L1 TX data size that gets handled in-memory
+%% defaults to ?MEMORY_SAFE_CAP if not set.
 get_memory_safe_cap(Opts) ->
     case maps:get(copycat_memory_cap, Opts, not_found) of
         not_found -> ?MEMORY_SAFE_CAP;
         Cap -> Cap
     end.
-    
+%% @doc Normalize an owner address into the native ID form used for comparisons.
 normalize_owner_id(Addr) ->
     hb_util:native_id(hb_util:bin(Addr)).
 
@@ -75,7 +77,8 @@ resolve_owner_alias(Alias, Opts) when is_binary(Alias) ->
     end;
 resolve_owner_alias(Alias, _Opts) ->
     {error, {invalid_owner_alias, Alias}}.
-
+%% @doc Parse include/exclude owner filters from the request.
+%% Supports direct owner values and owner aliases.
 parse_owner_filter(Request, Opts) ->
     case resolve_owner_filter_value(
         <<"include-owner">>,
@@ -101,7 +104,8 @@ parse_owner_filter(Request, Opts) ->
                     }}
             end
     end.
-%% Alias takes precedence over direct owner if both are provided
+%% @doc Resolve one owner filter value from either a direct owner param or
+%% a comma-separated owner alias param. Alias takes precedence.
 resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
     case hb_maps:find(AliasKey, Request, Opts) of
         {ok, Alias} ->
@@ -114,7 +118,7 @@ resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
                     {ok, undefined}
             end
     end.
-
+%% @doc Resolve one or more comma-separated owner aliases into normalized owner IDs.
 resolve_owner_aliases(Alias, Opts) ->
     case
         lists:filter(
@@ -130,7 +134,7 @@ resolve_owner_aliases(Alias, Opts) ->
         Aliases ->
             resolve_owner_aliases(Aliases, Opts, [])
     end.
-
+%% @doc Resolve a list of owner aliases into normalized owner IDs.
 resolve_owner_aliases([], _Opts, Acc) ->
     {ok, lists:reverse(Acc)};
 resolve_owner_aliases([Alias | Rest], Opts, Acc) ->
@@ -140,7 +144,7 @@ resolve_owner_aliases([Alias | Rest], Opts, Acc) ->
         {error, _} = Error ->
             Error
     end.
-
+%% @doc Parse an L1 exclude-tag filter from `Name:Value` form.
 parse_exclude_tag(Request, Opts) ->
     case hb_maps:find(<<"exclude-tag">>, Request, Opts) of
         {ok, Tag} ->
@@ -154,7 +158,11 @@ parse_exclude_tag(Request, Opts) ->
         error ->
             {ok, undefined}
     end.
-
+%% @doc Process the `id=...` copycat path for an already indexed L1 TX.
+%% applies L1-level owner/tag filters on the lightweight TX header first, then,
+%% if the TX passes and is a bundle, loads the full L1 payload once and indexes
+%% descendants in-memory (under the ?MEMORY_SAFE_CAP limit) up to the requested safe depth
+%% (defaults to full recursion till the set copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
     case parse_owner_filter(Request, Opts) of
@@ -174,7 +182,8 @@ process_l1_request(TXID, Request, Opts) ->
                         )}
             end
     end.
-
+%% @doc Parse the requested recursion depth and clamp it to the configured safe cap.
+%% `safe_max` resolves to the current copycat depth recursion cap.
 request_depth(Request, Default, Opts) ->
     MaxRecursionCap = get_depth_recursion_cap(Opts),
     RequestedDepth =
@@ -189,7 +198,7 @@ request_depth(Request, Default, Opts) ->
             RequestedDepth
         )
     ).
-
+%% @doc Return the first matching L1 filter reason for a TX header, or `pass`.
 l1_filter_reason(TX, Filters) ->
     IncludeOwner = maps:get(include_owner, Filters, undefined),
     ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
@@ -213,7 +222,7 @@ l1_filter_reason(TX, Filters) ->
                     end
             end
     end.
-
+%% @doc Match an owner against an undefined, single-owner, or multi-owner filter.
 owner_matches_filter(_Owner, undefined) ->
     false;
 owner_matches_filter(Owner, Owners) when is_list(Owners) ->
@@ -757,6 +766,7 @@ index_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
             )
     end.
 
+%% @doc Index bundle children from decoded bundle bytes and recurse descendants in-memory.
 index_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
     {ok, Count};
 index_bundle_items(
@@ -801,6 +811,7 @@ index_bundle_items(
 index_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
     {error, invalid_bundle_header}.
 
+%% @doc Recurse into a nested bundle data item from in-memory bytes.
 index_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
         when Depth =< 0 ->
     0;
