@@ -355,6 +355,10 @@ maybe_invoke_monitor(Details, Opts) ->
     case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
         not_found -> ok;
         Monitor ->
+            % We have a monitor message. Place the `details' into the body, set
+            % the `method' to "POST", add the `http_reference' (if applicable)
+            % and sign the request. We use the node message's wallet as the
+            % source of the key.
             MaybeWithReference =
                 case hb_ao:get(<<"http_reference">>, Opts, Opts) of
                     not_found -> Details;
@@ -370,6 +374,8 @@ maybe_invoke_monitor(Details, Opts) ->
                             Opts
                         )
                 },
+            % Use the singleton parse to generate the message sequence to
+            % execute.
             ReqMsgs = hb_singleton:from(Req, Opts),
             Res = hb_ao:resolve_many(ReqMsgs, Opts),
             ?event(debug_http_monitor, {resolved_monitor, Res})
@@ -527,6 +533,8 @@ do_gun_request(PID, Args, Opts) ->
 	Method = hb_maps:get(method, Args, undefined, Opts),
 	Path = hb_maps:get(path, Args, undefined, Opts),
     HeaderMap = hb_maps:get(headers, Args, #{}, Opts),
+    % Normalize cookie header lines from the header map. We support both
+    % lists of cookie lines and a single cookie line.
 	HeadersWithoutCookie =
         hb_maps:to_list(
             hb_maps:without([<<"cookie">>], HeaderMap, Opts),
