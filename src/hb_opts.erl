@@ -31,7 +31,6 @@
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
-        dev_manifest, http, hb_gateway_client,
         error, http_error, cron_error, hook_error, warning,
         http_server_short,
         compute_short, push_short, copycat_short, bundler_short
