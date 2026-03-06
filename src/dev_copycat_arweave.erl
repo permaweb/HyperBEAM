@@ -215,11 +215,16 @@ l1_filter_reason(TX, Filters) ->
 
 has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
     TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
-    LowerTagValue = hb_util:to_lower(TagValue),
-    LowerValue = hb_util:to_lower(Value),
-    case LowerTagValue of
-        LowerValue -> true;
-        _ -> false
+    case TagValue of
+        not_found ->
+            false;
+        _ ->
+            LowerTagValue = hb_util:to_lower(TagValue),
+            LowerValue = hb_util:to_lower(Value),
+            case LowerTagValue of
+                LowerValue -> true;
+                _ -> false
+            end
 end;
 has_tag_pair(_, _) ->
     false.
