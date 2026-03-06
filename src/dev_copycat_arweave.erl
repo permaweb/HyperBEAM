@@ -128,28 +128,63 @@ process_l1_request(TXID, Request, Opts) ->
     end.
 
 passes_l1_filters(TX, Filters) ->
+    l1_filter_reason(TX, Filters) =:= pass.
+
+l1_filter_reason(TX, Filters) ->
     IncludeOwner = maps:get(include_owner, Filters, undefined),
     ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
     ExcludeTag = maps:get(exclude_tag, Filters, undefined),
     Owner = ar_tx:get_owner_address(TX),
-    IncludeOwnerPass =
-        case IncludeOwner of
-            undefined -> true;
-            Owner -> true;
-            _ -> false
-        end,
-    ExcludeOwnerPass =
-        case ExcludeOwner of
-            undefined -> true;
-            Owner -> false;
-            _ -> true
-        end,
-    ExcludeTagPass =
-        case ExcludeTag of
-            undefined -> true;
-            _ -> not has_tag_pair(TX, ExcludeTag)
-        end,
-    IncludeOwnerPass andalso ExcludeOwnerPass andalso ExcludeTagPass.
+    case IncludeOwner of
+        undefined ->
+            case ExcludeOwner of
+                undefined ->
+                    case ExcludeTag of
+                        undefined -> pass;
+                        _ ->
+                            case has_tag_pair(TX, ExcludeTag) of
+                                true -> exclude_tag_match;
+                                false -> pass
+                            end
+                    end;
+                Owner ->
+                    exclude_owner_match;
+                _ ->
+                    case ExcludeTag of
+                        undefined -> pass;
+                        _ ->
+                            case has_tag_pair(TX, ExcludeTag) of
+                                true -> exclude_tag_match;
+                                false -> pass
+                            end
+                    end
+            end;
+        Owner ->
+            case ExcludeOwner of
+                undefined ->
+                    case ExcludeTag of
+                        undefined -> pass;
+                        _ ->
+                            case has_tag_pair(TX, ExcludeTag) of
+                                true -> exclude_tag_match;
+                                false -> pass
+                            end
+                    end;
+                Owner ->
+                    exclude_owner_match;
+                _ ->
+                    case ExcludeTag of
+                        undefined -> pass;
+                        _ ->
+                            case has_tag_pair(TX, ExcludeTag) of
+                                true -> exclude_tag_match;
+                                false -> pass
+                            end
+                    end
+            end;
+        _ ->
+            include_owner_mismatch
+    end.
 
 has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
     TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
@@ -529,17 +564,8 @@ process_l1_candidate(TXID, Filters, Opts) ->
             }} ->
             case resolve_tx_header(EncodedTXID, Opts) of
                 {ok, TX} ->
-                    case passes_l1_filters(TX, Filters) of
-                        false ->
-                            ?event(
-                                copycat_short,
-                                {arweave_tx_skipped,
-                                    {tx_id, {explicit, EncodedTXID}},
-                                    {reason, l1_filter}
-                                }
-                            ),
-                            Skipped;
-                        true ->
+                    case l1_filter_reason(TX, Filters) of
+                        pass ->
                             case is_bundle_tx(TX, Opts) of
                                 false ->
                                     ?event(
@@ -556,7 +582,16 @@ process_l1_candidate(TXID, Filters, Opts) ->
                                         0,
                                         Opts
                                     )
-                            end
+                            end;
+                        FilterReason ->
+                            ?event(
+                                copycat_short,
+                                {arweave_tx_skipped,
+                                    {tx_id, {explicit, EncodedTXID}},
+                                    {reason, FilterReason}
+                                }
+                            ),
+                            Skipped
                     end;
                 error ->
                     Skipped
