@@ -158,8 +158,10 @@ get_tx(Base, Request, Opts) ->
     end.
 
 %% @doc Check whether a response to a `GET /tx/ID' request is valid.
-%% The TXID is passed through the admissible message (Base), and the response
-%% (Request) is verified to have a content hash matching that TXID.
+%%   1. Unsigned content hash == TXID: for HyperBEAM-served messages.
+%%      The hash itself proves content integrity 
+%%   2. For signed Arweave TXs where TXID = SHA-256(signature). 
+%%      Cryptographically verifies the matching commitment
 is_tx_admissible(Base, Request, Opts) ->
     maybe
         {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
@@ -782,7 +784,16 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 undefined -> {ok, Msg};
                 Admissible ->
                     case is_tx_admissible(Admissible, Msg, Opts) of
-                        true -> {ok, Msg};
+                        true ->
+                            case dev_hook:on(
+                                <<"tx-admissible">>,
+                                #{ <<"body">> => Msg },
+                                Opts
+                            ) of
+                                {ok, #{ <<"body">> := ResultMsg }} ->
+                                    {ok, ResultMsg};
+                                {error, Reason} -> {error, Reason}
+                            end;
                         false -> {error, not_admissible}
                     end
             end;
