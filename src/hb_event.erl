@@ -172,7 +172,7 @@ find_event_server() ->
     end.
 
 server() ->
-    await_prometheus_started(),
+    hb_prometheus:ensure_started(),
     prometheus_counter:declare(
         [
             {name, <<"event">>},
@@ -219,16 +219,6 @@ handle_events() ->
             end,
             prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
             handle_events()
-    end.
-
-%% @doc Delay the event server until prometheus is started.
-await_prometheus_started() ->
-    receive
-        Msg ->
-            case application:get_application(prometheus) of
-                undefined -> await_prometheus_started();
-                _ -> self() ! Msg, ok
-            end
     end.
 
 parse_name(Name) when is_tuple(Name) ->

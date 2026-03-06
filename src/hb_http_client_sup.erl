@@ -7,6 +7,7 @@
 -define(DEFAULT_HTTP_CLIENT_POOL_MAX_OVERFLOW, 16).
 
 start_link(Opts) ->
+    hb_prometheus:ensure_started(),
 	supervisor:start_link({local, ?MODULE}, ?MODULE, Opts).
 
 init(Opts) ->
