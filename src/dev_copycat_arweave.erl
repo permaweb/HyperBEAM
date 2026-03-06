@@ -5,6 +5,7 @@
 %%% provided, every block in the range is processed.
 -module(dev_copycat_arweave).
 -export([arweave/3]).
+-export([add_owner_alias/3, resolve_owner_alias/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -70,7 +71,7 @@ parse_owner_filter(Request, Opts) ->
                     }}
             end
     end.
-
+%% Alias takes precedence over direct owner if both are provided
 resolve_owner_filter_value(OwnerKey, AliasKey, Request, Opts) ->
     case hb_maps:find(AliasKey, Request, Opts) of
         {ok, Alias} ->
@@ -100,6 +101,41 @@ parse_exclude_tag(Request, Opts) ->
         error ->
             {ok, undefined}
     end.
+
+passes_l1_filters(TX, Filters) ->
+    IncludeOwner = maps:get(include_owner, Filters, undefined),
+    ExcludeOwner = maps:get(exclude_owner, Filters, undefined),
+    ExcludeTag = maps:get(exclude_tag, Filters, undefined),
+    Owner = ar_tx:get_owner_address(TX),
+    IncludeOwnerPass =
+        case IncludeOwner of
+            undefined -> true;
+            Owner -> true;
+            _ -> false
+        end,
+    ExcludeOwnerPass =
+        case ExcludeOwner of
+            undefined -> true;
+            Owner -> false;
+            _ -> true
+        end,
+    ExcludeTagPass =
+        case ExcludeTag of
+            undefined -> true;
+            _ -> not has_tag_pair(TX, ExcludeTag)
+        end,
+    IncludeOwnerPass andalso ExcludeOwnerPass andalso ExcludeTagPass.
+
+has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
+    TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
+    LowerTagValue = hb_util:to_lower(TagValue),
+    LowerValue = hb_util:to_lower(Value),
+    case LowerTagValue of
+        LowerValue -> true;
+        _ -> false
+end;
+has_tag_pair(_, _) ->
+    false.
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
     From =
