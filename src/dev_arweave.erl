@@ -163,9 +163,15 @@ is_tx_admissible(Base, Request, Opts) ->
         BareMsg = hb_maps:without([<<"commitments">>], CommittedMsg, Opts),
         ContentID = hb_message:id(BareMsg, unsigned, Opts),
         true ?=
-            ((ContentID == TXID) orelse 
-            (hb_message:id(CommittedMsg, all, Opts) == TXID)) 
-            % and (hb_message:verify(CommittedMsg, all, Opts))
+            (ContentID == TXID) orelse
+            (
+                (hb_message:id(CommittedMsg, all, Opts) == TXID)
+                andalso hb_message:verify(
+                    CommittedMsg,
+                    #{ <<"commitment-ids">> => [TXID] },
+                    Opts
+                )
+            )
     else
         _ -> false
     end.
