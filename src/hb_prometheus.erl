@@ -3,40 +3,34 @@
 -export([ensure_started/0, declare/2, measure_and_report/2, measure_and_report/3]).
 -export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4]).
 
--define(STARTUP_RETRY_INTERVAL, 60). % seconds
-
 %% @doc Ensure the Prometheus application has been started. Caches startup
 %% failure with a timestamp to avoid repeated blocking ensure_all_started
 %% calls on hot paths, but retries after a cooldown period.
 ensure_started() ->
-    case application:get_application(prometheus) of
-        undefined ->
-            case persistent_term:get(hb_prometheus_start_failed, undefined) of
-                FailedAt when is_integer(FailedAt) ->
-                    case erlang:monotonic_time(second) - FailedAt >= ?STARTUP_RETRY_INTERVAL of
-                        true -> attempt_start();
-                        false -> {error, not_started}
-                    end;
-                undefined ->
-                    attempt_start()
-            end;
-        _ -> ok
+    case is_started() of
+        true -> ok;
+        false ->
+            application:ensure_all_started(
+                [prometheus, prometheus_cowboy, prometheus_ranch]
+            ),
+            wait_for_prometheus_started()
     end.
 
-attempt_start() ->
-    case application:ensure_all_started(
-        [prometheus, prometheus_cowboy, prometheus_ranch]
-    ) of
-        {ok, _} ->
-            persistent_term:erase(hb_prometheus_start_failed),
-            ok;
-        {error, _} = Err ->
-            persistent_term:put(
-                hb_prometheus_start_failed,
-                erlang:monotonic_time(second)
-            ),
-            Err
+%% @doc Lazy wait for prometheus to come up, after we have started the application.
+wait_for_prometheus_started() ->
+    case is_started() of
+        true -> ok;
+        false ->
+            timer:sleep(1),
+            wait_for_prometheus_started()
     end.
+
+%% @doc Check if prometheus has been started.
+%% The application itself may return `ok` to Erlang before it is actually ready
+%% for use, so we wait for the `ets` table to be created instead.
+is_started() ->
+    Info = ets:info(prometheus_registry_table),
+    Info =/= undefined.
 
 %% @doc Declare a new Prometheus metric in a replay-safe manner.
 declare(Type, Metric) ->

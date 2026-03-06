@@ -13,6 +13,7 @@
 -define(CHILD(I, Type, Opts), {I, {I, start_link, Opts}, permanent, ?SHUTDOWN_TIMEOUT, Type, [I]}).
 
 start_link(Opts) ->
+    hb_prometheus:ensure_started(),
 	supervisor:start_link({local, ?MODULE}, ?MODULE, Opts).
 
 init(Opts) ->
