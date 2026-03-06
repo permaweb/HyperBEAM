@@ -154,26 +154,15 @@ get_tx(Base, Request, Opts) ->
     end.
 
 %% @doc Check whether a response to a `GET /tx/ID' request is valid.
-%%   1. Unsigned content hash == TXID: for HyperBEAM-served messages.
-%%      The hash itself proves content integrity 
-%%   2. For signed Arweave TXs where TXID = SHA-256(signature). 
-%%      Cryptographically verifies the matching commitment
+%% Verifies that the requested TXID exists as a commitment ID in the
+%% response message, and that all commitments are cryptographically valid.
 is_tx_admissible(Base, Request, Opts) ->
     maybe
         {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
-        {ok, CommittedMsg} ?= hb_message:with_only_committed(Request, Opts),
-        BareMsg = hb_maps:without([<<"commitments">>], CommittedMsg, Opts),
-        ContentID = hb_message:id(BareMsg, unsigned, Opts),
+        CommIDs = maps:keys(maps:get(<<"commitments">>, Request, #{})),
         true ?=
-            (ContentID == TXID) orelse
-            (
-                (hb_message:id(CommittedMsg, all, Opts) == TXID)
-                andalso hb_message:verify(
-                    CommittedMsg,
-                    #{ <<"commitment-ids">> => [TXID] },
-                    Opts
-                )
-            )
+            lists:member(TXID, CommIDs) andalso 
+            hb_message:verify(Request, all, Opts)
     else
         _ -> false
     end.
