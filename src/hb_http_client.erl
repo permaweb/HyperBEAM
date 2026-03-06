@@ -10,6 +10,7 @@
 %% GenServer
 -export([start_link/1, init/1]).
 -export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
+-export([init_prometheus/0]).
 
 -record(state, {
 	opts = #{}
