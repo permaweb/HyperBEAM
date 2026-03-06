@@ -501,7 +501,12 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ),
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
-    cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
+    Fin =
+        case should_finalize_stream(Status, EncodedBody) of
+            true -> fin;
+            false -> nofin
+        end,
+    cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
@@ -528,6 +533,10 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Determine if the stream should be finalized.
+should_finalize_stream(429, _EncodedBody) -> true;
+should_finalize_stream(_, _EncodedBody) -> false.
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
