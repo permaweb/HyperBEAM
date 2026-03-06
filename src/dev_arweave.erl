@@ -2138,7 +2138,7 @@ is_admissible_real_gateway_test_() ->
     {timeout, 30, fun() ->
         application:ensure_all_started(hb),
         TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-        RouteOpts = #{
+        Node = hb_http_server:start_node(#{
             priv_wallet => ar_wallet:new(),
             routes => [
                 #{
@@ -2155,11 +2155,11 @@ is_admissible_real_gateway_test_() ->
                     <<"admissible-status">> => 200
                 }
             ]
-        },
-        {ok, Res} = get_tx(
-            #{ <<"tx">> => TXID, <<"exclude-data">> => true },
-            #{},
-            RouteOpts
+        }),
+        {ok, Res} = hb_http:get(
+            Node,
+            <<"~arweave@2.9/tx=", TXID/binary, "&exclude-data=true">>,
+            #{}
         ),
         ?assertMatch(#{ <<"reward">> := <<"482143296">> }, Res),
         ?assertMatch(
