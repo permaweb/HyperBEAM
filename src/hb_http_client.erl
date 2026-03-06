@@ -713,7 +713,7 @@ await_response(Args, Opts) ->
 			record_response_status(Method, Response, Path),
             ?event(http_outbound, {gun_cancel, {path, Path}}),
 			gun:cancel(PID, Ref),
-			log(warn, gun_await_process_down, Args, Response, Opts),
+			log(warning, gun_await_process_down, Args, timeout, Opts),
 			Response;
         {error,{connection_error,{stream_closed, Message}}} = Response ->
             ?event(http_outbound, {gun_cancel, {path, Path}, {message, Message}}),
@@ -721,18 +721,18 @@ await_response(Args, Opts) ->
             Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
 			record_response_status(Method, Response, Path),
-			log(warn, gun_await_process_down, Args, Reason, Opts),
+			log(warning, gun_await_process_down, Args, Reason, Opts),
 			Response;
 		Response ->
 			record_response_status(Method, Response, Path),
-			log(warn, gun_await_unknown, Args, Response, Opts),
+			log(warning, gun_await_unknown, Args, Response, Opts),
 			Response
 	end.
 
 %% @doc Debug `http` state logging.
 log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
     ?event(
-        debug_http,
+        Type,
         {gun_log,
             {type, Type},
             {event, Event},
