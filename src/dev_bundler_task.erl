@@ -39,14 +39,14 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                 Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
                 SignedTX = ar_tx:sign(TX#tx{ anchor = Anchor, reward = Price }, Wallet),
                 % Convert and post
-                % We build two Structured version of the TX:
-                % - Header only is used for posting. This greatly speeds up
+                % We build two Structured versions of the TX:
+                % - Header-only is used for posting. This greatly speeds up
                 %   the posting process.
                 % - Full TX including data is used for recovery
                 % 
                 % TODO: as a future improvement we should be able to recover
                 % from the TX header alone, but we have to be careful about
-                % how we rebuild the TX data to ensure it matche the already
+                % how we rebuild the TX data to ensure it matches the already
                 % posted TX.
                 Committed = hb_message:convert(
                     SignedTX,
