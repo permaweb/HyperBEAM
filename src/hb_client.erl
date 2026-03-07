@@ -128,6 +128,7 @@ upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
 %%% Tests
 
 upload_empty_raw_ans104_test() ->
+    application:ensure_all_started(hb),
     Serialized = ar_bundles:serialize(
         ar_bundles:sign_item(#tx{
             data = <<"TEST">>
@@ -139,6 +140,7 @@ upload_empty_raw_ans104_test() ->
     ?assertMatch({ok, _}, Result).
 
 upload_raw_ans104_test() ->
+    application:ensure_all_started(hb),
     Serialized = ar_bundles:serialize(
         ar_bundles:sign_item(#tx{
             data = <<"TEST">>,
@@ -151,6 +153,7 @@ upload_raw_ans104_test() ->
     ?assertMatch({ok, _}, Result).
 
 upload_raw_ans104_with_anchor_test() ->
+    application:ensure_all_started(hb),
     Serialized = ar_bundles:serialize(
         ar_bundles:sign_item(#tx{
             data = <<"TEST">>,
@@ -164,6 +167,7 @@ upload_raw_ans104_with_anchor_test() ->
     ?assertMatch({ok, _}, Result).
 
 upload_empty_message_test() ->
+    application:ensure_all_started(hb),
     Msg = #{ <<"data">> => <<"TEST">> },
     Committed = 
         hb_message:commit(
@@ -176,6 +180,7 @@ upload_empty_message_test() ->
     ?assertMatch({ok, _}, Result).
 
 upload_single_layer_message_test() ->
+    application:ensure_all_started(hb),
     Msg = #{
         <<"data">> => <<"TEST">>,
         <<"basic">> => <<"value">>,
