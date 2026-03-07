@@ -55,7 +55,8 @@ do_recover_unbundled_items(ServerPID, Opts) ->
                 {recover_unbundled_items_failed,
                     {error, Error},
                     {stack, Stack}
-                }
+                },
+                Opts
             )
     end.
 
@@ -80,7 +81,8 @@ do_recover_bundles(ServerPID, Opts) ->
                 {recover_bundles_failed,
                     {error, Error},
                     {stack, Stack}
-                }
+                },
+                Opts
             )
     end.
 
@@ -116,7 +118,8 @@ recover_bundle(ServerPID, TXID, Status, Opts) ->
                             {failed_to_load_bundle_item,
                                 {tx_id, {explicit, TXID}},
                                 {item_id, {explicit, ItemID}}
-                            }
+                            },
+                            Opts
                         ),
                         throw({failed_to_load_bundle_item, ItemID})
                     end
@@ -131,7 +134,8 @@ recover_bundle(ServerPID, TXID, Status, Opts) ->
                     {tx_id, {explicit, TXID}},
                     {error, Error},
                     {stack, Stack}
-                }
+                },
+                Opts
             )
     end.
 
@@ -189,7 +193,10 @@ recover_bundles_skips_complete_test() ->
     end.
 
 recover_bundles_failed_bundle_items_continue_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{
+        store => hb_test_utils:test_store(),
+        debug_print => false
+    },
     ValidItem = new_data_item(1, 10, Opts),
     ok = dev_bundler_cache:write_item(ValidItem, Opts),
     ValidTX = new_bundle_tx([ValidItem], Opts),
