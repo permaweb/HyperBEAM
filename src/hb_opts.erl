@@ -437,7 +437,7 @@ default_message() ->
         % responses are not verifiable.
         ans104_trust_gql => true,
         % Number of chunks to fetch in parallel when loading a TX or dataitem.
-        chunk_fetch_concurrency => 10,
+        arweave_chunk_fetch_concurrency => 5,
         http_extra_opts =>
             #{
                 force_message => true,

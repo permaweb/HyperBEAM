@@ -492,7 +492,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
 %% @doc Fetch chunks at the given offsets in parallel and parse the responses
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
-    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
+    Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     Results = hb_pmap:parallel_map(
         Offsets,
         fun(O) -> get_chunk(O, Opts) end,
