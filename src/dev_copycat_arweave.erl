@@ -13,7 +13,7 @@
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_RECURSION_CAP, 4).
 %% 1GB in bytes
--define(MEMORY_SAFE_CAP, 1024 * 1024 * 1024).
+-define(MEMORY_SAFE_CAP, 6 * 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
