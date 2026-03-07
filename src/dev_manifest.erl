@@ -15,7 +15,7 @@ info() ->
 
 %% @doc Return the fallback index page when the manifest itself is requested.
 index(M1, M2, Opts) ->
-    ?event(debug_manifest, {index_request, {m1, M1}, {m2, M2}}),
+    ?event(debug_manifest, {index_request, {base, M1}, {request, M2}}, Opts),
     case route(<<"index">>, M1, M2, Opts) of
         {ok, Index} ->
             ?event({manifest_index_returned, Index}),
