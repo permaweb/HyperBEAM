@@ -794,6 +794,13 @@ ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, LoadL1Offset, Opts) ->
         {ok, _} = OffsetRes ->
             OffsetRes;
         not_found when LoadL1Offset ->
+            ?event(
+                copycat_short,
+                {arweave_tx_offset_loading,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {source, network}
+                }
+            ),
             case load_l1_tx_offset(EncodedTXID, IndexStore, Opts) of
                 ok ->
                     case hb_store_arweave:read_offset(IndexStore, TXID) of
