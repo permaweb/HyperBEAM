@@ -68,6 +68,7 @@ async function performanceTest(walletPath, itemCount, bytesPerItem = 0) {
     
     const uploadPromises = batch.map(async (item) => {
       try {
+        console.log(`Posting data item: ${item.id}`);
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {

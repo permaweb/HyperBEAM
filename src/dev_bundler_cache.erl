@@ -81,7 +81,8 @@ write_tx(TX, Items, Opts) when is_map(TX) ->
             ok = link_item_to_tx(Item, TX, Opts)
         end,
         Items
-    ).
+    ),
+    ok.
 
 complete_tx(TX, Opts) ->
     set_tx_status(TX, <<"complete">>, Opts).
@@ -163,7 +164,10 @@ load_tx(TXID, Opts) ->
 %% @doc Write a value to a pseudopath.
 write_pseudopath(Path, Value, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:write(Store, Path, Value).
+    Result = hb_store:write(Store, Path, Value),
+    % force a flush to disk
+    hb_store:read(Store, Path),
+    Result.
 
 %% @doc Read a value from a pseudopath.
 read_pseudopath(Path, Opts) ->
@@ -254,6 +258,17 @@ load_unbundled_items_test() ->
     UnbundledItems3 = lists:sort(UnbundledItems2),
     ?event(debug_test, {unbundled_items, UnbundledItems3}),
     ?assertEqual(lists:sort([Item1, Item3]), UnbundledItems3),
+    ok.
+
+recovered_items_relink_to_original_bundle_path_test() ->
+    Opts = #{store => hb_test_utils:test_store()},
+    Item = new_data_item(1, <<"data1">>, Opts),
+    ok = write_item(Item, Opts),
+    [RecoveredItem] = load_items(<<>>, Opts),
+    TX = new_tx(1, Opts),
+    ok = write_tx(TX, [RecoveredItem], Opts),
+    ?assertEqual(tx_id(TX, Opts), get_item_bundle(Item, Opts)),
+    ?assertEqual([], load_items(<<>>, Opts)),
     ok.
 
 load_bundle_states_test() ->
