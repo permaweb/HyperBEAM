@@ -55,7 +55,6 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     SignedTX,
                     Opts
                 ),
-                ?event(bundler_short, {post_tx_response, PostTXResponse}),
                 case PostTXResponse of
                     {ok, _Result} ->
                         dev_bundler_cache:write_tx(
