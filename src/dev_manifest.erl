@@ -64,15 +64,10 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
 route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
-    Res = hb_ao:get(
-        <<"paths/", Key/binary>>,
-        {as, <<"message@1.0">>, Manifest},
-        Opts
-    ),
-    ?event({manifest_lookup_result, {res, Res}}),
-    case Res of
-        not_found ->
-            %% Support materialized view in some JavaScript frameworks
+    {ok, Res} = maps:find(<<"paths">>, Manifest),
+    case maps:get(Key, Res, no_path_match) of
+        no_path_match ->
+            % Support materialized view in some JavaScript frameworks.
             case hb_opts:get(manifest_404, fallback, Opts) of
                 error ->
                     ?event({manifest_404_error, {key, Key}}),
@@ -81,9 +76,11 @@ route(Key, M1, M2, Opts) ->
                     ?event({manifest_fallback, {key, Key}}),
                     route(<<"index">>, M1, M2, Opts)
             end;
-        _ ->
-            ?event({manifest_lookup_success, {key, Key}}),
-            {ok, Res}
+        Result ->
+            ?event({manifest_lookup_success, {key, Key}, {result, Result}}),
+            try {ok, hb_cache:ensure_loaded(Result, Opts)}
+            catch _:_:_ -> {error, not_found}
+            end
     end.
 
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
@@ -174,11 +171,12 @@ maybe_cast_manifest(Msg, Opts) ->
 %% message with the `~manifest@1.0' device.
 manifest(Base, _Req, Opts) ->
     JSON =
-        hb_ao:get_first(
+        hb_maps:get_first(
             [
-                {{as, <<"message@1.0">>, Base}, [<<"data">>]},
-                {{as, <<"message@1.0">>, Base}, [<<"body">>]}
+                {Base, <<"data">>},
+                {Base, <<"body">>}
             ],
+            not_found,
             Opts
         ),
     FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),

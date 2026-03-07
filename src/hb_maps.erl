@@ -17,7 +17,7 @@
 %%% yourself from the inevitable issues that will arise from using this
 %%% module without understanding the full implications. You have been warned.
 -module(hb_maps).
--export([get/2, get/3, get/4, put/3, put/4, find/2, find/3]).
+-export([get/2, get/3, get/4, get_first/2, get_first/3, put/3, put/4, find/2, find/3]).
 -export([is_key/2, is_key/3, keys/1, keys/2, values/1, values/2]).
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
 -export([fold/3, fold/4, take/2, take/3, size/1, size/2]).
@@ -25,6 +25,27 @@
 -export([with/2, with/3, without/2, without/3, update_with/3, update_with/4]).
 -export([from_list/1, to_list/1, to_list/2]).
 -include_lib("eunit/include/eunit.hrl").
+
+%%% HyperBEAM-specific functions
+
+-spec get_first(
+    Paths :: [{Base :: map() | binary(), Path :: binary()}],
+    Opts :: map()
+) -> term().
+get_first(Paths, Opts) ->
+    get_first(Paths, not_found, Opts).
+
+-spec get_first(
+    Paths :: [{Base :: map() | binary(), Path :: binary()}],
+    Default :: term(),
+    Opts :: map()
+) -> term().
+get_first([], Default, _Opts) -> Default;
+get_first([{Base, Path}|Paths], Default, Opts) ->
+    case find(Path, Base, Opts) of
+        {ok, Value} -> Value;
+        error -> get_first(Paths, Default, Opts)
+    end.
 
 -spec get(Key :: term(), Map :: map()) -> term().
 get(Key, Map) ->
