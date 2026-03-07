@@ -12,7 +12,7 @@
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_RECURSION_CAP, 4).
-%% 1GB in bytes
+%% 6GB in bytes
 -define(MEMORY_SAFE_CAP, 6 * 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
@@ -782,7 +782,10 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
             ),
             Skipped
     end.
-
+%% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
+%% if the offset is missing and `load_l1_offset` is enabled, fetches the TX
+%% offset metadata from Arweave, writes it to the local offset store, and
+%% retries the local lookup.
 ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
         when is_map(IndexStore) =:= false ->
     {error, missing_offset};
