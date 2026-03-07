@@ -40,7 +40,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                 SignedTX = ar_tx:sign(TX#tx{ anchor = Anchor, reward = Price }, Wallet),
                 % Convert and post
                 Committed = hb_message:convert(
-                    SignedTX,
+                    SignedTX#tx{ data = <<>> },
                     #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
                     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
                     Opts),
@@ -65,7 +65,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
-                ?event(bundle_short,
+                ?event(bundler_short,
                     log_task(task_failed, Task, [
                         {price, PriceErr},
                         {anchor, AnchorErr}
@@ -74,7 +74,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack ->
-            ?event(bundle_short, log_task(task_failed, Task, [{error, Err}])),
+            ?event(bundler_short, log_task(task_failed, Task, [{error, Err}])),
             {error, Err}
     end;
 

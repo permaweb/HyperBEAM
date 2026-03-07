@@ -23,9 +23,7 @@ recover_bundles(ServerPID, Opts) ->
 
 do_recover_unbundled_items(ServerPID, Opts) ->
     try
-        ItemIDs = dev_bundler_cache:list_item_ids(Opts),
-        ?event(bundler_short, {recover_unbundled_items_start,
-            {count, length(ItemIDs)}}),
+        ?event(bundler_short, {recover_unbundled_items_start}),
         UnbundledItems = dev_bundler_cache:load_items(
             <<>>,
             Opts,
@@ -63,8 +61,9 @@ do_recover_unbundled_items(ServerPID, Opts) ->
 
 do_recover_bundles(ServerPID, Opts) ->
     try
-        ?event(bundler_short, {recover_bundles_start}),
         BundleStates = dev_bundler_cache:load_bundle_states(Opts),
+        ?event(bundler_short, {recover_bundles_start,
+            {count, length(BundleStates)}}),
         lists:foreach(
             fun({TXID, Status}) ->
                 recover_bundle(ServerPID, TXID, Status, Opts)
