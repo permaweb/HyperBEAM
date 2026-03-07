@@ -5,7 +5,7 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+-export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -65,19 +65,7 @@ extract_target(Base, Request, Opts) ->
 
 post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
-    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
-    Serialized = hb_json:encode(JSON),
-    LogExtra = [
-        {codec, <<"tx@1.0">>},
-        {id, {explicit, hb_util:human_id(TX#tx.id)}}
-    ],
-    Res = request(
-        <<"POST">>,
-        <<"/tx">>,
-        #{ <<"body">> => Serialized },
-        LogExtra,
-        Opts
-    ),
+    Res = post_tx_header(TX, Opts),
     case Res of
         {ok, _} ->
             CacheRes = hb_cache:write(Request, Opts),
@@ -100,6 +88,22 @@ post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
         {id, {explicit, hb_util:human_id(TX#tx.id)}}
     ],
     post_binary_ans104(Serialized, LogExtra, Opts).
+
+
+post_tx_header(TX, Opts) ->
+    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
+    Serialized = hb_json:encode(JSON),
+    LogExtra = [
+        {codec, <<"tx@1.0">>},
+        {id, {explicit, hb_util:human_id(TX#tx.id)}}
+    ],
+    request(
+        <<"POST">>,
+        <<"/tx">>,
+        #{ <<"body">> => Serialized },
+        LogExtra,
+        Opts
+    ).
 
 post_binary_ans104(SerializedTX, Opts) ->
     LogExtra = [

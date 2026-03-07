@@ -38,12 +38,6 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                 % Sign the TX
                 Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
                 SignedTX = ar_tx:sign(TX#tx{ anchor = Anchor, reward = Price }, Wallet),
-                % Convert and post
-                % We build two Structured versions of the TX:
-                % - Header-only is used for posting. This greatly speeds up
-                %   the posting process.
-                % - Full TX including data is used for recovery
-                % 
                 % TODO: as a future improvement we should be able to recover
                 % from the TX header alone, but we have to be careful about
                 % how we rebuild the TX data to ensure it matches the already
@@ -53,23 +47,15 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
                     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
                     Opts),
-                CommittedHeader = hb_message:convert(
-                    SignedTX#tx{ data = <<>> },
-                    #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-                    #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
-                    Opts),
                 ?event(bundler_short, log_task(posting_tx,
                     Task,
                     [{tx, {explicit, hb_message:id(Committed, signed, Opts)}}]
                 )),
-                PostTXResponse = hb_ao:resolve(
-                    #{ <<"device">> => <<"arweave@2.9">> },
-                    CommittedHeader#{
-                        <<"path">> => <<"/tx">>,
-                        <<"method">> => <<"POST">>
-                    },
+                PostTXResponse = dev_arweave:post_tx_header(
+                    SignedTX,
                     Opts
                 ),
+                ?event(bundler_short, {post_tx_response, PostTXResponse}),
                 case PostTXResponse of
                     {ok, _Result} ->
                         dev_bundler_cache:write_tx(
