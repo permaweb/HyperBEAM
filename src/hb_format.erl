@@ -401,9 +401,9 @@ escape_format(Else) -> Else.
 
 %% @doc Format an error message as a string.
 error(ErrorMsg, Opts) ->
-    Type = hb_ao:get(<<"type">>, ErrorMsg, <<"">>, Opts),
-    Details = hb_ao:get(<<"details">>, ErrorMsg, <<"">>, Opts),
-    Stacktrace = hb_ao:get(<<"stacktrace">>, ErrorMsg, <<"">>, Opts),
+    Type = hb_maps:get(<<"type">>, ErrorMsg, <<"[No type]">>, Opts),
+    Details = hb_maps:get(<<"details">>, ErrorMsg, <<"[No details]">>, Opts),
+    Stacktrace = hb_maps:get(<<"stacktrace">>, ErrorMsg, <<"[No trace]">>, Opts),
     hb_util:bin(
         [
             <<"Termination type: '">>, Type,
