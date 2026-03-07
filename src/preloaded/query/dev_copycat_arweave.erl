@@ -13,8 +13,8 @@
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(DEPTH_L1_OFFSETS, 1).
 -define(DEPTH_RECURSION_CAP, 4).
-%% 1GB in bytes
--define(MEMORY_SAFE_CAP, 1024 * 1024 * 1024).
+%% 6GB in bytes
+-define(MEMORY_SAFE_CAP, 6 * 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -170,6 +170,10 @@ parse_tag_filter(Key, Request, Opts) ->
 %% (defaults to full recursion till the set copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
+    LoadL1Offset =
+        hb_util:bool(
+            hb_maps:get(<<"load-l1-offset">>, Request, false, Opts)
+        ),
     case parse_owner_filter(Request, Opts) of
         {error, _} = Error ->
             Error;
@@ -186,6 +190,7 @@ process_l1_request(TXID, Request, Opts) ->
                                 process_l1_candidate(
                                     TXID,
                                     OwnerFilters#{
+                                        load_l1_offset => LoadL1Offset,
                                         include_tag => IncludeTag,
                                         exclude_tag => ExcludeTag
                                     },
@@ -653,7 +658,14 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
-    case hb_store_arweave:read_offset(IndexStore, NormalizedTXID) of
+    LoadL1Offset = maps:get(load_l1_offset, Filters, false),
+    case ensure_l1_tx_offset(
+        NormalizedTXID,
+        EncodedTXID,
+        IndexStore,
+        LoadL1Offset,
+        Opts
+    ) of
         {ok,
             #{
                 <<"codec-device">> := <<"tx@1.0">>,
@@ -784,15 +796,76 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
                 }
             ),
             Skipped;
-        not_found ->
+        {error, Reason} ->
             ?event(
                 copycat_short,
                 {arweave_tx_skipped,
                     {tx_id, {explicit, EncodedTXID}},
-                    {reason, missing_offset}
+                    {reason, Reason}
                 }
             ),
             Skipped
+    end.
+%% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
+%% if the offset is missing and `load_l1_offset` is enabled, fetches the TX
+%% offset metadata from Arweave, writes it to the local offset store, and
+%% retries the local lookup.
+ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
+        when is_map(IndexStore) =:= false ->
+    {error, missing_offset};
+ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, LoadL1Offset, Opts) ->
+    case hb_store_arweave:read_offset(IndexStore, TXID) of
+        {ok, _} = OffsetRes ->
+            OffsetRes;
+        not_found when LoadL1Offset ->
+            ?event(
+                copycat_short,
+                {arweave_tx_offset_loading,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {source, network}
+                }
+            ),
+            case load_l1_tx_offset(EncodedTXID, IndexStore, Opts) of
+                ok ->
+                    case hb_store_arweave:read_offset(IndexStore, TXID) of
+                        {ok, _} = OffsetRes ->
+                            OffsetRes;
+                        not_found ->
+                            {error, missing_offset}
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
+        not_found ->
+            {error, missing_offset}
+    end.
+
+load_l1_tx_offset(TXID, IndexStore, Opts) ->
+    case hb_http:request(
+        #{
+            <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+            <<"method">> => <<"GET">>
+        },
+        Opts
+    ) of
+        {ok, #{ <<"body">> := OffsetBody }} ->
+            OffsetMsg = hb_json:decode(OffsetBody),
+            EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+            Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+            StartOffset = EndOffset - Size,
+            ok =
+                hb_store_arweave:write_offset(
+                    IndexStore,
+                    TXID,
+                    <<"tx@1.0">>,
+                    StartOffset,
+                    Size
+                ),
+            ok;
+        {error, Reason} ->
+            {error, Reason};
+        not_found ->
+            {error, not_found}
     end.
 
 index_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
