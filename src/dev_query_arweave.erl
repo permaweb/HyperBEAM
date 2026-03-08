@@ -82,13 +82,14 @@ query(Block, <<"timestamp">>, _Args, Opts) ->
 query(Msg, <<"signature">>, _Args, Opts) ->
     % Return the signature of the transaction.
     % Other TX access methods are defined below.
-    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
+    case hb_message:commitments(#{ <<"committer">> => '_' }, Msg, Opts) of
         not_found -> {ok, null};
         Commitments ->
-            case maps:to_list(Commitments) of
+            case hb_maps:keys(Commitments) of
                 [] -> {ok, null};
-                [{_CommitmentID, Commitment} | _] ->
-                    {ok, hb_maps:get(<<"signature">>, Commitment, null, Opts)}
+                [CommID | _] ->
+                    {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
+                    hb_maps:find(<<"signature">>, Commitment, Opts)
             end
     end;
 query(Msg, <<"owner">>, _Args, Opts) ->
