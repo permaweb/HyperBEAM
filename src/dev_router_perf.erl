@@ -15,6 +15,7 @@
 -module(dev_router_perf).
 -export([init/3, compute/3, snapshot/3, normalize/3]).
 -export([duration/3, register/3, recalculate/3]).
+%%% Helper API
 -export([to_float/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

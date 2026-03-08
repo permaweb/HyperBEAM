@@ -2261,6 +2261,98 @@ is_admissible_routed_test() ->
     ?assertMatch(#{ <<"b">> := 1 }, BobRes),
     ok.
 
+is_admissible_hook_routed_test_() ->
+    {timeout, 60, fun() ->
+        application:ensure_all_started(hb),
+        TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        PerfProcess = <<"/perf-router~node-process@1.0">>,
+        SchedulePath = <<PerfProcess/binary, "/schedule">>,
+        RoutesPath = <<PerfProcess/binary, "/now/routes">>,
+        NodeWallet = ar_wallet:new(),
+        NodeAddr = hb_util:human_id(NodeWallet),
+        Opts = #{
+            store => hb_test_utils:test_store(),
+            priv_wallet => NodeWallet,
+            http_monitor => #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => SchedulePath
+            },
+            router_opts => #{ <<"provider">> => #{ <<"path">> => RoutesPath } },
+            node_processes => #{
+                <<"perf-router">> => #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"execution-device">> => <<"router-perf@1.0">>,
+                    <<"scheduler-device">> => <<"scheduler@1.0">>,
+                    <<"performance-period">> => 2,
+                    <<"initial-performance">> => 1000
+                }
+            },
+            routes => [
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES,
+                    <<"parallel">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+        Node = hb_http_server:start_node(Opts),
+        %% Register gateways with the perf-router process.
+        RouteConfig = #{
+            <<"template">> => <<"^/arweave">>,
+            <<"parallel">> => true,
+            <<"strategy">> => <<"Random">>,
+            <<"choose">> => 10,
+            <<"admissible-status">> => 200
+        },
+        lists:foreach(
+            fun(GatewayNode) ->
+                Body = 
+                    hb_message:commit(
+                        #{
+                            <<"action">> => <<"register">>,
+                            <<"route">> => maps:merge(GatewayNode, RouteConfig)
+                        },
+                        Opts
+                    ),
+                {ok, _} = 
+                    hb_http:post(
+                        Node,
+                        #{
+                            <<"path">> => SchedulePath,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => Body
+                        },
+                        Opts
+                    )
+            end, 
+            ?ARWEAVE_BOOTSTRAP_DATA_NODES
+        ),
+        %% Trigger compute to process register messages.
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Verify initial performance.
+        PerfPath = <<PerfProcess/binary, "/now/routes/1/nodes/1/performance">>,
+        {ok, InitPerf} = hb_http:get(Node, PerfPath, Opts),
+        ?assertEqual(1000.0, dev_router_perf:to_float(InitPerf)),
+        %% Fetch TX through the full stack.
+        {ok, Res} = 
+            hb_http:get(
+                Node,
+                <<"~arweave@2.9/tx=", TXID/binary, "&exclude-data=true">>,
+                Opts
+            ),
+        ?assertMatch(#{ <<"reward">> := <<"482143296">> }, Res),
+        ?assert(hb_message:verify(Res, all, #{})),
+        ?assertNot(lists:member(NodeAddr, hb_message:signers(Res, #{}))),
+        %% Wait for async monitor duration posts, then recompute.
+        timer:sleep(1000),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Verify performance score changed from initial value.
+        {ok, UpdatedPerf} = hb_http:get(Node, PerfPath, Opts),
+        ?assertNotEqual(1000.0, dev_router_perf:to_float(UpdatedPerf)),
+        ok
+    end}.
+
 is_admissible_real_gateway_test_() ->
     {timeout, 30, fun() ->
         application:ensure_all_started(hb),
