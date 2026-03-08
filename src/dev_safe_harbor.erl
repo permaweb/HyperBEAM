@@ -1,6 +1,6 @@
 %%% @doc A `not-found' hook device that asynchronously imports missing IDs
 %%% from a secondary store into a node-local safe harbour store.
--module(dev_safe_harbour).
+-module(dev_safe_harbor).
 -export([info/1, enqueue/3, not_found/3, status/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -28,6 +28,20 @@ not_found(_Base, HookReq, Opts) ->
             )
     end.
 
+%% @doc Explain the safe harbour import process to the user.
+explainer_page(_Result, _Opts) ->
+    {ok,
+        #{
+            <<"body">> =>
+                <<
+                    "Your ID was not found on this node directly, but it has been",
+                    " scheduled for import from a secondary store, if it exists there. ",
+                    "You can check the status of the import process by calling",
+                    "`~safe-harbor@1.0/status'."
+                >>
+        }
+    }.
+
 %% @doc Manually queue one or more IDs for import.
 enqueue(_Base, Req, Opts) ->
     case missing_ids(Req, Opts) of
@@ -54,6 +68,18 @@ enqueue(_Base, Req, Opts) ->
 
 %% @doc Return the current importer status for the node.
 status(_Base, _Req, Opts) ->
+    return_server_reply(status, Opts).
+
+%% @doc Queue IDs for import if the feature is enabled.
+do_enqueue(IDs, Opts) ->
+    case enabled(Opts) of
+        false -> disabled;
+        true -> return_server_reply({enqueue, IDs}, Opts)
+    end.
+
+%% @doc Generalized wrapper to allow 'server-side' execution of commands granting
+%% a result that can be returned to the AO-Core caller.
+return_server_reply(Command, Opts) ->
     case enabled(Opts) of
         false ->
             {error,
@@ -64,31 +90,12 @@ status(_Base, _Req, Opts) ->
             };
         true ->
             {ok, PID} = ensure_server_started(Opts),
-            PID ! {status, self()},
+            PID ! {request, Ref = make_ref(), self(), Command},
             receive
-                {status, ServerStatus} -> {ok, ServerStatus}
-            after ?STATUS_TIMEOUT ->
-                {error, <<"Timed out waiting for safe harbour status.">>}
+                {response, Ref, Result} -> Result
+            after ?ENQUEUE_TIMEOUT ->
+                {error, <<"Timed out waiting for `safe-harbour@1.0` server.">>}
             end
-    end.
-
-%% @doc Queue IDs for import if the feature is enabled.
-do_enqueue([], _Opts) ->
-    {ok, []};
-do_enqueue(IDs, Opts) ->
-    case enabled(Opts) of
-        false -> disabled;
-        true -> send({enqueue, IDs}, Opts)
-    end.
-
-send(Command, Opts) ->
-    {ok, PID} = ensure_server_started(Opts),
-    PID ! {Ref = make_ref(), self(), Command},
-    receive
-        {reply, Ref, Result} ->
-            Result
-    after ?ENQUEUE_TIMEOUT ->
-        {error, <<"Timed out waiting for `safe-harbour@1.0` server.">>}
     end.
 
 %% @doc Ensure the singleton importer exists for the current node.
@@ -100,76 +107,74 @@ ensure_server_started(Opts) ->
         undefined ->
             hb_name:spawn_register(
                 ServerID,
-                fun() ->
-                    start_server(ServerID, relevant_opts(Opts))
-                end
+                fun() -> start_server(ServerID, Opts) end
             )
-    end.
-
-%% @doc Wait for the singleton importer to appear in the name registry.
-wait_for_server(ServerID, 0) ->
-    {error, {safe_harbour_start_timeout, ServerID}};
-wait_for_server(ServerID, AttemptsLeft) ->
-    case hb_name:lookup(ServerID) of
-        PID when is_pid(PID) ->
-            {ok, PID};
-        undefined ->
-            timer:sleep(?SERVER_LOOKUP_SLEEP_MS),
-            wait_for_server(ServerID, AttemptsLeft - 1)
     end.
 
 %% @doc Register and start the singleton importer loop.
 start_server(ServerID, Opts) ->
-    case hb_name:register(ServerID, self()) of
-        ok ->
-            ?event(safe_harbour, {started, {server_id, ServerID}}),
-            server_loop(
-                #{
-                    config => Opts,
-                    queue => queue:new(),
-                    queued => #{},
-                    failed => #{},
-                    imported => 0,
-                    failures => 0,
-                    inflight => undefined
-                }
-            );
-        error ->
-            ok
-    end.
+    ?event(safe_harbor, {started, {server_id, ServerID}}),
+    server_loop(
+        #{
+            config => Opts,
+            queue => queue:new(),
+            queued => #{},
+            failed => #{},
+            imported => 0,
+            failures => 0,
+            inflight => undefined
+        }
+    ).
 
-%% @doc Run the importer server loop, prioritizing control messages.
+%% @doc Run the importer server loop, prioritizing control messages between
+%% user calls.
 server_loop(State) ->
-    receive
-        Message ->
-            server_loop(handle_message(Message, State))
+    receive Msg -> server_loop(handle_request(Msg, State))
     after 0 ->
         case next_id(State) of
-            empty ->
-                receive
-                    Message ->
-                        server_loop(handle_message(Message, State))
-                end;
-            {ok, ID, NextState} ->
-                server_loop(import_id(ID, NextState))
+            empty -> receive Msg -> server_loop(handle_request(Msg, State)) end;
+            {ok, ID, NextState} -> server_loop(import_id(ID, NextState))
         end
     end.
 
-%% @doc Handle a control message sent to the importer.
-handle_message({enqueue, From, IDs, Opts}, State) ->
-    {Queued, NextState} = enqueue_ids(IDs, State#{ config => Opts }),
-    From ! {enqueued, Queued},
-    NextState;
-handle_message({status, From}, State) ->
-    From ! {status, status_message(State)},
-    State;
-handle_message(stop, State) ->
-    State;
-handle_message(_Other, State) ->
-    State.
+%% @doc A generic framework of requests and responses to the importer.
+handle_request({request, Ref, From, Command}, State) ->
+    case execute(Command, State) of
+        {Status, Result} ->
+            From ! {response, Ref, {Status, Result}},
+            State;
+        {Status, Result, NextState} ->
+            From ! {response, Ref, {Status, Result}},
+            NextState
+    end.
+
+%% @doc Execute a command against the importer state and return the result to
+%% the caller.
+execute({enqueue, IDs}, State) ->
+    {Queued, NextState} = enqueue_ids(IDs, State),
+    {
+        ok,
+        #{
+            <<"enqueued">> => length(Queued),
+            <<"queue-length">> => queue:len(maps:get(queue, NextState)),
+            <<"body">> =>
+                <<
+                    "Queued ",
+                    (hb_util:bin(length(Queued)))/binary,
+                    " IDs for import."
+                >>
+        },
+        NextState
+    };
+execute(status, State) ->
+    {ok, state_to_message(State), State};
+execute(stop, State) ->
+    {ok, stopped, State};
+execute(_Other, State) ->
+    {error, unknown_command, State}.
 
 %% @doc Convert the current importer state into a message.
-status_message(State) ->
+state_to_message(State) ->
     #{
         <<"enabled">> => true,
         <<"queue-depth">> => queue:len(maps:get(queue, State)),
@@ -199,7 +204,7 @@ enqueue_ids(IDs, State) ->
             end
         end,
         {[], State},
-        normalize_ids(IDs)
+        lists:map(fun hb_util:human_id/1, IDs)
     ).
 
 %% @doc Determine whether an ID should be added to the queue.
@@ -212,8 +217,7 @@ should_queue(ID, State) ->
 retry_ready(ID, State) ->
     Failed = maps:get(failed, State, #{}),
     case maps:get(ID, Failed, undefined) of
-        undefined ->
-            true;
+        undefined -> true;
         LastFailure ->
             erlang:system_time(millisecond) - LastFailure >=
                 retry_ms(maps:get(config, State))
@@ -222,8 +226,7 @@ retry_ready(ID, State) ->
 %% @doc Pop the next queued ID, if one exists.
 next_id(State) ->
     case queue:out(maps:get(queue, State)) of
-        {empty, _} ->
-            empty;
+        {empty, _} -> empty;
         {{value, ID}, Queue} ->
             {
                 ok,
@@ -239,37 +242,30 @@ next_id(State) ->
 %% @doc Import a single ID into the target store.
 import_id(ID, State) ->
     Opts = maps:get(config, State),
-    ?event(safe_harbour, {importing, {id, ID}}),
+    ?event(safe_harbor, {importing, {id, ID}}),
     try
-        case target_has_id(ID, Opts) of
+        case hb_cache:read(ID, WriteStore = #{ store => import_store(Opts) }) of
             true ->
-                ?event(safe_harbour, {already_present, {id, ID}}),
+                ?event(safe_harbor, {id_already_present_locally, {id, ID}}),
                 State#{ inflight => undefined };
             false ->
-                case hb_cache:read(ID, read_opts(Opts)) of
+                case hb_cache:read(ID, ReadOpts = #{ store => target_store(Opts) }) of
                     {ok, Imported} ->
-                        Loaded = hb_cache:ensure_all_loaded(Imported, read_opts(Opts)),
-                        case hb_cache:write(Loaded, write_opts(Opts)) of
+                        Loaded = hb_cache:ensure_all_loaded(Imported, ReadOpts),
+                        case hb_cache:write(Loaded, WriteStore) of
                             {ok, _Path} ->
-                                case target_has_id(ID, Opts) of
-                                    true ->
-                                        ?event(safe_harbour, {imported, {id, ID}}),
-                                        mark_success(ID, State);
-                                    false ->
-                                        mark_failure(ID, State)
-                                end;
-                            _ ->
-                                mark_failure(ID, State)
+                                ?event(safe_harbor, {id_imported, {id, ID}}),
+                                mark_success(ID, State);
+                            _ -> mark_failure(ID, State)
                         end;
-                    _ ->
-                        mark_failure(ID, State)
+                    _ -> mark_failure(ID, State)
                 end
         end
     catch
         Type:Reason:Stacktrace ->
             ?event(
                 warning,
-                {safe_harbour_import_failed,
+                {safe_harbor_import_failed,
                     {id, ID},
                     {type, Type},
                     {reason, Reason},
@@ -301,13 +297,6 @@ mark_failure(ID, State) ->
         failures => maps:get(failures, State, 0) + 1
     }.
 
-%% @doc Check whether the target store already has the requested ID.
-target_has_id(ID, Opts) ->
-    case hb_cache:read(ID, write_opts(Opts)) of
-        {ok, _} -> true;
-        _ -> false
-    end.
-
 %% @doc Extract queueable IDs from a not-found hook request.
 missing_ids(HookReq, Opts) ->
     case hb_maps:find(<<"missing">>, HookReq, Opts) of
@@ -318,34 +307,24 @@ missing_ids(HookReq, Opts) ->
 
 %% @doc Determine whether safe harbour imports are configured.
 enabled(Opts) ->
-    hb_opts:get(safe_harbour_source, false, Opts) =/= false.
+    hb_opts:get(safe_harbor_source, false, Opts) =/= false.
 
 %% @doc Return the configured import store, accepting both spellings.
 import_store(Opts) ->
-    hb_opts:get(
-        safe_harbor_import,
-        hb_opts:get(safe_harbour_import, [], Opts),
-        Opts
-    ).
+    hb_opts:get(safe_harbor_import, [], Opts).
 
 %% @doc Return the configured target store, defaulting to the node store.
 target_store(Opts) ->
-    case hb_opts:get(
-        safe_harbor_store,
-        hb_opts:get(safe_harbour_store, false, Opts),
-        Opts
-    ) of
-        false ->
-            hb_opts:get(store, no_viable_store, Opts);
-        Store ->
-            Store
+    case hb_opts:get(safe_harbor_store, false, Opts) of
+        false -> hb_opts:get(store, no_viable_store, Opts);
+        Store -> Store
     end.
 
 %% @doc Return the configured retry cooldown in milliseconds.
 retry_ms(Opts) ->
     hb_opts:get(
         safe_harbor_retry_ms,
-        hb_opts:get(safe_harbour_retry_ms, ?DEFAULT_RETRY_MS, Opts),
+        hb_opts:get(safe_harbor_retry_ms, ?DEFAULT_RETRY_MS, Opts),
         Opts
     ).
 
