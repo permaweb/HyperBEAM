@@ -20,35 +20,48 @@ info(_) ->
 %% @doc Queue any IDs referenced by a 404-producing request for import.
 not_found(_Base, HookReq, Opts) ->
     case enabled(Opts) of
-        false ->
-            {ok, HookReq};
+        false -> {ok, HookReq};
         true ->
-            _ = do_enqueue(missing_ids(HookReq, Opts), Opts),
-            {ok, HookReq}
+            explainer_page(
+                do_enqueue(missing_ids(HookReq, Opts), Opts),
+                Opts
+            )
     end.
 
 %% @doc Manually queue one or more IDs for import.
 enqueue(_Base, Req, Opts) ->
-    case do_enqueue(manual_ids(Req, Opts), Opts) of
-        disabled ->
-            {ok, #{ <<"enabled">> => false, <<"queued">> => [] }};
-        {ok, Queued} ->
-            {ok,
-                #{
-                    <<"enabled">> => true,
-                    <<"queued">> => Queued,
-                    <<"count">> => length(Queued)
-                }
-            };
-        {error, Reason} ->
-            {error, Reason}
+    case missing_ids(Req, Opts) of
+        [] ->
+            {error, <<"No IDs to import.">>};
+        IDs ->
+            case do_enqueue(IDs, Opts) of
+                disabled ->
+                    {error, <<"Safe harbour imports are not enabled on this node.">>};
+                {ok, Queued} ->
+                    {ok,
+                        #{
+                            <<"queued">> => length(Queued),
+                            <<"body">> =>
+                                <<
+                                    "Queued ",
+                                    (hb_util:bin(length(Queued)))/binary,
+                                    " IDs for import."
+                                >>
+                        }
+                    }
+            end
     end.
 
 %% @doc Return the current importer status for the node.
 status(_Base, _Req, Opts) ->
     case enabled(Opts) of
         false ->
-            {ok, #{ <<"enabled">> => false }};
+            {error,
+                #{
+                    <<"body">> =>
+                        <<"Safe harbour imports are not enabled on this node.">>
+                }
+            };
         true ->
             {ok, PID} = ensure_server_started(Opts),
             PID ! {status, self()},
@@ -64,17 +77,18 @@ do_enqueue([], _Opts) ->
     {ok, []};
 do_enqueue(IDs, Opts) ->
     case enabled(Opts) of
-        false ->
-            disabled;
-        true ->
-            {ok, PID} = ensure_server_started(Opts),
-            PID ! {enqueue, self(), IDs, relevant_opts(Opts)},
-            receive
-                {enqueued, Queued} ->
-                    {ok, Queued}
-            after ?ENQUEUE_TIMEOUT ->
-                {error, <<"Timed out queueing safe harbour imports.">>}
-            end
+        false -> disabled;
+        true -> send({enqueue, IDs}, Opts)
+    end.
+
+send(Command, Opts) ->
+    {ok, PID} = ensure_server_started(Opts),
+    PID ! {Ref = make_ref(), self(), Command},
+    receive
+        {reply, Ref, Result} ->
+            Result
+    after ?ENQUEUE_TIMEOUT ->
+        {error, <<"Timed out waiting for `safe-harbour@1.0` server.">>}
     end.
 
 %% @doc Ensure the singleton importer exists for the current node.
@@ -84,12 +98,12 @@ ensure_server_started(Opts) ->
         PID when is_pid(PID) ->
             {ok, PID};
         undefined ->
-            spawn(
+            hb_name:spawn_register(
+                ServerID,
                 fun() ->
                     start_server(ServerID, relevant_opts(Opts))
                 end
-            ),
-            wait_for_server(ServerID, ?SERVER_LOOKUP_RETRIES)
+            )
     end.
 
 %% @doc Wait for the singleton importer to appear in the name registry.
@@ -296,112 +310,15 @@ target_has_id(ID, Opts) ->
 
 %% @doc Extract queueable IDs from a not-found hook request.
 missing_ids(HookReq, Opts) ->
-    case hb_maps:find(<<"request">>, HookReq, Opts) of
-        {ok, Request} ->
-            try
-                collect_ids(hb_singleton:from(Request, Opts), [], Opts)
-            catch
-                _:_ ->
-                    []
-            end;
-        error ->
-            []
+    case hb_maps:find(<<"missing">>, HookReq, Opts) of
+        {ok, ID} when ?IS_ID(ID) -> [ID];
+        {ok, IDs} when is_list(IDs) -> [ID || ID <- IDs, ?IS_ID(ID)];
+        error -> []
     end.
-
-%% @doc Extract queueable IDs from a manual enqueue request.
-manual_ids(Req, Opts) ->
-    collect_ids(
-        [
-            hb_maps:get(<<"id">>, Req, undefined, Opts),
-            hb_maps:get(<<"ids">>, Req, [], Opts),
-            hb_maps:get(<<"target">>, Req, undefined, Opts),
-            hb_maps:get(<<"body">>, Req, undefined, Opts)
-        ],
-        [],
-        Opts
-    ).
-
-%% @doc Collect all IDs found inside a term.
-collect_ids(Term, Acc, _Opts) when ?IS_ID(Term) ->
-    [hb_util:human_id(Term) | Acc];
-collect_ids(Term, Acc, _Opts) when is_binary(Term) ->
-    Acc;
-collect_ids(Term, Acc, Opts) when ?IS_LINK(Term) ->
-    collect_ids(hb_cache:ensure_loaded(Term, Opts), Acc, Opts);
-collect_ids(Term, Acc, Opts) when is_map(Term) ->
-    hb_maps:fold(
-        fun(_Key, Value, AccIn) ->
-            collect_ids(Value, AccIn, Opts)
-        end,
-        Acc,
-        Term,
-        Opts
-    );
-collect_ids(Term, Acc, Opts) when is_list(Term) ->
-    lists:foldl(
-        fun(Value, AccIn) ->
-            collect_ids(Value, AccIn, Opts)
-        end,
-        Acc,
-        Term
-    );
-collect_ids(_Term, Acc, _Opts) ->
-    Acc.
-
-%% @doc Normalize and deduplicate a list of candidate IDs.
-normalize_ids(IDs) ->
-    lists:usort([hb_util:human_id(ID) || ID <- IDs, ?IS_ID(ID)]).
 
 %% @doc Determine whether safe harbour imports are configured.
 enabled(Opts) ->
-    configured(import_store(Opts))
-        andalso configured(target_store(Opts)).
-
-%% @doc Determine whether a store configuration is viable.
-configured([]) ->
-    false;
-configured(false) ->
-    false;
-configured(no_viable_store) ->
-    false;
-configured(undefined) ->
-    false;
-configured(_Store) ->
-    true.
-
-%% @doc Build the options used when reading from the import store.
-read_opts(Opts) ->
-    (relevant_opts(Opts))#{
-        store => import_store(Opts),
-        cache_control => [<<"no-cache">>, <<"no-store">>]
-    }.
-
-%% @doc Build the options used when writing into the target store.
-write_opts(Opts) ->
-    (relevant_opts(Opts))#{
-        store => target_store(Opts),
-        cache_control => [<<"no-cache">>, <<"no-store">>]
-    }.
-
-%% @doc Keep only the configuration relevant to an importer worker.
-relevant_opts(Opts) ->
-    maps:with(
-        [
-            safe_harbor_import,
-            safe_harbour_import,
-            safe_harbor_store,
-            safe_harbour_store,
-            safe_harbor_retry_ms,
-            safe_harbour_retry_ms,
-            store,
-            http_server,
-            priv_wallet,
-            ans104_trust_gql,
-            cache_control,
-            store_all_signed
-        ],
-        Opts
-    ).
+    hb_opts:get(safe_harbour_source, false, Opts) =/= false.
 
 %% @doc Return the configured import store, accepting both spellings.
 import_store(Opts) ->

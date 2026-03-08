@@ -5,6 +5,7 @@
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
+-export([spawn_register/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
@@ -57,6 +58,26 @@ unregister(Name) ->
     start(),
     ets:delete(?NAME_TABLE, Name),
     ok.
+
+%% @doc Atomic spawn+register operation. Multiple callers may simultanoeously
+%% invoke this function, but the PID of only one surviving surivor will be
+%% registered and returned to all callers.
+spawn_register(Name, Fun) ->
+    start(),
+    Self = self(),
+    Ref = make_ref(),
+    Spawned =
+        spawn_monitor(
+            fun() ->
+                ok = ?MODULE:register(Name, Self),
+                Self ! {survived, Ref},
+                Fun()
+            end
+        ),
+    receive
+        {survived, Ref} -> unlink(Spawned), Spawned;
+        {'DOWN', Ref, process, _, _} -> lookup(Name)
+    end.
 
 %%% @doc Lookup a name -> PID.
 lookup(Name) when is_atom(Name) ->
