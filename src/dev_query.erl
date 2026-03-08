@@ -66,6 +66,9 @@ has_results(Base, Req, Opts) ->
         #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Nodes } } }
                 when length(Nodes) > 0 ->
             {ok, true};
+        #{ <<"data">> := #{ <<"transaction">> := Transaction } }
+                when is_map(Transaction) ->
+            {ok, true};
         _ -> {ok, false}
     end.
 

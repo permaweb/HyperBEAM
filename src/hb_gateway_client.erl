@@ -85,34 +85,24 @@ root(ID, Opts) ->
     HumanID = hb_util:human_id(ID),
     Query =
         <<
-            "query($transactionId: ID!) { ",
-                "transaction(id: $transactionId) { ",
-                    "edges { node { id bundledIn { id } } } ",
+            "query($id: ID!) { ",
+                "transaction(id: $id) { ",
+                    "id bundledIn { id } ",
                 "} ",
             "} "
         >>,
-    Variables = #{ <<"transactionId">> => HumanID },
+    Variables = #{ <<"id">> => HumanID },
     case query(Query, Variables, Opts) of
         {error, Reason} ->
             {error, Reason};
         {ok, GqlMsg} ->
-            case first_result(GqlMsg, Opts) of
-                not_found ->
-                    {error, not_found};
+            case hb_util:deep_get(<<"data/transaction">>, GqlMsg, Opts) of
+                not_found -> {error, not_found};
                 #{ <<"bundledIn">> := #{ <<"id">> := ParentID } } ->
                     root(ParentID, Opts);
                 Item ->
                     {ok, hb_maps:get(<<"id">>, Item, HumanID, Opts)}
             end
-    end.
-
-%% @doc Find the first result in a GraphQL response.
-first_result(GqlMsg, Opts) ->
-    case hb_util:deep_get(<<"data/transactions/edges">>, GqlMsg, [], Opts) of
-        [FirstEdge | _] ->
-            hb_maps:get(<<"node">>, FirstEdge, not_found, Opts);
-        _ ->
-            not_found
     end.
 
 %% @doc Gives the fields of a transaction that are needed to construct an
@@ -400,11 +390,6 @@ normalize_null(null) -> <<>>;
 normalize_null(not_found) -> <<>>;
 normalize_null(Bin) when is_binary(Bin) -> Bin.
 
-decode_id_or_null(Bin) when byte_size(Bin) > 0 ->
-    hb_util:human_id(Bin);
-decode_id_or_null(_) ->
-    <<>>.
-
 decode_or_null(Bin) when is_binary(Bin) ->
     hb_util:decode(Bin);
 decode_or_null(_) ->
@@ -433,7 +418,13 @@ subindex_to_tags(Subindex) ->
     <<"[", ListInner/binary, "]">>.
 
 %%% Tests
+
+setup() ->
+    application:ensure_all_started([hb]),
+    _Node = hb_http_server:start_node(#{}).
+
 ans104_no_data_item_test() ->
+    setup(),
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
     {ok, Res} = read(<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>, #{}),
@@ -443,8 +434,7 @@ ans104_no_data_item_test() ->
 
 %% @doc Test that we can get the scheduler location.
 scheduler_location_test() ->
-    % Start a random node so that all of the services come up.
-    _Node = hb_http_server:start_node(#{}),
+    setup(),    
     {ok, Res} =
         location(
             <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
@@ -458,7 +448,7 @@ scheduler_location_test() ->
 
 %% @doc Test l1 message from graphql
 l1_transaction_test() ->
-    _Node = hb_http_server:start_node(#{}),
+    setup(),
     {ok, Res} = read(<<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>, #{}),
     ?event(gateway, {l1_transaction, Res}),
     Data = maps:get(<<"data">>, Res),
@@ -466,7 +456,7 @@ l1_transaction_test() ->
 
 %% @doc Test l2 message from graphql
 l2_dataitem_test() ->
-    _Node = hb_http_server:start_node(#{}),
+    setup(),
     {ok, Res} = read(ID = <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
     Opts = #{},
@@ -482,7 +472,7 @@ l2_dataitem_test() ->
 
 %% @doc ed25519 L2 Transaction test
 l2_dataitem_ed25519_test() ->
-    _Node = hb_http_server:start_node(#{}),
+    setup(),
     ID = <<"AwrAs-HaBlc8xeI8sw6Wpbi7A0weQWeXYwW20CpX5oM">>,
     {ok, Res} = read(ID, #{}),
     ?event(gateway, {l2_dataitem, Res}),
@@ -507,96 +497,17 @@ l2_dataitem_ed25519_test() ->
 
 %% @doc Test optimistic index
 ao_dataitem_test() ->
-    _Node = hb_http_server:start_node(#{}),
+    setup(),
     {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
 
-query_uses_explicit_node_test() ->
-    {ok, Node, ServerHandle} =
-        hb_mock_server:start(
-            [
-                {"/graphql", graphql, {200, hb_json:encode(#{ <<"data">> => #{ <<"ping">> => <<"ok">> } })}}
-            ]
-        ),
-    try
-        ?assertEqual(
-            {ok, #{ <<"data">> => #{ <<"ping">> => <<"ok">> } }},
-            query(
-                <<"query { ping }">>,
-                #{},
-                Node,
-                #{ http_client => httpc, protocol => http1 }
-            )
-        )
-    after
-        hb_mock_server:stop(ServerHandle)
-    end.
-
 root_follows_bundled_in_chain_test() ->
+    setup(),
     LeafID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-    BundleID = <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>,
-    RootID = <<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>,
-    Response =
-        fun(Req) ->
-            Body = hb_json:decode(maps:get(<<"body">>, Req)),
-            Variables = maps:get(<<"variables">>, Body),
-            RequestedID = maps:get(<<"transactionId">>, Variables),
-            Node =
-                case RequestedID of
-                    LeafID ->
-                        #{
-                            <<"id">> => LeafID,
-                            <<"bundledIn">> => #{ <<"id">> => BundleID }
-                        };
-                    BundleID ->
-                        #{
-                            <<"id">> => BundleID,
-                            <<"bundledIn">> => #{ <<"id">> => RootID }
-                        };
-                    RootID ->
-                        #{
-                            <<"id">> => RootID,
-                            <<"bundledIn">> => null
-                        }
-                end,
-            {200,
-                hb_json:encode(
-                    #{
-                        <<"data">> =>
-                            #{
-                                <<"transactions">> =>
-                                    #{
-                                        <<"edges">> => [#{ <<"node">> => Node }]
-                                    }
-                            }
-                    }
-                )}
-        end,
-    {ok, Node, ServerHandle} = hb_mock_server:start([{"/graphql", graphql, Response}]),
-    try
-        ?assertEqual(
-            {ok, RootID},
-            root(
-                LeafID,
-                #{
-                    routes => [
-                        #{
-                            <<"template">> => <<"/graphql">>,
-                            <<"nodes">> =>
-                                [
-                                    #{
-                                        <<"prefix">> => Node,
-                                        <<"opts">> =>
-                                            #{ http_client => httpc, protocol => http1 }
-                                    }
-                                ]
-                        }
-                    ]
-                }
-            )
-        )
-    after
-        hb_mock_server:stop(ServerHandle)
-    end.
+    RootID = <<"bYOhNFvvMpUkwRm973xHk-ebPVZ08HDwe08B-oZJpx4">>,
+    ?assertEqual(
+        {ok, RootID},
+        root(LeafID, #{})
+    ).
