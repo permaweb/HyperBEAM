@@ -35,7 +35,8 @@ explainer_page(_Result, _Opts) ->
             <<"body">> =>
                 <<
                     "Your ID was not found on this node directly, but it has been",
-                    " scheduled for import from a secondary store, if it exists there. ",
+                    " scheduled for recovery from the node's configured safe harbour ",
+                    "sources. ",
                     "You can check the status of the import process by calling",
                     "`~safe-harbor@1.0/status'."
                 >>
@@ -170,8 +171,12 @@ execute(_Other, State) ->
 
 %% @doc Convert the current importer state into a message.
 state_to_message(State) ->
+    Config = maps:get(config, State, #{}),
     #{
         <<"enabled">> => true,
+        <<"bucket-reseed-enabled">> =>
+            dev_safe_harbor_chunk_bucket:enabled(Config),
+        <<"import-store-enabled">> => import_store_enabled(Config),
         <<"queue-depth">> => queue:len(maps:get(queue, State)),
         <<"in-flight">> => maps:get(inflight, State, <<>>),
         <<"imported">> => maps:get(imported, State, 0),
@@ -237,38 +242,90 @@ next_id(State) ->
 %% @doc Import a single ID into the target store.
 import_id(ID, State) ->
     Opts = maps:get(config, State),
+    WriteOpts = #{ store => target_store(Opts) },
     ?event(safe_harbor, {importing, {id, ID}}),
     try
-        case hb_cache:read(ID, WriteOpts = #{ store => target_store(Opts) }) of
+        case hb_cache:read(ID, WriteOpts) of
             {ok, _} ->
                 ?event(safe_harbor, {id_already_present_locally, {id, ID}}),
                 State#{ inflight => undefined };
             not_found ->
-                case hb_cache:read(ID, ReadOpts = #{ store => import_store(Opts) }) of
-                    {ok, Imported} ->
-                        Loaded = hb_cache:ensure_all_loaded(Imported, ReadOpts),
-                        case hb_cache:write(Loaded, WriteOpts) of
-                            {ok, _Path} ->
-                                ?event(safe_harbor, {id_imported, {id, ID}}),
-                                mark_success(ID, State);
-                            _ -> mark_failure(ID, State)
-                        end;
-                    _ -> mark_failure(ID, State)
+                case maybe_reseed_from_bucket(ID, Opts) of
+                    {ok, Result} ->
+                        ?event(
+                            safe_harbor,
+                            {id_reseeded_from_bucket,
+                                {id, ID},
+                                {root_tx_id, maps:get(root_tx_id, Result)},
+                                {data_root, maps:get(data_root, Result)},
+                                {proofs, maps:get(proofs, Result)},
+                                {chunk_posts, maps:get(chunk_posts, Result)}
+                            }
+                        ),
+                        mark_success(ID, State);
+                    {skip, Stage, Reason} ->
+                        maybe_import_from_store(
+                            ID,
+                            Stage,
+                            Reason,
+                            WriteOpts,
+                            State
+                        )
                 end
         end
     catch
-        Type:Reason:Stacktrace ->
+        Type:CatchReason:Stacktrace ->
             ?event(
                 warning,
                 {safe_harbor_import_failed,
                     {id, ID},
                     {type, Type},
-                    {reason, Reason},
+                    {reason, CatchReason},
                     {stacktrace, {trace, Stacktrace}}
                 }
             ),
             mark_failure(ID, State)
     end.
+
+maybe_reseed_from_bucket(ID, Opts) ->
+    case dev_safe_harbor_chunk_bucket:enabled(Opts) of
+        false -> {skip, disabled, not_enabled};
+        true -> dev_safe_harbor_chunk_bucket:reseed(ID, Opts)
+    end.
+
+maybe_import_from_store(ID, Stage, Reason, WriteOpts, State) ->
+    Opts = maps:get(config, State),
+    maybe_log_bucket_skip(ID, Stage, Reason),
+    case import_store_enabled(Opts) of
+        false ->
+            mark_failure(ID, State);
+        true ->
+            case hb_cache:read(ID, ReadOpts = #{ store => import_store(Opts) }) of
+                {ok, Imported} ->
+                    Loaded = hb_cache:ensure_all_loaded(Imported, ReadOpts),
+                    case hb_cache:write(Loaded, WriteOpts) of
+                        {ok, _Path} ->
+                            ?event(safe_harbor, {id_imported, {id, ID}}),
+                            mark_success(ID, State);
+                        _ ->
+                            mark_failure(ID, State)
+                    end;
+                _ ->
+                    mark_failure(ID, State)
+            end
+    end.
+
+maybe_log_bucket_skip(_ID, disabled, not_enabled) ->
+    ok;
+maybe_log_bucket_skip(ID, Stage, Reason) ->
+    ?event(
+        safe_harbor,
+        {bucket_reseed_skipped,
+            {id, ID},
+            {stage, Stage},
+            {reason, Reason}
+        }
+    ).
 
 %% @doc Record a successful import and clear any prior failure cooldown.
 mark_success(ID, State) ->
@@ -314,6 +371,11 @@ missing_ids_from_request(Request, Opts) ->
 
 %% @doc Determine whether safe harbour imports are configured.
 enabled(Opts) ->
+    import_store_enabled(Opts)
+        orelse dev_safe_harbor_chunk_bucket:enabled(Opts).
+
+%% @doc Determine whether a fallback import store is configured.
+import_store_enabled(Opts) ->
     hb_opts:get(safe_harbor_import, [], Opts) =/= [].
 
 %% @doc Return the configured import store, accepting both spellings.
@@ -466,6 +528,35 @@ single_import_after_404() ->
         hb_ao:get(<<"body">>, LegacyMsg, not_found, #{}),
         hb_ao:get(<<"body">>, StoredLegacy, not_found, #{ store => PrimaryStore })
     ).
+
+enabled_with_bucket_config_test() ->
+    ?assert(
+        enabled(
+            #{
+                priv_safe_harbor_bucket_endpoint => <<"http://bucket">>,
+                priv_safe_harbor_bucket_access_key => <<"access">>,
+                priv_safe_harbor_bucket_secret_key => <<"secret">>
+            }
+        )
+    ).
+
+status_message_shows_bucket_reseed_test() ->
+    Status =
+        state_to_message(
+            #{
+                config =>
+                    #{
+                        priv_safe_harbor_bucket_endpoint => <<"http://bucket">>,
+                        priv_safe_harbor_bucket_access_key => <<"access">>,
+                        priv_safe_harbor_bucket_secret_key => <<"secret">>
+                    },
+                queue => queue:new(),
+                failed => #{},
+                imported => 0,
+                failures => 0
+            }
+        ),
+    ?assertEqual(true, maps:get(<<"bucket-reseed-enabled">>, Status)).
 
 %% @doc Verify that many missing IDs can be queued and imported together.
 many_imports_after_404_test_() ->

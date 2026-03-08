@@ -439,6 +439,15 @@ default_message() ->
         safe_harbor_import => [],
         safe_harbor_store => false,
         safe_harbor_retry_ms => 30_000,
+        % Optional bucket-backed safe harbor recovery. These `priv_' keys are
+        % intended for read-only MinIO/S3 credentials loaded from node config.
+        priv_safe_harbor_bucket_endpoint => undefined,
+        priv_safe_harbor_bucket_access_key => undefined,
+        priv_safe_harbor_bucket_secret_key => undefined,
+        priv_safe_harbor_bucket_name => <<"ario">>,
+        priv_safe_harbor_bucket_region => <<"us-east-1">>,
+        safe_harbor_chunk_bucket_nodes => auto,
+        safe_harbor_chunk_bucket_node_post_concurrency => 5,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
