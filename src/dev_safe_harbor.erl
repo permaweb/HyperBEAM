@@ -89,7 +89,7 @@ return_server_reply(Command, Opts) ->
                 }
             };
         true ->
-            {ok, PID} = ensure_server_started(Opts),
+            PID = ensure_server_started(Opts),
             PID ! {request, Ref = make_ref(), self(), Command},
             receive
                 {response, Ref, Result} -> Result
@@ -101,15 +101,10 @@ return_server_reply(Command, Opts) ->
 %% @doc Ensure the singleton importer exists for the current node.
 ensure_server_started(Opts) ->
     ServerID = server_id(Opts),
-    case hb_name:lookup(ServerID) of
-        PID when is_pid(PID) ->
-            {ok, PID};
-        undefined ->
-            hb_name:spawn_register(
-                ServerID,
-                fun() -> start_server(ServerID, Opts) end
-            )
-    end.
+    hb_name:singleton(
+        ServerID,
+        fun() -> start_server(ServerID, Opts) end
+    ).
 
 %% @doc Register and start the singleton importer loop.
 start_server(ServerID, Opts) ->
@@ -244,15 +239,15 @@ import_id(ID, State) ->
     Opts = maps:get(config, State),
     ?event(safe_harbor, {importing, {id, ID}}),
     try
-        case hb_cache:read(ID, WriteStore = #{ store => import_store(Opts) }) of
-            true ->
+        case hb_cache:read(ID, WriteOpts = #{ store => target_store(Opts) }) of
+            {ok, _} ->
                 ?event(safe_harbor, {id_already_present_locally, {id, ID}}),
                 State#{ inflight => undefined };
-            false ->
-                case hb_cache:read(ID, ReadOpts = #{ store => target_store(Opts) }) of
+            not_found ->
+                case hb_cache:read(ID, ReadOpts = #{ store => import_store(Opts) }) of
                     {ok, Imported} ->
                         Loaded = hb_cache:ensure_all_loaded(Imported, ReadOpts),
-                        case hb_cache:write(Loaded, WriteStore) of
+                        case hb_cache:write(Loaded, WriteOpts) of
                             {ok, _Path} ->
                                 ?event(safe_harbor, {id_imported, {id, ID}}),
                                 mark_success(ID, State);
@@ -302,12 +297,24 @@ missing_ids(HookReq, Opts) ->
     case hb_maps:find(<<"missing">>, HookReq, Opts) of
         {ok, ID} when ?IS_ID(ID) -> [ID];
         {ok, IDs} when is_list(IDs) -> [ID || ID <- IDs, ?IS_ID(ID)];
-        error -> []
+        error ->
+            case hb_maps:find(<<"request">>, HookReq, Opts) of
+                {ok, Request} -> missing_ids_from_request(Request, Opts);
+                error -> []
+            end
+    end.
+
+%% @doc Extract queueable IDs from the request path when no explicit `missing'
+%% field is present.
+missing_ids_from_request(Request, Opts) ->
+    case hb_path:from_message(request, Request, Opts) of
+        [ID | _] when ?IS_ID(ID) -> [hb_util:human_id(ID)];
+        _ -> []
     end.
 
 %% @doc Determine whether safe harbour imports are configured.
 enabled(Opts) ->
-    hb_opts:get(safe_harbor_source, false, Opts) =/= false.
+    hb_opts:get(safe_harbor_import, [], Opts) =/= [].
 
 %% @doc Return the configured import store, accepting both spellings.
 import_store(Opts) ->
@@ -346,18 +353,8 @@ server_id(Opts) ->
 
 %% @doc Build an isolated test environment for safe harbour imports.
 setup_test_env(LegacyCount) ->
-    PrimaryStore =
-        hb_test_utils:test_store(
-            hb_store_volatile,
-            <<"safe-harbour-primary">>
-        ),
-    ImportStore =
-        hb_test_utils:test_store(
-            hb_store_volatile,
-            <<"safe-harbour-import">>
-        ),
-    hb_store:reset([PrimaryStore, ImportStore]),
-    hb_store:start([PrimaryStore, ImportStore]),
+    PrimaryStore = hb_test_utils:test_store(hb_store_volatile),
+    ImportStore = hb_test_utils:test_store(hb_store_volatile),
     Current = #{ <<"body">> => <<"current">> },
     {ok, CurrentID} = hb_cache:write(Current, #{ store => [PrimaryStore] }),
     Legacy =
@@ -419,7 +416,7 @@ request_many(Node, IDs) ->
                     hb_http:get(
                         Node,
                         #{ <<"path">> => <<"/", ID/binary>> },
-                        #{ http_only_result => false }
+                        #{}
                     )
                 }
             end
@@ -427,14 +424,7 @@ request_many(Node, IDs) ->
     ||
         ID <- IDs
     ],
-    [
-        receive
-            {requested, ID, Result} ->
-                {ID, Result}
-        end
-    ||
-        _ <- IDs
-    ].
+    [ receive {requested, ID, Result} -> {ID, Result} end || _ <- IDs ].
 
 %% @doc Verify that a missing item is imported after the initial 404 response.
 single_import_after_404_test_() ->
@@ -451,7 +441,7 @@ single_import_after_404() ->
         hb_http:get(
             Node,
             #{ <<"path">> => <<"/", CurrentID/binary>> },
-            #{ http_only_result => false }
+            #{}
         )
     ),
     ?assertMatch(
@@ -459,16 +449,16 @@ single_import_after_404() ->
         hb_http:get(
             Node,
             #{ <<"path">> => <<"/", LegacyID/binary>> },
-            #{ http_only_result => false }
+            #{}
         )
     ),
     ?assert(wait_until_available([LegacyID], PrimaryStore)),
     ?assertMatch(
-        {ok, #{ <<"status">> := 200, <<"body">> := <<"legacy-1">> }},
+        {ok, <<"legacy-1">>},
         hb_http:get(
             Node,
             #{ <<"path">> => <<"/", LegacyID/binary, "/body">> },
-            #{ http_only_result => false }
+            #{}
         )
     ),
     {ok, StoredLegacy} = hb_cache:read(LegacyID, #{ store => PrimaryStore }),
@@ -496,13 +486,14 @@ many_imports_after_404() ->
     ),
     ?assert(wait_until_available(LegacyIDs, PrimaryStore)),
     lists:foreach(
-        fun({ID, Msg}) ->
+        fun({N, {ID, Msg}}) ->
+            ExpectedBody = <<"legacy-", (hb_util:bin(N))/binary>>,
             ?assertMatch(
-                {ok, #{ <<"status">> := 200, <<"body">> := _ }},
+                {ok, ExpectedBody},
                 hb_http:get(
                     Node,
                     #{ <<"path">> => <<"/", ID/binary, "/body">> },
-                    #{ http_only_result => false }
+                    #{}
                 )
             ),
             {ok, Stored} = hb_cache:read(ID, #{ store => PrimaryStore }),
@@ -516,5 +507,5 @@ many_imports_after_404() ->
                 )
             )
         end,
-        Legacy
+        hb_util:number(Legacy)
     ).

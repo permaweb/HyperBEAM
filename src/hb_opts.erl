@@ -484,9 +484,10 @@ default_message() ->
                         <<"device">> => <<"manifest@1.0">>
                     }
                 ],
-            <<"not-found">> =>
+            <<"return/not-found">> =>
                 #{
-                    <<"device">> => <<"safe-harbour@1.0">>
+                    <<"device">> => <<"safe-harbor@1.0">>,
+                    <<"path">> => <<"not-found">>
                 }
         },
         scheduler_default_commitment_spec => <<"httpsig@1.0">>,
