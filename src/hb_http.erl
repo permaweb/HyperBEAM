@@ -648,16 +648,8 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        {404, <<"httpsig@1.0">>, false} ->
-            {ok, ErrMsg} =
-                dev_hyperbuddy:return_file(
-                    <<"hyperbuddy@1.0">>,
-                    <<"404.html">>
-                ),
-            {Status,
-                maps:without([<<"body">>], ErrMsg),
-                maps:get(<<"body">>, ErrMsg, <<>>)
-            };
+        {404, <<"httpsig@1.0">>, _} ->
+            generate_404_response(TABMReq, Message, Opts);
         {_, <<"httpsig@1.0">>, _} ->
             TABM =
                 hb_message:convert(
@@ -752,6 +744,46 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 )
             }
     end.
+
+%% @doc Execute the `not-found` hook on a 404 response, if one is configured.
+%% If not, generate the default HyperBuddy 404 page.
+generate_404_response(TABMReq, Message, Opts) ->
+    HookReq =
+        #{
+            <<"not-found-style">> => <<"default">>,
+            <<"request">> => TABMReq,
+            <<"body">> => Message
+        },
+    {ok, HookResult} =
+        try dev_hook:on(<<"return/not-found">>, HookReq, Opts)
+        catch
+            Type:Reason:Stacktrace ->
+                ?event(
+                    hook_error,
+                    {not_found_hook_exception,
+                        {type, Type},
+                        {reason, Reason},
+                        {stacktrace, {trace, Stacktrace}}
+                    },
+                    Opts
+                ),
+                {ok, Message}
+        end,
+    {ok, Result} =
+        case hb_ao:get(<<"not-found-style">>, HookResult, undefined, Opts) of
+            <<"default">> ->
+                dev_hyperbuddy:return_file(
+                    <<"hyperbuddy@1.0">>,
+                    <<"404.html">>
+                );
+            _ ->
+                {ok, HookResult}
+        end,
+    {
+        hb_maps:get(<<"status">>, Result, 404, Opts),
+        maps:without([<<"body">>], Result),
+        maps:get(<<"body">>, Result, <<>>)
+    }.
 
 %% @doc Calculate the codec name to use for a reply given the original parsed 
 %% singleton TABM request and the response message. The precidence

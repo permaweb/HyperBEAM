@@ -50,6 +50,11 @@
 %%%         Req/request: The raw, unparsed singleton request that was used to
 %%%             generate the response.
 %%%         Result/body: The message to be sent in response to the request.
+%%%     not-found: Executed when a HTTP 404 response is about to be sent.
+%%%         Req/body: The response message that would be sent.
+%%%         Req/request: The raw, unparsed singleton request that produced the
+%%%             404 response.
+%%%         Result/body: The response message to be sent to the client.
 %%% 
 %%% Additionally, this module implements a traditional device API, allowing the
 %%% node operator to register hooks to the node and find those that are

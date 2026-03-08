@@ -206,6 +206,7 @@ default_message() ->
             #{<<"name">> => <<"rate-limit@1.0">>, <<"module">> => dev_rate_limit},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
+            #{<<"name">> => <<"safe-harbour@1.0">>, <<"module">> => dev_safe_harbour},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
@@ -432,6 +433,12 @@ default_message() ->
         %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         process_now_from_cache => false,
+        % An optional store (or list of stores) to consult when a request
+        % would otherwise return 404. Imported items are written into the
+        % `safe_harbor_store`, or the node's normal `store` if none is set.
+        safe_harbor_import => [],
+        safe_harbor_store => false,
+        safe_harbor_retry_ms => 30_000,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
@@ -476,7 +483,11 @@ default_message() ->
                     #{
                         <<"device">> => <<"manifest@1.0">>
                     }
-                ]
+                ],
+            <<"not-found">> =>
+                #{
+                    <<"device">> => <<"safe-harbour@1.0">>
+                }
         },
         scheduler_default_commitment_spec => <<"httpsig@1.0">>,
         genesis_wasm_import_authorities =>
