@@ -11,9 +11,6 @@
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(DEPTH_L1_OFFSETS, 1).
--define(DEPTH_RECURSION_CAP, 4).
-%% 6GB in bytes
--define(MEMORY_SAFE_CAP, 6 * 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -43,19 +40,13 @@ set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
 %% in very nested bundles (very rare).
 set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
     Opts#{copycat_depth_recursion_cap => Cap}.
-%% @doc Get the set depth recursion cap. if not set, defaults to ?DEPTH_RECURSION_CAP
+%% @doc Get the set depth recursion cap from hb_opts.
 get_depth_recursion_cap(Opts) ->
-    case maps:get(copycat_depth_recursion_cap, Opts, not_found) of
-        not_found -> ?DEPTH_RECURSION_CAP;
-        Cap -> Cap
-    end.
+    hb_opts:get(copycat_depth_recursion_cap, undefined, Opts).
 %% @doc Get the L1 TX data size that gets handled in-memory
-%% defaults to ?MEMORY_SAFE_CAP if not set.
+%% from hb_opts.
 get_memory_safe_cap(Opts) ->
-    case maps:get(copycat_memory_cap, Opts, not_found) of
-        not_found -> ?MEMORY_SAFE_CAP;
-        Cap -> Cap
-    end.
+    hb_opts:get(copycat_memory_cap, undefined, Opts).
 %% @doc Normalize an owner address into the native ID form used for comparisons.
 normalize_owner_id(Addr) ->
     hb_util:native_id(hb_util:bin(Addr)).
@@ -161,7 +152,7 @@ parse_tag_filter(Key, Request, Opts) ->
 %% @doc Process the `id=...` copycat path for an already indexed L1 TX.
 %% applies L1-level owner/tag filters on the lightweight TX header first, then,
 %% if the TX passes and is a bundle, loads the full L1 payload once and indexes
-%% descendants in-memory (under the ?MEMORY_SAFE_CAP limit) up to the requested safe depth
+%% descendants in-memory (under the configured copycat_memory_cap) up to the requested safe depth
 %% (defaults to full recursion till the set copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
