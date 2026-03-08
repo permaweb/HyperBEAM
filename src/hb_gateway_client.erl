@@ -11,7 +11,7 @@
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
--export([location/2]).
+-export([location/2, root/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -76,6 +76,43 @@ read(ID, Opts) ->
                     ?event({read_found, {id, ID}, {item, Item}}),
                     result_to_message(ID, Item, Opts)
             end
+    end.
+
+%% @doc Resolve the root L1 transaction ID for an item. Bundled data items are
+%% followed through their `bundledIn' chain until an unbundled root
+%% transaction is reached.
+root(ID, Opts) ->
+    HumanID = hb_util:human_id(ID),
+    Query =
+        <<
+            "query($transactionId: ID!) { ",
+                "transaction(id: $transactionId) { ",
+                    "edges { node { id bundledIn { id } } } ",
+                "} ",
+            "} "
+        >>,
+    Variables = #{ <<"transactionId">> => HumanID },
+    case query(Query, Variables, Opts) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, GqlMsg} ->
+            case first_result(GqlMsg, Opts) of
+                not_found ->
+                    {error, not_found};
+                #{ <<"bundledIn">> := #{ <<"id">> := ParentID } } ->
+                    root(ParentID, Opts);
+                Item ->
+                    {ok, hb_maps:get(<<"id">>, Item, HumanID, Opts)}
+            end
+    end.
+
+%% @doc Find the first result in a GraphQL response.
+first_result(GqlMsg, Opts) ->
+    case hb_util:deep_get(<<"data/transactions/edges">>, GqlMsg, [], Opts) of
+        [FirstEdge | _] ->
+            hb_maps:get(<<"node">>, FirstEdge, not_found, Opts);
+        _ ->
+            not_found
     end.
 
 %% @doc Gives the fields of a transaction that are needed to construct an
@@ -216,7 +253,7 @@ query(Query, Variables, Node, Operation, Opts) ->
                 },
             % Main request fields
             <<"method">> => <<"POST">>,
-            <<"path">> => <<"/graphql">>,
+            <<"path">> => Path,
             <<"content-type">> => <<"application/json">>,
             <<"body">> => hb_json:encode(CombinedQuery)
         },
@@ -475,3 +512,91 @@ ao_dataitem_test() ->
     ?event(gateway, {l2_dataitem, Res}),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
+
+query_uses_explicit_node_test() ->
+    {ok, Node, ServerHandle} =
+        hb_mock_server:start(
+            [
+                {"/graphql", graphql, {200, hb_json:encode(#{ <<"data">> => #{ <<"ping">> => <<"ok">> } })}}
+            ]
+        ),
+    try
+        ?assertEqual(
+            {ok, #{ <<"data">> => #{ <<"ping">> => <<"ok">> } }},
+            query(
+                <<"query { ping }">>,
+                #{},
+                Node,
+                #{ http_client => httpc, protocol => http1 }
+            )
+        )
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+root_follows_bundled_in_chain_test() ->
+    LeafID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    BundleID = <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>,
+    RootID = <<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>,
+    Response =
+        fun(Req) ->
+            Body = hb_json:decode(maps:get(<<"body">>, Req)),
+            Variables = maps:get(<<"variables">>, Body),
+            RequestedID = maps:get(<<"transactionId">>, Variables),
+            Node =
+                case RequestedID of
+                    LeafID ->
+                        #{
+                            <<"id">> => LeafID,
+                            <<"bundledIn">> => #{ <<"id">> => BundleID }
+                        };
+                    BundleID ->
+                        #{
+                            <<"id">> => BundleID,
+                            <<"bundledIn">> => #{ <<"id">> => RootID }
+                        };
+                    RootID ->
+                        #{
+                            <<"id">> => RootID,
+                            <<"bundledIn">> => null
+                        }
+                end,
+            {200,
+                hb_json:encode(
+                    #{
+                        <<"data">> =>
+                            #{
+                                <<"transactions">> =>
+                                    #{
+                                        <<"edges">> => [#{ <<"node">> => Node }]
+                                    }
+                            }
+                    }
+                )}
+        end,
+    {ok, Node, ServerHandle} = hb_mock_server:start([{"/graphql", graphql, Response}]),
+    try
+        ?assertEqual(
+            {ok, RootID},
+            root(
+                LeafID,
+                #{
+                    routes => [
+                        #{
+                            <<"template">> => <<"/graphql">>,
+                            <<"nodes">> =>
+                                [
+                                    #{
+                                        <<"prefix">> => Node,
+                                        <<"opts">> =>
+                                            #{ http_client => httpc, protocol => http1 }
+                                    }
+                                ]
+                        }
+                    ]
+                }
+            )
+        )
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
