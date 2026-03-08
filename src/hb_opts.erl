@@ -218,6 +218,7 @@ default_message() ->
             #{<<"name">> => <<"rate-limit@1.0">>, <<"module">> => dev_rate_limit},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
+            #{<<"name">> => <<"router-perf@1.0">>, <<"module">> => dev_router_perf},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
