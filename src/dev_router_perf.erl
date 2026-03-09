@@ -74,7 +74,8 @@ duration(RawBase, Req, Opts) ->
                 ChangeFactor, 
                 Opts
             ),
-            {ok, hb_ao:set(Base, #{ <<"routes">> => UpdatedRoutes }, Opts)}
+            NewBase = hb_ao:set(Base, #{ <<"routes">> => UpdatedRoutes }, Opts),
+            recalculate(NewBase, Req, Opts)
     end.
 
 %% @doc Register a new node on a route. Supports both:
@@ -489,3 +490,115 @@ recalculate_test() ->
     W1 = hb_maps:get(<<"weight">>, N1, undefined, #{}),
     W2 = hb_maps:get(<<"weight">>, N2, undefined, #{}),
     ?assert(W1 > W2).
+
+hb_gateway_load_balancer_test_() ->
+    {timeout, 60, fun() ->
+        application:ensure_all_started(hb),
+        %% A known ID that exists on HB gateways.
+        ID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        PerfProcess = <<"/perf-router~node-process@1.0">>,
+        SchedulePath = <<PerfProcess/binary, "/schedule">>,
+        RoutesPath = <<PerfProcess/binary, "/now/routes">>,
+        NodeWallet = ar_wallet:new(),
+        HBGateways = [
+            #{
+                <<"match">> => <<"^/">>,
+                <<"with">> => <<"https://blue.hyperbeam.zephyrdev.xyz/">>
+            },
+            #{
+                <<"match">> => <<"^/">>,
+                <<"with">> => <<"https://neo.hyperbeam.zephyrdev.xyz/">>
+            },
+            #{
+                <<"match">> => <<"^/">>,
+                <<"with">> => <<"https://neo2.hyperbeam.zephyrdev.xyz/">>
+            }
+        ],
+        Opts = #{
+            store => hb_test_utils:test_store(),
+            priv_wallet => NodeWallet,
+            http_monitor => #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => SchedulePath
+            },
+            router_opts => #{
+                <<"provider">> => #{ <<"path">> => RoutesPath }
+            },
+            on => #{
+                <<"request">> => #{
+                    <<"device">> => <<"router@1.0">>,
+                    <<"path">> => <<"preprocess">>
+                }
+            },
+            node_processes => #{
+                <<"perf-router">> => #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"execution-device">> => <<"router-perf@1.0">>,
+                    <<"scheduler-device">> => <<"scheduler@1.0">>,
+                    <<"performance-period">> => 2,
+                    <<"initial-performance">> => 1000
+                }
+            }
+        },
+        Node = hb_http_server:start_node(Opts),
+        %% Register HB gateways with perf-router.
+        %% Use ^/(?!.*~) to exclude internal device paths from routing.
+        RouteConfig = #{
+            <<"template">> => <<"^/(?!.*~)">>,
+            <<"strategy">> => <<"By-Weight">>,
+            <<"choose">> => 2
+        },
+        lists:foreach(
+            fun(GatewayNode) ->
+                Body =
+                    hb_message:commit(
+                        #{
+                            <<"action">> => <<"register">>,
+                            <<"route">> => maps:merge(GatewayNode, RouteConfig)
+                        },
+                        Opts
+                    ),
+                {ok, _} =
+                    hb_http:post(
+                        Node,
+                        #{
+                            <<"path">> => SchedulePath,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => Body
+                        },
+                        Opts
+                    )
+            end,
+            HBGateways
+        ),
+        %% Trigger compute to process register messages.
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Verify 3 nodes registered with initial performance.
+        PerfPath =
+            <<PerfProcess/binary, "/now/routes/1/nodes/1/performance">>,
+        {ok, InitPerf} = hb_http:get(Node, PerfPath, Opts),
+        ?assertEqual(1000.0, dev_router_perf:to_float(InitPerf)),
+        %% Fetch ID through the load-balanced routing.
+        %% The request goes through: on.request -> preprocess -> relay
+        %% -> hb_http_multi -> HB gateway -> response.
+        {ok, Res} = hb_http:get(Node, <<"/", ID/binary>>, Opts),
+        ?assert(is_map(Res)),
+        %% Wait for async monitor duration posts, then recompute.
+        timer:sleep(2000),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Check that at least one node's performance changed.
+        %% Routing selects 2 of 3 nodes randomly, so we check all.
+        Perfs = lists:map(
+            fun(I) ->
+                IB = integer_to_binary(I),
+                P = <<PerfProcess/binary,
+                    "/now/routes/1/nodes/", IB/binary,
+                    "/performance">>,
+                {ok, V} = hb_http:get(Node, P, Opts),
+                dev_router_perf:to_float(V)
+            end,
+            [1, 2, 3]
+        ),
+        ?assert(lists:any(fun(P) -> P =/= 1000.0 end, Perfs)),
+        ok
+    end}.
