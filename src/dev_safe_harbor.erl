@@ -20,8 +20,11 @@ info(_) ->
 %% @doc Queue any IDs referenced by a 404-producing request for import.
 not_found(_Base, HookReq, Opts) ->
     case enabled(Opts) of
-        false -> {ok, HookReq};
+        false ->
+            ?event(safe_harbor, {safe_harbor_disabled, {hook_req, HookReq}}, Opts),
+            {ok, HookReq};
         true ->
+            ?event(safe_harbor, {not_found, {hook_req, HookReq}}, Opts),
             explainer_page(
                 do_enqueue(missing_ids(HookReq, Opts), Opts),
                 Opts

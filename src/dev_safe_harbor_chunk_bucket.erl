@@ -13,8 +13,9 @@
 -define(DEFAULT_NODE_POST_CONCURRENCY, 5).
 
 enabled(Opts) ->
+    ?event(safe_harbor, {enabled, {opts, {explicit, Opts}}}, Opts),
     lists:all(
-        fun has_value/1,
+        fun(Value) -> Value =/= undefined end,
         [
             bucket_endpoint(Opts),
             bucket_access_key(Opts),
@@ -637,72 +638,32 @@ should_log_proof(Index, Total) ->
         orelse (Index rem 25) =:= 0.
 
 explicit_nodes(Opts) ->
-    normalize_nodes(
-        opt_value([safe_harbor_chunk_bucket_nodes], auto, Opts)
-    ).
-
-normalize_nodes(auto) ->
-    auto;
-normalize_nodes(Nodes) when is_list(Nodes), Nodes =:= [] ->
-    auto;
-normalize_nodes([NodeChar | _] = Nodes) when is_list(Nodes), is_integer(NodeChar) ->
-    normalize_nodes(hb_util:bin(Nodes));
-normalize_nodes(Nodes) when is_binary(Nodes) ->
-    [
-        trim(Node)
-    ||
-        Node <- binary:split(Nodes, <<",">>, [global]),
-        trim(Node) =/= <<>>
-    ];
-normalize_nodes(Nodes) when is_list(Nodes) ->
-    [hb_util:bin(Node) || Node <- Nodes];
-normalize_nodes(Node) ->
-    [hb_util:bin(Node)].
+    hb_opts:get(safe_harbor_chunk_bucket_nodes, [], Opts).
 
 node_post_concurrency(Opts) ->
-    opt_value(
-        [safe_harbor_chunk_bucket_node_post_concurrency],
+    hb_opts:get(
+        safe_harbor_chunk_bucket_node_post_concurrency,
         ?DEFAULT_NODE_POST_CONCURRENCY,
         Opts
     ).
 
 bucket_endpoint(Opts) ->
-    opt_value(
-        [priv_safe_harbor_bucket_endpoint],
-        undefined,
-        Opts
-    ).
+    hb_opts:get(priv_safe_harbor_bucket_endpoint, undefined, Opts).
 
 bucket_access_key(Opts) ->
-    opt_value(
-        [priv_safe_harbor_bucket_access_key],
-        undefined,
-        Opts
-    ).
+    hb_opts:get(priv_safe_harbor_bucket_access_key, undefined, Opts).
 
 bucket_secret_key(Opts) ->
-    opt_value(
-        [priv_safe_harbor_bucket_secret_key],
-        undefined,
-        Opts
-    ).
+    hb_opts:get(priv_safe_harbor_bucket_secret_key, undefined, Opts).
 
 bucket_name(Opts) ->
-    opt_value(
-        [priv_safe_harbor_bucket_name],
-        ?DEFAULT_BUCKET_NAME,
-        Opts
-    ).
+    hb_opts:get(priv_safe_harbor_bucket_name, ?DEFAULT_BUCKET_NAME, Opts).
 
 bucket_region(Opts) ->
-    opt_value(
-        [priv_safe_harbor_bucket_region],
-        ?DEFAULT_BUCKET_REGION,
-        Opts
-    ).
+    hb_opts:get(priv_safe_harbor_bucket_region, ?DEFAULT_BUCKET_REGION, Opts).
 
 bucket_auth_user(Opts) ->
-    binary_to_list(
+    hb_util:bin(
         <<
             (bucket_access_key(Opts))/binary,
             ":",
@@ -712,79 +673,3 @@ bucket_auth_user(Opts) ->
 
 sigv4_scope(Opts) ->
     binary_to_list(<<"aws:amz:", (bucket_region(Opts))/binary, ":s3">>).
-
-opt_value([], Default, _Opts) ->
-    Default;
-opt_value([Key | Rest], Default, Opts) ->
-    case hb_opts:get(Key, hb_opts_not_found, Opts) of
-        hb_opts_not_found -> opt_value(Rest, Default, Opts);
-        Value ->
-            case has_value(Value) of
-                true -> Value;
-                false -> opt_value(Rest, Default, Opts)
-            end
-    end.
-
-has_value(undefined) -> false;
-has_value(false) -> false;
-has_value(<<>>) -> false;
-has_value([]) -> false;
-has_value(_) -> true.
-
-trim(Binary) ->
-    trim_right(trim_left(Binary)).
-
-trim_left(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t; C =:= $\n; C =:= $\r ->
-    trim_left(Rest);
-trim_left(Binary) ->
-    Binary.
-
-trim_right(Binary) ->
-    trim_right(Binary, byte_size(Binary)).
-
-trim_right(_Binary, 0) ->
-    <<>>;
-trim_right(Binary, Size) ->
-    case binary:at(Binary, Size - 1) of
-        C when C =:= $\s; C =:= $\t; C =:= $\n; C =:= $\r ->
-            trim_right(Binary, Size - 1);
-        _ ->
-            binary:part(Binary, 0, Size)
-    end.
-
--ifdef(EUNIT).
-
-enabled_with_bucket_config_test() ->
-    ?assert(
-        enabled(
-            #{
-                priv_safe_harbor_bucket_endpoint => <<"http://bucket">>,
-                priv_safe_harbor_bucket_access_key => <<"access">>,
-                priv_safe_harbor_bucket_secret_key => <<"secret">>
-            }
-        )
-    ).
-
-sort_keys_test() ->
-    ?assertEqual(
-        [
-            <<"chunks/root/1">>,
-            <<"chunks/root/10">>,
-            <<"chunks/root/100">>
-        ],
-        sort_keys(
-            [
-                <<"chunks/root/100">>,
-                <<"chunks/root/1">>,
-                <<"chunks/root/10">>
-            ]
-        )
-    ).
-
-normalize_nodes_binary_test() ->
-    ?assertEqual(
-        [<<"http://tip-1">>, <<"http://tip-2">>],
-        normalize_nodes(<<"http://tip-1,http://tip-2">>)
-    ).
-
--endif.
