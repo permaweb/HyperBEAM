@@ -243,11 +243,11 @@ next_id(State) ->
 import_id(ID, State) ->
     Opts = maps:get(config, State),
     WriteOpts = #{ store => target_store(Opts) },
-    ?event(safe_harbor, {importing, {id, ID}}),
+    ?event(safe_harbor, {importing, {id, {string, ID}}}),
     try
         case hb_cache:read(ID, WriteOpts) of
             {ok, _} ->
-                ?event(safe_harbor, {id_already_present_locally, {id, ID}}),
+                ?event(safe_harbor, {id_already_present_locally, {id, {string, ID}}}),
                 State#{ inflight => undefined };
             not_found ->
                 case maybe_reseed_from_bucket(ID, Opts) of
@@ -255,7 +255,7 @@ import_id(ID, State) ->
                         ?event(
                             safe_harbor,
                             {id_reseeded_from_bucket,
-                                {id, ID},
+                                {id, {string, ID}},
                                 {root_tx_id, maps:get(root_tx_id, Result)},
                                 {data_root, maps:get(data_root, Result)},
                                 {proofs, maps:get(proofs, Result)},
@@ -278,7 +278,7 @@ import_id(ID, State) ->
             ?event(
                 warning,
                 {safe_harbor_import_failed,
-                    {id, ID},
+                    {id, {string, ID}},
                     {type, Type},
                     {reason, CatchReason},
                     {stacktrace, {trace, Stacktrace}}
@@ -305,7 +305,7 @@ maybe_import_from_store(ID, Stage, Reason, WriteOpts, State) ->
                     Loaded = hb_cache:ensure_all_loaded(Imported, ReadOpts),
                     case hb_cache:write(Loaded, WriteOpts) of
                         {ok, _Path} ->
-                            ?event(safe_harbor, {id_imported, {id, ID}}),
+                            ?event(safe_harbor, {id_imported, {id, {string, ID}}}),
                             mark_success(ID, State);
                         _ ->
                             mark_failure(ID, State)
@@ -321,9 +321,9 @@ maybe_log_bucket_skip(ID, Stage, Reason) ->
     ?event(
         safe_harbor,
         {bucket_reseed_skipped,
-            {id, ID},
+            {id, {string, ID}},
             {stage, Stage},
-            {reason, Reason}
+            {reason, {explicit, Reason}}
         }
     ).
 

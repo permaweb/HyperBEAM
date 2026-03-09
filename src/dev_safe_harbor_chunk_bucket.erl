@@ -576,14 +576,14 @@ collect_port(Port, Acc) ->
     end.
 
 log_stage(ID, Stage) ->
-    ?event(safe_harbor, {bucket_reseed_stage, {id, ID}, {stage, Stage}}).
+    ?event(safe_harbor, {bucket_reseed_stage, {id, {string, ID}}, {stage, Stage}}).
 
 log_stage(ID, RootTXID, Stage) ->
     ?event(
         safe_harbor,
         {bucket_reseed_stage,
-            {id, ID},
-            {root_tx_id, RootTXID},
+            {id, {string, ID}},
+            {root_tx_id, {string, RootTXID}},
             {stage, Stage}
         }
     ).
