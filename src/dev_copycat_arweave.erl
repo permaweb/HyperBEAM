@@ -28,21 +28,23 @@ arweave(_Base, Request, Opts) ->
 parse_range(Request, Opts) ->
     From =
         case hb_maps:find(<<"from">>, Request, Opts) of
-            {ok, Height} ->
-                RequestedFrom = hb_util:int(Height),
-                case RequestedFrom < 0 of
-                    true -> latest_height(Opts) + RequestedFrom;
-                    false -> RequestedFrom
-                end;
+            {ok, FromHeight} -> normalize_height(FromHeight, Opts);
             error ->
                 latest_height(Opts)
         end,
     To =
         case hb_maps:find(<<"to">>, Request, Opts) of
-            {ok, ToHeight} -> hb_util:int(ToHeight);
+            {ok, ToHeight} -> normalize_height(ToHeight, Opts);
             error -> undefined
         end,
     {From, To}.
+
+normalize_height(Height, Opts) ->
+    RequestedHeight = hb_util:int(Height),
+    case RequestedHeight < 0 of
+        true -> latest_height(Opts) + RequestedHeight;
+        false -> RequestedHeight
+    end.
 
 latest_height(Opts) ->
     case hb_ao:resolve(
@@ -302,7 +304,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
             ?event(copycat_debug, {fetching_bundle_header, 
-                {tx_id, {explicit, TXID}},
+                {tx_id, {string, TXID}},
                 {tx_end_offset, TXEndOffset},
                 {tx_data_size, TX#tx.data_size}
             }),
@@ -328,6 +330,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             BundleIndex
                         )
                     end),
+                    ?event(copycat_debug,
+                        {bundle_items_indexed,
+                            {tx_id, {string, TXID}},
+                            {items_count, ItemsCount}
+                        }),
                     % Single event increment for the batch
                     record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
                     #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
@@ -940,16 +947,21 @@ auto_stop_partial_index_test() ->
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ok.
 
-negative_from_parse_range_test() ->
+negative_parse_range_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, Tip} =
         hb_ao:resolve(
             <<?ARWEAVE_DEVICE/binary, "/current/height">>,
             Opts
         ),
-    {From, To} = parse_range(#{ <<"from">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip) - 3, From),
-    ?assertEqual(undefined, To),
+    {NegativeFrom, UndefinedTo} =
+        parse_range(#{ <<"from">> => <<"-3">> }, Opts),
+    ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
+    ?assertEqual(undefined, UndefinedTo),
+    {PositiveFrom, NegativeTo} =
+        parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
+    ?assertEqual(10, PositiveFrom),
+    ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
     ok.
 
 negative_from_index_test() ->
