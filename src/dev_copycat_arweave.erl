@@ -1000,7 +1000,6 @@ negative_from_index_test() ->
     ok.
 
 setup_index_opts() ->
-    application:ensure_all_started([hb]),
     TestStore = hb_test_utils:test_store(),
     StoreOpts = #{ <<"index-store">> => [TestStore] },
     Store = [

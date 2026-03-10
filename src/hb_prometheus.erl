@@ -1,6 +1,7 @@
 %%% @doc HyperBEAM wrapper for Prometheus metrics.
 -module(hb_prometheus).
 -export([ensure_started/0, declare/2, measure_and_report/2, measure_and_report/3]).
+-export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4]).
 
 -define(STARTUP_RETRY_INTERVAL, 60). % seconds
 
@@ -55,18 +56,57 @@ do_declare(Type, _Metric) -> throw({unsupported_metric_type, Type}).
 %% @doc Measure function duration and report metric, ensuring that the Prometheus
 %% application has been started first. If Prometheus is unavailable, the function
 %% is executed without measurement.
-measure_and_report(Fun, Metric) ->
+measure_and_report(Fun, Metric) when is_function(Fun) ->
     measure_and_report(Fun, Metric, []).
-measure_and_report(Fun, Metric, Labels) ->
+measure_and_report(Fun, Metric, Labels) when is_function(Fun) ->
+    Start = erlang:monotonic_time(),
+    try Fun()
+    after
+        DurationNative = erlang:monotonic_time() - Start,
+        observe(DurationNative, Metric, Labels)
+    end.
+
+observe(Duration, Metric) when is_integer(Duration) ->
+    observe(Duration, Metric, []).
+observe(Duration, Metric, Labels) when is_integer(Duration) ->
     case ensure_started() of
         ok ->
-            Start = erlang:monotonic_time(),
-            try Fun()
-            after
-                DurationNative = erlang:monotonic_time() - Start,
-                try prometheus_histogram:observe(Metric, Labels, DurationNative)
-                catch _:_ -> ok
-                end
+            try prometheus_histogram:observe(Metric, Labels, Duration)
+            catch _:_ -> ok
             end;
-        _ -> Fun()
+        _ ->
+            ok
     end.
+
+inc(Type, Metrics) ->
+    inc(Type, Metrics, []).
+inc(Type, Metrics, Labels) ->
+    inc(Type, Metrics, Labels, 1).
+inc(Type, Metrics, Labels, Value) ->
+    case ensure_started() of
+        ok ->
+            try do_inc(Type, Metrics, Labels, Value)
+            catch error:mfa_already_exists -> ok
+            end;
+        _ -> ok
+    end.
+do_inc(counter, Name, Labels, Value) ->
+    prometheus_counter:inc(Name, Labels, Value);
+do_inc(gauge, Name, Labels, Value) ->
+    prometheus_gauge:inc(Name, Labels, Value).
+
+dec(Type, Metrics) ->
+    dec(Type, Metrics, []).
+dec(Type, Metrics, Labels) ->
+    dec(Type, Metrics, Labels, 1).
+dec(Type, Metrics, Labels, Value) ->
+    case ensure_started() of 
+        ok ->
+            try do_dec(Type, Metrics, Labels, Value)
+            catch error:mfa_already_exists -> ok
+            end;
+        _ -> ok
+    end.
+
+do_dec(gauge, Name, Labels, Value) ->
+    prometheus_gauge:dec(Name, Labels, Value).

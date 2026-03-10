@@ -428,7 +428,7 @@ handle_info({gun_up, PID, Protocol}, State) ->
             ?event(http_client, {gun_up, {protocol, Protocol}, {conn_key, ConnKey}}),
             [gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
             ets:insert(?CONN_STATUS_ETS, {PID, connected, MonitorRef, ConnKey}),
-            inc_prometheus_gauge(outbound_connections),
+            hb_prometheus:inc(gauge, outbound_connections),
             {noreply, State};
         [{PID, connected, _MonitorRef, ConnKey}] ->
 			?event(warning,
@@ -458,7 +458,7 @@ handle_info({gun_error, PID, Reason}, State) ->
 				{connecting, PendingRequests} ->
 					reply_error(PendingRequests, Reason2);
 				connected ->
-					dec_prometheus_gauge(outbound_connections),
+					hb_prometheus:dec(gauge, outbound_connections),
 					ok
 			end,
 			gun:shutdown(PID),
@@ -487,7 +487,7 @@ handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
 				{connecting, PendingRequests} ->
 					reply_error(PendingRequests, Reason2);
 				_ ->
-					dec_prometheus_gauge(outbound_connections),
+					hb_prometheus:dec(gauge,outbound_connections),
 					ok
 			end,
 			gun:shutdown(PID),
@@ -507,7 +507,7 @@ handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
 				{connecting, PendingRequests} ->
 					reply_error(PendingRequests, Reason);
 				_ ->
-					dec_prometheus_gauge(outbound_connections),
+					hb_prometheus:dec(gauge, outbound_connections),
 					ok
 			end,
 			{noreply, State}
@@ -748,8 +748,7 @@ log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) 
 %% Metrics
 
 init_prometheus() ->
-    application:ensure_all_started([prometheus, prometheus_cowboy]),
-	prometheus_counter:declare([
+	hb_prometheus:declare(counter, [
 		{name, gun_requests_total},
 		{labels, [http_method, status_class, category]},
 		{
@@ -757,9 +756,9 @@ init_prometheus() ->
 			"The total number of GUN requests."
 		}
 	]),
-	prometheus_gauge:declare([{name, outbound_connections},
+	hb_prometheus:declare(gauge, [{name, outbound_connections},
 		{help, "The current number of the open outbound network connections"}]),
-	prometheus_histogram:declare([
+	hb_prometheus:declare(histogram, [
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
         {labels, [http_method, status_class, category]},
@@ -770,7 +769,7 @@ init_prometheus() ->
             "throttling, etc...)"
 		}
 	]),
-	prometheus_histogram:declare([
+	hb_prometheus:declare(histogram, [
 		{name, http_client_get_chunk_duration_seconds},
 		{buckets, [0.1, 1, 10, 60]},
         {labels, [status_class, peer]},
@@ -779,11 +778,11 @@ init_prometheus() ->
 			"The total duration of an HTTP GET chunk request made to a peer."
 		}
 	]),
-	prometheus_counter:declare([
+	hb_prometheus:declare(counter, [
 		{name, http_client_downloaded_bytes_total},
 		{help, "The total amount of bytes requested via HTTP, per remote endpoint"}
 	]),
-	prometheus_counter:declare([
+	hb_prometheus:declare(counter, [
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
@@ -796,9 +795,8 @@ init_prometheus() ->
 record_duration(Details, Opts) ->
     spawn(
         fun() ->
-            % First, write to prometheus if it is enabled. Prometheus works
-            % only with strings as lists, so we encode the data before granting
-            % it.
+            % Prometheus works only with strings as lists, so we encode the 
+            % data before granting it.
             GetFormat =
                 fun
                     (<<"request-category">>) ->
@@ -806,24 +804,18 @@ record_duration(Details, Opts) ->
                     (Key) ->
                         hb_util:list(maps:get(Key, Details))
                 end,
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    try prometheus_histogram:observe(
-                        http_request_duration_seconds,
-                        lists:map(
-                            GetFormat,
-                            [
-                                <<"request-method">>,
-                                <<"status-class">>,
-                                <<"request-category">>
-                            ]
-                        ),
-                        maps:get(<<"duration">>, Details)
-                    )
-                    catch _:_ -> ok
-                    end
-            end,
+            Labels = lists:map(
+                GetFormat,
+                [
+                    <<"request-method">>,
+                    <<"status-class">>,
+                    <<"request-category">>
+                ]),
+            hb_prometheus:observe(
+                maps:get(<<"duration">>, Details),
+                http_request_duration_seconds,
+                Labels
+            ),
             maybe_invoke_monitor(
                 Details#{ <<"path">> => <<"duration">> },
                 Opts
@@ -834,7 +826,9 @@ record_duration(Details, Opts) ->
 record_response_status(Method, Response) ->
     record_response_status(Method, Response, undefined).
 record_response_status(Method, Response, Path) ->
-	inc_prometheus_counter(gun_requests_total,
+	hb_prometheus:inc(
+        counter, 
+        gun_requests_total,
         [
             hb_util:list(method_to_bin(Method)),
 			hb_util:list(get_status_class(Response)),
@@ -843,55 +837,9 @@ record_response_status(Method, Response, Path) ->
         1
     ).
 
-%% @doc Safe wrapper for prometheus_gauge:inc/2.
-inc_prometheus_gauge(Name) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try prometheus_gauge:inc(Name)
-            catch _:_ ->
-                try
-                    init_prometheus(),
-                    prometheus_gauge:inc(Name)
-                catch _:_ ->
-                    ok
-                end
-            end
-    end.
-
-%% @doc Safe wrapper for prometheus_gauge:dec/2.
-dec_prometheus_gauge(Name) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try prometheus_gauge:dec(Name)
-            catch _:_ -> 
-                try
-                    init_prometheus(),
-                    prometheus_gauge:dec(Name)
-                catch _:_ ->
-                    ok
-                end
-            end
-    end.
-
-inc_prometheus_counter(Name, Labels, Value) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try prometheus_counter:inc(Name, Labels, Value)
-            catch _:_ -> 
-                try
-                    init_prometheus(),
-                    prometheus_counter:inc(Name, Labels, Value)
-                catch _:_ ->
-                    ok
-                end
-            end
-    end.
-
 download_metric(Data) ->
-	inc_prometheus_counter(
+	hb_prometheus:inc(
+        counter,
 		http_client_downloaded_bytes_total,
         [],
 		byte_size(Data)
@@ -903,7 +851,7 @@ upload_metric(#{method := Method, body := Body}) when is_atom(Method) ->
 upload_metric(#{ method := <<"POST">>, body := Body}) -> upload_metric(Body);
 upload_metric(#{ method := <<"PUT">>, body := Body}) -> upload_metric(Body);
 upload_metric(Body) when is_binary(Body) ->
-	inc_prometheus_counter(
+	hb_prometheus:inc(counter,
 		http_client_uploaded_bytes_total,
 		[],
 		byte_size(Body)

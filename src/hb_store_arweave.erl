@@ -254,20 +254,15 @@ write_offset(
 
 %% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset) when is_integer(Offset) ->
-    case application:get_application(prometheus) of
-        undefined -> ok;
-        _ ->
-            try
-                Partition = Offset div ?PARTITION_SIZE,
-                prometheus_counter:inc(
-                    hb_store_arweave_requests_partition,
-                    [Partition],
-                    1
-                )
-            catch _:_ ->
-                ok
-            end
-    end.
+    spawn(fun() -> 
+        Partition = Offset div ?PARTITION_SIZE,
+        hb_prometheus:inc(
+            counter,
+            hb_store_arweave_requests_partition,
+            [Partition],
+            1
+        )
+    end).
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
@@ -304,7 +299,6 @@ init_prometheus() ->
 %%% Tests
 
 write_read_tx_test() ->
-    application:ensure_all_started(hb),
     Store = [hb_test_utils:test_store()],
     Opts = #{ 
         <<"index-store">> => Store 
@@ -347,7 +341,6 @@ write_read_tx_test() ->
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
-    application:ensure_all_started(hb),
     Store = [hb_test_utils:test_store()],
     Opts = #{ 
         <<"index-store">> => Store 

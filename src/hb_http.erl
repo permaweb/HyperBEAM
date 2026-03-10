@@ -226,7 +226,6 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
             )
     end.
 
-
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
     ?event(debug_http_outbound,
@@ -264,6 +263,17 @@ outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
     {
         hb_http_client:response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
+    };
+outbound_result_to_message(<<"json@1.0">>, Status, Headers, Body, Opts) ->
+    ?event(debug, {headers, Headers}),
+    {
+        hb_http_client:response_status_to_atom(Status),
+        hb_message:convert(
+            Body,
+            <<"structured@1.0">>,
+            <<"json@1.0">>,
+            Opts
+        )
     }.
 
 %% @doc Convert a HTTP response to a httpsig message.
@@ -1074,13 +1084,12 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
         undefined -> NormalBody;
         P2PPort ->
-            RealIP = real_ip(Req, Opts),
             Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
             (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
                 <<"ao-peer">> => Peer
             }
     end,
-    WithPrivIP = hb_private:set(NormalBody, <<"ip">>, RealIP, Opts),
+    WithPrivIP = hb_private:set(WithPeer, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
     WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
@@ -1139,24 +1148,16 @@ init_prometheus() ->
 record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
     spawn(
         fun() ->
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    try
-                        prometheus_histogram:observe(
-                            http_request_server_duration_seconds,
-                            [StatusCode],
-                            TotalDuration
-                        ),
-                        prometheus_histogram:observe(
-                            http_request_server_reply_duration_seconds,
-                            [StatusCode],
-                            ReplyDuration
-                        )
-                    catch _:_ ->
-                        ok
-                    end
-            end
+            hb_prometheus:observe(
+                TotalDuration,
+                http_request_server_duration_seconds,
+                [StatusCode]
+            ),
+            hb_prometheus:observe(
+                ReplyDuration,
+                http_request_server_reply_duration_seconds,
+                [StatusCode]
+            )
         end
     ).
 
