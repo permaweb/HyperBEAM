@@ -158,6 +158,14 @@ atom_test() ->
 term_test() ->
     basic_test({term, os:timestamp()}).
 
+singleton_returns_spawned_pid_test() ->
+    Name = {singleton, os:timestamp()},
+    Pid = singleton(Name, fun() -> receive stop -> ok end end),
+    ?assertEqual(Pid, lookup(Name)),
+    ?assertNotEqual(self(), Pid),
+    Pid ! stop,
+    hb_name:unregister(Name).
+
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},
     SuccessCount = length([R || R <- spawn_test_workers(Name), R =:= ok]),
