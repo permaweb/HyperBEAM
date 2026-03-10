@@ -283,6 +283,9 @@ raw_default_message() ->
         <<"relay-http-client">> => httpc,
         % The default codec to use for commitment signatures.
         <<"commitment-device">> => <<"httpsig@1.0">>,
+        % Copycat-specific options.
+        copycat_memory_cap => 6 * 1024 * 1024 * 1024,
+        copycat_depth_recursion_cap => 4,
         % Dev options
         <<"mode">> => debug,
         <<"profiling">> => true,
