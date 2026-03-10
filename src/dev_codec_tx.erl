@@ -1204,7 +1204,6 @@ real_no_data_tx_test() ->
     ).
 
 do_real_tx_verify(TXID, ExpectedIDs) ->
-    application:ensure_all_started([hb]),
     Opts = #{},
     {ok, #{ <<"body">> := TXJSON }} = hb_http:request(
         #{
