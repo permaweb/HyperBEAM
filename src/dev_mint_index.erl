@@ -194,8 +194,14 @@ parse_signal(Base, Assignment, Opts) ->
             ),
         {ok, Quantity} ?=
             case hb_maps:find(<<"x-action">>, Msg, Opts) of
-                {ok, <<"deposit">>} -> {ok, RawQuantity};
-                {ok, <<"withdraw">>} -> {ok, -RawQuantity};
+                {ok, <<"deposit">>} when is_integer(RawQuantity), RawQuantity >= 0 -> 
+                    {ok, RawQuantity};
+                {ok, <<"deposit">>} ->
+                    {error, <<"Deposit quantity must be a non-negative integer.">>};
+                {ok, <<"withdraw">>} when is_integer(RawQuantity), RawQuantity =< 0 -> 
+                    {ok, RawQuantity};
+                {ok, <<"withdraw">>} ->
+                    {error, <<"Withdraw quantity must be a non-positive integer.">>};
                 {ok, _Unsupported} ->
                     {error, <<"Notification `action' unsupported.">>};
                 error ->
