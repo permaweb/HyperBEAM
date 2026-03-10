@@ -249,7 +249,9 @@ cache_table_name(Opts) ->
 %%% Tests
 
 setup_test_env() ->
-    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() },
+    %% We need to create a new priv_wallet to avoid conflift when starting a
+    %% new node from an existing priv_wallet address.
+    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => ar_wallet:new() },
     Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
     Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
     Msg3 = hb_message:commit(#{ <<"body">> => <<"test-3">> }, Opts0),
