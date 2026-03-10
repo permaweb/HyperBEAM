@@ -104,3 +104,14 @@ since the last invocation.
 3. Open the svg file in browser.
 
 Happy hacking!
+
+## Adding testing 
+
+Here is a helpful list of common mistakes when writing tests.
+
+If you need to start a new node, make sure a new private key is defined using
+`#{priv_wallet => ar_wallet:new()}`. If `hb:wallet()` is used, it will conflict
+with the default HyperBEAM server that is started before eunit run.
+
+Avoid pattern match a list of commitments, since we cannot guarantee the order.
+This will case tests to be flaky.
