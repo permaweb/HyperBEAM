@@ -159,13 +159,7 @@ raw_counters() ->
 %% @doc Find the event server, creating it if it doesn't exist. We cache the
 %% result in the process dictionary to avoid looking it up multiple times.
 find_event_server() ->
-    case hb_name:lookup(?MODULE) of
-        undefined ->
-            NewServer = spawn(fun() -> server() end),
-            hb_name:register(?MODULE, NewServer),
-            NewServer;
-        Pid -> Pid
-    end.
+    hb_name:singleton(?MODULE, fun() -> server() end).
 
 server() ->
     hb_prometheus:ensure_started(),
