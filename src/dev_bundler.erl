@@ -483,7 +483,7 @@ nested_bundle_test() ->
         ClientOpts = #{},
         NodeOpts2 = maps:merge(NodeOpts, #{ bundler_max_items => 3 }),
         Node = hb_http_server:start_node(NodeOpts2#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         }),
         %% Upload 3 data items across 4 chunks.
@@ -530,7 +530,7 @@ tx_error_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1
         }),
@@ -561,7 +561,7 @@ unsigned_dataitem_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             debug_print => false
         }),
@@ -593,7 +593,7 @@ idle_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             bundler_max_idle_time => 400,
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         }),
         % Test posting each of the supported signature types
@@ -651,7 +651,7 @@ dispatch_blocking_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 3
         }),
@@ -705,7 +705,7 @@ recover_respects_max_items_test() ->
         % Use max_items of 3, so 10 items should dispatch as 3+3+3+1
         MaxItems = 3,
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => MaxItems
         },
@@ -743,7 +743,7 @@ complete_task_sequence_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 2,
             retry_base_delay_ms => 100,
@@ -791,7 +791,7 @@ recover_bundles_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
@@ -850,7 +850,7 @@ post_tx_price_failure_retry_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 50,
@@ -886,7 +886,7 @@ post_tx_anchor_failure_retry_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 50,
@@ -924,7 +924,7 @@ post_tx_post_failure_retry_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 50,
@@ -962,7 +962,7 @@ post_proof_failure_retry_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 50,
@@ -997,7 +997,7 @@ rapid_dispatch_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             bundler_workers => 3
@@ -1035,7 +1035,7 @@ one_bundle_fails_others_continue_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 100,
@@ -1069,7 +1069,7 @@ parallel_task_execution_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             bundler_workers => 5
@@ -1114,7 +1114,7 @@ exponential_backoff_timing_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 100,
@@ -1163,7 +1163,7 @@ independent_task_retry_counts_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1,
             retry_base_delay_ms => 100,
@@ -1195,7 +1195,7 @@ invalid_item_test() ->
     try
         ClientOpts = #{},
         TestOpts = NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         },
         Node = hb_http_server:start_node(TestOpts#{
@@ -1207,7 +1207,7 @@ invalid_item_test() ->
                 data = <<"testdata">>,
                 tags = [{<<"tag1">>, <<"value1">>}]
             },
-            hb:wallet()
+            ar_wallet:new()
         ),
         % Tamper with the data after signing (this invalidates the signature)
         TamperedItem = Item#tx{data = <<"tampereddata">>},
@@ -1241,7 +1241,7 @@ cache_write_failure_test() ->
                 data = <<"testdata">>,
                 tags = [{<<"tag1">>, <<"value1">>}]
             },
-            hb:wallet()
+            ar_wallet:new()
         ),
         StructuredItem = hb_message:convert(
             Item, <<"structured@1.0">>, <<"ans104@1.0">>, GoodOpts),
@@ -1274,7 +1274,7 @@ test_bundle(Opts) ->
         ClientOpts = #{},
         NodeOpts2 = maps:merge(NodeOpts, Opts),
         Node = hb_http_server:start_node(NodeOpts2#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         }),
         %% Upload 3 data items across 4 chunks.
@@ -1303,7 +1303,7 @@ test_api_error(Responses) ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store(),
             bundler_max_items => 1
         }),
@@ -1325,7 +1325,7 @@ test_api_error(Responses) ->
     end.
 
 new_data_item(Index, Size) ->
-    new_data_item(Index, Size, hb:wallet()).
+    new_data_item(Index, Size, ar_wallet:new()).
 
 new_structured_data_item(Index, Size, Opts) ->
     hb_message:convert(
