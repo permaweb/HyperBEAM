@@ -9,7 +9,6 @@
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 -define(MAX_MEMORY, 1_000_000_000). % 1GB
 -define(MAX_EVENT_NAME_LENGTH, 100).
--define(MAX_PROMETHEUS_WAIT, 300). % ~30s at 100ms intervals
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -160,41 +159,27 @@ raw_counters() ->
 %% @doc Find the event server, creating it if it doesn't exist. We cache the
 %% result in the process dictionary to avoid looking it up multiple times.
 find_event_server() ->
-    case erlang:get({event_server, ?MODULE}) of
-        {cached, Pid} ->
-            case is_process_alive(Pid) of
-                true -> Pid;
-                false ->
-                    erlang:erase({event_server, ?MODULE}),
-                    find_event_server()
-            end;
+    case hb_name:lookup(?MODULE) of
         undefined ->
-            PID =
-                case hb_name:lookup(?MODULE) of
-                    Pid when is_pid(Pid) -> Pid;
-                    undefined ->
-                        NewServer = spawn(fun() -> server() end),
-                        hb_name:register(?MODULE, NewServer),
-                        NewServer
-                end,
-            erlang:put({event_server, ?MODULE}, {cached, PID}),
-            PID
+            NewServer = spawn(fun() -> server() end),
+            hb_name:register(?MODULE, NewServer),
+            NewServer;
+        Pid -> Pid
     end.
 
 server() ->
-    await_prometheus_started(),
+    hb_prometheus:ensure_started(),
     ensure_event_counter(),
     handle_events().
 
 ensure_event_counter() ->
-    try prometheus_counter:declare(
+    hb_prometheus:declare(
+        counter,
         [
             {name, <<"event">>},
             {help, <<"AO-Core execution events">>},
             {labels, [topic, event]}
-        ])
-    catch _:_ -> ok
-    end.
+        ]).
 
 handle_events() ->
     receive
@@ -233,27 +218,8 @@ handle_events() ->
                     end;
                 _ -> ignored
             end,
-            try
-                prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count)
-            catch _:_ ->
-                ensure_event_counter()
-            end,
+            hb_prometheus:inc(counter, <<"event">>, [TopicBin, EventName], Count),
             handle_events()
-    end.
-
-%% @doc Delay the event server until prometheus is started. Messages
-%% accumulate in the mailbox and are processed once handle_events/0 starts.
-%% Gives up after ?MAX_PROMETHEUS_WAIT attempts to avoid unbounded mailbox
-%% growth if Prometheus never comes up.
-await_prometheus_started() ->
-    await_prometheus_started(?MAX_PROMETHEUS_WAIT).
-await_prometheus_started(0) -> ok;
-await_prometheus_started(Remaining) ->
-    case application:get_application(prometheus) of
-        undefined ->
-            receive after 100 -> ok end,
-            await_prometheus_started(Remaining - 1);
-        _ -> ok
     end.
 
 parse_name(Name) when is_tuple(Name) ->

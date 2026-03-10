@@ -116,14 +116,11 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
     Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
-            <<"path">> => <<"/tx">>,
+            <<"path">> => <<"/~bundler@1.0/tx&codec-device=ans104@1.0">>,
             <<"content-type">> => <<"application/octet-stream">>,
             <<"body">> => SerializedTX
         },
-        Opts#{
-            http_client =>
-                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
-        }
+        Opts
     ),
     to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
@@ -1168,7 +1165,6 @@ setup_arweave_index_opts(TXIDs) ->
         arweave_index_ids => true,
         arweave_index_store => IndexStore
     },
-    application:ensure_all_started(hb),
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
     %     fun(Block) -> ok = index_test_block(Block, Opts) end,
@@ -1849,7 +1845,6 @@ reassemble_bundle2_test() ->
 %% reassembles the bundle and nested items. This is also useful tool 
 %% debugging tool to check that a bundle is present in the weave.
 assert_bundle_tx(TXID) ->
-    application:ensure_all_started(hb),
     Opts = #{},
     {ok, #{ <<"body">> := OffsetBody }} =
         hb_http:request(
