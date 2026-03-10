@@ -23,8 +23,14 @@ arweave(_Base, Request, Opts) ->
             case hb_maps:find(<<"id">>, Request, Opts) of
                 {ok, TXID} -> process_l1_request(TXID, Request, Opts);
                 error ->
+                    BlockDepth = request_depth(Request, ?DEPTH_L1_OFFSETS, Opts),
                     {From, To} = parse_range(Request, Opts),
-                    fetch_blocks(Request, From, To, Opts)
+                    fetch_blocks(
+                        Request,
+                        From,
+                        To,
+                        Opts#{copycat_block_depth => BlockDepth}
+                    )
             end;
         <<"list">>   ->
             {From, To} = parse_range(Request, Opts),
@@ -288,6 +294,9 @@ normalize_height(Height, Opts) ->
         false -> RequestedHeight
     end.
 
+get_block_depth(Opts) ->
+    maps:get(copycat_block_depth, Opts, ?DEPTH_L1_OFFSETS).
+
 latest_height(Opts) ->
     case hb_ao:resolve(
         <<?ARWEAVE_DEVICE/binary, "/current/height">>,
@@ -524,6 +533,7 @@ parallel_map(Items, Fun, Opts) ->
 process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
 process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
+    Depth = get_block_depth(Opts),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
@@ -544,6 +554,8 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     end),
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        true when Depth > ?DEPTH_L1_OFFSETS ->
+            process_l1_candidate(TX#tx.id, #{}, Depth, Opts);
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
