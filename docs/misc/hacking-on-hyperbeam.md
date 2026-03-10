@@ -103,15 +103,29 @@ since the last invocation.
 
 3. Open the svg file in browser.
 
+## Common testing pitfalls 
+
+Here is a helpful list of common mistakes when writing tests:
+
+- If you need to start a new node, be sure to use a new private key unless you
+  have a specific reason to use an existing one. HyperBEAM HTTP servers are
+  registered using their wallet ID as their 'name', so re-use can cause issues.
+  You can get a new private key is defined using `#{ priv_wallet => ar_wallet:new() }`.
+- Similarly, always be careful of your stores in your tests! Avoid using the
+  default stores, as this can lead to 'context leakage', where one part of your
+  test is unintentionally able to access data created/stored by a supposedly
+  different node in the environment. `hb_http_server:start_node/1` will generate
+  a new unique store for you by default, but avoid creating a named store unless
+  you need to (and know what you are doing).
+- Always try to test your devices through the HTTP AO-Core API as well as through
+  the local `hb_ao:resolve/[2-3]` interfaces. Avoid direct `dev_name:key` calls
+  unless strictly necessary. The HTTP API is how users will interact with your
+  almost always system, and there can be subtle differences in how the interfaces
+  react. For example, the Erlang function call interface has no regard for how
+  keys are matched by AO-Core, so will mask any issues with the choice of which
+  device function to call to satisfy requests.
+
 Happy hacking!
-
-## Adding testing 
-
-Here is a helpful list of common mistakes when writing tests.
-
-If you need to start a new node, make sure a new private key is defined using
-`#{priv_wallet => ar_wallet:new()}`. If `hb:wallet()` is used, it will conflict
-with the default HyperBEAM server that is started before eunit run.
 
 Avoid pattern match a list of commitments, since we cannot guarantee the order.
 This will case tests to be flaky.
