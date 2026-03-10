@@ -1095,7 +1095,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         not_found -> WithPrivIP;
         Device -> WithPrivIP#{<<"device">> => Device}
     end,
-    % Add host
+    % Add host (for ARNS requests)
     Host = cowboy_req:host(Req),
     WithDevice#{<<"host">> => Host}.
 

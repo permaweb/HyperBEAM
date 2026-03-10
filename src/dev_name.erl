@@ -102,7 +102,7 @@ request(HookMsg, HookReq, Opts) ->
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
-name_from_host(Host, no_host) ->
+name_from_host(Host, RawNodeHost) when RawNodeHost =:= no_host; RawNodeHost =:= <<"localhost">> ->
     case hd(binary:split(Host, <<".">>)) of
         <<>> -> {error, <<"No name found in `Host`.">>};
         Name -> {ok, Name}
@@ -113,7 +113,7 @@ name_from_host(ReqHost, RawNodeHost) ->
     WithoutNodeHost =
         binary:replace(
             ReqHost,
-            maps:get(host, uri_string:parse(RawNodeHost)),
+            maps:get(host, NodeHost),
             <<>>
         ),
     name_from_host(WithoutNodeHost, no_host).
