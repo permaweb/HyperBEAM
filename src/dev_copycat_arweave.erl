@@ -158,8 +158,9 @@ parse_tag_filter(Key, Request, Opts) ->
 %% @doc Process the `id=...` copycat path for an already indexed L1 TX.
 %% applies L1-level owner/tag filters on the lightweight TX header first, then,
 %% if the TX passes and is a bundle, loads the full L1 payload once and indexes
-%% descendants in-memory (under the configured copycat_memory_cap) up to the requested safe depth
-%% (defaults to full recursion till the set copycat_depth_recursion_cap).
+%% descendants in-memory (under the configured copycat_memory_cap) up to the
+%% requested safe depth (defaults to full recursion till the set
+%% copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
     LoadL1Offset =
@@ -1521,6 +1522,345 @@ negative_from_index_test() ->
     ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
     ok.
 
+owner_alias_roundtrip_test() ->
+    Opts1 =
+        add_owner_alias(
+            <<"FPjbN7EVwP3XwQJx8qnKqJDYa4TLJ0Y8gu4AaiUuW1c">>,
+            <<"turbo">>,
+            #{}
+        ),
+    Opts2 =
+        add_owner_alias(
+            <<"JNC6vBhU4sAK5T49VL4k79vNer0tZjM8fI1gpqUQK5g">>,
+            <<"redstone">>,
+            Opts1
+        ),
+    ?assertEqual(
+        {ok, normalize_owner_id(<<"FPjbN7EVwP3XwQJx8qnKqJDYa4TLJ0Y8gu4AaiUuW1c">>)},
+        resolve_owner_alias(<<"turbo">>, Opts2)
+    ),
+    ?assertEqual(
+        {ok, normalize_owner_id(<<"JNC6vBhU4sAK5T49VL4k79vNer0tZjM8fI1gpqUQK5g">>)},
+        resolve_owner_alias(<<"redstone">>, Opts2)
+    ),
+    ?assertEqual(
+        {error, {owner_alias_not_found, <<"unknown">>}},
+        resolve_owner_alias(<<"unknown">>, Opts2)
+    ),
+    ok.
+
+parse_tag_filter_test() ->
+    ?assertEqual(
+        {ok, #{name => <<"App-Name">>, value => <<"ao">>}},
+        parse_tag_filter(<<"include-tag">>, #{<<"include-tag">> => <<"App-Name:ao">>}, #{})
+    ),
+    ?assertEqual(
+        {ok, undefined},
+        parse_tag_filter(<<"include-tag">>, #{}, #{})
+    ),
+    ?assertEqual(
+        {error, invalid_tag_filter},
+        parse_tag_filter(<<"include-tag">>, #{<<"include-tag">> => <<"App-Name">>}, #{})
+    ),
+    ?assertEqual(
+        {error, invalid_tag_filter},
+        parse_tag_filter(<<"include-tag">>, #{<<"include-tag">> => <<":ao">>}, #{})
+    ),
+    ?assertEqual(
+        {error, invalid_tag_filter},
+        parse_tag_filter(<<"include-tag">>, #{<<"include-tag">> => <<"App-Name:">>}, #{})
+    ),
+    ok.
+
+l1_filter_reason_test() ->
+    Owner = <<"owner-1">>,
+    OtherOwner = <<"owner-2">>,
+    TX = #tx{
+        owner = <<"non-default-owner">>,
+        owner_address = Owner,
+        tags = [
+            {<<"App-Name">>, <<"ao">>},
+            {<<"Bundler-App-Name">>, <<"Redstone">>}
+        ]
+    },
+    IncludeTag = #{name => <<"App-Name">>, value => <<"ao">>},
+    ExcludeTag = #{name => <<"Bundler-App-Name">>, value => <<"Redstone">>},
+    ?assertEqual(pass, l1_filter_reason(TX, #{})),
+    ?assertEqual(pass, l1_filter_reason(TX, #{include_owner => Owner})),
+    ?assertEqual(
+        include_owner_mismatch,
+        l1_filter_reason(TX, #{include_owner => OtherOwner})
+    ),
+    ?assertEqual(
+        exclude_owner_match,
+        l1_filter_reason(TX, #{exclude_owner => Owner})
+    ),
+    ?assertEqual(
+        pass,
+        l1_filter_reason(TX, #{exclude_owner => OtherOwner})
+    ),
+    ?assertEqual(pass, l1_filter_reason(TX, #{include_tag => IncludeTag})),
+    ?assertEqual(
+        include_tag_mismatch,
+        l1_filter_reason(
+            TX,
+            #{include_tag => #{name => <<"Content-Type">>, value => <<"text/plain">>}}
+        )
+    ),
+    ?assertEqual(
+        exclude_tag_match,
+        l1_filter_reason(TX, #{exclude_tag => ExcludeTag})
+    ),
+    ?assertEqual(
+        pass,
+        l1_filter_reason(
+            TX,
+            #{exclude_tag => #{name => <<"Content-Type">>, value => <<"text/plain">>}}
+        )
+    ),
+    ?assertEqual(
+        exclude_tag_match,
+        l1_filter_reason(
+            TX,
+            #{include_tag => IncludeTag, exclude_tag => ExcludeTag}
+        )
+    ),
+    ?assertEqual(
+        pass,
+        l1_filter_reason(TX, #{include_owner => [OtherOwner, Owner]})
+    ),
+    ok.
+
+request_depth_clamping_test() ->
+    {_TestStore, _StoreOpts, Opts0} = setup_index_opts(),
+    ?assertEqual(4, request_depth(#{}, <<"safe_max">>, Opts0)),
+    ?assertEqual(
+        2,
+        request_depth(#{<<"depth">> => <<"2">>}, <<"safe_max">>, Opts0)
+    ),
+    ?assertEqual(
+        ?DEPTH_L1_OFFSETS,
+        request_depth(#{<<"depth">> => <<"0">>}, <<"safe_max">>, Opts0)
+    ),
+    ?assertEqual(
+        4,
+        request_depth(#{<<"depth">> => <<"999">>}, <<"safe_max">>, Opts0)
+    ),
+    Opts1 = set_depth_recursion_cap(2, Opts0),
+    ?assertEqual(2, request_depth(#{}, <<"safe_max">>, Opts1)),
+    % no recursion cap set, use default from hb_opts
+    ?assertEqual(4, request_depth(#{}, <<"safe_max">>, #{})),
+    ok.
+
+memory_cap_setter_getter_test() ->
+    {_TestStore, _StoreOpts, Opts0} = setup_index_opts(),
+    ?assertEqual(6 * 1024 * 1024 * 1024, get_memory_safe_cap(Opts0)),
+    Opts1 = set_memory_safe_cap(1024, Opts0),
+    ?assertEqual(1024, get_memory_safe_cap(Opts1)),
+    ok.
+
+id_depth_1_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    ok = index_l1_offsets(Block, Opts),
+    {ok, Result} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "depth=1"
+            >>,
+            Opts
+        ),
+    ?assertEqual(26, maps:get(items_count, Result)),
+    ?assertEqual(1, maps:get(bundle_count, Result)),
+    ?assertEqual(0, maps:get(skipped_count, Result)),
+
+    assert_bundle_read(
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        [
+            {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
+            {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
+            {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
+        ],
+        Opts
+    ),
+    % L3 item not read when doing L1 depth=1
+    assert_item_not_read(<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, Opts),
+    ok.
+
+id_depth_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    ok = index_l1_offsets(Block, Opts),
+    {ok, Result} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "depth=2"
+            >>,
+            Opts
+        ),
+    ?assertEqual(52, maps:get(items_count, Result)),
+    ?assertEqual(1, maps:get(bundle_count, Result)),
+    ?assertEqual(0, maps:get(skipped_count, Result)),
+
+    assert_bundle_read(
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        [
+            {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
+            {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
+            {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
+        ],
+        Opts
+    ),
+    % L2 bundle and L3 children should be read when doing L1 with depth=2
+    assert_bundle_read(
+        <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>,
+        [
+            {<<"iS5R3iSKaCdcXG2nlKWsbdT1_uhQe54nMsgYK-ivEcE">>, <<"1">>},
+            {<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, <<"2">>}
+        ],
+        Opts
+    ),
+    ok.
+
+id_exclude_tag_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    ok = index_l1_offsets(Block, Opts),
+    {ok, Result} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "exclude-tag=App-Name:ArDrive%20Turbo&"
+                "depth=2"
+            >>,
+            Opts
+        ),
+    ?assertEqual(0, maps:get(items_count, Result)),
+    ?assertEqual(0, maps:get(bundle_count, Result)),
+    ?assertEqual(1, maps:get(skipped_count, Result)),
+    assert_item_not_read(<<"iS5R3iSKaCdcXG2nlKWsbdT1_uhQe54nMsgYK-ivEcE">>, Opts),
+    ok.
+
+id_include_owner_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    ok = index_l1_offsets(Block, Opts),
+    {ok, Included} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "include-owner=JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8"
+            >>,
+            Opts
+        ),
+    ?assertEqual(52, maps:get(items_count, Included)),
+    ?assertEqual(1, maps:get(bundle_count, Included)),
+    ?assertEqual(0, maps:get(skipped_count, Included)),
+    {ok, Skipped} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "include-owner=FPjbN7EVwP3XwQJx8qnKqJDYa4TLJ0Y8gu4AaiUuW1c"
+            >>,
+            Opts
+        ),
+    ?assertEqual(0, maps:get(items_count, Skipped)),
+    ?assertEqual(0, maps:get(bundle_count, Skipped)),
+    ?assertEqual(1, maps:get(skipped_count, Skipped)).
+
+id_missing_offset_without_load_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {_Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    {ok, Result} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write"
+            >>,
+            Opts
+        ),
+    ?assertEqual(0, maps:get(items_count, Result)),
+    ?assertEqual(0, maps:get(bundle_count, Result)),
+    ?assertEqual(1, maps:get(skipped_count, Result)),
+    assert_item_not_read(<<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>, Opts),
+    ok.
+
+id_missing_offset_with_load_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {_Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
+    {ok, Result} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "id=", TXID/binary, "&"
+                "mode=write&"
+                "load-l1-offset=true&"
+                "depth=2"
+            >>,
+            Opts
+        ),
+    ?assertEqual(52, maps:get(items_count, Result)),
+    ?assertEqual(1, maps:get(bundle_count, Result)),
+    ?assertEqual(0, maps:get(skipped_count, Result)),
+
+    assert_bundle_read(
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        [
+            {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
+            {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
+            {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
+        ],
+        Opts
+    ),
+    % L2 bundle and L3 children should be read when doing L1 with depth=2
+    assert_bundle_read(
+        <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>,
+        [
+            {<<"iS5R3iSKaCdcXG2nlKWsbdT1_uhQe54nMsgYK-ivEcE">>, <<"1">>},
+            {<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, <<"2">>}
+        ],
+        Opts
+    ),
+    ok.
+
+parse_owner_filter_unknown_alias_test() ->
+    ?assertEqual(
+        {error, {owner_alias_not_found, <<"nonexistent">>}},
+        parse_owner_filter(
+            #{<<"include-owner-alias">> => <<"nonexistent">>},
+            #{}
+        )
+    ),
+    ok.
+
+index_l1_offsets(Block, Opts) ->
+    BlockBin = hb_util:bin(Block),
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=write&"
+                "depth=1"
+            >>,
+            Opts
+        ),
+    ok.
+
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
     StoreOpts = #{ <<"index-store">> => [TestStore] },
@@ -1570,7 +1910,9 @@ assert_bundle_read(BundleID, ExpectedItems, Opts) ->
     lists:foreach(
         fun({{_ItemID, Index}, Item}) ->
             QueriedItem = hb_ao:get(Index, Bundle, Opts),
-            ?assertEqual(hb_maps:without(?AO_CORE_KEYS, Item), hb_maps:without(?AO_CORE_KEYS, QueriedItem))
+            ?assertEqual(
+                hb_maps:without(?AO_CORE_KEYS, Item),
+                hb_maps:without(?AO_CORE_KEYS, QueriedItem))
         end,
         lists:zip(ExpectedItems, ReadItems)
     ),
@@ -1578,13 +1920,20 @@ assert_bundle_read(BundleID, ExpectedItems, Opts) ->
 
 assert_item_read(ItemID, Opts) ->
     ?event(debug_test, {resolving, {explicit, ItemID}}),
-    Resolved = hb_ao:resolve(ItemID, Opts),
-    ?assertMatch({ok, _}, Resolved, ItemID),
-    {ok, Item} = Resolved,
+    ReadResult = hb_store_arweave:read(
+        hb_store_arweave:store_from_opts(Opts), ItemID),
+    ?assertMatch({ok, _}, ReadResult, ItemID),
+    {ok, Item} = ReadResult,
     ?event(debug_test, {item, Item}),
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),
     Item.
+
+assert_item_not_read(ItemID, Opts) ->
+    ReadResult = hb_store_arweave:read(
+        hb_store_arweave:store_from_opts(Opts), ItemID),
+    ?assertEqual(not_found, ReadResult),
+    ok.
 
 has_any_indexed_tx(Height, Opts) ->
     case fetch_block_header(Height, Opts) of
