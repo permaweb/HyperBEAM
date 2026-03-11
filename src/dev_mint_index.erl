@@ -240,7 +240,7 @@ update_model(Address, Quantity, Base, Opts) ->
 must_redelegate(Base, _Quantity, _Address, Opts) ->
     UpdateEvery = hb_ao:get(<<"update-every">>, Base, 0, Opts),
     ChangesSinceUpdate = hb_ao:get(<<"changes-since-update">>, Base, 0, Opts),
-    UpdateEvery >= ChangesSinceUpdate.
+    ChangesSinceUpdate >= UpdateEvery.
 
 %% @doc Send messages reflecting updated delegation preferences to the parent
 %% mint.
