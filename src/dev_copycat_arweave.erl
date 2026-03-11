@@ -37,10 +37,11 @@ arweave(_Base, Request, Opts) ->
                                     {bundle_txs, maps:get(bundle_count, Stats, 0)},
                                     {skipped_txs, maps:get(skipped_count, Stats, 0)}
                                 }
-                            );
-                        _ -> ok                            
-                    end,
-                    {ok, TXID};
+                            ),
+                            {ok, maps:get(items_count, Stats, 0)};
+                        _ -> 
+                            {ok, 0}                         
+                    end;
                 error ->
                     {From, To} = parse_range(Request, Opts),
                     TargetDepth = request_depth(
