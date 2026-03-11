@@ -102,7 +102,7 @@ request(HookMsg, HookReq, Opts) ->
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
-name_from_host(Host, RawNodeHost) when RawNodeHost =:= no_host; RawNodeHost =:= <<"localhost">> ->
+name_from_host(Host, no_host) ->
     case hd(binary:split(Host, <<".">>)) of
         <<>> -> {error, <<"No name found in `Host`.">>};
         Name -> {ok, Name}
@@ -280,6 +280,6 @@ arns_host_resolution_test() ->
                 <<"path">> => <<"content-type">>,
                 <<"host">> => <<"draft-17_whitepaper">>
             },
-            Opts
+            Opts#{http_client => httpc}
         )
     ).
