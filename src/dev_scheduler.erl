@@ -957,7 +957,8 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 <<
                     ProcID/binary, "?process-id=", ProcID/binary,
                     FromBin/binary, ToParam/binary,
-                    "&limit=", (hb_util:bin(?MAX_ASSIGNMENT_QUERY_LEN))/binary
+                    "&limit=", (hb_util:bin(?MAX_ASSIGNMENT_QUERY_LEN))/binary,
+                    "&show-anchor"
                 >>
         end,
     ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
