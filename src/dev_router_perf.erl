@@ -489,3 +489,147 @@ recalculate_test() ->
     W1 = hb_maps:get(<<"weight">>, N1, undefined, #{}),
     W2 = hb_maps:get(<<"weight">>, N2, undefined, #{}),
     ?assert(W1 > W2).
+
+hb_gateway_load_balancer_test_() ->
+    {timeout, 60, fun() ->
+        application:ensure_all_started(hb),
+        ID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        PerfProcess = <<"/perf-router~node-process@1.0">>,
+        SchedulePath = <<PerfProcess/binary, "/schedule">>,
+        RoutesPath = <<PerfProcess/binary, "/now/routes">>,
+        HBGateways = [
+            #{ 
+                <<"match">> => <<"^/">>,
+                <<"with">> => <<"https://blue.hyperbeam.zephyrdev.xyz/">> 
+            },
+            #{ 
+                <<"match">> => <<"^/">>,
+                <<"with">> => <<"https://neo.hyperbeam.zephyrdev.xyz/">> 
+            },
+            #{ <<"match">> => <<"^/">>,
+               <<"with">> => <<"https://neo2.hyperbeam.zephyrdev.xyz/">> }
+        ],
+        Opts = #{
+            store => hb_test_utils:test_store(),
+            priv_wallet => ar_wallet:new(),
+            http_monitor => #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => SchedulePath
+            },
+            router_opts => #{
+                <<"provider">> => #{ <<"path">> => RoutesPath }
+            },
+            on => #{
+                <<"request">> => #{
+                    <<"device">> => <<"router@1.0">>,
+                    <<"path">> => <<"preprocess">>
+                }
+            },
+            node_processes => #{
+                <<"perf-router">> => #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"execution-device">> => <<"router-perf@1.0">>,
+                    <<"scheduler-device">> => <<"scheduler@1.0">>,
+                    <<"performance-period">> => 2,
+                    <<"initial-performance">> => 1000
+                }
+            }
+        },
+        Node = hb_http_server:start_node(Opts),
+        %% Register HB gateways with the perf-router process.
+        RouteConfig = #{
+            <<"template">> => <<"^/(?!.*~)">>,
+            <<"strategy">> => <<"By-Weight">>,
+            <<"choose">> => 2
+        },
+        lists:foreach(
+            fun(GW) ->
+                Body = 
+                    hb_message:commit(
+                        #{ 
+                            <<"action">> => <<"register">>,
+                            <<"route">> => maps:merge(GW, RouteConfig) 
+                        },
+                        Opts
+                    ),
+                {ok, _} = 
+                    hb_http:post(
+                        Node,
+                        #{ 
+                            <<"path">> => SchedulePath,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => Body 
+                        }, 
+                        Opts
+                    )
+            end,
+            HBGateways
+        ),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        {ok, InitPerf} = 
+            hb_http:get(
+                Node,
+                <<PerfProcess/binary, "/now/routes/1/nodes/1/performance">>,
+                Opts
+            ),
+        ?assertEqual(1000.0, to_float(InitPerf)),
+        {ok, Res} = hb_http:get(Node, <<"/", ID/binary>>, Opts),
+        ?assert(is_map(Res)),
+        timer:sleep(2000),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        Perfs = 
+            lists:map(
+                fun(I) ->
+                    IB = integer_to_binary(I),
+                    {ok, V} = 
+                        hb_http:get(
+                            Node,
+                            <<
+                                PerfProcess/binary,
+                                "/now/routes/1/nodes/", 
+                                IB/binary,
+                                "/performance"
+                            >>, 
+                        Opts
+                    ),
+                    to_float(V)
+                end,
+                [1, 2, 3]
+            ),
+        ?assert(lists:any(fun(P) -> P =/= 1000.0 end, Perfs)),
+        RecalcBody = 
+            hb_message:commit(#{ <<"action">> => <<"recalculate">> }, Opts),
+        {ok, _} = 
+            hb_http:post(
+                Node,
+                #{ 
+                    <<"path">> => SchedulePath,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> => RecalcBody 
+                }, 
+                Opts
+            ),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        Weights = 
+            lists:map(
+                fun(I) ->
+                    IB = integer_to_binary(I),
+                    {ok, W} = 
+                        hb_http:get(
+                            Node,
+                            <<
+                                PerfProcess/binary,
+                                "/now/routes/1/nodes/", 
+                                IB/binary,
+                                "/weight"
+                            >>, 
+                            Opts
+                        ),
+                    to_float(W)
+                end,
+                [1, 2, 3]
+            ),
+        UniqueWeights = lists:usort(Weights),
+        ?assert(length(UniqueWeights) > 1),
+        ok
+    end}.
