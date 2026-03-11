@@ -74,8 +74,10 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                 {error, {PriceErr, AnchorErr}}
         end
     catch
-        _:Err:_Stack ->
+        _:Err:Stack ->
             ?event(bundler_short, log_task(task_failed, Task, [{error, Err}])),
+            ?event(bundler_upload_error,
+                log_task(task_failed, Task, [{error, Err}, {trace, Stack}])),
             {error, Err}
     end;
 
