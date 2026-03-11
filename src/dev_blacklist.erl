@@ -1,12 +1,10 @@
 %%% @doc A request hook device for content moderation by blacklist.
 %%%
 %%% The node operator configures blacklist providers via the
-%%% `blacklist-providers` key (a list) or the legacy `blacklist-provider` key
-%%% (a single provider) in the node message options. Each provider can be a
-%%% message or a path that returns a message or binary. If a binary is returned
-%%% from a provider, it is parsed as a newline-delimited list of IDs. When
-%%% multiple providers are configured, their blacklists are merged into a single
-%%% cache (union of all IDs).
+%%% `blacklist-providers` key (a list) in the node message options. Each provider
+%%% can be a message or a path that returns a message or binary. If a binary is
+%%% returned from a provider, it is parsed as a newline-delimited list of IDs.
+%%% Multiple providers are merged into a single cache (union of all IDs).
 %%% 
 %%% The device is intended for use as a `~hook@1.0` `on/request` handler. It
 %%% blocks requests when any ID present in the hook payload matches the active
@@ -24,12 +22,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_PROVIDER,
-    [#{
-        <<"data-protocol">> => <<"content-policy">>,
-        <<"body">> => #{ <<"body">> => <<>> }
-    }]
-).
 -define(DEFAULT_MIN_WAIT, 60).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
@@ -114,22 +106,11 @@ fetch_and_insert_ids(Opts) ->
     ),
     {ok, Total}.
 
-%% @doc Resolve the configured providers into a list. Checks the plural
-%% `blacklist_providers` key first, then falls back to the singular
-%% `blacklist_provider` key for backward compatibility.
+%% @doc Resolve the configured providers into a list.
 resolve_providers(Opts) ->
-    case hb_opts:get(blacklist_providers, not_found, Opts) of
-        not_found ->
-            case hb_opts:get(blacklist_provider, no_provider, Opts) of
-                no_provider -> [];
-                SingleProvider -> [SingleProvider]
-            end;
-        Providers when is_list(Providers) ->
-            Providers;
-        Providers when is_map(Providers) ->
-            hb_util:message_to_ordered_list(Providers, Opts);
-        Other ->
-            [Other]
+    case hb_opts:get(blacklist_providers, [], Opts) of
+        Providers when is_list(Providers) -> Providers;
+        _ -> []
     end.
 
 %% @doc Fetch a single provider's blacklist and insert its IDs into the cache.
@@ -296,7 +277,7 @@ basic_test() ->
     }} = setup_test_env(),
     Opts1 =
         Opts0#{
-            blacklist_provider => BlacklistID,
+            blacklist_providers => [BlacklistID],
             on => #{
                 <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
             }
@@ -323,7 +304,7 @@ default_provider_test() ->
         signed1 := SignedID1,
         unsigned3 := UnsignedID3
     }} = setup_test_env(),
-    Opts1 = Opts0#{ blacklist_provider => ?DEFAULT_PROVIDER },
+    Opts1 = Opts0#{ blacklist_providers => [] },
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -351,11 +332,11 @@ blacklist_from_external_http_test() ->
         #{
             store => RootStore,
             priv_wallet => ar_wallet:new(),
-            blacklist_provider =>
-                <<
+            blacklist_providers =>
+                [<<
                     "/~relay@1.0/call?relay-method=GET&relay-path=",
                         BlacklistHostNode/binary, BlacklistID/binary
-                >>,
+                >>],
             on => #{
                 <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
             }
@@ -415,31 +396,6 @@ multiple_providers_test() ->
     ),
     ok.
 
-%% @doc Test that the singular `blacklist_provider` key still works.
-backward_compat_test() ->
-    {ok, #{
-        opts := Opts0,
-        signed1 := SignedID1,
-        unsigned3 := UnsignedID3,
-        blacklist := BlacklistID
-    }} = setup_test_env(),
-    Opts1 = Opts0#{
-        blacklist_provider => BlacklistID,
-        on => #{
-            <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
-        }
-    },
-    Node = hb_http_server:start_node(Opts1),
-    ?assertMatch(
-        {error, #{ <<"status">> := 451 }},
-        hb_http:get(Node, SignedID1, Opts1)
-    ),
-    ?assertMatch(
-        {ok, <<"test-3">>},
-        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
-    ),
-    ok.
-
 %% @doc Test that a failing provider does not prevent other providers from
 %% contributing entries.
 provider_failure_resilience_test() ->
@@ -460,50 +416,6 @@ provider_failure_resilience_test() ->
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},
         hb_http:get(Node, SignedID1, Opts1)
-    ),
-    ?assertMatch(
-        {ok, <<"test-3">>},
-        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
-    ),
-    ok.
-
-%% @doc Test that `blacklist_providers` works when given as a numbered message
-%% (map with integer keys), as would arrive from structured config formats.
-plural_numbered_message_test() ->
-    {ok, #{
-        opts := Opts0,
-        signed1 := SignedID1,
-        unsigned2 := UnsignedID2,
-        unsigned3 := UnsignedID3
-    }} = setup_test_env(),
-    Blacklist1 = #{
-        <<"data-protocol">> => <<"content-policy">>,
-        <<"body">> => <<SignedID1/binary, "\n">>
-    },
-    Blacklist2 = #{
-        <<"data-protocol">> => <<"content-policy">>,
-        <<"body">> => <<UnsignedID2/binary, "\n">>
-    },
-    BlacklistMsg1 = hb_message:commit(Blacklist1, Opts0),
-    BlacklistMsg2 = hb_message:commit(Blacklist2, Opts0),
-    {ok, BlacklistID1} = hb_cache:write(BlacklistMsg1, Opts0),
-    {ok, BlacklistID2} = hb_cache:write(BlacklistMsg2, Opts0),
-    NumberedProviders =
-        hb_util:list_to_numbered_message([BlacklistID1, BlacklistID2]),
-    Opts1 = Opts0#{
-        blacklist_providers => NumberedProviders,
-        on => #{
-            <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
-        }
-    },
-    Node = hb_http_server:start_node(Opts1),
-    ?assertMatch(
-        {error, #{ <<"status">> := 451 }},
-        hb_http:get(Node, SignedID1, Opts1)
-    ),
-    ?assertMatch(
-        {error, #{ <<"status">> := 451 }},
-        hb_http:get(Node, <<"/", UnsignedID2/binary>>, Opts1)
     ),
     ?assertMatch(
         {ok, <<"test-3">>},
