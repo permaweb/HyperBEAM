@@ -194,8 +194,14 @@ parse_signal(Base, Assignment, Opts) ->
             ),
         {ok, Quantity} ?=
             case hb_maps:find(<<"x-action">>, Msg, Opts) of
-                {ok, <<"deposit">>} -> {ok, RawQuantity};
-                {ok, <<"withdraw">>} -> {ok, -RawQuantity};
+                {ok, <<"deposit">>} when is_integer(RawQuantity), RawQuantity >= 0 -> 
+                    {ok, RawQuantity};
+                {ok, <<"deposit">>} ->
+                    {error, <<"Deposit quantity must be a non-negative integer.">>};
+                {ok, <<"withdraw">>} when is_integer(RawQuantity), RawQuantity =< 0 -> 
+                    {ok, RawQuantity};
+                {ok, <<"withdraw">>} ->
+                    {error, <<"Withdraw quantity must be a non-positive integer.">>};
                 {ok, _Unsupported} ->
                     {error, <<"Notification `action' unsupported.">>};
                 error ->
@@ -234,7 +240,7 @@ update_model(Address, Quantity, Base, Opts) ->
 must_redelegate(Base, _Quantity, _Address, Opts) ->
     UpdateEvery = hb_ao:get(<<"update-every">>, Base, 0, Opts),
     ChangesSinceUpdate = hb_ao:get(<<"changes-since-update">>, Base, 0, Opts),
-    UpdateEvery >= ChangesSinceUpdate.
+    ChangesSinceUpdate >= UpdateEvery.
 
 %% @doc Send messages reflecting updated delegation preferences to the parent
 %% mint.
