@@ -115,41 +115,39 @@ is_limited(Reference, Opts) ->
 %% will fail with an error and the other will succeed. The effect to the caller
 %% is the same: A rate limiter is available to query.
 ensure_rate_limiter_started(Opts) ->
-    case hb_name:lookup(ServerID = server_id(Opts)) of
-        PID when is_pid(PID) -> PID;
-        undefined ->
-            spawn(
-                fun() ->
-                    % Exit the process if we cannot register the server ID.
-                    ok = hb_name:register(ServerID, self()),
-                    Reqs = hb_opts:get(rate_limit_requests, ?DEFAULT_REQS, Opts),
-                    Period = hb_opts:get(rate_limit_period, ?DEFAULT_PERIOD, Opts),
-                    Max = hb_opts:get(rate_limit_max, ?DEFAULT_MAX, Opts),
-                    Min = hb_opts:get(rate_limit_min, ?DEFAULT_MIN, Opts),
-                    Exempt = hb_opts:get(rate_limit_exempt, [], Opts),
-                    ?event(
-                        rate_limit,
-                        {started_rate_limiter,
-                            {server_id, ServerID},
-                            {reqs, Reqs},
-                            {period, Period},
-                            {max, Max},
-                            {min, Min},
-                            {exempt, Exempt}
-                        }
-                    ),
-                    server_loop(
-                        #{
-                            reqs => Reqs,
-                            period => Period,
-                            max => Max,
-                            min => Min,
-                            peers => #{ Ref => infinity || Ref <- Exempt }
-                        }
-                    )
-                end
-            )
-    end.
+    ServerID = server_id(Opts),
+    hb_name:singleton(
+        ServerID,
+        fun() -> start_server(ServerID, Opts) end
+    ).
+
+start_server(ServerID, Opts) ->
+    % Exit the process if we cannot register the server ID.
+    Reqs = hb_opts:get(rate_limit_requests, ?DEFAULT_REQS, Opts),
+    Period = hb_opts:get(rate_limit_period, ?DEFAULT_PERIOD, Opts),
+    Max = hb_opts:get(rate_limit_max, ?DEFAULT_MAX, Opts),
+    Min = hb_opts:get(rate_limit_min, ?DEFAULT_MIN, Opts),
+    Exempt = hb_opts:get(rate_limit_exempt, [], Opts),
+    ?event(
+        rate_limit,
+        {started_rate_limiter,
+            {server_id, ServerID},
+            {reqs, Reqs},
+            {period, Period},
+            {max, Max},
+            {min, Min},
+            {exempt, Exempt}
+        }
+    ),
+    server_loop(
+        #{
+            reqs => Reqs,
+            period => Period,
+            max => Max,
+            min => Min,
+            peers => #{ Ref => infinity || Ref <- Exempt }
+        }
+    ).
 
 %% @doc The main loop of the rate limiter server. Only responds to two messages:
 %% - `{request, Self, Reference}': Debit the account of the given reference by 1.

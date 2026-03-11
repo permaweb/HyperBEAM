@@ -98,14 +98,10 @@ cache_item(Item, Opts) ->
 %% @doc Return the PID of the bundler server. If the server is not running,
 %% it is started and registered with the name `?SERVER_NAME'.
 ensure_server(Opts) ->
-    case hb_name:lookup(?SERVER_NAME) of
-        undefined ->
-            PID = spawn(fun() -> init(Opts) end),
-            ?event(bundler_short, {starting_bundler_server, {pid, PID}}),
-            hb_name:register(?SERVER_NAME, PID),
-            hb_name:lookup(?SERVER_NAME);
-        PID -> PID
-    end.
+    hb_name:singleton(
+        ?SERVER_NAME,
+        fun() -> init(Opts) end
+    ).
 
 stop_server() ->
     case hb_name:lookup(?SERVER_NAME) of
