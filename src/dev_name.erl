@@ -280,6 +280,8 @@ arns_host_resolution_test() ->
                 <<"path">> => <<"content-type">>,
                 <<"host">> => <<"draft-17_whitepaper">>
             },
-            Opts#{http_client => httpc}
+            %% Host header isn't added automatically if used HTTP2. 
+            %% We need host header to resolve the ARNS name.
+            Opts#{http_client => gun, opts => #{protocol => http1} }
         )
     ).
