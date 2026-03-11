@@ -1231,6 +1231,57 @@ invalid_item_test() ->
         stop_test_servers(ServerHandle)
     end.
 
+integer_timestamp_item_cached_but_not_bundled_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        ClientOpts = #{},
+        TestOpts = NodeOpts#{
+            priv_wallet => ar_wallet:new(),
+            store => hb_test_utils:test_store(),
+            bundler_max_items => 1,
+            retry_base_delay_ms => 1000,
+            retry_jitter => 0,
+            debug_print => false
+        },
+        Node = hb_http_server:start_node(TestOpts),
+        Structured =
+            hb_message:commit(
+                #{
+                    <<"timestamp">> => 1773165609150,
+                    <<"other-key">> => <<"other-value">>
+                },
+                TestOpts,
+                <<"ans104@1.0">>
+            ),
+        Item = 
+            hb_message:convert(
+                Structured,
+                <<"ans104@1.0">>,
+                <<"structured@1.0">>,
+                TestOpts
+            ),
+        ?event(debug_test, {structured, {explicit, Structured}}),
+        ?event(debug_test, {item, {explicit, Item}}),
+        ?assert(ar_bundles:verify_item(Item)),
+        ?assertMatch({ok, _}, post_data_item(Node, Item, ClientOpts)),
+        % ?assertEqual([], hb_mock_server:get_requests(tx, 1, ServerHandle, 200)),
+        [CachedItem] = dev_bundler_cache:load_items(<<>>, TestOpts),
+        TX = dev_codec_tx:to([CachedItem], #{}, #{}),
+        ?event(debug_test, {tx, {explicit, TX}}),
+        ?assertEqual(
+            1773165609150,
+            hb_maps:get(<<"timestamp">>, CachedItem, undefined, TestOpts)
+        ),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
+
 cache_write_failure_test() ->
     GoodOpts = #{store => hb_test_utils:test_store()},
     BadOpts = #{

@@ -1579,3 +1579,29 @@ bundle_list_test() ->
     ?assert(ar_tx:verify(SignedTXRoundtrip)),
     ?assertEqual(SignedTX, SignedTXRoundtrip),
     ok.
+
+list_of_lists_test() ->
+    % ?assertException(
+    %     error,
+    %     badarg,
+    %     dev_codec_tx:to(
+    %         [
+    %             #{
+    %                 <<"timestamp">> => 1773165609150
+    %             }
+    %         ],
+    %         #{},
+    %         #{}
+    %     )
+    % ),
+    TX = dev_codec_tx:to(
+        [
+            #{
+                <<"timestamp">> => [1773165609150]
+            }
+        ],
+        #{},
+        #{}
+    ),
+    ?event(debug_test, {tx, TX}),
+    ok.
