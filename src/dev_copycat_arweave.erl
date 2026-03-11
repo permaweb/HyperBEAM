@@ -26,11 +26,28 @@ arweave(_Base, Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
         <<"write">>  ->
             case hb_maps:find(<<"id">>, Request, Opts) of
-                {ok, TXID} -> process_l1_request(TXID, Request, Opts);
+                {ok, TXID} ->
+                    case process_l1_request(TXID, Request, Opts) of
+                        {ok, Stats} when is_map(Stats) ->
+                            ?event(
+                                copycat_short,
+                                {arweave_tx_indexed,
+                                    {id, {explicit, TXID}},
+                                    {items_indexed, maps:get(items_count, Stats, 0)},
+                                    {bundle_txs, maps:get(bundle_count, Stats, 0)},
+                                    {skipped_txs, maps:get(skipped_count, Stats, 0)}
+                                }
+                            );
+                        _ -> ok                            
+                    end,
+                    {ok, TXID};
                 error ->
                     {From, To} = parse_range(Request, Opts),
                     TargetDepth = request_depth(
                         Request, ?DEFAULT_BLOCK_DEPTH, Opts),
+                    ?event(copycat_short,
+                        {indexing_blocks, {from, From}, {to, To}, {depth, TargetDepth}}
+                    ),
                     fetch_blocks(
                         From,
                         To,
@@ -971,6 +988,12 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
+    ?event(copycat_short,
+        {indexing_l1_tx, {tx_id, {explicit, EncodedTXID}},
+        {depth, Depth},
+        {query_l1_offset, QueryL1Offset},
+        {filters, Filters}
+    }),
     maybe
         {ok,
             #{
