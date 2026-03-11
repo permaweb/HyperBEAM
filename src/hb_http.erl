@@ -264,14 +264,14 @@ outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
         hb_http_client:response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
     };
-outbound_result_to_message(<<"json@1.0">>, Status, Headers, Body, Opts) ->
+outbound_result_to_message(Codec, Status, Headers, Body, Opts) ->
     ?event(debug, {headers, Headers}),
     {
         hb_http_client:response_status_to_atom(Status),
         hb_message:convert(
             Body,
             <<"structured@1.0">>,
-            <<"json@1.0">>,
+            Codec,
             Opts
         )
     }.
@@ -1091,13 +1091,10 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     end,
     WithPrivIP = hb_private:set(WithPeer, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
-    WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
+    case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
         Device -> WithPrivIP#{<<"device">> => Device}
-    end,
-    % Add host (for ARNS requests)
-    Host = cowboy_req:host(Req),
-    WithDevice#{<<"host">> => Host}.
+    end.
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
 real_ip(Req = #{ headers := RawHeaders }, Opts) ->
