@@ -10,7 +10,12 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
--define(DEPTH_L1_OFFSETS, 1).
+% By default we'll index blocks to depth 2 which is:
+% - depth 1: L1 TXs
+% - depth 2: L2 bundles and dataitems
+% Note: this means that the children of L2 bundles are not indexed at
+% depth 2.
+-define(DEFAULT_BLOCK_DEPTH, 2).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -23,13 +28,14 @@ arweave(_Base, Request, Opts) ->
             case hb_maps:find(<<"id">>, Request, Opts) of
                 {ok, TXID} -> process_l1_request(TXID, Request, Opts);
                 error ->
-                    BlockDepth = request_depth(Request, ?DEPTH_L1_OFFSETS, Opts),
                     {From, To} = parse_range(Request, Opts),
+                    TargetDepth = request_depth(
+                        Request, ?DEFAULT_BLOCK_DEPTH, Opts),
                     fetch_blocks(
-                        Request,
                         From,
                         To,
-                        Opts#{copycat_block_depth => BlockDepth}
+                        TargetDepth,
+                        Opts
                     )
             end;
         <<"list">>   ->
@@ -60,15 +66,15 @@ normalize_owner_id(Addr) ->
 %% @doc Adds an address to the owners aliases cache in Opts, mapping
 %% Alias -> native address for fast lookup and once per address computation.
 add_owner_alias(Addr, Alias, Opts) when is_binary(Alias) -> 
-    ExistingAliases = maps:get(owner_aliases, Opts, #{}),
+    ExistingAliases = hb_opts:get(owner_aliases, #{}, Opts),
     Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }};
 add_owner_alias(_Addr, Alias, _Opts) ->
     throw({invalid_owner_alias, Alias}).
 
 %% @doc Retrieve the address of a given alias.
 resolve_owner_alias(Alias, Opts) when is_binary(Alias) ->
-    Aliases = maps:get(owner_aliases, Opts, #{}),
-    case maps:find(Alias, Aliases) of
+    Aliases = hb_opts:get(owner_aliases, #{}, Opts),
+    case hb_maps:find(Alias, Aliases) of
         {ok, Addr} -> {ok, Addr};
         error -> {error, {owner_alias_not_found, Alias}}
     end;
@@ -163,9 +169,9 @@ parse_tag_filter(Key, Request, Opts) ->
 %% copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
-    LoadL1Offset =
+    ReadL1Offset =
         hb_util:bool(
-            hb_maps:get(<<"load-l1-offset">>, Request, false, Opts)
+            hb_maps:get(<<"read-l1-offset">>, Request, false, Opts)
         ),
     case parse_owner_filter(Request, Opts) of
         {error, _} = Error ->
@@ -183,17 +189,20 @@ process_l1_request(TXID, Request, Opts) ->
                                 process_l1_candidate(
                                     TXID,
                                     OwnerFilters#{
-                                        load_l1_offset => LoadL1Offset,
                                         include_tag => IncludeTag,
                                         exclude_tag => ExcludeTag
                                     },
                                     Depth,
+                                    ReadL1Offset,
                                     Opts
                                 )}
                     end
             end
     end.
-%% @doc Parse the requested recursion depth and clamp it to the configured safe cap.
+%% @doc Parse the requested recursion depth and clamp it to the configured
+%% safe cap. Depth is relative so depth 1 is always one level below the
+%% root specified in the request (either a block or an L1 TX ID).
+%% 
 %% `safe_max` resolves to the current copycat depth recursion cap.
 request_depth(Request, Default, Opts) ->
     MaxRecursionCap = get_depth_recursion_cap(Opts),
@@ -204,10 +213,7 @@ request_depth(Request, Default, Opts) ->
         end,
     erlang:min(
         MaxRecursionCap,
-        erlang:max(
-            ?DEPTH_L1_OFFSETS,
-            RequestedDepth
-        )
+        erlang:max(1, RequestedDepth)
     ).
 %% @doc Return the first matching L1 filter reason for a TX header, or `pass`.
 l1_filter_reason(TX, Filters) ->
@@ -395,38 +401,38 @@ classify_txs(TXIDs, Opts) ->
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
 %% is omitted, stop at the first block where any TX is already indexed.
-fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
+fetch_blocks(Current, To, TargetDepth, _Opts) 
+        when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
             {reached_target, To},
-            {initial_request, Req}
+            {target_depth, TargetDepth}
         }
     ),
     {ok, To};
-fetch_blocks(_Req, Current, undefined, _Opts) when Current < 0 ->
+fetch_blocks(Current, undefined, _TargetDepth, _Opts) when Current < 0 ->
     {ok, 0};
-fetch_blocks(Req, Current, undefined, Opts) ->
+fetch_blocks(Current, undefined, TargetDepth, Opts) ->
     BlockRes = fetch_block_header(Current, Opts),
     case is_already_indexed(BlockRes, Opts) of
         true ->
             ?event(copycat_short,
                 {arweave_block_indexing_completed,
-                    {stop_at_indexed_block, Current},
-                    {initial_request, Req}
+                    {stop_at_indexed_block, Current}
                 }
             ),
             {ok, Current};
         false ->
             observe_event(<<"block_indexed">>, fun() ->
-                process_block(BlockRes, Current, undefined, Opts)
+                process_block(BlockRes, Current, undefined, TargetDepth, Opts)
             end),
-            fetch_blocks(Req, Current - 1, undefined, Opts)
+            fetch_blocks(Current - 1, undefined, TargetDepth, Opts)
     end;
-fetch_blocks(Req, Current, To, Opts) ->
+fetch_blocks(Current, To, TargetDepth, Opts) ->
     observe_event(<<"block_indexed">>, fun() ->
-        fetch_and_process_block(Current, To, Opts)
+        fetch_and_process_block(Current, To, TargetDepth, Opts)
     end),
-    fetch_blocks(Req, Current - 1, To, Opts).
+    fetch_blocks(Current - 1, To, TargetDepth, Opts).
 
 %% @doc Determine whether a fetched block is considered indexed.
 %% A block is indexed when any TX from its `txs' list is in the index.
@@ -436,17 +442,17 @@ is_already_indexed({ok, Block}, Opts) ->
 is_already_indexed({error, _}, _Opts) ->
     false.
 
-fetch_and_process_block(Current, To, Opts) ->
+fetch_and_process_block(Current, To, TargetDepth, Opts) ->
     BlockRes = fetch_block_header(Current, Opts),
-    process_block(BlockRes, Current, To, Opts).
+    process_block(BlockRes, Current, To, TargetDepth, Opts).
 
 %% @doc Process a block.
-process_block(BlockRes, Current, To, Opts) ->
+process_block(BlockRes, Current, To, TargetDepth, Opts) ->
     case BlockRes of
         {ok, Block} ->
             ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
-            case maybe_index_ids(Block, Opts) of
+            case maybe_index_ids(Block, TargetDepth, Opts) of
                 {block_skipped, Results} ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     ?event(
@@ -485,7 +491,7 @@ process_block(BlockRes, Current, To, Opts) ->
     end.
 
 %% @doc Index the IDs of all transactions in the block if configured to do so.
-maybe_index_ids(Block, Opts) ->
+maybe_index_ids(Block, TargetDepth, Opts) ->
     TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
     case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
@@ -516,7 +522,8 @@ maybe_index_ids(Block, Opts) ->
                         fun({{padding, _}, _}) -> false; (_) -> true end,
                         TXsWithData
                     ),
-                    TXResults = process_txs(ValidTXs, BlockStartOffset, Opts),
+                    TXResults = process_txs(
+                        ValidTXs, BlockStartOffset, TargetDepth, Opts),
                     {block_cached, TXResults#{total_txs => TotalTXs}}
             end
     end.
@@ -531,10 +538,9 @@ parallel_map(Items, Fun, Opts) ->
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
+process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _TargetDepth, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
-process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
-    Depth = get_block_depth(Opts),
+process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
@@ -555,8 +561,10 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     end),
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
-        true when Depth > ?DEPTH_L1_OFFSETS ->
-            process_l1_candidate(TX#tx.id, #{}, Depth, Opts);
+        true when TargetDepth > 1 ->
+            % Indexing a block to depth 2 or greater means we need to load
+            % and recurse into each of the L1 TXs in the block.
+            process_l1_candidate(TX#tx.id, #{}, TargetDepth - 1, false, Opts);
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
@@ -614,10 +622,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
 %% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
 %% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
 %% Returns a map with keys: items_count, bundle_count, skipped_count.
-process_txs(ValidTXs, BlockStartOffset, Opts) ->
+process_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
     Results = parallel_map(
         ValidTXs,
-        fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, Opts) end,
+        fun(TXWithData) -> process_tx(
+            TXWithData, BlockStartOffset, TargetDepth, Opts) end,
         Opts
     ),
     lists:foldl(
@@ -633,17 +642,16 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
     ).
 
 %% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
-process_l1_candidate(TXID, Filters, Depth, Opts) ->
+process_l1_candidate(TXID, Filters, Depth, ReadL1Offset, Opts) ->
     Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
-    LoadL1Offset = maps:get(load_l1_offset, Filters, false),
     case ensure_l1_tx_offset(
         NormalizedTXID,
         EncodedTXID,
         IndexStore,
-        LoadL1Offset,
+        ReadL1Offset,
         Opts
     ) of
         {ok,
@@ -793,11 +801,11 @@ process_l1_candidate(TXID, Filters, Depth, Opts) ->
 ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
         when is_map(IndexStore) =:= false ->
     {error, missing_offset};
-ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, LoadL1Offset, Opts) ->
+ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, ReadL1Offset, Opts) ->
     case hb_store_arweave:read_offset(IndexStore, TXID) of
         {ok, _} = OffsetRes ->
             OffsetRes;
-        not_found when LoadL1Offset ->
+        not_found when ReadL1Offset ->
             ?event(
                 copycat_short,
                 {arweave_tx_offset_loading,
@@ -1035,7 +1043,7 @@ index_ids_test() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=1">>,
             Opts
         ),
     ?assertMatch(
@@ -1092,7 +1100,23 @@ index_ids_test() ->
         ],
         Opts
     ),
+    % L3 item not read when doing L1 depth=1
+    assert_item_not_read(<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, Opts),
    ok.
+
+index_ids_depth_2_test() ->
+    %% Test block: https://viewblock.io/arweave/block/1827942
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=2">>,
+            Opts
+        ),
+    % L3 item read when doing depth=2
+    assert_item_read(
+        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>,
+        Opts),
+    ok.
 
 %% @doc Test a bundle header that fits in a single chunk.
 small_bundle_header_test() ->
@@ -1633,23 +1657,23 @@ l1_filter_reason_test() ->
 
 request_depth_clamping_test() ->
     {_TestStore, _StoreOpts, Opts0} = setup_index_opts(),
-    ?assertEqual(4, request_depth(#{}, <<"safe_max">>, Opts0)),
+    ?assertEqual(6, request_depth(#{}, <<"safe_max">>, Opts0)),
     ?assertEqual(
         2,
         request_depth(#{<<"depth">> => <<"2">>}, <<"safe_max">>, Opts0)
     ),
     ?assertEqual(
-        ?DEPTH_L1_OFFSETS,
+        1,
         request_depth(#{<<"depth">> => <<"0">>}, <<"safe_max">>, Opts0)
     ),
     ?assertEqual(
-        4,
+        6,
         request_depth(#{<<"depth">> => <<"999">>}, <<"safe_max">>, Opts0)
     ),
     Opts1 = set_depth_recursion_cap(2, Opts0),
     ?assertEqual(2, request_depth(#{}, <<"safe_max">>, Opts1)),
     % no recursion cap set, use default from hb_opts
-    ?assertEqual(4, request_depth(#{}, <<"safe_max">>, #{})),
+    ?assertEqual(6, request_depth(#{}, <<"safe_max">>, #{})),
     ok.
 
 memory_cap_setter_getter_test() ->
@@ -1807,7 +1831,7 @@ id_missing_offset_with_load_test() ->
                 "~copycat@1.0/arweave&"
                 "id=", TXID/binary, "&"
                 "mode=write&"
-                "load-l1-offset=true&"
+                "read-l1-offset=true&"
                 "depth=2"
             >>,
             Opts

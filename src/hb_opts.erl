@@ -252,7 +252,7 @@ default_message() ->
         commitment_device => <<"httpsig@1.0">>,
         %% Copycat-specific options.
         copycat_memory_cap => 6 * 1024 * 1024 * 1024,
-        copycat_depth_recursion_cap => 4,
+        copycat_depth_recursion_cap => 6, % 2x the deepest we've seen to date
         %% Dev options
         mode => debug,
         profiling => true,
