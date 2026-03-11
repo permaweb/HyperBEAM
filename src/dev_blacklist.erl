@@ -1,9 +1,10 @@
 %%% @doc A request hook device for content moderation by blacklist.
 %%%
-%%% The node operator configures a blacklist provider via the `blacklist-provider`
-%%% key in the node message options. The provider can be a message or a path that
-%%% returns a message or binary. If a binary is returned from the provider, it is
-%%% parsed as a newline-delimited list of IDs.
+%%% The node operator configures blacklist providers via the
+%%% `blacklist-providers` key (a list) in the node message options. Each provider
+%%% can be a message or a path that returns a message or binary. If a binary is
+%%% returned from a provider, it is parsed as a newline-delimited list of IDs.
+%%% Multiple providers are merged into a single cache (union of all IDs).
 %%% 
 %%% The device is intended for use as a `~hook@1.0` `on/request` handler. It
 %%% blocks requests when any ID present in the hook payload matches the active
@@ -21,12 +22,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_PROVIDER,
-    [#{
-        <<"data-protocol">> => <<"content-policy">>,
-        <<"body">> => #{ <<"body">> => <<>> }
-    }]
-).
 -define(DEFAULT_MIN_WAIT, 60).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
@@ -94,24 +89,51 @@ maybe_refresh(Opts) ->
             skip_update
     end.
 
-%% @doc Fetch the blacklist and insert the IDs into the cache table.
+%% @doc Fetch blacklists from all configured providers and insert IDs into the
+%% cache table.
 fetch_and_insert_ids(Opts) ->
     ensure_cache_table(Opts),
-    case hb_opts:get(blacklist_provider, no_provider, Opts) of
-        no_provider -> {ok, 0};
-        Provider ->
-            case execute_provider(Provider, Opts) of
-                {ok, Blacklist} ->
-                    {ok, IDs} = parse_blacklist(Blacklist, Opts),
-                    ?event({parsed_blacklist, {ids, IDs}}),
-                    BlacklistID = hb_message:id(Blacklist, all, Opts),
-                    ?event({update_blacklist_cache, {ids, IDs}, {blacklist_id, BlacklistID}}),
-                    Table = cache_table_name(Opts),
-                    {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
-                {error, _} = Error ->
-                    ?event({execute_provider_error, Error}),
-                    Error
+    Providers = resolve_providers(Opts),
+    Total = lists:foldl(
+        fun(Provider, Acc) ->
+            case fetch_single_provider(Provider, Opts) of
+                {ok, Count} -> Acc + Count;
+                {error, _} -> Acc
             end
+        end,
+        0,
+        Providers
+    ),
+    {ok, Total}.
+
+%% @doc Resolve the configured providers into a list.
+resolve_providers(Opts) ->
+    case hb_opts:get(blacklist_providers, [], Opts) of
+        Providers when is_list(Providers) -> Providers;
+        _ -> []
+    end.
+
+%% @doc Fetch a single provider's blacklist and insert its IDs into the cache.
+fetch_single_provider(Provider, Opts) ->
+    try
+        case execute_provider(Provider, Opts) of
+            {ok, Blacklist} ->
+                {ok, IDs} = parse_blacklist(Blacklist, Opts),
+                ?event({parsed_blacklist, {ids, IDs}}),
+                BlacklistID = hb_message:id(Blacklist, all, Opts),
+                ?event({update_blacklist_cache,
+                    {ids, IDs}, {blacklist_id, BlacklistID}}),
+                Table = cache_table_name(Opts),
+                {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
+            {error, _} = Error ->
+                ?event({execute_provider_error, Error}),
+                Error
+        end
+    catch
+        Type:Reason ->
+            ?event({provider_fetch_error,
+                {type, Type}, {reason, Reason}, {provider, Provider}}),
+            {error, {Type, Reason}}
     end.
 
 %% @doc Execute the blacklist provider, returning the result.
@@ -255,7 +277,7 @@ basic_test() ->
     }} = setup_test_env(),
     Opts1 =
         Opts0#{
-            blacklist_provider => BlacklistID,
+            blacklist_providers => [BlacklistID],
             on => #{
                 <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
             }
@@ -282,7 +304,7 @@ default_provider_test() ->
         signed1 := SignedID1,
         unsigned3 := UnsignedID3
     }} = setup_test_env(),
-    Opts1 = Opts0#{ blacklist_provider => ?DEFAULT_PROVIDER },
+    Opts1 = Opts0#{ blacklist_providers => [] },
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -310,11 +332,11 @@ blacklist_from_external_http_test() ->
         #{
             store => RootStore,
             priv_wallet => ar_wallet:new(),
-            blacklist_provider =>
-                <<
+            blacklist_providers =>
+                [<<
                     "/~relay@1.0/call?relay-method=GET&relay-path=",
                         BlacklistHostNode/binary, BlacklistID/binary
-                >>,
+                >>],
             on => #{
                 <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
             }
@@ -332,3 +354,71 @@ blacklist_from_external_http_test() ->
             }},
         hb_http:get(Node, SignedID1, NodeOpts)
     ).
+
+%% @doc Test that multiple providers merge their blacklists.
+multiple_providers_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        unsigned2 := UnsignedID2,
+        unsigned3 := UnsignedID3
+    }} = setup_test_env(),
+    Blacklist1 = #{
+        <<"data-protocol">> => <<"content-policy">>,
+        <<"body">> => <<SignedID1/binary, "\n">>
+    },
+    Blacklist2 = #{
+        <<"data-protocol">> => <<"content-policy">>,
+        <<"body">> => <<UnsignedID2/binary, "\n">>
+    },
+    BlacklistMsg1 = hb_message:commit(Blacklist1, Opts0),
+    BlacklistMsg2 = hb_message:commit(Blacklist2, Opts0),
+    {ok, BlacklistID1} = hb_cache:write(BlacklistMsg1, Opts0),
+    {ok, BlacklistID2} = hb_cache:write(BlacklistMsg2, Opts0),
+    Opts1 = Opts0#{
+        blacklist_providers => [BlacklistID1, BlacklistID2],
+        on => #{
+            <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+        }
+    },
+    Node = hb_http_server:start_node(Opts1),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(Node, SignedID1, Opts1)
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(Node, <<"/", UnsignedID2/binary>>, Opts1)
+    ),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    ok.
+
+%% @doc Test that a failing provider does not prevent other providers from
+%% contributing entries.
+provider_failure_resilience_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        unsigned3 := UnsignedID3,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    BadProvider = <<"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkk">>,
+    Opts1 = Opts0#{
+        blacklist_providers => [BadProvider, BlacklistID],
+        on => #{
+            <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+        }
+    },
+    Node = hb_http_server:start_node(Opts1),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(Node, SignedID1, Opts1)
+    ),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    ok.
