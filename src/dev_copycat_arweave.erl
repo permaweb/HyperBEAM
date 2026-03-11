@@ -83,29 +83,28 @@ resolve_owner_alias(Alias, _Opts) ->
 %% @doc Parse include/exclude owner filters from the request.
 %% Supports direct owner values and owner aliases.
 parse_owner_filter(Request, Opts) ->
-    case resolve_owner_filter_value(
-        <<"include-owner">>,
-        <<"include-owner-alias">>,
-        Request,
-        Opts
-    ) of
-        {error, _} = Error ->
-            Error;
-        {ok, IncludeOwner} ->
-            case resolve_owner_filter_value(
+    maybe
+        {ok, IncludeOwner} ?=
+            resolve_owner_filter_value(
+                <<"include-owner">>,
+                <<"include-owner-alias">>,
+                Request,
+                Opts
+            ),
+        {ok, ExcludeOwner} ?=
+            resolve_owner_filter_value(
                 <<"exclude-owner">>,
                 <<"exclude-owner-alias">>,
                 Request,
                 Opts
-            ) of
-                {error, _} = Error ->
-                    Error;
-                {ok, ExcludeOwner} ->
-                    {ok, #{
-                        include_owner => IncludeOwner,
-                        exclude_owner => ExcludeOwner
-                    }}
-            end
+            ),
+        {ok, #{
+            include_owner => IncludeOwner,
+            exclude_owner => ExcludeOwner
+        }}
+    else
+        {error, _} = Error ->
+            Error
     end.
 %% @doc Resolve one owner filter value from either a direct owner param or
 %% a comma-separated owner alias param. Alias takes precedence.
@@ -169,35 +168,28 @@ parse_tag_filter(Key, Request, Opts) ->
 %% copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
-    ReadL1Offset =
+    QueryL1Offset =
         hb_util:bool(
-            hb_maps:get(<<"read-l1-offset">>, Request, false, Opts)
+            hb_maps:get(<<"query-l1-offset">>, Request, false, Opts)
         ),
-    case parse_owner_filter(Request, Opts) of
+    maybe
+        {ok, OwnerFilters} ?= parse_owner_filter(Request, Opts),
+        {ok, IncludeTag} ?= parse_tag_filter(<<"include-tag">>, Request, Opts),
+        {ok, ExcludeTag} ?= parse_tag_filter(<<"exclude-tag">>, Request, Opts),
+        {ok,
+            maybe_process_l1_tx(
+                TXID,
+                OwnerFilters#{
+                    include_tag => IncludeTag,
+                    exclude_tag => ExcludeTag
+                },
+                Depth,
+                QueryL1Offset,
+                Opts
+            )}
+    else
         {error, _} = Error ->
-            Error;
-        {ok, OwnerFilters} ->
-            case parse_tag_filter(<<"include-tag">>, Request, Opts) of
-                {error, _} = Error ->
-                    Error;
-                {ok, IncludeTag} ->
-                    case parse_tag_filter(<<"exclude-tag">>, Request, Opts) of
-                        {error, _} = Error ->
-                            Error;
-                        {ok, ExcludeTag} ->
-                            {ok,
-                                process_l1_candidate(
-                                    TXID,
-                                    OwnerFilters#{
-                                        include_tag => IncludeTag,
-                                        exclude_tag => ExcludeTag
-                                    },
-                                    Depth,
-                                    ReadL1Offset,
-                                    Opts
-                                )}
-                    end
-            end
+            Error
     end.
 %% @doc Parse the requested recursion depth and clamp it to the configured
 %% safe cap. Depth is relative so depth 1 is always one level below the
@@ -222,39 +214,14 @@ l1_filter_reason(TX, Filters) ->
     IncludeTag = maps:get(include_tag, Filters, undefined),
     ExcludeTag = maps:get(exclude_tag, Filters, undefined),
     Owner = ar_tx:get_owner_address(TX),
-    case owner_matches_filter(Owner, IncludeOwner) of
-        false when IncludeOwner =/= undefined ->
-            include_owner_mismatch;
-        _ ->
-            case owner_matches_filter(Owner, ExcludeOwner) of
-                true ->
-                    exclude_owner_match;
-                false ->
-                    case IncludeTag of
-                        undefined ->
-                            case ExcludeTag of
-                                undefined -> pass;
-                                _ ->
-                                    case has_tag_pair(TX, ExcludeTag) of
-                                        true -> exclude_tag_match;
-                                        false -> pass
-                                    end
-                            end;
-                        _ ->
-                            case has_tag_pair(TX, IncludeTag) of
-                                false -> include_tag_mismatch;
-                                true ->
-                                    case ExcludeTag of
-                                        undefined -> pass;
-                                        _ ->
-                                            case has_tag_pair(TX, ExcludeTag) of
-                                                true -> exclude_tag_match;
-                                                false -> pass
-                                            end
-                                    end
-                            end
-                    end
-            end
+    maybe
+        pass ?= maybe_include_owner(Owner, IncludeOwner),
+        pass ?= maybe_exclude_owner(Owner, ExcludeOwner),
+        pass ?= maybe_include_tag(TX, IncludeTag),
+        pass ?= maybe_exclude_tag(TX, ExcludeTag),
+        pass
+    else
+        Reason -> Reason
     end.
 %% @doc Match an owner against an undefined, single-owner, or multi-owner filter.
 owner_matches_filter(_Owner, undefined) ->
@@ -263,6 +230,38 @@ owner_matches_filter(Owner, Owners) when is_list(Owners) ->
     lists:member(Owner, Owners);
 owner_matches_filter(Owner, FilterOwner) ->
     Owner =:= FilterOwner.
+
+maybe_include_owner(_Owner, undefined) ->
+    pass;
+maybe_include_owner(Owner, IncludeOwner) ->
+    case owner_matches_filter(Owner, IncludeOwner) of
+        true -> pass;
+        false -> include_owner_mismatch
+    end.
+
+maybe_exclude_owner(_Owner, undefined) ->
+    pass;
+maybe_exclude_owner(Owner, ExcludeOwner) ->
+    case owner_matches_filter(Owner, ExcludeOwner) of
+        true -> exclude_owner_match;
+        false -> pass
+    end.
+
+maybe_include_tag(_TX, undefined) ->
+    pass;
+maybe_include_tag(TX, IncludeTag) ->
+    case has_tag_pair(TX, IncludeTag) of
+        true -> pass;
+        false -> include_tag_mismatch
+    end.
+
+maybe_exclude_tag(_TX, undefined) ->
+    pass;
+maybe_exclude_tag(TX, ExcludeTag) ->
+    case has_tag_pair(TX, ExcludeTag) of
+        true -> exclude_tag_match;
+        false -> pass
+    end.
 
 has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
     TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
@@ -452,7 +451,7 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
         {ok, Block} ->
             ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
-            case maybe_index_ids(Block, TargetDepth, Opts) of
+            case maybe_index_block(Block, TargetDepth, Opts) of
                 {block_skipped, Results} ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     ?event(
@@ -491,7 +490,7 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
     end.
 
 %% @doc Index the IDs of all transactions in the block if configured to do so.
-maybe_index_ids(Block, TargetDepth, Opts) ->
+maybe_index_block(Block, TargetDepth, Opts) ->
     TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
     case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
@@ -522,7 +521,7 @@ maybe_index_ids(Block, TargetDepth, Opts) ->
                         fun({{padding, _}, _}) -> false; (_) -> true end,
                         TXsWithData
                     ),
-                    TXResults = process_txs(
+                    TXResults = process_block_txs(
                         ValidTXs, BlockStartOffset, TargetDepth, Opts),
                     {block_cached, TXResults#{total_txs => TotalTXs}}
             end
@@ -538,9 +537,9 @@ parallel_map(Items, Fun, Opts) ->
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _TargetDepth, _Opts) ->
+process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _TargetDepth, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0};
-process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
+process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
@@ -561,10 +560,10 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) 
     end),
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
-        true when TargetDepth > 1 ->
-            % Indexing a block to depth 2 or greater means we need to load
+        true when TargetDepth > 2 ->
+            % Indexing a block to depth 3 or greater means we need to load
             % and recurse into each of the L1 TXs in the block.
-            process_l1_candidate(TX#tx.id, #{}, TargetDepth - 1, false, Opts);
+            maybe_process_l1_tx(TX#tx.id, #{}, TargetDepth - 1, false, Opts);
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
@@ -876,10 +875,342 @@ index_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
             )
     end.
 
+%% @doc Lightweight bundle indexing. This function only loads the bundle header
+%% and writes the index based solely on the header. For a more rigorous and
+%% deeper indexing, see the index_full_bundle_xxx functions.
+index_bundle_header(TXID, TXEndOffset, TXDataSize, TXStartOffset, IndexStore, Opts) ->
+    BundleRes = download_bundle_header(TXEndOffset, TXDataSize, Opts),
+    case BundleRes of
+        {ok, {BundleIndex, HeaderSize}} ->
+            % Batch event tracking: measure total time and count for
+            % all write_offset calls
+            {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
+                lists:foldl(
+                    fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                        hb_store_arweave:write_offset(
+                            IndexStore,
+                            hb_util:encode(ItemID),
+                            <<"ans104@1.0">>,
+                            ItemStartOffset,
+                            Size
+                        ),
+                        {ItemStartOffset + Size, ItemsCountAcc + 1}
+                    end,
+                    {TXStartOffset + HeaderSize, 0},
+                    BundleIndex
+                )
+            end),
+            % Single event increment for the batch
+            record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
+            #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+        {error, Reason} ->
+            ?event(
+                copycat_short,
+                {arweave_bundle_skipped,
+                    {tx_id, {explicit, TXID}},
+                    {reason, Reason}
+                }
+            ),
+            #{items_count => 0, bundle_count => 1, skipped_count => 1}
+    end.
+
+download_bundle_header(EndOffset, Size, Opts) ->
+    observe_event(<<"bundle_header">>, fun() ->
+        dev_arweave:bundle_header(EndOffset - Size, Opts)
+    end).
+
+header_chunk(invalid_bundle_header, _FirstChunk, _StartOffset, _Opts) ->
+    {error, invalid_bundle_header};
+header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
+        when HeaderSize =< byte_size(FirstChunk) ->
+    {ok, FirstChunk};
+header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
+    Res =
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary,
+                "/chunk&offset=",
+                (hb_util:bin(StartOffset + byte_size(FirstChunk)))/binary,
+                "&length=",
+                (hb_util:bin(HeaderSize - byte_size(FirstChunk)))/binary
+            >>,
+            Opts
+        ),
+    case Res of
+        {ok, OtherChunks} -> {ok, <<FirstChunk/binary, OtherChunks/binary>>};
+        Other -> Other
+    end.
+
+%% @doc Process transactions: spawn workers and manage the worker pool.
+%% This function processes transactions in parallel using parallel_map.
+%% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
+%% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
+%% Returns a map with keys: items_count, bundle_count, skipped_count.
+process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
+    Results = parallel_map(
+        ValidTXs,
+        fun(TXWithData) -> process_block_tx(
+            TXWithData, BlockStartOffset, TargetDepth, Opts) end,
+        Opts
+    ),
+    lists:foldl(
+        fun(Result, Acc) ->
+            #{
+                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
+                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
+                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
+            }
+        end,
+        #{items_count => 0, bundle_count => 0, skipped_count => 0},
+        Results
+    ).
+
+%% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
+maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
+    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
+    NormalizedTXID = hb_util:native_id(TXID),
+    EncodedTXID = hb_util:encode(NormalizedTXID),
+    IndexStore = hb_store_arweave:store_from_opts(Opts),
+    maybe
+        {ok,
+            #{
+                <<"codec-device">> := <<"tx@1.0">>,
+                <<"start-offset">> := StartOffset,
+                <<"length">> := Length
+            }} ?=
+            ensure_l1_tx_offset(
+                NormalizedTXID,
+                EncodedTXID,
+                IndexStore,
+                QueryL1Offset,
+                Opts
+            ),
+        {ok, TX} ?= resolve_tx_header(EncodedTXID, Opts),
+        pass ?= l1_filter_reason(TX, Filters),
+        bundle ?=
+            case is_bundle_tx(TX, Opts) of
+                true -> bundle;
+                false -> not_bundle
+            end,
+        within_memory_cap ?=
+            case Length =< get_memory_safe_cap(Opts) of
+                true -> within_memory_cap;
+                false -> memory_safe_cap_exceeded
+            end,
+        process_l1_tx(
+            StartOffset,
+            Length,
+            Depth,
+            IndexStore,
+            EncodedTXID,
+            Opts
+        )
+    else
+        {error, Reason} ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, Reason}
+                }
+            ),
+            Skipped;
+        error ->
+            % event already logged in resolve_tx_header
+            Skipped;
+        not_bundle ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, not_bundle}
+                }
+            ),
+            Skipped;
+        memory_safe_cap_exceeded ->
+            ?event(
+                copycat_short,
+                {arweave_bundle_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, memory_safe_cap_exceeded}
+                }
+            ),
+            #{
+                items_count => 0,
+                bundle_count => 1,
+                skipped_count => 1
+            };
+        FilterReason ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, FilterReason}
+                }
+            ),
+            Skipped
+    end.
+
+%% @doc Load the L1 TX data into memory and index it.
+%% 
+%% TODO: process_l1_tx and process_block_tx are very similar and can/should
+%% be merged.
+process_l1_tx(
+        StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
+    case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
+        {ok, BundleData} ->
+            {TotalTime, IndexRes} = timer:tc(
+                fun() ->
+                    index_full_bundle_bytes(
+                        BundleData,
+                        StartOffset,
+                        Depth,
+                        IndexStore,
+                        Opts
+                    )
+                end
+            ),
+            case IndexRes of
+                {ok, ItemsCount} ->
+                    record_event_metrics(
+                        <<"item_indexed">>,
+                        ItemsCount,
+                        TotalTime
+                    ),
+                    #{
+                        items_count => ItemsCount,
+                        bundle_count => 1,
+                        skipped_count => 0
+                    };
+                {error, Reason} ->
+                    ?event(
+                        copycat_short,
+                        {arweave_bundle_skipped,
+                            {tx_id, {explicit, EncodedTXID}},
+                            {reason, Reason}
+                        }
+                    ),
+                    #{
+                        items_count => 0,
+                        bundle_count => 1,
+                        skipped_count => 1
+                    }
+            end;
+        {error, Reason} ->
+            ?event(
+                copycat_short,
+                {arweave_bundle_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, Reason}
+                }
+            ),
+            #{
+                items_count => 0,
+                bundle_count => 1,
+                skipped_count => 1
+            };
+        not_found ->
+            ?event(
+                copycat_short,
+                {arweave_bundle_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, not_found}
+                }
+            ),
+            #{
+                items_count => 0,
+                bundle_count => 1,
+                skipped_count => 1
+            }
+    end.
+%% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
+%% if the offset is missing and `query_l1_offset` is enabled, fetches the TX
+%% offset metadata from Arweave, writes it to the local offset store, and
+%% retries the local lookup.
+ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
+        when is_map(IndexStore) =:= false ->
+    {error, missing_offset};
+ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, QueryL1Offset, Opts) ->
+    case hb_store_arweave:read_offset(IndexStore, TXID) of
+        {ok, _} = OffsetRes ->
+            OffsetRes;
+        not_found when QueryL1Offset ->
+            ?event(
+                copycat_short,
+                {arweave_tx_querying_offset,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {source, network}
+                }
+            ),
+            case query_l1_tx_offset(EncodedTXID, IndexStore, Opts) of
+                ok ->
+                    case hb_store_arweave:read_offset(IndexStore, TXID) of
+                        {ok, _} = OffsetRes ->
+                            OffsetRes;
+                        not_found ->
+                            {error, missing_offset}
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
+        not_found ->
+            {error, missing_offset}
+    end.
+
+query_l1_tx_offset(TXID, IndexStore, Opts) ->
+    % TODO: move this into dev_arweave - I think? Unless it's possible to
+    % query this already via one of the existing ~arweave@2.9 paths?
+    case hb_http:request(
+        #{
+            <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+            <<"method">> => <<"GET">>
+        },
+        Opts
+    ) of
+        {ok, #{ <<"body">> := OffsetBody }} ->
+            OffsetMsg = hb_json:decode(OffsetBody),
+            EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+            Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+            StartOffset = EndOffset - Size,
+            ok =
+                hb_store_arweave:write_offset(
+                    IndexStore,
+                    TXID,
+                    <<"tx@1.0">>,
+                    StartOffset,
+                    Size
+                ),
+            ok;
+        {error, Reason} ->
+            {error, Reason};
+        not_found ->
+            {error, not_found}
+    end.
+
+index_full_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
+        when Depth =< 0 ->
+    {ok, 0};
+index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
+    case ar_bundles:decode_bundle_header(BundleData) of
+        invalid_bundle_header ->
+            {error, invalid_bundle_header};
+        {ItemsBin, BundleIndex} ->
+            HeaderSize = byte_size(BundleData) - byte_size(ItemsBin),
+            index_full_bundle_items(
+                BundleIndex,
+                ItemsBin,
+                BundleStartOffset + HeaderSize,
+                Depth,
+                Store,
+                Opts,
+                0
+            )
+    end.
+
 %% @doc Index bundle children from decoded bundle bytes and recurse descendants in-memory.
-index_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
+index_full_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
     {ok, Count};
-index_bundle_items(
+index_full_bundle_items(
     [{ItemID, Size} | Rest],
     ItemsBin,
     ItemStartOffset,
@@ -899,7 +1230,7 @@ index_bundle_items(
     DescendantCount =
         case Depth > 1 of
             true ->
-                index_bundle_descendants(
+                index_full_bundle_descendants(
                     ItemBinary,
                     ItemStartOffset,
                     Depth - 1,
@@ -909,7 +1240,7 @@ index_bundle_items(
             false ->
                 0
         end,
-    index_bundle_items(
+    index_full_bundle_items(
         Rest,
         binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),
         ItemStartOffset + Size,
@@ -918,19 +1249,19 @@ index_bundle_items(
         Opts,
         Count + 1 + DescendantCount
     );
-index_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
+index_full_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
     {error, invalid_bundle_header}.
 
 %% @doc Recurse into a nested bundle data item from in-memory bytes.
-index_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
+index_full_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
         when Depth =< 0 ->
     0;
-index_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
+index_full_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
     try ar_bundles:deserialize_header(ItemBinary) of
         {ok, HeaderSize, HeaderTX} ->
             case is_bundle_tx(HeaderTX, Opts) of
                 true ->
-                    case index_bundle_bytes(
+                    case index_full_bundle_bytes(
                         HeaderTX#tx.data,
                         ItemStartOffset + HeaderSize,
                         Depth,
@@ -952,11 +1283,6 @@ index_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
 
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
-
-download_bundle_header(EndOffset, Size, Opts) ->
-    observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Opts)
-    end).
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
@@ -1034,7 +1360,7 @@ observe_event(MetricName, Fun) ->
 
 %%% Tests
 
-index_ids_test() ->
+block_depth_2_test() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     %% Note: this block includes a data item with an Ethereum signature. This
     %% signature type is not yet (as of Jan 2026) supported by ar_bundles.erl,
@@ -1043,7 +1369,7 @@ index_ids_test() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=1">>,
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
             Opts
         ),
     ?assertMatch(
@@ -1104,17 +1430,17 @@ index_ids_test() ->
     assert_item_not_read(<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, Opts),
    ok.
 
-index_ids_depth_2_test() ->
+block_depth_3_test() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=2">>,
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=3">>,
             Opts
         ),
     % L3 item read when doing depth=2
     assert_item_read(
-        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>,
+        <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
         Opts),
     ok.
 
@@ -1831,7 +2157,7 @@ id_missing_offset_with_load_test() ->
                 "~copycat@1.0/arweave&"
                 "id=", TXID/binary, "&"
                 "mode=write&"
-                "read-l1-offset=true&"
+                "query-l1-offset=true&"
                 "depth=2"
             >>,
             Opts
