@@ -125,7 +125,7 @@ print_greeter(Config, PrivWallet) ->
                     io_lib:format(
                         "http://~s:~p",
                         [
-                            hb_opts:get(host, <<"localhost">>, Config),
+                            hb_opts:get(node_host, <<"localhost">>, Config),
                             hb_opts:get(port, 8734, Config)
                         ]
                     )
