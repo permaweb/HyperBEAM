@@ -289,15 +289,16 @@ enforce_set_authority(Base, Req, Opts) ->
 validate_address(Address) when is_binary(Address) ->
     case byte_size(Address) of
         0 -> {error, <<"Recipient address cannot be empty.">>};
+        N when N > 128 -> {error, <<"Recipient address is too long.">>};
         _ ->
-            % Check for path separators (security: prevent path traversal)
-            case binary:match(Address, [<<"/">>, <<"\\">>]) of
-                nomatch -> true; 
-                _ -> 
-                    {
-                        error, 
-                        <<"Recipient address cannot contain path separators.">>
-                    }
+            maybe
+                true ?= (not dev_trie:is_reserved_key(Address))
+                    orelse {error, <<"Recipient address uses a reserved internal key.">>},
+                % Check for path separators (security: prevent path traversal)
+                case binary:match(Address, [<<"/">>, <<"\\">>]) of
+                    nomatch -> true;
+                    _ -> {error, <<"Recipient address cannot contain path separators.">>}
+                end
             end
     end;
 validate_address(_) ->
