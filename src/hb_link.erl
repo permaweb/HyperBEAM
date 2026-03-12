@@ -38,7 +38,8 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         UnderlyingID =
                             case maps:get(<<"lazy">>, LinkOpts, false) of
                                 true ->
-                                    case hb_cache:read(ID, Opts) of
+                                    ReadOpts = hb_util:deep_merge(Opts, LinkOpts, Opts),
+                                    case hb_cache:read(ID, ReadOpts) of
                                         {ok, Underlying} when ?IS_ID(Underlying) ->
                                             Underlying;
                                         Err ->

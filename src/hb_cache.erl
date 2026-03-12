@@ -640,7 +640,8 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                                     binary:part(Subpath, 0, byte_size(Subpath) - 5),
                                     {link, SubkeyPath, #{
                                         <<"type">> => <<"link">>,
-                                        <<"lazy">> => true
+                                        <<"lazy">> => true,
+                                        store => Store
                                     }}
                                 }
                             }
