@@ -27,7 +27,7 @@
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_keys/2]).
--export([base58_encode/1, base32_encode/1, base32_decode/1]).
+-export([base58_encode/1]).
 -include("include/hb.hrl").
 
 
@@ -840,51 +840,3 @@ base58_encode_int(N) ->
     Char = binary:at(Alphabet, Rem),
     Rest = base58_encode_int(N div 58),
     <<Rest/binary, Char>>.
-
--define(ALPHABET, <<"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567">>).
-base32_encode(Data) ->
-    Bits = << <<B:8>> || <<B:8>> <= Data >>,
-    encode_bits(Bits, <<>>).
-
-encode_bits(<<>>, Acc) ->
-    Acc;
-encode_bits(Bits, Acc) when bit_size(Bits) < 5 ->
-    Acc;
-encode_bits(<<Chunk:5, Rest/bitstring>>, Acc) ->
-    <<Char>> = binary:part(?ALPHABET, Chunk, 1),
-    encode_bits(Rest, <<Acc/binary, Char>>).
-
--spec base32_decode(binary() | list()) -> binary().
-base32_decode(Input0) ->
-    Input =
-        case is_list(Input0) of
-            true -> list_to_binary(Input0);
-            false -> Input0
-        end,
-    Upper = string:uppercase(Input),
-    decode(Upper, <<>>, 0, 0).
-
-decode(<<>>, Acc, Bits, Value) ->
-    case Bits of
-        0 -> Acc;
-        _ ->
-            <<Acc/binary, (Value bsr (Bits - 8)):8>>
-    end;
-decode(<<C, Rest/binary>>, Acc, Bits, Value) ->
-    V = alphabet_val(C),
-    NewValue = (Value bsl 5) bor V,
-    NewBits = Bits + 5,
-    case NewBits >= 8 of
-        true ->
-            Byte = (NewValue bsr (NewBits - 8)) band 16#FF,
-            decode(Rest, <<Acc/binary, Byte>>, NewBits - 8, NewValue);
-        false ->
-            decode(Rest, Acc, NewBits, NewValue)
-    end.
-
-alphabet_val(C) when $A =< C, C =< $Z ->
-    C - $A;
-alphabet_val(C) when $2 =< C, C =< $7 ->
-    26 + (C - $2);
-alphabet_val($=) ->
-    0.
