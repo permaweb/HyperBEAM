@@ -104,6 +104,7 @@ fetch_and_insert_ids(Opts) ->
         0,
         Providers
     ),
+    ?event(blacklist_short, {fetched_and_inserted_ids, Total}, Opts),
     {ok, Total}.
 
 %% @doc Resolve the configured providers into a list.
@@ -175,9 +176,14 @@ parse_blacklist_line(Line) ->
 collect_ids(Msg, Opts) -> lists:usort(collect_ids(Msg, [], Opts)).
 collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
 collect_ids(Bin, Acc, _Opts) when is_binary(Bin) -> Acc;
-collect_ids(Link, Acc, Opts) when ?IS_LINK(Link) ->
-    collect_ids(hb_cache:ensure_loaded(Link, Opts), Acc, Opts);
+collect_ids({link, ID, _}, Acc, _Opts) when ?IS_ID(ID) ->
+    [hb_util:human_id(ID) | Acc];
 collect_ids(Msg, Acc, Opts) when is_map(Msg) ->
+    case hb_maps:get(<<"path">>, Msg, undefined, Opts) of
+        Path when ?IS_ID(Path) -> [hb_util:human_id(Path)];
+        _ -> []
+    end ++
+    hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) ++
     hb_maps:fold(
         fun(_Key, Value, AccIn) -> collect_ids(Value, AccIn, Opts) end,
         Acc,
