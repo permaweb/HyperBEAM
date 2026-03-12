@@ -475,6 +475,9 @@ default_message() ->
                     },
                     #{
                         <<"device">> => <<"manifest@1.0">>
+                    },
+                    #{
+                        <<"device">> => <<"blacklist@1.0">>
                     }
                 ]
         },
