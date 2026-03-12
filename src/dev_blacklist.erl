@@ -27,28 +27,32 @@
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
-    case is_match(HookReq, Opts) of
-        false ->
-            ?event(blacklist, {allowed, HookReq}, Opts),
-            {ok, HookReq};
-        ID ->
-            ?event(blacklist, {blocked, ID}, Opts),
-            {
-                ok,
-                HookReq#{
-                    <<"body">> =>
-                        [#{
-                            <<"status">> => 451,
-                            <<"reason">> => <<"content-policy">>,
-                            <<"blocked-id">> => ID,
+    case hb_opts:get(blacklist_providers, false, Opts) of
+        false -> {ok, HookReq};
+        _ ->
+            case is_match(HookReq, Opts) of
+                false ->
+                    ?event(blacklist, {allowed, HookReq}, Opts),
+                    {ok, HookReq};
+                ID ->
+                    ?event(blacklist, {blocked, ID}, Opts),
+                    {
+                        ok,
+                        HookReq#{
                             <<"body">> =>
-                                <<
-                                    "Requested message blocked by this node's ",
-                                    "content policy. Blocked ID: ", ID/binary
-                                >>
-                        }]
-                }
-            }
+                                [#{
+                                    <<"status">> => 451,
+                                    <<"reason">> => <<"content-policy">>,
+                                    <<"blocked-id">> => ID,
+                                    <<"body">> =>
+                                        <<
+                                            "Requested message blocked by this node's ",
+                                            "content policy. Blocked ID: ", ID/binary
+                                        >>
+                                }]
+                        }
+                    }
+            end
     end.
 
 %% @doc Check if the message contains any blacklisted IDs.

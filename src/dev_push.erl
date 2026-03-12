@@ -363,7 +363,7 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             {ok, NewOpts} -> NewOpts;
             _ -> RawOpts
         end,
-    Self = hb_opts:get(host, host_not_specified, Opts),
+    Self = hb_opts:get(node_host, host_not_specified, Opts),
     ?event(remote_push,
         {push_downstream_remote,
             {target, TargetID},

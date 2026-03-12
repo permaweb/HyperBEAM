@@ -75,7 +75,7 @@ request(HookMsg, HookReq, Opts) ->
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
-        {ok, Name} ?= name_from_host(Host, hb_opts:get(host, no_host, Opts)),
+        {ok, Name} ?= name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
         ModReq =
             case hb_maps:find(<<"body">>, HookReq, Opts) of
@@ -280,8 +280,6 @@ arns_host_resolution_test() ->
                 <<"path">> => <<"content-type">>,
                 <<"host">> => <<"draft-17_whitepaper">>
             },
-            %% Host header isn't added automatically if used HTTP2. 
-            %% We need host header to resolve the ARNS name.
-            Opts#{http_client => gun, opts => #{protocol => http1} }
+            Opts
         )
     ).
