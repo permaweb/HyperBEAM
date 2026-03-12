@@ -27,12 +27,37 @@ arweave(_Base, Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
         <<"write">> ->
             case hb_maps:find(<<"id">>, Request, Opts) of
-                {ok, TXID} -> process_l1_request(TXID, Request, Opts);
+                {ok, TXID} ->
+                    case process_l1_request(TXID, Request, Opts) of
+                        {ok, Stats} when is_map(Stats) ->
+                            ?event(
+                                copycat_short,
+                                {arweave_tx_indexed,
+                                    {id, {explicit, TXID}},
+                                    {items_indexed, maps:get(items_count, Stats, 0)},
+                                    {bundle_txs, maps:get(bundle_count, Stats, 0)},
+                                    {skipped_txs, maps:get(skipped_count, Stats, 0)}
+                                }
+                            ),
+                            {ok, Stats#{
+                                <<"body">> => maps:get(items_count, Stats, 0)
+                            }};
+                        _ -> 
+                            {ok, #{
+                                items_count => 0,
+                                bundle_count => 0,
+                                skipped_count => 0,
+                                <<"body">> => 0
+                            }}                         
+                    end;
                 error ->
                     TargetDepth = request_depth(Request, ?DEFAULT_BLOCK_DEPTH, Opts),
                     case parse_range(Request, Opts) of
                         {error, unavailable} -> {error, unavailable};
                         {ok, {From, To}} ->
+                            ?event(copycat_short,
+                                {indexing_blocks, {from, From}, {to, To}, {depth, TargetDepth}}
+                            ),
                             fetch_blocks(From, To, TargetDepth, Opts)
                     end
             end;
@@ -318,9 +343,6 @@ normalize_height(Height, Opts) ->
         false ->
             {ok, RequestedHeight}
     end.
-
-get_block_depth(Opts) ->
-    maps:get(copycat_block_depth, Opts, ?DEPTH_L1_OFFSETS).
 
 latest_height(Opts) ->
     case hb_ao:resolve(
@@ -635,304 +657,6 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             end
     end.
 
-%% @doc Process transactions: spawn workers and manage the worker pool.
-%% This function processes transactions in parallel using parallel_map.
-%% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
-%% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
-%% Returns a map with keys: items_count, bundle_count, skipped_count.
-process_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
-    Results = parallel_map(
-        ValidTXs,
-        fun(TXWithData) -> process_tx(
-            TXWithData, BlockStartOffset, TargetDepth, Opts) end,
-        Opts
-    ),
-    lists:foldl(
-        fun(Result, Acc) ->
-            #{
-                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
-                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
-                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
-            }
-        end,
-        #{items_count => 0, bundle_count => 0, skipped_count => 0},
-        Results
-    ).
-
-%% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
-process_l1_candidate(TXID, Filters, Depth, ReadL1Offset, Opts) ->
-    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
-    NormalizedTXID = hb_util:native_id(TXID),
-    EncodedTXID = hb_util:encode(NormalizedTXID),
-    IndexStore = hb_store_arweave:store_from_opts(Opts),
-    case ensure_l1_tx_offset(
-        NormalizedTXID,
-        EncodedTXID,
-        IndexStore,
-        ReadL1Offset,
-        Opts
-    ) of
-        {ok,
-            #{
-                <<"codec-device">> := <<"tx@1.0">>,
-                <<"start-offset">> := StartOffset,
-                <<"length">> := Length
-            }} ->
-            case resolve_tx_header(EncodedTXID, Opts) of
-                {ok, TX} ->
-                    case l1_filter_reason(TX, Filters) of
-                        pass ->
-                            case is_bundle_tx(TX, Opts) of
-                                false ->
-                                    ?event(
-                                        copycat_short,
-                                        {arweave_tx_skipped,
-                                            {tx_id, {explicit, EncodedTXID}},
-                                            {reason, not_bundle}
-                                }
-                                    ),
-                                    Skipped;
-                                true ->
-                                    case Length =< get_memory_safe_cap(Opts) of
-                                        false ->
-                                            ?event(
-                                                copycat_short,
-                                                {arweave_bundle_skipped,
-                                                    {tx_id, {explicit, EncodedTXID}},
-                                                    {reason, memory_safe_cap_exceeded}
-                                                }
-                                            ),
-                                            #{
-                                                items_count => 0,
-                                                bundle_count => 1,
-                                                skipped_count => 1
-                                            };
-                                        true ->
-                                            case hb_store_arweave:read_chunks(
-                                                StartOffset,
-                                                Length,
-                                                Opts
-                                            ) of
-                                                {ok, BundleData} ->
-                                                    {TotalTime, IndexRes} = timer:tc(
-                                                        fun() ->
-                                                            index_bundle_bytes(
-                                                                BundleData,
-                                                                StartOffset,
-                                                                Depth,
-                                                                IndexStore,
-                                                                Opts
-                                                            )
-                                                        end
-                                                    ),
-                                                    case IndexRes of
-                                                        {ok, ItemsCount} ->
-                                                            record_event_metrics(
-                                                                <<"item_indexed">>,
-                                                                ItemsCount,
-                                                                TotalTime
-                                                            ),
-                                                            #{
-                                                                items_count => ItemsCount,
-                                                                bundle_count => 1,
-                                                                skipped_count => 0
-                                                            };
-                                                        {error, Reason} ->
-                                                            ?event(
-                                                                copycat_short,
-                                                                {arweave_bundle_skipped,
-                                                                    {tx_id, {explicit, EncodedTXID}},
-                                                                    {reason, Reason}
-                                                                }
-                                                            ),
-                                                            #{
-                                                                items_count => 0,
-                                                                bundle_count => 1,
-                                                                skipped_count => 1
-                                                            }
-                                                    end;
-                                                {error, Reason} ->
-                                                    ?event(
-                                                        copycat_short,
-                                                        {arweave_bundle_skipped,
-                                                            {tx_id, {explicit, EncodedTXID}},
-                                                            {reason, Reason}
-                                                        }
-                                                    ),
-                                                    #{
-                                                        items_count => 0,
-                                                        bundle_count => 1,
-                                                        skipped_count => 1
-                                                    };
-                                                not_found ->
-                                                    ?event(
-                                                        copycat_short,
-                                                        {arweave_bundle_skipped,
-                                                            {tx_id, {explicit, EncodedTXID}},
-                                                            {reason, not_found}
-                                                        }
-                                                    ),
-                                                    #{
-                                                        items_count => 0,
-                                                        bundle_count => 1,
-                                                        skipped_count => 1
-                                                    }
-                                            end
-                                    end
-                            end;
-                        FilterReason ->
-                            ?event(
-                                copycat_short,
-                                {arweave_tx_skipped,
-                                    {tx_id, {explicit, EncodedTXID}},
-                                    {reason, FilterReason}
-                                }
-                            ),
-                            Skipped
-                    end;
-                error ->
-                    Skipped
-            end;
-        {ok, _OtherOffset} ->
-            ?event(
-                copycat_short,
-                {arweave_tx_skipped,
-                    {tx_id, {explicit, EncodedTXID}},
-                    {reason, not_tx}
-                }
-            ),
-            Skipped;
-        {error, Reason} ->
-            ?event(
-                copycat_short,
-                {arweave_tx_skipped,
-                    {tx_id, {explicit, EncodedTXID}},
-                    {reason, Reason}
-                }
-            ),
-            Skipped
-    end.
-%% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
-%% if the offset is missing and `load_l1_offset` is enabled, fetches the TX
-%% offset metadata from Arweave, writes it to the local offset store, and
-%% retries the local lookup.
-ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
-        when is_map(IndexStore) =:= false ->
-    {error, missing_offset};
-ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, ReadL1Offset, Opts) ->
-    case hb_store_arweave:read_offset(IndexStore, TXID) of
-        {ok, _} = OffsetRes ->
-            OffsetRes;
-        not_found when ReadL1Offset ->
-            ?event(
-                copycat_short,
-                {arweave_tx_offset_loading,
-                    {tx_id, {explicit, EncodedTXID}},
-                    {source, network}
-                }
-            ),
-            case load_l1_tx_offset(EncodedTXID, IndexStore, Opts) of
-                ok ->
-                    case hb_store_arweave:read_offset(IndexStore, TXID) of
-                        {ok, _} = OffsetRes ->
-                            OffsetRes;
-                        not_found ->
-                            {error, missing_offset}
-                    end;
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        not_found ->
-            {error, missing_offset}
-    end.
-
-load_l1_tx_offset(TXID, IndexStore, Opts) ->
-    case hb_http:request(
-        #{
-            <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
-            <<"method">> => <<"GET">>
-        },
-        Opts
-    ) of
-        {ok, #{ <<"body">> := OffsetBody }} ->
-            OffsetMsg = hb_json:decode(OffsetBody),
-            EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
-            Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-            StartOffset = EndOffset - Size,
-            ok =
-                hb_store_arweave:write_offset(
-                    IndexStore,
-                    TXID,
-                    <<"tx@1.0">>,
-                    StartOffset,
-                    Size
-                ),
-            ok;
-        {error, Reason} ->
-            {error, Reason};
-        not_found ->
-            {error, not_found}
-    end.
-
-index_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
-        when Depth =< 0 ->
-    {ok, 0};
-index_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
-    case ar_bundles:decode_bundle_header(BundleData) of
-        invalid_bundle_header ->
-            {error, invalid_bundle_header};
-        {ItemsBin, BundleIndex} ->
-            HeaderSize = byte_size(BundleData) - byte_size(ItemsBin),
-            index_bundle_items(
-                BundleIndex,
-                ItemsBin,
-                BundleStartOffset + HeaderSize,
-                Depth,
-                Store,
-                Opts,
-                0
-            )
-    end.
-
-%% @doc Lightweight bundle indexing. This function only loads the bundle header
-%% and writes the index based solely on the header. For a more rigorous and
-%% deeper indexing, see the index_full_bundle_xxx functions.
-index_bundle_header(TXID, TXEndOffset, TXDataSize, TXStartOffset, IndexStore, Opts) ->
-    BundleRes = download_bundle_header(TXEndOffset, TXDataSize, Opts),
-    case BundleRes of
-        {ok, {BundleIndex, HeaderSize}} ->
-            % Batch event tracking: measure total time and count for
-            % all write_offset calls
-            {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
-                lists:foldl(
-                    fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
-                        hb_store_arweave:write_offset(
-                            IndexStore,
-                            hb_util:encode(ItemID),
-                            <<"ans104@1.0">>,
-                            ItemStartOffset,
-                            Size
-                        ),
-                        {ItemStartOffset + Size, ItemsCountAcc + 1}
-                    end,
-                    {TXStartOffset + HeaderSize, 0},
-                    BundleIndex
-                )
-            end),
-            % Single event increment for the batch
-            record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-            #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
-        {error, Reason} ->
-            ?event(
-                copycat_short,
-                {arweave_bundle_skipped,
-                    {tx_id, {explicit, TXID}},
-                    {reason, Reason}
-                }
-            ),
-            #{items_count => 0, bundle_count => 1, skipped_count => 1}
-    end.
-
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
         dev_arweave:bundle_header(EndOffset - Size, Opts)
@@ -990,6 +714,12 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
+    ?event(copycat_short,
+        {indexing_l1_tx, {tx_id, {explicit, EncodedTXID}},
+        {depth, Depth},
+        {query_l1_offset, QueryL1Offset},
+        {filters, Filters}
+    }),
     maybe
         {ok,
             #{
@@ -1452,7 +1182,7 @@ index_ids_test_parallel() ->
     ),
     % L3 item not read when doing L1 depth=1
     assert_item_not_read(<<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, Opts),
-   ok.
+    ok.
 
 block_depth_3_test() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
@@ -2135,7 +1865,6 @@ id_depth_1_test() ->
     ?assertEqual(26, maps:get(items_count, Result)),
     ?assertEqual(1, maps:get(bundle_count, Result)),
     ?assertEqual(0, maps:get(skipped_count, Result)),
-
     assert_bundle_read(
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         [
@@ -2166,7 +1895,6 @@ id_depth_2_test() ->
     ?assertEqual(52, maps:get(items_count, Result)),
     ?assertEqual(1, maps:get(bundle_count, Result)),
     ?assertEqual(0, maps:get(skipped_count, Result)),
-
     assert_bundle_read(
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         [
@@ -2274,7 +2002,6 @@ id_missing_offset_with_load_test() ->
     ?assertEqual(52, maps:get(items_count, Result)),
     ?assertEqual(1, maps:get(bundle_count, Result)),
     ?assertEqual(0, maps:get(skipped_count, Result)),
-
     assert_bundle_read(
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         [
