@@ -15,6 +15,7 @@
 %%% 4 children!)
 -module(dev_trie).
 -export([info/0, keys/2, set/3, get/3, get/4]).
+-export([reserved_keys/0, is_reserved_key/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -304,6 +305,17 @@ edges(TrieNode, Opts) ->
         Opts
     ),
     hb_maps:keys(Filtered).
+
+reserved_keys() ->
+    [   <<"node-value">>,
+        <<"device">>,
+        <<"commitments">>,
+        <<"priv">>,
+        <<"hashpath">>
+    ].
+
+is_reserved_key(Key) ->
+    lists:member(Key, reserved_keys()).
 
 %% @doc Compute the longest common binary prefix of A and B, comparing chunks of
 %% N bits.
