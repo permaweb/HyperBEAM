@@ -125,6 +125,9 @@ overlay_loaded({as, DevID, Base}, Resolved, Opts) ->
 overlay_loaded(Base, Resolved, Opts) ->
     hb_maps:merge(Base, Resolved, Opts).
 
+subdomain_to_tx_id(Subdomain) when byte_size(Subdomain) == 52 ->
+    b64fast:encode(hb_util:base32_decode(Subdomain)).
+
 %%% Tests.
 
 no_resolvers_test() ->
@@ -282,4 +285,19 @@ arns_host_resolution_test() ->
             },
             Opts
         )
+    ).
+
+subdomain_to_tx_id_test() -> 
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_tx_id(Subdomain)).
+
+resolve_52char_subdomain_if_txid_not_present_test() ->
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(#{}),
+    {ok, _} = hb_http:get(
+        Node, 
+        #{
+          <<"path">> => <<"/assets/index-C_KRlCcV.js">>, 
+          <<"host">> => <<Subdomain/binary, ".localhost">>
+        }
     ).
