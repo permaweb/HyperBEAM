@@ -7,16 +7,27 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%% @doc Return Opts with the store overridden to use process_cache_store
+%% if it is set (injected by dev_process for node_process isolation).
+%% Falls back to the default store otherwise.
+cache_opts(Opts) ->
+    case hb_opts:get(process_cache_store, not_found, Opts) of
+        not_found -> Opts;
+        CacheStore -> Opts#{ store => CacheStore }
+    end.
+
 %% @doc Read the result of a process at a given slot.
 read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
-read(ProcID, SlotRef, Opts) ->
+read(ProcID, SlotRef, RawOpts) ->
+    Opts = cache_opts(RawOpts),
     ?event({reading_computed_result, ProcID, SlotRef}),
     Path = path(ProcID, SlotRef, Opts),
     hb_cache:read(Path, Opts).
 
 %% @doc Write a process computation result to the cache.
-write(ProcID, Slot, Msg, Opts) ->
+write(ProcID, Slot, Msg, RawOpts) ->
+    Opts = cache_opts(RawOpts),
     % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
     % Link the item to the path in the store by slot number.
@@ -66,7 +77,8 @@ path(ProcID, Ref, PathSuffix, Opts) ->
 latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
-latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
+latest(ProcID, RawRequiredPath, Limit, RawRawOpts) ->
+    RawOpts = cache_opts(RawRawOpts),
     Scope = hb_opts:get(process_cache_scope, local, RawOpts),
     % Normalize the store descriptor to a list of stores.
     UnscopedStore =

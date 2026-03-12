@@ -62,6 +62,31 @@
 -define(DEFAULT_SNAPSHOT_TIME, 60).
 -endif.
 
+%% @doc If the process definition has a node-process-store private key
+%% (injected by dev_node_process), override Opts so that:
+%%   - process_cache_store: isolated stores first (for dev_process_cache writes)
+%%   - store: existing + isolated (so lazy links from isolated store resolve)
+%% This avoids needing ensure_all_loaded calls — lazy loading works naturally.
+node_process_opts(Base, Opts) ->
+    case hb_private:get(<<"node-process-store">>, Base, Opts) of
+        not_found -> Opts;
+        Store ->
+            Existing =
+                case hb_opts:get(store, [], Opts) of
+                    S when is_list(S) -> S;
+                    S -> [S]
+                end,
+            IsolatedStores =
+                case Store of
+                    L when is_list(L) -> L;
+                    M -> [M]
+                end,
+            Opts#{
+                process_cache_store => IsolatedStores ++ Existing,
+                store => Existing ++ IsolatedStores
+            }
+    end.
+
 %% @doc When the info key is called, we should return the process exports.
 info(_Base) ->
     #{
@@ -201,7 +226,8 @@ init(Base, Req, Opts) ->
 %%   handlers and previewing results. The POST method is the key entry point
 %%   for the dryrun functionality that allows external clients to test
 %%   message processing without side effects.
-compute(Base, Req, Opts) ->
+compute(Base, Req, RawOpts) ->
+    Opts = node_process_opts(Base, RawOpts),
     ProcBase = dev_process_lib:ensure_process_key(Base, Opts),
     ProcID = dev_process_lib:process_id(ProcBase, #{}, Opts),
     TargetSlot =
@@ -569,7 +595,8 @@ should_snapshot_time(Res, Opts) ->
 
 %% @doc Returns the known state of the process at either the current slot, or
 %% the latest slot in the cache depending on the `process_now_from_cache' option.
-now(RawBase, Req, Opts) ->
+now(RawBase, Req, RawOpts) ->
+    Opts = node_process_opts(RawBase, RawOpts),
     Base = dev_process_lib:ensure_process_key(RawBase, Opts),
     ProcessID = dev_process_lib:process_id(Base, #{}, Opts),
     case hb_opts:get(process_now_from_cache, false, Opts) of
