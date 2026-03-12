@@ -205,11 +205,11 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
 %% @doc Ensure the cache table exists.
 ensure_cache_table(Opts) ->
     TableName = cache_table_name(Opts),
-    hb_name:singleton(
-        TableName,
-        fun() ->
-            case ets:info(TableName) of
-                undefined ->
+    case ets:info(TableName) of
+        undefined ->
+            hb_name:singleton(
+                TableName,
+                fun() ->
                     ?event({creating_table, TableName}),
                     ets:new(
                         TableName,
@@ -221,17 +221,18 @@ ensure_cache_table(Opts) ->
                             {write_concurrency, true}
                         ]
                     ),
-                    hb_util:until(
-                        fun() -> ets:info(TableName) =/= undefined end,
-                        100
-                    ),
-                    fetch_and_insert_ids(Opts);
-                _ ->
-                    ?event({table_exists, TableName}),
-                    ok
-            end
-        end
-    ).
+                    fetch_and_insert_ids(Opts),
+                    receive kill -> ok end
+                end
+            ),
+            hb_util:until(
+                fun() -> ets:info(TableName) =/= undefined end,
+                100
+            ),
+            TableName;
+        _ ->
+            TableName
+    end.
 
 %% @doc Calculate the name of the cache table given the `Opts`.
 cache_table_name(Opts) ->
