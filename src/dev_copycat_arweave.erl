@@ -38,12 +38,15 @@ arweave(_Base, Request, Opts) ->
                                     {skipped_txs, maps:get(skipped_count, Stats, 0)}
                                 }
                             ),
-                            {ok, Stats};
+                            {ok, Stats#{
+                                <<"body">> => maps:get(items_count, Stats, 0)
+                            }};
                         _ -> 
                             {ok, #{
                                 items_count => 0,
                                 bundle_count => 0,
-                                skipped_count => 0
+                                skipped_count => 0,
+                                <<"body">> => 0
                             }}                         
                     end;
                 error ->
