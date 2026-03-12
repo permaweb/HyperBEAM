@@ -52,34 +52,28 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
 %% @returns {ok, Msg} on success or not_found if the key is missing.
+read(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
+    not_found;
 read(Opts = #{ <<"node">> := Node }, Key) ->
-    ReadOnlyIDs = maps:get(<<"only-ids">>, Opts, false),
-    %% Limit read to ID keys if `<<"only-ids">>` is set to true.
-    ShouldRead = (ReadOnlyIDs andalso ?IS_ID(Key)) orelse not ReadOnlyIDs,
-    case ShouldRead of 
-        true ->
-            ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
-            HTTPRes =
-                hb_http:get(
-                    Node,
-                    #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
-                    Opts
-                ),
-            case HTTPRes of
-                {ok, Res} ->
-                    % returning the whole response to get the test-key
-                    {ok, Msg} = hb_message:with_only_committed(Res, Opts),
-                    ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-                    maybe_cache(Opts, Msg, [Key]),
-                    {ok, Msg};
-                {error, _Err} ->
-                    ?event(store_remote_node, {read_not_found, {key, Key}}),
-                    not_found
-            end;
-        false ->
-            ?event(store_remote_node, {ignoring_non_id, {key, Key}}),
+    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+    HTTPRes =
+        hb_http:get(
+            Node,
+            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
+            Opts
+        ),
+    case HTTPRes of
+        {ok, Res} ->
+            % returning the whole response to get the test-key
+            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
+            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
+            maybe_cache(Opts, Msg, [Key]),
+            {ok, Msg};
+        {error, _Err} ->
+            ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
-    end.
+    end;
+read(_, _) -> not_found.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
