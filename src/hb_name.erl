@@ -95,7 +95,7 @@ singleton_spawn(Name, Fun) ->
         ),
     receive
         {spawned, ReadyRef, PID} -> PID;
-        {spawn_failed, ReadyRef} -> singleton_spawn(Name, Fun)
+        {spawn_failed, ReadyRef} -> singleton(Name, Fun)
     end.
 
 %%% @doc Lookup a name -> PID.
