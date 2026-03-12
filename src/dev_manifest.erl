@@ -281,40 +281,43 @@ create_generic_manifest(Opts) ->
 
 %% @doc Download the manifest raw data. 
 %% NOTE: This test requests data to arweave node
-manifest_download_via_raw_endpoint_test() ->
-    Opts = #{
-        arweave_index_ids => true,
-        store => [
-        #{
-            <<"store-module">> => hb_store_arweave,
-            <<"name">> => <<"arweave-store">>,
-            <<"arweave-node">> => <<"https://arweave.net">>,
-            <<"index-store">> => [hb_test_utils:test_store()]
-        }
-    ]},
-    Node = hb_http_server:start_node(Opts),
-    %% Force index the block that includes the manifest transaction
-    _ = hb_http:get(
-            Node,
+manifest_download_via_raw_endpoint_test_() ->
+    {timeout, 60, fun() ->
+        Opts = #{
+            arweave_index_ids => true,
+            store => [
             #{
-                <<"path">> =>
-                    <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>
-            },
-            #{}
-        ),
-    ?assertMatch(
-        {ok,
-            #{
-                <<"arweave-id">> := <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
-                <<"content-length">> := 5868
+                <<"store-module">> => hb_store_arweave,
+                <<"name">> => <<"arweave-store">>,
+                <<"arweave-node">> => <<"https://arweave.net">>,
+                <<"index-store">> => [hb_test_utils:test_store()]
             }
-        },
-        hb_http:get(
-            Node,
-            #{<<"path">> => <<"~arweave@2.9/raw=42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
-            #{}
-        )
-    ).
+        ]},
+        Node = hb_http_server:start_node(Opts),
+        %% Force index the block that includes the manifest transaction
+        _ = hb_http:get(
+                Node,
+                #{
+                    <<"path">> =>
+                        <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>
+                },
+                #{}
+            ),
+        ?assertMatch(
+            {ok,
+                #{
+                    <<"arweave-id">> := <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
+                    <<"content-length">> := 5868
+                }
+            },
+            hb_http:get(
+                Node,
+                #{<<"path">> => <<"~arweave@2.9/raw=42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
+                #{}
+            )
+        ),
+        ok
+    end}.
 
 %% @doc Accessing `/TXID` of a manifest transaction should access the index key.
 manifest_inner_redirect_test() ->
