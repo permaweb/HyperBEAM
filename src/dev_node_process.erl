@@ -26,16 +26,32 @@ lookup(Name, _Base, Req, Opts) ->
             #{ <<"path">> => <<"lookup">>, <<"key">> => Name, <<"load">> => true },
             Opts
         ),
-    case LookupRes of
-        {ok, ProcessID} ->
-            hb_cache:read(ProcessID, Opts);
-        {error, not_found} ->
-            case hb_ao:get(<<"spawn">>, Req, true, Opts) of
-                true ->
-                    spawn_register(Name, Opts);
-                false ->
-                    {error, not_found}
-            end
+    maybe
+        {ok, ProcessDef} ?=
+            case LookupRes of
+                {ok, ProcessID} ->
+                    hb_cache:read(ProcessID, Opts);
+                {error, not_found} ->
+                    case hb_ao:get(<<"spawn">>, Req, true, Opts) of
+                        true ->
+                            spawn_register(Name, Opts);
+                        false ->
+                            {error, not_found}
+                    end
+            end,
+        maybe_inject_store(ProcessDef, Opts)
+    else
+        {error, Error} -> {error, Error};
+        Reason -> {error, Reason}
+    end.
+    
+%% @doc If node_process_store is configured, attach it as a private key
+%% on the process definition so dev_process can use it for cache isolation.
+maybe_inject_store(ProcessDef, Opts) ->
+    case hb_opts:get(node_process_store, not_found, Opts) of
+        not_found -> {ok, ProcessDef};
+        Store ->
+            {ok, hb_private:set(ProcessDef, <<"node-process-store">>, Store, Opts)}
     end.
 
 %% @doc Spawn a new process according to the process definition found in the 
@@ -213,3 +229,57 @@ lookup_execute_test() ->
             Opts
         )
     ).
+
+%% @doc Test that when node_process_store is configured, the private key is
+%% injected and compute results land in the isolated store, not the default.
+store_isolation_test() ->
+    IsolatedStore = hb_test_utils:test_store(hb_store_fs, <<"isolated-store">>),
+    hb_store:start(IsolatedStore),
+    Opts = (generate_test_opts())#{
+        node_process_store => IsolatedStore,
+        process_async_cache => false
+    },
+    {ok, ProcessDef} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"node-process@1.0">> },
+            ?TEST_NAME,
+            Opts
+        ),
+    ?assertNotEqual(
+        not_found,
+        hb_private:get(<<"node-process-store">>, ProcessDef, Opts)
+    ),
+    Res =
+        hb_ao:resolve_many(
+            [
+                #{ <<"device">> => <<"node-process@1.0">> },
+                ?TEST_NAME,
+                #{
+                    <<"path">> => <<"schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> =>
+                        hb_message:commit(
+                            #{
+                                <<"path">> => <<"compute">>,
+                                <<"test-key">> => <<"test-value">>
+                            },
+                            Opts
+                        )
+                }
+            ],
+            Opts
+        ),
+    ?assertMatch({ok, _}, Res),
+    ?assertMatch(
+        42,
+        hb_ao:get(
+            << ?TEST_NAME/binary, "/now/results/output/body" >>,
+            #{ <<"device">> => <<"node-process@1.0">> },
+            Opts
+        )
+    ),
+    %% Step 4: Verify compute result is in the isolated store.
+    ProcID = hb_message:id(ProcessDef, signed, Opts),
+    IsolatedReadOpts = Opts#{ process_cache_store => IsolatedStore },
+    ReadResult = dev_process_cache:latest(ProcID, IsolatedReadOpts),
+    ?assertMatch({ok, _, _}, ReadResult).
