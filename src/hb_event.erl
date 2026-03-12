@@ -150,42 +150,37 @@ raw_counters() ->
     [].
 -else.
 raw_counters() ->
-    ets:tab2list(prometheus_counter_table).
+    ets:match_object(
+        prometheus_counter_table,
+        {{default, <<"event">>, '_', '_'}, '_', '_'}
+    ).
 -endif.
 
 %% @doc Find the event server, creating it if it doesn't exist. We cache the
 %% result in the process dictionary to avoid looking it up multiple times.
 find_event_server() ->
-    case erlang:get({event_server, ?MODULE}) of
-        {cached, Pid} -> Pid;
-        undefined ->
-            PID =
-                case hb_name:lookup(?MODULE) of
-                    Pid when is_pid(Pid) -> Pid;
-                    undefined ->
-                        NewServer = spawn(fun() -> server() end),
-                        hb_name:register(?MODULE, NewServer),
-                        NewServer
-                end,
-            erlang:put({event_server, ?MODULE}, {cached, PID}),
-            PID
-    end.
+    hb_name:singleton(?MODULE, fun() -> server() end).
 
 server() ->
-    await_prometheus_started(),
-    prometheus_counter:declare(
+    hb_prometheus:ensure_started(),
+    ensure_event_counter(),
+    handle_events().
+
+ensure_event_counter() ->
+    hb_prometheus:declare(
+        counter,
         [
             {name, <<"event">>},
             {help, <<"AO-Core execution events">>},
             {labels, [topic, event]}
-        ]),
-    handle_events().
+        ]).
+
 handle_events() ->
     receive
         {increment, TopicBin, EventName, Count} ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
-                    % Print a warning, but do so less frequently the more 
+                    % Print a warning, but do so less frequently the more
                     % overloaded the system is.
                     {memory, MemorySize} = erlang:process_info(self(), memory),
                     case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
@@ -217,18 +212,8 @@ handle_events() ->
                     end;
                 _ -> ignored
             end,
-            prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
+            hb_prometheus:inc(counter, <<"event">>, [TopicBin, EventName], Count),
             handle_events()
-    end.
-
-%% @doc Delay the event server until prometheus is started.
-await_prometheus_started() ->
-    receive
-        Msg ->
-            case application:get_application(prometheus) of
-                undefined -> await_prometheus_started();
-                _ -> self() ! Msg, ok
-            end
     end.
 
 parse_name(Name) when is_tuple(Name) ->

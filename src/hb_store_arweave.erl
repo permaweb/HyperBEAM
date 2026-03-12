@@ -254,20 +254,15 @@ write_offset(
 
 %% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset) when is_integer(Offset) ->
-    spawn(
-        fun () ->
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    Partition = Offset div ?PARTITION_SIZE,
-                    prometheus_counter:inc(
-                        hb_store_arweave_requests_partition,
-                        [Partition],
-                        1
-                    )
-            end
-        end
-    ).
+    spawn(fun() -> 
+        Partition = Offset div ?PARTITION_SIZE,
+        hb_prometheus:inc(
+            counter,
+            hb_store_arweave_requests_partition,
+            [Partition],
+            1
+        )
+    end).
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.

@@ -916,14 +916,14 @@ global_preference_test() ->
 load_flat_test() ->
     % File contents:
     % port: 1234
-    % host: https://ao.computer
+    % node_host: https://ao.computer
     % await-inprogress: false
     {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
     ?assertEqual(1234, hb_maps:get(port, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
 
@@ -933,7 +933,7 @@ load_json_test() ->
     ?assertEqual(1234, hb_maps:get(port, Conf)),
     ?assertEqual(9001, hb_maps:get(example, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
     % Ensure that a store with `ao-types' is loaded correctly.

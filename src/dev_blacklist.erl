@@ -27,28 +27,32 @@
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
-    case is_match(HookReq, Opts) of
-        false ->
-            ?event(blacklist, {allowed, HookReq}, Opts),
-            {ok, HookReq};
-        ID ->
-            ?event(blacklist, {blocked, ID}, Opts),
-            {
-                ok,
-                HookReq#{
-                    <<"body">> =>
-                        [#{
-                            <<"status">> => 451,
-                            <<"reason">> => <<"content-policy">>,
-                            <<"blocked-id">> => ID,
+    case hb_opts:get(blacklist_providers, false, Opts) of
+        false -> {ok, HookReq};
+        _ ->
+            case is_match(HookReq, Opts) of
+                false ->
+                    ?event(blacklist, {allowed, HookReq}, Opts),
+                    {ok, HookReq};
+                ID ->
+                    ?event(blacklist, {blocked, ID}, Opts),
+                    {
+                        ok,
+                        HookReq#{
                             <<"body">> =>
-                                <<
-                                    "Requested message blocked by this node's ",
-                                    "content policy. Blocked ID: ", ID/binary
-                                >>
-                        }]
-                }
-            }
+                                [#{
+                                    <<"status">> => 451,
+                                    <<"reason">> => <<"content-policy">>,
+                                    <<"blocked-id">> => ID,
+                                    <<"body">> =>
+                                        <<
+                                            "Requested message blocked by this node's ",
+                                            "content policy. Blocked ID: ", ID/binary
+                                        >>
+                                }]
+                        }
+                    }
+            end
     end.
 
 %% @doc Check if the message contains any blacklisted IDs.
@@ -249,7 +253,9 @@ cache_table_name(Opts) ->
 %%% Tests
 
 setup_test_env() ->
-    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() },
+    %% We need to create a new priv_wallet to avoid conflift when starting a
+    %% new node from an existing priv_wallet address.
+    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => ar_wallet:new() },
     Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
     Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
     Msg3 = hb_message:commit(#{ <<"body">> => <<"test-3">> }, Opts0),

@@ -75,7 +75,7 @@ request(HookMsg, HookReq, Opts) ->
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
-        {ok, Name} ?= name_from_host(Host, hb_opts:get(host, no_host, Opts)),
+        {ok, Name} ?= name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
         ModReq =
             case hb_maps:find(<<"body">>, HookReq, Opts) of
@@ -113,7 +113,7 @@ name_from_host(ReqHost, RawNodeHost) ->
     WithoutNodeHost =
         binary:replace(
             ReqHost,
-            maps:get(host, uri_string:parse(RawNodeHost)),
+            maps:get(host, NodeHost),
             <<>>
         ),
     name_from_host(WithoutNodeHost, no_host).

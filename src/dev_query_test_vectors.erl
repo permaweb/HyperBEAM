@@ -69,7 +69,7 @@ write_test_message_with_recipient(Recipient, Opts) ->
 simple_blocks_query_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -114,7 +114,7 @@ simple_blocks_query_test() ->
 block_by_height_query_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -165,7 +165,7 @@ block_by_height_query_test() ->
 simple_ans104_query_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => Wallet = ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -202,7 +202,7 @@ simple_ans104_query_test() ->
             Node,
             Query,
             #{
-                <<"owners">> => [hb:address()]
+                <<"owners">> => [hb:address(Wallet)]
             },
             Opts
         ),
@@ -232,7 +232,7 @@ simple_ans104_query_test() ->
 transactions_query_tags_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -295,7 +295,7 @@ transactions_query_tags_test() ->
 transactions_query_owners_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => Wallet = ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -327,7 +327,7 @@ transactions_query_owners_test() ->
             Node,
             Query,
             #{
-                <<"owners">> => [hb:address()]
+                <<"owners">> => [hb:address(Wallet)]
             },
             Opts
         ),
@@ -357,7 +357,7 @@ transactions_query_owners_test() ->
 transactions_query_recipients_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -422,7 +422,7 @@ transactions_query_recipients_test() ->
 transactions_query_ids_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -484,7 +484,7 @@ transactions_query_ids_test() ->
 transactions_query_combined_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => Wallet = ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -521,7 +521,7 @@ transactions_query_combined_test() ->
             Node,
             Query,
             #{
-                <<"owners">> => [hb:address()],
+                <<"owners">> => [hb:address(Wallet)],
                 <<"ids">> => [ExpectedID]
             },
             Opts
@@ -552,7 +552,7 @@ transactions_query_combined_test() ->
 transaction_query_by_id_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -602,7 +602,7 @@ transaction_query_by_id_test() ->
 transaction_query_full_test() ->
     Opts =
         #{
-            priv_wallet => SenderKey = hb:wallet(),
+            priv_wallet => SenderKey = ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -679,7 +679,7 @@ transaction_query_full_test() ->
 transaction_query_not_found_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Res =
@@ -715,7 +715,7 @@ transaction_query_not_found_test() ->
 transaction_query_with_anchor_test() ->
     Opts =
         #{
-            priv_wallet => hb:wallet(),
+            priv_wallet => Wallet = ar_wallet:new(),
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
@@ -727,7 +727,7 @@ transaction_query_with_anchor_test() ->
                         anchor = AnchorID = crypto:strong_rand_bytes(32),
                         data = <<"test-data">>
                     },
-                    hb:wallet()
+                    Wallet
                 ),
                 <<"structured@1.0">>,
                 <<"ans104@1.0">>,

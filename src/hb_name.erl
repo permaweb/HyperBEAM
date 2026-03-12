@@ -95,7 +95,7 @@ singleton_spawn(Name, Fun) ->
         ),
     receive
         {spawned, ReadyRef, PID} -> PID;
-        {spawn_failed, ReadyRef} -> singleton_spawn(Name, Fun)
+        {spawn_failed, ReadyRef} -> singleton(Name, Fun)
     end.
 
 %%% @doc Lookup a name -> PID.
@@ -157,6 +157,14 @@ atom_test() ->
 
 term_test() ->
     basic_test({term, os:timestamp()}).
+
+singleton_returns_spawned_pid_test() ->
+    Name = {singleton, os:timestamp()},
+    Pid = singleton(Name, fun() -> receive stop -> ok end end),
+    ?assertEqual(Pid, lookup(Name)),
+    ?assertNotEqual(self(), Pid),
+    Pid ! stop,
+    hb_name:unregister(Name).
 
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},

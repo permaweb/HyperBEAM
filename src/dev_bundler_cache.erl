@@ -329,17 +329,18 @@ load_bundled_items_test() ->
 %%       L4IItem1 (leaf)
 %%       L4IItem2 (leaf)
 bundler_optimistic_cache_test() ->
+    Wallet = ar_wallet:new(),
     L3Item = ar_bundles:sign_item(
         #tx{ data = <<"l3item">>, tags = [{<<"idx">>, <<"1">>}] },
-        hb:wallet()
+        Wallet
     ),
     L4Item1 = ar_bundles:sign_item(
         #tx{ data = <<"l4item1">>, tags = [{<<"idx">>, <<"2.1">>}] },
-        hb:wallet()
+        Wallet
     ),
     L4Item2 = ar_bundles:sign_item(
         #tx{ data = <<"l4item2">>, tags = [{<<"idx">>, <<"2.2">>}] },
-        hb:wallet()
+        Wallet 
     ),
     % L3Bundle is itself a bundle wrapping the two L4 leaves.
     {undefined, L3BundlePayload} = ar_bundles:serialize_bundle(
@@ -353,7 +354,7 @@ bundler_optimistic_cache_test() ->
                 {<<"idx">>, <<"2">>}
             ]
         },
-        hb:wallet()
+        Wallet 
     ),
     {undefined, L2BundlePayload} = ar_bundles:serialize_bundle(
         list, [L3Item, L3Bundle], false),
@@ -365,7 +366,7 @@ bundler_optimistic_cache_test() ->
                 {<<"Bundle-Version">>, <<"2.0.0">>}
             ]
         },
-        hb:wallet()
+        Wallet 
     ),
     % Compute signed IDs for all items before posting.
     L2BundleID = hb_util:encode(ar_bundles:id(L2Bundle, signed)),
@@ -375,7 +376,7 @@ bundler_optimistic_cache_test() ->
     L4Item2ID  = hb_util:encode(ar_bundles:id(L4Item2,  signed)),
     % Start a real node with LMDB and POST the serialized bundle wrapper over HTTP.
     Node = hb_http_server:start_node(#{
-        priv_wallet => hb:wallet(),
+        priv_wallet => Wallet,
         store => hb_test_utils:test_store(hb_store_lmdb)
     }),
     try
