@@ -70,6 +70,8 @@ item(_Base, Req, Opts) ->
 verify_item(Req, Opts) ->
     case hb_message:with_only_committed(Req, Opts) of
         {ok, Item} ->
+            ?event(debug_test, {input_request, {explicit, Req}}),
+            ?event(debug_test, {verified_item, {explicit, Item}}),
             case hb_message:verify(Item, all, Opts) of
                 true -> {ok, Item};
                 false ->
@@ -87,6 +89,7 @@ verify_item(Req, Opts) ->
 %% Returns ok or {error, Reason}.
 cache_item(Item, Opts) ->
     try
+        ?event(debug_test, {cache_item, {explicit, Item}}),
         dev_bundler_cache:write_item(Item, Opts)
     catch
         Type:ExceptionReason ->

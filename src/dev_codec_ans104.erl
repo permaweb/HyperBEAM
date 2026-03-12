@@ -152,7 +152,9 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
         Opts
     ),
     IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
+    ?event(debug_test, {raw_tabm, {explicit, RawTABM}}),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
+    ?event(debug_test, {maybe_bundle, {explicit, MaybeBundle}}),
     dev_arweave_common:log_conversion(ans104_to, {to, {maybe_bundle, MaybeBundle}}),
 
     % Calculate and normalize the `data', if applicable.

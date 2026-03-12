@@ -898,7 +898,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     ANS104 =
                         hb_message:convert(
                             Item,
-                            <<"structured@1.0">>,
+                            tabm,
                             <<"ans104@1.0">>,
                             Opts
                         ),
@@ -920,7 +920,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     StructuredTX =
                         hb_message:convert(
                             TX,
-                            <<"structured@1.0">>,
+                            tabm,
                             <<"tx@1.0">>,
                             Opts
                         ),
