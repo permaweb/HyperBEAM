@@ -79,20 +79,23 @@ singleton_spawn(Name, Fun) ->
     start(),
     Parent = self(),
     ReadyRef = make_ref(),
-    {PID, MonitorRef} =
-        spawn_monitor(
+    PID =
+        spawn(
             fun() ->
-                ok = ?MODULE:register(Name, Spawned = self()),
-                Parent ! {spawned, ReadyRef, Spawned},
-                Fun()
+                Spawned = self(),
+                case catch ?MODULE:register(Name, Spawned) of
+                    ok ->
+                        Parent ! {spawned, ReadyRef, Spawned},
+                        Fun();
+                    _ ->
+                        Parent ! {spawn_failed, ReadyRef},
+                        ok
+                end
             end
         ),
     receive
-        {spawned, ReadyRef, PID} ->
-            erlang:demonitor(MonitorRef, [flush]),
-            PID;
-        {'DOWN', MonitorRef, process, _, _} ->
-            singleton(Name, Fun)
+        {spawned, ReadyRef, PID} -> PID;
+        {spawn_failed, ReadyRef} -> singleton_spawn(Name, Fun)
     end.
 
 %%% @doc Lookup a name -> PID.
