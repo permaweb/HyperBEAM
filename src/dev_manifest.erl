@@ -117,15 +117,10 @@ request(Base, Req, Opts) ->
         {error, not_found} ->
             ?event(debug_manifest, {not_found_on_load, {req, Req}}),
             {
-                ok,
-                Req#{
-                    <<"body">> =>
-                        [
-                            #{
-                                <<"status">> => 404,
-                                <<"body">> => <<"Not Found">>
-                            }
-                        ]
+                error,
+                #{
+                    <<"status">> => 404,
+                    <<"body">> => <<"Not Found">>
                 }
             };
         Error ->
