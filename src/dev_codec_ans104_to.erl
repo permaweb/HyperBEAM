@@ -207,7 +207,16 @@ data_messages(TABM, Opts) when is_map(TABM) ->
         fun(Key, Value) ->
             case is_map(Value) of
                 true -> true;
-                false -> byte_size(Value) > ?MAX_TAG_VALUE_SIZE orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
+                false -> 
+                    case not is_binary(Key) orelse not is_binary(Value) of
+                        true -> ?event(blah, {failure,
+                            {tabm, {explicit, TABM}},
+                            {uncommitted_tabm, {explicit, UncommittedTABM}},
+                            {key, {explicit, Key}},
+                            {value, {explicit, Value}}});
+                        false -> ok
+                    end,
+                    byte_size(Value) > ?MAX_TAG_VALUE_SIZE orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
             end
         end,
         UncommittedTABM,
