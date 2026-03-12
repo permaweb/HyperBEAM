@@ -28,7 +28,7 @@ info(_) ->
 resolve(Key, _, Req, Opts) ->
     Resolvers = hb_opts:get(name_resolvers, [], Opts),
     ?event({resolvers, Resolvers}),
-    case match_resolver(Key, Resolvers, Opts) of
+    ArnsResolver = case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
             case hb_util:atom(hb_ao:get(<<"load">>, Req, true, Opts)) of
                 false ->
@@ -38,7 +38,26 @@ resolve(Key, _, Req, Opts) ->
             end;
         not_found ->
             not_found
+    end,
+    case ArnsResolver of 
+        not_found ->
+            resolve_52char(Key, Req, Opts);
+        _ ->
+            ArnsResolver
     end.
+
+%% @doc Try to resolve 52char subdomain back to its original TX ID when TX ID 
+%% isn't present.
+resolve_52char(_, #{<<"body">> := [ID | _]}, _) when ?IS_ID(ID) ->
+    ?event({resolve_52char, {skip_becase_id_found, ID}}),
+    not_found;
+resolve_52char(Key, _, Opts) when byte_size(Key) == 52 ->
+    TXID = subdomain_to_tx_id(Key),
+    ?event({resolve_52char, {key, Key}, {txid, TXID}}),
+    hb_cache:read(TXID, Opts);
+resolve_52char(_, _, _) ->
+    ?event({resolve_52char, nothing_matched}),
+    not_found.
 
 %% @doc Find the first resolver that matches the key and return its value.
 match_resolver(_Key, [], _Opts) -> 
@@ -76,7 +95,7 @@ request(HookMsg, HookReq, Opts) ->
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
         {ok, Name} ?= name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
-        {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
+        {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
             case hb_maps:find(<<"body">>, HookReq, Opts) of
                 {ok, [OldBase|Rest]} ->
@@ -126,7 +145,7 @@ overlay_loaded(Base, Resolved, Opts) ->
     hb_maps:merge(Base, Resolved, Opts).
 
 subdomain_to_tx_id(Subdomain) when byte_size(Subdomain) == 52 ->
-    b64fast:encode(hb_util:base32_decode(Subdomain)).
+    b64fast:encode(base32:decode(Subdomain)).
 
 %%% Tests.
 
@@ -238,6 +257,7 @@ load_and_execute_test() ->
 arns_opts() ->
     JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
+    % TODO: Delete?
     hb_http_server:start_node(#{}),
     TempStore = hb_test_utils:test_store(),
     #{
@@ -291,13 +311,29 @@ subdomain_to_tx_id_test() ->
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_tx_id(Subdomain)).
 
-resolve_52char_subdomain_if_txid_not_present_test() ->
+resolve_52char_subdomain_asset_if_txid_not_present_test() ->
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(#{}),
-    {ok, _} = hb_http:get(
+    {ok, R} = hb_http:get(
         Node, 
         #{
           <<"path">> => <<"/assets/index-C_KRlCcV.js">>, 
           <<"host">> => <<Subdomain/binary, ".localhost">>
         }
-    ).
+    ),
+    ?event(error, {r, R}).
+
+resolve_52char_subdomain_if_txid_not_present_test() ->
+    Opts = arns_opts(),
+    %% TX: 42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(Opts),
+    {ok, R} = hb_http:get(
+        Node, 
+        #{
+          <<"path">> => <<"/">>,
+          <<"host">> => <<Subdomain/binary, ".localhost">>
+        },
+        Opts
+    ),
+    ?event(error, {r, R}).
