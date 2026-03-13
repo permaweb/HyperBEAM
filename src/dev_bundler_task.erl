@@ -27,7 +27,7 @@ worker_loop() ->
 %% @doc Execute a specific task.
 execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
-        ?event(bundler_debug, log_task(executing_task, Task, [])),
+        ?event(debug_bundler, log_task(executing_task, Task, [])),
         % Get price and anchor
         {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
         DataSize = TX#tx.data_size,
@@ -83,7 +83,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
 
 execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task) ->
     try
-        ?event(bundler_debug, log_task(executing_task, Task, [])),
+        ?event(debug_bundler, log_task(executing_task, Task, [])),
         % Calculate chunks and proofs
         TX = hb_message:convert(
             CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
@@ -139,7 +139,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
 execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     #{chunk := Chunk, data_path := DataPath, offset := Offset,
       data_size := DataSize, data_root := DataRoot} = Proof,
-    ?event(bundler_debug, log_task(executing_task, Task, [])),
+    ?event(debug_bundler, log_task(executing_task, Task, [])),
     Request = #{
         <<"chunk">> => hb_util:encode(Chunk),
         <<"data_path">> => hb_util:encode(DataPath),
