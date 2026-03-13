@@ -226,6 +226,8 @@ parse_name(Name)
     no_event_name;
 parse_name(Name) when is_list(Name) ->
     iolist_to_binary(Name);
+parse_name(Name) when is_binary(Name) ->
+    Name;
 parse_name(_) -> no_event_name.
 
 %%% Benchmark tests
