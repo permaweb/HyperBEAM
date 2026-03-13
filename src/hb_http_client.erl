@@ -181,19 +181,62 @@ hackney_req(Args, Opts) ->
         body := Body
     } = Args,
     {Host, Port} = parse_peer(Peer, Opts),
-    Scheme = case Port of
-        443 -> "https";
-        _ -> "http"
+    Transport = case Port of
+        443 -> hackney_ssl;
+        _ -> hackney_tcp
     end,
-    URL = iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path]),
-    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+    Method = string:uppercase(hb_util:bin(RawMethod)),
     HeaderList =
         [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
-    case hackney:request(Method, URL, HeaderList, Body, [with_body, {pool, default}]) of
-        {ok, Status, RespHeaders, RespBody} ->
+    ConnKey = {hackney_conn, Host, Port},
+    case hackney_get_conn(ConnKey, Host, Port, Transport) of
+        {ok, ConnPid} ->
+            case hackney_do_request(ConnPid, Method, Path, HeaderList, Body) of
+                {ok, _Status, _RespHeaders, _RespBody} = Result ->
+                    Result;
+                {error, _Reason} = Err ->
+                    erase(ConnKey),
+                    catch hackney:close(ConnPid),
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+hackney_get_conn(ConnKey, Host, Port, Transport) ->
+    case get(ConnKey) of
+        ConnPid when is_pid(ConnPid) ->
+            case is_process_alive(ConnPid) of
+                true -> {ok, ConnPid};
+                false -> hackney_new_conn(ConnKey, Host, Port, Transport)
+            end;
+        _ ->
+            hackney_new_conn(ConnKey, Host, Port, Transport)
+    end.
+
+hackney_new_conn(ConnKey, Host, Port, Transport) ->
+    case hackney:connect(Transport, Host, Port, []) of
+        {ok, ConnPid} ->
+            put(ConnKey, ConnPid),
+            {ok, ConnPid};
+        {error, _Reason} = Err ->
+            Err
+    end.
+
+hackney_do_request(ConnPid, Method, Path, HeaderList, Body) ->
+    case hackney:send_request(ConnPid, {Method, Path, HeaderList, Body}) of
+        {ok, Status, RespHeaders, Ref} when is_reference(Ref) ->
+            {ok, RespBody} = hackney:body(Ref),
             {ok, Status, RespHeaders, RespBody};
-        {error, Reason} ->
-            {error, Reason}
+        {ok, Status, RespHeaders, ConnPid2} when is_pid(ConnPid2) ->
+            {ok, RespBody} = hackney:body(ConnPid2),
+            {ok, Status, RespHeaders, RespBody};
+        {ok, Status, RespHeaders, RespBody} when is_binary(RespBody) ->
+            {ok, Status, RespHeaders, RespBody};
+        {ok, Status, RespHeaders} ->
+            {ok, Status, RespHeaders, <<>>};
+        {error, _Reason} = Err ->
+            Err
     end.
 
 gun_req(Args, Opts) ->
