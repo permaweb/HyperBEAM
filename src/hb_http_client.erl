@@ -63,7 +63,8 @@ request(Args, RemainingRetries, Opts) ->
 do_request(Args, Opts) ->
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
         gun -> gun_req(Args, Opts);
-        httpc -> httpc_req(Args, Opts)
+        httpc -> httpc_req(Args, Opts);
+        hackney -> hackney_req(Args, Opts)
     end.
 
 maybe_retry(0, _, OriginalResponse, _) -> OriginalResponse;
@@ -168,6 +169,30 @@ httpc_req(Args, Opts) ->
             {ok, Status, RespHeaders, RespBody};
         {error, Reason} ->
             ?event(http_client, {httpc_error, Reason}),
+            {error, Reason}
+    end.
+
+hackney_req(Args, Opts) ->
+    #{
+        peer := Peer,
+        path := Path,
+        method := RawMethod,
+        headers := Headers,
+        body := Body
+    } = Args,
+    {Host, Port} = parse_peer(Peer, Opts),
+    Scheme = case Port of
+        443 -> "https";
+        _ -> "http"
+    end,
+    URL = iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path]),
+    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+    HeaderList =
+        [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
+    case hackney:request(Method, URL, HeaderList, Body, [with_body, {pool, default}]) of
+        {ok, Status, RespHeaders, RespBody} ->
+            {ok, Status, RespHeaders, RespBody};
+        {error, Reason} ->
             {error, Reason}
     end.
 
