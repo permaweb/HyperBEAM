@@ -7,15 +7,15 @@ const BUNDLER_URL = "http://localhost:8734";
 const DEFAULT_WALLET = "../../hyperbeam-key.json";
 const CONCURRENT_UPLOADS = 100; // Number of parallel uploads
 
-async function performanceTest(walletPath, itemCount, bytesPerItem = 0) {
+async function performanceTest(walletPath, itemCount, bytesPerItem = 0, bundlerUrl = BUNDLER_URL) {
   const wallet = require(path.resolve(walletPath));
   const signer = new ArweaveSigner(wallet);
-  const endpoint = `${BUNDLER_URL}/~bundler@1.0/item?codec-device=ans104@1.0`;
+  const endpoint = `${bundlerUrl}/~bundler@1.0/item?codec-device=ans104@1.0`;
 
   console.log("\n" + "=".repeat(70));
   console.log("ANS-104 Bundle Upload Performance Test");
   console.log("=".repeat(70));
-  console.log(`Target:     ${BUNDLER_URL}`);
+  console.log(`Target:     ${bundlerUrl}`);
   console.log(`Items:      ${itemCount}`);
   console.log(`Item Size:  ${bytesPerItem > 0 ? `~${bytesPerItem} bytes` : 'default'}`);
   console.log(`Concurrent: ${CONCURRENT_UPLOADS}`);
@@ -138,23 +138,26 @@ if (require.main === module) {
   const walletPath = firstIsNumber ? DEFAULT_WALLET : (process.argv[2] || DEFAULT_WALLET);
   const itemCount   = parseInt(firstIsNumber ? process.argv[2] : process.argv[3], 10);
   const bytesPerItem = parseInt(firstIsNumber ? process.argv[3] : process.argv[4], 10) || 0;
+  const bundlerUrl = (firstIsNumber ? process.argv[4] : process.argv[5]) || BUNDLER_URL;
 
   if (!itemCount || itemCount < 1 || isNaN(itemCount)) {
-    console.error("Usage: node upload-items.js [wallet_path] <number_of_items> [bytes_per_item]");
+    console.error("Usage: node upload-items.js [wallet_path] <number_of_items> [bytes_per_item] [bundler_url]");
     console.error("");
     console.error("Arguments:");
     console.error("  wallet_path      - Path to Arweave wallet JSON (default: ../../hyperbeam-key.json)");
     console.error("  number_of_items  - Number of data items to create and upload");
     console.error("  bytes_per_item   - Minimum size of each item in bytes (optional)");
+    console.error("  bundler_url      - Bundler base URL (default: " + BUNDLER_URL + ")");
     console.error("");
     console.error("Examples:");
     console.error("  node upload-items.js 100");
     console.error("  node upload-items.js 100 1024");
     console.error("  node upload-items.js /path/to/wallet.json 100 1024");
+    console.error("  node upload-items.js 100 0 http://other-bundler:8734");
     process.exit(1);
   }
 
-  performanceTest(walletPath, itemCount, bytesPerItem)
+  performanceTest(walletPath, itemCount, bytesPerItem, bundlerUrl)
     .then(() => {
       process.exit(0);
     })
