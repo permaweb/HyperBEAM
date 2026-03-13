@@ -115,7 +115,7 @@ list_index_blocks(Current, To, Opts, Acc) ->
     end.
 
 fetch_block_header(Height, Opts) ->
-    ?event(copycat_debug, {fetching_block, Height}),
+    ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
             <<
@@ -192,7 +192,7 @@ fetch_and_process_block(Current, To, Opts) ->
 process_block(BlockRes, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            ?event(copycat_debug, {{processing_block, Current},
+            ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
             case maybe_index_ids(Block, Opts) of
                 {block_skipped, Results} ->
@@ -286,7 +286,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
-    ?event(copycat_debug, {writing_index,
+    ?event(debug_copycat, {writing_index,
         {id, {explicit, TXID}},
         {offset, TXStartOffset},
         {size, TX#tx.data_size}
@@ -303,7 +303,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
-            ?event(copycat_debug, {fetching_bundle_header, 
+            % Lightweight processing of block transactions to depth 2. We
+            % can avoid loading the full L1 TX data into memory, and instead
+            % only load the bundle header. But as a result we're unable to
+            % recurse any deeper than L2 dataitems.
+            ?event(debug_copycat, {fetching_bundle_header, 
                 {tx_id, {string, TXID}},
                 {tx_end_offset, TXEndOffset},
                 {tx_data_size, TX#tx.data_size}
@@ -330,7 +334,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             BundleIndex
                         )
                     end),
-                    ?event(copycat_debug,
+                    ?event(debug_copycat,
                         {bundle_items_indexed,
                             {tx_id, {string, TXID}},
                             {items_count, ItemsCount}
@@ -400,7 +404,7 @@ resolve_tx_headers(TXIDs, Opts) ->
 
 resolve_tx_header(TXID, Opts) ->
     try
-        ?event(copycat_debug, {fetching_tx, {explicit, TXID}}),
+        ?event(debug_copycat, {fetching_tx, {explicit, TXID}}),
         ResolveRes = observe_event(<<"tx_header">>, fun() ->
             hb_ao:resolve(
                 <<

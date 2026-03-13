@@ -1002,29 +1002,29 @@ isolated_type_debug_test() ->
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,
     OtherKeyPath = <<MessageID/binary, "/other-test-key">>,
-    ?event(isolated_debug, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
+    ?event(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
     make_group(StoreOpts, CommitmentsPath),
     make_group(StoreOpts, OtherKeyPath),
     % 3. Add some actual data within those groups
     write(StoreOpts, <<CommitmentsPath/binary, "/sig1">>, <<"signature_data_1">>),
     write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
     % 4. Test type detection on the nested paths
-    ?event(isolated_debug, {testing_main_message_type}),
+    ?event(debug_isolated, {testing_main_message_type}),
     MainType = type(StoreOpts, MessageID),
-    ?event(isolated_debug, {main_message_type, MainType}),
-    ?event(isolated_debug, {testing_commitments_type}),
+    ?event(debug_isolated, {main_message_type, MainType}),
+    ?event(debug_isolated, {testing_commitments_type}),
     CommitmentsType = type(StoreOpts, CommitmentsPath),
-    ?event(isolated_debug, {commitments_type, CommitmentsType}),
-    ?event(isolated_debug, {testing_other_key_type}),
+    ?event(debug_isolated, {commitments_type, CommitmentsType}),
+    ?event(debug_isolated, {testing_other_key_type}),
     OtherKeyType = type(StoreOpts, OtherKeyPath),
-    ?event(isolated_debug, {other_key_type, OtherKeyType}),
+    ?event(debug_isolated, {other_key_type, OtherKeyType}),
     % 5. Test what happens when reading these nested paths
-    ?event(isolated_debug, {reading_commitments_directly}),
+    ?event(debug_isolated, {reading_commitments_directly}),
     CommitmentsResult = read(StoreOpts, CommitmentsPath),
-    ?event(isolated_debug, {commitments_read_result, CommitmentsResult}),
-    ?event(isolated_debug, {reading_other_key_directly}),
+    ?event(debug_isolated, {commitments_read_result, CommitmentsResult}),
+    ?event(debug_isolated, {reading_other_key_directly}),
     OtherKeyResult = read(StoreOpts, OtherKeyPath),
-    ?event(isolated_debug, {other_key_read_result, OtherKeyResult}),
+    ?event(debug_isolated, {other_key_read_result, OtherKeyResult}),
     stop(StoreOpts).
 
 %% @doc Test that list function resolves links correctly

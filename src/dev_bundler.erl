@@ -304,7 +304,7 @@ handle_task_complete(WorkerPID, Task, Result, State = #state{
         bundles = Bundles
     }) ->
     #task{bundle_id = BundleID} = Task,
-    ?event(bundler_debug, dev_bundler_task:log_task(task_complete, Task, [])),
+    ?event(debug_bundler, dev_bundler_task:log_task(task_complete, Task, [])),
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
     },

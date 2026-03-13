@@ -365,7 +365,7 @@ cors_reply(Req, _ServerID) ->
         <<"access-control-allow-methods">> =>
             <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>
     }, Req),
-    ?event(http_debug, {cors_reply, {req, Req}, {req2, Req2}}),
+    ?event(debug_http, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
 
 %% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 

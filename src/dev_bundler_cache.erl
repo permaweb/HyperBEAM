@@ -90,7 +90,7 @@ complete_tx(TX, Opts) ->
 %% @doc Set the status of a bundle TX.
 set_tx_status(TX, Status, Opts) ->
     Path = tx_path(TX, Opts),
-    ?event(bundler_debug, {set_tx_status, {path, Path}, {status, Status}}),
+    ?event(debug_bundler, {set_tx_status, {path, Path}, {status, Status}}),
     write_pseudopath(Path, Status, Opts).
 
 %% @doc Get the status of a bundle TX.
@@ -134,7 +134,7 @@ load_bundle_states(Opts) ->
                 <<"complete">> -> false; % Skip completed bundles
                 Status ->
                     ?event(
-                        bundler_debug,
+                        debug_bundler,
                         {loaded_tx_state,
                             {id, {string, TXID}},
                             {status, Status}
@@ -148,10 +148,10 @@ load_bundle_states(Opts) ->
 
 %% @doc Load a TX from cache by its ID.
 load_tx(TXID, Opts) ->
-    ?event(bundler_debug, {load_tx, {tx_id, {explicit, TXID}}}),
+    ?event(debug_bundler, {load_tx, {tx_id, {explicit, TXID}}}),
     case hb_cache:read(TXID, Opts) of
         {ok, TX} ->
-            ?event(bundler_debug, {loaded_tx, {tx_id, {explicit, TXID}}}),
+            ?event(debug_bundler, {loaded_tx, {tx_id, {explicit, TXID}}}),
             hb_cache:ensure_all_loaded(TX, Opts);
         _ ->
             ?event(error, {failed_to_load_tx, {tx_id, {explicit, TXID}}}),
