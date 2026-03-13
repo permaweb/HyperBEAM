@@ -302,14 +302,14 @@ get_connection_by_key(ConnKey, PoolSize, Args, Opts, Attempts) when Attempts < P
                     {ok, PID};
                 [{PID, {connecting, _}, _MonitorRef, _ConnKey}] ->
                     %% Connection is being established, wait for it via gen_server
-                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, infinity);
+                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000);
                 [] ->
                     %% Status not found, connection might be dead, create new one
-                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, infinity)
+                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000)
             end;
         [] ->
             %% No connection, create one via gen_server
-            catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, infinity)
+            catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000)
     end;
 get_connection_by_key(_ConnKey, _PoolSize, _Args, _Opts, _Attempts) ->
     {error, no_available_connection}.
