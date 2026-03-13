@@ -197,25 +197,30 @@ process_l1_request(TXID, Request, Opts) ->
         hb_util:bool(
             hb_maps:get(<<"query-l1-offset">>, Request, false, Opts)
         ),
-    maybe
-        {ok, OwnerFilters} ?= parse_owner_filter(Request, Opts),
-        {ok, IncludeTag} ?= parse_tag_filter(<<"include-tag">>, Request, Opts),
-        {ok, ExcludeTag} ?= parse_tag_filter(<<"exclude-tag">>, Request, Opts),
-        {ok,
-            maybe_process_l1_tx(
-                TXID,
-                OwnerFilters#{
-                    include_tag => IncludeTag,
-                    exclude_tag => ExcludeTag
-                },
-                Depth,
-                QueryL1Offset,
-                Opts
-            )}
-    else
-        {error, _} = Error ->
-            Error
-    end.
+    observe_copycat_l1_stage(
+        <<"l1_request_total">>,
+        fun() ->
+            maybe
+                {ok, OwnerFilters} ?= parse_owner_filter(Request, Opts),
+                {ok, IncludeTag} ?= parse_tag_filter(<<"include-tag">>, Request, Opts),
+                {ok, ExcludeTag} ?= parse_tag_filter(<<"exclude-tag">>, Request, Opts),
+                {ok,
+                    maybe_process_l1_tx(
+                        TXID,
+                        OwnerFilters#{
+                            include_tag => IncludeTag,
+                            exclude_tag => ExcludeTag
+                        },
+                        Depth,
+                        QueryL1Offset,
+                        Opts
+                    )}
+            else
+                {error, _} = Error ->
+                    Error
+            end
+        end
+    ).
 %% @doc Parse the requested recursion depth and clamp it to the configured
 %% safe cap. Depth is relative so depth 1 is always one level below the
 %% root specified in the request (either a block or an L1 TX ID).
@@ -717,8 +722,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
     ?event(copycat_short,
         {indexing_l1_tx, {tx_id, {explicit, EncodedTXID}},
         {depth, Depth},
-        {query_l1_offset, QueryL1Offset},
-        {filters, Filters}
+        {query_l1_offset, QueryL1Offset}
     }),
     maybe
         {ok,
@@ -727,12 +731,17 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
                 <<"start-offset">> := StartOffset,
                 <<"length">> := Length
             }} ?=
-            ensure_l1_tx_offset(
-                NormalizedTXID,
-                EncodedTXID,
-                IndexStore,
-                QueryL1Offset,
-                Opts
+            observe_copycat_l1_stage(
+                <<"l1_offset_lookup">>,
+                fun() ->
+                    ensure_l1_tx_offset(
+                        NormalizedTXID,
+                        EncodedTXID,
+                        IndexStore,
+                        QueryL1Offset,
+                        Opts
+                    )
+                end
             ),
         {ok, TX} ?= resolve_tx_header(EncodedTXID, Opts),
         pass ?= l1_filter_reason(TX, Filters),
@@ -806,16 +815,24 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
 %% be merged.
 process_l1_tx(
         StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
-    case hb_store_arweave:read_chunks(StartOffset, Length, Opts) of
+    case observe_copycat_l1_stage(
+        <<"l1_read_chunks">>,
+        fun() -> hb_store_arweave:read_chunks(StartOffset, Length, Opts) end
+    ) of
         {ok, BundleData} ->
             {TotalTime, IndexRes} = timer:tc(
                 fun() ->
-                    index_full_bundle_bytes(
-                        BundleData,
-                        StartOffset,
-                        Depth,
-                        IndexStore,
-                        Opts
+                    observe_copycat_l1_stage(
+                        <<"l1_full_bundle_index">>,
+                        fun() ->
+                            index_full_bundle_bytes(
+                                BundleData,
+                                StartOffset,
+                                Depth,
+                                IndexStore,
+                                Opts
+                            )
+                        end
                     )
                 end
             ),
@@ -909,26 +926,35 @@ ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, QueryL1Offset, Opts) ->
 query_l1_tx_offset(TXID, IndexStore, Opts) ->
     % TODO: move this into dev_arweave - I think? Unless it's possible to
     % query this already via one of the existing ~arweave@2.9 paths?
-    case hb_http:request(
-        #{
-            <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
-            <<"method">> => <<"GET">>
-        },
-        Opts
+    case observe_copycat_l1_stage(
+        <<"l1_offset_query_http">>,
+        fun() ->
+            hb_http:request(
+                #{
+                    <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                    <<"method">> => <<"GET">>
+                },
+                Opts
+            )
+        end
     ) of
         {ok, #{ <<"body">> := OffsetBody }} ->
             OffsetMsg = hb_json:decode(OffsetBody),
             EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
             Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
             StartOffset = EndOffset - Size,
-            ok =
-                hb_store_arweave:write_offset(
-                    IndexStore,
-                    TXID,
-                    <<"tx@1.0">>,
-                    StartOffset,
-                    Size
-                ),
+            ok = observe_copycat_l1_stage(
+                <<"l1_offset_query_store_write">>,
+                fun() ->
+                    hb_store_arweave:write_offset(
+                        IndexStore,
+                        TXID,
+                        <<"tx@1.0">>,
+                        StartOffset,
+                        Size
+                    )
+                end
+            ),
             ok;
         {error, Reason} ->
             {error, Reason};
@@ -1101,11 +1127,20 @@ record_event_metrics(MetricName, Count, Duration) ->
     hb_event:record(<<"arweave_block_count">>, MetricName, #{}, Count),
     hb_event:record(<<"arweave_block_duration">>, MetricName, #{}, Duration).
 
+record_copycat_l1_metrics(MetricName, Count, Duration) ->
+    hb_event:record(copycat_l1_count, MetricName, #{}, Count),
+    hb_event:record(copycat_l1_duration, MetricName, #{}, Duration).
+
 %% @doc Track an operation's execution time and count using hb_event:record.
 %% Always tracks both count and duration, regardless of success/failure.
 observe_event(MetricName, Fun) ->
     {Time, Result} = timer:tc(Fun),
     record_event_metrics(MetricName, 1, Time),
+    Result.
+
+observe_copycat_l1_stage(MetricName, Fun) ->
+    {Time, Result} = timer:tc(Fun),
+    record_copycat_l1_metrics(MetricName, 1, Time),
     Result.
 
 %%% Tests

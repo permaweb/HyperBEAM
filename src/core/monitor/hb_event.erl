@@ -405,28 +405,10 @@ check_overload(Last, N) ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
                     {memory, MemorySize} = erlang:process_info(self(), memory),
-                    case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
-                        1 ->
-                            ?debug_print(
-                                {warning,
-                                    prometheus_event_queue_overloading,
-                                    {queue, Len},
-                                    {last_event, Last},
-                                    {memory_bytes, MemorySize}
-                                }
-                            );
-                        _ -> ignored
-                    end,
+                    % If the size of this process is too large, exit such that
+                    % we can be restarted by the next caller.
                     case MemorySize of
                         MemorySize when MemorySize > ?MAX_MEMORY ->
-                            ?debug_print(
-                                {error,
-                                    prometheus_event_queue_terminating_on_memory_overload,
-                                    {queue, Len},
-                                    {memory_bytes, MemorySize},
-                                    {last_event, Last}
-                                }
-                            ),
                             exit(memory_overload);
                         _ -> no_action
                     end;
