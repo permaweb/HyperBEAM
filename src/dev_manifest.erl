@@ -348,8 +348,8 @@ manifest_inner_redirect_test() ->
     %% Define the store
     LmdbStore = hb_test_utils:test_store(),
     %% Load transaction information to the store
-    hb_test_utils:load_and_store(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:load_and_store(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
     %% Start node
     Opts = #{store => LmdbStore},
     Node = hb_http_server:start_node(Opts),
@@ -366,9 +366,9 @@ manifest_inner_redirect_test() ->
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
 access_key_path_in_manifest_test() ->
     LmdbStore = hb_test_utils:test_store(),
-    hb_test_utils:load_and_store(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:load_and_store(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    hb_test_utils:load_and_store(LmdbStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
     Opts = #{store => LmdbStore},
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -384,8 +384,8 @@ access_key_path_in_manifest_test() ->
 %% folder structure, like `assets/not_found.js .
 manifest_should_fallback_on_not_found_path_test() ->
     LmdbStore = hb_test_utils:test_store(),
-    hb_test_utils:load_and_store(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:load_and_store(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
     Opts = #{store => LmdbStore},
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
