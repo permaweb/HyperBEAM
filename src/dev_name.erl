@@ -257,8 +257,6 @@ load_and_execute_test() ->
 arns_opts() ->
     JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
-    % TODO: Delete?
-    hb_http_server:start_node(#{}),
     TempStore = hb_test_utils:test_store(),
     #{
         store =>
@@ -311,29 +309,71 @@ subdomain_to_tx_id_test() ->
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_tx_id(Subdomain)).
 
-resolve_52char_subdomain_asset_if_txid_not_present_test() ->
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(#{}),
-    {ok, R} = hb_http:get(
-        Node, 
-        #{
-          <<"path">> => <<"/assets/index-C_KRlCcV.js">>, 
-          <<"host">> => <<Subdomain/binary, ".localhost">>
-        }
-    ),
-    ?event(error, {r, R}).
-
 resolve_52char_subdomain_if_txid_not_present_test() ->
-    Opts = arns_opts(),
-    %% TX: 42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA
+    Opts = load_manifest_opts(),
+    %% Test to load manifest with only subdomain
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    {ok, R} = hb_http:get(
-        Node, 
-        #{
-          <<"path">> => <<"/">>,
-          <<"host">> => <<Subdomain/binary, ".localhost">>
-        },
-        Opts
-    ),
-    ?event(error, {r, R}).
+    ?assertMatch(
+        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
+        hb_http:get(
+            Node, 
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => <<Subdomain/binary, ".localhost">>
+            },
+            Opts
+        )
+    ).
+
+resolve_52char_subdomain_asset_if_txid_not_present_test() ->
+    Opts = load_manifest_opts(),
+    %% Test to load asset with only subdomain (no TX ID present).
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}}}, 
+        hb_http:get(
+            Node, 
+            #{
+                <<"path">> => <<"/assets/ArticleBlock-Dtwjc54T.js">>,
+                <<"host">> => <<Subdomain/binary, ".localhost">>
+            },
+            Opts
+        )
+    ).
+
+ignore_52char_subdomain_if_txid_present_test() ->
+        Opts = load_manifest_opts(),
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}}}, 
+        hb_http:get(
+            Node, 
+            #{
+                <<"path">> => <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
+                <<"host">> => <<Subdomain/binary, ".localhost">>
+            },
+            Opts
+        )
+    ).
+
+load_manifest_opts() ->
+    TempStore = hb_test_utils:test_store(),
+    %% Load TX data into the store
+    hb_test_utils:load_and_store(TempStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    hb_test_utils:load_and_store(TempStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    hb_test_utils:load_and_store(TempStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
+    %% Opts
+    #{
+        store => [TempStore],
+        on => #{
+            <<"request">> =>
+                [
+                    #{<<"device">> => <<"name@1.0">>},
+                    #{<<"device">> => <<"manifest@1.0">>}
+                ]
+        }
+    }.
+
