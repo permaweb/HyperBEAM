@@ -542,7 +542,7 @@ create_new_connection(ConnKey, Args, From, State) ->
     %% Store connection in ETS
     ets:insert(?CONNECTIONS_ETS, {ConnKey, PID}),
     %% Store status with monitor ref and conn key
-    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, [{From, Args}]}, MonitorRef, ConnKey}),
+    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, []}, MonitorRef, ConnKey}),
     {reply, {ok, PID}, State}.
 
 open_connection(#{ peer := Peer }, Opts) ->
