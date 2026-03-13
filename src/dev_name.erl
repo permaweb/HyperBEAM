@@ -46,17 +46,27 @@ resolve(Key, _, Req, Opts) ->
             ArnsResolver
     end.
 
-%% @doc Try to resolve 52char subdomain back to its original TX ID when TX ID 
-%% isn't present.
-resolve_52char(_, #{<<"body">> := [ID | _]}, _) when ?IS_ID(ID) ->
-    ?event({resolve_52char, {skip_becase_id_found, ID}}),
-    not_found;
-resolve_52char(Key, _, Opts) when byte_size(Key) == 52 ->
+%% @doc Try to resolve 52char subdomain back to its original TX ID
+resolve_52char(Key, HookMsg, Opts) when byte_size(Key) == 52 ->
     TXID = subdomain_to_tx_id(Key),
-    ?event({resolve_52char, {key, Key}, {txid, TXID}}),
-    hb_cache:read(TXID, Opts);
-resolve_52char(_, _, _) ->
-    ?event({resolve_52char, nothing_matched}),
+    %% Clean up entries that doesn't have <<"path">> as key or aren't IDs.
+    Body = lists:filter(
+        fun (#{<<"path">> := _ }) -> true;
+            (ID) when ?IS_ID(ID) -> true;
+            (_) -> false
+        end, 
+        maps:get(<<"body">>, HookMsg, [])
+    ),
+    case Body of 
+        [TXID | _] ->
+            ?event({resolve_52char, same_txid_as_subdomain}),
+            %% To be resolved later, under normal flow
+            not_found;
+        _ ->
+            hb_cache:read(TXID, Opts)
+    end;
+resolve_52char(Key, _, _) ->
+    ?event({resolve_52char, {key, Key}, {message, <<"Key isn't not a valid 52 char subdomain">>}}),
     not_found.
 
 %% @doc Find the first resolver that matches the key and return its value.
@@ -98,6 +108,8 @@ request(HookMsg, HookReq, Opts) ->
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
             case hb_maps:find(<<"body">>, HookReq, Opts) of
+                {ok, [ID|Rest]} when ?IS_ID(ID) ->
+                    [ResolvedMsg|Rest];
                 {ok, [OldBase|Rest]} ->
                     [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest];
                 {ok, []} ->
@@ -114,8 +126,15 @@ request(HookMsg, HookReq, Opts) ->
         {ok, #{ <<"body">> => ModReq }}
     else
         Reason ->
-            ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
-            {ok, HookReq}
+            case maps:get(<<"body">>, HookReq, []) of 
+                [] ->
+                    ?event({request_hook_404, root_path}),
+                    % No path provided should return 404 if not resolved (via ARNS or 52 char subdomain)
+                    {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
+                _ ->
+                    ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
+                    {ok, HookReq}
+            end
     end.
 
 %% @doc Takes a request-given host and the host value in the node message and
@@ -305,11 +324,31 @@ arns_host_resolution_test() ->
         )
     ).
 
+%% @doc If the sudbdomain provided isn't a valid ARNS or a 52 char subdomain 
+%% it should return 404 instead of HyperBEAM page.
+invalid_arns_and_not_52char_host_resolution_gives_404_test() ->
+    Opts = arns_opts(),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {error, #{<<"status">> := 404}},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => <<"non-existing-subdomain.localhost">>
+            },
+            Opts
+        )
+    ).
+
+%% @doc Unit test for 52 char subdomain to TX ID logic
 subdomain_to_tx_id_test() -> 
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_tx_id(Subdomain)).
 
+%% @doc Resolving a 52 char subdomain without a TXID in the path should work.
 resolve_52char_subdomain_if_txid_not_present_test() ->
+    TestPath = <<"/">>,
     Opts = load_manifest_opts(),
     %% Test to load manifest with only subdomain
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
@@ -319,14 +358,17 @@ resolve_52char_subdomain_if_txid_not_present_test() ->
         hb_http:get(
             Node, 
             #{
-                <<"path">> => <<"/">>,
+                <<"path">> => TestPath,
                 <<"host">> => <<Subdomain/binary, ".localhost">>
             },
             Opts
         )
     ).
 
+%% @doc Loading assets from a manifest where only a 52 char subdomain is 
+%% provided should work. 
 resolve_52char_subdomain_asset_if_txid_not_present_test() ->
+    TestPath = <<"/assets/ArticleBlock-Dtwjc54T.js">>,
     Opts = load_manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
@@ -336,15 +378,19 @@ resolve_52char_subdomain_asset_if_txid_not_present_test() ->
         hb_http:get(
             Node, 
             #{
-                <<"path">> => <<"/assets/ArticleBlock-Dtwjc54T.js">>,
+                <<"path">> => TestPath,
                 <<"host">> => <<Subdomain/binary, ".localhost">>
             },
             Opts
         )
     ).
 
-ignore_52char_subdomain_if_txid_present_test() ->
-        Opts = load_manifest_opts(),
+%% @doc Loading assets from a manifest where a 52 char subdomain and TX ID 
+%% is provided should work.
+resolve_52char_subdomain_asset_if_txid_present_test() ->
+    TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>,
+    Opts = load_manifest_opts(),
+    %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -352,7 +398,47 @@ ignore_52char_subdomain_if_txid_present_test() ->
         hb_http:get(
             Node, 
             #{
-                <<"path">> => <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
+                <<"path">> => TestPath,
+                <<"host">> => <<Subdomain/binary, ".localhost">>
+            },
+            Opts
+        )
+    ).
+
+%% @doc When both 52 char subdomain and TX ID are provided and equal, ignore 
+%% the TXID from the assets path. 
+ignore_52char_subdomain_if_the_same_txid_is_provided_test() ->
+    TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
+    Opts = load_manifest_opts(),
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
+        hb_http:get(
+            Node, 
+            #{
+                <<"path">> => TestPath,
+                <<"host">> => <<Subdomain/binary, ".localhost">>
+            },
+            Opts
+        )
+    ).
+
+%% @doc When a valid 52 char subdomain TXID doesn't match the TX ID provided,
+%% the subdomain TXID is loaded, and tries to access the assets path defined.
+%% In this case, sinse no assets exists with this TX ID, it should load the 
+%% index.
+when_52char_subdomain_txid_it_doesnt_match_txid_provided_test() ->
+    TestPath = <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
+    Opts = load_manifest_opts(),
+    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
+        hb_http:get(
+            Node, 
+            #{
+                <<"path">> => TestPath,
                 <<"host">> => <<Subdomain/binary, ".localhost">>
             },
             Opts
@@ -376,4 +462,3 @@ load_manifest_opts() ->
                 ]
         }
     }.
-
