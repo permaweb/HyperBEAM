@@ -703,8 +703,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
     ?event(copycat_short,
         {indexing_l1_tx, {tx_id, {explicit, EncodedTXID}},
         {depth, Depth},
-        {query_l1_offset, QueryL1Offset},
-        {filters, Filters}
+        {query_l1_offset, QueryL1Offset}
     }),
     maybe
         {ok,
