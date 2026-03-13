@@ -1104,12 +1104,12 @@ resolve_tx_header(TXID, Opts) ->
 
 %% @doc Record event metrics (count and duration) using hb_event:increment.
 record_event_metrics(MetricName, Count, Duration) ->
-    hb_event:increment(<<"arweave_block_count">>, MetricName, #{}, Count),
-    hb_event:increment(<<"arweave_block_duration">>, MetricName, #{}, Duration).
+    hb_event:increment(arweave_block_count, MetricName, #{}, Count),
+    hb_event:increment(arweave_block_duration, MetricName, #{}, Duration).
 
 record_copycat_l1_metrics(MetricName, Count, Duration) ->
-    hb_event:increment(<<"copycat_l1_count">>, MetricName, #{}, Count),
-    hb_event:increment(<<"copycat_l1_duration">>, MetricName, #{}, Duration).
+    hb_event:increment(copycat_l1_count, MetricName, #{}, Count),
+    hb_event:increment(copycat_l1_duration, MetricName, #{}, Duration).
 
 %% @doc Track an operation's execution time and count using hb_event:increment.
 %% Always tracks both count and duration, regardless of success/failure.
