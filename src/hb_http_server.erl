@@ -145,15 +145,30 @@ print_greeter(Config, PrivWallet) ->
 %% before it is used to configure the server. The `start' hook expects gives and
 %% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
+    ServerID =
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_opts:get(
+                    priv_wallet,
+                    no_wallet,
+                    RawNodeMsg
+                )
+            )
+        ),
     RawNodeMsgWithDefaults =
         hb_maps:merge(
             hb_opts:default_message_with_env(),
-            RawNodeMsg#{ only => local }
+            RawNodeMsg#{ only => local, http_server => ServerID }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
         case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
-            {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
+            {ok, #{ <<"body">> := NodeMsgAfterHook }} when is_map(NodeMsgAfterHook) -> NodeMsgAfterHook;
+            {ok, _R} ->
+                %% NOTE: Since cron doesn't reply with a NodeMsg, we need to handle it seperatly.
+                %% For from cron, it replies with the token.
+                %% We set opts, the same way if there is no handler to solve.
+                maps:get(<<"body">>, HookMsg);
             Unexpected ->
                 ?event(http,
                     {failed_to_start_server,
@@ -168,7 +183,7 @@ new_server(RawNodeMsg) ->
         end,
     % Put server ID into node message so it's possible to update current server
     hb_http:start(),
-    ServerID =
+    _ServerID =
         hb_util:human_id(
             ar_wallet:to_address(
                 hb_opts:get(

@@ -452,34 +452,45 @@ default_message() ->
             routes => []
         },
         on => #{
-            <<"request">> =>
-                [
-                    #{
-                        <<"device">> => <<"rate-limit@1.0">>
-                    },
-                    #{
-                        <<"device">> => <<"auth-hook@1.0">>,
-                        <<"path">> => <<"request">>,
-                        <<"when">> => #{
-                            <<"keys">> => [<<"authorization">>, <<"!">>]
-                        },
-                        <<"secret-provider">> =>
-                            #{
-                                <<"device">> => <<"http-auth@1.0">>,
-                                <<"access-control">> =>
-                                    #{ <<"device">> => <<"http-auth@1.0">> }
-                            }
-                    },
-                    #{
-                        <<"device">> => <<"name@1.0">>
-                    },
-                    #{
-                        <<"device">> => <<"manifest@1.0">>
-                    },
-                    #{
-                        <<"device">> => <<"blacklist@1.0">>
-                    }
-                ]
+            <<"start">> => [#{
+                <<"device">> => <<"cron@1.0">>,
+                <<"path">> => <<"every">>,
+                <<"extra-params">> => #{
+                <<"interval">> => <<"10-second">>,
+                <<"cron-path">> => <<"/~copycat@1.0/arweave&from+integer=-1&to+integer=-19">>
+                },
+                <<"target">> => <<"self">>
+            }]
+            %% NOTE: Not sure why, but requests interfer with the sucess of <<"start">> hook.
+            %% If unconmment, it will return 404 and not execute.
+%            <<"request">> =>
+%                [
+%                    #{
+%                        <<"device">> => <<"rate-limit@1.0">>
+%                    },
+%                    #{
+%                        <<"device">> => <<"auth-hook@1.0">>,
+%                        <<"path">> => <<"request">>,
+%                        <<"when">> => #{
+%                            <<"keys">> => [<<"authorization">>, <<"!">>]
+%                        },
+%                        <<"secret-provider">> =>
+%                            #{
+%                                <<"device">> => <<"http-auth@1.0">>,
+%                                <<"access-control">> =>
+%                                    #{ <<"device">> => <<"http-auth@1.0">> }
+%                            }
+%                    },
+%                    #{
+%                        <<"device">> => <<"name@1.0">>
+%                    },
+%                    #{
+%                        <<"device">> => <<"manifest@1.0">>
+%                    },
+%                    #{
+%                        <<"device">> => <<"blacklist@1.0">>
+%                    }
+%                ]
         },
         scheduler_default_commitment_spec => <<"httpsig@1.0">>,
         genesis_wasm_import_authorities =>
