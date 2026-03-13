@@ -7,7 +7,7 @@
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
 -export([compare_events/3, compare_events/4, compare_events/5]).
--export([load_and_store/2]).
+-export([preload/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -264,7 +264,7 @@ format_time(Time) ->
     hb_util:human_int(Time * 1000) ++ "ms".
 
 %% @doc Load ans104 binary files to a store.
-load_and_store(Store, File) ->
+preload(Store, File) ->
     Opts = #{},
     {ok, SerializedItem} =
         file:read_file(

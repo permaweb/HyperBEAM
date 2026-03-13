@@ -28,7 +28,7 @@ info(_) ->
 resolve(Key, _, Req, Opts) ->
     Resolvers = hb_opts:get(name_resolvers, [], Opts),
     ?event({resolvers, Resolvers}),
-    ArnsResolver = case match_resolver(Key, Resolvers, Opts) of
+    NameResolver = case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
             case hb_util:atom(hb_ao:get(<<"load">>, Req, true, Opts)) of
                 false ->
@@ -39,22 +39,19 @@ resolve(Key, _, Req, Opts) ->
         not_found ->
             not_found
     end,
-    case ArnsResolver of 
+    case NameResolver of 
         not_found ->
             resolve_52char(Key, Req, Opts);
         _ ->
-            ArnsResolver
+            NameResolver
     end.
 
 %% @doc Try to resolve 52char subdomain back to its original TX ID
 resolve_52char(Key, HookMsg, Opts) when byte_size(Key) == 52 ->
-    TXID = subdomain_to_tx_id(Key),
+    TXID = subdomain_to_txid(Key),
     %% Clean up entries that doesn't have <<"path">> as key or aren't IDs.
     Body = lists:filter(
-        fun (#{<<"path">> := _ }) -> true;
-            (ID) when ?IS_ID(ID) -> true;
-            (_) -> false
-        end, 
+        fun (Map) -> (is_map(map) andalso maps:is_key(<<"path">>, Map)) orelse ?IS_ID(Map) end, 
         maps:get(<<"body">>, HookMsg, [])
     ),
     case Body of 
@@ -129,7 +126,7 @@ request(HookMsg, HookReq, Opts) ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
                     ?event({request_hook_404, root_path}),
-                    % No path provided should return 404 if not resolved (via ARNS or 52 char subdomain)
+                    % No path provided should return 404 if not resolved (via name resolvers or 52 char subdomain)
                     {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
                 _ ->
                     ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
@@ -163,8 +160,8 @@ overlay_loaded({as, DevID, Base}, Resolved, Opts) ->
 overlay_loaded(Base, Resolved, Opts) ->
     hb_maps:merge(Base, Resolved, Opts).
 
-subdomain_to_tx_id(Subdomain) when byte_size(Subdomain) == 52 ->
-    b64fast:encode(base32:decode(Subdomain)).
+subdomain_to_txid(Subdomain) when byte_size(Subdomain) == 52 ->
+    hb_util:human_id(b64fast:encode(base32:decode(Subdomain))).
 
 %%% Tests.
 
@@ -342,9 +339,9 @@ invalid_arns_and_not_52char_host_resolution_gives_404_test() ->
     ).
 
 %% @doc Unit test for 52 char subdomain to TX ID logic
-subdomain_to_tx_id_test() -> 
+subdomain_to_txid_test() -> 
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_tx_id(Subdomain)).
+    ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_txid(Subdomain)).
 
 %% @doc Resolving a 52 char subdomain without a TXID in the path should work.
 resolve_52char_subdomain_if_txid_not_present_test() ->
@@ -448,9 +445,9 @@ when_52char_subdomain_txid_it_doesnt_match_txid_provided_test() ->
 load_manifest_opts() ->
     TempStore = hb_test_utils:test_store(),
     %% Load TX data into the store
-    hb_test_utils:load_and_store(TempStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:load_and_store(TempStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    hb_test_utils:load_and_store(TempStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
+    hb_test_utils:preload(TempStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
+    hb_test_utils:preload(TempStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
+    hb_test_utils:preload(TempStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
     %% Opts
     #{
         store => [TempStore],
