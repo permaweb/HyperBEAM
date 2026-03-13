@@ -100,7 +100,7 @@ httpc_req(Args, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    {Host, Port} = parse_peer(Peer, Opts),
+    {ok, {Host, Port}} = parse_peer(Peer, Opts),
     Scheme = case Port of
         443 -> "https";
         _ -> "http"
@@ -535,18 +535,26 @@ terminate(Reason, _State) ->
 %%% ==================================================================
 
 %% @doc Create a new connection and store it in ETS.
-create_new_connection(ConnKey, Args, From, State) ->
+create_new_connection(ConnKey, Args, _From, State) ->
     MergedOpts = hb_maps:merge(State#state.opts, hb_maps:get(opts, Args, #{}), #{}),
-    {ok, PID} = open_connection(Args, MergedOpts),
-    MonitorRef = monitor(process, PID),
-    %% Store connection in ETS
-    ets:insert(?CONNECTIONS_ETS, {ConnKey, PID}),
-    %% Store status with monitor ref and conn key
-    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, []}, MonitorRef, ConnKey}),
-    {reply, {ok, PID}, State}.
+    case open_connection(Args, MergedOpts) of
+        {ok, PID} ->
+            MonitorRef = monitor(process, PID),
+            ets:insert(?CONNECTIONS_ETS, {ConnKey, PID}),
+            ets:insert(?CONN_STATUS_ETS,
+                {PID, {connecting, []}, MonitorRef, ConnKey}),
+            {reply, {ok, PID}, State};
+        {error, _} = Err ->
+            {reply, Err, State}
+    end.
 
 open_connection(#{ peer := Peer }, Opts) ->
-    {Host, Port} = parse_peer(Peer, Opts),
+    case parse_peer(Peer, Opts) of
+        {error, _} = Err -> Err;
+        {ok, {Host, Port}} -> open_connection_gun(Host, Port, Peer, Opts)
+    end.
+
+open_connection_gun(Host, Port, Peer, Opts) ->
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
         #{
@@ -598,15 +606,17 @@ parse_peer(Peer, Opts) ->
     Parsed = uri_string:parse(Peer),
     case Parsed of
         #{ host := Host, port := Port } ->
-            {hb_util:list(Host), Port};
+            {ok, {hb_util:list(Host), Port}};
         URI = #{ host := Host } ->
-            {
+            {ok, {
                 hb_util:list(Host),
                 case hb_maps:get(scheme, URI, undefined, Opts) of
                     <<"https">> -> 443;
                     _ -> hb_opts:get(port, 8734, Opts)
                 end
-            }
+            }};
+        _ ->
+            {error, {bad_peer, Peer}}
     end.
 
 reply_error([], _Reason) ->
