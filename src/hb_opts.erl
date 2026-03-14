@@ -243,6 +243,8 @@ default_message() ->
         http_client_keepalive => 120000,
         http_client_send_timeout => 300_000,
         port => 8734,
+        process_sampler => true,
+        process_sampler_interval => 15000,
         wasm_allow_aot => false,
         %% Options for the relay device
         relay_http_client => httpc,
