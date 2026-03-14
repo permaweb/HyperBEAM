@@ -285,7 +285,9 @@ enforce_set_authority(Base, Req, Opts) ->
 
 %%% Helper functions.
 
-%% @doc Validate address format for security
+%% @doc Validate address format for security. the validation
+%% allows binary addresses up to 128 bytes and prevent invalid
+%% addresses such as dev_trie reserved keys.
 validate_address(Address) when is_binary(Address) ->
     case byte_size(Address) of
         0 -> {error, <<"Recipient address cannot be empty.">>};

@@ -305,7 +305,7 @@ edges(TrieNode, Opts) ->
         Opts
     ),
     hb_maps:keys(Filtered).
-
+%% @doc Returns a list of the modules's edge labels for trie node.
 reserved_keys() ->
     [   <<"node-value">>,
         <<"device">>,
@@ -313,7 +313,7 @@ reserved_keys() ->
         <<"priv">>,
         <<"hashpath">>
     ].
-
+%% @doc Checks if the passed Key is a reserved dev_trie trie node label.
 is_reserved_key(Key) ->
     lists:member(Key, reserved_keys()).
 
