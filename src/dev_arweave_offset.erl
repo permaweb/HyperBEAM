@@ -105,23 +105,25 @@ read_remaining_item_data(_StartOffset, _HeaderSize, _PrefixSize, 0, _Opts) ->
 read_remaining_item_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
     hb_store_arweave:read_chunks(StartOffset + HeaderSize + PrefixSize, Length, Opts).
 
-%% @doc Resolve the size of the item at the given offset by locating it in the
-%% containing bundle header. We use the `note` attached to the Merkle leaf of
-%% the `tx_path` for the chunk to find the size of the bundle that contains the
-%% item. We then use the `note` attached to the Merkle leaf of the `data_path`
-%% for the chunk to find the offset of the end of the chunk inside the bundle.
+%% @doc Determine the size of the item at an offset by locating it in the parent
+%% Arweave transaction's bundle header. In order to do this we must:
+%% 1. Find the global offset of the data root of the chunk.
+%% 2. Jump to that location and read the header chunks until we find our item.
+%% 3. Extract the item's size from the bundle header and return it.
+%% We achieve objective (1) by extracting the `absolute_end_offset` from the
+%% chunk JSON and subtracting the `data_path`'s note from it. The `data_path`
+%% is the Merkle path of the chunk that contains the item, and its note is the
+%% offset of the end of the chunk inside the bundle. The `absolute_end_offset`
+%% is the global offset of the end of the chunk, so to calculate the bundle's
+%% start offset we can simply perform `absolute_end_offset - data_path_note`.
 item_size_from_offset(StartOffset, ChunkJSON, Opts) ->
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
-    BundleSize =
-        ar_merkle:extract_note(
-            hb_util:decode(maps:get(<<"tx_path">>, ChunkJSON))
-        ),
     ChunkEndInBundle =
         ar_merkle:extract_note(
             hb_util:decode(maps:get(<<"data_path">>, ChunkJSON))
         ),
     BundleStartOffset = AbsEnd - ChunkEndInBundle,
-    case bundle_header(BundleStartOffset, BundleSize, Opts) of
+    case dev_arweave:bundle_header(BundleStartOffset, Opts) of
         {ok, HeaderSize, BundleIndex} ->
             locate_bundle_item(
                 StartOffset,
@@ -131,44 +133,6 @@ item_size_from_offset(StartOffset, ChunkJSON, Opts) ->
         Error ->
             Error
     end.
-
-%% @doc Read and decode the containing bundle header for an item.
-bundle_header(BundleStartOffset, _BundleSize, Opts) ->
-    case hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => BundleStartOffset + 1
-        },
-        Opts
-    ) of
-        {ok, FirstChunk} ->
-            case ar_bundles:bundle_header_size(FirstChunk) of
-                invalid_bundle_header ->
-                    {error, invalid_bundle_header};
-                HeaderSize ->
-                    case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
-                        {ok, HeaderBin} ->
-                            case ar_bundles:decode_bundle_header(HeaderBin) of
-                                {_Items, BundleIndex} ->
-                                    {ok, HeaderSize, BundleIndex};
-                                invalid_bundle_header ->
-                                    {error, invalid_bundle_header}
-                            end;
-                        Error ->
-                            Error
-                    end
-            end;
-        Error ->
-            Error
-    end.
-
-%% @doc Read exactly the bytes needed to decode a bundle header.
-read_bundle_header(_BundleStartOffset, HeaderSize, FirstChunk, _Opts)
-        when HeaderSize =< byte_size(FirstChunk) ->
-    {ok, binary:part(FirstChunk, 0, HeaderSize)};
-read_bundle_header(BundleStartOffset, HeaderSize, _FirstChunk, Opts) ->
-    hb_store_arweave:read_chunks(BundleStartOffset, HeaderSize, Opts).
 
 %% @doc Locate the item that starts at the given offset in a bundle header
 %% index and return its serialized size.
