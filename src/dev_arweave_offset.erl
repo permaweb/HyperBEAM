@@ -37,14 +37,16 @@ load_item_at_offset(StartOffset, Length, Opts) ->
             try ar_bundles:deserialize_header(FirstChunk)
             catch _:_ -> {error, invalid_ans104_header}
             end,
-        {ok, ItemSize} ?=
-            if Length =:= undefined ->
-                item_size_from_offset(StartOffset, ChunkJSON, Opts);
+        {ok, DataSize} ?=
+            if Length =/= undefined -> {ok, Length};
             true ->
-                {ok, Length}
+                case item_size_from_offset(StartOffset, ChunkJSON, Opts) of
+                    {ok, ItemSize} when HeaderSize =< ItemSize ->
+                        {ok, ItemSize - HeaderSize};
+                    {ok, _ItemSize} -> false;
+                    ItemSizeError -> ItemSizeError
+                end
             end,
-        true ?= HeaderSize =< ItemSize,
-        DataSize = ItemSize - HeaderSize,
         {HeaderData, RemainingLength} =
             split_header_data(HeaderTX#tx.data, DataSize),
         {ok, RemainingData} ?=
@@ -181,25 +183,48 @@ locate_bundle_item(_StartOffset, _ItemStartOffset, _BundleIndex) ->
 
 %%% Tests
 
+offset_item_cases_test() ->
+    Opts = #{},
+    assert_offset_item(
+        <<"160399272861859">>,
+        498852,
+        #{ <<"content-type">> => <<"image/png">> },
+        Opts
+    ),
+    assert_offset_item(
+        <<"160399272861859-498852">>,
+        498852,
+        #{ <<"content-type">> => <<"image/png">> },
+        Opts
+    ),
+    assert_offset_item(
+        <<"384600234780716">>,
+        856691,
+        #{ <<"content-type">> => <<"image/jpeg">> },
+        Opts
+    ),
+    ok.
 
-resolve_item_at_offset_test() ->
-    StartOffset = 384600234780716,
-    ExpectedID = <<"cTI07T1OrF0KZEqPmZji1VTdbeKJG7kMAVlLu7KQvyw">>,
-    {ok, Item} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9">> },
-            hb_util:bin(StartOffset),
-            #{}
-        ),
-    ?assert(hb_message:verify(Item, all, #{})),
-    ?assertEqual(ExpectedID, hb_message:id(Item, signed, #{})).
+assert_offset_item(Path, DataSize, Tags, Opts) ->
+    {ok, Item} = hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, Path, Opts),
+    TX = hb_message:convert(Item, <<"ans104@1.0">>, <<"structured@1.0">>, Opts),
+    ?assert(hb_message:verify(Item, all, Opts)),
+    ?assertEqual(DataSize, TX#tx.data_size),
+    ?assertEqual(DataSize, byte_size(TX#tx.data)),
+    maps:foreach(
+        fun(Key, Value) ->
+            ?assertEqual({ok, Value}, hb_maps:find(Key, Item, Opts))
+        end,
+        Tags
+    ),
+    ok.
 
 offset_as_name_resolver_lookup_test() ->
     Opts = #{
         name_resolvers => [#{ <<"device">> => <<"arweave@2.9">> }],
         on =>
             #{
-                <<"request">> => [#{ <<"device">> => <<"name@2.9">> }]
+                <<"request">> => [#{ <<"device">> => <<"name@1.0">> }]
             }
     },
     Node = hb_http_server:start_node(Opts),
@@ -208,8 +233,8 @@ offset_as_name_resolver_lookup_test() ->
             Node,
             #{
                 <<"path">> => <<"/">>,
-                <<"host">> => <<"384600234780716.localhost">>
+                <<"host">> => <<"152974576623958.localhost">>
             },
             Opts
         ),
-    ?assertEqual(<<"image/jpeg">>, hb_ao:get(<<"content-type">>, Item, Opts)).
+    ?assertEqual(<<"application/json">>, hb_ao:get(<<"content-type">>, Item, Opts)).
