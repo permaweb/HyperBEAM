@@ -313,12 +313,12 @@ do_invoke_monitor(Monitor, Details, Opts) ->
 
 %% @doc When the monitor target is a WASM process, `path' is a reserved
 %% AO-Core routing key that the scheduler copies into the assignment.
-%% Move it to `monitor-type' to avoid breaking execution dispatch.
+%% Move it to `Action' to avoid breaking execution dispatch.
 sanitize_body(Body, Monitor, Opts) ->
     case hb_ao:get(<<"is-wasm-process">>, Monitor, Opts) of
         true ->
             {PathVal, Rest} = hb_maps:take(<<"path">>, Body, Opts),
-            Rest#{ <<"monitor-type">> => PathVal };
+            Rest#{ <<"Action">> => PathVal };
         _ ->
             Body
     end.
