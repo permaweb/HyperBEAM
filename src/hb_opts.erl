@@ -43,7 +43,8 @@
 -ifndef(TEST).
 -define(DEFAULT_NAME_RESOLVERS,
     [
-        #{ <<"device">> => <<"~b32-name@1.0">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"device">> => <<"b32-name@1.0">> },
         <<
             "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
                 "~json@1.0/deserialize&target=data"
