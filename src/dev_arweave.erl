@@ -4,12 +4,23 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
+-export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+%%% Helper functions
+-export([get_chunk/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
+
+%% @doc Route unknown keys through offset resolution first, then fall back to
+%% the message device for direct key access.
+info() ->
+    #{
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        default => fun dev_arweave_offset:get/4
+    }.
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
