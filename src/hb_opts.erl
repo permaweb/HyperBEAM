@@ -205,6 +205,7 @@ default_message() ->
             #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
+            #{<<"name">> => <<"monitor-sampler@1.0">>, <<"module">> => dev_monitor_sampler},
             #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
             #{<<"name">> => <<"name@1.0">>, <<"module">> => dev_name},
             #{<<"name">> => <<"node-process@1.0">>, <<"module">> => dev_node_process},
