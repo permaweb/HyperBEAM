@@ -222,8 +222,9 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => StartOffset,
+            <<"raw-id">> => TXID,
+            <<"offset">> => StartOffset,
+            <<"data-offset">> => StartOffset,
             <<"content-type">> => ContentType,
             <<"header-length">> => 0,
             <<"content-length">> => Length,
@@ -256,8 +257,9 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => ArweaveOffset + HeaderSize,
+            <<"raw-id">> => TXID,
+            <<"offset">> => ArweaveOffset,
+            <<"data-offset">> => ArweaveOffset + HeaderSize,
             <<"content-type">> => ContentType,
             <<"header-length">> => HeaderSize,
             <<"content-length">> => Length - HeaderSize,
@@ -275,8 +277,8 @@ get_raw(Base, Request, Opts) ->
         Err = {error, _} -> Err;
         {ok,
             Header = #{
-                <<"arweave-id">> := TXID,
-                <<"arweave-data-offset">> := ArweaveDataOffset,
+                <<"raw-id">> := TXID,
+                <<"data-offset">> := ArweaveDataOffset,
                 <<"content-type">> := ContentType,
                 <<"content-length">> := FullContentLength
             }
