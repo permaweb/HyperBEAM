@@ -261,43 +261,66 @@ init_hackney_pool() ->
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
 
-%% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
-%% node message key. We invoke the given message with the `body' set to a signed
-%% version of the details. This allows node operators to configure their machine
-%% to record duration statistics into customized data stores, computations, or
-%% processes etc. Additionally, we include the `http_reference' value, if set in
-%% the given `opts'.
-%% 
-%% We use `hb_ao:get' rather than `hb_opts:get', as settings configured
-%% by the `~router@1.0' route `opts' key are unable to generate atoms.
+%% @doc Invoke the HTTP monitor if configured. Optionally gates invocations
+%% via `monitor-sampler@1.0' when `sample-rate' is set in the monitor config.
+%% When the target is a WASM process (`is-wasm-process' in the monitor config),
+%% the reserved `path' key is moved to `monitor-type' to avoid interfering
+%% with AO-Core routing.
 maybe_invoke_monitor(Details, Opts) ->
     case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
         not_found -> ok;
         Monitor ->
-            % We have a monitor message. Place the `details' into the body, set
-            % the `method' to "POST", add the `http_reference' (if applicable)
-            % and sign the request. We use the node message's wallet as the
-            % source of the key.
-            MaybeWithReference =
-                case hb_ao:get(<<"http_reference">>, Opts, Opts) of
-                    not_found -> Details;
-                    Ref -> Details#{ <<"reference">> => Ref }
-                end,
-            Req =
-                Monitor#{
-                    <<"body">> =>
-                        hb_message:commit(
-                            MaybeWithReference#{
-                                <<"method">> => <<"POST">>
-                            },
-                            Opts
-                        )
-                },
-            % Use the singleton parse to generate the message sequence to 
-            % execute.
-            ReqMsgs = hb_singleton:from(Req, Opts),
-            Res = hb_ao:resolve_many(ReqMsgs, Opts),
-            ?event(debug_http_monitor, {resolved_monitor, Res})
+            case should_forward(Monitor, Opts) of
+                false -> ok;
+                true -> do_invoke_monitor(Monitor, Details, Opts)
+            end
+    end.
+
+%% @doc Check whether this request should be forwarded to the monitor.
+%% If `sample-rate' is not set in the monitor config, all requests are forwarded.
+should_forward(Monitor, Opts) ->
+    case hb_maps:get(<<"sample-rate">>, Monitor, not_found, Opts) of
+        not_found -> true;
+        _ ->
+            case hb_ao:resolve(
+                #{ <<"device">> => <<"monitor-sampler@1.0">> },
+                Monitor#{ <<"path">> => <<"should-sample">> },
+                Opts
+            ) of
+                {ok, true} -> true;
+                {ok, false} -> false;
+                Error -> Error
+            end
+    end.
+
+%% @doc Build and dispatch the monitor message.
+do_invoke_monitor(Monitor, Details, Opts) ->
+    WithRef =
+        case hb_ao:get(<<"http_reference">>, Opts, Opts) of
+            not_found -> Details;
+            Ref -> Details#{ <<"reference">> => Ref }
+        end,
+    BodyData = sanitize_body(WithRef, Monitor, Opts),
+    Req = Monitor#{
+        <<"body">> =>
+            hb_message:commit(
+                BodyData#{ <<"method">> => <<"POST">> }, Opts
+            )
+    },
+    ReqMsgs = hb_singleton:from(Req, Opts),
+    Res = hb_ao:resolve_many(ReqMsgs, Opts),
+    ?event(http_monitor, {resolved_monitor, Res}).
+
+%% @doc When the monitor target is a WASM process, `path' is a reserved
+%% AO-Core routing key that the scheduler copies into the assignment.
+%% Move it to `monitor-type' to avoid breaking execution dispatch.
+sanitize_body(Body, Monitor, Opts) ->
+    case hb_ao:get(<<"is-wasm-process">>, Monitor, Opts) of
+        true ->
+            {PathVal, Rest} = hb_maps:take(<<"path">>, Body, Opts),
+            Rest#{ <<"monitor-type">> => PathVal };
+        _ ->
+            Body
     end.
 
 %%% ==================================================================
