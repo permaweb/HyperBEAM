@@ -312,7 +312,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                 TXEndOffset, TX#tx.data_size, Opts
             ),
             case BundleRes of
-                {ok, {BundleIndex, HeaderSize}} ->
+                {ok, HeaderSize, BundleIndex} ->
                     % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
@@ -378,54 +378,8 @@ is_bundle_tx(TX, _Opts) ->
 
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        StartOffset = EndOffset - Size + 1,
-        case hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/chunk&offset=",
-                (hb_util:bin(StartOffset))/binary
-            >>,
-            Opts
-        ) of
-            {ok, FirstChunk} ->
-                % Most bundle headers can fit in a single chunk, but those with
-                % thousands of items might require multiple chunks to fully
-                % represent the item index.
-                HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-                case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
-                    {ok, BundleHeader} ->
-                        {_ItemsBin, BundleIndex} =
-                            ar_bundles:decode_bundle_header(BundleHeader),
-                        {ok, {BundleIndex, HeaderSize}};
-                    Error ->
-                        Error
-                end;
-            Error ->
-                Error
-        end
+        dev_arweave:bundle_header(EndOffset - Size, Opts)
     end).
-
-header_chunk(invalid_bundle_header, _FirstChunk, _StartOffset, _Opts) ->
-    {error, invalid_bundle_header};
-header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
-        when HeaderSize =< byte_size(FirstChunk) ->
-    {ok, FirstChunk};
-header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
-    Res =
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/chunk&offset=",
-                (hb_util:bin(StartOffset + byte_size(FirstChunk)))/binary,
-                "&length=",
-                (hb_util:bin(HeaderSize - byte_size(FirstChunk)))/binary
-            >>,
-            Opts
-        ),
-    case Res of
-        {ok, OtherChunks} -> {ok, <<FirstChunk/binary, OtherChunks/binary>>};
-        Other -> Other
-    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
@@ -586,7 +540,7 @@ small_bundle_header_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, HeaderSize}} =
+    {ok, HeaderSize, BundleIndex} =
         download_bundle_header(EndOffset, Size, Opts),
     ?assertEqual(1704, length(BundleIndex)),
     ?assertEqual(109088, HeaderSize),
@@ -607,7 +561,7 @@ large_bundle_header_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, HeaderSize}} =
+    {ok, HeaderSize, BundleIndex} =
         download_bundle_header(EndOffset, Size, Opts),
     ?assertEqual(15000, length(BundleIndex)),
     ?assertEqual(960032, HeaderSize),
