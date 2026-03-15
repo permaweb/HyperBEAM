@@ -33,11 +33,22 @@ resolve(Key, _, Req, Opts) ->
     case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
             case hb_util:atom(hb_ao:get(<<"load">>, Req, true, Opts)) of
-                false -> {ok, Resolved};
-                true -> hb_cache:read(Resolved, Opts)
+                false ->
+                    {ok, Resolved};
+                true ->
+                    maybe_load_resolved(Resolved, Opts)
             end;
         not_found -> not_found
     end.
+
+%% @doc Load a resolved name target if it is a cache reference, otherwise
+%% return the resolved value directly.
+maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
+    hb_cache:read(Resolved, Opts);
+maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
+    {ok, hb_cache:ensure_loaded(Resolved, Opts)};
+maybe_load_resolved(Resolved, _Opts) ->
+    {ok, Resolved}.
 
 %% @doc Find the first resolver that matches the key and return its value.
 match_resolver(_Key, [], _Opts) -> 
