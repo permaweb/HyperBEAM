@@ -103,9 +103,9 @@ request(HookMsg, HookReq, Opts) ->
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
 name_from_host(Host, no_host) ->
-    case hd(binary:split(Host, <<".">>)) of
-        <<>> -> {error, <<"No name found in `Host`.">>};
-        Name -> {ok, Name}
+    case binary:split(Host, <<".">>, [global, trim_all]) of
+        [_Host] -> {error, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
+        [Name|_] -> {ok, Name}
     end;
 name_from_host(ReqHost, RawNodeHost) ->
     NodeHost = uri_string:parse(RawNodeHost),
@@ -258,11 +258,11 @@ arns_opts() ->
 arns_json_snapshot_test() ->
     Opts = arns_opts(),
     ?assertMatch(
-        {ok, <<"application/pdf">>},
+        {ok, <<"text/html">>},
         hb_ao:resolve_many(
             [
                 #{ <<"device">> => <<"name@1.0">> },
-                #{ <<"path">> => <<"draft-17_whitepaper">> },
+                #{ <<"path">> => <<"001_permabytes">>, <<"load">> => true },
                 <<"content-type">>
             ],
             Opts
@@ -273,12 +273,12 @@ arns_host_resolution_test() ->
     Opts = arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
-        {ok, <<"application/pdf">>},
+        {ok, <<"text/html">>},
         hb_http:get(
             Node,
             #{
                 <<"path">> => <<"content-type">>,
-                <<"host">> => <<"draft-17_whitepaper">>
+                <<"host">> => <<"001_permabytes.localhost">>
             },
             Opts
         )
