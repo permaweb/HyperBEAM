@@ -235,10 +235,10 @@ default_message() ->
         trusted_device_signers => [],
         %% What should the node do if a client error occurs?
         client_error_strategy => throw,
-        %% HTTP request options
-        http_connect_timeout => 5000,
-        http_keepalive => 120000,
-        http_request_send_timeout => 300_000,
+        %% HTTP client request options
+        http_client_connect_timeout => 5000,
+        http_client_keepalive => 120000,
+        http_client_send_timeout => 300_000,
         port => 8734,
         wasm_allow_aot => false,
         %% Options for the relay device
