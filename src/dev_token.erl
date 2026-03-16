@@ -185,7 +185,7 @@ transfer(Base, Assignment, Opts) ->
                 },
                 Opts
             ),
-            {ok, send_error(Base, Assignment, Reason, Opts)}
+            send_error(Base, Assignment, Reason, Opts)
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
@@ -306,18 +306,29 @@ validate_address(Address) when is_binary(Address) ->
 validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
 
+send_error(Base, Assignment, Reason, Opts) when is_atom(Reason) ->
+    send_error(Base, Assignment, atom_to_binary(Reason), Opts);
+send_error(Base, Assignment, Reason, Opts) when not is_binary(Reason) ->
+    send_error(
+        Base,
+        Assignment,
+        iolist_to_binary(io_lib:format("~0p", [Reason])),
+        Opts
+    );
 send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
     case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
         {error, Error} ->
             ?event(token_short, {skipping_error_report, Error}, Opts),
             {ok, Base};
         {ok, Target} ->
-            dev_process_outbox:send(
-                #{
-                    <<"target">> => Target,       
-                    <<"reason">> => Reason
-                },
-                Base,
-                Opts
-            )
+            {ok,
+                dev_process_outbox:send(
+                    #{
+                        <<"target">> => Target,       
+                        <<"reason">> => Reason
+                    },
+                    Base,
+                    Opts
+                )
+            }
     end.
