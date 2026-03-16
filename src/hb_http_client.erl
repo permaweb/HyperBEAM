@@ -176,6 +176,8 @@ httpc_req(Args, Opts) ->
     end.
 
 hackney_req(Args, Opts) ->
+    hackney_req(Args, false, Opts).
+hackney_req(Args, ReestablishedConnection, Opts) ->
     #{
         peer := Peer,
         path := Path,
@@ -202,7 +204,10 @@ hackney_req(Args, Opts) ->
                         {error, _Reason} = Err2 ->
                             erase(ConnKey),
                             catch hackney:close(ConnRef),
-                            Err2
+                            case ReestablishedConnection of
+                                true -> Err2;
+                                false -> hackney_req(Args, true, Opts)
+                            end
                     end;
                 {error, _} = Err3 ->
                     Err3
