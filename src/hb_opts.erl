@@ -43,6 +43,7 @@
 -ifndef(TEST).
 -define(DEFAULT_NAME_RESOLVERS,
     [
+        #{ <<"device">> => <<"~b32-name@1.0">> },
         <<
             "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
                 "~json@1.0/deserialize&target=data"
@@ -164,6 +165,7 @@ default_message() ->
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
+            #{<<"name">> => <<"b32-name@1.0">>, <<"module">> => dev_b32_name},
             #{<<"name">> => <<"blacklist@1.0">>, <<"module">> => dev_blacklist},
             #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
