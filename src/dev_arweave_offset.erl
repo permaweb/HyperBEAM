@@ -64,7 +64,7 @@ unit(Base, <<"gi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"mi">>);
 unit(Base, <<"ti", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"gi">>);
 unit(Base, <<"pi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"ti">>);
 unit(Base, <<"ei", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"pi">>);
-unit(Base, <<"zi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"zi">>);
+unit(Base, <<"zi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"ei">>);
 unit(Base, <<"yi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"zi">>);
 unit(Base, <<"k", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"b">>);
 unit(Base, <<"m", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"k">>);
