@@ -30,27 +30,32 @@ parse(Key) ->
     end.
 
 %% @doc Load an ANS-104 item whose header begins at the given global offset.
-load_item_at_offset(StartOffset, Length, Opts) ->
+load_item_at_offset(TargetOffset, Length, Opts) ->
     maybe
-        {ok, ChunkJSON, FirstChunk} ?= item_chunk_from_offset(StartOffset, Opts),
-        {ok, HeaderSize, HeaderTX} ?= 
-            try ar_bundles:deserialize_header(FirstChunk)
-            catch _:_ -> {error, invalid_ans104_header}
-            end,
+        {ok, StartOffset, ItemSize} ?= message_from_offset(TargetOffset, Opts),
+        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(StartOffset, Opts),
+        {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
         {ok, DataSize} ?=
             if Length =/= undefined -> {ok, Length};
-            true ->
-                case item_size_from_offset(StartOffset, ChunkJSON, Opts) of
-                    {ok, ItemSize} when HeaderSize =< ItemSize ->
-                        {ok, ItemSize - HeaderSize};
-                    {ok, _ItemSize} -> false;
-                    ItemSizeError -> ItemSizeError
-                end
+            HeaderSize =< ItemSize -> {ok, ItemSize - HeaderSize};
+            true -> false
             end,
         {HeaderData, RemainingLength} =
             split_header_data(HeaderTX#tx.data, DataSize),
+        ?event(
+            arweave_offset_lookup,
+            {calculating_message_from_offset,
+                {target_offset, TargetOffset},
+                {start_offset, StartOffset},
+                {header_size, HeaderSize},
+                {data_size, DataSize},
+                {header_data, HeaderData},
+                {remaining_length, RemainingLength}
+            },
+            Opts
+        ),
         {ok, RemainingData} ?=
-            read_remaining_item_data(
+            read_remaining_data(
                 StartOffset,
                 HeaderSize,
                 byte_size(HeaderData),
@@ -59,7 +64,7 @@ load_item_at_offset(StartOffset, Length, Opts) ->
             ),
         FullTX =
             HeaderTX#tx{
-                data = <<HeaderData/binary, RemainingData/binary>>,
+                data = << HeaderData/binary, RemainingData/binary >>,
                 data_size = DataSize
             },
         {ok,
@@ -76,7 +81,7 @@ load_item_at_offset(StartOffset, Length, Opts) ->
 
 %% @doc Read the chunk containing the given offset and trim it to begin at the
 %% first byte of the requested item.
-item_chunk_from_offset(StartOffset, Opts) ->
+chunk_from_offset(StartOffset, Opts) ->
     case dev_arweave:get_chunk(StartOffset + 1, Opts) of
         {ok, ChunkJSON} ->
             ChunkSize = hb_util:int(maps:get(<<"chunk_size">>, ChunkJSON)),
@@ -87,6 +92,12 @@ item_chunk_from_offset(StartOffset, Opts) ->
             {ok, ChunkJSON, binary:part(Chunk, Skip, byte_size(Chunk) - Skip)};
         Error ->
             Error
+    end.
+
+%% @doc Safe wraper for ANS-104 header deserialization.
+deserialize_header(Binary) ->
+    try ar_bundles:deserialize_header(Binary)
+    catch _:_ -> {error, <<"Invalid message header">>}
     end.
 
 %% @doc Split the bytes already present after a decoded header from those that
@@ -100,67 +111,118 @@ split_header_data(HeaderData, DataSize) ->
 
 %% @doc Read any bytes of the data segment that were not present in the first
 %% header chunk.
-read_remaining_item_data(_StartOffset, _HeaderSize, _PrefixSize, 0, _Opts) ->
+read_remaining_data(_StartOffset, _HeaderSize, _PrefixSize, 0, _Opts) ->
     {ok, <<>>};
-read_remaining_item_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
+read_remaining_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
     hb_store_arweave:read_chunks(StartOffset + HeaderSize + PrefixSize, Length, Opts).
 
-%% @doc Determine the size of the item at an offset by locating it in the parent
-%% Arweave transaction's bundle header. In order to do this we must:
-%% 1. Find the global offset of the data root of the chunk.
-%% 2. Jump to that location and read the header chunks until we find our item.
-%% 3. Extract the item's size from the bundle header and return it.
-%% We achieve objective (1) by extracting the `absolute_end_offset` from the
-%% chunk JSON and subtracting the `data_path`'s note from it. The `data_path`
-%% is the Merkle path of the chunk that contains the item, and its note is the
-%% offset of the end of the chunk inside the bundle. The `absolute_end_offset`
-%% is the global offset of the end of the chunk, so to calculate the bundle's
-%% start offset we can simply perform `absolute_end_offset - data_path_note`.
-item_size_from_offset(StartOffset, ChunkJSON, Opts) ->
+%% @doc Locate the deepest bundled item that contains the given global offset.
+message_from_offset(TargetOffset, Opts) ->
+    maybe
+        {ok, ChunkJSON, _Chunk} ?= chunk_from_offset(TargetOffset, Opts),
+        message_from_offset(TargetOffset, bundle_start_offset(ChunkJSON), Opts)
+    end.
+
+%% @doc Recover the global start offset of the containing bundle from the end
+%% offset of the chunk in global space and its end offset inside the bundle.
+bundle_start_offset(ChunkJSON) ->
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
     ChunkEndInBundle =
         ar_merkle:extract_note(
             hb_util:decode(maps:get(<<"data_path">>, ChunkJSON))
         ),
-    BundleStartOffset = AbsEnd - ChunkEndInBundle,
-    case dev_arweave:bundle_header(BundleStartOffset, Opts) of
-        {ok, HeaderSize, BundleIndex} ->
-            locate_bundle_item(
-                StartOffset,
+    AbsEnd - ChunkEndInBundle.
+
+message_from_offset(TargetOffset, BundleStartOffset, Opts) ->
+    maybe
+        {ok, HeaderSize, BundleIndex} ?=
+            dev_arweave:bundle_header(
+                BundleStartOffset,
+                Opts
+            ),
+        {ok, ItemStartOffset, ItemSize} ?=
+            find_bundle_member(
+                TargetOffset,
                 BundleStartOffset + HeaderSize,
-                BundleIndex
-            );
-        Error ->
-            Error
+                BundleIndex,
+                Opts
+            ),
+        maybe_nested_item(TargetOffset, ItemStartOffset, ItemSize, Opts)
     end.
 
-%% @doc Locate the item that starts at the given offset in a bundle header
-%% index and return its serialized size.
-locate_bundle_item(StartOffset, ItemStartOffset, [{_ID, Size} | _]) 
-        when StartOffset =:= ItemStartOffset ->
-    {ok, Size};
-locate_bundle_item(StartOffset, ItemStartOffset, [{_ID, Size} | Rest])
-        when StartOffset > ItemStartOffset ->
-    locate_bundle_item(StartOffset, ItemStartOffset + Size, Rest);
-locate_bundle_item(_StartOffset, _ItemStartOffset, _BundleIndex) ->
+%% @doc If the containing item is itself a bundle and the offset lies in its
+%% data payload, recurse into its bundle header. Otherwise return the item.
+maybe_nested_item(TargetOffset, ItemStartOffset, ItemSize, Opts) ->
+    maybe
+        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(ItemStartOffset, Opts),
+        {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
+        true ?= TargetOffset >= ItemStartOffset + HeaderSize,
+        true ?= dev_arweave_common:type(HeaderTX) =/= binary,
+        message_from_offset(TargetOffset, ItemStartOffset + HeaderSize, Opts)
+    else
+        false -> {ok, ItemStartOffset, ItemSize};
+        {error, not_found} -> {ok, ItemStartOffset, ItemSize};
+        Error -> Error
+    end.
+
+%% @doc Locate the bundle member containing the given offset.
+find_bundle_member(TargetOffset, ItemStartOffset, _BundleIndex, Opts)
+        when TargetOffset < ItemStartOffset ->
+    ?event(
+        arweave_offset_lookup,
+        {bundle_offset_search_exceeded_bounds,
+            {target_offset, TargetOffset},
+            {item_start_offset, ItemStartOffset}
+        },
+        Opts
+    ),
+    {error, not_found};
+find_bundle_member(TargetOffset, ItemStartOffset, [{ID, Size} | _], Opts)
+        when TargetOffset < ItemStartOffset + Size ->
+    % The target offset is within the current bundle member.
+    ?event(
+        arweave_offset_lookup,
+        {resolved_bundle_member, {id, ID}, {size, Size}},
+        Opts
+    ),
+    {ok, ItemStartOffset, Size};
+find_bundle_member(TargetOffset, ItemStartOffset, [{_ID, Size} | Rest], Opts) ->
+    find_bundle_member(TargetOffset, ItemStartOffset + Size, Rest, Opts);
+find_bundle_member(_TargetOffset, _ItemStartOffset, [], _Opts) ->
     {error, not_found}.
 
 %%% Tests
 
 offset_item_cases_test() ->
     Opts = #{},
+    % A simple message.
     assert_offset_item(
         <<"160399272861859">>,
         498852,
         #{ <<"content-type">> => <<"image/png">> },
         Opts
     ),
+    % A reference with a given length.
     assert_offset_item(
         <<"160399272861859-498852">>,
         498852,
         #{ <<"content-type">> => <<"image/png">> },
         Opts
     ),
+    % A reference to a byte in the middle of the test message.
+    assert_offset_item(
+        <<"160399273000000">>,
+        498852,
+        #{ <<"content-type">> => <<"image/png">> },
+        Opts
+    ),
+    % % A megabyte reference to the item, occurring in the middle of the item.
+    % assert_offset_item(
+    %     <<"160399273m">>,
+    %     498852,
+    %     #{ <<"content-type">> => <<"image/jpeg">> },
+    %     Opts
+    % ),
     assert_offset_item(
         <<"384600234780716">>,
         856691,
@@ -168,6 +230,20 @@ offset_item_cases_test() ->
         Opts
     ),
     ok.
+
+offset_nested_item_test() ->
+    Opts = #{},
+    TXID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    Node = hb_http_server:start_node(),
+    {ok, Expected} =
+        hb_http:get(
+            Node,
+            <<"/~arweave@2.9/tx=", TXID/binary, "/1/2">>,
+            Opts
+        ),
+    {ItemStartOffset, _ItemSize} =
+        bundle_message_offset_from_tx(TXID, [1, 2], Opts),
+    assert_offset_matches(hb_util:bin(ItemStartOffset + 1), Expected, Opts).
 
 assert_offset_item(Path, DataSize, Tags, Opts) ->
     {ok, Item} = hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, Path, Opts),
@@ -182,6 +258,57 @@ assert_offset_item(Path, DataSize, Tags, Opts) ->
         Tags
     ),
     ok.
+
+assert_offset_matches(Path, Expected, Opts) ->
+    {ok, Item} = hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, Path, Opts),
+    ExpectedTX =
+        hb_message:convert(
+            Expected,
+            <<"ans104@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    TX = hb_message:convert(Item, <<"ans104@1.0">>, <<"structured@1.0">>, Opts),
+    ?assert(hb_message:verify(Item, all, Opts)),
+    ?assertEqual(
+        hb_message:id(Expected, signed, Opts),
+        hb_message:id(Item, signed, Opts)
+    ),
+    ?assertEqual(ExpectedTX#tx.data_size, TX#tx.data_size),
+    ok.
+
+bundle_message_offset_from_tx(TXID, Path, Opts) ->
+    {ok, #{ <<"body">> := OffsetBody }} =
+        hb_http:request(
+            #{
+                <<"path">> => <<"/arweave/tx/", TXID/binary, "/offset">>,
+                <<"method">> => <<"GET">>
+            },
+            Opts
+        ),
+    OffsetMsg = hb_json:decode(OffsetBody),
+    EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
+    Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
+    bundled_index_offset(EndOffset - Size, Path, Opts).
+
+bundled_index_offset(BundleStartOffset, [Index], Opts) ->
+    {ok, HeaderSize, BundleIndex} =
+        dev_arweave:bundle_header(
+            BundleStartOffset,
+            Opts
+        ),
+    nth_bundle_item(Index, BundleStartOffset + HeaderSize, BundleIndex);
+bundled_index_offset(BundleStartOffset, [Index | Rest], Opts) ->
+    {ItemStartOffset, _ItemSize} =
+        bundled_index_offset(BundleStartOffset, [Index], Opts),
+    {ok, _ChunkJSON, FirstChunk} = chunk_from_offset(ItemStartOffset, Opts),
+    {ok, HeaderSize, _HeaderTX} = deserialize_header(FirstChunk),
+    bundled_index_offset(ItemStartOffset + HeaderSize, Rest, Opts).
+
+nth_bundle_item(1, ItemStartOffset, [{_ID, Size} | _]) ->
+    {ItemStartOffset, Size};
+nth_bundle_item(Index, ItemStartOffset, [{_ID, Size} | Rest]) when Index > 1 ->
+    nth_bundle_item(Index - 1, ItemStartOffset + Size, Rest).
 
 offset_as_name_resolver_lookup_test() ->
     Opts = #{
