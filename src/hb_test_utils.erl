@@ -264,19 +264,14 @@ format_time(Time) ->
     hb_util:human_int(Time * 1000) ++ "ms".
 
 %% @doc Load ans104 binary files to a store.
-preload(Store, File) ->
-    Opts = #{},
-    {ok, SerializedItem} =
-        file:read_file(
-            hb_util:bin(
-                <<"test/arbundles.js/ans-104-manifest-", File/binary>>
-            )
+preload(Opts, File) ->
+    {ok, SerializedItem} = file:read_file(hb_util:bin(File)),
+    Message =
+        hb_message:convert(
+            ar_bundles:deserialize(SerializedItem),
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
         ),
-    Message = hb_message:convert(
-        ar_bundles:deserialize(SerializedItem),
-        <<"structured@1.0">>,
-        <<"ans104@1.0">>,
-        Opts
-    ),
-    _ = hb_cache:write(Message, #{store => Store}).
+    hb_cache:write(Message, Opts).
 

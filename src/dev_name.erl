@@ -5,6 +5,8 @@
 %%% first resolver that matches.
 -module(dev_name).
 -export([info/1, request/3]).
+%%% Public helpers.
+-export([test_arns_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -28,43 +30,14 @@ info(_) ->
 resolve(Key, _, Req, Opts) ->
     Resolvers = hb_opts:get(name_resolvers, [], Opts),
     ?event({resolvers, Resolvers}),
-    NameResolver = case match_resolver(Key, Resolvers, Opts) of
+    case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
             case hb_util:atom(hb_ao:get(<<"load">>, Req, true, Opts)) of
-                false ->
-                    {ok, Resolved};
-                true ->
-                    hb_cache:read(Resolved, Opts)
+                false -> {ok, Resolved};
+                true -> hb_cache:read(Resolved, Opts)
             end;
-        not_found ->
-            not_found
-    end,
-    case NameResolver of 
-        not_found ->
-            resolve_52char(Key, Req, Opts);
-        _ ->
-            NameResolver
+        not_found -> not_found
     end.
-
-%% @doc Try to resolve 52char subdomain back to its original TX ID
-resolve_52char(Key, HookMsg, Opts) when byte_size(Key) == 52 ->
-    TXID = subdomain_to_txid(Key),
-    %% Clean up entries that doesn't have <<"path">> as key or aren't IDs.
-    Body = lists:filter(
-        fun (Map) -> (is_map(map) andalso maps:is_key(<<"path">>, Map)) orelse ?IS_ID(Map) end, 
-        maps:get(<<"body">>, HookMsg, [])
-    ),
-    case Body of 
-        [TXID | _] ->
-            ?event({resolve_52char, same_txid_as_subdomain}),
-            %% To be resolved later, under normal flow
-            not_found;
-        _ ->
-            hb_cache:read(TXID, Opts)
-    end;
-resolve_52char(Key, _, _) ->
-    ?event({resolve_52char, {key, Key}, {message, <<"Key isn't not a valid 52 char subdomain">>}}),
-    not_found.
 
 %% @doc Find the first resolver that matches the key and return its value.
 match_resolver(_Key, [], _Opts) -> 
@@ -104,14 +77,11 @@ request(HookMsg, HookReq, Opts) ->
         {ok, Name} ?= name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
-            case hb_maps:find(<<"body">>, HookReq, Opts) of
-                {ok, [ID|Rest]} when ?IS_ID(ID) ->
-                    [ResolvedMsg|Rest];
-                {ok, [OldBase|Rest]} ->
-                    [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest];
-                {ok, []} ->
-                    [ResolvedMsg]
-            end,
+            maybe_append_named_message(
+                ResolvedMsg,
+                hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
+                Opts
+            ),
         ?event(
             {request_with_prepended_path,
                 {name, Name},
@@ -126,13 +96,54 @@ request(HookMsg, HookReq, Opts) ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
                     ?event({request_hook_404, root_path}),
-                    % No path provided should return 404 if not resolved (via name resolvers or 52 char subdomain)
+                    % No path provided should return 404 if not resolved
+                    % (via name resolvers or 52 char subdomain)
                     {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
                 _ ->
                     ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
                     {ok, HookReq}
             end
     end.
+
+%% @doc After finding a hit for a named message, we should ensure that it is the
+%% base message for the evaluation. If it is already present in the request,
+%% however, we should not add it twice. Instead, we must add the version that
+%% is loaded (if applicable).
+%% 
+%% Eg:
+%%      base32IDA.hyperbeam/ -> [IDA]
+%%      base32IDA.hyperbeam/base64urlIDA/xyz -> [IDA, xyz]
+%%      base32IDA.hyperbeam/base64urlIDB/xyz -> [IDA, IDB, xyz]
+maybe_append_named_message(ResolvedMsg, [], _Opts) -> [ResolvedMsg];
+maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
+    case permissive_id(OldBase, Opts) == permissive_id(ResolvedMsg, Opts) of
+        true when is_map(OldBase) or is_list(OldBase) -> OldReq;
+        true -> [ResolvedMsg|ReqMsgsRest];
+        false ->
+            case is_map(OldBase) andalso hb_maps:get(<<"path">>, OldBase, not_found, Opts) of
+                not_found ->
+                    ?event(
+                        {skipping_old_base,
+                            {old_base, OldBase},
+                            {resolved_msg, ResolvedMsg}
+                        }
+                    ),
+                    [ResolvedMsg|ReqMsgsRest];
+                _ -> [ResolvedMsg, as_message_or_link(OldBase)|ReqMsgsRest]
+            end
+    end.
+
+%% @doc Takes a message or resolution request (`as` or `resolve`) -- whether in
+%% the form of an ID, link, or loaded map -- and returns its ID.
+permissive_id(ID, _Opts) when ?IS_ID(ID) -> ID;
+permissive_id({link, ID, _LinkOpts}, _Opts) -> ID;
+permissive_id({as, _Device, Msg}, Opts) -> permissive_id(Msg, Opts);
+permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
+
+%% @doc Ensure that a message reference is converted to a message or link.
+as_message_or_link(ID) when ?IS_ID(ID) -> {link, ID, #{}};
+as_message_or_link(Msg) when is_map(Msg) -> Msg;
+as_message_or_link(Link) when ?IS_LINK(Link) -> Link.
 
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
@@ -152,16 +163,6 @@ name_from_host(ReqHost, RawNodeHost) ->
             <<>>
         ),
     name_from_host(WithoutNodeHost, no_host).
-
-%% @doc Merge the base message with the resolved message, ensuring that `~` as
-%% device specifiers are preserved.
-overlay_loaded({as, DevID, Base}, Resolved, Opts) ->
-    {as, DevID, hb_maps:merge(Base, Resolved, Opts)};
-overlay_loaded(Base, Resolved, Opts) ->
-    hb_maps:merge(Base, Resolved, Opts).
-
-subdomain_to_txid(Subdomain) when byte_size(Subdomain) == 52 ->
-    hb_util:human_id(b64fast:encode(base32:decode(Subdomain))).
 
 %%% Tests.
 
@@ -270,7 +271,7 @@ load_and_execute_test() ->
 
 %% @doc Return an `Opts` for an environment with the default ARNS name export
 %% and a temporary store for the test.
-arns_opts() ->
+test_arns_opts() ->
     JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
     TempStore = hb_test_utils:test_store(),
@@ -293,7 +294,7 @@ arns_opts() ->
 
 %% @doc Names from JSON test.
 arns_json_snapshot_test() ->
-    Opts = arns_opts(),
+    Opts = test_arns_opts(),
     ?assertMatch(
         {ok, <<"text/html">>},
         hb_ao:resolve_many(
@@ -307,7 +308,7 @@ arns_json_snapshot_test() ->
     ).
 
 arns_host_resolution_test() ->
-    Opts = arns_opts(),
+    Opts = test_arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -320,142 +321,3 @@ arns_host_resolution_test() ->
             Opts
         )
     ).
-
-%% @doc If the sudbdomain provided isn't a valid ARNS or a 52 char subdomain 
-%% it should return 404 instead of HyperBEAM page.
-invalid_arns_and_not_52char_host_resolution_gives_404_test() ->
-    Opts = arns_opts(),
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {error, #{<<"status">> := 404}},
-        hb_http:get(
-            Node,
-            #{
-                <<"path">> => <<"/">>,
-                <<"host">> => <<"non-existing-subdomain.localhost">>
-            },
-            Opts
-        )
-    ).
-
-%% @doc Unit test for 52 char subdomain to TX ID logic
-subdomain_to_txid_test() -> 
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    ?assertEqual(<<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>, subdomain_to_txid(Subdomain)).
-
-%% @doc Resolving a 52 char subdomain without a TXID in the path should work.
-resolve_52char_subdomain_if_txid_not_present_test() ->
-    TestPath = <<"/">>,
-    Opts = load_manifest_opts(),
-    %% Test to load manifest with only subdomain
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        )
-    ).
-
-%% @doc Loading assets from a manifest where only a 52 char subdomain is 
-%% provided should work. 
-resolve_52char_subdomain_asset_if_txid_not_present_test() ->
-    TestPath = <<"/assets/ArticleBlock-Dtwjc54T.js">>,
-    Opts = load_manifest_opts(),
-    %% Test to load asset with only subdomain (no TX ID present).
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}}}, 
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        )
-    ).
-
-%% @doc Loading assets from a manifest where a 52 char subdomain and TX ID 
-%% is provided should work.
-resolve_52char_subdomain_asset_if_txid_present_test() ->
-    TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>,
-    Opts = load_manifest_opts(),
-    %% Test to load asset with only subdomain (no TX ID present).
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}}}, 
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        )
-    ).
-
-%% @doc When both 52 char subdomain and TX ID are provided and equal, ignore 
-%% the TXID from the assets path. 
-ignore_52char_subdomain_if_the_same_txid_is_provided_test() ->
-    TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
-    Opts = load_manifest_opts(),
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        )
-    ).
-
-%% @doc When a valid 52 char subdomain TXID doesn't match the TX ID provided,
-%% the subdomain TXID is loaded, and tries to access the assets path defined.
-%% In this case, sinse no assets exists with this TX ID, it should load the 
-%% index.
-when_52char_subdomain_txid_it_doesnt_match_txid_provided_test() ->
-    TestPath = <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
-    Opts = load_manifest_opts(),
-    Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"status">> := 200, <<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}}}, 
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        )
-    ).
-
-load_manifest_opts() ->
-    TempStore = hb_test_utils:test_store(),
-    %% Load TX data into the store
-    hb_test_utils:preload(TempStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:preload(TempStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    hb_test_utils:preload(TempStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
-    %% Opts
-    #{
-        store => [TempStore],
-        on => #{
-            <<"request">> =>
-                [
-                    #{<<"device">> => <<"name@1.0">>},
-                    #{<<"device">> => <<"manifest@1.0">>}
-                ]
-        }
-    }.
