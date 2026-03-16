@@ -165,9 +165,8 @@ new_server(RawNodeMsg) ->
         case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
             {ok, #{ <<"body">> := NodeMsgAfterHook }} when is_map(NodeMsgAfterHook) -> NodeMsgAfterHook;
             {ok, _R} ->
-                %% NOTE: Since cron doesn't reply with a NodeMsg, we need to handle it seperatly.
-                %% For from cron, it replies with the token.
-                %% We set opts, the same way if there is no handler to solve.
+                %% Fire-and-forget start handlers (e.g. cron) use hook/result => ignore,
+                %% so this clause handles any remaining non-NodeMsg results gracefully.
                 maps:get(<<"body">>, HookMsg);
             Unexpected ->
                 ?event(http,

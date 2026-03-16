@@ -162,9 +162,6 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % handler does not affect the hashpath of a request's output. If the
         % `hook/commit` key is set to `true`, the handler request will be
         % committed before execution.
-        %
-        % NOTE: Since only path and method are allow, this aren't enough to 
-        % make it run.
         ExtraParams = maps:get(<<"extra-params">>, Handler, #{}),
         BaseReq =
             hb_maps:merge(#{
@@ -194,8 +191,17 @@ execute_handler(HookName, Handler, Req, Opts) ->
                     };
                 <<"false">> -> {Handler, BaseReq}
             end,
+        % Remove the current hook's handlers from Opts before resolution to
+        % prevent cross-hook interference (e.g. request handlers firing during
+        % start hook resolution).
+        ScopedOpts =
+            case maps:get(on, Opts, #{}) of
+                On when is_map(On) ->
+                    Opts#{ on => maps:remove(HookName, On) };
+                _ -> Opts
+            end,
         ?event(hook,
-            {resolving_handler, 
+            {resolving_handler,
                 {name, HookName},
                 {handler, Handler},
                 {prepared_base, PreparedBase},
@@ -207,7 +213,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:resolve(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ hashpath => ignore }
+                ScopedOpts#{ hashpath => ignore }
             ),
         ?event(hook,
             {handler_result,
