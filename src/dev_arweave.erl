@@ -4,12 +4,23 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
+-export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+%%% Helper functions
+-export([get_chunk/2, bundle_header/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
+
+%% @doc Route unknown keys through offset resolution first, then fall back to
+%% the message device for direct key access.
+info() ->
+    #{
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        default => fun dev_arweave_offset:get/4
+    }.
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
@@ -211,8 +222,9 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => StartOffset,
+            <<"raw-id">> => TXID,
+            <<"offset">> => StartOffset,
+            <<"data-offset">> => StartOffset,
             <<"content-type">> => ContentType,
             <<"header-length">> => 0,
             <<"content-length">> => Length,
@@ -245,8 +257,9 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => ArweaveOffset + HeaderSize,
+            <<"raw-id">> => TXID,
+            <<"offset">> => ArweaveOffset,
+            <<"data-offset">> => ArweaveOffset + HeaderSize,
             <<"content-type">> => ContentType,
             <<"header-length">> => HeaderSize,
             <<"content-length">> => Length - HeaderSize,
@@ -264,8 +277,8 @@ get_raw(Base, Request, Opts) ->
         Err = {error, _} -> Err;
         {ok,
             Header = #{
-                <<"arweave-id">> := TXID,
-                <<"arweave-data-offset">> := ArweaveDataOffset,
+                <<"raw-id">> := TXID,
+                <<"data-offset">> := ArweaveDataOffset,
                 <<"content-type">> := ContentType,
                 <<"content-length">> := FullContentLength
             }
@@ -616,6 +629,59 @@ get_chunk(Offset, Opts) ->
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+
+%% @doc Read and decode the bundle header index at the given global start
+%% offset, returning the header size alongside the decoded index entries.
+bundle_header(BundleStartOffset, Opts) ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => BundleStartOffset + 1
+        },
+        Opts
+    ) of
+        {ok, FirstChunk} ->
+            case ar_bundles:bundle_header_size(FirstChunk) of
+                invalid_bundle_header ->
+                    {error, invalid_bundle_header};
+                HeaderSize ->
+                    case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
+                        {ok, HeaderBin} ->
+                            case ar_bundles:decode_bundle_header(HeaderBin) of
+                                {_Items, BundleIndex} ->
+                                    {ok, HeaderSize, BundleIndex};
+                                invalid_bundle_header ->
+                                    {error, invalid_bundle_header}
+                            end;
+                        Error ->
+                            Error
+                    end
+            end;
+        Error ->
+            Error
+    end.
+
+%% @doc Read exactly the bytes needed to decode a bundle header.
+read_bundle_header(_BundleStartOffset, HeaderSize, FirstChunk, _Opts)
+        when HeaderSize =< byte_size(FirstChunk) ->
+    {ok, binary:part(FirstChunk, 0, HeaderSize)};
+read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) ->
+    RemainingSize = HeaderSize - byte_size(FirstChunk),
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => BundleStartOffset + byte_size(FirstChunk) + 1,
+            <<"length">> => RemainingSize
+        },
+        Opts
+    ) of
+        {ok, RemainingChunk} ->
+            {ok, <<FirstChunk/binary, RemainingChunk/binary>>};
+        Error ->
+            Error
+    end.
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
