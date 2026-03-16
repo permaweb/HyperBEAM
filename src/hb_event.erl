@@ -176,44 +176,51 @@ ensure_event_counter() ->
         ]).
 
 handle_events() ->
+    handle_events(0).
+handle_events(N) ->
     receive
         {increment, TopicBin, EventName, Count} ->
-            case erlang:process_info(self(), message_queue_len) of
-                {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
-                    % Print a warning, but do so less frequently the more
-                    % overloaded the system is.
-                    {memory, MemorySize} = erlang:process_info(self(), memory),
-                    case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
-                        1 ->
-                            ?debug_print(
-                                {warning,
-                                    prometheus_event_queue_overloading,
-                                    {queue, Len},
-                                    {current_message, EventName},
-                                    {memory_bytes, MemorySize}
-                                }
-                            );
-                        _ -> ignored
-                    end,
-                    % If the size of this process is too large, exit such that
-                    % we can be restarted by the next caller.
-                    case MemorySize of
-                        MemorySize when MemorySize > ?MAX_MEMORY ->
-                            ?debug_print(
-                                {error,
-                                    prometheus_event_queue_terminating_on_memory_overload,
-                                    {queue, Len},
-                                    {memory_bytes, MemorySize},
-                                    {current_message, EventName}
-                                }
-                            ),
-                            exit(memory_overload);
-                        _ -> no_action
-                    end;
+            N2 = N + 1,
+            case N2 rem 1000 of
+                0 ->
+                    check_overload(EventName);
+                _ ->
+                    ok
+            end,
+            prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
+            handle_events(N2)
+    end.
+
+check_overload(EventName) ->
+    case erlang:process_info(self(), message_queue_len) of
+        {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
+            {memory, MemorySize} = erlang:process_info(self(), memory),
+            case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
+                1 ->
+                    ?debug_print(
+                        {warning,
+                            prometheus_event_queue_overloading,
+                            {queue, Len},
+                            {current_message, EventName},
+                            {memory_bytes, MemorySize}
+                        }
+                    );
                 _ -> ignored
             end,
-            hb_prometheus:inc(counter, <<"event">>, [TopicBin, EventName], Count),
-            handle_events()
+            case MemorySize of
+                MemorySize when MemorySize > ?MAX_MEMORY ->
+                    ?debug_print(
+                        {error,
+                            prometheus_event_queue_terminating_on_memory_overload,
+                            {queue, Len},
+                            {memory_bytes, MemorySize},
+                            {current_message, EventName}
+                        }
+                    ),
+                    exit(memory_overload);
+                _ -> no_action
+            end;
+        _ -> ignored
     end.
 
 parse_name(Name) when is_tuple(Name) ->
@@ -272,3 +279,46 @@ benchmark_increment_test() ->
     hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
+
+-ifdef(NO_EVENTS).
+benchmark_drain_rate_test() -> ok.
+-else.
+benchmark_drain_rate_test() ->
+    log(warmup, {warmup, 0}),
+    timer:sleep(100),
+    EventPid = hb_name:lookup(?MODULE),
+    wait_drain(EventPid, 5000),
+    N = 100000,
+    fill_mailbox(EventPid, N),
+    {DrainTime, _} = timer:tc(fun() ->
+        wait_drain(EventPid, 30000)
+    end),
+    DrainRate = round(N / (DrainTime / 1_000_000)),
+    hb_test_utils:benchmark_print(
+        <<"Drained">>, <<"events">>, DrainRate, 1),
+    ?assert(DrainRate >= 10000),
+    ok.
+
+fill_mailbox(_Pid, 0) -> ok;
+fill_mailbox(Pid, N) ->
+    Pid ! {increment, <<"bench">>, <<"drain">>, 1},
+    fill_mailbox(Pid, N - 1).
+
+wait_drain(Pid, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    wait_drain_loop(Pid, Deadline).
+
+wait_drain_loop(Pid, Deadline) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, 0} -> ok;
+        {message_queue_len, _} ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> error(drain_timeout);
+                false ->
+                    timer:sleep(10),
+                    wait_drain_loop(Pid, Deadline)
+            end;
+        undefined ->
+            error(event_server_dead)
+    end.
+-endif.
