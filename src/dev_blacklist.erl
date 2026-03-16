@@ -22,7 +22,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEFAULT_MIN_WAIT, 60).
+%%% The default frequency at which the blacklist cache is refreshed in seconds.
+-define(DEFAULT_REFRESH_FREQUENCY, 60 * 5).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
@@ -70,8 +71,6 @@ is_match(Msg, Opts) ->
 %% @doc Fetch blacklists from all configured providers and insert IDs into the
 %% cache table.
 fetch_and_insert_ids(Opts) ->
-    ensure_cache_table(Opts),
-    Providers = resolve_providers(Opts),
     Total =
         lists:foldl(
             fun(Provider, Acc) ->
@@ -81,8 +80,16 @@ fetch_and_insert_ids(Opts) ->
                 end
             end,
             0,
-            Providers
+            resolve_providers(Opts)
         ),
+    Table = cache_table_name(Opts),
+    ets:insert(Table, {<<"meta/last-refresh">>, os:system_time(millisecond)}),
+    ?event(
+        {table_inserted,
+            {get_last_refresh, ets:lookup(Table, <<"meta/last-refresh">>)},
+            {is_initialized, is_initialized(Table)}
+        }
+    ),
     ?event(blacklist_short, {fetched_and_inserted_ids, Total}, Opts),
     {ok, Total}.
 
@@ -189,8 +196,9 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
 %% @doc Ensure the cache table exists.
 ensure_cache_table(Opts) ->
     TableName = cache_table_name(Opts),
-    case ets:info(TableName) of
-        undefined ->
+    case is_initialized(TableName) of
+        true -> TableName;
+        false ->
             hb_name:singleton(
                 TableName,
                 fun() ->
@@ -205,18 +213,23 @@ ensure_cache_table(Opts) ->
                             {write_concurrency, true}
                         ]
                     ),
+                    ?event({table_created, TableName}),
                     fetch_and_insert_ids(Opts),
                     refresh_loop(Opts)
                 end
             ),
             hb_util:until(
-                fun() -> ets:info(TableName) =/= undefined end,
-                100
+                fun() -> is_initialized(TableName) end,
+                10
             ),
-            TableName;
-        _ ->
             TableName
     end.
+
+%% @doc Check if the cache table is initialized. We do this by checking that the
+%% `meta/last-refresh' key is present, although we do not care about its value.
+is_initialized(TableName) ->
+    ets:info(TableName) =/= undefined
+        andalso ets:lookup(TableName, <<"meta/last-refresh">>) =/= [].
 
 %% @doc Loop that periodically refreshes the blacklist cache. Runs on the 
 %% singleton process that is responsible for the cache ets table.
@@ -225,7 +238,7 @@ refresh_loop(Opts) ->
         hb_util:int(
             hb_opts:get(
                 blacklist_refresh_frequency,
-                ?DEFAULT_MIN_WAIT,
+                ?DEFAULT_REFRESH_FREQUENCY,
                 Opts
             )
         ) * 1000,
@@ -236,8 +249,7 @@ refresh_loop(Opts) ->
         refresh ->
             fetch_and_insert_ids(Opts),
             refresh_loop(Opts);
-        stop ->
-            ok
+        stop -> ok
     end.
 
 %% @doc Calculate the name of the cache table given the `Opts`.
@@ -251,7 +263,10 @@ cache_table_name(Opts) ->
 setup_test_env() ->
     %% We need to create a new priv_wallet to avoid conflift when starting a
     %% new node from an existing priv_wallet address.
-    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => ar_wallet:new() },
+    Opts0 = #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => ar_wallet:new()
+    },
     Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
     Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
     Msg3 = hb_message:commit(#{ <<"body">> => <<"test-3">> }, Opts0),
