@@ -452,18 +452,6 @@ default_message() ->
             routes => []
         },
         on => #{
-            <<"start">> => [#{
-                <<"device">> => <<"cron@1.0">>,
-                <<"path">> => <<"every">>,
-                <<"extra-params">> => #{
-                    <<"interval">> => <<"10-second">>,
-                    <<"cron-path">> => <<"/~copycat@1.0/arweave&from+integer=-1&to+integer=-19">>
-                },
-                <<"target">> => <<"self">>,
-                % Cron returns a task token, not a NodeMsg — discard the result
-                % and keep the original HookMsg so new_server gets the NodeMsg back.
-                <<"hook/result">> => <<"ignore">>
-            }],
             <<"request">> =>
                 [
                     #{
