@@ -84,30 +84,73 @@ parse_unit(Base, <<"z", _/binary>>) -> parse_unit(Base * 1000, <<"e">>);
 parse_unit(Base, <<"y", _/binary>>) -> parse_unit(Base * 1000, <<"z">>).
 
 %% @doc Load an ANS-104 item whose header begins at the given global offset.
-load_item_at_offset(TargetOffset, Length, Opts) ->
+%% When a length is supplied it is treated as the exact ANS-104 data length, so
+%% we can skip bundle index discovery and read only the remaining payload bytes.
+load_item_at_offset(ExplicitOffset, Length, Opts) when is_integer(Length) ->
     maybe
-        {ok, StartOffset, ItemSize} ?= message_from_offset(TargetOffset, Opts),
-        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(StartOffset, Opts),
-        {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
-        {ok, DataSize} ?=
-            if Length =/= undefined -> {ok, Length};
-            HeaderSize =< ItemSize -> {ok, ItemSize - HeaderSize};
-            true -> false
-            end,
-        {HeaderData, RemainingLength} =
-            split_header_data(HeaderTX#tx.data, DataSize),
+        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(ExplicitOffset, Opts),
         ?event(
             arweave_offset_lookup,
-            {calculating_message_from_offset,
-                {target_offset, TargetOffset},
-                {start_offset, StartOffset},
-                {header_size, HeaderSize},
-                {data_size, DataSize},
-                {header_data, HeaderData},
-                {remaining_length, RemainingLength}
+            {loaded_explicit_offset,
+                {explicit_offset, ExplicitOffset},
+                {length, Length}
             },
             Opts
         ),
+        load_item_from_data_size(ExplicitOffset, Length, FirstChunk, Opts)
+    end;
+load_item_at_offset(TargetOffset, undefined, Opts) ->
+    maybe
+        {ok, StartOffset, ItemSize, FirstChunk} ?=
+            message_from_offset(TargetOffset, Opts),
+        load_item_from_serialized_size(StartOffset, ItemSize, FirstChunk, Opts)
+    else
+        false -> {error, invalid_item_size};
+        Error -> Error
+    end.
+
+%% @doc Load an item when the exact ANS-104 data length is already known.
+load_item_from_data_size(StartOffset, DataSize, FirstChunk, Opts) ->
+    maybe
+        {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
+        load_item_from_header(StartOffset, HeaderSize, HeaderTX, DataSize, Opts)
+    end.
+
+%% @doc Load an item when its serialized size is known from the containing
+%% bundle index.
+load_item_from_serialized_size(StartOffset, ItemSize, FirstChunk, Opts) ->
+    maybe
+        {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
+        true ?= HeaderSize =< ItemSize,
+        load_item_from_header(
+            StartOffset,
+            HeaderSize,
+            HeaderTX,
+            ItemSize - HeaderSize,
+            Opts
+        )
+    else
+        false -> {error, invalid_item_size};
+        Error -> Error
+    end.
+
+%% @doc Complete an item load once the header has been decoded, using any data
+%% bytes that were already present after the header before reading the tail.
+load_item_from_header(StartOffset, HeaderSize, HeaderTX, DataSize, Opts) ->
+    {HeaderData, RemainingLength} =
+        split_header_data(HeaderTX#tx.data, DataSize),
+    ?event(
+        arweave_offset_lookup,
+        {calculating_message_from_offset,
+            {start_offset, StartOffset},
+            {header_size, HeaderSize},
+            {data_size, DataSize},
+            {header_data, HeaderData},
+            {remaining_length, RemainingLength}
+        },
+        Opts
+    ),
+    maybe
         {ok, RemainingData} ?=
             read_remaining_data(
                 StartOffset,
@@ -127,10 +170,8 @@ load_item_at_offset(TargetOffset, Length, Opts) ->
                 <<"structured@1.0">>,
                 <<"ans104@1.0">>,
                 Opts
-            )}
-    else
-        false -> {error, invalid_item_size};
-        Error -> Error
+            )
+        }
     end.
 
 %% @doc Read the chunk containing the given offset and trim it to begin at the
@@ -173,8 +214,14 @@ read_remaining_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
 %% @doc Locate the deepest bundled item that contains the given global offset.
 message_from_offset(TargetOffset, Opts) ->
     maybe
-        {ok, ChunkJSON, _Chunk} ?= chunk_from_offset(TargetOffset, Opts),
-        message_from_offset(TargetOffset, bundle_start_offset(ChunkJSON), Opts)
+        {ok, ChunkJSON, FirstChunk} ?= chunk_from_offset(TargetOffset, Opts),
+        message_from_offset(
+            TargetOffset,
+            bundle_start_offset(ChunkJSON),
+            TargetOffset,
+            FirstChunk,
+            Opts
+        )
     end.
 
 %% @doc Recover the global start offset of the containing bundle from the end
@@ -187,7 +234,7 @@ bundle_start_offset(ChunkJSON) ->
         ),
     AbsEnd - ChunkEndInBundle.
 
-message_from_offset(TargetOffset, BundleStartOffset, Opts) ->
+message_from_offset(TargetOffset, BundleStartOffset, KnownOffset, KnownChunk, Opts) ->
     maybe
         {ok, HeaderSize, BundleIndex} ?=
             dev_arweave:bundle_header(
@@ -201,21 +248,73 @@ message_from_offset(TargetOffset, BundleStartOffset, Opts) ->
                 BundleIndex,
                 Opts
             ),
-        maybe_nested_item(TargetOffset, ItemStartOffset, ItemSize, Opts)
+        maybe_nested_item(
+            TargetOffset,
+            ItemStartOffset,
+            ItemSize,
+            KnownOffset,
+            KnownChunk,
+            Opts
+        )
     end.
 
 %% @doc If the containing item is itself a bundle and the offset lies in its
 %% data payload, recurse into its bundle header. Otherwise return the item.
-maybe_nested_item(TargetOffset, ItemStartOffset, ItemSize, Opts) ->
+maybe_nested_item(
+        TargetOffset,
+        ItemStartOffset,
+        ItemSize,
+        KnownOffset,
+        KnownChunk,
+        Opts
+    ) ->
     maybe
-        {ok, _ChunkJSON, FirstChunk} ?= chunk_from_offset(ItemStartOffset, Opts),
+        {ok, FirstChunk} ?=
+            item_chunk(ItemStartOffset, KnownOffset, KnownChunk, Opts),
+        maybe_nested_item(
+            TargetOffset,
+            ItemStartOffset,
+            ItemSize,
+            FirstChunk,
+            KnownOffset,
+            KnownChunk,
+            Opts
+        )
+    end.
+
+maybe_nested_item(
+        TargetOffset,
+        ItemStartOffset,
+        ItemSize,
+        FirstChunk,
+        KnownOffset,
+        KnownChunk,
+        Opts
+    ) ->
+    maybe
         {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
         true ?= TargetOffset >= ItemStartOffset + HeaderSize,
         true ?= dev_arweave_common:type(HeaderTX) =/= binary,
-        message_from_offset(TargetOffset, ItemStartOffset + HeaderSize, Opts)
+        message_from_offset(
+            TargetOffset,
+            ItemStartOffset + HeaderSize,
+            KnownOffset,
+            KnownChunk,
+            Opts
+        )
     else
-        false -> {ok, ItemStartOffset, ItemSize};
-        {error, not_found} -> {ok, ItemStartOffset, ItemSize};
+        false -> {ok, ItemStartOffset, ItemSize, FirstChunk};
+        {error, not_found} -> {ok, ItemStartOffset, ItemSize, FirstChunk};
+        Error -> Error
+    end.
+
+%% @doc Reuse the first chunk we already have when the located item starts at the
+%% same offset as the original request, otherwise fetch the item's first chunk.
+item_chunk(ItemStartOffset, ItemStartOffset, FirstChunk, _Opts) ->
+    {ok, FirstChunk};
+item_chunk(ItemStartOffset, _KnownOffset, _KnownChunk, Opts) ->
+    case chunk_from_offset(ItemStartOffset, Opts) of
+        {ok, _ChunkJSON, FirstChunk} -> {ok, FirstChunk};
         Error -> Error
     end.
 
