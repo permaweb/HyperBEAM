@@ -17,7 +17,7 @@
 %%% enforcing its own content policies based on its own free choice and
 %%% configuration.
 -module(dev_blacklist).
--export([request/3, refresh/3]).
+-export([request/3]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -57,7 +57,7 @@ request(_Base, HookReq, Opts) ->
 
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
-    maybe_refresh(Opts),
+    ensure_cache_table(Opts),
     IDs = collect_ids(Msg, Opts),
     MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
     case lists:filter(MatchesFromIDs, IDs) of
@@ -65,49 +65,24 @@ is_match(Msg, Opts) ->
         [ID|_] -> ID
     end.
 
-%% @doc Force a reload of the blacklist cache. Returns the number of newly 
-%% inserted IDs.
-refresh(Base, Req, Opts) ->
-    ?event({refresh_called, {base, Base}, {req, Req}}),
-    maybe_refresh(Opts).
-
 %%% Internal
-
-%% @doc Fetch the blacklist and store the results in the cache table.
-maybe_refresh(Opts) ->
-    ensure_cache_table(Opts),
-    MinWait =
-        hb_util:int(
-            hb_opts:get(
-                blacklist_refresh_frequency,
-                ?DEFAULT_MIN_WAIT,
-                Opts
-            )
-        ),
-    Time = erlang:system_time(second),
-    case hb_opts:get(blacklist_last_refresh, 0, Opts) of
-        LastRefresh when (Time - LastRefresh) > MinWait ->
-            fetch_and_insert_ids(Opts),
-            hb_http_server:set_opts(Opts#{ blacklist_last_refresh => Time });
-        _ ->
-            skip_update
-    end.
 
 %% @doc Fetch blacklists from all configured providers and insert IDs into the
 %% cache table.
 fetch_and_insert_ids(Opts) ->
     ensure_cache_table(Opts),
     Providers = resolve_providers(Opts),
-    Total = lists:foldl(
-        fun(Provider, Acc) ->
-            case fetch_single_provider(Provider, Opts) of
-                {ok, Count} -> Acc + Count;
-                {error, _} -> Acc
-            end
-        end,
-        0,
-        Providers
-    ),
+    Total =
+        lists:foldl(
+            fun(Provider, Acc) ->
+                case fetch_single_provider(Provider, Opts) of
+                    {ok, Count} -> Acc + Count;
+                    {error, _} -> Acc
+                end
+            end,
+            0,
+            Providers
+        ),
     ?event(blacklist_short, {fetched_and_inserted_ids, Total}, Opts),
     {ok, Total}.
 
@@ -145,10 +120,8 @@ fetch_single_provider(Provider, Opts) ->
 execute_provider(Provider, Opts) ->
     ?event({execute_provider, {provider, Provider}}),
     case hb_cache:ensure_loaded(Provider, Opts) of
-        Bin when is_binary(Bin) ->
-            hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
-        Msgs when is_list(Msgs) ->
-            hb_ao:resolve_many(Msgs, Opts)
+        Bin when is_binary(Bin) -> hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
+        Msgs when is_list(Msgs) -> hb_ao:resolve_many(Msgs, Opts)
     end.
 
 %% @doc Parse the blacklist body, returning a list of IDs.
@@ -233,7 +206,7 @@ ensure_cache_table(Opts) ->
                         ]
                     ),
                     fetch_and_insert_ids(Opts),
-                    receive kill -> ok end
+                    refresh_loop(Opts)
                 end
             ),
             hb_util:until(
@@ -243,6 +216,28 @@ ensure_cache_table(Opts) ->
             TableName;
         _ ->
             TableName
+    end.
+
+%% @doc Loop that periodically refreshes the blacklist cache. Runs on the 
+%% singleton process that is responsible for the cache ets table.
+refresh_loop(Opts) ->
+    timer:send_after(
+        hb_util:int(
+            hb_opts:get(
+                blacklist_refresh_frequency,
+                ?DEFAULT_MIN_WAIT,
+                Opts
+            )
+        ) * 1000,
+        self(),
+        refresh
+    ),
+    receive
+        refresh ->
+            fetch_and_insert_ids(Opts),
+            refresh_loop(Opts);
+        stop ->
+            ok
     end.
 
 %% @doc Calculate the name of the cache table given the `Opts`.
@@ -441,6 +436,57 @@ provider_failure_resilience_test() ->
     ),
     ?assertMatch(
         {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    ok.
+
+%% @doc Test that the blacklist cache is refreshed periodically.
+refresh_periodically_test() ->
+    {ok, #{
+        opts := Opts0 = #{ store := Store },
+        signed1 := SignedID1,
+        unsigned3 := UnsignedID3
+    }} = setup_test_env(),
+    InitialBlacklist =
+        #{
+            <<"data-protocol">> => <<"content-policy">>,
+            <<"body">> => SignedID1
+        },
+    BlacklistMsg = hb_message:commit(InitialBlacklist, Opts0),
+    {ok, InitialBlacklistID} = hb_cache:write(BlacklistMsg, Opts0),
+    hb_store:make_link(Store, InitialBlacklistID, <<"mutable">>),
+    UpdatedBlacklist =
+        #{
+            <<"data-protocol">> => <<"content-policy">>,
+            <<"body">> => <<SignedID1/binary, "\n", UnsignedID3/binary, "\n">>
+        },
+    UpdatedBlacklistMsg = hb_message:commit(UpdatedBlacklist, Opts0),
+    {ok, UpdatedBlacklistID} = hb_cache:write(UpdatedBlacklistMsg, Opts0),
+    hb_store:make_link(Store, InitialBlacklistID, <<"mutable">>),
+    Opts1 = Opts0#{
+        blacklist_providers => [<<"/~cache@1.0/read?target=mutable">>],
+        on => #{
+            <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+        },
+        blacklist_refresh_frequency => 1
+    },
+    Node = hb_http_server:start_node(Opts1),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(Node, SignedID1, Opts1)
+    ),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    hb_store:make_link(Store, UpdatedBlacklistID, <<"mutable">>),
+    ?assertMatch(
+        {ok, <<"test-3">>},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ),
+    timer:sleep(1000),
+    ?assertMatch(
+        {error, #{ <<"status">> := 451 }},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
     ok.
