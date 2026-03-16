@@ -9,6 +9,7 @@
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 -define(MAX_MEMORY, 1_000_000_000). % 1GB
 -define(MAX_EVENT_NAME_LENGTH, 100).
+-define(BATCH_MAX, 10000).
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -180,47 +181,87 @@ handle_events() ->
 handle_events(N) ->
     receive
         {increment, TopicBin, EventName, Count} ->
-            N2 = N + 1,
-            case N2 rem 1000 of
-                0 ->
-                    check_overload(EventName);
-                _ ->
-                    ok
-            end,
-            prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
+            erlang:put(batch_keys, []),
+            N2 = drain_batch(N + 1, TopicBin, EventName, Count, ?BATCH_MAX - 1),
+            hb_prometheus:ensure_started(),
+            Keys = flush_batch(),
+            check_overload(Keys, N, N2),
             handle_events(N2)
     end.
 
-check_overload(EventName) ->
-    case erlang:process_info(self(), message_queue_len) of
-        {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
-            {memory, MemorySize} = erlang:process_info(self(), memory),
-            case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
-                1 ->
-                    ?debug_print(
-                        {warning,
-                            prometheus_event_queue_overloading,
-                            {queue, Len},
-                            {current_message, EventName},
-                            {memory_bytes, MemorySize}
-                        }
-                    );
+drain_batch(N, LastT, LastE, Acc, 0) ->
+    pd_inc({batch, LastT, LastE}, Acc),
+    N;
+drain_batch(N, LastT, LastE, Acc, Remaining) ->
+    receive
+        {increment, TopicBin, EventName, Count} ->
+            case TopicBin =:= LastT andalso EventName =:= LastE of
+                true ->
+                    drain_batch(N + 1, LastT, LastE, Acc + Count, Remaining - 1);
+                false ->
+                    pd_inc({batch, LastT, LastE}, Acc),
+                    drain_batch(N + 1, TopicBin, EventName, Count, Remaining - 1)
+            end
+    after 0 ->
+        pd_inc({batch, LastT, LastE}, Acc),
+        N
+    end.
+
+pd_inc(Key, Count) ->
+    case erlang:get(Key) of
+        undefined ->
+            erlang:put(Key, Count),
+            erlang:put(batch_keys, [Key | erlang:get(batch_keys)]);
+        Old when is_integer(Old) ->
+            erlang:put(Key, Old + Count)
+    end.
+
+flush_batch() ->
+    Keys = erlang:get(batch_keys),
+    lists:foreach(
+        fun(Key = {batch, Topic, Event}) ->
+            prometheus_counter:inc(<<"event">>, [Topic, Event], erlang:get(Key)),
+            erlang:erase(Key)
+        end,
+        Keys),
+    erlang:put(batch_keys, []),
+    Keys.
+
+check_overload(Keys, Prev, N) ->
+    case N div 1000 > Prev div 1000 of
+        true ->
+            case erlang:process_info(self(), message_queue_len) of
+                {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
+                    {memory, MemorySize} = erlang:process_info(self(), memory),
+                    SampleKeys = lists:sublist(Keys, 5),
+                    case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
+                        1 ->
+                            ?debug_print(
+                                {warning,
+                                    prometheus_event_queue_overloading,
+                                    {queue, Len},
+                                    {sample_keys, SampleKeys},
+                                    {memory_bytes, MemorySize}
+                                }
+                            );
+                        _ -> ignored
+                    end,
+                    case MemorySize of
+                        MemorySize when MemorySize > ?MAX_MEMORY ->
+                            ?debug_print(
+                                {error,
+                                    prometheus_event_queue_terminating_on_memory_overload,
+                                    {queue, Len},
+                                    {memory_bytes, MemorySize},
+                                    {sample_keys, SampleKeys}
+                                }
+                            ),
+                            exit(memory_overload);
+                        _ -> no_action
+                    end;
                 _ -> ignored
-            end,
-            case MemorySize of
-                MemorySize when MemorySize > ?MAX_MEMORY ->
-                    ?debug_print(
-                        {error,
-                            prometheus_event_queue_terminating_on_memory_overload,
-                            {queue, Len},
-                            {memory_bytes, MemorySize},
-                            {current_message, EventName}
-                        }
-                    ),
-                    exit(memory_overload);
-                _ -> no_action
             end;
-        _ -> ignored
+        _ -> ok
     end.
 
 parse_name(Name) when is_tuple(Name) ->
@@ -282,6 +323,7 @@ benchmark_increment_test() ->
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
+batch_correctness_test() -> ok.
 -else.
 benchmark_drain_rate_test() ->
     log(warmup, {warmup, 0}),
@@ -289,15 +331,50 @@ benchmark_drain_rate_test() ->
     EventPid = hb_name:lookup(?MODULE),
     wait_drain(EventPid, 5000),
     N = 100000,
+    erlang:suspend_process(EventPid),
     fill_mailbox(EventPid, N),
+    erlang:resume_process(EventPid),
     {DrainTime, _} = timer:tc(fun() ->
         wait_drain(EventPid, 30000)
     end),
-    DrainRate = round(N / (DrainTime / 1_000_000)),
+    DrainRate = round(N / (max(1, DrainTime) / 1_000_000)),
     hb_test_utils:benchmark_print(
         <<"Drained">>, <<"events">>, DrainRate, 1),
     ?assert(DrainRate >= 10000),
     ok.
+
+batch_correctness_test() ->
+    log(warmup, {warmup, 0}),
+    timer:sleep(100),
+    EventPid = hb_name:lookup(?MODULE),
+    wait_drain(EventPid, 5000),
+    NumKeys = 50,
+    N = 30000,
+    Keys = [{list_to_binary("corr_topic_" ++ integer_to_list(K)),
+             list_to_binary("corr_event_" ++ integer_to_list(K))}
+            || K <- lists:seq(1, NumKeys)],
+    Before = counters(),
+    BeforeCounts = [{T, E, deep_get([T, E], Before, 0)} || {T, E} <- Keys],
+    erlang:suspend_process(EventPid),
+    lists:foreach(fun(I) ->
+        {T, E} = lists:nth((I rem NumKeys) + 1, Keys),
+        EventPid ! {increment, T, E, 1}
+    end, lists:seq(1, N)),
+    erlang:resume_process(EventPid),
+    wait_drain(EventPid, 30000),
+    After = counters(),
+    PerKey = N div NumKeys,
+    lists:foreach(fun({T, E, BeforeVal}) ->
+        AfterVal = deep_get([T, E], After, 0),
+        ?assertEqual(PerKey, AfterVal - BeforeVal)
+    end, BeforeCounts),
+    ok.
+
+deep_get([Group, Name], Map, Default) ->
+    case maps:get(Group, Map, undefined) of
+        undefined -> Default;
+        Inner -> maps:get(Name, Inner, Default)
+    end.
 
 fill_mailbox(_Pid, 0) -> ok;
 fill_mailbox(Pid, N) ->
