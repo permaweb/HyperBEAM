@@ -73,9 +73,10 @@ refresh(Base, Req, Opts) ->
 
 %%% Internal
 
-%% @doc Fetch the blacklist and store the results in the cache table.
+%% @doc Check if a refresh is due and, if so, atomically claim the refresh so
+%% that only one process fetches at a time (no thundering herd).
 maybe_refresh(Opts) ->
-    ensure_cache_table(Opts),
+    Table = ensure_cache_table(Opts),
     MinWait =
         hb_util:int(
             hb_opts:get(
@@ -85,18 +86,76 @@ maybe_refresh(Opts) ->
             )
         ),
     Time = erlang:system_time(second),
-    case hb_opts:get(blacklist_last_refresh, 0, Opts) of
-        LastRefresh when (Time - LastRefresh) > MinWait ->
-            fetch_and_insert_ids(Opts),
-            hb_http_server:set_opts(Opts#{ blacklist_last_refresh => Time });
+    LastRefresh =
+        case ets:lookup(Table, {meta, last_refresh}) of
+            [{{meta, last_refresh}, T}] -> T;
+            [] -> 0
+        end,
+    case (Time - LastRefresh) > MinWait of
+        false ->
+            skip_update;
+        true ->
+            try_claim_refresh(Table, Opts)
+    end.
+
+%% @doc Attempt to atomically claim the refresh sentinel. Only the winner
+%% proceeds with the actual fetch; losers return skip_update. During cold
+%% start (no prior refresh completed), losers wait for the initial refresh
+%% rather than skipping, to avoid evaluating against an empty blacklist.
+try_claim_refresh(Table, Opts) ->
+    case ets:insert_new(Table, {{meta, refreshing}, self()}) of
+        true ->
+            do_refresh(Table, Opts);
+        false ->
+            case ets:lookup(Table, {meta, refreshing}) of
+                [{{meta, refreshing}, PID}] ->
+                    case is_process_alive(PID) of
+                        true ->
+                            wait_if_cold_start(Table);
+                        false ->
+                            ets:select_delete(Table, [
+                                {{{meta, refreshing}, PID}, [], [true]}
+                            ]),
+                            try_claim_refresh(Table, Opts)
+                    end;
+                [] ->
+                    try_claim_refresh(Table, Opts)
+            end
+    end.
+
+%% @doc During cold start (no {meta, last_refresh} yet), wait for the
+%% in-progress refresh to complete so callers don't see an empty blacklist.
+%% In steady state, skip immediately since we already have data.
+wait_if_cold_start(Table) ->
+    case ets:lookup(Table, {meta, last_refresh}) of
+        [] ->
+            hb_util:until(
+                fun() ->
+                    ets:lookup(Table, {meta, last_refresh}) =/= []
+                end,
+                100
+            ),
+            skip_update;
         _ ->
             skip_update
     end.
 
+%% @doc Perform the actual refresh: fetch all providers, then update the
+%% last-refresh timestamp and release the sentinel.
+do_refresh(Table, Opts) ->
+    try
+        ets:update_counter(
+            Table, {meta, refresh_count}, 1, {{meta, refresh_count}, 0}
+        ),
+        fetch_and_insert_ids(Opts)
+    after
+        ets:insert(Table, {{meta, last_refresh}, erlang:system_time(second)}),
+        ets:delete(Table, {meta, refreshing})
+    end.
+
 %% @doc Fetch blacklists from all configured providers and insert IDs into the
-%% cache table.
+%% cache table. The caller must ensure the table exists before calling this.
 fetch_and_insert_ids(Opts) ->
-    ensure_cache_table(Opts),
     Providers = resolve_providers(Opts),
     Total = lists:foldl(
         fun(Provider, Acc) ->
@@ -119,17 +178,37 @@ resolve_providers(Opts) ->
     end.
 
 %% @doc Fetch a single provider's blacklist and insert its IDs into the cache.
+%% Handles 304 Not Modified responses when an ETag was sent.
 fetch_single_provider(Provider, Opts) ->
     try
         case execute_provider(Provider, Opts) of
             {ok, Blacklist} ->
-                {ok, IDs} = parse_blacklist(Blacklist, Opts),
-                ?event({parsed_blacklist, {ids, IDs}}),
-                BlacklistID = hb_message:id(Blacklist, all, Opts),
-                ?event({update_blacklist_cache,
-                    {ids, IDs}, {blacklist_id, BlacklistID}}),
-                Table = cache_table_name(Opts),
-                {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
+                Status = hb_maps:get(
+                    <<"status">>, Blacklist, 200, Opts
+                ),
+                case hb_util:int(Status) of
+                    304 ->
+                        Table = cache_table_name(Opts),
+                        ets:update_counter(
+                            Table,
+                            {meta, not_modified_count},
+                            1,
+                            {{meta, not_modified_count}, 0}
+                        ),
+                        ?event(blacklist_short,
+                            {provider_not_modified, Provider}, Opts),
+                        {ok, 0};
+                    _ ->
+                        maybe_store_etag(Provider, Blacklist, Opts),
+                        {ok, IDs} = parse_blacklist(Blacklist, Opts),
+                        ?event({parsed_blacklist, {ids, IDs}}),
+                        BlacklistID =
+                            hb_message:id(Blacklist, all, Opts),
+                        ?event({update_blacklist_cache,
+                            {ids, IDs}, {blacklist_id, BlacklistID}}),
+                        Table = cache_table_name(Opts),
+                        {ok, insert_ids(IDs, BlacklistID, Table, Opts)}
+                end;
             {error, _} = Error ->
                 ?event({execute_provider_error, Error}),
                 Error
@@ -141,14 +220,36 @@ fetch_single_provider(Provider, Opts) ->
             {error, {Type, Reason}}
     end.
 
-%% @doc Execute the blacklist provider, returning the result.
+%% @doc Execute the blacklist provider, returning the result. For binary
+%% providers (HTTP via relay), inject If-None-Match when a stored ETag exists.
 execute_provider(Provider, Opts) ->
     ?event({execute_provider, {provider, Provider}}),
     case hb_cache:ensure_loaded(Provider, Opts) of
         Bin when is_binary(Bin) ->
-            hb_ao:resolve(#{ <<"path">> => Bin }, Opts);
+            Table = cache_table_name(Opts),
+            Msg =
+                case ets:lookup(Table, {etag, Provider}) of
+                    [{{etag, _}, StoredETag}] ->
+                        #{
+                            <<"path">> => Bin,
+                            <<"if-none-match">> => StoredETag
+                        };
+                    [] ->
+                        #{ <<"path">> => Bin }
+                end,
+            hb_ao:resolve(Msg, Opts);
         Msgs when is_list(Msgs) ->
             hb_ao:resolve_many(Msgs, Opts)
+    end.
+
+%% @doc Store the ETag from a provider response, or clear a stale one.
+maybe_store_etag(Provider, Response, Opts) ->
+    Table = cache_table_name(Opts),
+    case hb_maps:get(<<"etag">>, Response, not_found, Opts) of
+        not_found ->
+            ets:delete(Table, {etag, Provider});
+        ETag ->
+            ets:insert(Table, {{etag, Provider}, ETag})
     end.
 
 %% @doc Parse the blacklist body, returning a list of IDs.
@@ -232,7 +333,7 @@ ensure_cache_table(Opts) ->
                             {write_concurrency, true}
                         ]
                     ),
-                    fetch_and_insert_ids(Opts),
+                    try_claim_refresh(TableName, Opts),
                     receive kill -> ok end
                 end
             ),
@@ -443,4 +544,145 @@ provider_failure_resilience_test() ->
         {ok, <<"test-3">>},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
+    ok.
+
+%% @doc Test that concurrent requests on a fresh node only trigger one provider
+%% fetch (cold-start herd prevention).
+cold_start_herd_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    BlacklistHostNode = hb_http_server:start_node(Opts0),
+    ProviderPath =
+        <<
+            "/~relay@1.0/call?relay-method=GET&relay-path=",
+            BlacklistHostNode/binary, BlacklistID/binary
+        >>,
+    NodeOpts =
+        #{
+            store => maps:get(store, Opts0),
+            priv_wallet => ar_wallet:new(),
+            blacklist_providers => [ProviderPath],
+            on => #{
+                <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+            }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    N = 20,
+    Parent = self(),
+    Ref = make_ref(),
+    _Workers = [
+        spawn(fun() ->
+            hb_http:get(Node, <<"/some-path">>, NodeOpts),
+            Parent ! {Ref, done}
+        end)
+    || _ <- lists:seq(1, N)],
+    lists:foreach(fun(_) -> receive {Ref, done} -> ok end end, lists:seq(1, N)),
+    Table = cache_table_name(NodeOpts),
+    [{{meta, refresh_count}, Count}] =
+        ets:lookup(Table, {meta, refresh_count}),
+    ?assertEqual(1, Count),
+    ?assertEqual([], ets:lookup(Table, {meta, refreshing})),
+    ?assertNotEqual(
+        [],
+        ets:lookup(Table, hb_util:human_id(SignedID1))
+    ),
+    ok.
+
+%% @doc Test that concurrent requests with a stale timestamp only trigger one
+%% provider fetch (steady-state herd prevention).
+steady_state_herd_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    Opts1 =
+        Opts0#{
+            blacklist_providers => [BlacklistID],
+            blacklist_refresh_frequency => 0,
+            on => #{
+                <<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }
+            }
+        },
+    Node = hb_http_server:start_node(Opts1),
+    hb_http:get(Node, <<"/warmup">>, Opts1),
+    Table = cache_table_name(Opts1),
+    CountBefore =
+        case ets:lookup(Table, {meta, refresh_count}) of
+            [{{meta, refresh_count}, C}] -> C;
+            [] -> 0
+        end,
+    ets:insert(Table, {{meta, last_refresh}, 0}),
+    timer:sleep(1100),
+    N = 20,
+    Parent = self(),
+    Ref = make_ref(),
+    _Workers = [
+        spawn(fun() ->
+            hb_http:get(Node, <<"/some-path">>, Opts1),
+            Parent ! {Ref, done}
+        end)
+    || _ <- lists:seq(1, N)],
+    lists:foreach(fun(_) -> receive {Ref, done} -> ok end end, lists:seq(1, N)),
+    ?assertEqual([], ets:lookup(Table, {meta, refreshing})),
+    [{{meta, refresh_count}, CountAfter}] =
+        ets:lookup(Table, {meta, refresh_count}),
+    ?assertEqual(1, CountAfter - CountBefore),
+    ?assertNotEqual(
+        [],
+        ets:lookup(Table, hb_util:human_id(SignedID1))
+    ),
+    ok.
+
+%% @doc Test that a stale sentinel (dead PID) is reclaimed and refresh proceeds.
+crash_recovery_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    Opts1 =
+        Opts0#{
+            blacklist_providers => [BlacklistID],
+            blacklist_refresh_frequency => 0
+        },
+    Table = ensure_cache_table(Opts1),
+    DeadPid = spawn(fun() -> ok end),
+    timer:sleep(10),
+    ?assertNot(is_process_alive(DeadPid)),
+    ets:insert(Table, {{meta, refreshing}, DeadPid}),
+    ets:insert(Table, {{meta, last_refresh}, 0}),
+    timer:sleep(1100),
+    maybe_refresh(Opts1),
+    ?assertEqual([], ets:lookup(Table, {meta, refreshing})),
+    [{{meta, last_refresh}, Ts}] =
+        ets:lookup(Table, {meta, last_refresh}),
+    ?assert(Ts > 0),
+    ?assertNotEqual([], ets:lookup(Table, hb_util:human_id(SignedID1))),
+    ok.
+
+%% @doc Directly test the 304 Not Modified code path in fetch_single_provider.
+%% Creates a provider whose resolved message has status 304, verifying that
+%% fetch_single_provider returns {ok, 0} and increments the not_modified_count.
+not_modified_provider_test() ->
+    Opts0 = #{ store => hb_test_utils:test_store(), priv_wallet => ar_wallet:new() },
+    Table = ensure_cache_table(Opts0),
+    Response304 = hb_message:commit(
+        #{ <<"status">> => 304, <<"body">> => <<>> },
+        Opts0
+    ),
+    {ok, Response304ID} = hb_cache:write(Response304, Opts0),
+    CountBefore =
+        case ets:lookup(Table, {meta, not_modified_count}) of
+            [{{meta, not_modified_count}, N}] -> N;
+            [] -> 0
+        end,
+    Result = fetch_single_provider(Response304ID, Opts0),
+    ?assertEqual({ok, 0}, Result),
+    [{{meta, not_modified_count}, CountAfter}] =
+        ets:lookup(Table, {meta, not_modified_count}),
+    ?assertEqual(CountBefore + 1, CountAfter),
     ok.
