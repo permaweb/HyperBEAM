@@ -16,18 +16,72 @@ get(Key, Base, Request, Opts) ->
             dev_message:get(Key, Base, Request, Opts)
     end.
 
-%% @doc Parse a path key as a global Arweave start offset.
+%% @doc Parse a path key as a global Arweave start offset. The supported syntax
+%% is as follows:
+%% ```
+%% Reference :: Offset-Length
+%% Offset :: <integer>[Unit]
+%% Length :: <integer>
+%% Unit ::
+%%     b        : The global Arweave offset in absolute bytes (default).
+%%     k[i][b]  : The global Arweave offset in absolute kilobytes or kibibytes.
+%%     m[i][b]  : The global Arweave offset in absolute megabytes or mebibytes.
+%%     g[i][b]  : The global Arweave offset in absolute gigabytes or gibibytes.
+%%     t[i][b]  : The global Arweave offset in absolute terabytes or tebibytes.
+%%     p[i][b]  : The global Arweave offset in absolute petabytes or pebibytes.
+%%     e[i][b]  : The global Arweave offset in absolute exabytes or exbibytes.
+%%     z[i][b]  : The global Arweave offset in absolute zettabytes or zebibytes.
+%%     y[i][b]  : The global Arweave offset in absolute yottabytes or yobibytes.
+%% ```
+%% In the scheme above, the `i` modifier in units indicates that the unit is in
+%% binary multiples of the base unit. For example, `kib` is 1024 bytes, `mib` is
+%% 1024 * 1024 bytes, etc. By contrast, the `kb` unit is decimal-oriented: `kb`
+%% 1000 bytes, `mb` is 1000 * 1000 bytes, etc. To aid minimization of the bytes
+%% required for the references, the `b` is always implied and need not be
+%% specified.
 parse(Key) ->
     try
-        case binary:split(Key, <<"-">>) of
-            [Start, Length] ->
-                {ok, hb_util:int(Start), hb_util:int(Length)};
-            [Start] ->
-                {ok, hb_util:int(Start), undefined}
-        end
+        {OffsetBin, Length} =
+            case binary:split(Key, <<"-">>) of
+                [Start, LengthBin] -> {Start, hb_util:int(LengthBin)};
+                [Start] -> {Start, undefined}
+            end,
+        {ok, parse_unit(OffsetBin), Length}
     catch
-        _:_ -> error
+        Class:Error:StackTrace ->
+            ?event(
+                error,
+                {error, {invalid_offset_key, Key},
+                {class, Class},
+                {error, Error},
+                {stack_trace, {trace, StackTrace}}}
+            ),
+            error
     end.
+
+%% @doc Parses and applies a unit modifier to a base value, supporting both
+%% the `kb` and `kib` unit formats.
+parse_unit(Binary) -> parse_unit(0, Binary).
+parse_unit(Complete, <<>>) -> Complete;
+parse_unit(Base, <<Int:8/integer, Rest/binary>>) when Int >= $0 andalso Int =< $9 ->
+    parse_unit(Base * 10 + (Int - $0), Rest);
+parse_unit(Base, <<"b">>) -> Base;
+parse_unit(Base, <<"ki", _/binary>>) -> parse_unit(Base * 1024, <<"b">>);
+parse_unit(Base, <<"mi", _/binary>>) -> parse_unit(Base * 1024, <<"ki">>);
+parse_unit(Base, <<"gi", _/binary>>) -> parse_unit(Base * 1024, <<"mi">>);
+parse_unit(Base, <<"ti", _/binary>>) -> parse_unit(Base * 1024, <<"gi">>);
+parse_unit(Base, <<"pi", _/binary>>) -> parse_unit(Base * 1024, <<"ti">>);
+parse_unit(Base, <<"ei", _/binary>>) -> parse_unit(Base * 1024, <<"pi">>);
+parse_unit(Base, <<"zi", _/binary>>) -> parse_unit(Base * 1024, <<"zi">>);
+parse_unit(Base, <<"yi", _/binary>>) -> parse_unit(Base * 1024, <<"zi">>);
+parse_unit(Base, <<"k", _/binary>>) -> parse_unit(Base * 1000, <<"b">>);
+parse_unit(Base, <<"m", _/binary>>) -> parse_unit(Base * 1000, <<"k">>);
+parse_unit(Base, <<"g", _/binary>>) -> parse_unit(Base * 1000, <<"m">>);
+parse_unit(Base, <<"t", _/binary>>) -> parse_unit(Base * 1000, <<"g">>);
+parse_unit(Base, <<"p", _/binary>>) -> parse_unit(Base * 1000, <<"t">>);
+parse_unit(Base, <<"e", _/binary>>) -> parse_unit(Base * 1000, <<"p">>);
+parse_unit(Base, <<"z", _/binary>>) -> parse_unit(Base * 1000, <<"e">>);
+parse_unit(Base, <<"y", _/binary>>) -> parse_unit(Base * 1000, <<"z">>).
 
 %% @doc Load an ANS-104 item whose header begins at the given global offset.
 load_item_at_offset(TargetOffset, Length, Opts) ->
@@ -193,6 +247,19 @@ find_bundle_member(_TargetOffset, _ItemStartOffset, [], _Opts) ->
 
 %%% Tests
 
+parse_offset_test() ->
+    ?assertEqual({ok, 160399272861859, undefined}, parse(<<"160399272861859">>)),
+    ?assertEqual({ok, 160399272861859, 498852}, parse(<<"160399272861859-498852">>)),
+    ?assertEqual({ok, 160399273000000, undefined}, parse(<<"160399273000000">>)),
+    ?assertEqual({ok, 160399273000000, 498852}, parse(<<"160399273000000-498852">>)),
+    ?assertEqual({ok, 160399273000000, undefined}, parse(<<"160399273m">>)),
+    ?assertEqual({ok, 160399273000000, 498852}, parse(<<"160399273m-498852">>)),
+    ?assertEqual(
+        {ok, 1337 * 1024 * 1024 * 1024 * 1024, undefined},
+        parse(<<"1337tib">>)
+    ),
+    ok.
+
 offset_item_cases_test() ->
     Opts = #{},
     % A simple message.
@@ -216,13 +283,13 @@ offset_item_cases_test() ->
         #{ <<"content-type">> => <<"image/png">> },
         Opts
     ),
-    % % A megabyte reference to the item, occurring in the middle of the item.
-    % assert_offset_item(
-    %     <<"160399273m">>,
-    %     498852,
-    %     #{ <<"content-type">> => <<"image/jpeg">> },
-    %     Opts
-    % ),
+    % A megabyte reference to the item, occurring in the middle of the item.
+    assert_offset_item(
+        <<"160399273m">>,
+        498852,
+        #{ <<"content-type">> => <<"image/png">> },
+        Opts
+    ),
     assert_offset_item(
         <<"384600234780716">>,
         856691,
