@@ -101,75 +101,78 @@ httpc_req(Args, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    {ok, {Host, Port}} = parse_peer(Peer, Opts),
-    Scheme = case Port of
-        443 -> "https";
-        _ -> "http"
-    end,
-    ?event(debug_http_client, {httpc_req, {explicit, Args}}),
-    URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
-    HeaderKV =
-        [
-            {binary_to_list(Key), binary_to_list(Value)}
-        ||
-            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
-        ] ++
-        [
-            {<<"cookie">>, CookieLine}
-        ||
-            CookieLine <-
-                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
-                    Binary when is_binary(Binary) ->
-                        [Binary];
-                    List when is_list(List) ->
-                        List
-                end
-        ],
-    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
-    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
-    Request =
-        case Method of
-            get ->
-                {
-                    URL,
-                    HeaderKV
-                };
-            _ ->
-                upload_metric(Body),
-                {
-                    URL,
-                    HeaderKV,
-                    binary_to_list(ContentType),
-                    Body
-                }
-        end,
-    ?event({http_client_outbound, Method, URL, Request}),
-    HTTPCOpts = [{full_result, true}, {body_format, binary}],
-	StartTime = os:system_time(native),
-    case httpc:request(Method, Request, [], HTTPCOpts) of
-        {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-            download_metric(RespBody),
-	        EndTime = os:system_time(native),
-            RespHeaders =
+    case parse_peer(Peer, Opts) of
+        {error, _} = Err -> Err;
+        {ok, {Host, Port}} ->
+            Scheme = case Port of
+                443 -> "https";
+                _ -> "http"
+            end,
+            ?event(debug_http_client, {httpc_req, {explicit, Args}}),
+            URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+            FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+            HeaderKV =
                 [
-                    {list_to_binary(Key), list_to_binary(Value)}
+                    {binary_to_list(Key), binary_to_list(Value)}
                 ||
-                    {Key, Value} <- RawRespHeaders
+                    {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+                ] ++
+                [
+                    {<<"cookie">>, CookieLine}
+                ||
+                    CookieLine <-
+                        case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                            Binary when is_binary(Binary) ->
+                                [Binary];
+                            List when is_list(List) ->
+                                List
+                        end
                 ],
-            ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Status),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            ),
-            {ok, Status, RespHeaders, RespBody};
-        {error, Reason} ->
-            ?event(http_client, {httpc_error, Reason}),
-            {error, Reason}
+            Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+            ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
+            Request =
+                case Method of
+                    get ->
+                        {
+                            URL,
+                            HeaderKV
+                        };
+                    _ ->
+                        upload_metric(Body),
+                        {
+                            URL,
+                            HeaderKV,
+                            binary_to_list(ContentType),
+                            Body
+                        }
+                end,
+            ?event({http_client_outbound, Method, URL, Request}),
+            HTTPCOpts = [{full_result, true}, {body_format, binary}],
+            StartTime = os:system_time(native),
+            case httpc:request(Method, Request, [], HTTPCOpts) of
+                {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+                    download_metric(RespBody),
+                    EndTime = os:system_time(native),
+                    RespHeaders =
+                        [
+                            {list_to_binary(Key), list_to_binary(Value)}
+                        ||
+                            {Key, Value} <- RawRespHeaders
+                        ],
+                    ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+                    record_duration(#{
+                            <<"request-method">> => method_to_bin(Method),
+                            <<"request-path">> => hb_util:bin(Path),
+                            <<"status-class">> => get_status_class(Status),
+                            <<"duration">> => EndTime - StartTime
+                        },
+                        Opts
+                    ),
+                    {ok, Status, RespHeaders, RespBody};
+                {error, Reason} ->
+                    ?event(http_client, {httpc_error, Reason}),
+                    {error, Reason}
+            end
     end.
 
 hackney_req(Args, Opts) ->
@@ -180,62 +183,71 @@ hackney_req(Args, Opts) ->
         headers := Headers,
         body := Body
     } = Args,
-    {Host, Port} = parse_peer(Peer, Opts),
-    Transport = case Port of
-        443 -> hackney_ssl;
-        _ -> hackney_tcp
-    end,
-    Method = string:uppercase(hb_util:bin(RawMethod)),
-    HeaderList =
-        [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
-    ConnKey = {hackney_conn, Host, Port},
-    case hackney_get_conn(ConnKey, Host, Port, Transport) of
-        {ok, ConnPid} ->
-            case hackney_do_request(ConnPid, Method, Path, HeaderList, Body) of
-                {ok, _Status, _RespHeaders, _RespBody} = Result ->
-                    Result;
-                {error, _Reason} = Err ->
-                    erase(ConnKey),
-                    catch hackney:close(ConnPid),
-                    Err
-            end;
-        {error, _} = Err ->
-            Err
+    case parse_peer(Peer, Opts) of
+        {error, _} = Err -> Err;
+        {ok, {Host, Port}} ->
+            Transport = case Port of
+                443 -> hackney_ssl;
+                _ -> hackney_tcp
+            end,
+            Method = string:uppercase(hb_util:bin(RawMethod)),
+            HeaderList =
+                [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
+            ConnKey = {hackney_conn, Host, Port},
+            case hackney_get_conn(ConnKey, Host, Port, Transport) of
+                {ok, ConnRef} ->
+                    case hackney_do_request(ConnRef, Method, Path, HeaderList, Body) of
+                        {ok, _Status, _RespHeaders, _RespBody} = Result ->
+                            Result;
+                        {error, _Reason} = Err2 ->
+                            erase(ConnKey),
+                            catch hackney:close(ConnRef),
+                            Err2
+                    end;
+                {error, _} = Err3 ->
+                    Err3
+            end
     end.
 
 hackney_get_conn(ConnKey, Host, Port, Transport) ->
     case get(ConnKey) of
-        ConnPid when is_pid(ConnPid) ->
-            case is_process_alive(ConnPid) of
-                true -> {ok, ConnPid};
-                false -> hackney_new_conn(ConnKey, Host, Port, Transport)
-            end;
+        ConnRef when is_reference(ConnRef) ->
+            {ok, ConnRef};
         _ ->
             hackney_new_conn(ConnKey, Host, Port, Transport)
     end.
 
 hackney_new_conn(ConnKey, Host, Port, Transport) ->
-    case hackney:connect(Transport, Host, Port, []) of
-        {ok, ConnPid} ->
-            put(ConnKey, ConnPid),
-            {ok, ConnPid};
+    case get(ConnKey) of
+        OldRef when is_reference(OldRef) ->
+            catch hackney:close(OldRef);
+        _ -> ok
+    end,
+    case hackney:connect(Transport, Host, Port, [{pool, false}]) of
+        {ok, ConnRef} ->
+            put(ConnKey, ConnRef),
+            {ok, ConnRef};
         {error, _Reason} = Err ->
             Err
     end.
 
-hackney_do_request(ConnPid, Method, Path, HeaderList, Body) ->
-    case hackney:send_request(ConnPid, {Method, Path, HeaderList, Body}) of
+hackney_do_request(ConnRef, Method, Path, HeaderList, Body) ->
+    case hackney:send_request(ConnRef, {Method, Path, HeaderList, Body}) of
         {ok, Status, RespHeaders, Ref} when is_reference(Ref) ->
-            {ok, RespBody} = hackney:body(Ref),
-            {ok, Status, RespHeaders, RespBody};
-        {ok, Status, RespHeaders, ConnPid2} when is_pid(ConnPid2) ->
-            {ok, RespBody} = hackney:body(ConnPid2),
-            {ok, Status, RespHeaders, RespBody};
+            read_hackney_body(Ref, Status, RespHeaders);
         {ok, Status, RespHeaders, RespBody} when is_binary(RespBody) ->
             {ok, Status, RespHeaders, RespBody};
         {ok, Status, RespHeaders} ->
             {ok, Status, RespHeaders, <<>>};
         {error, _Reason} = Err ->
+            Err
+    end.
+
+read_hackney_body(Ref, Status, RespHeaders) ->
+    case hackney:body(Ref) of
+        {ok, RespBody} ->
+            {ok, Status, RespHeaders, RespBody};
+        {error, _} = Err ->
             Err
     end.
 
