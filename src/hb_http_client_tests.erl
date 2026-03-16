@@ -23,7 +23,7 @@ orphan_message_leak_test_() ->
         {ok, 200, _, _} = hb_http_client:request(Args, Opts),
         timer:sleep(2000),
         Orphans = flush_mailbox(),
-        ?debugFmt("Orphan messages after first request: ~p", [length(Orphans)]),
+        ?event(http_client_tests, {orphaned_messages, {length, length(Orphans)}}),
         ?assertEqual(0, length(Orphans),
             "No orphan messages should be left in caller mailbox")
     end}.
@@ -43,7 +43,9 @@ unreachable_peer_hang_test_() ->
         T0 = erlang:monotonic_time(millisecond),
         Result = hb_http_client:request(Args, Opts),
         Elapsed = erlang:monotonic_time(millisecond) - T0,
-        ?debugFmt("Unreachable peer: ~p in ~pms", [element(1, Result), Elapsed]),
+        ?event(http_client_tests,
+            {unreachable_peer_result, {result, Result}, {elapsed, Elapsed}}
+        ),
         ?assertMatch({error, _}, Result),
         ?assert(Elapsed >= 4000 andalso Elapsed =< 15000,
             "Should block for ~5s connect_timeout, not infinity")
@@ -64,13 +66,13 @@ bad_peer_survives_test_() ->
         {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts),
         BadArgs = ValidArgs#{peer => <<"not-a-valid-uri">>},
         BadResult = hb_http_client:request(BadArgs, Opts),
-        ?debugFmt("Bad peer result: ~p", [BadResult]),
+        ?event(http_client_tests, {bad_peer_result, BadResult}),
         ?assertMatch({error, _}, BadResult),
         timer:sleep(500),
         ?assert(erlang:whereis(hb_http_client) =/= undefined,
             "gen_server must survive a bad peer URI"),
         {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts),
-        ?debugFmt("Follow-up request to valid peer succeeded", [])
+        ?event(http_client_tests, follow_up_request_to_valid_peer_succeeded)
     end}.
 
 flush_mailbox() ->
