@@ -521,9 +521,9 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
     record_request_metric(
-      ReqDuration * 1000000,
-      ReplyDuration * 1000000,
-      Status
+        ReqDuration * 1000000,
+        ReplyDuration * 1000000,
+        Status
     ),
     ?event(debug_http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_server_short,
@@ -1116,7 +1116,7 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
 
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
-		{name, http_request_server_reply_duration_seconds},
+		{name, http_server_encoding_duration_seconds},
         {labels, [status_code]},
 		{buckets, [0.001, 0.0025, 0.005,
                     0.01, 0.025, 0.05,
@@ -1131,7 +1131,7 @@ init_prometheus() ->
 		}
 	]),
     hb_prometheus:declare(histogram, [
-		{name, http_request_server_duration_seconds},
+		{name, http_server_duration_seconds},
         {labels, [status_code]},
 		{buckets, [0.001, 0.0025, 0.005,
                     0.01, 0.025, 0.05,
@@ -1149,12 +1149,12 @@ record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
         fun() ->
             hb_prometheus:observe(
                 TotalDuration,
-                http_request_server_duration_seconds,
+                http_server_duration_seconds,
                 [StatusCode]
             ),
             hb_prometheus:observe(
                 ReplyDuration,
-                http_request_server_reply_duration_seconds,
+                http_server_encoding_duration_seconds,
                 [StatusCode]
             )
         end

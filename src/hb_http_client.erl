@@ -562,7 +562,7 @@ open_connection_gun(Host, Port, Peer, Opts) ->
                 #{
                     keepalive =>
                         hb_opts:get(
-                            http_keepalive,
+                            http_client_keepalive,
                             ?DEFAULT_KEEPALIVE_TIMEOUT,
                             Opts
                         )
@@ -570,7 +570,7 @@ open_connection_gun(Host, Port, Peer, Opts) ->
             retry => 0,
             connect_timeout =>
                 hb_opts:get(
-                    http_connect_timeout,
+                    http_client_connect_timeout,
                     ?DEFAULT_CONNECT_TIMEOUT,
                     Opts
                 )
@@ -632,7 +632,7 @@ reply_error([PendingRequest | PendingRequests], Reason) ->
 do_gun_request(PID, Args, Opts) ->
 	Timer =
         inet:start_timer(
-            hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)
+            hb_opts:get(http_client_send_timeout, no_request_send_timeout, Opts)
         ),
 	Method = hb_maps:get(method, Args, undefined, Opts),
 	Path = hb_maps:get(path, Args, undefined, Opts),
@@ -769,7 +769,7 @@ init_prometheus() ->
 	hb_prometheus:declare(gauge, [{name, outbound_connections},
 		{help, "The current number of the open outbound network connections"}]),
 	hb_prometheus:declare(histogram, [
-		{name, http_request_duration_seconds},
+		{name, http_client_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
         {labels, [http_method, status_class, category]},
 		{
@@ -823,7 +823,7 @@ record_duration(Details, Opts) ->
                 ]),
             hb_prometheus:observe(
                 maps:get(<<"duration">>, Details),
-                http_request_duration_seconds,
+                http_client_duration_seconds,
                 Labels
             ),
             maybe_invoke_monitor(

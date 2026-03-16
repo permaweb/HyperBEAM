@@ -77,14 +77,14 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
-            record_partition_metric(StartOffset),
             {ok, #{
                 <<"version">> => Version,
                 <<"codec-device">> => CodecName,
                 <<"start-offset">> => StartOffset,
                 <<"length">> => Length
             }};
-        _ -> not_found
+        _ ->
+            not_found
     end;
 read_offset(_, _) -> not_found.
 
@@ -129,6 +129,7 @@ do_read(StoreOpts, ID) ->
                             {length, Length}
                         }
                     ),
+                    record_partition_metric(StartOffset, ok),
                     Loaded;
                 {error, Reason} ->
                     ?event(
@@ -142,6 +143,7 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
+                    record_partition_metric(StartOffset, not_found),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end
@@ -253,13 +255,12 @@ write_offset(
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
 %% @doc Record the partition that data is found in when it is requested.
-record_partition_metric(Offset) when is_integer(Offset) ->
+record_partition_metric(Offset, Result) when is_integer(Offset) ->
     spawn(fun() -> 
-        Partition = Offset div ?PARTITION_SIZE,
         hb_prometheus:inc(
             counter,
             hb_store_arweave_requests_partition,
-            [Partition],
+            [Offset div ?PARTITION_SIZE, hb_util:bin(Result)],
             1
         )
     end).
@@ -288,7 +289,7 @@ init_prometheus() ->
         counter,
         [
             {name, hb_store_arweave_requests_partition},
-            {labels, [partition]},
+            {labels, [partition, result]},
             {help, "Partition where chunks are being requested"}
         ]
     ),
