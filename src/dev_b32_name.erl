@@ -26,9 +26,7 @@ get(Key, _, _HookMsg, _Opts) ->
 %% @doc If the key is a 52-character binary, attempt to decode it as base32.
 %% Else, return `error`.
 decode(Key) when byte_size(Key) == 52 ->
-    try hb_util:human_id(base32:decode(Key))
-    catch _:_ -> error
-    end;
+    try hb_util:human_id(base32:decode(Key)) catch _:_ -> error end;
 decode(_Key) -> error.
 
 %% @doc Convert an ID into its base32 encoded string representation.
@@ -74,7 +72,7 @@ key_to_id_test() ->
 %% @doc Resolving a 52 char subdomain without a TXID in the path should work.
 empty_path_manifest_test() ->
     TestPath = <<"/">>,
-    Opts = load_manifest_opts(),
+    Opts = manifest_opts(),
     %% Test to load manifest with only subdomain
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
@@ -100,7 +98,7 @@ empty_path_manifest_test() ->
 %% provided should work. 
 resolve_52char_subdomain_asset_if_txid_not_present_test() ->
     TestPath = <<"/assets/ArticleBlock-Dtwjc54T.js">>,
-    Opts = load_manifest_opts(),
+    Opts = manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
@@ -126,7 +124,7 @@ resolve_52char_subdomain_asset_if_txid_not_present_test() ->
 %% is provided should work.
 subdomain_matches_path_id_and_loads_asset_test() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>,
-    Opts = load_manifest_opts(),
+    Opts = manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
@@ -185,7 +183,7 @@ subdomain_does_not_match_path_id_test() ->
 %% the TXID from the assets path. 
 manifest_subdomain_matches_path_id_test() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
-    Opts = load_manifest_opts(),
+    Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -212,7 +210,7 @@ manifest_subdomain_matches_path_id_test() ->
 %% index.
 manifest_subdomain_does_not_match_path_id_test() ->
     TestPath = <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
-    Opts = load_manifest_opts(),
+    Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -291,24 +289,8 @@ subdomain(ID, Opts) ->
 
 %% @doc Returns `Opts' with a test environment preloaded with manifest related
 %% IDs.
-load_manifest_opts() ->
-    TempStore = hb_test_utils:test_store(),
-    BaseOpts = #{ store => [TempStore] },
-    %% Load TX data into the store
-    lists:foreach(
-        fun(Ref) ->
-            hb_test_utils:preload(
-                BaseOpts,
-                <<"test/arbundles.js/ans-104-manifest-", Ref/binary>>
-            )
-        end,
-        [
-            <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>,
-            <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>,
-            <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>
-        ]
-    ),
-    BaseOpts#{
+manifest_opts() ->
+    (dev_manifest:test_env_opts())#{
         name_resolvers => [#{ <<"device">> => <<"b32-name@1.0">> }],
         on =>
             #{

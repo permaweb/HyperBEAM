@@ -2,6 +2,8 @@
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
 -export([index/3, info/0, request/3]).
+%%% Public test exports
+-export([test_env_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -345,13 +347,7 @@ manifest_download_via_raw_endpoint_test_ignore() ->
 
 %% @doc Accessing `/TXID` of a manifest transaction should access the index key.
 manifest_inner_redirect_test() ->
-    %% Define the store
-    LmdbStore = hb_test_utils:test_store(),
-    %% Load transaction information to the store
-    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    %% Start node
-    Opts = #{store => LmdbStore},
+    Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
     ?assertMatch(
@@ -365,11 +361,7 @@ manifest_inner_redirect_test() ->
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
 access_key_path_in_manifest_test() ->
-    LmdbStore = hb_test_utils:test_store(),
-    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    hb_test_utils:preload(LmdbStore, <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>),
-    Opts = #{store => LmdbStore},
+    Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{<<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _ }}},
@@ -383,10 +375,7 @@ access_key_path_in_manifest_test() ->
 %% This works with `not_found.js` but doesn't follow the logic if under a 
 %% folder structure, like `assets/not_found.js .
 manifest_should_fallback_on_not_found_path_test() ->
-    LmdbStore = hb_test_utils:test_store(),
-    hb_test_utils:preload(LmdbStore, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>),
-    hb_test_utils:preload(LmdbStore, <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>),
-    Opts = #{store => LmdbStore},
+    Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
@@ -396,3 +385,28 @@ manifest_should_fallback_on_not_found_path_test() ->
             Opts
         )
     ).
+
+%% @doc Returns `Opts' with the test manifest fixture flow used by `dev_b32_name'.
+test_env_opts() ->
+    TempStore = hb_test_utils:test_store(),
+    BaseOpts = #{store => [TempStore]},
+    lists:foreach(
+        fun(Ref) ->
+            hb_test_utils:preload(
+                BaseOpts,
+                <<"test/arbundles.js/ans-104-manifest-", Ref/binary>>
+            )
+        end,
+        [
+            <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA.bin">>,
+            <<"index-Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM.bin">>,
+            <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>
+        ]
+    ),
+    BaseOpts#{
+        on =>
+            #{
+                <<"request">> =>
+                    [#{<<"device">> => <<"manifest@1.0">>}]
+            }
+    }.
