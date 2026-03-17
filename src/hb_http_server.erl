@@ -164,7 +164,8 @@ new_server(RawNodeMsg) ->
     NodeMsg =
         case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
             {ok, #{ <<"body">> := NodeMsgAfterHook }} when is_map(NodeMsgAfterHook) -> NodeMsgAfterHook;
-            {ok, _R} ->
+            {ok, Response} ->
+                ?event(boot, {start_hook_response, {response, Response}}),
                 %% Fire-and-forget start handlers (e.g. cron) use hook/result => ignore,
                 %% so this clause handles any remaining non-NodeMsg results gracefully.
                 maps:get(<<"body">>, HookMsg);
@@ -182,16 +183,6 @@ new_server(RawNodeMsg) ->
         end,
     % Put server ID into node message so it's possible to update current server
     hb_http:start(),
-    _ServerID =
-        hb_util:human_id(
-            ar_wallet:to_address(
-                hb_opts:get(
-                    priv_wallet,
-                    no_wallet,
-                    NodeMsg
-                )
-            )
-        ),
     % Put server ID into node message so it's possible to update current server
     % params.
     NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),
