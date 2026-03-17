@@ -308,10 +308,10 @@ validate_address(Address) when is_binary(Address) ->
             maybe
                 true ?= (not dev_trie:is_reserved_key(Address))
                     orelse {error, <<"Recipient address uses a reserved internal key.">>},
-                % Check for path separators (security: prevent path traversal)
-                case binary:match(Address, [<<"/">>, <<"\\">>]) of
+                % Check for path separators (security: prevent path traversal) and whitespaces.
+                case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
                     nomatch -> true;
-                    _ -> {error, <<"Recipient address cannot contain path separators.">>}
+                    _ -> {error, <<"Recipient address cannot contain path separators or whitespaces">>}
                 end
             end
     end;
