@@ -181,50 +181,65 @@ handle_events() ->
 handle_events(N) ->
     receive
         {increment, TopicBin, EventName, Count} ->
-            erlang:put(batch_keys, []),
-            N2 = drain_batch(N + 1, TopicBin, EventName, Count, ?BATCH_MAX - 1),
+            {N2, Batch} =
+                drain_batch(
+                    N + 1,
+                    TopicBin,
+                    EventName,
+                    Count,
+                    {#{}, []},
+                    ?BATCH_MAX - 1
+                ),
             hb_prometheus:ensure_started(),
-            Keys = flush_batch(),
+            Keys = flush_batch(Batch),
             check_overload(Keys, N, N2),
             handle_events(N2)
     end.
 
-drain_batch(N, LastT, LastE, Acc, 0) ->
-    pd_inc({batch, LastT, LastE}, Acc),
-    N;
-drain_batch(N, LastT, LastE, Acc, Remaining) ->
+drain_batch(N, LastT, LastE, Acc, Batch, 0) ->
+    {N, batch_inc({batch, LastT, LastE}, Acc, Batch)};
+drain_batch(N, LastT, LastE, Acc, Batch, Remaining) ->
     receive
         {increment, TopicBin, EventName, Count} ->
             case TopicBin =:= LastT andalso EventName =:= LastE of
                 true ->
-                    drain_batch(N + 1, LastT, LastE, Acc + Count, Remaining - 1);
+                    drain_batch(
+                        N + 1,
+                        LastT,
+                        LastE,
+                        Acc + Count,
+                        Batch,
+                        Remaining - 1
+                    );
                 false ->
-                    pd_inc({batch, LastT, LastE}, Acc),
-                    drain_batch(N + 1, TopicBin, EventName, Count, Remaining - 1)
+                    drain_batch(
+                        N + 1,
+                        TopicBin,
+                        EventName,
+                        Count,
+                        batch_inc({batch, LastT, LastE}, Acc, Batch),
+                        Remaining - 1
+                    )
             end
     after 0 ->
-        pd_inc({batch, LastT, LastE}, Acc),
-        N
+        {N, batch_inc({batch, LastT, LastE}, Acc, Batch)}
     end.
 
-pd_inc(Key, Count) ->
-    case erlang:get(Key) of
+batch_inc(Key, Count, {Counts, Keys}) ->
+    case maps:get(Key, Counts, undefined) of
         undefined ->
-            erlang:put(Key, Count),
-            erlang:put(batch_keys, [Key | erlang:get(batch_keys)]);
+            {Counts#{ Key => Count }, [Key | Keys]};
         Old when is_integer(Old) ->
-            erlang:put(Key, Old + Count)
+            {Counts#{ Key => Old + Count }, Keys}
     end.
 
-flush_batch() ->
-    Keys = erlang:get(batch_keys),
+flush_batch({Counts, Keys}) ->
     lists:foreach(
         fun(Key = {batch, Topic, Event}) ->
-            prometheus_counter:inc(<<"event">>, [Topic, Event], erlang:get(Key)),
-            erlang:erase(Key)
+            prometheus_counter:inc(<<"event">>, [Topic, Event], maps:get(Key, Counts))
         end,
-        Keys),
-    erlang:put(batch_keys, []),
+        Keys
+    ),
     Keys.
 
 check_overload(Keys, Prev, N) ->
@@ -334,9 +349,12 @@ benchmark_drain_rate_test() ->
     erlang:suspend_process(EventPid),
     fill_mailbox(EventPid, N),
     erlang:resume_process(EventPid),
-    {DrainTime, _} = timer:tc(fun() ->
-        wait_drain(EventPid, 30000)
-    end),
+    {DrainTime, _} =
+        timer:tc(
+            fun() ->
+                wait_drain(EventPid, 30000)
+            end
+        ),
     DrainRate = round(N / (max(1, DrainTime) / 1_000_000)),
     hb_test_utils:benchmark_print(
         <<"Drained">>, <<"events">>, DrainRate, 1),
