@@ -110,5 +110,5 @@ perform_mint(Base, RawQuantities, Opts) ->
                 end,
                 maps:to_list(Quantities)
             ),
-        dev_process_lib:send(Notices, NewBaseWithBalAndSupply, Opts)
+        {ok, dev_process_outbox:send(Notices, NewBaseWithBalAndSupply, Opts)}
     end.
