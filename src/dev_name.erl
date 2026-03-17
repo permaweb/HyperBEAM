@@ -140,7 +140,7 @@ maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
                         }
                     ),
                     [ResolvedMsg|ReqMsgsRest];
-                _ -> [ResolvedMsg, as_message_or_link(OldBase)|ReqMsgsRest]
+                _ -> [ResolvedMsg, OldBase|ReqMsgsRest]
             end
     end.
 
@@ -150,11 +150,6 @@ permissive_id(ID, _Opts) when ?IS_ID(ID) -> ID;
 permissive_id({link, ID, _LinkOpts}, _Opts) -> ID;
 permissive_id({as, _Device, Msg}, Opts) -> permissive_id(Msg, Opts);
 permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
-
-%% @doc Ensure that a message reference is converted to a message or link.
-as_message_or_link(ID) when ?IS_ID(ID) -> {link, ID, #{}};
-as_message_or_link(Msg) when is_map(Msg) -> Msg;
-as_message_or_link(Link) when ?IS_LINK(Link) -> Link.
 
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
