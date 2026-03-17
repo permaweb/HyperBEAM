@@ -240,7 +240,7 @@ action_as_mint_device(Action, Base, Req, Opts) ->
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
-            send_error(Base, Req, <<"unsupported action: " /binary, Action>>, Opts)
+            send_error(Base, Req, <<"unsupported action: ", Action/binary>>, Opts)
     end.
 
 %% @doc Run a given `path' on the mint device.
@@ -283,10 +283,16 @@ secure_set(Base, Assignment, Opts) ->
 %% @doc Enforce that the caller is the `set' authority.
 enforce_set_authority(Base, Req, Opts) ->
     Setter = hb_ao:get(<<"from">>, Req, Opts),
-    case hb_ao:get(<<"set-authority">>, Base, Opts) of
-        Setter -> true;
-        not_found -> {error, <<"No set-authority found in `Base' state.">>};
-        _ -> {error, <<"Caller is not the `set-authority'.">>}
+    SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+    case {Setter, SetAuthority} of
+        {not_found, _} -> 
+            {error, <<"No normalized `from` key found in request.">>};
+        {_, not_found} -> 
+            {error, <<"No set-authority found in `Base' state.">>};
+        {S, S} -> 
+            true;
+        _ -> 
+            {error, <<"Caller is not the `set-authority'.">>}
     end.
 
 %%% Helper functions.
