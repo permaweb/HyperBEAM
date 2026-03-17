@@ -18,9 +18,14 @@ mint(Base, Assignment, Opts) ->
 
 enforce_mint_authority(Base, Req, Opts) ->
     Minter = hb_ao:get(<<"from">>, Req, Opts),
-    case hb_ao:get(<<"mint-authority">>, Base, Opts) of
-        Minter -> true;
-        not_found -> {error, <<"Mint authority not found.">>};
+    MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
+    case {Minter, MintAuthority} of
+        {not_found, _} -> 
+            {error, <<"Minter not found.">>};
+        {_, not_found} -> 
+            {error, <<"Mint authority not found.">>};
+        {M, M} -> 
+            true;
         _ -> {error, <<"Mint authority mismatch.">>}
     end.
     
