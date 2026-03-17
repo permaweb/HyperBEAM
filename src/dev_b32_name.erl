@@ -209,7 +209,7 @@ manifest_subdomain_matches_path_id_test() ->
 %% In this case, sinse no assets exists with this TX ID, it should load the 
 %% index.
 manifest_subdomain_does_not_match_path_id_test() ->
-    TestPath = <<"/oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">>,
+    TestPath = <<"/1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
@@ -218,7 +218,7 @@ manifest_subdomain_does_not_match_path_id_test() ->
             #{
                 <<"commitments">> :=
                     #{
-                        <<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _
+                        <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">> := _
                     }
             }
         }, 

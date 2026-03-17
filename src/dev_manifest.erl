@@ -389,7 +389,14 @@ manifest_should_fallback_on_not_found_path_test() ->
 %% @doc Returns `Opts' with the test manifest fixture flow used by `dev_b32_name'.
 test_env_opts() ->
     TempStore = hb_test_utils:test_store(),
-    BaseOpts = #{store => [TempStore]},
+    BaseOpts = 
+        #{
+            store => 
+                [
+                    TempStore
+                    #{<<"store-module">> => hb_store_gateway}
+                ]
+        },
     lists:foreach(
         fun(Ref) ->
             hb_test_utils:preload(
