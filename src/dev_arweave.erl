@@ -236,11 +236,12 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
 %% so to read the data associated with their IDs, we must first read the header
 %% chunk, deserialize it, and offset our data read from its starting offset.
 head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
+    ?event(debug_raw, {head_raw_ans104, {txid, TXID}, {arweave_offset, ArweaveOffset}, {length, Length}}),
     HeaderReq =
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => ArweaveOffset + 1,
-            <<"length">> => ?DATA_CHUNK_SIZE
+            <<"length">> => min(Length, ?DATA_CHUNK_SIZE)
         },
     case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
         {ok, HeaderChunk} ->
