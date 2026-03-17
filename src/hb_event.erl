@@ -187,7 +187,7 @@ handle_events(N) ->
     end.
 
 check_overload(Last, N) ->
-    case N div 1000 of
+    case N rem 1000 of
         0 ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
@@ -282,6 +282,7 @@ benchmark_increment_test() ->
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
 batch_correctness_test() -> ok.
+overload_checks_past_first_thousand_test() -> ok.
 -else.
 benchmark_drain_rate_test() ->
     NumKeys = 50,
@@ -344,6 +345,40 @@ batch_correctness_test() ->
         ?assertEqual(PerKey, AfterVal - BeforeVal)
     end, BeforeCounts),
     ok.
+
+overload_checks_past_first_thousand_test() ->
+    {EventPid, Ref} =
+        spawn_monitor(
+            fun() ->
+                hb_prometheus:ensure_started(),
+                ensure_event_counter(),
+                handle_events(1000)
+            end
+        ),
+    erlang:suspend_process(EventPid),
+    Topic = lists:duplicate(256, $a),
+    Event = lists:duplicate(256, $b),
+    lists:foreach(
+        fun(_) ->
+            EventPid ! {increment, Topic, Event, 1}
+        end,
+        lists:seq(1, ?OVERLOAD_QUEUE_LENGTH + 100)
+    ),
+    {message_queue_len, QueueLen} =
+        erlang:process_info(EventPid, message_queue_len),
+    {memory, MemorySize} = erlang:process_info(EventPid, memory),
+    ?assert(QueueLen > ?OVERLOAD_QUEUE_LENGTH),
+    ?assert(MemorySize > ?MAX_MEMORY),
+    erlang:resume_process(EventPid),
+    receive
+        {'DOWN', Ref, process, EventPid, memory_overload} ->
+            ok;
+        {'DOWN', Ref, process, EventPid, Reason} ->
+            ?assertEqual(memory_overload, Reason)
+    after 5000 ->
+        exit(EventPid, kill),
+        error(memory_overload_not_triggered)
+    end.
 
 deep_get([Group, Name], Map, Default) ->
     case maps:get(Group, Map, undefined) of
