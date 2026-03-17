@@ -20,7 +20,7 @@
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
--export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
+-export([count/2, mean/1, stddev/1, variance/1, weighted_random/1, shuffle/1]).
 -export([unique/1]).
 -export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
 -export([unquote/1, split_escaped_single/2]).

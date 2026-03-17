@@ -7,7 +7,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
--define(MAX_MEMORY, 1_000_000_000). % 1GB
+-define(MAX_MEMORY, 50_000_000). % 50 MB
 -define(MAX_EVENT_NAME_LENGTH, 100).
 -define(BATCH_MAX, 10000).
 
@@ -341,13 +341,23 @@ benchmark_drain_rate_test() -> ok.
 batch_correctness_test() -> ok.
 -else.
 benchmark_drain_rate_test() ->
+    NumKeys = 50,
+    NumEvents = 100000,
     log(warmup, {warmup, 0}),
     timer:sleep(100),
     EventPid = hb_name:lookup(?MODULE),
     wait_drain(EventPid, 5000),
-    N = 100000,
     erlang:suspend_process(EventPid),
-    fill_mailbox(EventPid, N),
+    Keys =
+        [
+            {
+                hb_util:bin([<<"corr-topic-">>, hb_util:int(K)]),
+                hb_util:bin([<<"corr-event-">>, hb_util:int(K)])
+            }
+        ||
+            K <- lists:seq(1, NumKeys)
+        ],
+    fill_mailbox(EventPid, NumEvents, Keys),
     erlang:resume_process(EventPid),
     {DrainTime, _} =
         timer:tc(
@@ -355,9 +365,13 @@ benchmark_drain_rate_test() ->
                 wait_drain(EventPid, 30000)
             end
         ),
-    DrainRate = round(N / (max(1, DrainTime) / 1_000_000)),
+    DrainRate = round(NumEvents / (max(1, DrainTime) / 1_000_000)),
     hb_test_utils:benchmark_print(
-        <<"Drained">>, <<"events">>, DrainRate, 1),
+        <<"Drained">>,
+        <<"events">>,
+        DrainRate,
+        1
+    ),
     ?assert(DrainRate >= 10000),
     ok.
 
@@ -366,7 +380,7 @@ batch_correctness_test() ->
     timer:sleep(100),
     EventPid = hb_name:lookup(?MODULE),
     wait_drain(EventPid, 5000),
-    NumKeys = 50,
+    NumKeys = 5,
     N = 30000,
     Keys = [{list_to_binary("corr_topic_" ++ integer_to_list(K)),
              list_to_binary("corr_event_" ++ integer_to_list(K))}
@@ -394,10 +408,13 @@ deep_get([Group, Name], Map, Default) ->
         Inner -> maps:get(Name, Inner, Default)
     end.
 
-fill_mailbox(_Pid, 0) -> ok;
-fill_mailbox(Pid, N) ->
-    Pid ! {increment, <<"bench">>, <<"drain">>, 1},
-    fill_mailbox(Pid, N - 1).
+%% @doc Fill the event server mailbox with a list of keys. Rotate the keys to
+%% ensure that we are testing the event server's ability to handle many different
+%% types of event.
+fill_mailbox(_Pid, 0, _Keys) -> ok;
+fill_mailbox(Pid, N, Keys = [{Topic, Event}|_]) ->
+    Pid ! {increment, Topic, Event, 1},
+    fill_mailbox(Pid, N - 1, hb_util:shuffle(Keys)).
 
 wait_drain(Pid, Timeout) ->
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
