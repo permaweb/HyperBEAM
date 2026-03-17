@@ -28,20 +28,8 @@ worker_loop() ->
 execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
         ?event(debug_bundler, log_task(executing_task, Task, [])),
-        % Get price and anchor
-        {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
-        DataSize = TX#tx.data_size,
-        PriceResult = get_price(DataSize, Opts),
-        AnchorResult = get_anchor(Opts),
-        case {PriceResult, AnchorResult} of
-            {{ok, Price}, {ok, Anchor}} ->
-                % Sign the TX
-                Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-                SignedTX = ar_tx:sign(TX#tx{ anchor = Anchor, reward = Price }, Wallet),
-                % TODO: as a future improvement we should be able to recover
-                % from the TX header alone, but we have to be careful about
-                % how we rebuild the TX data to ensure it matches the already
-                % posted TX.
+        case build_signed_tx(Items, Opts) of
+            {ok, SignedTX} ->
                 Committed = hb_message:convert(
                     SignedTX,
                     #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
@@ -65,7 +53,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                         {ok, Committed};
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
-            {PriceErr, AnchorErr} ->
+            {error, {PriceErr, AnchorErr}} ->
                 ?event(bundler_short,
                     log_task(task_failed, Task, [
                         {price, PriceErr},
@@ -160,6 +148,24 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
             {error, Err}
     end.
 
+%% @doc Build and sign a bundle TX without posting it.
+build_signed_tx(Items, Opts) ->
+    {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
+    DataSize = TX#tx.data_size,
+    PriceResult = get_price(DataSize, Opts),
+    AnchorResult = get_anchor(Opts),
+    case {PriceResult, AnchorResult} of
+        {{ok, Price}, {ok, Anchor}} ->
+            Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+            SignedTX = ar_tx:sign(
+                TX#tx{anchor = Anchor, reward = Price},
+                Wallet
+            ),
+            {ok, SignedTX};
+        {PriceErr, AnchorErr} ->
+            {error, {PriceErr, AnchorErr}}
+    end.
+
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -211,3 +217,68 @@ format_timestamp() ->
     {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
     Millisecs = (MegaSecs * 1000000 + Secs) * 1000 + (MicroSecs div 1000),
     calendar:system_time_to_rfc3339(Millisecs, [{unit, millisecond}, {offset, "Z"}]).
+
+build_signed_tx_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        priv_wallet => ar_wallet:new(),
+        store => hb_test_utils:test_store()
+    },
+    try
+        Timestamp = 12344567,
+        ListValue = [<<"a">>, <<"b">>, <<"c">>],
+        StructuredItems = [
+            #{
+                <<"body">> => <<"body1">>,
+                <<"tag1">> => <<"value1">>,
+                <<"timestamp">> => Timestamp
+            },
+            #{
+                <<"body">> => <<"body3">>,
+                <<"tag3">> => <<"value3">>,
+                <<"list">> => ListValue
+            },
+            #{
+                <<"body">> => <<"body2">>,
+                <<"tag2">> => <<"value2">>
+            }
+        ],
+        Items = [
+            hb_message:commit(
+                Item,
+                TestOpts,
+                #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
+            )
+        || Item <- StructuredItems],
+        {ok, SignedTX} = build_signed_tx(Items, TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        ?assertEqual(Anchor, SignedTX#tx.anchor),
+        ?assertEqual(Price, SignedTX#tx.reward),
+        ?event(debug_test, {signed_tx, SignedTX}),
+        BundledTX = ar_bundles:deserialize(SignedTX),
+        ?event(debug_test, {bundled_tx, BundledTX}),
+        BundledItems = hb_util:numbered_keys_to_list(BundledTX#tx.data, #{}),
+        lists:foreach(
+            fun(Item) ->
+                ?assert(ar_bundles:verify_item(Item))
+            end,
+            BundledItems
+        ),
+        BundledStructuredItems = [
+            hb_message:convert(
+                Item,
+                <<"structured@1.0">>,
+                <<"ans104@1.0">>,
+                TestOpts
+            )
+        || Item <- BundledItems],
+        ?assertEqual(lists:reverse(Items), BundledStructuredItems),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.

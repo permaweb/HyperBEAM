@@ -150,7 +150,14 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
 %% @doc List of ans104 items is bundled into a single L1 transaction.
 to(RawList, Req, Opts) when is_list(RawList) ->
     List = lists:map(
-        fun(Item) -> hb_util:ok(dev_codec_ans104:to(Item, Req, Opts)) end,
+        fun(Item) -> 
+            hb_message:convert(
+                Item,
+                #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+                #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+                Opts
+            )
+        end,
         RawList),
     TX = #tx{
         format = 2,
