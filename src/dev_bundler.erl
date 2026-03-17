@@ -16,6 +16,8 @@
 %%% transaction is dispatched.
 -module(dev_bundler).
 -export([tx/3, item/3, ensure_server/1, stop_server/0, get_state/0]).
+%%% Test-only exports.
+-export([start_mock_gateway/1]).
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
