@@ -6,10 +6,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(OVERLOAD_QUEUE_LENGTH, 10000).
+-define(OVERLOAD_QUEUE_LENGTH, 10_000).
 -define(MAX_MEMORY, 50_000_000). % 50 MB
 -define(MAX_EVENT_NAME_LENGTH, 100).
--define(BATCH_MAX, 10000).
 
 -ifdef(NO_EVENTS).
 log(_X) -> ok.
@@ -180,82 +179,26 @@ handle_events() ->
     handle_events(0).
 handle_events(N) ->
     receive
-        {increment, TopicBin, EventName, Count} ->
-            {N2, Batch} =
-                drain_batch(
-                    N + 1,
-                    TopicBin,
-                    EventName,
-                    Count,
-                    {#{}, []},
-                    ?BATCH_MAX - 1
-                ),
-            hb_prometheus:ensure_started(),
-            Keys = flush_batch(Batch),
-            check_overload(Keys, N, N2),
-            handle_events(N2)
+        {increment, Topic, Event, Count} ->
+            BatchCount = 0,
+            prometheus_counter:inc(<<"event">>, [Topic, Event], Count + BatchCount),
+            check_overload({Topic, Event}, N),
+            handle_events(N + 1)
     end.
 
-drain_batch(N, LastT, LastE, Acc, Batch, 0) ->
-    {N, batch_inc({batch, LastT, LastE}, Acc, Batch)};
-drain_batch(N, LastT, LastE, Acc, Batch, Remaining) ->
-    receive
-        {increment, TopicBin, EventName, Count} ->
-            case TopicBin =:= LastT andalso EventName =:= LastE of
-                true ->
-                    drain_batch(
-                        N + 1,
-                        LastT,
-                        LastE,
-                        Acc + Count,
-                        Batch,
-                        Remaining - 1
-                    );
-                false ->
-                    drain_batch(
-                        N + 1,
-                        TopicBin,
-                        EventName,
-                        Count,
-                        batch_inc({batch, LastT, LastE}, Acc, Batch),
-                        Remaining - 1
-                    )
-            end
-    after 0 ->
-        {N, batch_inc({batch, LastT, LastE}, Acc, Batch)}
-    end.
-
-batch_inc(Key, Count, {Counts, Keys}) ->
-    case maps:get(Key, Counts, undefined) of
-        undefined ->
-            {Counts#{ Key => Count }, [Key | Keys]};
-        Old when is_integer(Old) ->
-            {Counts#{ Key => Old + Count }, Keys}
-    end.
-
-flush_batch({Counts, Keys}) ->
-    lists:foreach(
-        fun(Key = {batch, Topic, Event}) ->
-            prometheus_counter:inc(<<"event">>, [Topic, Event], maps:get(Key, Counts))
-        end,
-        Keys
-    ),
-    Keys.
-
-check_overload(Keys, Prev, N) ->
-    case N div 1000 > Prev div 1000 of
-        true ->
+check_overload(Last, N) ->
+    case N div 1000 of
+        0 ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
                     {memory, MemorySize} = erlang:process_info(self(), memory),
-                    SampleKeys = lists:sublist(Keys, 5),
                     case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
                         1 ->
                             ?debug_print(
                                 {warning,
                                     prometheus_event_queue_overloading,
                                     {queue, Len},
-                                    {sample_keys, SampleKeys},
+                                    {last_event, Last},
                                     {memory_bytes, MemorySize}
                                 }
                             );
@@ -268,7 +211,7 @@ check_overload(Keys, Prev, N) ->
                                     prometheus_event_queue_terminating_on_memory_overload,
                                     {queue, Len},
                                     {memory_bytes, MemorySize},
-                                    {sample_keys, SampleKeys}
+                                    {last_event, Last}
                                 }
                             ),
                             exit(memory_overload);
@@ -381,7 +324,7 @@ batch_correctness_test() ->
     EventPid = hb_name:lookup(?MODULE),
     wait_drain(EventPid, 5000),
     NumKeys = 5,
-    N = 30000,
+    N = 30_000,
     Keys = [{list_to_binary("corr_topic_" ++ integer_to_list(K)),
              list_to_binary("corr_event_" ++ integer_to_list(K))}
             || K <- lists:seq(1, NumKeys)],
