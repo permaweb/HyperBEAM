@@ -176,8 +176,6 @@ httpc_req(Args, Opts) ->
     end.
 
 hackney_req(Args, Opts) ->
-    hackney_req(Args, false, Opts).
-hackney_req(Args, ReestablishedConnection, Opts) ->
     #{
         peer := Peer,
         path := Path,
@@ -188,72 +186,26 @@ hackney_req(Args, ReestablishedConnection, Opts) ->
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
         {ok, {Host, Port}} ->
-            Transport = case Port of
-                443 -> hackney_ssl;
-                _ -> hackney_tcp
+            Scheme = case Port of
+                443 -> <<"https">>;
+                _ -> <<"http">>
             end,
+            URL = <<Scheme/binary, "://",
+                (hb_util:bin(Host))/binary, ":",
+                (integer_to_binary(Port))/binary,
+                Path/binary>>,
             Method = string:uppercase(hb_util:bin(RawMethod)),
             HeaderList =
                 [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
-            ConnKey = {hackney_conn, Host, Port},
-            case hackney_get_conn(ConnKey, Host, Port, Transport) of
-                {ok, ConnRef} ->
-                    case hackney_do_request(ConnRef, Method, Path, HeaderList, Body) of
-                        {ok, _Status, _RespHeaders, _RespBody} = Result ->
-                            Result;
-                        {error, _Reason} = Err2 ->
-                            erase(ConnKey),
-                            catch hackney:close(ConnRef),
-                            case ReestablishedConnection of
-                                true -> Err2;
-                                false -> hackney_req(Args, true, Opts)
-                            end
-                    end;
-                {error, _} = Err3 ->
-                    Err3
+            HackneyOpts = [with_body],
+            case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
+                {ok, Status, RespHeaders, RespBody} ->
+                    {ok, Status, RespHeaders, RespBody};
+                {ok, Status, RespHeaders} ->
+                    {ok, Status, RespHeaders, <<>>};
+                {error, _Reason} = Err2 ->
+                    Err2
             end
-    end.
-
-hackney_get_conn(ConnKey, Host, Port, Transport) ->
-    case get(ConnKey) of
-        ConnRef when is_reference(ConnRef) ->
-            {ok, ConnRef};
-        _ ->
-            hackney_new_conn(ConnKey, Host, Port, Transport)
-    end.
-
-hackney_new_conn(ConnKey, Host, Port, Transport) ->
-    case get(ConnKey) of
-        OldRef when is_reference(OldRef) ->
-            catch hackney:close(OldRef);
-        _ -> ok
-    end,
-    case hackney:connect(Transport, Host, Port, [{pool, false}]) of
-        {ok, ConnRef} ->
-            put(ConnKey, ConnRef),
-            {ok, ConnRef};
-        {error, _Reason} = Err ->
-            Err
-    end.
-
-hackney_do_request(ConnRef, Method, Path, HeaderList, Body) ->
-    case hackney:send_request(ConnRef, {Method, Path, HeaderList, Body}) of
-        {ok, Status, RespHeaders, Ref} when is_reference(Ref) ->
-            read_hackney_body(Ref, Status, RespHeaders);
-        {ok, Status, RespHeaders, RespBody} when is_binary(RespBody) ->
-            {ok, Status, RespHeaders, RespBody};
-        {ok, Status, RespHeaders} ->
-            {ok, Status, RespHeaders, <<>>};
-        {error, _Reason} = Err ->
-            Err
-    end.
-
-read_hackney_body(Ref, Status, RespHeaders) ->
-    case hackney:body(Ref) of
-        {ok, RespBody} ->
-            {ok, Status, RespHeaders, RespBody};
-        {error, _} = Err ->
-            Err
     end.
 
 gun_req(Args, Opts) ->
