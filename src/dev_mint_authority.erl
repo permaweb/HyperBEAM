@@ -17,16 +17,20 @@ mint(Base, Assignment, Opts) ->
     end.
 
 enforce_mint_authority(Base, Req, Opts) ->
-    Minter = hb_ao:get(<<"from">>, Req, Opts),
-    MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
-    case {Minter, MintAuthority} of
-        {not_found, _} -> 
-            {error, <<"Minter not found.">>};
-        {_, not_found} -> 
-            {error, <<"Mint authority not found.">>};
-        {M, M} -> 
-            true;
-        _ -> {error, <<"Mint authority mismatch.">>}
+    maybe
+        Minter = hb_ao:get(<<"from">>, Req, Opts),
+        MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
+        true ?= dev_token:validate_address(Minter),
+        true ?= dev_token:validate_address(MintAuthority),
+        case {Minter, MintAuthority} of
+            {not_found, _} -> 
+                {error, <<"Minter not found.">>};
+            {_, not_found} -> 
+                {error, <<"Mint authority not found.">>};
+            {M, M} -> 
+                true;
+            _ -> {error, <<"Mint authority mismatch.">>}
+        end
     end.
     
 mint_single(Base, Req, Opts) ->
@@ -55,6 +59,13 @@ perform_mint(Base, RawQuantities, Opts) ->
             RawQuantities
         ),
         ?event({filtered_quantities, Quantities}),
+        % validate address
+        true ?= 
+            lists:all(
+                fun(Addr) -> true =:= dev_token:validate_address(Addr) end,
+                maps:keys(Quantities)
+            )
+            orelse {error, <<"Mint recipients must be valid addresses">>},
         true ?=
             lists:all(
                 fun(Q) -> is_integer(Q) andalso (Q >= 0) end,
