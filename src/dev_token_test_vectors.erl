@@ -411,6 +411,43 @@ mint_authority_mismatch_rejected_test() ->
     ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
     ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
 
+batch_mint_reserved_recipient_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Mint recipients must be valid addresses">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Minter),
+                    <<"mode">> => <<"batch">>,
+                    <<"quantities">> => #{
+                        <<"device">> => 1,
+                        Recipient => 5
+                    }
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
