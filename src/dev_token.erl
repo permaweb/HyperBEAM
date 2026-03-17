@@ -231,14 +231,15 @@ normalize_mint(Base, Assignment, Opts) ->
 is_supported_mint_action(Action) ->
     lists:member(Action, ?MINT_ACTIONS).
 
-%% @doc Verify if the action is a supported path on the mint device interdface,
-%% and if so, switch to the mint device and run it.
+%% @doc Verify if the action is a supported path on the mint device interface,
+%% and if so, switch to the mint device and run it. Unsupported actions fall through
+%% send_error/4 codepath.
 action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
-            {ok, Base}
+            send_error(Base, Req, <<"unsupported action: " /binary, Action>>, Opts)
     end.
 
 %% @doc Run a given `path' on the mint device.
