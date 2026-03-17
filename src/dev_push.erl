@@ -1263,7 +1263,7 @@ nested_push_prompts_encoding_change() ->
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
-    ?event(push_debug, {opts, Opts}),
+    ?event(debug_push, {opts, Opts}),
     Base = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Base, Opts),
     {ok, SchedInit} =

@@ -105,7 +105,7 @@ recover_bundle(ServerPID, TXID, Status, Opts) ->
                     Opts,
                     fun(ItemID, _Item) ->
                         ?event(
-                            bundler_debug,
+                            debug_bundler,
                             {loaded_bundle_item,
                                 {tx_id, {explicit, TXID}},
                                 {item_id, {explicit, ItemID}}
