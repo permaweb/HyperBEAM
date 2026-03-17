@@ -377,6 +377,40 @@ transfer_basic_test() ->
     % % Verify total supply unchanged
     % ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
 
+mint_authority_mismatch_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    NotMinter = ar_wallet:new(),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Mint authority mismatch.">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(NotMinter),
+                    <<"recipient">> => Recipient,
+                    <<"quantity">> => 1
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
