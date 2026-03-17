@@ -6,8 +6,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(OVERLOAD_QUEUE_LENGTH, 10000).
--define(MAX_MEMORY, 1_000_000_000). % 1GB
+-define(OVERLOAD_QUEUE_LENGTH, 10_000).
+-define(MAX_MEMORY, 50_000_000). % 50 MB
 -define(MAX_EVENT_NAME_LENGTH, 100).
 
 -ifdef(NO_EVENTS).
@@ -176,12 +176,21 @@ ensure_event_counter() ->
         ]).
 
 handle_events() ->
+    handle_events(0).
+handle_events(N) ->
     receive
-        {increment, TopicBin, EventName, Count} ->
+        {increment, Topic, Event, Count} ->
+            BatchCount = 0,
+            prometheus_counter:inc(<<"event">>, [Topic, Event], Count + BatchCount),
+            check_overload({Topic, Event}, N),
+            handle_events(N + 1)
+    end.
+
+check_overload(Last, N) ->
+    case N div 1000 of
+        0 ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
-                    % Print a warning, but do so less frequently the more
-                    % overloaded the system is.
                     {memory, MemorySize} = erlang:process_info(self(), memory),
                     case rand:uniform(max(1000, Len - ?OVERLOAD_QUEUE_LENGTH)) of
                         1 ->
@@ -189,14 +198,12 @@ handle_events() ->
                                 {warning,
                                     prometheus_event_queue_overloading,
                                     {queue, Len},
-                                    {current_message, EventName},
+                                    {last_event, Last},
                                     {memory_bytes, MemorySize}
                                 }
                             );
                         _ -> ignored
                     end,
-                    % If the size of this process is too large, exit such that
-                    % we can be restarted by the next caller.
                     case MemorySize of
                         MemorySize when MemorySize > ?MAX_MEMORY ->
                             ?debug_print(
@@ -204,16 +211,15 @@ handle_events() ->
                                     prometheus_event_queue_terminating_on_memory_overload,
                                     {queue, Len},
                                     {memory_bytes, MemorySize},
-                                    {current_message, EventName}
+                                    {last_event, Last}
                                 }
                             ),
                             exit(memory_overload);
                         _ -> no_action
                     end;
                 _ -> ignored
-            end,
-            hb_prometheus:inc(counter, <<"event">>, [TopicBin, EventName], Count),
-            handle_events()
+            end;
+        _ -> ok
     end.
 
 parse_name(Name) when is_tuple(Name) ->
@@ -271,3 +277,102 @@ benchmark_increment_test() ->
     hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),
     ok.
+
+-ifdef(NO_EVENTS).
+benchmark_drain_rate_test() -> ok.
+batch_correctness_test() -> ok.
+-else.
+benchmark_drain_rate_test() ->
+    NumKeys = 50,
+    NumEvents = 100000,
+    log(warmup, {warmup, 0}),
+    timer:sleep(100),
+    EventPid = hb_name:lookup(?MODULE),
+    wait_drain(EventPid, 5000),
+    erlang:suspend_process(EventPid),
+    Keys =
+        [
+            {
+                hb_util:bin([<<"corr-topic-">>, hb_util:int(K)]),
+                hb_util:bin([<<"corr-event-">>, hb_util:int(K)])
+            }
+        ||
+            K <- lists:seq(1, NumKeys)
+        ],
+    fill_mailbox(EventPid, NumEvents, Keys),
+    erlang:resume_process(EventPid),
+    {DrainTime, _} =
+        timer:tc(
+            fun() ->
+                wait_drain(EventPid, 30000)
+            end
+        ),
+    DrainRate = round(NumEvents / (max(1, DrainTime) / 1_000_000)),
+    hb_test_utils:benchmark_print(
+        <<"Drained">>,
+        <<"events">>,
+        DrainRate,
+        1
+    ),
+    ?assert(DrainRate >= 10000),
+    ok.
+
+batch_correctness_test() ->
+    log(warmup, {warmup, 0}),
+    timer:sleep(100),
+    EventPid = hb_name:lookup(?MODULE),
+    wait_drain(EventPid, 5000),
+    NumKeys = 5,
+    N = 30_000,
+    Keys = [{list_to_binary("corr_topic_" ++ integer_to_list(K)),
+             list_to_binary("corr_event_" ++ integer_to_list(K))}
+            || K <- lists:seq(1, NumKeys)],
+    Before = counters(),
+    BeforeCounts = [{T, E, deep_get([T, E], Before, 0)} || {T, E} <- Keys],
+    erlang:suspend_process(EventPid),
+    lists:foreach(fun(I) ->
+        {T, E} = lists:nth((I rem NumKeys) + 1, Keys),
+        EventPid ! {increment, T, E, 1}
+    end, lists:seq(1, N)),
+    erlang:resume_process(EventPid),
+    wait_drain(EventPid, 30000),
+    After = counters(),
+    PerKey = N div NumKeys,
+    lists:foreach(fun({T, E, BeforeVal}) ->
+        AfterVal = deep_get([T, E], After, 0),
+        ?assertEqual(PerKey, AfterVal - BeforeVal)
+    end, BeforeCounts),
+    ok.
+
+deep_get([Group, Name], Map, Default) ->
+    case maps:get(Group, Map, undefined) of
+        undefined -> Default;
+        Inner -> maps:get(Name, Inner, Default)
+    end.
+
+%% @doc Fill the event server mailbox with a list of keys. Rotate the keys to
+%% ensure that we are testing the event server's ability to handle many different
+%% types of event.
+fill_mailbox(_Pid, 0, _Keys) -> ok;
+fill_mailbox(Pid, N, Keys = [{Topic, Event}|_]) ->
+    Pid ! {increment, Topic, Event, 1},
+    fill_mailbox(Pid, N - 1, hb_util:shuffle(Keys)).
+
+wait_drain(Pid, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    wait_drain_loop(Pid, Deadline).
+
+wait_drain_loop(Pid, Deadline) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, 0} -> ok;
+        {message_queue_len, _} ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> error(drain_timeout);
+                false ->
+                    timer:sleep(10),
+                    wait_drain_loop(Pid, Deadline)
+            end;
+        undefined ->
+            error(event_server_dead)
+    end.
+-endif.
