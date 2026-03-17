@@ -177,38 +177,28 @@ generate_pot_fields(Params, Opts) ->
     Resources = hb_maps:get(resources, Params, #{}, Opts),
     T = hb_maps:get(t, Params, 0, Opts),
     LastDrip = hb_maps:get(last_drip, Params, T, Opts),
-    % Normalize all user deposits in all resources by folding over each in turn
-    % and calling the `modify_deposit_state` function to update the state. This
-    % ensures that all values are tracked correctly.
-    hb_maps:fold(
-        fun(ResourceID, Resource, ResourceLevelState) ->
-            hb_maps:fold(
-                fun(User, Quantity, UserLevelState) ->
-                    dev_pot:modify_deposit_state(
-                        User,
-                        ResourceID,
-                        0,
-                        UserLevelState,
-                        Opts
-                    )
-                end,
-                hb_maps:get(<<"deposits">>, Resource, #{}, Opts),
-                ResourceLevelState,
-                Opts
-            )
-        end,
-        0,
-        #{
-            <<"mint-device">> => <<"pot@1.0">>,
-            <<"mint-cap">> => MintCap,
-            <<"mint-prop-numerator">> => MintPropNumerator,
-            <<"mint-prop-denominator">> => MintPropDenominator,
-            <<"resources">> => Resources,
-            <<"t">> => T,
-            <<"last-drip">> => LastDrip
-        },
-        Opts
-    ).
+    TotalWeightedUnits =
+        hb_maps:fold(
+            fun(_ResourceID, Resource, Acc) ->
+                Weight = hb_maps:get(<<"weight">>, Resource, 0, Opts),
+                TotalDeposits = hb_maps:get(<<"total-deposits">>, Resource, 0, Opts),
+                Acc + (Weight * TotalDeposits)
+            end,
+            0,
+            Resources,
+            Opts
+        ),
+    #{
+        <<"mint-device">> => <<"pot@1.0">>,
+        <<"mint-cap">> => MintCap,
+        <<"mint-prop-numerator">> => MintPropNumerator,
+        <<"mint-prop-denominator">> => MintPropDenominator,
+        <<"t-source">> => <<"slot">>,
+        <<"total-weighted-units">> => TotalWeightedUnits,
+        <<"resources">> => Resources,
+        <<"t">> => T,
+        <<"last-drip">> => LastDrip
+    }.
 
 %% @doc Helper to create a pot resource with deposits
 %% Example: pot_resource(100, [{?ALICE, 10}, {?BOB, 5}])

@@ -94,7 +94,7 @@ balance(Base, Req, Opts) ->
             hb_ao:set(Req, <<"subject">>, Account, Opts),
             Opts
         ),
-    Balance =
+    BalanceRes =
         hb_ao:resolve_many(
             [
                 NormBase,
@@ -107,11 +107,11 @@ balance(Base, Req, Opts) ->
         debug_token,
         {balance_after_mint_normalization,
             {account, Account},
-            {balance, Balance}
+            {balance, BalanceRes}
         },
         Opts
     ),
-    case Balance of
+    case BalanceRes of
         {ok, Balance} -> {ok, Balance};
         {error, not_found} -> {ok, 0};
         {error, Reason} -> {error, Reason}
