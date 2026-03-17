@@ -79,42 +79,45 @@ handle_action(Action, Base, Req, Opts) ->
 %% @doc Get the balance for an account. Normalize the minting state for that
 %% account before returning.
 balance(Base, Req, Opts) ->
-    {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
-    ?event(
-        debug_token,
-        {balance_request,
-            {account, Account},
-            {base, Base}
-        },
-        Opts
-    ),
-    {ok, NormBase} =
-        normalize_mint(
-            Base,
-            hb_ao:set(Req, <<"subject">>, Account, Opts),
+    maybe
+        {ok, Account} ?= hb_ao:resolve(Req, <<"balance">>, Opts),
+        true ?= validate_address(Account),
+        ?event(
+            debug_token,
+            {balance_request,
+                {account, Account},
+                {base, Base}
+            },
             Opts
         ),
-    BalanceRes =
-        hb_ao:resolve_many(
-            [
-                NormBase,
-                <<"balances">>,
-                Account
-            ],
+        {ok, NormBase} ?=
+            normalize_mint(
+                Base,
+                hb_ao:set(Req, <<"subject">>, Account, Opts),
+                Opts
+            ),
+        BalanceRes =
+            hb_ao:resolve_many(
+                [
+                    NormBase,
+                    <<"balances">>,
+                    Account
+                ],
+                Opts
+            ),
+        ?event(
+            debug_token,
+            {balance_after_mint_normalization,
+                {account, Account},
+                {balance, BalanceRes}
+            },
             Opts
         ),
-    ?event(
-        debug_token,
-        {balance_after_mint_normalization,
-            {account, Account},
-            {balance, BalanceRes}
-        },
-        Opts
-    ),
-    case BalanceRes of
-        {ok, Balance} -> {ok, Balance};
-        {error, not_found} -> {ok, 0};
-        {error, Reason} -> {error, Reason}
+        case BalanceRes of
+            {ok, Balance} -> {ok, Balance};
+            {error, not_found} -> {ok, 0};
+            {error, Reason} -> {error, Reason}
+        end
     end.
 
 transfer(Base, Assignment, Opts) ->

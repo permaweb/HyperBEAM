@@ -411,6 +411,46 @@ simple_process_test() ->
     ?assertEqual(1, get_balance(Base, id(Bob), Opts)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
 
+reserved_recipient_transfer_rejected_test() ->
+    Opts = opts(),
+    Alice = ar_wallet:new(),
+    AliceID = id(Alice),
+    Base =
+        generate_process(
+            #{
+                initial_balances => #{ AliceID => 1_000_000_000 }
+            },
+            Opts
+        ),
+    _SchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceID,
+                <<"recipient">> => <<"device">>,
+                <<"quantity">> => 1
+            },
+            Alice,
+            Opts
+        ),
+    {ok, BalancesLink} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                <<"now">>,
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                <<"balances">>
+            ],
+            Opts
+        ),
+    ?assertEqual(1_000_000_000, get_balance(Base, AliceID, Opts)),
+    ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, BalancesLink, undefined, Opts)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
+
 simple_pot_process_test() ->
     Opts = opts(),
     AliceWallet = ar_wallet:new(),
