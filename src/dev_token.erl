@@ -148,8 +148,9 @@ transfer(Base, Assignment, Opts) ->
             Opts
         ),
         % Sanity check the transfer request.
-        true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
-            orelse {error, <<"Invalid balance types.">>},
+        true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance)
+                and (SenderBalance >= 0) and (RecipientBalance >= 0))
+            orelse {error, <<"Invalid balance values.">>},
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
