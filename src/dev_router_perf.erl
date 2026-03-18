@@ -512,10 +512,6 @@ hb_gateway_load_balancer_test_() ->
         Opts = #{
             store => hb_test_utils:test_store(),
             priv_wallet => ar_wallet:new(),
-            http_monitor => #{
-                <<"method">> => <<"POST">>,
-                <<"path">> => SchedulePath
-            },
             router_opts => #{
                 <<"provider">> => #{ <<"path">> => RoutesPath }
             },
@@ -523,6 +519,17 @@ hb_gateway_load_balancer_test_() ->
                 <<"request">> => #{
                     <<"device">> => <<"router@1.0">>,
                     <<"path">> => <<"preprocess">>
+                },
+                <<"http-client">> => #{
+                    <<"response">> => [
+                        #{
+                            <<"device">> => <<"relay@1.0">>,
+                            <<"path">> => <<"call">>,
+                            <<"method">> => <<"POST">>,
+                            <<"relay-path">> => SchedulePath,
+                            <<"hook/result">> => <<"ignore">>
+                        }
+                    ]
                 }
             },
             node_processes => #{
