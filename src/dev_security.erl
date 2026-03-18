@@ -83,8 +83,14 @@ validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
     %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
     From = lists:uniq(as_list(RawFrom, Opts)),
     Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
-    RequiredList = lists:uniq(hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts)),
-    Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
+    RequiredList = lists:uniq(
+        as_list(
+            hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+            Opts
+        )
+    ),
+    MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
+    Match = safe_match(MatchRaw, length(Valid)),
     ?event(security_debug,
         {validate_authority,
             {subject_ids, From},
@@ -145,6 +151,29 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 %% @doc Normalize value to a list.
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
+%% @doc Normalize and validate a `*-match` threshold against the number of
+%% available valid identities. Missing thresholds fall back to `Default`.
+%% Explicit thresholds must be integer-like and within the admissible range:
+%% `0` is only allowed when `Default = 0`, otherwise the threshold must be in
+%% `1..Default`.
+safe_match(not_found, Default) when is_integer(Default), Default >= 0 ->
+    Default;
+safe_match(not_found, _Default) ->
+    {error, <<"Default must be a non-negative integer.">>};
+safe_match(Match, Default) when is_integer(Match), is_integer(Default), Default >= 0 ->
+    case {Match, Default} of
+        {0, 0} -> 0;
+        {M, D} when M > 0 andalso M =< D -> M;
+        _ -> {error, <<"Invalid Match threshold.">>}
+    end;
+safe_match(Match, Default) when is_binary(Match)->
+    try binary_to_integer(Match) of
+        IntMatch -> safe_match(IntMatch, Default)
+    catch
+        _:_ -> {error, <<"Invalid Match threshold.">>}
+    end;
+safe_match(_, _) ->
+    {error, <<"Invalid Match threshold.">>}.
 
 %% @doc Return the single element of a list if there is only one, else return
 %% the list.
