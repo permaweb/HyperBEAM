@@ -216,7 +216,7 @@ prepare_header_case_tags(TABM, Opts) ->
     lists:map(
         fun({Name, Value}) ->
             #{
-                <<"name">> => header_case_string(maybe_list_to_binary(Name)),
+                <<"name">> => hb_util:to_header_case(maybe_list_to_binary(Name)),
                 <<"value">> => maybe_list_to_binary(Value)
             }
         end,
@@ -253,7 +253,11 @@ json_to_message(Resp, Opts) when is_map(Resp) ->
                             )
                     ]
                 ),
-            <<"patches">> => lists:map(fun(Patch) -> tags_to_map(Patch, Opts) end, Patches),
+            <<"patches">> =>
+                lists:map(
+                    fun(Patch) -> tags_to_message(Patch, Opts) end,
+                    Patches
+                ),
             <<"data">> => Data
         },
     {ok, Output};
@@ -274,20 +278,6 @@ maybe_list_to_binary(List) when is_list(List) ->
     list_to_binary(List);
 maybe_list_to_binary(Bin) ->
     Bin.
-
-header_case_string(Key) ->
-    NormKey = hb_ao:normalize_key(Key),
-    Words = string:lexemes(NormKey, "-"),
-    TitleCaseWords =
-        lists:map(
-            fun binary_to_list/1,
-            lists:map(
-                fun string:titlecase/1,
-                Words
-            )
-        ),
-    TitleCaseKey = list_to_binary(string:join(TitleCaseWords, "-")),
-    TitleCaseKey.
 
 %% @doc Read the computed results out of the WASM environment, assuming that
 %% the environment has been set up by `prep_call/3' and that the WASM executor
@@ -382,46 +372,63 @@ normalize_results(#{ <<"Error">> := Error }) ->
     {ok, Error, [], []};
 normalize_results(Msg) ->
     try
-        Output = maps:get(<<"Output">>, Msg, #{}),
-        Data = maps:get(<<"data">>, Output, maps:get(<<"Data">>, Msg, <<>>)),
+        Output = case_tolerant_get(<<"Output">>, Msg, #{}),
+        Data =
+            case_tolerant_get(
+                <<"Data">>,
+                Output,
+                case_tolerant_get(<<"data">>, Msg, <<>>)
+            ),
+        Messages = case_tolerant_get(<<"Messages">>, Msg, []),
+        Patches = case_tolerant_get(<<"Patches">>, Msg, []),
+        ?event(
+            {normalized_results,
+                {data, Data},
+                {messages, Messages},
+                {patches, Patches}
+            }
+        ),
         {ok,
             Data,
-            maps:get(<<"Messages">>, Msg, []),
-            maps:get(<<"patches">>, Msg, [])
+            Messages,
+            Patches
         }
     catch
         _:_ ->
             {ok, <<>>, [], []}
     end.
 
+%% @doc Get a value from a map, tolerating case differences in the first 
+%% character of the key.
+case_tolerant_get(Key, Map, Default) ->
+    maps:get(Key, Map, maps:get(hb_util:to_lower(Key), Map, Default)).
+
 %% @doc After the process returns messages from an evaluation, the
 %% signing node needs to add some tags to each message and spawn such that
 %% the target process knows these messages are created by a process.
 preprocess_results(Msg, Opts) ->
-    Tags = tags_to_map(Msg, Opts),
-    FilteredMsg =
-        hb_maps:without(
-            [<<"from-process">>, <<"from-image">>, <<"anchor">>, <<"tags">>],
-            Msg,
-            Opts
-        ),
+    FilteredKeys = [<<"from-process">>, <<"from-image">>, <<"anchor">>, <<"tags">>],
     hb_maps:merge(
         hb_maps:from_list(
-            lists:map(
+            lists:filtermap(
                 fun({Key, Value}) ->
-                    {hb_ao:normalize_key(Key), Value}
+                    NormKey = hb_ao:normalize_key(Key),
+                    LowerNormKey = hb_util:to_lower(NormKey),
+                    case lists:member(LowerNormKey, FilteredKeys) of
+                        true -> false;
+                        false -> {true, {NormKey, Value}}
+                    end
                 end,
-                hb_maps:to_list(FilteredMsg, Opts)
+                hb_maps:to_list(Msg, Opts)
             )
         ),
-        Tags,
+        tags_to_message(Msg, Opts),
         Opts
     ).
 
 %% @doc Convert a message with tags into a map of their key-value pairs.
-tags_to_map(Msg, Opts) ->
-    NormMsg = hb_util:lower_case_keys(hb_ao:normalize_keys(Msg, Opts), Opts),
-    RawTags = hb_maps:get(<<"tags">>, NormMsg, [], Opts),
+tags_to_message(Msg, Opts) ->
+    RawTags = hb_maps:get(<<"Tags">>, Msg, [], Opts),
     TagList =
         [
             {hb_maps:get(<<"name">>, Tag, Opts), hb_maps:get(<<"value">>, Tag, Opts)}

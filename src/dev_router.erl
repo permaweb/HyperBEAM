@@ -508,11 +508,11 @@ choose(N, <<"Nearest-Integer">>, #{ <<"route-by">> := Int }, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                %% Use 4-arity get with explicit default — the old
-                %% 3-arity call returned the Opts map when `center'
-                %% was missing, crashing field_distance with badarith.
-                %% Centerless nodes get 2^256 (> max distance) so they
-                %% are selected last.
+                % Use 4-arity get with explicit default — the old
+                % 3-arity call returned the Opts map when `center'
+                % was missing, crashing field_distance with badarith.
+                % Centerless nodes get 2^256 (> max distance) so they
+                % are selected last.
                 case hb_maps:get(<<"center">>, Node, not_found, Opts) of
                     not_found ->
                         {Node, 1 bsl 256};
@@ -615,18 +615,7 @@ choose_count(RawChoose, Nodes) ->
     min(NormalizedChoose, length(Nodes)).
 
 normalize_strategy(RawStrategy) ->
-    case hb_util:to_lower(hb_util:bin(RawStrategy)) of
-        <<"all">> -> <<"All">>;
-        <<"random">> -> <<"Random">>;
-        <<"by-base">> -> <<"By-Base">>;
-        <<"by_base">> -> <<"By-Base">>;
-        <<"by-weight">> -> <<"By-Weight">>;
-        <<"by_weight">> -> <<"By-Weight">>;
-        <<"nearest">> -> <<"Nearest">>;
-        <<"nearest-integer">> -> <<"Nearest-Integer">>;
-        <<"nearest_integer">> -> <<"Nearest-Integer">>;
-        _ -> <<"All">>
-    end.
+    hb_util:to_header_case(RawStrategy).
 
 route_integer(Int, _Opts) when is_integer(Int) ->
     Int;
@@ -2080,11 +2069,9 @@ full_route_config_test() ->
             }
         ],
     Opts = #{ routes => Routes },
-
-    %% --- Nearest-Integer strategy for /arweave/chunk ---
-
-    %% A chunk request with route-by near center 8_200_000_000 should pick
-    %% the 3 closest nodes out of the 5 available.
+    % --- Nearest-Integer strategy for /arweave/chunk ---
+    % A chunk request with route-by near center 8_200_000_000 should pick
+    % the 3 closest nodes out of the 5 available.
     {ok, ChunkRoute} =
         route(
             #{
@@ -2097,16 +2084,16 @@ full_route_config_test() ->
     ?assertEqual(2, hb_ao:get(<<"parallel">>, ChunkRoute, #{})),
     ChunkNodes = hb_ao:get(<<"nodes">>, ChunkRoute, #{}),
     ?assertEqual(3, length(ChunkNodes)),
-    %% The three nearest centers to 8_200_000_100 should be
-    %% 8_200_000_000, 3_600_000_000, and 12_200_000_000.
+    % The three nearest centers to 8_200_000_100 should be
+    % 8_200_000_000, 3_600_000_000, and 12_200_000_000.
     ChunkCenters =
         lists:sort(
             [hb_ao:get(<<"center">>, N, #{}) || N <- ChunkNodes]
         ),
     ?event(router_test, {chunk_centers, ChunkCenters}),
     ?assertEqual([3_600_000_000, 8_200_000_000, 12_200_000_000], ChunkCenters),
-    %% Each selected node should have a URI with the match/with regex applied:
-    %% /arweave/chunk/... -> https://data-N.arweave.net/chunk/...
+    % Each selected node should have a URI with the match/with regex applied:
+    % /arweave/chunk/... -> https://data-N.arweave.net/chunk/...
     ChunkURIs =
         lists:sort(
             [hb_ao:get(<<"uri">>, N, #{}) || N <- ChunkNodes]
@@ -2120,9 +2107,8 @@ full_route_config_test() ->
         ],
         ChunkURIs
     ),
-
-    %% A chunk request near the high end should select the 3 closest to
-    %% 16_000_000_000: 16_200_000_000, 12_200_000_000, and 8_200_000_000.
+    % A chunk request near the high end should select the 3 closest to
+    % 16_000_000_000: 16_200_000_000, 12_200_000_000, and 8_200_000_000.
     {ok, HighChunkRoute} =
         route(
             #{
@@ -2161,9 +2147,7 @@ full_route_config_test() ->
     ArweaveURI = hb_ao:get(<<"uri">>, hd(ArweaveNodes), #{}),
     ?event(router_test, {arweave_fallback_uri, ArweaveURI}),
     ?assertEqual(<<"https://arweave.net/tx/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>, ArweaveURI),
-
-    %% --- Single-node prefix route (/raw) ---
-
+    % --- Single-node prefix route (/raw) ---
     {ok, RawRoute} =
         route(#{ <<"path">> => <<"/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">> }, Opts),
     ?event(router_test, {raw_route, RawRoute}),
@@ -2171,18 +2155,14 @@ full_route_config_test() ->
         <<"https://arweave.net/raw/RTvlIxbvDOpo7kPisnhnfz0BtgOZE4QlScBSRLEkky4">>,
         hb_ao:get(<<"uri">>, RawRoute, #{})
     ),
-
-    %% --- No match ---
-
+    % --- No match ---
     NoMatchResult = route(#{ <<"path">> => <<"/unknown/endpoint">> }, Opts),
     ?event(router_test, {no_match_result, NoMatchResult}),
     ?assertEqual({error, no_matches}, NoMatchResult),
-
     %% --- HTTP GETs through the routes ---
     %% Fire actual requests using hb_http:request/2, the same way the
     %% route_multirequest_parallel_limit test does it.
     HttpReqOpts = #{ routes => Routes, http_only_result => false },
-
     %% Chunk request via Nearest-Integer (parallel=2, choose=3).
     %% With 3 nodes and parallel=2, wave 1 sends to 2 nodes, wave 2 sends
     %% to the remaining 1. We time it to confirm parallelism.
@@ -2199,11 +2179,10 @@ full_route_config_test() ->
     ChunkDuration = os:system_time(millisecond) - ChunkStart,
     ?event(router_test, {chunk_http_result, ChunkHttpRes}),
     ?event(router_test, {chunk_http_duration_ms, ChunkDuration}),
-
-    %% Now test with ALL 5 data nodes to really exercise parallel=2.
-    %% choose=5 means all 5 nodes get hit, but only 2 at a time.
-    %% With ~300-500ms per request, we expect ~3 waves (~900-1500ms)
-    %% instead of fully serial (~1500-2500ms) or fully parallel (~300-500ms).
+    % Now test with ALL 5 data nodes to really exercise parallel=2.
+    % choose=5 means all 5 nodes get hit, but only 2 at a time.
+    % With ~300-500ms per request, we expect ~3 waves (~900-1500ms)
+    % instead of fully serial (~1500-2500ms) or fully parallel (~300-500ms).
     AllChunkRoutes =
         [
             #{
@@ -2267,8 +2246,7 @@ full_route_config_test() ->
             false -> not_a_list
         end
     }),
-
-    %% Fallback /arweave route.
+    % Fallback /arweave route.
     ArweaveHttpRes =
         (catch hb_http:request(
             #{
@@ -2278,8 +2256,7 @@ full_route_config_test() ->
             HttpReqOpts
         )),
     ?event(router_test, {arweave_http_result, ArweaveHttpRes}),
-
-    %% /raw prefix route.
+    % /raw prefix route.
     RawHttpRes =
         (catch hb_http:request(
             #{
