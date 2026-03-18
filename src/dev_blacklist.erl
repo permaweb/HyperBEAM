@@ -16,6 +16,15 @@
 %%% the Arweave network: No central enforcement, but each node is capable of
 %%% enforcing its own content policies based on its own free choice and
 %%% configuration.
+%%%
+%%% Configuration options:
+%%% - blacklist_providers: List of providers to load in AO format.
+%%% - blacklist_fallback: halt or continue. 
+%%%     - Halt waits for X milliseconds before sending 503.
+%%%     - Continue allow the connection to fetch while blacklist is being loaded.
+%%% - blacklist_timeout: How long should the request wait for the blacklist to be 
+%%%     loaded.
+%%% - blacklist_whitelist: List of endpoint path that are always whitelisted.
 -module(dev_blacklist).
 -export([request/3]).
 
@@ -24,6 +33,9 @@
 
 %%% The default frequency at which the blacklist cache is refreshed in seconds.
 -define(DEFAULT_REFRESH_FREQUENCY, 60 * 5).
+-define(DEFAULT_REQUEST_TIMEOUT, 1000).
+%% Fallback mode ptions: halt or continue
+-define(DEFAULT_FALLBACK_MODE, halt).
 -define(DEFAULT_WHITELIST, 
     [<<"/~hyperbuddy@1.0/metrics">>,
      <<"/~hyperbuddy@1.0/styles.css">>,
@@ -42,6 +54,9 @@ request(_Base, HookReq, Opts) ->
             case is_match(HookReq, Opts) of
                 false ->
                     ?event(blacklist, {allowed, HookReq}, Opts),
+                    %% Still trigger the download of the blacklist
+                    try ensure_cache_table(Opts) 
+                    catch _:_ -> ok end,
                     {ok, HookReq};
                 ID ->
                     ?event(blacklist, {blocked, ID}, Opts),
@@ -68,10 +83,9 @@ request(_Base, HookReq, Opts) ->
 is_match(Msg, Opts) ->
     WhitelistRoutes = hb_opts:get(blacklist_whitelist, ?DEFAULT_WHITELIST, Opts),
     Path = hb_maps:get(<<"path">>, maps:get(<<"request">>, Msg, #{}), no_path),
-    ?event({is_match, {route, Path}}),
     case lists:member(Path, WhitelistRoutes) of 
         false -> 
-            ?event(error, {whitelist_route_no_match, {route, maps:get(<<"path">>, Msg, no_path)}}),
+            ?event({path_do_not_match_whitelist, {path, Path}}),
             ensure_cache_table(Opts),
             IDs = collect_ids(Msg, Opts),
             MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
@@ -80,6 +94,7 @@ is_match(Msg, Opts) ->
                 [ID|_] -> ID
             end;
         true ->
+            ?event({path_match_whitelist, {path, Path}}),
             false
     end.
 
@@ -165,12 +180,27 @@ parse_blacklist(Body, _Opts) when is_binary(Body) ->
 %% @doc Parse a single line of the blacklist body, returning the ID if it is valid,
 %% and `false' otherwise.
 parse_blacklist_line(Line) ->
-    Trimmed = string:trim(Line, both),
-    case Trimmed of
+    case trim_ascii(Line) of
         <<>> -> false;
         <<"#", _/binary>> -> false;
         ID when ?IS_ID(ID) -> {true, hb_util:human_id(ID)};
         _ -> false
+    end.
+
+%% @doc Fast ASCII-only whitespace trim (strips \r, \n, \s, \t).
+%% Avoids Unicode machinery of string:trim/2 for performance.
+trim_ascii(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t; C =:= $\r; C =:= $\n ->
+    trim_ascii(Rest);
+trim_ascii(Bin) ->
+    trim_ascii_right(Bin, byte_size(Bin)).
+
+trim_ascii_right(_, 0) -> <<>>;
+trim_ascii_right(Bin, Len) ->
+    case binary:at(Bin, Len - 1) of
+        C when C =:= $\s; C =:= $\t; C =:= $\r; C =:= $\n ->
+            trim_ascii_right(Bin, Len - 1);
+        _ ->
+            binary:part(Bin, 0, Len)
     end.
 
 %% @doc Collect all IDs found as elements of a given message.
@@ -214,8 +244,9 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
 ensure_cache_table(Opts) ->
     %% Options: 
     %% - continue: Don't wait for blacklist to be initialized
-    %% - halt: Close connection if not initilalized
-    FallbackMode = hb_opts:get(blacklist_fallback, halt, Opts),
+    %% - halt: Close connection with HTTP 503 if not initilalized
+    FallbackMode = hb_opts:get(blacklist_fallback, ?DEFAULT_FALLBACK_MODE, Opts),
+    RequestTimeout = hb_opts:get(blacklist_timeout, ?DEFAULT_REQUEST_TIMEOUT, Opts),
     TableName = cache_table_name(Opts),
     case is_initialized(TableName) of
         true -> TableName;
@@ -242,9 +273,20 @@ ensure_cache_table(Opts) ->
             case FallbackMode of 
                 continue -> TableName;
                 halt ->
-                    case is_initialized(TableName) of
+                    IsInitialized = 
+                        hb_util:wait_until(
+                            fun() -> is_initialized(TableName) end,
+                            RequestTimeout
+                        ),
+                    case IsInitialized of
                         true -> TableName;
-                        false -> throw({error, #{<<"status">> => 503, <<"body">> => <<"Loading blacklist ...">>}})
+                        false -> 
+                            throw({error,
+                                #{
+                                  <<"status">> => 503, 
+                                  <<"body">> => <<"Loading blacklist ...">>
+                                }
+                            })
                     end
             end
     end.
@@ -352,6 +394,19 @@ basic_test() ->
         hb_http:get(Node, SignedID1, Opts1)
     ),
     ok.
+
+%% @doc Ensure that the default provider does not block any requests.
+first_request_always_return_503_test() ->
+    {ok, #{
+        opts := Opts0,
+        unsigned3 := UnsignedID3
+    }} = setup_test_env(),
+    Opts1 = Opts0#{ blacklist_providers => [] },
+    Node = hb_http_server:start_node(Opts1#{blacklist_timeout => 0}),
+    ?assertMatch(
+        {failure, #{<<"status">> := 503, <<"body">> := <<"Loading blacklist ...">>}},
+        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
+    ).
 
 %% @doc Ensure that the default provider does not block any requests.
 default_provider_test() ->
@@ -529,3 +584,27 @@ refresh_periodically_test() ->
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
     ok.
+
+%% @doc Test that parse_blacklist/2 can handle 1 million IDs within 2000ms.
+parse_blacklist_performance_test() ->
+    GenID = fun() ->
+        B64 = base64:encode(crypto:strong_rand_bytes(32)),
+        %% base64:encode of 32 bytes = 44 chars (with 1 '=' padding).
+        %% Taking the first 43 chars gives a valid 43-byte binary ID.
+        binary:part(B64, 0, 43)
+    end,
+    IDs = [GenID() || _ <- lists:seq(1, 1000000)],
+    Body = iolist_to_binary(lists:join(<<"\n">>, IDs)),
+    Start = erlang:monotonic_time(millisecond),
+    {ok, Parsed} = parse_blacklist(Body, #{}),
+    Duration = erlang:monotonic_time(millisecond) - Start,
+    ?assert(length(Parsed) =:= 1000000),
+    ?assert(Duration =< 2000).
+
+wait_for_blacklist_to_load(Node) ->
+    hb_util:wait_until(fun() ->
+        case hb_http:get(Node, <<"/any_path">>, #{}) of 
+            {error, #{ <<"status">> := 503 }} -> false;
+                                            _ -> true
+        end
+    end, 5000).
