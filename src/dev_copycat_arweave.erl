@@ -480,21 +480,17 @@ index_ids_test() ->
             <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
         )
     ),
-    assert_item_read(
-        <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
-        Opts),
-    assert_item_read(
-        <<"2lmrYydmDweX2MgGH39ZEB9hKm2JqGOYmRiG3n_xh8A">>,
-        Opts),
-    assert_item_read(
-        <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>,
-        Opts),
-    assert_item_read(
-        <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>,
-        Opts),
-    assert_item_read(
-        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>,
-        Opts),
+    hb_pmap:parallel_map(
+        [
+            <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
+            <<"2lmrYydmDweX2MgGH39ZEB9hKm2JqGOYmRiG3n_xh8A">>,
+            <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>,
+            <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>,
+            <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>
+        ],
+        fun(ItemID) -> assert_item_read(ItemID, Opts) end,
+        5
+    ),
     % The T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs can be deserialized so
     % we'll verify that some of its items were index and match the version
     % in the deserialized bundle.
@@ -996,11 +992,12 @@ setup_index_opts() ->
 
 assert_bundle_read(BundleID, ExpectedItems, Opts) ->
     ReadItems =
-        lists:map(
+        hb_pmap:parallel_map(
+            ExpectedItems,
             fun({ItemID, _Index}) ->
                 assert_item_read(ItemID, Opts)
             end,
-            ExpectedItems
+            length(ExpectedItems)
         ),
     Bundle = assert_item_read(BundleID, Opts),
     lists:foreach(
