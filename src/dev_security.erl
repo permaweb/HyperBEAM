@@ -80,22 +80,23 @@ validate_authority(Base, Assignment, Opts) ->
 validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
-    From = as_list(RawFrom, Opts),
-    Valid = as_list(hb_ao:get(Key, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+    %% dedup entries for uniqueness sanity and correctness of min N threshold
+    From = lists:dedup(as_list(RawFrom, Opts)),
+    Valid = lists:dedup(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
+    RequiredList = lists:dedup(hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts)),
     Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
     ?event(security_debug,
         {validate_authority,
             {subject_ids, From},
             {intent, compute},
             {valid_options, Valid},
-            {required, Required},
+            {required, RequiredList},
             {base, Base},
             {message, SubjectMsg}
         },
         Opts
     ),
-    satisfies_constraints(Key, From, Required, Valid, Match, Opts).
+    satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
