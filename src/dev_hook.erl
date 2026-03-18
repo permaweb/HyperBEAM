@@ -218,6 +218,8 @@ execute_handler(HookName, Handler, Req, Opts) ->
             _ -> {Status, Res}
         end
     catch
+        _:{error, #{<<"status">> := _} = Msg}:_ ->
+            {error, Msg};
         Error:Reason:Stacktrace ->
             % If an exception occurs during execution, log it and return an error.
             ?event(hook_error,
