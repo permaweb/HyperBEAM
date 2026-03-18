@@ -61,7 +61,8 @@ do_request(Args, Opts) ->
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
         gun -> gun_req(Args, Opts);
         httpc -> httpc_req(Args, Opts);
-        hackney -> hackney_req(Args, Opts)
+        hackney -> hackney_req(Args, Opts);
+        Module -> Module:request(Args, Opts)
     end.
 
 maybe_retry(0, _, OriginalResponse, _) -> OriginalResponse;
