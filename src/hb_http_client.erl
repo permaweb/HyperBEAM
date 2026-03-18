@@ -183,6 +183,7 @@ hackney_req(Args, Opts) ->
         headers := Headers,
         body := Body
     } = Args,
+    ?event({hackney_req, Args}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
         {ok, {Host, Port}} ->
@@ -197,15 +198,37 @@ hackney_req(Args, Opts) ->
             Method = string:uppercase(hb_util:bin(RawMethod)),
             HeaderList =
                 [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
-            HackneyOpts = [with_body],
-            case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
+            upload_metric(#{method => Method, body => Body}),
+            ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
+            RecvTimeout = hb_opts:get(http_client_send_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
+            HackneyOpts = [with_body,
+                {pool, ?HACKNEY_POOL},
+                {connect_timeout, ConnTimeout},
+                {recv_timeout, RecvTimeout}],
+            StartTime = erlang:monotonic_time(native),
+            Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
                 {ok, Status, RespHeaders, RespBody} ->
+                    download_metric(RespBody),
+                    ?event(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
                     {ok, Status, RespHeaders, RespBody};
                 {ok, Status, RespHeaders} ->
+                    ?event(debug_http_client, {hackney_resp, Status, RespHeaders, no_body}),
                     {ok, Status, RespHeaders, <<>>};
-                {error, _Reason} = Err2 ->
-                    Err2
-            end
+                {error, Reason} ->
+                    ?event(http_client, {hackney_error, Reason}),
+                    {error, Reason}
+            end,
+            EndTime = erlang:monotonic_time(native),
+            record_duration(#{
+                    <<"request-method">> => method_to_bin(Method),
+                    <<"request-path">> => hb_util:bin(Path),
+                    <<"status-class">> => get_status_class(Response),
+                    <<"duration">> => EndTime - StartTime
+                },
+                Opts
+            ),
+            record_response_status(Method, Response, Path),
+            Response
     end.
 
 gun_req(Args, Opts) ->
@@ -272,6 +295,16 @@ init_ets_table(Table) ->
         _ ->
             ok
     end.
+
+init_hackney_pool(Opts) ->
+    ReadSize = hb_maps:get(conn_pool_read_size, Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
+    WriteSize = hb_maps:get(conn_pool_write_size, Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    PoolSize = ReadSize + WriteSize,
+    KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
+    hackney_pool:start_pool(?HACKNEY_POOL, [
+        {max_connections, PoolSize},
+        {timeout, KeepAlive}
+    ]).
 
 init_counter_ets_table(Table) ->
     case ets:whereis(Table) of
@@ -396,6 +429,7 @@ maybe_invoke_monitor(Details, Opts) ->
 
 init(Opts) ->
     init_ets_tables(),
+    init_hackney_pool(Opts),
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
             ?event({starting_prometheus_application,
@@ -935,6 +969,12 @@ get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 	get_status_class(Status);
 get_status_class({ok, Status, _RespondeHeaders, _Body}) ->
     get_status_class(Status);
+get_status_class({error, closed}) ->
+	<<"closed">>;
+get_status_class({error, checkout_timeout}) ->
+	<<"checkout-timeout">>;
+get_status_class({error, nxdomain}) ->
+	<<"nxdomain">>;
 get_status_class({error, connection_closed}) ->
 	<<"connection-closed">>;
 get_status_class({error, connect_timeout}) ->
