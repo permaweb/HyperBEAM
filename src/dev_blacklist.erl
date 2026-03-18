@@ -48,17 +48,11 @@ request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
     case hb_opts:get(blacklist_providers, false, Opts) of
         false -> 
-            ?event(error, {no_providers}),
+            ?event({no_providers}),
             {ok, HookReq};
         _ ->
             case is_match(HookReq, Opts) of
-                false ->
-                    ?event(blacklist, {allowed, HookReq}, Opts),
-                    %% Still trigger the download of the blacklist
-                    try ensure_cache_table(Opts) 
-                    catch _:_ -> ok end,
-                    {ok, HookReq};
-                ID ->
+                {blocked_txid, ID} ->
                     ?event(blacklist, {blocked, ID}, Opts),
                     {
                         ok,
@@ -75,7 +69,9 @@ request(_Base, HookReq, Opts) ->
                                         >>
                                 }]
                         }
-                    }
+                    };
+                Response ->
+                    Response
             end
     end.
 
@@ -86,16 +82,20 @@ is_match(Msg, Opts) ->
     case lists:member(Path, WhitelistRoutes) of 
         false -> 
             ?event({path_do_not_match_whitelist, {path, Path}}),
-            ensure_cache_table(Opts),
-            IDs = collect_ids(Msg, Opts),
-            MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
-            case lists:filter(MatchesFromIDs, IDs) of
-                [] -> false;
-                [ID|_] -> ID
+            case ensure_cache_table(Msg, Opts) of 
+                {ok, Msg1} ->
+                    IDs = collect_ids(Msg1, Opts),
+                    MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
+                    case lists:filter(MatchesFromIDs, IDs) of
+                        [] -> {ok, Msg1};
+                        [ID|_] -> {blocked_txid, ID}
+                    end;
+                {error, Msg1} ->
+                    {error, Msg1}
             end;
         true ->
             ?event({path_match_whitelist, {path, Path}}),
-            false
+            {ok, Msg}
     end.
 
 %%% Internal
@@ -241,7 +241,7 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
     end.
 
 %% @doc Ensure the cache table exists.
-ensure_cache_table(Opts) ->
+ensure_cache_table(Msg, Opts) ->
     %% Options: 
     %% - continue: Don't wait for blacklist to be initialized
     %% - halt: Close connection with HTTP 503 if not initilalized
@@ -249,7 +249,7 @@ ensure_cache_table(Opts) ->
     RequestTimeout = hb_opts:get(blacklist_timeout, ?DEFAULT_REQUEST_TIMEOUT, Opts),
     TableName = cache_table_name(Opts),
     case is_initialized(TableName) of
-        true -> TableName;
+        true -> {ok, Msg};
         false ->
             hb_name:singleton(
                 TableName,
@@ -271,7 +271,7 @@ ensure_cache_table(Opts) ->
                 end
             ),
             case FallbackMode of 
-                continue -> TableName;
+                continue -> {ok, Msg};
                 halt ->
                     IsInitialized = 
                         hb_util:wait_until(
@@ -279,14 +279,12 @@ ensure_cache_table(Opts) ->
                             RequestTimeout
                         ),
                     case IsInitialized of
-                        true -> TableName;
+                        true -> {ok, Msg};
                         false -> 
-                            throw({error,
-                                #{
-                                  <<"status">> => 503, 
-                                  <<"body">> => <<"Loading blacklist ...">>
-                                }
-                            })
+                            {error, Msg#{
+                                <<"status">> => 503, 
+                                <<"body">> => <<"Loading blacklist ...">>
+                            }}
                     end
             end
     end.
@@ -600,11 +598,3 @@ parse_blacklist_performance_test() ->
     Duration = erlang:monotonic_time(millisecond) - Start,
     ?assert(length(Parsed) =:= 1000000),
     ?assert(Duration =< 2000).
-
-wait_for_blacklist_to_load(Node) ->
-    hb_util:wait_until(fun() ->
-        case hb_http:get(Node, <<"/any_path">>, #{}) of 
-            {error, #{ <<"status">> := 503 }} -> false;
-                                            _ -> true
-        end
-    end, 5000).
