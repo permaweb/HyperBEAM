@@ -1,7 +1,10 @@
-.PHONY: compile
+.PHONY: compile test
 
 compile:
 	rebar3 compile
+
+test:
+	scripts/parallel_tests.sh
 
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
@@ -86,6 +89,7 @@ $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
 
 clean:
 	rebar3 clean
+	rm -rf /tmp/hb_test_cache
 
 # Add a new target to print the library path
 print-lib-path:
