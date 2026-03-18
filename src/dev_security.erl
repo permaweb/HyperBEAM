@@ -89,8 +89,13 @@ validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
             Opts
         )
     ),
+    DefaultThresholdN = case length(Valid) of
+        0 -> 0;
+        _ -> 1
+    end,
+    
     MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
-    Match = safe_match(MatchRaw, length(Valid)),
+    Match = safe_match(MatchRaw, DefaultThresholdN),
     ?event(security_debug,
         {validate_authority,
             {subject_ids, From},
@@ -151,11 +156,11 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 %% @doc Normalize value to a list.
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
-%% @doc Normalize and validate a `*-match` threshold against the number of
-%% available valid identities. Missing thresholds fall back to `Default`.
-%% Explicit thresholds must be integer-like and within the admissible range:
-%% `0` is only allowed when `Default = 0`, otherwise the threshold must be in
-%% `1..Default`.
+%% @doc Normalize and validate a `*-match` threshold against the acceptable
+%% signer set. If no explicit threshold is provided, the default is `0` when
+%% there are no acceptable signers and `1` otherwise. Explicit thresholds must
+%% be integer-like and within the admissible range: `0` is only allowed when
+%% the default is `0`; otherwise the threshold must be in `1..Default`.
 safe_match(not_found, Default) when is_integer(Default), Default >= 0 ->
     Default;
 safe_match(not_found, _Default) ->
