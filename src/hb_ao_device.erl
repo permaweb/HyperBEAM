@@ -249,8 +249,9 @@ maybe_normalize_device_key(Key, Mode) ->
 %% a tuple of the form {error, Reason} is returned.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(ID, _Opts) when is_atom(ID) ->
-    try ID:module_info(), {ok, ID}
-    catch _:_ -> {error, not_loadable}
+    case code:ensure_loaded(ID) of
+        {module, ID} -> {ok, ID};
+        {error, _} -> {error, not_loadable}
     end;
 load(ID, Opts) when ?IS_ID(ID) ->
     ?event(device_load, {requested_load, {id, ID}}, Opts),
