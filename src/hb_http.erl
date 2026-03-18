@@ -104,23 +104,34 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
+    Response = hb_http_client:request(Req, Opts),
     % Process the response.
     EndTime = os:system_time(millisecond),
-    ?event(http_outbound,
-        {
-            http_response,
-            {req, Req},
-            {response,
-                #{
-                    status => Status,
-                    headers => Headers,
-                    body => Body
-                }
-            }
-        },
-        Opts
-    ),
+    Duration = EndTime - StartTime,
+    case Response of
+        {_ErlStatus, Status, Headers, Body} ->
+            ?event(http_outbound,
+                {
+                    http_response,
+                    {req, Req},
+                    {response,
+                        #{
+                            status => Status,
+                            headers => Headers,
+                            body => Body
+                        }
+                    }
+                },
+                Opts
+            ),
+            request_response(Method, Peer, Path, Response, Duration, Opts);
+        Error ->
+            Error
+    end.
+    
+
+request_response(Method, Peer, Path, Response, Duration, Opts) ->
+    {_ErlStatus, Status, Headers, Body} = Response,
     % Convert the set-cookie headers into a cookie message, if they are present.
     % We do this by extracting the set-cookie headers and converting them into a
     % cookie message if they are present.
@@ -161,7 +172,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     ?event(http_short,
         {received,
             {status, Status},
-            {duration, EndTime - StartTime},
+            {duration, Duration},
             {method, Method},
             {peer, Peer},
             {path, {string, Path}},
@@ -180,7 +191,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             ),
             case {Key, hb_maps:get(Key, Msg, undefined, Opts)} of
                 {<<"body">>, undefined} ->
-                    {response_status_to_atom(Status), <<>>};
+                    {hb_http_client:response_status_to_atom(Status), <<>>};
                 {_, undefined} ->
                     {failure,
                         <<
@@ -195,7 +206,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                         >>
                     };
                 {_, Value} ->
-                    {response_status_to_atom(Status), Value}
+                    {hb_http_client:response_status_to_atom(Status), Value}
             end;
         false ->
             % Find the codec device from the headers, if set.
@@ -215,14 +226,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             )
     end.
 
-%% @doc Convert a HTTP status code to a status atom.
-response_status_to_atom(Status) ->
-    case Status of
-        201 -> created;
-        X when X < 400 -> ok;
-        X when X < 500 -> error;
-        _ -> failure
-    end.
 
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
@@ -233,7 +236,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
     try ar_bundles:deserialize(Body) of
         Deserialized ->
             {
-                response_status_to_atom(Status),
+                hb_http_client:response_status_to_atom(Status),
                 hb_message:convert(
                     Deserialized,
                     <<"structured@1.0">>,
@@ -259,7 +262,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
     ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
     {
-        response_status_to_atom(Status),
+        hb_http_client:response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
     }.
 
@@ -891,6 +894,28 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                 false ->
                     throw({invalid_ans104_signature, Item})
             end;
+        <<"tx@1.0">> ->
+            TX = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+            ?event(debug_accept,
+                {deserialized_tx,
+                    {tx, TX},
+                    {exact, {explicit, TX}}
+                }
+            ),
+            case ar_tx:verify(TX) of
+                true ->
+                    ?event(tx, {valid_tx_signature, TX}),
+                    StructuredTX =
+                        hb_message:convert(
+                            TX,
+                            <<"structured@1.0">>,
+                            <<"tx@1.0">>,
+                            Opts
+                        ),
+                    normalize_unsigned(PrimitiveMsg, Req, StructuredTX, Opts);
+                false ->
+                    throw({invalid_tx_signature, TX})
+            end;
         Codec ->
             % Assume that the codec stores the encoded message in the `body' field.
             ?event(http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
@@ -1326,3 +1351,16 @@ parallel_request_test() ->
             Opts
         )
     ).
+
+request_error_handling_test() ->
+    Opts = #{},
+    NonExistentDomain = <<"http://nonexistent.invalid:80">>,
+    Result = hb_http:request(
+        <<"GET">>,
+        NonExistentDomain,
+        <<"/">>,
+        #{},
+        Opts
+    ),
+    % The result should be an error tuple, not crash with badmatch
+    ?assertMatch({error, _}, Result).

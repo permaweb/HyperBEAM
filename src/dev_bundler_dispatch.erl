@@ -49,7 +49,7 @@
 
 %% @doc Dispatch the queue.
 dispatch([], _Opts) ->
-    ?event({skipping_empty_queue});
+    ok;
 dispatch(Items, Opts) ->
     PID = ensure_dispatcher(Opts),
     PID ! {dispatch, Items}.
@@ -60,6 +60,7 @@ ensure_dispatcher(Opts) ->
     case hb_name:lookup(?DISPATCHER_NAME) of
         undefined ->
             PID = spawn(fun() -> init(Opts) end),
+            ?event(bundler_short, {starting_dispatcher, {pid, PID}}),
             hb_name:register(?DISPATCHER_NAME, PID),
             hb_name:lookup(?DISPATCHER_NAME);
         PID -> PID
@@ -122,7 +123,7 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
-            ?event({dispatching_bundle, {timestamp, format_timestamp()},
+            ?event(bundler_short, {dispatching_bundle, {timestamp, format_timestamp()},
                 {bundle_id, BundleID}, {num_items, length(Items)}}),
             Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
@@ -156,9 +157,9 @@ enqueue_task(Task, State) ->
     State#state{task_queue = queue:in(Task, Queue)}.
 
 %% @doc Format a task for logging.
-format_task(#task{bundle_id = BundleID, type = post_tx, data = CommittedTX}) ->
+format_task(#task{bundle_id = BundleID, type = post_tx, data = DataItems}) ->
     {post_tx, {timestamp, format_timestamp()}, {bundle, BundleID},
-        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
+        {num_items, length(DataItems)}};
 format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
     {build_proofs, {timestamp, format_timestamp()}, {bundle, BundleID},
         {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
@@ -206,14 +207,14 @@ handle_task_complete(WorkerPID, Task, Result, State) ->
     Workers = State#state.workers,
     Bundles = State#state.bundles,
     #task{bundle_id = BundleID} = Task,
-    ?event({task_complete, format_task(Task)}),
+    ?event(bundler_debug, {task_complete, format_task(Task)}),
     % Update worker to idle
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
     },
     case maps:get(BundleID, Bundles, undefined) of
         undefined ->
-            ?event({bundle_not_found, BundleID}),
+            ?event(bundler_short, {bundle_not_found, BundleID}),
             State1;
         Bundle ->
             task_completed(Task, Bundle, Result, State1)
@@ -233,7 +234,7 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
     % This distributes the delay across [delay * (1-jitter), delay * (1+jitter)]
     JitterFactor = (rand:uniform() * 2 - 1) * Jitter,  % Random value in [-jitter, +jitter]
     Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
-    ?event({task_failed_retrying, format_task(Task),
+    ?event(bundler_short, {task_failed_retrying, format_task(Task),
             {reason, {explicit, Reason}}, 
             {retry_count, RetryCount}, {delay_ms, Delay}}),
     % Update worker to idle
@@ -324,8 +325,9 @@ bundle_complete(Bundle, State) ->
     ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
     ElapsedTime = 
         timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
-    ?event({bundle_complete, {bundle_id, Bundle#bundle.id},
+    ?event(bundler_short, {bundle_complete, {bundle_id, Bundle#bundle.id},
         {timestamp, format_timestamp()},
+        {tx, {explicit, hb_message:id(Bundle#bundle.tx, signed, Opts)}},
         {elapsed_time_s, ElapsedTime}}),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
@@ -346,7 +348,10 @@ recover_bundles(State) ->
 %% @doc Recover a single bundle based on its cached state.
 recover_bundle(TXID, Status, State) ->
     Opts = State#state.opts,
-    ?event({recovering_bundle, {tx_id, TXID}, {status, Status}}),
+    ?event(bundler_short, {recovering_bundle,
+        {tx_id, {explicit, TXID}},
+        {status, Status}
+    }),
     try
         % Load the TX and its items
         CommittedTX = dev_bundler_cache:load_tx(TXID, Opts),
@@ -374,7 +379,11 @@ recover_bundle(TXID, Status, State) ->
         enqueue_task(Task, State1)
     catch
         _:Error:Stack ->
-            ?event({failed_to_recover_bundle, {tx_id, TXID}, {error, Error}, {stack, Stack}}),
+            ?event(bundler_short, {failed_to_recover_bundle,
+                {tx_id, {explicit, TXID}},
+                {error, Error},
+                {stack, Stack}
+            }),
             % Skip this bundle and continue
             State
     end.
@@ -400,7 +409,7 @@ worker_loop() ->
 %% @doc Execute a specific task.
 execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task)}),
+        ?event(bundler_debug, {execute_task, format_task(Task)}),
         % Get price and anchor
         {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
         DataSize = TX#tx.data_size,
@@ -417,8 +426,10 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
                     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
                     Opts),
+                ?event(bundler_short, {posting_tx,
+                    {tx, {explicit, hb_message:id(Committed, signed, Opts)}}}),
                 PostTXResponse = hb_ao:resolve(
-                    #{ <<"device">> => <<"arweave@2.9-pre">> },
+                    #{ <<"device">> => <<"arweave@2.9">> },
                     Committed#{
                         <<"path">> => <<"/tx">>,
                         <<"method">> => <<"POST">>
@@ -430,7 +441,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
-                ?event({post_tx_failed,
+                ?event(bundle_short, {post_tx_failed,
                     format_task(Task),
                     {price, PriceErr},
                     {anchor, AnchorErr}}),
@@ -438,7 +449,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
         end
     catch
         _:Err:_Stack -> 
-            ?event({post_tx_failed,
+            ?event(bundle_short, {post_tx_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -446,14 +457,19 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
 
 execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task)}),
+        ?event(bundler_debug, {execute_task, format_task(Task)}),
         % Calculate chunks and proofs
         TX = hb_message:convert(
             CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
         Data = TX#tx.data,
         DataRoot = TX#tx.data_root,
         DataSize = TX#tx.data_size,
-        Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, Data),
+        Mode = ar_tx:chunking_mode(TX#tx.format),
+        Chunks = ar_tx:chunk_binary(Mode, ?DATA_CHUNK_SIZE, Data),
+        ?event(bundler_short, {building_proofs,
+            {bundle, Task#task.bundle_id},
+            {data_size, DataSize},
+            {num_chunks, length(Chunks)}}),
         SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
         SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
         {_Root, DataTree} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
@@ -480,7 +496,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
         {ok, Proofs}
     catch
         _:Err:_Stack ->
-            ?event({build_proofs_failed,
+            ?event(bundler_short, {build_proofs_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -489,7 +505,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
 execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     #{chunk := Chunk, data_path := DataPath, offset := Offset,
       data_size := DataSize, data_root := DataRoot} = Proof,
-    ?event({execute_task, format_task(Task)}),
+    ?event(bundler_debug, {execute_task, format_task(Task)}),
     Request = #{
         <<"chunk">> => hb_util:encode(Chunk),
         <<"data_path">> => hb_util:encode(DataPath),
@@ -499,21 +515,14 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
     },
     try
         Serialized = hb_json:encode(Request),
-        Response = hb_http:post(
-            hb_opts:get(gateway, not_found, Opts),
-            #{
-                <<"path">> => <<"/chunk">>,
-                <<"body">> => Serialized
-            },
-            Opts
-        ),
+        Response = dev_arweave:post_json_chunk(Serialized, Opts),
         case Response of
             {ok, _} -> {ok, proof_posted};
             {error, Reason} -> {error, Reason}
         end
     catch
         _:Err:_Stack ->
-            ?event({post_proof_failed,
+            ?event(bundler_short, {post_proof_failed,
                 format_task(Task),
                 {error, Err}}),
             {error, Err}
@@ -521,14 +530,14 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
 
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"/price">>, <<"size">> => DataSize },
         Opts
     ).
 
 get_anchor(Opts) ->
     hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"path">> => <<"/tx_anchor">> },
         Opts
     ).
@@ -582,10 +591,10 @@ complete_task_sequence_test() ->
 post_tx_price_failure_retry_test() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
+    setup_test_counter(price_attempts_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => fun(_Req) ->
-            Count = persistent_term:get(price_attempts, 0),
-            persistent_term:put(price_attempts, Count + 1),
+            Count = increment_test_counter(price_attempts_counter) - 1,
             case Count < FailCount of
                 true -> {500, <<"error">>};
                 false -> {200, <<"12345">>}
@@ -594,7 +603,6 @@ post_tx_price_failure_retry_test() ->
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
     try
-        persistent_term:put(price_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
@@ -608,22 +616,22 @@ post_tx_price_failure_retry_test() ->
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         % Verify it retried multiple times
-        FinalCount = persistent_term:get(price_attempts, 0),
+        FinalCount = get_test_counter(price_attempts_counter),
         ?assertEqual(FailCount+1, FinalCount),
         ok
     after
-        persistent_term:erase(price_attempts),
+        cleanup_test_counter(price_attempts_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
 post_tx_anchor_failure_retry_test() ->
     Price = 12345,
     FailCount = 3,
+    setup_test_counter(anchor_attempts_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => fun(_Req) ->
-            Count = persistent_term:get(anchor_attempts, 0),
-            persistent_term:put(anchor_attempts, Count + 1),
+            Count = increment_test_counter(anchor_attempts_counter) - 1,
             case Count < FailCount of
                 true -> {500, <<"error">>};
                 false -> {200, hb_util:encode(rand:bytes(32))}
@@ -631,7 +639,6 @@ post_tx_anchor_failure_retry_test() ->
         end
     }),
     try
-        persistent_term:put(anchor_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
@@ -645,11 +652,11 @@ post_tx_anchor_failure_retry_test() ->
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         % Verify it retried multiple times
-        FinalCount = persistent_term:get(anchor_attempts, 0),
+        FinalCount = get_test_counter(anchor_attempts_counter),
         ?assertEqual(FailCount+1, FinalCount),
         ok
     after
-        persistent_term:erase(anchor_attempts),
+        cleanup_test_counter(anchor_attempts_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
@@ -657,12 +664,12 @@ post_tx_post_failure_retry_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 4,
+    setup_test_counter(tx_attempts_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
-            Count = persistent_term:get(tx_attempts, 0),
-            persistent_term:put(tx_attempts, Count + 1),
+            Count = increment_test_counter(tx_attempts_counter) - 1,
             case Count < FailCount of
                 true -> {400, <<"Transaction verification failed">>};
                 false -> {200, <<"OK">>}
@@ -670,7 +677,6 @@ post_tx_post_failure_retry_test() ->
         end
     }),
     try
-        persistent_term:put(tx_attempts, 0),
         % Use short retry delays for testing.
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
@@ -685,11 +691,11 @@ post_tx_post_failure_retry_test() ->
         TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle),
         ?assertEqual(FailCount+1, length(TXs)),
         % Verify final attempt succeeded
-        FinalCount = persistent_term:get(tx_attempts, 0),
+        FinalCount = get_test_counter(tx_attempts_counter),
         ?assertEqual(FailCount+1, FinalCount),
         ok
     after
-        persistent_term:erase(tx_attempts),
+        cleanup_test_counter(tx_attempts_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
@@ -697,12 +703,12 @@ post_proof_failure_retry_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 2,
+    setup_test_counter(chunk_attempts_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         chunk => fun(_Req) ->
-            Count = persistent_term:get(chunk_attempts, 0),
-            persistent_term:put(chunk_attempts, Count + 1),
+            Count = increment_test_counter(chunk_attempts_counter) - 1,
             case Count < FailCount of
                 true -> {500, <<"error">>};
                 false -> {200, <<"OK">>}
@@ -710,7 +716,6 @@ post_proof_failure_retry_test() ->
         end
     }),
     try
-        persistent_term:put(chunk_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
@@ -728,11 +733,11 @@ post_proof_failure_retry_test() ->
         Chunks = hb_mock_server:get_requests(chunk, FailCount+5, ServerHandle),
         ?assertEqual( FailCount+5, length(Chunks)),
         % Verify retries happened
-        FinalCount = persistent_term:get(chunk_attempts, 0),
+        FinalCount = get_test_counter(chunk_attempts_counter),
         ?assertEqual(FailCount+5, FinalCount),
         ok
     after
-        persistent_term:erase(chunk_attempts),
+        cleanup_test_counter(chunk_attempts_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
@@ -780,13 +785,13 @@ rapid_dispatch_test() ->
 one_bundle_fails_others_continue_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
+    setup_test_counter(mixed_attempts_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
-            % First TX fails, second succeeds
-            Count = persistent_term:get(tx_mixed_attempts, 0),
-            persistent_term:put(tx_mixed_attempts, Count + 1),
+            % First TX succeeds, all following attempts fail.
+            Count = increment_test_counter(mixed_attempts_counter) - 1,
             case Count of
                 0 -> {200, <<"OK">>}; 
                 _ -> {400, <<"fail">>}
@@ -794,7 +799,6 @@ one_bundle_fails_others_continue_test() ->
         end
     }),
     try
-        persistent_term:put(tx_mixed_attempts, 0),
         % Use short retry delays for testing (100ms base, with exponential backoff)
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
@@ -814,7 +818,7 @@ one_bundle_fails_others_continue_test() ->
         ?assert(length(TXs) >= 5, length(TXs)),
         ok
     after
-        persistent_term:erase(tx_mixed_attempts),
+        cleanup_test_counter(mixed_attempts_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
@@ -861,16 +865,16 @@ exponential_backoff_timing_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 5,
+    setup_test_counter(backoff_cap_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
-            Count = persistent_term:get(backoff_cap_attempts, 0),
             Timestamp = erlang:system_time(millisecond),
-            persistent_term:put(backoff_cap_attempts, Count + 1),
-            % Store timestamp of each attempt
-            Timestamps = persistent_term:get(backoff_cap_timestamps, []),
-            persistent_term:put(backoff_cap_timestamps, [Timestamp | Timestamps]),
+            Attempt = increment_test_counter(backoff_cap_counter),
+            Count = Attempt - 1,
+            % Store timestamp by attempt number.
+            add_test_attempt_timestamp(backoff_cap_counter, Attempt, Timestamp),
             case Count < FailCount of
                 true -> {400, <<"fail">>};
                 false -> {200, <<"OK">>}
@@ -878,8 +882,6 @@ exponential_backoff_timing_test() ->
         end
     }),
     try
-        persistent_term:put(backoff_cap_attempts, 0),
-        persistent_term:put(backoff_cap_timestamps, []),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
@@ -894,7 +896,7 @@ exponential_backoff_timing_test() ->
         TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle, 5000),
         ?assertEqual(FailCount+1, length(TXs)),
         % Verify backoff respects cap
-        Timestamps = lists:reverse(persistent_term:get(backoff_cap_timestamps, [])),
+        Timestamps = test_attempt_timestamps(backoff_cap_counter),
         ?assertEqual(6, length(Timestamps)),
         [T1, T2, T3, T4, T5, T6] = Timestamps,
         % Calculate actual delays
@@ -911,16 +913,14 @@ exponential_backoff_timing_test() ->
         ?assert(Delay5 >= 400 andalso Delay5 =< 700, Delay5),
         ok
     after
-        persistent_term:erase(backoff_cap_attempts),
-        persistent_term:erase(backoff_cap_timestamps),
+        cleanup_test_counter(backoff_cap_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
 independent_task_retry_counts_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    % Track which bundles we've seen
-    persistent_term:put(independent_bundle_ids, []),
+    setup_test_counter(independent_retry_counter),
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
@@ -928,8 +928,7 @@ independent_task_retry_counts_test() ->
             % Use request ordering to distinguish bundles
             % First 3 requests are bundle1 (fail, fail, succeed)
             % 4th request is bundle2 (succeed)
-            Count = persistent_term:get(independent_total_attempts, 0),
-            persistent_term:put(independent_total_attempts, Count + 1),
+            Count = increment_test_counter(independent_retry_counter) - 1,
             case Count < 2 of
                 true -> {400, <<"fail">>};  % First 2 attempts fail
                 false -> {200, <<"OK">>}    % Rest succeed
@@ -937,7 +936,6 @@ independent_task_retry_counts_test() ->
         end
     }),
     try
-        persistent_term:put(independent_total_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             store => hb_test_utils:test_store(),
@@ -959,8 +957,7 @@ independent_task_retry_counts_test() ->
         ?assertEqual(TotalAttempts, length(TXs)),
         ok
     after
-        persistent_term:erase(independent_total_attempts),
-        persistent_term:erase(independent_bundle_ids),
+        cleanup_test_counter(independent_retry_counter),
         cleanup_dispatcher(ServerHandle)
     end.
 
@@ -1064,3 +1061,34 @@ cleanup_dispatcher(ServerHandle) ->
     stop_dispatcher(),
     timer:sleep(10), % Ensure dispatcher fully stops
     hb_mock_server:stop(ServerHandle).
+
+setup_test_counter(Table) ->
+    cleanup_test_counter(Table),
+    ets:new(Table, [named_table, public, set]),
+    ok.
+
+cleanup_test_counter(Table) ->
+    case ets:info(Table) of
+        undefined -> ok;
+        _ -> ets:delete(Table), ok
+    end.
+
+increment_test_counter(Table) ->
+    ets:update_counter(Table, Table, {2, 1}, {Table, 0}).
+
+get_test_counter(Table) ->
+    case ets:lookup(Table, Table) of
+        [{_, Value}] -> Value;
+        [] -> 0
+    end.
+
+add_test_attempt_timestamp(Table, Attempt, Timestamp) ->
+    ets:insert(Table, {{Table, Attempt}, Timestamp}).
+
+test_attempt_timestamps(Table) ->
+    TimestampEntries = [
+        {Attempt, Timestamp}
+        || {{Prefix1, Attempt}, Timestamp} <- ets:tab2list(Table),
+            Prefix1 =:= Table
+    ],
+    [Timestamp || {_, Timestamp} <- lists:sort(TimestampEntries)].

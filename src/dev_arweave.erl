@@ -4,17 +4,20 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
--export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_tx/3, post_tx/4, post_binary_ans104/2]).
+-export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
 
-%% @doc Returns the given transaction, if known to the client node(s), as an
-%% AO-Core message.
+%% @doc Returns the given transaction as an AO-Core message. By default, this
+%% embeds the `/raw` payload. Set `exclude-data` to true to return just the
+%% header.
 tx(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_tx(Base, Request, Opts);
@@ -41,7 +44,7 @@ post_tx(Base, RawRequest, Opts) ->
             ),
             {error, <<"No commitment found on `POST tx` request.">>};
         Devices ->
-            ?event({too_many_commitment_devices, Devices}),
+            ?event(error, {too_many_commitment_devices, Devices}),
             {error, too_many_commitment_devices}
     end.
 
@@ -60,48 +63,53 @@ extract_target(Base, Request, Opts) ->
             not_found
     end.
 
-post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
-    ?event({{request, Request}, {base, Base}}),
+post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
-    ?event({tx, TX}),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
     Serialized = hb_json:encode(JSON),
-    ?event({serialized_tx, {explicit, Serialized}}),
-    TXResponse = hb_http:post(
-        hb_opts:get(gateway, not_found, Opts),
-        #{
-            <<"path">> => <<"/tx">>,
-            <<"body">> => Serialized
-        },
+    LogExtra = [
+        {codec, <<"tx@1.0">>},
+        {id, {explicit, hb_util:human_id(TX#tx.id)}}
+    ],
+    Res = request(
+        <<"POST">>,
+        <<"/tx">>,
+        #{ <<"body">> => Serialized },
+        LogExtra,
         Opts
     ),
-    case TXResponse of
+    case Res of
         {ok, _} ->
-            ?event({uploaded_arweave_tx, {request, Request}, {result, TXResponse}}),
             CacheRes = hb_cache:write(Request, Opts),
-            ?event(
-                {cache_uploaded_message,
-                    {msg, Request},
-                    {status,
-                        case CacheRes of {ok, _} -> ok;
-                        _ -> failed
-                        end
-                    }
-                }
-            ),
-            TXResponse;
-        Else -> Else
-    end;
-post_tx(Base, Request, Opts, <<"ans104@1.0">>) ->
-    ?event({{request, Request}, {base, Base}, {opts, Opts}}),
+            case CacheRes of
+                {ok, _} ->
+                    ?event(arweave_debug, {tx_cached, {msg, Request}, {status, ok}});
+                _ ->
+                    ?event(error, {tx_failed_to_cache, {msg, Request}, CacheRes})
+            end;
+        _ ->
+            ok
+    end,
+    Res;
+
+post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
     TX = hb_message:convert(Request, <<"ans104@1.0">>, Opts),
-    ?event({tx, TX}),
     Serialized = ar_bundles:serialize(TX),
-    ?event({serialized_tx, Serialized}),
-    post_binary_ans104(Serialized, Opts).
+    LogExtra = [
+        {codec, <<"ans104@1.0">>},
+        {id, {explicit, hb_util:human_id(TX#tx.id)}}
+    ],
+    post_binary_ans104(Serialized, LogExtra, Opts).
 
 post_binary_ans104(SerializedTX, Opts) ->
-    hb_http:post(
+    LogExtra = [
+        {codec, <<"ans104@1.0">>},
+        {id, unknown}
+    ],
+    post_binary_ans104(SerializedTX, LogExtra, Opts).
+
+post_binary_ans104(SerializedTX, LogExtra, Opts) ->
+    Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
             <<"path">> => <<"/tx">>,
@@ -112,64 +120,272 @@ post_binary_ans104(SerializedTX, Opts) ->
             http_client =>
                 hb_opts:get(bundler_ans104_http_client, httpc, Opts)
         }
-    ).
+    ),
+    to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
-%% @doc Get a transaction ID from the Arweave node, as indicated by the `tx` key
-%% in the request or base message. If the `data' key is present and set to
-%% `false', the data is not retrieved and added to the response. If the `data'
-%% key is set to `always', transactions for which the header is available but
-%% the data is not will lead to an error. Otherwise, just the header will be
-%% returned.
+%% @doc Get a transaction from the Arweave node, as indicated by the
+%% `tx` key in the request or base message. By default, this embeds the data
+%% payload. Set `exclude_data` to true to return just the header.
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID -> request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts)
+        TXID ->
+            request(
+                <<"GET">>,
+                <<"/tx/", TXID/binary>>,
+                Opts#{ exclude_data => exclude_data(Base, Request, Opts) }
+            )
     end.
 
-chunk(Base, Request, Opts) ->
-    case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
-        <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> {error, not_implemented}
-    end.
-
-post_chunk(_Base, Request, Opts) ->
-    Serialized = hb_json:encode(Request),
-    ?event({uploading_chunk, {explicit, Serialized}}),
-    hb_http:post(
-        hb_opts:get(gateway, not_found, Opts),
-        #{
-            <<"path">> => <<"/chunk">>,
-            <<"body">> => Serialized
-        },
-        Opts
-    ).
-
-add_data(TXID, TXHeader, Opts) ->
-    case data(TXID, Opts) of
-        {ok, Data} ->
-            TX = TXHeader#tx{ data = Data },
-            ?event(
-                {retrieved_tx_with_data,
-                    {id, TXID},
-                    {data_size, byte_size(Data)},
-                    {tx, TX}
-                }
-            ),
-            {ok, TX};
-        {error, Reason} ->
-            ?event(
-                {data_retrieval_failed_after_header,
-                    {id, TXID},
-                    {error, Reason}
-                }
-            ),
-            {error, Reason}
+%% @doc Get raw transaction data from the Arweave node, as indicated by the
+%% `tx` key in the request or base message.
+raw(Base, Request, Opts) ->
+    case find_txid(Base, Request, Opts) of
+        not_found -> {error, not_found};
+        TXID -> data(TXID, Opts)
     end.
 
 %% @doc Retrieve the data of a transaction from Arweave.
 data(TXID, Opts) ->
-    ?event({retrieving_tx_data, {tx, TXID}}),
     request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
+
+chunk(Base, Request, Opts) ->
+    case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
+        <<"POST">> -> post_chunk(Base, Request, Opts);
+        <<"GET">> -> get_chunk_range(Base, Request, Opts)
+    end.
+
+post_chunk(_Base, Request, Opts) ->
+    Serialized = hb_json:encode(Request),
+    post_json_chunk(Serialized, Opts).
+
+post_json_chunk(JSON, Opts) ->
+    hb_http:post(
+        hb_opts:get(gateway, not_found, Opts),
+        #{
+            <<"path">> => <<"/chunk">>,
+            <<"body">> => JSON
+        },
+        Opts
+    ).
+
+get_chunk_range(_Base, Request, Opts) ->
+    Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
+    Length = hb_util:int(hb_ao:get(<<"length">>, Request, 1, Opts)),
+    case fetch_chunk_range(Offset, Length, Opts) of
+        {ok, Chunks} ->
+            Data = iolist_to_binary(Chunks),
+            case hb_maps:is_key(<<"length">>, Request, Opts) of
+                true ->
+                    {ok, binary:part(Data, 0, Length)};
+                false ->
+                    {ok, Data}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Fetch a range of chunks in parallel. Dispatches to pre-threshold or
+%% post-threshold algorithm depending on the offset. A single TX/data-item
+%% cannot span the strict data split threshold, so mixed ranges are rejected.
+fetch_chunk_range(Offset, Length, Opts) ->
+    EndOffset = Offset + Length - 1,
+    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
+    ?event(arweave_debug, {fetch_chunk_range,
+        {length, Length}, {start_offset, Offset}, {end_offset, EndOffset},
+        {concurrency, Concurrency}}),
+    case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
+          EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
+        {true, true} ->
+            fetch_post_threshold(Offset, EndOffset, Concurrency, Opts);
+        {false, false} ->
+            fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts);
+        {false, true} ->
+            {error, chunk_range_spans_strict_data_split_threshold}
+    end.
+
+%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. A single pass at
+%% DATA_CHUNK_SIZE increments covers all chunks.
+fetch_post_threshold(Offset, EndOffset, Concurrency, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case fetch_and_collect(Offsets, Concurrency, Opts) of
+        {ok, ChunkInfos} -> assemble_chunks(ChunkInfos, Offset);
+        Error -> Error
+    end.
+
+%% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
+%% DATA_CHUNK_SIZE increments, then iteratively fill gaps until contiguous.
+fetch_pre_threshold(Offset, EndOffset, Concurrency, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case fetch_and_collect(Offsets, Concurrency, Opts) of
+        {ok, ChunkInfos} ->
+            fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts);
+        Error -> Error
+    end.
+
+%% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
+%% of each gap until the entire range [Offset, EndOffset] is covered.
+fill_gaps(ChunkInfos, Offset, EndOffset, Concurrency, Opts) ->
+    Sorted = dedup_and_sort(ChunkInfos),
+    case find_gaps(Sorted, Offset, EndOffset) of
+        [] ->
+            assemble_chunks(Sorted, Offset);
+        Gaps ->
+            GapOffsets = [Start || {Start, _End} <- Gaps],
+            ?event(warning, {fetch_chunk_gap_handling_untested,
+                {gap_offsets, GapOffsets}}),
+            case fetch_and_collect(GapOffsets, Concurrency, Opts) of
+                {ok, NewInfos} ->
+                    fill_gaps(
+                        Sorted ++ NewInfos,
+                        Offset, EndOffset, Concurrency, Opts
+                    );
+                Error -> Error
+            end
+    end.
+
+%% @doc Fetch chunks at the given offsets in parallel and parse the responses
+%% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
+fetch_and_collect(Offsets, Concurrency, Opts) ->
+    Results = parallel_map(
+        Offsets,
+        fun(O) -> get_chunk(O, Opts) end,
+        Concurrency
+    ),
+    collect_chunk_infos(Results).
+
+%% @doc Generate a list of offsets from Start to End (inclusive) stepping by
+%% Step bytes. Used to produce candidate query offsets at 256KiB increments.
+generate_offsets(Start, End, Step) ->
+    generate_offsets_acc(Start, End, Step, []).
+
+generate_offsets_acc(Current, End, _Step, Acc) when Current > End ->
+    Offsets = lists:reverse(Acc),
+    ?event(arweave_debug, {fetch_chunk_offsets, {offsets, Offsets}}),
+    Offsets;
+generate_offsets_acc(Current, End, Step, Acc) ->
+    generate_offsets_acc(Current + Step, End, Step, [Current | Acc]).
+
+%% @doc Parse a list of chunk fetch results into chunk info tuples.
+%% Fails fast on the first error.
+collect_chunk_infos(Results) ->
+    collect_chunk_infos_acc(Results, []).
+
+collect_chunk_infos_acc([], Acc) ->
+    {ok, lists:reverse(Acc)};
+collect_chunk_infos_acc([{ok, JSON} | Rest], Acc) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
+    AbsStart = AbsEnd - byte_size(Chunk) + 1,
+    ?event(arweave_debug, {collect_chunk_infos, {abs_start, AbsStart}, {abs_end, AbsEnd}, {size, byte_size(Chunk)}}),
+    collect_chunk_infos_acc(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
+collect_chunk_infos_acc([{error, Reason} | _], _Acc) ->
+    {error, Reason}.
+
+%% @doc Sort chunk infos by start offset and remove duplicates. Two queries
+%% landing in the same chunk produce identical entries; we deduplicate by
+%% absolute_end_offset which uniquely identifies a chunk in the weave.
+dedup_and_sort(ChunkInfos) ->
+    Sorted = lists:sort(
+        fun({StartA, _, _}, {StartB, _, _}) -> StartA =< StartB end,
+        ChunkInfos
+    ),
+    dedup_by_end(Sorted, #{}).
+
+dedup_by_end([], _Seen) ->
+    [];
+dedup_by_end([{_Start, End, _Data} = Info | Rest], Seen) ->
+    case maps:is_key(End, Seen) of
+        true -> dedup_by_end(Rest, Seen);
+        false -> [Info | dedup_by_end(Rest, Seen#{End => true})]
+    end.
+
+%% @doc Find byte ranges within [RangeStart, RangeEnd] not covered by any
+%% chunk. Returns a list of {GapStart, GapEnd} tuples.
+find_gaps(SortedChunks, RangeStart, RangeEnd) ->
+    find_gaps_acc(SortedChunks, RangeStart, RangeEnd, []).
+
+find_gaps_acc([], Pos, RangeEnd, Gaps) when Pos =< RangeEnd ->
+    lists:reverse([{Pos, RangeEnd} | Gaps]);
+find_gaps_acc([], _Pos, _RangeEnd, Gaps) ->
+    lists:reverse(Gaps);
+find_gaps_acc([{ChunkStart, ChunkEnd, _} | Rest], Pos, RangeEnd, Gaps) ->
+    NewGaps = case ChunkStart > Pos of
+        true -> [{Pos, ChunkStart - 1} | Gaps];
+        false -> Gaps
+    end,
+    find_gaps_acc(Rest, max(Pos, ChunkEnd + 1), RangeEnd, NewGaps).
+
+%% @doc Assemble chunk infos into a list of contiguous binaries suitable for
+%% iolist_to_binary. The first chunk is sliced if it starts before Offset.
+assemble_chunks(ChunkInfos, Offset) ->
+    Sorted = dedup_and_sort(ChunkInfos),
+    Binaries = lists:map(
+        fun({ChunkStart, _ChunkEnd, Data}) ->
+            case ChunkStart < Offset of
+                true ->
+                    Skip = Offset - ChunkStart,
+                    binary:part(Data, Skip, byte_size(Data) - Skip);
+                false ->
+                    Data
+            end
+        end,
+        Sorted
+    ),
+    {ok, Binaries}.
+
+%% @doc Concurrency-limited parallel map. Spawns up to MaxWorkers processes
+%% and refills the pool as workers complete. Returns results in input order.
+parallel_map(Items, Fun, MaxWorkers) ->
+    Parent = self(),
+    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
+    {ToSpawn, Remaining} = lists:split(
+        min(length(ItemsWithRefs), MaxWorkers),
+        ItemsWithRefs
+    ),
+    ActiveRefs =
+        [spawn_pmap_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
+    ResultsMap =
+        pmap_collect(ActiveRefs, Remaining, Fun, Parent, #{}),
+    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+
+spawn_pmap_worker({Item, Ref}, Fun, Parent) ->
+    spawn(fun() -> Parent ! {pmap_result, Ref, Fun(Item)} end),
+    Ref.
+
+pmap_collect([], [], _Fun, _Parent, Results) ->
+    Results;
+pmap_collect(Active, Remaining, Fun, Parent, Results) ->
+    receive
+        {pmap_result, Ref, Result} ->
+            NewResults = Results#{Ref => Result},
+            NewActive = lists:delete(Ref, Active),
+            case Remaining of
+                [] ->
+                    pmap_collect(
+                        NewActive, [], Fun, Parent, NewResults
+                    );
+                [Next | Rest] ->
+                    NextRef = spawn_pmap_worker(Next, Fun, Parent),
+                    pmap_collect(
+                        [NextRef | NewActive], Rest,
+                        Fun, Parent, NewResults
+                    )
+            end
+    end.
+
+get_chunk(Offset, Opts) ->
+    % Note: it's possible that we will need to add the x-bucket-based-offset
+    % header to *some* queries. When querying L1 TX chunks from after the
+    % strict data split threshold, in theory that header is needed. But I
+    % haven't found a TX which requires it. However, including the header
+    % when querying some *dataitems* does cause an error. So for now we will
+    % leaeve the header out and continue to search for a case where it is
+    % needed.
+    Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
+    request(<<"GET">>, Path, #{
+        <<"route-by">> => Offset
+    }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -189,10 +405,10 @@ block(Base, Request, Opts) ->
     case Block of
         <<"current">> -> current(Base, Request, Opts);
         not_found -> current(Base, Request, Opts);
-        ID when ?IS_ID(ID) -> block({id, ID}, Opts);
+        ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Opts);
         MaybeHeight ->
             try hb_util:int(MaybeHeight) of
-              Int -> block({height, Int}, Opts)
+                Int -> block({height, Int}, Opts)
             catch
                 _:_ ->
                     {
@@ -204,7 +420,9 @@ block(Base, Request, Opts) ->
 block({id, ID}, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Block} ->
-            ?event({retrieved_block_from_cache, {id, ID}}),
+            ?event(arweave_short, {read_block_from_cache,
+                {id, {explicit, ID}}
+            }),
             {ok, Block};
         not_found ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
@@ -212,7 +430,9 @@ block({id, ID}, Opts) ->
 block({height, Height}, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} ->
-            ?event({retrieved_block_from_cache, {height, Height}}),
+            ?event(arweave_short, {read_block_from_cache,
+                {height, Height}
+            }),
             {ok, Block};
         not_found ->
             request(
@@ -261,82 +481,138 @@ find_txid(Base, Request, Opts) ->
         Opts
     ).
 
+exclude_data(Base, Request, Opts) ->
+    RawValue =
+        hb_ao:get_first(
+            [
+                {Request, <<"exclude-data">>},
+                {Base, <<"exclude-data">>}
+            ],
+            false,
+            Opts
+        ),
+    hb_util:bool(RawValue).
+
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
 %% a `content-type' header. Subsequently, we parse the response manually and
 %% pass it back as a message.
 request(Method, Path, Opts) ->
-    request(Method, Path, #{}, Opts).
+    request(Method, Path, #{}, [], Opts).
 request(Method, Path, Extra, Opts) ->
-    ?event({arweave_request, {method, Method}, {path, Path}}),
+    request(Method, Path, Extra, [], Opts).
+request(Method, Path, Extra, LogExtra, Opts) ->
+    ?event(arweave_debug, {request,
+        {method, Method}, {path, Path}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
             Extra#{
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
             },
-            Opts
+            Opts#{
+                cache_control => [<<"no-cache">>, <<"no-store">>]
+            }
         ),
-    to_message(Path, Res, Opts).
+    to_message(Path, Method, best_response(Res), LogExtra, Opts).
+
+%% @doc Select the best response from a list of responses by sorting them
+%% ascending by HTTP status code. Returns the first (best) response tuple.
+best_response({error, {no_viable_responses, Responses}}) ->
+    best_response(Responses);
+best_response([]) ->
+    {error, no_viable_responses};
+best_response(Responses) when is_list(Responses) ->
+    Sorted = lists:sort(
+        fun({_, ResponseA}, {_, ResponseB}) ->
+            StatusA = maps:get(<<"status">>, ResponseA, 999),
+            StatusB = maps:get(<<"status">>, ResponseB, 999),
+            StatusA =< StatusB
+        end,
+        Responses
+    ),
+    hd(Sorted);
+best_response(Response) ->
+    Response.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
-to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
+to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
+    event_request(Path, Method, 404, LogExtra),
     {error, not_found};
-to_message(_Path, {error, _}, _Opts) ->
-    {error, client_error};
-to_message(_Path, {failure, _}, _Opts) ->
+to_message(Path, Method, {error, Response}, LogExtra, _Opts) ->
+    Status = maps:get(<<"status">>, Response, client_error),
+    event_request(Path, Method, Status, LogExtra),
+    {error, Response};
+to_message(Path, Method, {failure, Response}, LogExtra, _Opts) ->
+    Status = maps:get(<<"status">>, Response, server_error),
+    event_request(Path, Method, Status, LogExtra),
     {error, server_error};
-to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
+to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
+    Status = maps:get(<<"status">>, Response, 200),
+    event_request(Path, <<"POST">>, Status, LogExtra),
+    {ok, Response};
+to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-    ?event(
+    ?event(arweave_debug,
         {arweave_tx_response,
-            {path, Path},
+            {path, {explicit, Path}},
             {raw_body, {explicit, Body}},
             {body, {explicit, hb_json:decode(Body)}},
             {tx, TXHeader}
         }
     ),
-    {ok, TX} = add_data(TXID, TXHeader, Opts),
-    {
-        ok,
-        hb_message:convert(
-            TX,
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    };
-to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
-    ?event(
-        {arweave_raw_response,
-            {path, Path},
-            {data_size, byte_size(Body)}
-        }
-    ),
+    case hb_opts:get(exclude_data, false, Opts) of
+        true ->
+            {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+        false ->
+            case data(TXID, Opts) of
+                {ok, RawData} ->
+                    TX = TXHeader#tx{ data = RawData },
+                    {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                {error, not_found} ->
+                    {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                Error ->
+                    Error
+            end
+    end;
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
-to_message(Path = <<"/block/", _/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
-    Block = hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts),
+to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, Block} =
+        dev_codec_json:from(
+            Body,
+            #{ <<"accept-codec">> => <<"structured@1.0">> },
+            Opts
+        ),
+    CacheRes =
+        case hb_opts:get(arweave_index_blocks, true, Opts) of
+            true -> dev_arweave_block_cache:write(Block, Opts);
+            false -> skipped
+        end,
     ?event(
-        {arweave_block_response,
-            {path, Path},
-            {block, Block}
-        }
-    ),
-    CacheRes = dev_arweave_block_cache:write(Block, Opts),
-    ?event(
-        {cached_arweave_block,
+        debug_arweave_index,
+        {
+            if CacheRes == skipped -> skipped_caching_arweave_block;
+            true -> cached_arweave_block
+            end,
             {path, Path},
             {result, CacheRes}
         }
     ),
     {ok, Block};
-to_message(<<"/price/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
+to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
     Price = hb_util:int(Body),
     {ok, Price};
-to_message(<<"/tx_anchor">>, {ok, #{ <<"body">> := Body }}, _Opts) ->
+to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
     Anchor = hb_util:decode(Body),
     {ok, Anchor};
-to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
+to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
     % All other responses that are `OK' status are converted from JSON to an
     % AO-Core message.
     ?event(
@@ -355,9 +631,14 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
         )
     }.
 
+event_request(Path, Method, Status, Extra) ->
+    BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
+    MergedTuple = erlang:list_to_tuple(BaseList ++ Extra),
+    ?event(arweave_short, MergedTuple).
+
 %%% Tests
 
-post_ans104_tx_test() ->
+post_ans104_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
@@ -379,12 +660,12 @@ post_ans104_tx_test() ->
         hb_http:post(
             Server,
             Msg#{
-                <<"path">> => <<"/~arweave@2.9-pre/tx">>,
-                <<"codec-device">> => <<"ans104@1.0">>
+                <<"path">> => <<"/~arweave@2.9/tx">>
             },
             ClientOpts
         ),
     ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
     SignedID = hb_message:id(Msg, signed, ClientOpts),
     {ok, GetRes} =
         hb_http:get(
@@ -402,10 +683,220 @@ post_ans104_tx_test() ->
     ),
     ok.
 
+post_ans104_binary_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"Process">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+    DataItem = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, ClientOpts),
+    ?event(debug_test, {data_item, DataItem}),
+    Serialized = ar_bundles:serialize(DataItem),
+    {ok, PostRes} =
+        hb_http:post(
+            Server,
+            #{
+                <<"device">> => <<"arweave@2.9">>,
+                <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized
+            },
+            ClientOpts
+        ),
+    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
+    SignedID = hb_message:id(Msg, signed, ClientOpts),
+    {ok, GetRes} =
+        hb_http:get(
+            Server, <<"/", SignedID/binary>>,
+            ClientOpts
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 200,
+            <<"variant">> := <<"ao.N.1">>,
+            <<"type">> := <<"Process">>,
+            <<"data">> := <<"test-data">>
+        },
+        GetRes
+    ),
+    ok.
+
+post_tx_message_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"tag">> => <<"value">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    ?event(debug_test, {msg, Msg}),
+    Response =
+        hb_http:post(
+            Server,
+            Msg#{
+                <<"device">> => <<"arweave@2.9">>,
+                <<"path">> => <<"/tx">>
+            },
+            ClientOpts
+        ),
+    ?event(debug_test, {post_response, Response}),
+    % The transaction is invalid because it has insufficient balance, only
+    % way we'll know that is if the HB node successfully posted the tx to
+    % an arweave node.
+    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
+    {error, #{ <<"body">> := Body }} = Response,
+    ?assertEqual(<<"Transaction verification failed.">>, Body),
+    ok.
+
+post_tx_json_failure_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ClientOpts = post_tx_json_client_opts(),
+    Response = post_tx_json_request(Server, ClientOpts),
+    % The transaction is invalid because it has insufficient balance, only
+    % way we'll know that is if the HB node successfully posted the tx to
+    % an arweave node.
+    ?assertMatch({error, #{ <<"status">> := 400 }}, Response),
+    {error, #{ <<"body">> := Body }} = Response,
+    ?assertEqual(<<"Transaction verification failed.">>, Body),
+    ok.
+
+post_tx_json_success_test() ->
+    {Response, Node1Posts, Node2Posts} =
+        post_tx_json_two_node_test({200, <<"OK-1">>}, {200, <<"OK-2">>}),
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Response),
+    ?assertEqual(1, length(Node1Posts)),
+    ?assertEqual(1, length(Node2Posts)),
+    ok.
+
+post_tx_json_mixed_status_prefers_success_test() ->
+    {Response, Node1Posts, Node2Posts} =
+        post_tx_json_two_node_test(
+            {400, <<"Transaction verification failed.">>},
+            {200, <<"OK-2">>}
+        ),
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Response),
+    ?assertEqual(1, length(Node1Posts)),
+    ?assertEqual(1, length(Node2Posts)),
+    ok.
+
+post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
+    {ok, MockNode1, MockHandle1} = hb_mock_server:start([
+        {"/tx", tx, Node1TxResponse}
+    ]),
+    {ok, MockNode2, MockHandle2} = hb_mock_server:start([
+        {"/tx", tx, Node2TxResponse}
+    ]),
+    Server = hb_http_server:start_node(
+        post_tx_json_two_node_server_opts(MockNode1, MockNode2)
+    ),
+    ClientOpts = post_tx_json_client_opts(),
+    try
+        Response = post_tx_json_request(Server, ClientOpts),
+        Node1Posts = hb_mock_server:get_requests(tx, 1, MockHandle1),
+        Node2Posts = hb_mock_server:get_requests(tx, 1, MockHandle2),
+        {Response, Node1Posts, Node2Posts}
+    after
+        hb_mock_server:stop(MockHandle1),
+        hb_mock_server:stop(MockHandle2)
+    end.
+
+post_tx_json_two_node_server_opts(MockNode1, MockNode2) ->
+    #{
+        store => [hb_test_utils:test_store()],
+        routes => [
+            #{
+                <<"template">> =>
+                    #{
+                        <<"path">> => <<"^/arweave/tx">>,
+                        <<"method">> => <<"POST">>
+                    },
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => MockNode1,
+                            <<"opts">> => #{ http_client => httpc }
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => MockNode2,
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                <<"parallel">> => true,
+                <<"responses">> => 2,
+                <<"stop-after">> => false,
+                <<"admissible-status">> => 200
+            }
+        ]
+    }.
+
+post_tx_json_client_opts() ->
+    #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    }.
+
+post_tx_json_payload(ClientOpts) ->
+    Msg =
+        hb_message:commit(
+            #{
+                <<"tag">> => <<"value">>,
+                <<"data">> => <<"test-data">>
+            },
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    TX = hb_message:convert(Msg, <<"tx@1.0">>, <<"structured@1.0">>, ClientOpts),
+    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
+    hb_json:encode(JSON).
+
+post_tx_json_request(Server, ClientOpts) ->
+    Serialized = post_tx_json_payload(ClientOpts),
+    hb_http:post(
+        Server,
+        #{
+            <<"device">> => <<"arweave@2.9">>,
+            <<"path">> => <<"/tx?codec-device=tx@1.0">>,
+            <<"content-type">> => <<"application/json">>,
+            <<"body">> => Serialized
+        },
+        ClientOpts
+    ).
+
 get_tx_basic_data_test() ->
-    Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-    {ok, Structured} = hb_http:get(Node, Path, #{}),
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"exclude-data">> => false
+        },
+        #{}
+    ),
     ?event(debug_test, {structured_tx, Structured}),
     ?assert(hb_message:verify(Structured, all, #{})),
     % Hash the data to make it easier to match
@@ -423,18 +914,112 @@ get_tx_basic_data_test() ->
     ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
     ok.
 
+%% @doc The data for this transaction ends with two smaller chunks.
+get_tx_split_chunk_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+            <<"exclude-data">> => false
+        },
+        #{}
+    ),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(
+        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+        hb_message:id(Structured, signed)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"6035386935">>,
+        <<"anchor">> => <<"PX16-598IrIMvLxFkvfNTWLVKXqXSmArOdW3o7X8jWMCH1fiNOjBZ2XjQlw0FOme">>,
+        <<"Contract">> => <<"KTzTXT_ANmF84fWEKHzWURD1LWd9QaFR9yfYUwH2Lxw">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+
+    Child = hb_ao:get(<<"1/2">>, Structured),
+    ?assert(hb_message:verify(Child, all, #{})),
+    ?event(debug_test, {child, {explicit, hb_message:id(Child, signed)}}),
+    ?assertEqual(
+        <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
+        hb_message:id(Child, signed)),
+    ok.
+
+get_tx_basic_data_exclude_data_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"exclude-data">> => true
+        },
+        #{}
+    ),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"482143296">>,
+        <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>
+        },
+        #{}
+    ),
+    StructuredWithData = Structured#{ <<"data">> => Data },
+    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    DataHash = hb_util:encode(crypto:hash(sha256, Data)),
+    ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
+    ok.
+
+get_tx_data_tag_exclude_data_test() ->
+    {ok, Structured} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
+            <<"exclude-data">> => true
+        },
+        #{}
+    ),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assertEqual(false, maps:is_key(<<"data">>, Structured)),
+    ExpectedMsg = #{
+        <<"reward">> => <<"630923958">>,
+        <<"anchor">> => <<"CWJKkpdXEQO9sCWLFg8Cqby0d7wY0Gez5H95YG15g8pAYaXVatF9Ms1QBUpvZ-Ll">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>
+        },
+        #{}
+    ),
+    StructuredWithData = Structured#{ <<"data">> => Data },
+    ?assert(hb_message:verify(StructuredWithData, all, #{})),
+    DataHash = hb_util:encode(crypto:hash(sha256, Data)),
+    ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
+    ok.
+
 get_tx_rsa_nested_bundle_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    Path = <<"/~arweave@2.9/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     {ok, Root} = hb_http:get(Node, Path, #{}),
     ?event(debug_test, {root, Root}),
     ?assert(hb_message:verify(Root, all, #{})),
-
     ChildPath = <<Path/binary, "/1/2">>,
     {ok, Child} = hb_http:get(Node, ChildPath, #{}),
     ?event(debug_test, {child, Child}),
     ?assert(hb_message:verify(Child, all, #{})),
-
     {ok, ExpectedChild} =
         hb_ao:resolve(
             Root,
@@ -442,7 +1027,6 @@ get_tx_rsa_nested_bundle_test() ->
             #{}
         ),
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
-
     ManualChild = #{
         <<"data">> => <<"{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\"tickedRewardDistributions\":[],\"newPruneGatewaysResults\":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\"gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\"prunedGateways\":[],\"slashedGateways\":[],\"gatewayStakeWithdrawing\":0}]}">>,
         <<"data-protocol">> => <<"ao">>,
@@ -462,7 +1046,7 @@ get_tx_rsa_nested_bundle_test() ->
 get_tx_rsa_large_bundle_test_disabled() ->
     {timeout, 300, fun() ->
         Node = hb_http_server:start_node(),
-        Path = <<"/~arweave@2.9-pre/tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
+        Path = <<"/~arweave@2.9/tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
         {ok, Root} = hb_http:get(Node, Path, #{}),
         ?event(debug_test, {root, Root}),
         ?assert(hb_message:verify(Root, all, #{})),
@@ -471,9 +1055,9 @@ get_tx_rsa_large_bundle_test_disabled() ->
 
 get_bad_tx_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
+    Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
-    ?assertEqual({error, client_error}, Res).
+    ?assertEqual({error, not_found}, Res).
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.
@@ -506,4 +1090,274 @@ serialize_data_item_test_disabled() ->
     ?assertEqual(DataItem#tx.data, VerifiedItem#tx.data),
     ?assertEqual(length(DataItem#tx.tags), length(VerifiedItem#tx.tags)),
     ?assert(ar_bundles:verify_item(VerifiedItem)),
+    ok.
+
+get_partial_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399,
+    ExpectedLength = 1000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"G62E7qonT1RBmkC6e3pNJz_thpS9xkVD3qTJAk6o3Uc">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_full_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399,
+    ExpectedLength = ?DATA_CHUNK_SIZE,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"LyTBdUe0rNmpqt8C-p7HksdiredXaa0wCBAPt3504W0">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_multi_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399,
+    ExpectedLength = ?DATA_CHUNK_SIZE * 3,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"4Cb_N0z0tMDwCiWrUbuzktfn-H6NLHT1btXGDo3CByI">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+
+%% @doc Query a chunk range that starts and ends in the middle of a chunk.
+get_mid_chunk_post_split_test() ->
+    %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
+    %% 
+    Offset = 378092137521399 + 200_000,
+    ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"xkEZpGqDiCVuVZfGVyscmfYNZqYmgBLjOrMD2P_SfWs">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_partial_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = 1000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"yU5tZyDCTZ4MFcT6lng74tvx1oIbPkpCw1VAJsSqeuo">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_full_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = ?DATA_CHUNK_SIZE,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"nVCvjEq9T5nxIR6jvglNbX1_CYCg0WifxfQoXhS4gik">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_multi_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109,
+    ExpectedLength = ?DATA_CHUNK_SIZE * 3,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"DfS3jtLXqG3zO_IFA3P-r55SUBoeJmeIh4Eim2Rldeo">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_mid_chunk_pre_split_test() ->
+    %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
+    %% 
+    Offset = 30575701172109 + 200_000,
+    ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
+    Opts = #{},
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    ?assertEqual(
+        <<"mgSfqsNapn_BXpbnIHtdeu3rQyvrjBaS0c7rEbUbtBU">>,
+        hb_util:encode(crypto:hash(sha256, Data))
+    ),
+    ok.
+
+get_pre_split_small_chunks_test() ->
+    assert_chunk_range(
+        <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
+        11_741_031_646_397,
+        810774,
+        <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+    ).
+
+get_post_split_small_chunks_test() ->
+    assert_chunk_range(
+        <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
+        146_563_435_390_439,
+        541937,
+        <<"cR2HRQRfZP_MiC1egrdc8y8j4SAF9-ppvaIaXDq5i7s">>
+    ).
+
+%% @doc this test fails if the chunks are queried with
+%% the `x-bucket-based-offset' header set. I believe it is because
+%% bucket-based offset should only be used when querying an L1 TX
+bucket_based_offset_test() ->
+    Offset = 376836461101675,
+    Length = 116247,
+    ExpectedID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
+    {ok, SerializedItem} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset + 1,
+            <<"length">> => Length
+        },
+        #{}
+    ),
+    Item = ar_bundles:deserialize(SerializedItem),
+    ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id)),
+    ?assert(ar_bundles:verify_item(Item)),
+    ok.
+
+% large_tx_test() ->
+%     assert_chunk_range(
+%         <<"GX2bvdo736wJPR1GmIkyW9GRk3JdXQ_aAd1ozX1d450">>,
+%         378161418083672,
+%         42040418,
+%         <<"LJbiKv5gT2Y5XKFFPF6WqYAdOtaZAvHmtCkfCTbP43g">>
+%     ).
+
+assert_chunk_range(TXID, EndOffset, ExpectedLength, ExpectedHash) ->
+    StartOffset = EndOffset - ExpectedLength,
+    Opts = #{},
+    T1 = erlang:monotonic_time(millisecond),
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => StartOffset+1,
+            <<"length">> => ExpectedLength
+        },
+        Opts
+    ),
+    T2 = erlang:monotonic_time(millisecond),
+    ?event(debug_performance, {chunk_range_resolve,
+        {elapsed_ms, T2 - T1},
+        {tx, TXID},
+        {offset, StartOffset + 1},
+        {length, ExpectedLength}
+    }),
+    {ok, RawData} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"raw">>,
+            <<"tx">> => TXID
+        },
+        Opts
+    ),
+    ?event(debug_test, {chunk_vs_raw_comparison,
+        {tx, TXID},
+        {start_offset, StartOffset},
+        {end_offset, EndOffset},
+        {expected_length, ExpectedLength},
+        {chunk_size, byte_size(Data)},
+        {raw_size, byte_size(RawData)},
+        {match, Data =:= RawData},
+        {hash, {explicit, hb_util:encode(crypto:hash(sha256, Data))}}
+    }),
+    ?assertEqual(RawData, Data),
+    ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
+    {ok, TXHeader} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => TXID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ),
+    ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
+    ?assert(hb_message:verify(TXHeader, all, Opts)),
+    TXWithData = TXHeader#{ <<"data">> => Data },
+    ?assert(hb_message:verify(TXWithData, all, Opts)),
     ok.
