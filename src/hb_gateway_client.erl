@@ -110,14 +110,19 @@ data(ID, Opts) ->
     },
     case hb_http:request(Req, Opts) of
         {ok, Res} ->
+            Data =
+                case hb_maps:find(<<"data">>, Res, Opts) of
+                    {ok, D} -> D;
+                    _ -> hb_ao:get(<<"body">>, Res, <<>>, Opts)
+                end,
             ?event(gateway,
                 {data,
                     {id, ID},
                     {response, Res},
-                    {body, hb_ao:get(<<"body">>, Res, <<>>, Opts)}
+                    {data, Data}
                 }
             ),
-            {ok, hb_ao:get(<<"body">>, Res, <<>>, Opts)};
+            {ok, Data};
         Res ->
             ?event(gateway, {request_error, {id, ID}, {response, Res}}),
             {error, no_viable_gateway}

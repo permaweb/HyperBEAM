@@ -211,7 +211,7 @@ find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
         end,
     case LocalCacheRes of
         {ok, Worker, Assignment} ->
-            ?event(next_debug,
+            ?event(debug_next,
                 {in_cache,
                     {slot, LastSlot + 1},
                     {assignment, Assignment}

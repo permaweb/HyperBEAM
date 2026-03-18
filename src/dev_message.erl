@@ -635,7 +635,7 @@ set(Base, NewValuesMsg, Opts) ->
         ),
     % Base message with keys-to-unset removed
     BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
-    ?event(message_set,
+    ?event(debug_message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
             {keys_to_unset, UnsetKeys},

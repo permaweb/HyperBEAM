@@ -4,14 +4,24 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
+-export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
--export([is_tx_admissible/3]).
+-export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+%%% Helper functions
+-export([get_chunk/2, bundle_header/2]).
 -include("include/hb.hrl").
 -include("include/hb_arweave_nodes.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
+
+%% @doc Route unknown keys through offset resolution first, then fall back to
+%% the message device for direct key access.
+info() ->
+    #{
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>],
+        default => fun dev_arweave_offset:get/4
+    }.
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
@@ -67,25 +77,13 @@ extract_target(Base, Request, Opts) ->
 
 post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
-    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
-    Serialized = hb_json:encode(JSON),
-    LogExtra = [
-        {codec, <<"tx@1.0">>},
-        {id, {explicit, hb_util:human_id(TX#tx.id)}}
-    ],
-    Res = request(
-        <<"POST">>,
-        <<"/tx">>,
-        #{ <<"body">> => Serialized },
-        LogExtra,
-        Opts
-    ),
+    Res = post_tx_header(TX, Opts),
     case Res of
         {ok, _} ->
             CacheRes = hb_cache:write(Request, Opts),
             case CacheRes of
                 {ok, _} ->
-                    ?event(arweave_debug, {tx_cached, {msg, Request}, {status, ok}});
+                    ?event(debug_arweave, {tx_cached, {msg, Request}, {status, ok}});
                 _ ->
                     ?event(error, {tx_failed_to_cache, {msg, Request}, CacheRes})
             end;
@@ -103,6 +101,22 @@ post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
     ],
     post_binary_ans104(Serialized, LogExtra, Opts).
 
+
+post_tx_header(TX, Opts) ->
+    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
+    Serialized = hb_json:encode(JSON),
+    LogExtra = [
+        {codec, <<"tx@1.0">>},
+        {id, {explicit, hb_util:human_id(TX#tx.id)}}
+    ],
+    request(
+        <<"POST">>,
+        <<"/tx">>,
+        #{ <<"body">> => Serialized },
+        LogExtra,
+        Opts
+    ).
+
 post_binary_ans104(SerializedTX, Opts) ->
     LogExtra = [
         {codec, <<"ans104@1.0">>},
@@ -114,14 +128,11 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
     Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
-            <<"path">> => <<"/tx">>,
+            <<"path">> => <<"/~bundler@1.0/tx&codec-device=ans104@1.0">>,
             <<"content-type">> => <<"application/octet-stream">>,
             <<"body">> => SerializedTX
         },
-        Opts#{
-            http_client =>
-                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
-        }
+        Opts
     ),
     to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
@@ -239,8 +250,9 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => StartOffset,
+            <<"raw-id">> => TXID,
+            <<"offset">> => StartOffset,
+            <<"data-offset">> => StartOffset,
             <<"content-type">> => ContentType,
             <<"header-length">> => 0,
             <<"content-length">> => Length,
@@ -252,11 +264,12 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
 %% so to read the data associated with their IDs, we must first read the header
 %% chunk, deserialize it, and offset our data read from its starting offset.
 head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
+    ?event(debug_raw, {head_raw_ans104, {txid, TXID}, {arweave_offset, ArweaveOffset}, {length, Length}}),
     HeaderReq =
         #{
             <<"path">> => <<"chunk">>,
             <<"offset">> => ArweaveOffset + 1,
-            <<"length">> => ?DATA_CHUNK_SIZE
+            <<"length">> => min(Length, ?DATA_CHUNK_SIZE)
         },
     case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
         {ok, HeaderChunk} ->
@@ -273,8 +286,9 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
         ),
     {ok,
         #{
-            <<"arweave-id">> => TXID,
-            <<"arweave-data-offset">> => ArweaveOffset + HeaderSize,
+            <<"raw-id">> => TXID,
+            <<"offset">> => ArweaveOffset,
+            <<"data-offset">> => ArweaveOffset + HeaderSize,
             <<"content-type">> => ContentType,
             <<"header-length">> => HeaderSize,
             <<"content-length">> => Length - HeaderSize,
@@ -292,8 +306,8 @@ get_raw(Base, Request, Opts) ->
         Err = {error, _} -> Err;
         {ok,
             Header = #{
-                <<"arweave-id">> := TXID,
-                <<"arweave-data-offset">> := ArweaveDataOffset,
+                <<"raw-id">> := TXID,
+                <<"data-offset">> := ArweaveDataOffset,
                 <<"content-type">> := ContentType,
                 <<"content-length">> := FullContentLength
             }
@@ -324,7 +338,7 @@ get_raw(Base, Request, Opts) ->
                                 "/",
                                 (hb_util:bin(FullContentLength))/binary
                             >>,
-                        <<"data">> => Data
+                        <<"body">> => Data
                     }
                 };
             false ->
@@ -332,7 +346,7 @@ get_raw(Base, Request, Opts) ->
                     {ok, Data} ->
                         {ok, Header#{
                             <<"content-type">> => ContentType,
-                            <<"data">> => Data
+                            <<"body">> => Data
                         }};
                     Error ->
                         ?event(
@@ -411,7 +425,7 @@ get_chunk_range(_Base, Request, Opts) ->
 %% cannot span the strict data split threshold, so mixed ranges are rejected.
 fetch_chunk_range(Offset, Length, Opts) ->
     EndOffset = Offset + Length - 1,
-    ?event(arweave_debug, {fetch_chunk_range,
+    ?event(debug_arweave, {fetch_chunk_range,
         {offset, Offset},
         {end_offset, EndOffset},
         {size, Length}}),
@@ -449,7 +463,7 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
                 true ->
                     ExtraOffset = min(
                         lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(arweave_debug, {fetching_extra_chunk,
+                    ?event(debug_arweave, {fetching_extra_chunk,
                         {binary_size, BinarySize},
                         {expected_length, ExpectedLength},
                         {extra_offset, ExtraOffset}}),
@@ -486,7 +500,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             % be needed. We have yet to find an L1 TX that is chunked in such
             % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(arweave_debug,
+            ?event(debug_arweave,
                 {fill_gaps, 
                     {offset, Offset},
                     {end_offset, EndOffset},
@@ -505,7 +519,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
                     {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
-                    ?event(arweave_debug, {fill_gaps, NewInfos}),
+                    ?event(debug_arweave, {fill_gaps, NewInfos}),
                     fill_gaps(
                         Sorted ++ NewInfos,
                         Offset, EndOffset, Opts
@@ -517,7 +531,7 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
 %% @doc Fetch chunks at the given offsets in parallel and parse the responses
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
-    Concurrency = hb_opts:get(chunk_fetch_concurrency, 10, Opts),
+    Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     Results = hb_pmap:parallel_map(
         Offsets,
         fun(O) -> get_chunk(O, Opts) end,
@@ -532,7 +546,7 @@ generate_offsets(Start, End, Step) ->
 
 generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets = lists:reverse(Acc),
-    ?event(arweave_debug, {fetch_chunk_offsets, {offsets, Offsets}}),
+    ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
     Offsets;
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
@@ -548,7 +562,7 @@ collect_chunks([{ok, JSON} | Rest], Acc) ->
     Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
     AbsStart = AbsEnd - byte_size(Chunk) + 1,
-    ?event(arweave_debug, 
+    ?event(debug_arweave, 
         {collect_chunks,
             {abs_start, AbsStart}, 
             {abs_end, AbsEnd},
@@ -613,7 +627,7 @@ assemble_chunks(ChunkInfos, Offset) ->
                     % The first chunk may start before the requested offset;
                     % trim the leading bytes to start exactly at Offset.
                     Skip = Offset - ChunkStart,
-                    ?event(arweave_debug, {assemble_chunks,
+                    ?event(debug_arweave, {assemble_chunks,
                         {skip, Skip},
                         {chunk_start, ChunkStart},
                         {offset, Offset},
@@ -622,7 +636,7 @@ assemble_chunks(ChunkInfos, Offset) ->
                     }),
                     binary:part(Data, Skip, byte_size(Data) - Skip);
                 false ->
-                    ?event(arweave_debug, {assemble_chunks,
+                    ?event(debug_arweave, {assemble_chunks,
                         {chunk_start, ChunkStart},
                         {offset, Offset},
                         {byte_size, byte_size(Data)}
@@ -644,6 +658,59 @@ get_chunk(Offset, Opts) ->
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+
+%% @doc Read and decode the bundle header index at the given global start
+%% offset, returning the header size alongside the decoded index entries.
+bundle_header(BundleStartOffset, Opts) ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => BundleStartOffset + 1
+        },
+        Opts
+    ) of
+        {ok, FirstChunk} ->
+            case ar_bundles:bundle_header_size(FirstChunk) of
+                invalid_bundle_header ->
+                    {error, invalid_bundle_header};
+                HeaderSize ->
+                    case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
+                        {ok, HeaderBin} ->
+                            case ar_bundles:decode_bundle_header(HeaderBin) of
+                                {_Items, BundleIndex} ->
+                                    {ok, HeaderSize, BundleIndex};
+                                invalid_bundle_header ->
+                                    {error, invalid_bundle_header}
+                            end;
+                        Error ->
+                            Error
+                    end
+            end;
+        Error ->
+            Error
+    end.
+
+%% @doc Read exactly the bytes needed to decode a bundle header.
+read_bundle_header(_BundleStartOffset, HeaderSize, FirstChunk, _Opts)
+        when HeaderSize =< byte_size(FirstChunk) ->
+    {ok, binary:part(FirstChunk, 0, HeaderSize)};
+read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) ->
+    RemainingSize = HeaderSize - byte_size(FirstChunk),
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => BundleStartOffset + byte_size(FirstChunk) + 1,
+            <<"length">> => RemainingSize
+        },
+        Opts
+    ) of
+        {ok, RemainingChunk} ->
+            {ok, <<FirstChunk/binary, RemainingChunk/binary>>};
+        Error ->
+            Error
+    end.
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -758,7 +825,7 @@ request(Method, Path, Opts) ->
 request(Method, Path, Extra, Opts) ->
     request(Method, Path, Extra, [], Opts).
 request(Method, Path, Extra, LogExtra, Opts) ->
-    ?event(arweave_debug, {request,
+    ?event(debug_arweave, {request,
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
@@ -821,7 +888,7 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-    ?event(arweave_debug,
+    ?event(debug_arweave,
         {arweave_tx_response,
             {path, {explicit, Path}},
             {raw_body, {explicit, Body}},
@@ -1197,7 +1264,6 @@ setup_arweave_index_opts(TXIDs) ->
         arweave_index_ids => true,
         arweave_index_store => IndexStore
     },
-    application:ensure_all_started(hb),
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
     %     fun(Block) -> ok = index_test_block(Block, Opts) end,
@@ -1340,7 +1406,8 @@ get_tx_basic_data_exclude_data_test() ->
         },
         Opts
     ),
-    Data = hb_ao:get(<<"data">>, RawData, Opts),
+    ?event(debug_test, {raw_data, RawData}),
+    Data = hb_ao:get(<<"body">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
@@ -1376,7 +1443,7 @@ get_tx_data_tag_exclude_data_test() ->
         },
         Opts
     ),
-    Data = hb_ao:get(<<"data">>, RawData, Opts),
+    Data = hb_ao:get(<<"body">>, RawData, Opts),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
@@ -1454,7 +1521,7 @@ get_raw_range_tx_test() ->
     ?event(debug_test, {result, Result}),
     ?assertEqual(
         {ok, <<"{\"d">>},
-        hb_maps:find(<<"data">>, Result, Opts)
+        hb_maps:find(<<"body">>, Result, Opts)
     ),
     {ok, Result2} =
         hb_ao:resolve(
@@ -1474,7 +1541,7 @@ get_raw_range_tx_test() ->
     ),
     ?assertEqual(
         {ok, <<"ame Cr">>},
-        hb_maps:find(<<"data">>, Result2, Opts)
+        hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
 get_raw_range_ans104_test() ->
@@ -1499,7 +1566,7 @@ get_raw_range_ans104_test() ->
     ?event(debug_test, {result, Result}),
     ?assertEqual(
         {ok, <<"{\n">>},
-        hb_maps:find(<<"data">>, Result, Opts)
+        hb_maps:find(<<"body">>, Result, Opts)
     ),
     {ok, Result2} =
         hb_ao:resolve(
@@ -1519,7 +1586,7 @@ get_raw_range_ans104_test() ->
     ),
     ?assertEqual(
         {ok, <<"t #972">>},
-        hb_maps:find(<<"data">>, Result2, Opts)
+        hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
 get_tx_rsa_nested_bundle_test() ->
@@ -1877,7 +1944,6 @@ reassemble_bundle2_test() ->
 %% reassembles the bundle and nested items. This is also useful tool 
 %% debugging tool to check that a bundle is present in the weave.
 assert_bundle_tx(TXID) ->
-    application:ensure_all_started(hb),
     Opts = #{},
     {ok, #{ <<"body">> := OffsetBody }} =
         hb_http:request(
