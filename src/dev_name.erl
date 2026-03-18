@@ -229,10 +229,14 @@ load_and_execute_test() ->
 %% @doc Return an `Opts` for an environment with the default ARNS name export
 %% and a temporary store for the test.
 arns_opts() ->
-    JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
-    Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
+    JSONNames = <<"4DnLccQGh0zfyNdEBQSbuB3cMXmnTr5uF9j5GgXl2Rg">>,
+    Path = <<JSONNames/binary, "~process@1.0/compute/records">>,
     hb_http_server:start_node(#{}),
-    TempStore = hb_test_utils:test_store(),
+    TempStore =
+        #{
+            <<"name">> => <<"cache-mainnet/lmdb">>,
+            <<"store-module">> => hb_store_lmdb
+        },
     #{
         store =>
             [
