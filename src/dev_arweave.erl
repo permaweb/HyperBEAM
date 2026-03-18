@@ -2273,9 +2273,18 @@ is_admissible_hook_routed_test_() ->
         Opts = #{
             store => hb_test_utils:test_store(),
             priv_wallet => NodeWallet,
-            http_monitor => #{
-                <<"method">> => <<"POST">>,
-                <<"path">> => SchedulePath
+            on => #{
+                <<"http-client">> => #{
+                    <<"response">> => [
+                        #{
+                            <<"device">> => <<"relay@1.0">>,
+                            <<"path">> => <<"call">>,
+                            <<"method">> => <<"POST">>,
+                            <<"relay-path">> => SchedulePath,
+                            <<"hook/result">> => <<"ignore">>
+                        }
+                    ]
+                }
             },
             router_opts => #{ <<"provider">> => #{ <<"path">> => RoutesPath } },
             node_processes => #{
