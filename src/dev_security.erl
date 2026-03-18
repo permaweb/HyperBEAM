@@ -80,22 +80,29 @@ validate_authority(Base, Assignment, Opts) ->
 validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
-    From = as_list(RawFrom, Opts),
-    Valid = as_list(hb_ao:get(Key, Base, [], Opts), Opts),
-    Required = hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
-    Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
+    %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
+    From = lists:uniq(as_list(RawFrom, Opts)),
+    Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
+    RequiredList = lists:uniq(
+        as_list(
+            hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+            Opts
+        )
+    ),
+    MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
+    Match = safe_match(MatchRaw, length(Valid)),
     ?event(security_debug,
         {validate_authority,
             {subject_ids, From},
             {intent, compute},
             {valid_options, Valid},
-            {required, Required},
+            {required, RequiredList},
             {base, Base},
             {message, SubjectMsg}
         },
         Opts
     ),
-    satisfies_constraints(Key, From, Required, Valid, Match, Opts).
+    satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts).
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
@@ -117,7 +124,11 @@ satisfies_constraints(Intent, MsgCommitters, Required, Valid, ValidCount, Opts) 
         (PresentRequiredCommitters == length(RequiredList)) orelse
             {error, <<"Required committers not present in message.">>},
     % Must have at least `Match' common elements AND all `Required' elements
-    Res = SatisfiesAcceptable andalso SatisfiesRequired,
+    Res =
+        case SatisfiesAcceptable of
+            true -> SatisfiesRequired;
+            Error -> Error
+        end,
     ?event(
         security_short,
         {constraint_check,
@@ -140,8 +151,46 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 %% @doc Normalize value to a list.
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
+%% @doc Normalize and validate a `*-match` threshold against the number of
+%% available valid identities. Missing thresholds fall back to `Default`.
+%% Explicit thresholds must be integer-like and within the admissible range:
+%% `0` is only allowed when `Default = 0`, otherwise the threshold must be in
+%% `1..Default`.
+safe_match(not_found, Default) when is_integer(Default), Default >= 0 ->
+    Default;
+safe_match(not_found, _Default) ->
+    {error, <<"Default must be a non-negative integer.">>};
+safe_match(Match, Default) when is_integer(Match), is_integer(Default), Default >= 0 ->
+    case {Match, Default} of
+        {0, 0} -> 0;
+        {M, D} when M > 0 andalso M =< D -> M;
+        _ -> {error, <<"Invalid Match threshold.">>}
+    end;
+safe_match(Match, Default) when is_binary(Match)->
+    try binary_to_integer(Match) of
+        IntMatch -> safe_match(IntMatch, Default)
+    catch
+        _:_ -> {error, <<"Invalid Match threshold.">>}
+    end;
+safe_match(_, _) ->
+    {error, <<"Invalid Match threshold.">>}.
 
 %% @doc Return the single element of a list if there is only one, else return
 %% the list.
 maybe_single([SingleElement], _Opts) -> SingleElement;
 maybe_single(List, _Opts) -> List.
+
+duplicate_authority_match_rejected_test() ->
+    ?assertEqual(
+        {error, <<"Too few acceptable committers present.">>},
+        validate(
+            <<"authority">>,
+            #{
+                <<"authority">> => [<<"alice">>, <<"bob">>],
+                <<"authority-match">> => 2
+            },
+            #{},
+            [<<"alice">>, <<"alice">>],
+            #{}
+        )
+    ).
