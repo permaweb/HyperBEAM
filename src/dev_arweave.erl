@@ -132,29 +132,34 @@ get_tx(Base, Request, Opts) ->
     case find_key(<<"tx">>, Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
-            request(
-                <<"GET">>,
-                <<"/tx/", TXID/binary>>,
-                #{
-                    <<"multirequest-admissible">> =>
-                        #{
-                            <<"device">> => <<"arweave@2.9">>,
-                            <<"path">> => <<"is-tx-admissible">>,
-                            <<"tx">> => TXID
-                        }
-                },
-                Opts#{
-                    exclude_data =>
-                        hb_util:bool(
-                            find_key(
-                                <<"exclude-data">>,
-                                Base,
-                                Request,
-                                Opts
-                            )
-                        )
-                }
-            )
+            TxOpts = Opts#{
+                exclude_data =>
+                    hb_util:bool(
+                        find_key(<<"exclude-data">>, Base, Request, Opts)
+                    )
+            },
+            case request(<<"GET">>, <<"/tx/", TXID/binary>>, TxOpts) of
+                {ok, Msg} ->
+                    Admissible = #{
+                        <<"device">> => <<"arweave@2.9">>,
+                        <<"path">> => <<"is-tx-admissible">>,
+                        <<"tx">> => TXID
+                    },
+                    case is_tx_admissible(Admissible, Msg, TxOpts) of
+                        true ->
+                            case dev_hook:on(
+                                <<"tx-admissible">>,
+                                #{ <<"body">> => Msg },
+                                TxOpts
+                            ) of
+                                {ok, #{ <<"body">> := ResultMsg }} ->
+                                    {ok, ResultMsg};
+                                {error, Reason} -> {error, Reason}
+                            end;
+                        false -> {error, not_admissible}
+                    end;
+                Error -> Error
+            end
     end.
 
 %% @doc Check whether a response to a `GET /tx/ID' request is valid.
@@ -765,29 +770,7 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 cache_control => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    case to_message(Path, Method, best_response(Res), LogExtra, Opts) of
-        {ok, Msg} ->
-            case hb_maps:get(
-                <<"multirequest-admissible">>, Extra, undefined, Opts
-            ) of
-                undefined -> {ok, Msg};
-                Admissible ->
-                    case is_tx_admissible(Admissible, Msg, Opts) of
-                        true ->
-                            case dev_hook:on(
-                                <<"tx-admissible">>,
-                                #{ <<"body">> => Msg },
-                                Opts
-                            ) of
-                                {ok, #{ <<"body">> := ResultMsg }} ->
-                                    {ok, ResultMsg};
-                                {error, Reason} -> {error, Reason}
-                            end;
-                        false -> {error, not_admissible}
-                    end
-            end;
-        Error -> Error
-    end.
+    to_message(Path, Method, best_response(Res), LogExtra, Opts).
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
