@@ -261,66 +261,54 @@ init_hackney_pool() ->
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
 
-%% @doc Invoke the HTTP monitor if configured. Optionally gates invocations
-%% via `monitor-sampler@1.0' when `sample-rate' is set in the monitor config.
-%% When the target is a WASM process (`is-wasm-process' in the monitor config),
-%% the reserved `path' key is moved to `monitor-type' to avoid interfering
-%% with AO-Core routing.
-maybe_invoke_monitor(Details, Opts) ->
-    case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
-        not_found -> ok;
-        Monitor ->
-            case should_forward(Monitor, Opts) of
-                false -> ok;
-                true -> do_invoke_monitor(Monitor, Details, Opts)
-            end
-    end.
+%% @doc Record the duration of the request in an async process. We write the
+%% data to prometheus if the application is enabled, as well as firing the
+%% `http-client/response' hook if configured.
+record_duration(Details, Opts) ->
+    spawn(
+        fun() ->
+            % First, write to prometheus if it is enabled. Prometheus works
+            % only with strings as lists, so we encode the data before granting
+            % it.
+            GetFormat =
+                fun
+                    (<<"request-category">>) ->
+                        path_to_category(maps:get(<<"request-path">>, Details));
+                    (Key) ->
+                        hb_util:list(maps:get(Key, Details))
+                end,
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    prometheus_histogram:observe(
+                        http_request_duration_seconds,
+                        lists:map(
+                            GetFormat,
+                            [
+                                <<"request-method">>,
+                                <<"status-class">>,
+                                <<"request-category">>
+                            ]
+                        ),
+                        maps:get(<<"duration">>, Details)
+                    )
+            end,
+            HookReq =
+                #{ <<"body">> =>
+                    hb_message:commit(
+                        maybe_add_reference(Details, Opts),
+                        Opts
+                    )
+                },
+            dev_hook:on(<<"http-client/response">>, HookReq, Opts)
+        end
+    ).
 
-%% @doc Check whether this request should be forwarded to the monitor.
-%% If `sample-rate' is not set in the monitor config, all requests are forwarded.
-should_forward(Monitor, Opts) ->
-    case hb_maps:get(<<"sample-rate">>, Monitor, not_found, Opts) of
-        not_found -> true;
-        _ ->
-            case hb_ao:resolve(
-                #{ <<"device">> => <<"monitor-sampler@1.0">> },
-                Monitor#{ <<"path">> => <<"should-sample">> },
-                Opts
-            ) of
-                {ok, true} -> true;
-                {ok, false} -> false;
-                Error -> Error
-            end
-    end.
-
-%% @doc Build and dispatch the monitor message.
-do_invoke_monitor(Monitor, Details, Opts) ->
-    WithRef =
-        case hb_ao:get(<<"http_reference">>, Opts, Opts) of
-            not_found -> Details;
-            Ref -> Details#{ <<"reference">> => Ref }
-        end,
-    BodyData = sanitize_body(WithRef, Monitor, Opts),
-    Req = Monitor#{
-        <<"body">> =>
-            hb_message:commit(
-                BodyData#{ <<"method">> => <<"POST">> }, Opts
-            )
-    },
-    ReqMsgs = hb_singleton:from(Req, Opts),
-    Res = hb_ao:resolve_many(ReqMsgs, Opts),
-    ?event(http_monitor, {resolved_monitor, Res}).
-
-%% @doc When the monitor target is a WASM process, `path' is a reserved
-%% AO-Core routing key that the scheduler copies into the assignment.
-%% Move it to `Action' to avoid breaking execution dispatch.
-sanitize_body(Body, Monitor, Opts) ->
-    case hb_ao:get(<<"is-wasm-process">>, Monitor, Opts) of
-        true ->
-            {PathVal, Rest} = hb_maps:take(<<"path">>, Body, Opts),
-            Rest#{ <<"Action">> => PathVal };
-        _ ->
-            Body
+%% @doc Attach the `http_reference' from Opts to the details map, if present.
+maybe_add_reference(Details, Opts) ->
+    case hb_opts:get(http_reference, not_found, Opts) of
+        not_found -> Details;
+        Ref -> Details#{ <<"reference">> => Ref }
     end.
 
 %%% ==================================================================
