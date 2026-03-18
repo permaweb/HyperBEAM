@@ -80,10 +80,10 @@ validate_authority(Base, Assignment, Opts) ->
 validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
-    %% dedup entries for uniqueness sanity and correctness of min N threshold
-    From = lists:dedup(as_list(RawFrom, Opts)),
-    Valid = lists:dedup(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
-    RequiredList = lists:dedup(hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts)),
+    %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
+    From = lists:uniq(as_list(RawFrom, Opts)),
+    Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
+    RequiredList = lists:uniq(hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts)),
     Match = hb_ao:get(<<Key/binary, "-match">>, Base, length(Valid), Opts),
     ?event(security_debug,
         {validate_authority,
@@ -118,7 +118,11 @@ satisfies_constraints(Intent, MsgCommitters, Required, Valid, ValidCount, Opts) 
         (PresentRequiredCommitters == length(RequiredList)) orelse
             {error, <<"Required committers not present in message.">>},
     % Must have at least `Match' common elements AND all `Required' elements
-    Res = SatisfiesAcceptable andalso SatisfiesRequired,
+    Res =
+        case SatisfiesAcceptable of
+            true -> SatisfiesRequired;
+            Error -> Error
+        end,
     ?event(
         security_short,
         {constraint_check,
@@ -146,3 +150,18 @@ as_list(Value, _Opts) -> [Value].
 %% the list.
 maybe_single([SingleElement], _Opts) -> SingleElement;
 maybe_single(List, _Opts) -> List.
+
+duplicate_authority_match_rejected_test() ->
+    ?assertEqual(
+        {error, <<"Too few acceptable committers present.">>},
+        validate(
+            <<"authority">>,
+            #{
+                <<"authority">> => [<<"alice">>, <<"bob">>],
+                <<"authority-match">> => 2
+            },
+            #{},
+            [<<"alice">>, <<"alice">>],
+            #{}
+        )
+    ).
