@@ -80,34 +80,38 @@ validate_authority(Base, Assignment, Opts) ->
 validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
-    %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
-    From = lists:uniq(as_list(RawFrom, Opts)),
-    Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
-    RequiredList = lists:uniq(
-        as_list(
-            hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+    maybe
+        %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
+        From = lists:uniq(as_list(RawFrom, Opts)),
+        Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
+        RequiredList = lists:uniq(
+            as_list(
+                hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+                Opts
+            )
+        ),
+        DefaultThresholdN = case length(Valid) of
+            0 -> 0;
+            _ -> 1
+        end,
+        
+        MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
+        MatchOrError = safe_match(MatchRaw, DefaultThresholdN, length(Valid)),
+        true ?= is_integer(MatchOrError) orelse MatchOrError,
+        Match = MatchOrError,
+        ?event(security_debug,
+            {validate_authority,
+                {subject_ids, From},
+                {intent, compute},
+                {valid_options, Valid},
+                {required, RequiredList},
+                {base, Base},
+                {message, SubjectMsg}
+            },
             Opts
-        )
-    ),
-    DefaultThresholdN = case length(Valid) of
-        0 -> 0;
-        _ -> 1
-    end,
-    
-    MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
-    Match = safe_match(MatchRaw, DefaultThresholdN),
-    ?event(security_debug,
-        {validate_authority,
-            {subject_ids, From},
-            {intent, compute},
-            {valid_options, Valid},
-            {required, RequiredList},
-            {base, Base},
-            {message, SubjectMsg}
-        },
-        Opts
-    ),
-    satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts).
+        ),
+        satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts)
+end.
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
@@ -161,23 +165,23 @@ as_list(Value, _Opts) -> [Value].
 %% there are no acceptable signers and `1` otherwise. Explicit thresholds must
 %% be integer-like and within the admissible range: `0` is only allowed when
 %% the default is `0`; otherwise the threshold must be in `1..Default`.
-safe_match(not_found, Default) when is_integer(Default), Default >= 0 ->
+safe_match(_Match, _Default, ValidLen) when is_integer(ValidLen), ValidLen < 0 ->
+    {error, <<"Valid list length must be a non-negative integer.">>};
+safe_match(not_found, Default, _ValidLen) ->
     Default;
-safe_match(not_found, _Default) ->
-    {error, <<"Default must be a non-negative integer.">>};
-safe_match(Match, Default) when is_integer(Match), is_integer(Default), Default >= 0 ->
-    case {Match, Default} of
-        {0, 0} -> 0;
-        {M, D} when M > 0 andalso M =< D -> M;
+safe_match(Match, Default, ValidLen) when is_integer(Match), is_integer(Default), Default >= 0, is_integer(ValidLen) ->
+    case {Match, Default, ValidLen} of
+        {0, 0, _} -> 0;
+        {M, _, V} when M > 0 andalso M =< V -> M;
         _ -> {error, <<"Invalid Match threshold.">>}
     end;
-safe_match(Match, Default) when is_binary(Match)->
+safe_match(Match, Default, ValidLen) when is_binary(Match)->
     try binary_to_integer(Match) of
-        IntMatch -> safe_match(IntMatch, Default)
+        IntMatch -> safe_match(IntMatch, Default, ValidLen)
     catch
         _:_ -> {error, <<"Invalid Match threshold.">>}
     end;
-safe_match(_, _) ->
+safe_match(_, _, _) ->
     {error, <<"Invalid Match threshold.">>}.
 
 %% @doc Return the single element of a list if there is only one, else return
