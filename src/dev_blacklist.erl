@@ -24,12 +24,20 @@
 
 %%% The default frequency at which the blacklist cache is refreshed in seconds.
 -define(DEFAULT_REFRESH_FREQUENCY, 60 * 5).
+-define(DEFAULT_WHITELIST, 
+    [<<"/~hyperbuddy@1.0/metrics">>,
+     <<"/~hyperbuddy@1.0/styles.css">>,
+     <<"/~hyperbuddy@1.0/fonts.css">>,
+     <<"/~hyperbuddy@1.0/script.js">>,
+     <<"/~hyperbuddy@1.0/bundle.js">>]).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
     case hb_opts:get(blacklist_providers, false, Opts) of
-        false -> {ok, HookReq};
+        false -> 
+            ?event(error, {no_providers}),
+            {ok, HookReq};
         _ ->
             case is_match(HookReq, Opts) of
                 false ->
@@ -58,12 +66,21 @@ request(_Base, HookReq, Opts) ->
 
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
-    ensure_cache_table(Opts),
-    IDs = collect_ids(Msg, Opts),
-    MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
-    case lists:filter(MatchesFromIDs, IDs) of
-        [] -> false;
-        [ID|_] -> ID
+    WhitelistRoutes = hb_opts:get(blacklist_whitelist, ?DEFAULT_WHITELIST, Opts),
+    Path = hb_maps:get(<<"path">>, maps:get(<<"request">>, Msg, #{}), no_path),
+    ?event({is_match, {route, Path}}),
+    case lists:member(Path, WhitelistRoutes) of 
+        false -> 
+            ?event(error, {whitelist_route_no_match, {route, maps:get(<<"path">>, Msg, no_path)}}),
+            ensure_cache_table(Opts),
+            IDs = collect_ids(Msg, Opts),
+            MatchesFromIDs = fun(ID) -> ets:lookup(cache_table_name(Opts), ID) =/= [] end,
+            case lists:filter(MatchesFromIDs, IDs) of
+                [] -> false;
+                [ID|_] -> ID
+            end;
+        true ->
+            false
     end.
 
 %%% Internal
@@ -106,10 +123,10 @@ fetch_single_provider(Provider, Opts) ->
         case execute_provider(Provider, Opts) of
             {ok, Blacklist} ->
                 {ok, IDs} = parse_blacklist(Blacklist, Opts),
-                ?event({parsed_blacklist, {ids, IDs}}),
+                ?event({parsed_blacklist, {ids_lengh, length(IDs)}}),
                 BlacklistID = hb_message:id(Blacklist, all, Opts),
                 ?event({update_blacklist_cache,
-                    {ids, IDs}, {blacklist_id, BlacklistID}}),
+                    {ids_lengh, length(IDs)}, {blacklist_id, BlacklistID}}),
                 Table = cache_table_name(Opts),
                 {ok, insert_ids(IDs, BlacklistID, Table, Opts)};
             {error, _} = Error ->
@@ -195,6 +212,10 @@ insert_ids([ID | IDs], Value, Table, Opts) when ?IS_ID(ID) ->
 
 %% @doc Ensure the cache table exists.
 ensure_cache_table(Opts) ->
+    %% Options: 
+    %% - continue: Don't wait for blacklist to be initialized
+    %% - halt: Close connection if not initilalized
+    FallbackMode = hb_opts:get(blacklist_fallback, halt, Opts),
     TableName = cache_table_name(Opts),
     case is_initialized(TableName) of
         true -> TableName;
@@ -218,11 +239,14 @@ ensure_cache_table(Opts) ->
                     refresh_loop(Opts)
                 end
             ),
-            hb_util:until(
-                fun() -> is_initialized(TableName) end,
-                10
-            ),
-            TableName
+            case FallbackMode of 
+                continue -> TableName;
+                halt ->
+                    case is_initialized(TableName) of
+                        true -> TableName;
+                        false -> throw({error, #{<<"status">> => 503, <<"body">> => <<"Loading blacklist ...">>}})
+                    end
+            end
     end.
 
 %% @doc Check if the cache table is initialized. We do this by checking that the
