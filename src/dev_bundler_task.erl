@@ -4,6 +4,8 @@
 %%% - post_proof: Seeding teh chunks to the Arweave network
 -module(dev_bundler_task).
 -export([worker_loop/0, log_task/3, format_timestamp/0]).
+%%% Test-only exports.
+-export([data_items_to_tx/2]).
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -150,21 +152,40 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
 
 %% @doc Build and sign a bundle TX without posting it.
 build_signed_tx(Items, Opts) ->
-    {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
+    TX = data_items_to_tx(Items, Opts),
     DataSize = TX#tx.data_size,
     PriceResult = get_price(DataSize, Opts),
     AnchorResult = get_anchor(Opts),
     case {PriceResult, AnchorResult} of
         {{ok, Price}, {ok, Anchor}} ->
             Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-            SignedTX = ar_tx:sign(
-                TX#tx{anchor = Anchor, reward = Price},
-                Wallet
-            ),
+            SignedTX = 
+                dev_arweave_common:normalize(
+                    ar_tx:sign(
+                        TX#tx{anchor = Anchor, reward = Price},
+                        Wallet
+                    )
+                ),
             {ok, SignedTX};
         {PriceErr, AnchorErr} ->
             {error, {PriceErr, AnchorErr}}
     end.
+
+data_items_to_tx(Items, Opts) ->
+    List = lists:map(
+        fun(Item) -> 
+            hb_message:convert(
+                Item,
+                #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+                <<"structured@1.0">>,
+                Opts
+            )
+        end,
+        lists:reverse(Items)),
+    dev_arweave_common:normalize(#tx{
+        format = 2,
+        data = List
+    }).
 
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
@@ -278,6 +299,79 @@ build_signed_tx_test() ->
             )
         || Item <- BundledItems],
         ?assertEqual(lists:reverse(Items), BundledStructuredItems),
+        ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+build_signed_tx_on_arbundles_js_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        priv_wallet => hb:wallet(),
+        store => hb_test_utils:test_store()
+    },
+    try
+        % Load an arweave.js-created dataitem
+        Item = ar_bundles:deserialize(
+            hb_util:ok(
+                file:read_file(<<"test/arbundles.js/ans104-item.bundle">>)
+            )
+        ),
+        ?event(debug_test, {item, Item}),
+        ?assert(ar_bundles:verify_item(Item)),
+        % Load an arweave.js-created list bundle
+        {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-list-bundle.bundle">>),
+        BundledItem = ar_bundles:sign_item(#tx{
+            format = ans104,
+            data = Bin,
+            data_size = byte_size(Bin),
+            tags = [
+                {<<"Bundle-Format">>, <<"binary">>},
+                {<<"Bundle-Version">>, <<"2.0.0">>}
+            ]
+        }, hb:wallet()),
+        ?event(debug_test, {bundled_item, BundledItem}),
+        ?assert(ar_bundles:verify_item(BundledItem)),
+        % Convert both dataitems to structured messages
+        ItemStructured = hb_message:convert(Item,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            TestOpts),
+        ?event(debug_test, {item_structured, ItemStructured}),
+        ?assert(hb_message:verify(ItemStructured, all, TestOpts)),
+        BundledItemStructured = hb_message:convert(BundledItem,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            TestOpts),
+        ?event(debug_test, {bundled_item_structured, BundledItemStructured}),
+        ?assert(hb_message:verify(BundledItemStructured, all, TestOpts)),
+        % Use build_signed_tx/2 to mimic the bundler worker logic.
+        {ok, SignedTX} = build_signed_tx(
+            [ItemStructured, BundledItemStructured],
+            TestOpts
+        ),
+        ?event(debug_test, {signed_tx, SignedTX}),
+        ?assert(ar_tx:verify(SignedTX)),
+        % Convert the signed TX to a structured message
+        StructuredTX = hb_message:convert(SignedTX,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+            TestOpts),
+        % ?event(debug_test, {structured_tx, StructuredTX}),
+        ?assert(hb_message:verify(StructuredTX, all, TestOpts)),
+        % Convert back to an L1 TX
+        SignedTXRoundtrip = hb_message:convert(StructuredTX,
+            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            TestOpts),
+        ?event(debug_test, {signed_tx_roundtrip, SignedTXRoundtrip}),
+        ?assert(ar_tx:verify(SignedTXRoundtrip)),
+        ?assertEqual(SignedTX, SignedTXRoundtrip),
         ok
     after
         hb_mock_server:stop(ServerHandle)
