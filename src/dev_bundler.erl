@@ -803,14 +803,15 @@ recover_bundles_test() ->
         ok = dev_bundler_cache:write_item(Item1, Opts),
         ok = dev_bundler_cache:write_item(Item2, Opts),
         ok = dev_bundler_cache:write_item(Item3, Opts),
-        {ok, TX} = dev_codec_tx:to(
-            lists:reverse([Item1, Item2, Item3]), #{}, #{}),
+        TX = dev_bundler_task:data_items_to_tx(
+            lists:reverse([Item1, Item2, Item3]), Opts),
         CommittedTX = hb_message:convert(
             TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
         ok = dev_bundler_cache:write_tx(CommittedTX, [Item1, Item2, Item3], Opts),
         Item4 = new_structured_data_item(4, 10, Opts),
         ok = dev_bundler_cache:write_item(Item4, Opts),
-        {ok, TX2} = dev_codec_tx:to(lists:reverse([Item4]), #{}, #{}),
+        TX2 = dev_bundler_task:data_items_to_tx(
+            lists:reverse([Item4]), Opts),
         CommittedTX2 = hb_message:convert(
             TX2, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
         ok = dev_bundler_cache:write_tx(CommittedTX2, [Item4], Opts),

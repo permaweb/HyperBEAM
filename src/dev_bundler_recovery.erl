@@ -274,5 +274,5 @@ new_data_item(Index, Size, Opts) ->
     hb_message:convert(Item, <<"structured@1.0">>, <<"ans104@1.0">>, Opts).
 
 new_bundle_tx(Items, Opts) ->
-    {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
+    TX = dev_bundler_task:data_items_to_tx(lists:reverse(Items), Opts),
     hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts).
