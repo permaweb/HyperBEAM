@@ -75,6 +75,79 @@ bad_peer_survives_test_() ->
         ?event(http_client_tests, follow_up_request_to_valid_peer_succeeded)
     end}.
 
+hackney_basic_request_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        Args = #{
+            peer => <<"https://arweave.net">>,
+            path => <<"/info">>,
+            method => <<"GET">>,
+            headers => #{},
+            body => <<>>
+        },
+        Opts = #{http_client => hackney, http_retry => 0},
+        {ok, 200, _, _} = hb_http_client:request(Args, Opts)
+    end}.
+
+hackney_unreachable_peer_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        Args = #{
+            peer => <<"http://192.0.2.1:1984">>,
+            path => <<"/info">>,
+            method => <<"GET">>,
+            headers => #{},
+            body => <<>>
+        },
+        Opts = #{http_client => hackney, http_retry => 0},
+        T0 = erlang:monotonic_time(millisecond),
+        Result = hb_http_client:request(Args, Opts),
+        Elapsed = erlang:monotonic_time(millisecond) - T0,
+        ?event(http_client_tests,
+            {hackney_unreachable_peer, {result, Result}, {elapsed, Elapsed}}
+        ),
+        ?assertMatch({error, _}, Result)
+    end}.
+
+hackney_bad_peer_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        ?assert(erlang:whereis(hb_http_client) =/= undefined),
+        ValidArgs = #{
+            peer => <<"https://arweave.net">>,
+            path => <<"/info">>,
+            method => <<"GET">>,
+            headers => #{},
+            body => <<>>
+        },
+        Opts = #{http_client => hackney, http_retry => 0},
+        {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts),
+        BadArgs = ValidArgs#{peer => <<"not-a-valid-uri">>},
+        BadResult = hb_http_client:request(BadArgs, Opts),
+        ?event(http_client_tests, {hackney_bad_peer_result, BadResult}),
+        ?assertMatch({error, _}, BadResult),
+        timer:sleep(500),
+        ?assert(erlang:whereis(hb_http_client) =/= undefined,
+            "gen_server must survive a bad peer URI with hackney backend"),
+        {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts)
+    end}.
+
+hackney_post_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        Args = #{
+            peer => <<"https://arweave.net">>,
+            path => <<"/info">>,
+            method => <<"POST">>,
+            headers => #{},
+            body => <<"{}">>
+        },
+        Opts = #{http_client => hackney, http_retry => 0},
+        Result = hb_http_client:request(Args, Opts),
+        ?event(http_client_tests, {hackney_post_result, summarize(Result)}),
+        ?assertMatch({ok, _, _, _}, Result)
+    end}.
+
 flush_mailbox() ->
     flush_mailbox([]).
 flush_mailbox(Acc) ->
