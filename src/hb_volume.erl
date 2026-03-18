@@ -3,8 +3,8 @@
 Module for managing physical disks and volumes, providing operations
 for partitioning, formatting, mounting, and managing encrypted volumes.
 """.
--export([list_partitions/0, create_partition/2]).
--export([format_disk/2, mount_disk/4, change_node_store/2]).
+-export([list_partitions/0, create_partition_table/1, create_partition/2, get_partition_info/1]).
+-export([format_partition/2, mount_disk/4, change_node_store/2]).
 -export([check_for_device/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -19,16 +19,13 @@ list_partitions() ->
     ?event(debug_volume, {list_partitions, entry, starting}),    
     % Get the partition information using fdisk -l
     ?event(debug_volume, {list_partitions, executing_fdisk, command}),
-    case os:cmd("sudo fdisk -l") of
-        [] ->
-            % Empty output indicates an error
-            Reason = <<"Failed to list partitions: no output">>,
-            ?event(debug_volume, {list_partitions, fdisk_error, no_output}),
-            {error, Reason};
-        Output ->
+    case safe_exec("fdisk -l") of
+        {error, Error} ->
+            ?event(debug_volume, {list_partitions, fdisk_error, Error}),
+            {error, <<"Failed to list disk partitions">>};
+        {ok, Output} ->
             ?event(debug_volume, {list_partitions, fdisk_success, parsing}),
 
-            % Split output into lines
             Lines = string:split(Output, "\n", all),
 
             % Process the output to group information by disk
@@ -90,135 +87,162 @@ process_disk_line(Line, {CurrentDisk, Acc}) ->
 % Parse detailed disk information from fdisk output lines
 parse_disk_info(Device, Lines) ->
     % Initialize with device ID
-    DiskInfo = #{<<"device">> => Device},
-    % Process each line to extract information
+    InitialInfo = #{<<"device">> => Device},
+    
+    % Define all parsing functions as a list
+    Parsers = [
+        fun parse_size_info/2,
+        fun parse_model_info/2,
+        fun parse_units_info/2,
+        fun parse_sector_size_info/2,
+        fun parse_io_size_info/2
+    ],
+    
+    % Apply each parser to each line and accumulate results
     lists:foldl(
-        fun parse_disk_line/2,
-        DiskInfo,
+        fun(Line, Info) ->
+            apply_first_matching_parser(Line, Info, Parsers)
+        end,
+        InitialInfo,
         Lines
     ).
 
-% Parse a single line of disk information
-parse_disk_line(Line, Info) ->
-    % Extract disk size and bytes
+% Apply a list of parsers to a line, returning updated info when first match found
+apply_first_matching_parser(_Line, Info, []) ->
+    Info;
+apply_first_matching_parser(Line, Info, [Parser | RestParsers]) ->
+    case Parser(Line, Info) of
+        continue ->
+            % No change, try next parser
+            apply_first_matching_parser(Line, Info, RestParsers);
+        {ok, UpdatedInfo} ->
+            % Parser matched and updated info, return result
+            UpdatedInfo
+    end.
+
+% Parse disk size and bytes information
+parse_size_info(Line, Info) ->
     SizePattern = "^Disk .+: ([0-9.]+ [KMGT]iB), ([0-9]+) bytes, ([0-9]+) sectors",
     case re:run(Line, SizePattern, [{capture, [1, 2, 3], binary}]) of
         {match, [Size, Bytes, Sectors]} ->
-            Info#{
+            {ok, Info#{
                 <<"size">> => Size,
                 <<"bytes">> => binary_to_integer(Bytes),
                 <<"sectors">> => binary_to_integer(Sectors)
-            };
+            }};
         _ -> 
-            parse_disk_model_line(Line, Info)
+            continue
     end.
 
 % Parse disk model information
-parse_disk_model_line(Line, Info) ->
-    % Extract disk model
+parse_model_info(Line, Info) ->
     ModelPattern = "^Disk model: (.+)\\s*$",
     case re:run(Line, ModelPattern, [{capture, [1], binary}]) of
         {match, [Model]} ->
-            Info#{<<"model">> => string:trim(Model)};
+            {ok, Info#{<<"model">> => string:trim(Model)}};
         _ ->
-            parse_disk_units_line(Line, Info)
+            continue
     end.
 
 % Parse disk units information
-parse_disk_units_line(Line, Info) ->
-    % Extract units information
+parse_units_info(Line, Info) ->
     UnitsPattern = "^Units: (.+)$",
     case re:run(Line, UnitsPattern, [{capture, [1], binary}]) of
         {match, [Units]} ->
-            Info#{<<"units">> => Units};
+            {ok, Info#{<<"units">> => Units}};
         _ ->
-            parse_sector_size_line(Line, Info)
+            continue
     end.
 
 % Parse sector size information
-parse_sector_size_line(Line, Info) ->
-    % Extract sector size
+parse_sector_size_info(Line, Info) ->
     SectorPattern = "^Sector size \\(logical/physical\\): ([^/]+)/(.+)$",
     case re:run(Line, SectorPattern, [{capture, [1, 2], binary}]) of
         {match, [LogicalSize, PhysicalSize]} ->
-            Info#{
+            {ok, Info#{
                 <<"sector_size">> => #{
                     <<"logical">> => string:trim(LogicalSize),
                     <<"physical">> => string:trim(PhysicalSize)
                 }
-            };
+            }};
         _ ->
-            parse_io_size_line(Line, Info)
+            continue
     end.
 
 % Parse I/O size information
-parse_io_size_line(Line, Info) ->
-    % Extract I/O size
+parse_io_size_info(Line, Info) ->
     IOPattern = "^I/O size \\(minimum/optimal\\): ([^/]+)/(.+)$",
     case re:run(Line, IOPattern, [{capture, [1, 2], binary}]) of
         {match, [MinSize, OptSize]} ->
-            Info#{
+            {ok, Info#{
                 <<"io_size">> => #{
                     <<"minimum">> => string:trim(MinSize),
                     <<"optimal">> => string:trim(OptSize)
                 }
-            };
+            }};
         _ -> 
-            Info
+            continue
+    end.
+
+-doc """
+Create a partition table on a disk device.
+@param Device The path to the device, e.g. "/dev/sdb".
+@returns {ok, Output} on success where Output is the command output,
+         or {error, Reason} if the operation fails.
+""".
+-spec create_partition_table(Device :: binary()) ->
+    {ok, binary()} | {error, binary()}.
+create_partition_table(undefined) ->
+    ?event(debug_volume, {create_partition_table, error, device_undefined}),
+    {error, <<"Device path not specified">>};
+create_partition_table(Device) ->
+    ?event(debug_volume, 
+        {create_partition_table, entry, 
+           {device, Device}
+        }
+    ),
+    % Create a GPT partition table
+    DeviceStr = binary_to_list(Device),
+    MklabelCmd = "parted -s " ++ DeviceStr ++ " mklabel gpt",
+    ?event(debug_volume, 
+        {create_partition_table, creating_gpt_label, 
+            {device, Device}
+        }
+    ),
+    ?event(debug_volume, 
+        {create_partition_table, executing_mklabel, 
+            {command, MklabelCmd}
+        }
+    ),
+    case safe_exec(MklabelCmd) of
+        {ok, Output} ->
+            ?event(debug_volume, 
+                {create_partition_table, gpt_label_success, 
+                    {result, Output}
+                }
+            ),
+            {ok, <<"Successfully created partition table">>};
+        {error, Error} ->
+            ?event(debug_volume, 
+                {create_partition_table, gpt_label_error, 
+                    {error, Error}
+                }
+            ),
+            {error, <<"Failed to create partition table">>}
     end.
 
 -doc """
 Create a partition on a disk device.
 @param Device The path to the device, e.g. "/dev/sdb".
 @param PartType The partition type to create, defaults to "ext4".
-@returns {ok, Map} on success where Map includes status and partition 
-         information, or {error, Reason} if the operation fails.
+@returns {ok, Output} on success where Output is the command output,
+         or {error, Reason} if the operation fails.
 """.
 -spec create_partition(Device :: binary(), PartType :: binary()) ->
-    {ok, map()} | {error, binary()}.
-create_partition(undefined, _PartType) ->
-    ?event(debug_volume, {create_partition, error, device_undefined}),
-    {error, <<"Device path not specified">>};
+    {ok, binary()} | {error, binary()}.
 create_partition(Device, PartType) ->
     ?event(debug_volume, 
         {create_partition, entry, 
-           {device, Device, part_type, PartType}
-        }
-    ),
-    % Create a GPT partition table
-    DeviceStr = binary_to_list(Device),
-    MklabelCmd = "sudo parted " ++ DeviceStr ++ " mklabel gpt",
-    ?event(debug_volume, 
-        {create_partition, creating_gpt_label, 
-            {device, Device}
-        }
-    ),
-    ?event(debug_volume, 
-        {create_partition, executing_mklabel, 
-            {command, MklabelCmd}
-        }
-    ),
-    case safe_exec(MklabelCmd) of
-        {ok, Result} ->
-            ?event(debug_volume, 
-                {create_partition, gpt_label_success, 
-                    {result, Result}
-                }
-            ),
-            create_actual_partition(Device, PartType);
-        {error, ErrorMsg} ->
-            ?event(debug_volume, 
-                {create_partition, gpt_label_error, 
-                    {error, ErrorMsg}
-                }
-            ),
-            {error, ErrorMsg}
-    end.
-
-% Create the actual partition after making the GPT label
-create_actual_partition(Device, PartType) ->
-    ?event(debug_volume, 
-        {create_actual_partition, entry, 
            {device, Device, part_type, PartType}
         }
     ),
@@ -226,70 +250,80 @@ create_actual_partition(Device, PartType) ->
     PartTypeStr = binary_to_list(PartType),
     % Build the parted command to create the partition
     MkpartCmd = 
-        "sudo parted -a optimal " ++ DeviceStr ++ 
+        "parted -a optimal " ++ DeviceStr ++ 
         " mkpart primary " ++ PartTypeStr ++ " 0% 100%",
     ?event(debug_volume, 
-        {create_actual_partition, executing_mkpart, 
+        {create_partition, executing_mkpart, 
            {command, MkpartCmd}
         }
     ),
     case safe_exec(MkpartCmd) of
-        {ok, Result} ->
+        {ok, Output} ->
             ?event(debug_volume, 
-                {create_actual_partition, mkpart_success, 
-                   {result, Result}
+                {create_partition, mkpart_success, 
+                   {result, Output}
                 }
             ),
-            get_partition_info(Device);
-        {error, ErrorMsg} ->
+            {ok, <<"Successfully created partition">>};
+        {error, Error} ->
             ?event(debug_volume, 
-                {create_actual_partition, mkpart_error, 
-                    {error, ErrorMsg}
+                {create_partition, mkpart_error, 
+                    {error, Error}
                 }
             ),
-            {error, ErrorMsg}
+            {error, <<"Failed to create partition">>}
     end.
 
-% Get the partition information after creating a partition
+-spec get_partition_info(Device :: binary()) ->
+    {ok, map()} | {error, binary()}.
 get_partition_info(Device) ->
     ?event(debug_volume, {get_partition_info, entry, {device, Device}}),
     DeviceStr = binary_to_list(Device),
     % Print partition information
-    PrintCmd = "sudo parted " ++ DeviceStr ++ " print",
+    PrintCmd = "parted " ++ DeviceStr ++ " print",
     ?event(debug_volume, 
         {get_partition_info, executing_print, {command, PrintCmd}}
     ),
-    PartitionInfo = os:cmd(PrintCmd),
-    ?event(debug_volume, 
-        {get_partition_info, success, partition_created, 
-            {result, PartitionInfo}
-        }
-    ),
-    {ok, #{
-        <<"status">> => 200,
-        <<"message">> => <<"Partition created successfully.">>,
-        <<"device_path">> => Device,
-        <<"partition_info">> => list_to_binary(PartitionInfo)
-    }}.
+    case safe_exec(PrintCmd) of
+        {ok, Output} ->
+            ?event(debug_volume, 
+                {get_partition_info, success, 
+                   {result, Output}
+                }
+            ),
+            {ok, #{
+                <<"status">> => 200,
+                <<"message">> => <<"Partition created successfully.">>,
+                <<"device_path">> => Device,
+                <<"partition_info">> => list_to_binary(Output)
+            }};
+        {error, Error} ->
+            ?event(debug_volume, 
+                {get_partition_info, mkpart_error, 
+                    {error, Error}
+                }
+            ),
+            {error, <<"Failed to get partition information">>}
+    end.
 
 -doc """
-Format a disk or partition with LUKS encryption.
+Format a partition with LUKS encryption.
 @param Partition The path to the partition, e.g. "/dev/sdc1".
 @param EncKey The encryption key to use for LUKS.
 @returns {ok, Map} on success where Map includes the status and 
     confirmation message, or {error, Reason} if the operation fails.
 """.
--spec format_disk(Partition :: binary(), EncKey :: binary()) ->
+-spec format_partition(Partition :: binary(), EncKey :: binary()) ->
     {ok, map()} | {error, binary()}.
-format_disk(undefined, _EncKey) ->
-    ?event(debug_volume, {format_disk, error, partition_undefined}),
+format_partition(undefined, _EncKey) ->
+    ?event(debug_volume, {format_partition, error, partition_undefined}),
     {error, <<"Partition path not specified">>};
-format_disk(_Partition, undefined) ->
-    ?event(debug_volume, {format_disk, error, key_undefined}),
+format_partition(_Partition, undefined) ->
+    ?event(debug_volume, {format_partition, error, key_undefined}),
     {error, <<"Encryption key not specified">>};
-format_disk(Partition, EncKey) ->
+format_partition(Partition, EncKey) ->
     ?event(debug_volume, 
-        {format_disk, entry, 
+        {format_partition, entry, 
             {
                 partition, Partition, 
                 key_present, true
@@ -297,19 +331,19 @@ format_disk(Partition, EncKey) ->
         }
     ),
     PartitionStr = binary_to_list(Partition),
-    ?event(debug_volume, {format_disk, creating_secure_key_file, starting}),
+    ?event(debug_volume, {format_partition, creating_secure_key_file, starting}),
     with_secure_key_file(EncKey, fun(KeyFile) ->
         FormatCmd = 
-            "sudo cryptsetup luksFormat --batch-mode " ++
+            "cryptsetup luksFormat --batch-mode " ++
             "--key-file " ++ KeyFile ++ " " ++ PartitionStr,
         ?event(debug_volume, 
-            {format_disk, executing_luks_format, {command, FormatCmd}}
+            {format_partition, executing_luks_format, {command, FormatCmd}}
         ),
-        case safe_exec(FormatCmd, ["failed"]) of
-            {ok, Result} ->
+        case safe_exec(FormatCmd) of
+            {ok, Output} ->
                 ?event(debug_volume, 
-                    {format_disk, luks_format_success, completed, 
-                        {result, Result}
+                    {format_partition, luks_format_success, completed, 
+                        {result, Output}
                     }
                 ),
                 {ok, #{
@@ -318,11 +352,11 @@ format_disk(Partition, EncKey) ->
                         <<"Partition formatted with LUKS encryption "
                           "successfully.">>
                 }};
-            {error, ErrorMsg} ->
+            {error, Error} ->
                 ?event(debug_volume, 
-                    {format_disk, luks_format_error, ErrorMsg}
+                    {format_partition, luks_format_error, Error}
                 ),
-                {error, ErrorMsg}
+                {error, <<"Failed to format partition with LUKS">>}
         end
     end).
 
@@ -364,20 +398,20 @@ mount_disk(Partition, EncKey, MountPoint, VolumeName) ->
     ?event(debug_volume, {mount_disk, opening_luks_volume, starting}),
     with_secure_key_file(EncKey, fun(KeyFile) ->
         OpenCmd = 
-            "sudo cryptsetup luksOpen --key-file " ++ KeyFile ++ 
+            "cryptsetup luksOpen --key-file " ++ KeyFile ++ 
             " " ++ PartitionStr ++ " " ++ VolumeNameStr,
         ?event(debug_volume, {mount_disk, executing_luks_open, {command, OpenCmd}}),
-        case safe_exec(OpenCmd, ["failed"]) of
-            {ok, Result} ->
+        case safe_exec(OpenCmd) of
+            {ok, Output} ->
                 ?event(debug_volume, 
                     {mount_disk, luks_open_success, proceeding_to_mount, 
-                        {result, Result}
+                        {result, Output}
                     }
                 ),
                 mount_opened_volume(Partition, MountPoint, VolumeName);
-            {error, ErrorMsg} ->
-                ?event(debug_volume, {mount_disk, luks_open_error, ErrorMsg}),
-                {error, ErrorMsg}
+            {error, Error} ->
+                ?event(debug_volume, {mount_disk, luks_open_error, Error}),
+                {error, <<"Failed to open LUKS volume">>}
         end
     end).
 
@@ -392,92 +426,85 @@ mount_opened_volume(Partition, MountPoint, VolumeName) ->
             }
         }
     ),
-    % Create mount point if it doesn't exist
+
     MountPointStr = binary_to_list(MountPoint),
     ?event(debug_volume, 
         {mount_opened_volume, creating_mount_point, MountPoint}
     ),
-    os:cmd("sudo mkdir -p " ++ MountPointStr),
-    % Check if filesystem exists on the opened LUKS volume
+
     VolumeNameStr = binary_to_list(VolumeName),
     DeviceMapperPath = "/dev/mapper/" ++ VolumeNameStr,
-    % Check filesystem type
-    FSCheckCmd = "sudo blkid " ++ DeviceMapperPath,
-    ?event(debug_volume, 
-        {mount_opened_volume, checking_filesystem, {command, FSCheckCmd}}
-    ),
-    FSCheckResult = os:cmd(FSCheckCmd),
-    ?event(debug_volume, 
-        {mount_opened_volume, filesystem_check_result, FSCheckResult}
-    ),
-    % Create filesystem if none exists
-    case string:find(FSCheckResult, "TYPE=") of
-        nomatch ->
-            % No filesystem found, create ext4
+
+    maybe
+        {_, ok} ?= {create_mount_point_directory, filelib:ensure_path(MountPointStr)},
+        {_, ok} ?= {ensure_ext4_filesystem_exists, ensure_ext4_filesystem_exists(DeviceMapperPath)},
+        {_, {ok, _}} ?= {mount_partition, safe_exec("mount " ++ DeviceMapperPath ++ " " ++ MountPointStr)},
+        {ok, #{
+                <<"status">> => 200,
+                <<"message">> => 
+                    <<"Encrypted partition mounted successfully.">>,
+                <<"mount_point">> => MountPoint,
+                <<"mount_info">> => #{
+                    partition => Partition,
+                    mount_point => MountPoint,
+                    volume_name => VolumeName
+                }
+            }}
+    else
+        {create_mount_point_directory, {error, Error}} -> 
             ?event(debug_volume, 
-                {mount_opened_volume, creating_filesystem, ext4}
-            ),
-            MkfsCmd = "sudo mkfs.ext4 -F " ++ DeviceMapperPath,
-            ?event(debug_volume, 
-                {mount_opened_volume, executing_mkfs, {command, MkfsCmd}}
-            ),
-            MkfsResult = os:cmd(MkfsCmd),
-            ?event(debug_volume, 
-                {mount_opened_volume, mkfs_result, MkfsResult}
-            );
-        _ ->
-            ?event(debug_volume, 
-                {mount_opened_volume, filesystem_exists, skipping_creation}
-            )
-    end,
-    % Mount the unlocked LUKS volume
-    MountCmd = "sudo mount " ++ DeviceMapperPath ++ " " ++ MountPointStr,
-    ?event(debug_volume, 
-        {mount_opened_volume, executing_mount, 
-           {command, MountCmd}
-        }
-    ),
-    case safe_exec(MountCmd, ["failed"]) of
-        {ok, Result} ->
-            ?event(debug_volume, 
-                {mount_opened_volume, mount_success, 
-                   creating_info, {result, Result}
+                {create_and_format_partition, create_mount_point_directory_error, 
+                    {error, Error}
                 }
             ),
-            create_mount_info(Partition, MountPoint, VolumeName);
-        {error, ErrorMsg} ->
+            safe_exec("cryptsetup luksClose " ++ VolumeNameStr),
+            {error, <<"Failed to create mount point directory">>};
+        {ensure_ext4_filesystem_exists, {error, Error}} ->
             ?event(debug_volume, 
-                {mount_opened_volume, mount_error, 
-                   {error, ErrorMsg, closing_luks}
+                {create_and_format_partition, ensure_ext4_filesystem_exists_error,
+                    {error, Error}
                 }
             ),
-            % Close the LUKS volume if mounting failed
-            os:cmd("sudo cryptsetup luksClose " ++ VolumeNameStr),
-            {error, ErrorMsg}
+            safe_exec("cryptsetup luksClose " ++ VolumeNameStr),
+            {error, <<"Failed to get block device info">>};
+        {mount_partition, {error, Error}} -> 
+            ?event(debug_volume, 
+                {create_and_format_partition, mount_partition_error, 
+                    {error, Error}
+                }
+            ),
+            safe_exec("cryptsetup luksClose " ++ VolumeNameStr),
+            {error, <<"Failed to mount partition">>}
     end.
 
-% Create mount info response
-create_mount_info(Partition, MountPoint, VolumeName) ->
-    ?event(debug_volume, 
-        {create_mount_info, success, 
-            {
-                partition, Partition, 
-                mount_point, MountPoint, 
-                volume_name, VolumeName
-            }
-        }
-    ),
-    {ok, #{
-        <<"status">> => 200,
-        <<"message">> => 
-            <<"Encrypted partition mounted successfully.">>,
-        <<"mount_point">> => MountPoint,
-        <<"mount_info">> => #{
-            partition => Partition,
-            mount_point => MountPoint,
-            volume_name => VolumeName
-        }
-    }}.
+ensure_ext4_filesystem_exists(DeviceMapperPath) ->
+    maybe
+        {_, {ok, BlockDeviceInfo}} ?= {get_block_device_info, safe_exec("blkid " ++ DeviceMapperPath)},
+        FileSystemFound ?= string:find(BlockDeviceInfo, "TYPE="),
+        {_, {ok, _}} ?= {maybe_create_ext4_filesystem, maybe_create_ext4_filesystem(FileSystemFound, DeviceMapperPath)},
+        ok
+    else
+        {get_block_device_info, {error, Error}} -> 
+            ?event(debug_volume, 
+                {create_and_format_partition, get_block_device_info_error, 
+                    {error, Error}
+                }
+            ),            
+            {error, <<"Failed to get block device info">>};
+        {maybe_create_ext4_filesystem, {error, Error}} -> 
+            ?event(debug_volume, 
+                {create_and_format_partition, maybe_create_ext4_filesystem_error, 
+                    {error, Error}
+                }
+            ),            
+            {error, <<"Failed to create ext4 filesystem">>}
+    end.
+
+maybe_create_ext4_filesystem(nomatch, DeviceMapperPath) ->
+    safe_exec("mkfs.ext4 -F " ++ DeviceMapperPath);
+
+maybe_create_ext4_filesystem(_, _) ->
+    {ok, <<"Filesystem already exists">>}.
 
 -doc """
 Change the node's data store location to the mounted encrypted disk.
@@ -501,132 +528,25 @@ change_node_store(StorePath, CurrentStore) ->
     % Create the store directory if it doesn't exist
     StorePathStr = binary_to_list(StorePath),
     ?event(debug_volume, {change_node_store, creating_directory, StorePath}),
-    os:cmd("sudo mkdir -p " ++ StorePathStr),
-    % Update the store configuration with the new path
-    ?event(debug_volume, 
-        {change_node_store, updating_config, 
-           {current_store, CurrentStore}
-        }
-    ),
-    NewStore = update_store_config(CurrentStore, StorePath),
-    % Return the result
-    ?event(debug_volume,
-        {change_node_store, success, {new_store_config, NewStore}}
-    ),
-    {ok, #{
-        <<"status">> => 200,
-        <<"message">> => 
-            <<"Node store updated to use encrypted disk.">>,
-        <<"store_path">> => StorePath,
-        <<"store">> => NewStore
-    }}.
 
-%%% Helper functions
-%% Execute system command with error checking
-safe_exec(Command) ->
-    safe_exec(Command, ["Error", "failed", "bad", "error"]).
-
-safe_exec(Command, ErrorKeywords) ->
-    Result = os:cmd(Command),
-    case check_command_errors(Result, ErrorKeywords) of
-        ok -> {ok, Result};
-        error -> {error, list_to_binary(Result)}
-    end.
-
-%% Check if command result contains error indicators
-check_command_errors(Result, Keywords) ->
-    case lists:any(fun(Keyword) -> 
-        string:find(Result, Keyword) =/= nomatch 
-    end, Keywords) of
-        true -> error;
-        false -> ok
-    end.
-
-%% Secure key file management with automatic cleanup
-with_secure_key_file(EncKey, Fun) ->
-    ?event(debug_volume, {with_secure_key_file, entry, creating_temp_file}),
-    os:cmd("sudo mkdir -p /root/tmp"),
-    % Get process ID and create filename
-    PID = os:getpid(),
-    ?event(debug_volume, {with_secure_key_file, process_id, PID}),
-    KeyFile = "/root/tmp/luks_key_" ++ PID,
-    ?event(debug_volume, {with_secure_key_file, key_file_path, KeyFile}),
-    % Check if directory was created successfully
-    DirCheck = os:cmd("ls -la /root/tmp/"),
-    ?event(debug_volume, {with_secure_key_file, directory_check, DirCheck}),
-    try
-        % Convert EncKey to binary using hb_util
-        BinaryEncKey = case EncKey of
-            % Handle RSA wallet tuples - extract private key or use hash
-            {{rsa, _}, PrivKey, _PubKey} when is_binary(PrivKey) ->
-                % Use first 32 bytes of private key for AES-256
-                case byte_size(PrivKey) of
-                    Size when Size >= 32 ->
-                        binary:part(PrivKey, 0, 32);
-                    _ ->
-                        % If private key is too short, hash it to get 32 bytes
-                        crypto:hash(sha256, PrivKey)
-                end;
-            % Handle other complex terms
-            _ when not is_binary(EncKey) andalso not is_list(EncKey) ->
-                try
-                    hb_util:bin(EncKey)
-                catch
-                    _:_ ->
-                        % Fallback to term_to_binary and hash to get consistent
-                        % key size
-                        crypto:hash(sha256, term_to_binary(EncKey))
-                end;
-            % Simple cases handled by hb_util:bin
-            _ ->
-                hb_util:bin(EncKey)
-        end,
-        WriteResult = file:write_file(KeyFile, BinaryEncKey, [raw]),
-        ?event(debug_volume, 
-            {with_secure_key_file, write_result, WriteResult}
-        ),
-        % Check if file was created
-        FileExists = filelib:is_regular(KeyFile),
-        ?event(debug_volume, 
-            {with_secure_key_file, file_exists_check, FileExists}
-        ),
-        % If file exists, get its info
-        case FileExists of
-            true ->
-                FileInfo = file:read_file_info(KeyFile),
-                ?event(debug_volume, 
-                    {with_secure_key_file, file_info, FileInfo}
-                );
-            false ->
-                ?event(debug_volume, 
-                    {with_secure_key_file, file_not_found, KeyFile}
-                )
-        end,
-        % Execute function with key file path
-        ?event(debug_volume, 
-            {with_secure_key_file, executing_function, with_key_file}
-        ),
-        Result = Fun(KeyFile),
-        % Always clean up the key file
-        ?event(debug_volume, 
-            {with_secure_key_file, cleanup, shredding_key_file}
-        ),
-        os:cmd("sudo shred -u " ++ KeyFile),
-        ?event(debug_volume, {with_secure_key_file, success, completed}),
-        Result
-    catch
-        Class:Reason:Stacktrace ->
+    maybe
+        {_, ok} ?= {create_store_directory, filelib:ensure_path(StorePathStr)},
+        NewStore ?= update_store_config(CurrentStore, StorePath),
+        {ok, #{
+            <<"status">> => 200,
+            <<"message">> => 
+                <<"Node store updated to use encrypted disk.">>,
+            <<"store_path">> => StorePath,
+            <<"store">> => NewStore
+        }}
+    else
+        {create_store_directory, {error, Error}} ->
             ?event(debug_volume, 
-                {with_secure_key_file, exception, 
-                   {class, Class, reason, Reason, cleanup, starting}
+                {change_node_store, failed_to_create_new_store_directory, 
+                    {error, Error}
                 }
-            ),
-            % Ensure cleanup even if function fails
-            os:cmd("sudo shred -u " ++ KeyFile),
-            ?event(debug_volume, 
-                {with_secure_key_file, exception_cleanup, completed}
-            ),
-            erlang:raise(Class, Reason, Stacktrace)
+            ),            
+            {error, <<"Failed to create store directory at new path">>}
     end.
 
 % Update the store configuration with a new base path
@@ -696,71 +616,141 @@ safe_start_lmdb_store(StoreConfig) ->
     ?event(debug_volume, {starting_new_store, NewName}),
     hb_store_lmdb:start(StoreConfig).
 
+%%% Helper functions
+%% Execute system command with error checking
+-spec safe_exec(Command :: string()) -> 
+    {ok, binary()} | {error, {command_failed, integer(), binary()}} | {error, {command_timeout, binary()}}.
+safe_exec(Command) ->
+    Port = erlang:open_port({spawn, Command}, [exit_status, {line, 256}]),
+    collect_output(Port, []).
+
+-spec collect_output(Port :: port(), Acc :: [binary()]) -> 
+    {ok, string()} | {error, {command_failed, integer(), binary()}} | {error, {command_timeout, binary()}}.
+collect_output(Port, Acc) ->
+    receive
+        {Port, {data, {eol, Line}}} ->
+            collect_output(Port, [Line | Acc]);
+        {Port, {data, {noeol, Line}}} ->
+            collect_output(Port, [Line | Acc]);
+        {Port, {exit_status, 0}} ->
+            safe_port_close(Port),
+            {ok, string:join(lists:reverse(Acc), "\n")};
+        {Port, {exit_status, ExitCode}} ->
+            safe_port_close(Port),
+            {error, {command_failed, ExitCode, string:join(lists:reverse(Acc), "\n")}}
+    after 15 * 60 * 1000 ->
+        safe_port_close(Port),
+        {error, {command_timeout, string:join(lists:reverse(Acc), "\n")}}
+    end.
+
+safe_port_close(Port) ->
+    try
+        port_close(Port)
+    catch
+        error:badarg -> 
+            % Port already closed, ignore
+            ok
+    end.
+
+%% Helper function that will store encryption key in a temporary file,
+%% and execute the provided function with the key file path as argument.
+%% It will securely delete the key file after execution.
+with_secure_key_file(EncKey, Fun) ->
+    ?event(debug_volume, {with_secure_key_file, entry, creating_temp_file}),
+
+    KeyFile = "/root/tmp/luks_key_" ++ os:getpid(),
+
+    ?event(debug_volume, {with_secure_key_file, key_file_path, KeyFile}),
+
+    maybe
+        {_, ok} ?= {create_temp_directory, filelib:ensure_path("/root/tmp")},
+        BinaryEncryptionKey ?= encryption_key_to_binary(EncKey),
+        {_, ok} ?= {write_encryption_binary_to_file, file:write_file(KeyFile, BinaryEncryptionKey, [raw])},
+        Result ?= Fun(KeyFile),
+        {_, {ok, _}} ?= {shred_key_file_after_execution, safe_exec("shred -u " ++ KeyFile)},
+        {ok, Result}
+    else
+        {create_temp_directory, {error, Error}} ->
+            ?event(debug_volume, 
+                {with_secure_key_file, create_temp_directory_error, 
+                    {error, Error}
+                }
+            ),
+            safe_exec("shred -u " ++ KeyFile),
+            {error, <<"Failed to temp directory">>};
+        {write_encryption_binary_to_file, {error, Error}} ->
+            ?event(debug_volume, 
+                {with_secure_key_file, write_encryption_binary_to_file_error, 
+                    {error, Error}
+                }
+            ),
+            safe_exec("shred -u " ++ KeyFile),
+            {error, <<"Failed to write encryption key(binary) to file">>};
+        {shred_key_file_after_execution, {error, Error}} ->
+            ?event(debug_volume, 
+                {with_secure_key_file, shred_key_file_after_execution_error, 
+                    {error, Error}
+                }
+            ),
+            {error, <<"Failed to shred key file after execution">>}
+    end.
+
 -doc """
 Check if a device exists on the system.
 @param Device The path to the device to check (binary).
 @returns true if the device exists, false otherwise.
 """.
--spec check_for_device(Device :: binary()) -> boolean().
+-spec check_for_device(Device :: binary()) -> {ok, boolean()} | {error, binary()}.
 check_for_device(Device) ->
     ?event(debug_volume, {check_for_device, entry, {device, Device}}),
-    Command = 
-        io_lib:format(
-            "ls -l ~s 2>/dev/null || echo 'not_found'", 
-            [binary_to_list(Device)]
-        ),
-    ?event(debug_volume, {check_for_device, executing_command, ls_check}),
-    Result = os:cmd(Command),
-    DeviceExists = string:find(Result, "not_found") =:= nomatch,
-    ?event(debug_volume, 
-        {check_for_device, result, 
-           {device, Device, exists, DeviceExists}
-        }
-    ),
-    DeviceExists.
+    case file:read_file_info(binary_to_list(Device)) of
+        {ok, _file_info} ->
+            ?event(debug_volume, 
+                {check_for_device, result, 
+                {device, Device, exists, true}
+                }
+            ),
+            {ok, true};
+        {error, enoent} ->
+            ?event(debug_volume, 
+                {check_for_device, result, 
+                {device, Device, exists, false}
+                }
+            ),
+            {ok, false};
+        {error, Error} ->
+            ?event(debug_volume, 
+                {check_for_device, error, 
+                {device, Device, error, Error}
+                }
+            ),
+            {error, <<"Failed to check device existence">>}
+    end.
 
-%%% Unit Tests
-%% Test helper function error checking
-check_command_errors_test() ->
-    % Test successful case - no errors
-    ?assertEqual(
-        ok, 
-        check_command_errors(
-            "Success: operation completed", 
-            ["Error", "failed"]
-        )
-    ),
-    % Test error detection
-    ?assertEqual(
-        error, 
-        check_command_errors(
-            "Error: something went wrong", 
-            ["Error", "failed"]
-        )
-    ),
-    ?assertEqual(
-        error,
-        check_command_errors(
-            "Operation failed", 
-            ["Error", "failed"]
-        )
-    ),
-    % Test case sensitivity
-    ?assertEqual(
-        ok, 
-        check_command_errors(
-            "error (lowercase)", 
-            ["Error", "failed"]
-        )
-    ),
-    % Test multiple keywords
-    ?assertEqual(
-        error, 
-        check_command_errors(
-            "Command failed with Error", 
-            ["Error", "failed"]
-        )
-    ).
+-spec encryption_key_to_binary(term()) -> binary().
+encryption_key_to_binary(EncKey) ->
+    case EncKey of
+            % Handle RSA wallet tuples - extract private key or use hash
+            {{rsa, _}, PrivKey, _PubKey} when is_binary(PrivKey) ->
+                % Use first 32 bytes of private key for AES-256
+                case byte_size(PrivKey) of
+                    Size when Size >= 32 ->
+                        binary:part(PrivKey, 0, 32);
+                    _ ->
+                        % If private key is too short, hash it to get 32 bytes
+                        crypto:hash(sha256, PrivKey)
+                end;
+            _ ->
+                try
+                    hb_util:bin(EncKey)
+                catch
+                    _:_ ->
+                        % Fallback to term_to_binary and hash to get consistent
+                        % key size
+                        crypto:hash(sha256, term_to_binary(EncKey))
+                end
+
+        end.
 
 %% Test store configuration updates for different types
 update_store_config_test() ->
@@ -827,27 +817,9 @@ with_secure_key_file_test() ->
 check_for_device_test() ->
     % This test would need mocking of os:cmd to be fully testable
     % For now, test with /dev/null which should always exist
-    ?assertEqual(true, check_for_device(<<"/dev/null">>)),
+    ?assertEqual({ok, true}, check_for_device(<<"/dev/null">>)),
     % Test non-existent device
     ?assertEqual(
-        false, 
+        {ok, false}, 
         check_for_device(<<"/dev/nonexistent_device_123">>)
     ).
-
-%% Test safe command execution with mocked results
-safe_exec_mock_test() ->
-    % We can't easily mock os:cmd, but we can test the error checking logic
-    % This is covered by check_command_errors_test above
-    % Test with default error keywords
-    TestResult1 = 
-        check_command_errors(
-            "Operation completed successfully", 
-            ["Error", "failed"]
-        ),
-    ?assertEqual(ok, TestResult1),
-    TestResult2 = 
-        check_command_errors(
-            "Error: disk not found", 
-            ["Error", "failed"]
-        ),
-    ?assertEqual(error, TestResult2). 
