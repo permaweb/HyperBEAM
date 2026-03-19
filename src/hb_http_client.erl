@@ -22,8 +22,8 @@
 
 %% @doc Use Opts to configure connection pool size.
 setup_conn(Opts) ->
-    ConnPoolReadSize = hb_maps:get(conn_pool_read_size,Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
-    ConnPoolWriteSize = hb_maps:get(conn_pool_write_size,Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    ConnPoolReadSize = hb_opts:get(conn_pool_read_size, ?DEFAULT_CONN_POOL_READ_SIZE, Opts),
+    ConnPoolWriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
     ?event(
         connection_pool,
         {conn,
@@ -294,8 +294,8 @@ init_ets_table(Table) ->
     end.
 
 init_hackney_pool(Opts) ->
-    ReadSize = hb_maps:get(conn_pool_read_size, Opts, ?DEFAULT_CONN_POOL_READ_SIZE),
-    WriteSize = hb_maps:get(conn_pool_write_size, Opts, ?DEFAULT_CONN_POOL_WRITE_SIZE),
+    ReadSize = hb_opts:get(conn_pool_read_size, ?DEFAULT_CONN_POOL_READ_SIZE, Opts),
+    WriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
     PoolSize = ReadSize + WriteSize,
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     hackney_pool:start_pool(?HACKNEY_POOL, [
