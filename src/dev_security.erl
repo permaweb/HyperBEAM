@@ -222,3 +222,17 @@ duplicate_authority_match_rejected_test() ->
             #{}
         )
     ).
+
+comma_separated_authority_config_supported_test() ->
+    ?assertEqual(
+        true,
+        validate(
+            <<"authority">>,
+            #{
+                <<"authority">> => <<"\"alice\",\"bob\"">>
+            },
+            #{},
+            [<<"alice">>, <<"bob">>],
+            #{}
+        )
+    ).
