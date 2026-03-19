@@ -101,78 +101,75 @@ httpc_req(Args, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    case parse_peer(Peer, Opts) of
-        {error, _} = Err -> Err;
-        {ok, {Host, Port}} ->
-            Scheme = case Port of
-                443 -> "https";
-                _ -> "http"
-            end,
-            ?event(debug_http_client, {httpc_req, {explicit, Args}}),
-            URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-            FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
-            HeaderKV =
+    {ok, {Host, Port}} = parse_peer(Peer, Opts),
+    Scheme = case Port of
+        443 -> "https";
+        _ -> "http"
+    end,
+    ?event(debug_http_client, {httpc_req, {explicit, Args}}),
+    URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+    HeaderKV =
+        [
+            {binary_to_list(Key), binary_to_list(Value)}
+        ||
+            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+        ] ++
+        [
+            {<<"cookie">>, CookieLine}
+        ||
+            CookieLine <-
+                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                    Binary when is_binary(Binary) ->
+                        [Binary];
+                    List when is_list(List) ->
+                        List
+                end
+        ],
+    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
+    Request =
+        case Method of
+            get ->
+                {
+                    URL,
+                    HeaderKV
+                };
+            _ ->
+                upload_metric(Body),
+                {
+                    URL,
+                    HeaderKV,
+                    binary_to_list(ContentType),
+                    Body
+                }
+        end,
+    ?event({http_client_outbound, Method, URL, Request}),
+    HTTPCOpts = [{full_result, true}, {body_format, binary}],
+	StartTime = os:system_time(native),
+    case httpc:request(Method, Request, [], HTTPCOpts) of
+        {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+            download_metric(RespBody),
+	        EndTime = os:system_time(native),
+            RespHeaders =
                 [
-                    {binary_to_list(Key), binary_to_list(Value)}
+                    {list_to_binary(Key), list_to_binary(Value)}
                 ||
-                    {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
-                ] ++
-                [
-                    {<<"cookie">>, CookieLine}
-                ||
-                    CookieLine <-
-                        case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
-                            Binary when is_binary(Binary) ->
-                                [Binary];
-                            List when is_list(List) ->
-                                List
-                        end
+                    {Key, Value} <- RawRespHeaders
                 ],
-            Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
-            ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
-            Request =
-                case Method of
-                    get ->
-                        {
-                            URL,
-                            HeaderKV
-                        };
-                    _ ->
-                        upload_metric(Body),
-                        {
-                            URL,
-                            HeaderKV,
-                            binary_to_list(ContentType),
-                            Body
-                        }
-                end,
-            ?event({http_client_outbound, Method, URL, Request}),
-            HTTPCOpts = [{full_result, true}, {body_format, binary}],
-            StartTime = os:system_time(native),
-            case httpc:request(Method, Request, [], HTTPCOpts) of
-                {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-                    download_metric(RespBody),
-                    EndTime = os:system_time(native),
-                    RespHeaders =
-                        [
-                            {list_to_binary(Key), list_to_binary(Value)}
-                        ||
-                            {Key, Value} <- RawRespHeaders
-                        ],
-                    ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
-                    record_duration(#{
-                            <<"request-method">> => method_to_bin(Method),
-                            <<"request-path">> => hb_util:bin(Path),
-                            <<"status-class">> => get_status_class(Status),
-                            <<"duration">> => EndTime - StartTime
-                        },
-                        Opts
-                    ),
-                    {ok, Status, RespHeaders, RespBody};
-                {error, Reason} ->
-                    ?event(http_client, {httpc_error, Reason}),
-                    {error, Reason}
-            end
+            ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+            record_duration(#{
+                    <<"request-method">> => method_to_bin(Method),
+                    <<"request-path">> => hb_util:bin(Path),
+                    <<"status-class">> => get_status_class(Status),
+                    <<"duration">> => EndTime - StartTime
+                },
+                Opts
+            ),
+            {ok, Status, RespHeaders, RespBody};
+        {error, Reason} ->
+            ?event(http_client, {httpc_error, Reason}),
+            {error, Reason}
     end.
 
 hackney_req(Args, Opts) ->
