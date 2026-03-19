@@ -298,6 +298,7 @@ init_hackney_pool(Opts) ->
     WriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
     PoolSize = ReadSize + WriteSize,
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
+    ?event(boot, {hackney_pool_size, PoolSize}),
     hackney_pool:start_pool(?HACKNEY_POOL, [
         {max_connections, PoolSize},
         {timeout, KeepAlive}
