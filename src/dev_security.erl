@@ -161,15 +161,23 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
 %% @doc Normalize and validate a `*-match` threshold against the acceptable
-%% signer set. If no explicit threshold is provided, the default is `0` when
-%% there are no acceptable signers and `1` otherwise. Explicit thresholds must
-%% be integer-like and within the admissible range: `0` is only allowed when
-%% the default is `0`; otherwise the threshold must be in `1..Default`.
+%% signer set `Valid`. Let `ValidLen = |Valid|`. If no explicit threshold is
+%% provided, the default threshold is `0` when `ValidLen = 0` and `1` when
+%% `ValidLen > 0`. Explicit thresholds must be integer-like and satisfy:
+%% `Match = 0` iff `ValidLen = 0`; otherwise `1 =< Match =< ValidLen`.
+safe_match(_Match, _Default, ValidLen) when not is_integer(ValidLen) ->
+    {error, <<"Invalid Valid list length type.">>};
 safe_match(_Match, _Default, ValidLen) when is_integer(ValidLen), ValidLen < 0 ->
     {error, <<"Valid list length must be a non-negative integer.">>};
-safe_match(not_found, Default, _ValidLen) ->
+safe_match(_Match, Default, _ValidLen) when not is_integer(Default) ->
+    {error, <<"Invalid Default type.">>};
+safe_match(_Match, Default, _ValidLen) when Default < 0 ->
+    {error, <<"Default must be a non-negative integer.">>};
+safe_match(_Match, Default, ValidLen) when Default > ValidLen ->
+    {error, <<"Default must be integer less than or equal to ValidLen.">>};
+safe_match(not_found, Default, _ValidLen) when is_integer(Default), Default >= 0 ->
     Default;
-safe_match(Match, Default, ValidLen) when is_integer(Match), is_integer(Default), Default >= 0, is_integer(ValidLen) ->
+safe_match(Match, Default, ValidLen) when is_integer(Match) ->
     case {Match, Default, ValidLen} of
         {0, 0, _} -> 0;
         {M, _, V} when M > 0 andalso M =< V -> M;
