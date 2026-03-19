@@ -24,13 +24,18 @@
 setup_conn(Opts) ->
     ConnPoolReadSize = hb_opts:get(conn_pool_read_size, ?DEFAULT_CONN_POOL_READ_SIZE, Opts),
     ConnPoolWriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
+    HackneyPoolSize = ConnPoolReadSize + ConnPoolWriteSize,
+    KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     ?event(
         connection_pool,
         {conn,
             {pool_read_num, ConnPoolReadSize},
-            {pool_write_num, ConnPoolWriteSize}
+            {pool_write_num, ConnPoolWriteSize},
+            {hackney_pool_size, HackneyPoolSize}
         }
     ),
+    hackney_pool:set_max_connections(?HACKNEY_POOL, HackneyPoolSize),
+    hackney_pool:set_timeout(?HACKNEY_POOL, KeepAlive),
     persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
 
 start_link(Opts) ->
@@ -294,14 +299,9 @@ init_ets_table(Table) ->
     end.
 
 init_hackney_pool(Opts) ->
-    ReadSize = hb_opts:get(conn_pool_read_size, ?DEFAULT_CONN_POOL_READ_SIZE, Opts),
-    WriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
-    PoolSize = ReadSize + WriteSize,
-    KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
-    ?event(boot, {hackney_pool_size, PoolSize}),
     hackney_pool:start_pool(?HACKNEY_POOL, [
-        {max_connections, PoolSize},
-        {timeout, KeepAlive}
+        {max_connections, ?DEFAULT_HACKNEY_POOL_SIZE},
+        {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
 
 init_counter_ets_table(Table) ->
