@@ -139,7 +139,7 @@ default_message() ->
         hb_config_location => <<"config.flat">>,
         initialized => true,
         %% What HTTP client should the node use?
-        %% Options: gun, httpc
+        %% Options: gun, httpc, hackney
         http_client => ?DEFAULT_HTTP_CLIENT,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
@@ -307,15 +307,15 @@ default_message() ->
                     [
                         #{
                             <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
                             <<"prefix">> => ?DEFAULT_GATEWAY,
-                            <<"opts">> => #{ http_client => gun, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         }
                     ]
             },
@@ -376,7 +376,7 @@ default_message() ->
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             },
             %% General Arweave requests: race all chain nodes, take
@@ -394,7 +394,7 @@ default_message() ->
                 <<"node">> =>
                     #{
                         <<"prefix">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             }
         ],
