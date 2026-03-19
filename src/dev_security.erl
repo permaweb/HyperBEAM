@@ -83,13 +83,16 @@ validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
     maybe
         %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
         From = lists:uniq(as_list(RawFrom, Opts)),
-        Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
-        RequiredList = lists:uniq(
-            as_list(
+        ValidOrError = as_signer_config_list(hb_ao:get(Key, Base, [], Opts), Opts),
+        true ?= is_list(ValidOrError) orelse ValidOrError,
+        Valid = lists:uniq(ValidOrError),
+        RequiredListOrError =
+            as_signer_config_list(
                 hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
                 Opts
-            )
-        ),
+            ),
+        true ?= is_list(RequiredListOrError) orelse RequiredListOrError,
+        RequiredList = lists:uniq(RequiredListOrError),
         DefaultThresholdN = case length(Valid) of
             0 -> 0;
             _ -> 1
@@ -160,6 +163,14 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 %% @doc Normalize value to a list.
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
+
+%% @doc Normalize signer config values. Supports true lists and comma-separated
+%% binary encodings used in process security configuration.
+as_signer_config_list(Value, _Opts) when is_list(Value) -> Value;
+as_signer_config_list(Value, _Opts) when is_binary(Value) ->
+    hb_util:binary_to_strings(Value);
+as_signer_config_list(_Value, _Opts) -> 
+    {error, <<"Signer config must be a binary or a list.">>}.
 %% @doc Normalize and validate a `*-match` threshold against the acceptable
 %% signer set `Valid`. Let `ValidLen = |Valid|`. If no explicit threshold is
 %% provided, the default threshold is `0` when `ValidLen = 0` and `1` when
@@ -208,6 +219,20 @@ duplicate_authority_match_rejected_test() ->
             },
             #{},
             [<<"alice">>, <<"alice">>],
+            #{}
+        )
+    ).
+
+comma_separated_authority_config_supported_test() ->
+    ?assertEqual(
+        true,
+        validate(
+            <<"authority">>,
+            #{
+                <<"authority">> => <<"\"alice\",\"bob\"">>
+            },
+            #{},
+            [<<"alice">>, <<"bob">>],
             #{}
         )
     ).

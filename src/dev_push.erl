@@ -886,6 +886,51 @@ push_as_identity_test_() ->
         )
     end}.
 
+comma_separated_authority_config_supported_test_() ->
+    {timeout, 30, fun() ->
+        dev_process_test_vectors:init(),
+        DefaultWallet = hb:wallet(),
+        AliceWallet = ar_wallet:new(),
+        AliceID = hb_util:human_id(AliceWallet),
+        BobWallet = ar_wallet:new(),
+        BobID = hb_util:human_id(BobWallet),
+        Authority =
+            iolist_to_binary(
+                [
+                    <<"\"">>,
+                    AliceID,
+                    <<"\",\"">>,
+                    BobID,
+                    <<"\"">>
+                ]
+            ),
+        Opts = #{
+            priv_wallet => DefaultWallet,
+            identities => #{
+                AliceID => #{ priv_wallet => AliceWallet },
+                BobID => #{ priv_wallet => BobWallet }
+            }
+        },
+        Base = dev_process_test_vectors:aos_process(Opts#{ authority => Authority }),
+        SignedMsg =
+            apply_security(
+                authority,
+                #{ <<"path">> => <<"compute">> },
+                Base,
+                <<"httpsig@1.0">>,
+                Opts
+            ),
+        Signers = hb_message:signers(SignedMsg, Opts),
+        ?assertEqual(
+            lists:sort([AliceID, BobID]),
+            lists:sort(Signers)
+        ),
+        ?assertEqual(
+            true,
+            dev_security:validate(<<"authority">>, Base, #{}, Signers, Opts)
+        )
+    end}.
+
 multi_process_push_test_() ->
     {timeout, 30, fun() ->
         dev_process_test_vectors:init(),
