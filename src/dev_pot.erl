@@ -39,6 +39,19 @@
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
+%%% `~pot@1.0` dev_token:validate_address custom denylist
+-define(RESERVED_KEYS, [
+    <<"balances">>,
+    <<"resources">>,
+    <<"users">>,
+    <<"total-suuply">>,
+    <<"minted">>,
+    <<"accumulator">>,
+    <<"last-drip">>,
+    <<"t">>,
+    <<"total-weighted-units">>,
+    <<"undistributed-mint">>
+]).
 
 %%% Pot Model Functions.
 
@@ -293,27 +306,30 @@ unclaimed_yield(Addr, S, Opts) ->
 
 %% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
-    GlobalDrippedS = drip_global(UndrippedS, Opts),
-    ?event(debug_pot,
-        {unclaimed_yield,
-            {resource_id, ResourceID},
-            {global_dripped_state, GlobalDrippedS},
-            {undripped_state, UndrippedS}
-        },
-        Opts
-    ),
-    S = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
-    Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
-    case hb_maps:find(Addr, Deposits) of
-        error -> 0;
-        {ok, #{
-                <<"quantity">> := Qty,
-                <<"last-resource-accumulator">> := LastResourceAcc
-            }} ->
-            ?no_prod("Remove all floating point arithmetic."),
-            dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        GlobalDrippedS = drip_global(UndrippedS, Opts),
+        ?event(debug_pot,
+            {unclaimed_yield,
+                {resource_id, ResourceID},
+                {global_dripped_state, GlobalDrippedS},
+                {undripped_state, UndrippedS}
+            },
+            Opts
+        ),
+        S = drip_resource(ResourceID, GlobalDrippedS, Opts),
+        Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
+        ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
+        Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
+        case hb_maps:find(Addr, Deposits) of
+            error -> 0;
+            {ok, #{
+                    <<"quantity">> := Qty,
+                    <<"last-resource-accumulator">> := LastResourceAcc
+                }} ->
+                ?no_prod("Remove all floating point arithmetic."),
+                dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
+            end
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
@@ -367,6 +383,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No `address' provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(Address, ?RESERVED_KEYS),
         {ok, ResourceID} ?=
             hb_maps:find(
                 <<"resource">>,
@@ -374,6 +391,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No resource ID provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         {ok, Amount} ?=
             hb_maps:find(
                 <<"quantity">>,
@@ -395,6 +413,7 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
         {ok, Resources} =
             hb_maps:find(
                 <<"resources">>,
@@ -502,6 +521,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         {ok, ToAddr} ?=
             hb_maps:find(
                 <<"address">>,
@@ -509,6 +529,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No recipient `address' to delegate to provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         {ok, ResourceID} ?=
             hb_maps:find(
                 <<"resource">>,
@@ -516,6 +537,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `resource' ID to delegate on provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         {ok, Amount} ?=
             hb_maps:find(
                 <<"quantity">>,
@@ -667,6 +689,9 @@ undelegate(State, Assignment, Opts) ->
         {ok, ToAddr} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
         StateWithT = State#{ <<"t">> := NewT },
         {ok, NewState} ?=
@@ -822,6 +847,7 @@ register(State, Assignment, Opts) ->
                 <<"No `resource' provided to register.">>, 
                 Opts
             ),
+        true ?= dev_token:validate_address(ResID, ?RESERVED_KEYS),
         {ok, From} ?= 
             hb_maps:find(
                 <<"from">>, 
@@ -829,6 +855,7 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
+        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
         true ?=
             (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
             dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
@@ -851,12 +878,16 @@ register(State, Assignment, Opts) ->
 
 %% @doc Update the authority record for a specific resource in the pot.
 register_resource_authority(ResourceID, Authority, S, Opts) ->
-    hb_ao:set(
-        S,
-        <<"/resources/", ResourceID/binary, "/authority">>,
-        Authority,
-        Opts
-    ).
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(Authority, ?RESERVED_KEYS),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority">>,
+            Authority,
+            Opts
+        )
+end.
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
