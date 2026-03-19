@@ -177,15 +177,15 @@ safe_match(_Match, Default, ValidLen) when Default > ValidLen ->
     {error, <<"Default must be integer less than or equal to ValidLen.">>};
 safe_match(not_found, Default, _ValidLen) when is_integer(Default), Default >= 0 ->
     Default;
-safe_match(Match, Default, ValidLen) when is_integer(Match) ->
-    case {Match, Default, ValidLen} of
-        {0, 0, _} -> 0;
-        {M, _, V} when M > 0 andalso M =< V -> M;
+safe_match(Match, _Default, ValidLen) when is_integer(Match) ->
+    case {Match, ValidLen} of
+        {0, 0} -> 0;
+        {M, V} when M > 0 andalso M =< V -> M;
         _ -> {error, <<"Invalid Match threshold.">>}
     end;
-safe_match(Match, Default, ValidLen) when is_binary(Match)->
+safe_match(Match, _Default, ValidLen) when is_binary(Match)->
     try binary_to_integer(Match) of
-        IntMatch -> safe_match(IntMatch, Default, ValidLen)
+        IntMatch -> safe_match(IntMatch, _Default, ValidLen)
     catch
         _:_ -> {error, <<"Invalid Match threshold.">>}
     end;
