@@ -20,8 +20,8 @@ enforce_mint_authority(Base, Req, Opts) ->
     maybe
         Minter = hb_ao:get(<<"from">>, Req, Opts),
         MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
-        true ?= dev_token:validate_address(Minter),
-        true ?= dev_token:validate_address(MintAuthority),
+        true ?= dev_token:validate_address(Minter, []),
+        true ?= dev_token:validate_address(MintAuthority, []),
         case {Minter, MintAuthority} of
             {not_found, _} -> 
                 {error, <<"Minter not found.">>};
@@ -40,7 +40,7 @@ mint_single(Base, Req, Opts) ->
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
-        true ?= dev_token:validate_address(To),
+        true ?= dev_token:validate_address(To, []),
         ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
         perform_mint(Base, #{ To => Quantity }, Opts)
     end.
@@ -62,7 +62,7 @@ perform_mint(Base, RawQuantities, Opts) ->
         % validate address
         true ?= 
             lists:all(
-                fun(Addr) -> true =:= dev_token:validate_address(Addr) end,
+                fun(Addr) -> true =:= dev_token:validate_address(Addr, []) end,
                 maps:keys(Quantities)
             )
             orelse {error, <<"Mint recipients must be valid addresses">>},
