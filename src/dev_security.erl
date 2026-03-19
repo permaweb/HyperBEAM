@@ -80,34 +80,38 @@ validate_authority(Base, Assignment, Opts) ->
 validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
-    %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
-    From = lists:uniq(as_list(RawFrom, Opts)),
-    Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
-    RequiredList = lists:uniq(
-        as_list(
-            hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+    maybe
+        %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
+        From = lists:uniq(as_list(RawFrom, Opts)),
+        Valid = lists:uniq(as_list(hb_ao:get(Key, Base, [], Opts), Opts)),
+        RequiredList = lists:uniq(
+            as_list(
+                hb_ao:get(<<Key/binary, "-required">>, Base, [], Opts),
+                Opts
+            )
+        ),
+        DefaultThresholdN = case length(Valid) of
+            0 -> 0;
+            _ -> 1
+        end,
+        
+        MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
+        MatchOrError = safe_match(MatchRaw, DefaultThresholdN, length(Valid)),
+        true ?= is_integer(MatchOrError) orelse MatchOrError,
+        Match = MatchOrError,
+        ?event(security_debug,
+            {validate_authority,
+                {subject_ids, From},
+                {intent, compute},
+                {valid_options, Valid},
+                {required, RequiredList},
+                {base, Base},
+                {message, SubjectMsg}
+            },
             Opts
-        )
-    ),
-    DefaultThresholdN = case length(Valid) of
-        0 -> 0;
-        _ -> 1
-    end,
-    
-    MatchRaw = hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts),
-    Match = safe_match(MatchRaw, DefaultThresholdN),
-    ?event(security_debug,
-        {validate_authority,
-            {subject_ids, From},
-            {intent, compute},
-            {valid_options, Valid},
-            {required, RequiredList},
-            {base, Base},
-            {message, SubjectMsg}
-        },
-        Opts
-    ),
-    satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts).
+        ),
+        satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts)
+end.
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
@@ -157,27 +161,35 @@ count_common(ListA, ListB) -> length([X || X <- ListA, lists:member(X, ListB)]).
 as_list(Value, _Opts) when is_list(Value) -> Value;
 as_list(Value, _Opts) -> [Value].
 %% @doc Normalize and validate a `*-match` threshold against the acceptable
-%% signer set. If no explicit threshold is provided, the default is `0` when
-%% there are no acceptable signers and `1` otherwise. Explicit thresholds must
-%% be integer-like and within the admissible range: `0` is only allowed when
-%% the default is `0`; otherwise the threshold must be in `1..Default`.
-safe_match(not_found, Default) when is_integer(Default), Default >= 0 ->
-    Default;
-safe_match(not_found, _Default) ->
+%% signer set `Valid`. Let `ValidLen = |Valid|`. If no explicit threshold is
+%% provided, the default threshold is `0` when `ValidLen = 0` and `1` when
+%% `ValidLen > 0`. Explicit thresholds must be integer-like and satisfy:
+%% `Match = 0` iff `ValidLen = 0`; otherwise `1 =< Match =< ValidLen`.
+safe_match(_Match, _Default, ValidLen) when not is_integer(ValidLen) ->
+    {error, <<"Invalid Valid list length type.">>};
+safe_match(_Match, _Default, ValidLen) when is_integer(ValidLen), ValidLen < 0 ->
+    {error, <<"Valid list length must be a non-negative integer.">>};
+safe_match(_Match, Default, _ValidLen) when not is_integer(Default) ->
+    {error, <<"Invalid Default type.">>};
+safe_match(_Match, Default, _ValidLen) when Default < 0 ->
     {error, <<"Default must be a non-negative integer.">>};
-safe_match(Match, Default) when is_integer(Match), is_integer(Default), Default >= 0 ->
-    case {Match, Default} of
+safe_match(_Match, Default, ValidLen) when Default > ValidLen ->
+    {error, <<"Default must be integer less than or equal to ValidLen.">>};
+safe_match(not_found, Default, _ValidLen) when is_integer(Default), Default >= 0 ->
+    Default;
+safe_match(Match, _Default, ValidLen) when is_integer(Match) ->
+    case {Match, ValidLen} of
         {0, 0} -> 0;
-        {M, D} when M > 0 andalso M =< D -> M;
+        {M, V} when M > 0 andalso M =< V -> M;
         _ -> {error, <<"Invalid Match threshold.">>}
     end;
-safe_match(Match, Default) when is_binary(Match)->
+safe_match(Match, _Default, ValidLen) when is_binary(Match)->
     try binary_to_integer(Match) of
-        IntMatch -> safe_match(IntMatch, Default)
+        IntMatch -> safe_match(IntMatch, _Default, ValidLen)
     catch
         _:_ -> {error, <<"Invalid Match threshold.">>}
     end;
-safe_match(_, _) ->
+safe_match(_, _, _) ->
     {error, <<"Invalid Match threshold.">>}.
 
 %% @doc Return the single element of a list if there is only one, else return
