@@ -22,7 +22,8 @@
 
 %% @doc Use Opts to configure connection pool size.
 setup_conn(Opts) ->
-    MaxConnections = hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
+    MaxConnections =
+        hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     ?event(connection_pool, {http_client_hackney_max_connections, MaxConnections}),
     hackney_pool:set_max_connections(?HACKNEY_POOL, MaxConnections),
@@ -41,7 +42,8 @@ response_status_to_atom(Status) ->
     end.
 
 request(Args, Opts) ->
-    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
+    Opts1 = hb_opts:mimic_default_types(Opts, existing, Opts),
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts1), Opts1).
 request(Args, RemainingRetries, Opts) ->
     Response = do_request(Args, Opts),
     case Response of
@@ -50,7 +52,7 @@ request(Args, RemainingRetries, Opts) ->
             StatusAtom = response_status_to_atom(Status),
             RetryResponses = hb_opts:get(http_retry_response, [], Opts),
             case lists:member(StatusAtom, RetryResponses) of
-            true -> maybe_retry(RemainingRetries, Args, Response, Opts);
+                true -> maybe_retry(RemainingRetries, Args, Response, Opts);
                 false -> Response
             end
     end.
@@ -96,75 +98,70 @@ httpc_req(Args, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    {ok, {Host, Port}} = parse_peer(Peer, Opts),
-    Scheme = case Port of
-        443 -> "https";
-        _ -> "http"
-    end,
-    ?event(debug_http_client, {httpc_req, {explicit, Args}}),
-    URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
-    HeaderKV =
-        [
-            {binary_to_list(Key), binary_to_list(Value)}
-        ||
-            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
-        ] ++
-        [
-            {<<"cookie">>, CookieLine}
-        ||
-            CookieLine <-
-                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
-                    Binary when is_binary(Binary) ->
-                        [Binary];
-                    List when is_list(List) ->
-                        List
-                end
-        ],
-    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
-    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
-    Request =
-        case Method of
-            get ->
-                {
-                    URL,
-                    HeaderKV
-                };
-            _ ->
-                upload_metric(Body),
-                {
-                    URL,
-                    HeaderKV,
-                    binary_to_list(ContentType),
-                    Body
-                }
-        end,
-    ?event({http_client_outbound, Method, URL, Request}),
-    HTTPCOpts = [{full_result, true}, {body_format, binary}],
-	StartTime = os:system_time(native),
-    case httpc:request(Method, Request, [], HTTPCOpts) of
-        {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-            download_metric(RespBody),
-	        EndTime = os:system_time(native),
-            RespHeaders =
+    case parse_peer(Peer, Opts) of
+        {error, _} = Err -> Err;
+        {ok, {Host, Port}} ->
+            Scheme = case Port of
+                443 -> "https";
+                _ -> "http"
+            end,
+            ?event(debug_http_client, {httpc_req, {explicit, Args}}),
+            URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+            FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+            HeaderKV =
                 [
-                    {list_to_binary(Key), list_to_binary(Value)}
+                    {binary_to_list(Key), binary_to_list(Value)}
                 ||
-                    {Key, Value} <- RawRespHeaders
+                    {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+                ] ++
+                [
+                    {<<"cookie">>, CookieLine}
+                ||
+                    CookieLine <-
+                        case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                            Binary when is_binary(Binary) ->
+                                [Binary];
+                            List when is_list(List) ->
+                                List
+                        end
                 ],
-            ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Status),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            ),
-            {ok, Status, RespHeaders, RespBody};
-        {error, Reason} ->
-            ?event(http_client, {httpc_error, Reason}),
-            {error, Reason}
+            Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+            ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
+            Request =
+                case Method of
+                    get ->
+                        {URL, HeaderKV};
+                    _ ->
+                        upload_metric(Body),
+                        {URL, HeaderKV, binary_to_list(ContentType), Body}
+                end,
+            ?event({http_client_outbound, Method, URL, Request}),
+            HTTPCOpts = [{full_result, true}, {body_format, binary}],
+            StartTime = os:system_time(native),
+            case httpc:request(Method, Request, [], HTTPCOpts) of
+                {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+                    download_metric(RespBody),
+                    EndTime = os:system_time(native),
+                    RespHeaders =
+                        [
+                            {list_to_binary(Key), list_to_binary(Value)}
+                        ||
+                            {Key, Value} <- RawRespHeaders
+                        ],
+                    ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+                    record_duration(#{
+                            <<"request-method">> => method_to_bin(Method),
+                            <<"request-path">> => hb_util:bin(Path),
+                            <<"status-class">> => get_status_class(Status),
+                            <<"duration">> => EndTime - StartTime
+                        },
+                        Opts
+                    ),
+                    {ok, Status, RespHeaders, RespBody};
+                {error, Reason} ->
+                    ?event(http_client, {httpc_error, Reason}),
+                    {error, Reason}
+            end
     end.
 
 hackney_req(Args, Opts) ->
@@ -224,153 +221,43 @@ hackney_req(Args, Opts) ->
     end.
 
 gun_req(Args, Opts) ->
-    gun_req(Args, false, Opts).
-gun_req(Args, ReestablishedConnection, Opts) ->
 	StartTime = os:system_time(native),
 	#{ peer := Peer, path := Path, method := Method } = Args,
-    ConnType = get_connection_type(Method),
+	ConnectTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
 	Response =
-        case get_connection(Peer, ConnType, Args, Opts) of
-            {ok, PID} ->
-                ar_rate_limiter:throttle(Peer, Path, Opts),
-                case do_gun_request(PID, Args,     hb_opts:mimic_default_types(Opts, existing, Opts)) of
-                    {error, Error} when Error == {shutdown, normal};
-                            Error == noproc ->
-                        case ReestablishedConnection of
-                            true -> {error, client_error};
-                            false -> gun_req(Args, true, Opts)
-                        end;
-                    Reply ->
-                        Reply
-                end;
-            {'EXIT', _} ->
-                {error, client_error};
-            Error ->
-                ?event(http_client, {gun_error, Error}),
-                Error
-	    end,
+		case open_connection(Args, Opts) of
+			{error, _} = Err ->
+				Err;
+			{ok, PID} ->
+				case gun:await_up(PID, ConnectTimeout) of
+					{error, Reason} ->
+						gun:close(PID),
+						{error, Reason};
+					{ok, _Protocol} ->
+						ar_rate_limiter:throttle(Peer, Path, Opts),
+						Result = do_gun_request(PID, Args, Opts),
+						gun:close(PID),
+						Result
+				end
+		end,
 	EndTime = os:system_time(native),
-	%% Only log the metric for the top-level call to req/2 - not the recursive call
-	%% that happens when the connection is reestablished.
-	case ReestablishedConnection of
-		true ->
-			ok;
-		false ->
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Response),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            )
-	end,
+	record_duration(#{
+			<<"request-method">> => method_to_bin(Method),
+			<<"request-path">> => hb_util:bin(Path),
+			<<"status-class">> => get_status_class(Response),
+			<<"duration">> => EndTime - StartTime
+		},
+		Opts
+	),
 	Response.
 
-%% Connection Pool Logic
-
-init_ets_tables() ->
-    init_ets_table(?CONNECTIONS_ETS),
-    init_ets_table(?CONN_STATUS_ETS),
-    init_counter_ets_table(?CONN_COUNTER_ETS).
-
-init_ets_table(Table) ->
-    case ets:whereis(Table) of
-        undefined ->
-            ets:new(Table, [
-                named_table,
-                public,
-                set,
-                {read_concurrency, true},
-                {write_concurrency, true}
-            ]);
-        _ ->
-            ok
-    end.
-
-init_hackney_pool(Opts) ->
+%% @doc Start the hackney connection pool with default settings.
+%% Overridden at runtime by setup_conn/1 once node config is available.
+init_hackney_pool() ->
     hackney_pool:start_pool(?HACKNEY_POOL, [
         {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
-
-init_counter_ets_table(Table) ->
-    case ets:whereis(Table) of
-        undefined ->
-            ets:new(Table, [
-                named_table,
-                public,
-                set,
-                {write_concurrency, true}
-            ]);
-        _ ->
-            ok
-    end.
-
-
-get_connection_type(<<"GET">>) -> read;
-get_connection_type(<<"get">>) -> read;
-get_connection_type(<<"HEAD">>) -> read;
-get_connection_type(<<"head">>) -> read;
-get_connection_type(get) -> read;
-get_connection_type(head) -> read;
-get_connection_type(_) -> write.
-
-%% @doc Get the pool size for a connection type.
-get_pool_size(read) ->
-    {ReadSize, _} = persistent_term:get(?CONN_TERM, {?DEFAULT_CONN_POOL_READ_SIZE, ?DEFAULT_CONN_POOL_WRITE_SIZE}),
-    ReadSize;
-get_pool_size(write) ->
-    {_, WriteSize} = persistent_term:get(?CONN_TERM, {?DEFAULT_CONN_POOL_READ_SIZE, ?DEFAULT_CONN_POOL_WRITE_SIZE}),
-    WriteSize.
-
-%% @doc Get the next connection index using round-robin selection.
-%% Uses ets:update_counter for atomic increment.
-get_next_conn_index(Peer, ConnType) ->
-    PoolSize = get_pool_size(ConnType),
-    CounterKey = {Peer, ConnType},
-    %% Atomically increment and wrap around using update_counter
-    %% If key doesn't exist, it will be created with default 0
-    try
-        Index = ets:update_counter(?CONN_COUNTER_ETS, CounterKey, {2, 1, PoolSize, 1}),
-        Index
-    catch
-        error:badarg ->
-            %% Key doesn't exist, initialize it
-            ets:insert_new(?CONN_COUNTER_ETS, {CounterKey, 1}),
-            1
-    end.
-
-%% @doc Get a connection for a peer+type, using ETS for fast lookup.
-%% If no connection exists, it will be created via the gen_server.
-%% Uses round-robin to distribute requests across the connection pool.
-get_connection(Peer, ConnType, Args, Opts) ->
-    PoolSize = get_pool_size(ConnType),
-    ConnIndex = get_next_conn_index(Peer, ConnType),
-    ConnKey = {Peer, ConnType, ConnIndex},
-    get_connection_by_key(ConnKey, PoolSize, Args, Opts, 0).
-
-%% @doc Try to get a connection by key, with fallback to other pool connections.
-get_connection_by_key(ConnKey, PoolSize, Args, Opts, Attempts) when Attempts < PoolSize ->
-    case ets:lookup(?CONNECTIONS_ETS, ConnKey) of
-        [{ConnKey, PID}] ->
-            %% Found a connection, check if it's still alive and connected
-            case ets:lookup(?CONN_STATUS_ETS, PID) of
-                [{PID, connected, _MonitorRef, _ConnKey}] ->
-                    {ok, PID};
-                [{PID, {connecting, _}, _MonitorRef, _ConnKey}] ->
-                    %% Connection is being established, wait for it via gen_server
-                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000);
-                [] ->
-                    %% Status not found, connection might be dead, create new one
-                    catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000)
-            end;
-        [] ->
-            %% No connection, create one via gen_server
-            catch gen_server:call(?MODULE, {get_connection, ConnKey, Args, Opts}, 10_000)
-    end;
-get_connection_by_key(_ConnKey, _PoolSize, _Args, _Opts, _Attempts) ->
-    {error, no_available_connection}.
 
 %% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
 %% node message key. We invoke the given message with the `body' set to a signed
@@ -416,8 +303,7 @@ maybe_invoke_monitor(Details, Opts) ->
 %%% ==================================================================
 
 init(Opts) ->
-    init_ets_tables(),
-    init_hackney_pool(Opts),
+    init_hackney_pool(),
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
             ?event({starting_prometheus_application,
@@ -442,34 +328,6 @@ init(Opts) ->
         false -> {ok, #state{ opts = Opts }}
     end.
 
-handle_call({get_connection, ConnKey, Args, Opts}, From, State) ->
-    ArgsOpts = maps:get(opts, Args, #{}),
-    HttpOpts = maps:get(opts,     hb_opts:mimic_default_types(Opts, existing, #{deep => true}), #{}),
-    MergedHttpOpts = maps:merge(ArgsOpts, HttpOpts),
-    MergedArgs = Args#{opts => MergedHttpOpts},
-    %% ConnKey = {Peer, ConnType, Index} where ConnType is 'read' or 'write'
-    %% and Index is 1..PoolSize for round-robin distribution
-    %% Double-check ETS to handle race conditions
-    case ets:lookup(?CONNECTIONS_ETS, ConnKey) of
-        [{ConnKey, PID}] ->
-            %% Connection exists, check status
-            case ets:lookup(?CONN_STATUS_ETS, PID) of
-                [{PID, connected, _MonitorRef, _ConnKey}] ->
-                    {reply, {ok, PID}, State};
-                [{PID, {connecting, PendingRequests}, MonitorRef, ConnKey}] ->
-                    %% Add to pending requests list
-                    ets:insert(?CONN_STATUS_ETS, {PID, {connecting, [{From, MergedArgs} | PendingRequests]}, MonitorRef, ConnKey}),
-                    {noreply, State};
-                [] ->
-                    %% Status not found, PID is stale - remove and create new
-                    ets:delete(?CONNECTIONS_ETS, ConnKey),
-                    create_new_connection(ConnKey, MergedArgs, From, State)
-            end;
-        [] ->
-            %% No connection exists, create one
-            create_new_connection(ConnKey, MergedArgs, From, State)
-    end;
-
 handle_call(Request, _From, State) ->
 	?event(warning, {unhandled_call, {module, ?MODULE}, {request, Request}}),
 	{reply, ok, State}.
@@ -478,134 +336,31 @@ handle_cast(Cast, State) ->
 	?event(warning, {unhandled_cast, {module, ?MODULE}, {cast, Cast}}),
 	{noreply, State}.
 
-handle_info({gun_up, PID, Protocol}, State) ->
-    case ets:lookup(?CONN_STATUS_ETS, PID) of
-        [] ->
-			%% A connection timeout should have occurred.
-			{noreply, State};
-        [{PID, {connecting, PendingRequests}, MonitorRef, ConnKey}] ->
-            ?event(http_client, {gun_up, {protocol, Protocol}, {conn_key, ConnKey}}),
-            [gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
-            ets:insert(?CONN_STATUS_ETS, {PID, connected, MonitorRef, ConnKey}),
-            hb_prometheus:inc(gauge, outbound_connections),
-            {noreply, State};
-        [{PID, connected, _MonitorRef, ConnKey}] ->
-			?event(warning,
-                {gun_up_pid_already_exists, {conn_key, ConnKey}}),
-			{noreply, State}
-	end;
+handle_info({gun_up, _PID, _Protocol}, State) ->
+	{noreply, State};
 
 handle_info({gun_error, PID, Reason}, State) ->
-    case ets:lookup(?CONN_STATUS_ETS, PID) of
-        [] ->
-			?event(warning, {gun_connection_error_with_unknown_pid}),
-			{noreply, State};
-        [{PID, Status, MonitorRef, ConnKey}] ->
-            ets:delete(?CONNECTIONS_ETS, ConnKey),
-            ets:delete(?CONN_STATUS_ETS, PID),
-            demonitor(MonitorRef, [flush]),
-			Reason2 =
-				case Reason of
-					timeout ->
-						connect_timeout;
-					{Type, _} ->
-						Type;
-					_ ->
-						Reason
-				end,
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason2);
-				connected ->
-					hb_prometheus:dec(gauge, outbound_connections),
-					ok
-			end,
-			gun:shutdown(PID),
-			?event(http_client, {connection_error, {conn_key, ConnKey}, {reason, Reason}}),
-			{noreply, State}
-	end;
+	?event(warning, {gun_connection_error, {pid, PID}, {reason, Reason}}),
+	{noreply, State};
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
-	case ets:lookup(?CONN_STATUS_ETS, PID) of
-		[] ->
-			?event(warning,
-                {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
-            {noreply, State};
-        [{PID, Status, MonitorRef, ConnKey}] ->
-            ets:delete(?CONNECTIONS_ETS, ConnKey),
-            ets:delete(?CONN_STATUS_ETS, PID),
-            demonitor(MonitorRef, [flush]),
-            Reason2 =
-                case Reason of
-                    {Type, _} ->
-                        Type;
-                    _ ->
-                        Reason
-                end,
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason2);
-				_ ->
-					hb_prometheus:dec(gauge,outbound_connections),
-					ok
-			end,
-			gun:shutdown(PID),
-            ?event(http_outbound, {gun_shutdown_after_down, {conn_key, ConnKey}, {protocol, Protocol}}),
-            {noreply, State}
-	end;
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams}, State) ->
+	?event(warning, {gun_connection_down, {pid, PID}, {protocol, Protocol}, {reason, Reason}}),
+	{noreply, State};
 
 handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
-    case ets:lookup(?CONN_STATUS_ETS, PID) of
-        [] ->
-            {noreply, State};
-        [{PID, Status, MonitorRef, ConnKey}] ->
-            ets:delete(?CONNECTIONS_ETS, ConnKey),
-            ets:delete(?CONN_STATUS_ETS, PID),
-            demonitor(MonitorRef, [flush]),
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason);
-				_ ->
-					hb_prometheus:dec(gauge, outbound_connections),
-					ok
-			end,
-			{noreply, State}
-    end;
+	?event(warning, {gun_process_down, {pid, PID}, {reason, Reason}}),
+	{noreply, State};
 
 handle_info(Message, State) ->
 	?event(warning, {unhandled_info, {module, ?MODULE}, {message, Message}}),
 	{noreply, State}.
 
-terminate(Reason, _State) ->
-	?event(info,{http_client_terminating, {reason, Reason}}),
-    ets:foldl(
-        fun({PID, _Status, MonitorRef, _ConnKey}, Acc) ->
-                gun:shutdown(PID),
-                demonitor(MonitorRef, [flush]),
-                Acc
-        end,
-        ok,
-        ?CONN_STATUS_ETS
-    ),
+terminate(_Reason, _State) ->
 	ok.
 
 %%% ==================================================================
 %%% Private functions.
 %%% ==================================================================
-
-%% @doc Create a new connection and store it in ETS.
-create_new_connection(ConnKey, Args, _From, State) ->
-    MergedOpts = hb_maps:merge(State#state.opts, hb_maps:get(opts, Args, #{}), #{}),
-    case open_connection(Args, MergedOpts) of
-        {ok, PID} ->
-            MonitorRef = monitor(process, PID),
-            ets:insert(?CONNECTIONS_ETS, {ConnKey, PID}),
-            ets:insert(?CONN_STATUS_ETS,
-                {PID, {connecting, []}, MonitorRef, ConnKey}),
-            {reply, {ok, PID}, State};
-        {error, _} = Err ->
-            {reply, Err, State}
-    end.
 
 open_connection(#{ peer := Peer }, Opts) ->
     case parse_peer(Peer, Opts) of
@@ -677,16 +432,6 @@ parse_peer(Peer, Opts) ->
         _ ->
             {error, {bad_peer, Peer}}
     end.
-
-reply_error([], _Reason) ->
-	ok;
-reply_error([PendingRequest | PendingRequests], Reason) ->
-	ReplyTo = element(1, PendingRequest),
-	Args = element(2, PendingRequest),
-	Method = hb_maps:get(method, Args),
-	record_response_status(Method, {error, Reason}),
-	gen_server:reply(ReplyTo, {error, Reason}),
-	reply_error(PendingRequests, Reason).
 
 do_gun_request(PID, Args, Opts) ->
 	Timer =

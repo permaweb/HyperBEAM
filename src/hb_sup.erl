@@ -32,11 +32,7 @@ init(Opts) ->
             type => worker,
             modules => [hb_http_client]
         },
-    HttpMailBoxMonitoringChild = #{
-        id => hb_http_conn_monitor,
-        start => {hb_http_conn_monitor, start_link, [Opts]}
-    },
-    {ok, {SupFlags, [HttpMailBoxMonitoringChild | [GunChild | StoreChildren]]}}.
+    {ok, {SupFlags, [GunChild | StoreChildren]}}.
 
 %% @doc Generate a child spec for stores in the given Opts.
 store_children(Store) when not is_list(Store) ->
