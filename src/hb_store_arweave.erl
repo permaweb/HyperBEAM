@@ -192,7 +192,8 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
 
 %% @doc Load a TX from the given start offset and length. The `StartOffset' is
 %% the start of the first chunk of the data and runs for the length of the data
-%% segment, ignoring header size.
+%% segment, ignoring header size. After reading chunks, verifies the data
+%% matches the TX header's data_root to guard against stale offsets.
 load_tx(ID, StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
@@ -209,16 +210,23 @@ load_tx(ID, StartOffset, Length, Opts) ->
                     Opts
                 ),
             case read_chunks(StartOffset, Length, Opts) of
-                {ok, SerializedItem} ->
-                    {
-                        ok,
-                        hb_message:convert(
-                            TXHeader#tx{ data = SerializedItem },
-                            <<"structured@1.0">>,
-                            <<"tx@1.0">>,
-                            Opts
-                        )
-                    };
+                {ok, Data} ->
+                    TXWithData = ar_tx:generate_chunk_tree(
+                        TXHeader#tx{ data = Data }),
+                    case TXWithData#tx.data_root =:= TXHeader#tx.data_root of
+                        true ->
+                            {
+                                ok,
+                                hb_message:convert(
+                                    TXWithData,
+                                    <<"structured@1.0">>,
+                                    <<"tx@1.0">>,
+                                    Opts
+                                )
+                            };
+                        false ->
+                            {error, {data_root_mismatch, ID}}
+                    end;
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -360,6 +368,20 @@ stale_ans104_offset_returns_error_test() ->
     ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, RealStartOffset, RealSize),
     Result = read(Opts, FakeID),
     ?assertMatch({error, {id_mismatch, _, _}}, Result).
+
+%% @doc Stale TX offset must return data_root_mismatch, not wrong data.
+%% Uses a real TX ID but points the offset at a different TX's data.
+%% The header is fetched by ID (correct), but the chunk data won't match
+%% the header's data_root.
+stale_tx_offset_returns_error_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{<<"index-store">> => Store},
+    RealID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    WrongOffset = 155309918167286,
+    WrongSize = 2,
+    ok = write_offset(Opts, RealID, <<"tx@1.0">>, WrongOffset, WrongSize),
+    Result = read(Opts, RealID),
+    ?assertMatch({error, {data_root_mismatch, _}}, Result).
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
