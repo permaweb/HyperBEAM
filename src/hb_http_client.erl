@@ -46,25 +46,16 @@ response_status_to_atom(Status) ->
     end.
 
 request(Args, Opts) ->
-    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), 0, Opts).
-request(Args, RemainingRetries, RedirectCount, Opts) ->
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
+request(Args, RemainingRetries, Opts) ->
     Response = do_request(Args, Opts),
-    MaxRedirect = hb_opts:get(max_redirect, 0, Opts),
     case Response of
-        {ok, Status, Headers, _Body} 
-            when 
-        Status >= 300, Status < 400, RedirectCount < MaxRedirect ->
-            case redirect_args(Args, Status, Headers) of
-                {ok, NewArgs} -> 
-                    request(NewArgs, RemainingRetries, RedirectCount + 1, Opts);
-                pass -> Response
-            end;
         {error, _Details} -> maybe_retry(RemainingRetries, Args, Response, Opts);
         {ok, Status, _Headers, _Body} ->
             StatusAtom = response_status_to_atom(Status),
             RetryResponses = hb_opts:get(http_retry_response, [], Opts),
             case lists:member(StatusAtom, RetryResponses) of
-                true -> maybe_retry(RemainingRetries, Args, Response, Opts);
+            true -> maybe_retry(RemainingRetries, Args, Response, Opts);
                 false -> Response
             end
     end.
@@ -98,7 +89,7 @@ maybe_retry(Remaining, Args, OriginalResponse, Opts) ->
         }
     ),
     timer:sleep(RetryTime),
-    request(Args, Remaining - 1, 0, Opts).
+    request(Args, Remaining - 1, Opts).
 
 httpc_req(Args, Opts) ->
     #{
@@ -116,12 +107,7 @@ httpc_req(Args, Opts) ->
     end,
     ?event(debug_http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    WithUA = 
-        case hb_maps:get(<<"user-agent">>, Headers, not_found, Opts) of
-            not_found -> Headers#{ <<"user-agent">> => <<"HyperBEAM">> };
-            _ -> Headers
-        end,
-    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], WithUA, Opts),
+    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
     HeaderKV =
         [
             {binary_to_list(Key), binary_to_list(Value)}
@@ -158,10 +144,9 @@ httpc_req(Args, Opts) ->
                 }
         end,
     ?event({http_client_outbound, Method, URL, Request}),
-    HTTPOpts = [{autoredirect, false}],
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
 	StartTime = os:system_time(native),
-    case httpc:request(Method, Request, HTTPOpts, HTTPCOpts) of
+    case httpc:request(Method, Request, [], HTTPCOpts) of
         {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
             download_metric(RespBody),
 	        EndTime = os:system_time(native),
@@ -229,47 +214,6 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             )
 	end,
 	Response.
-
-%% @doc Build new request Args for a redirect. Returns {ok, NewArgs} or pass.
-%% 307/308 preserve the original method and body; others switch to GET.
-redirect_args(Args, Status, RespHeaders) ->
-    case proplists:get_value(<<"location">>, RespHeaders) of
-        undefined -> pass;
-        Location ->
-            {NewPeer, NewPath} = parse_redirect_location(Location, Args),
-            NewArgs = 
-                case Status of
-                    S when S =:= 307; S =:= 308 ->
-                        Args#{ peer => NewPeer, path => NewPath };
-                    _ ->
-                        Args#{
-                            peer => NewPeer,
-                            path => NewPath,
-                            method => <<"GET">>,
-                            body => <<>>,
-                            headers => #{}
-                        }
-                end,
-                {ok, NewArgs}
-    end.
-
-%% @doc Parse a redirect Location header into {Peer, Path}.
-%% Handles relative paths ("/path") and absolute URLs ("https://host/path").
-parse_redirect_location(Location, _Args) ->
-    URI = uri_string:parse(Location),
-    Scheme = maps:get(scheme, URI, <<"https">>),
-    Host = maps:get(host, URI, <<>>),
-    Path = case maps:get(path, URI, <<"/">>) of
-        <<>> -> <<"/">>;
-        V -> V
-    end,
-    Peer = 
-        case maps:get(port, URI, undefined) of
-            undefined -> iolist_to_binary([Scheme, "://", Host]);
-            Port -> 
-                iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port)])
-        end,
-    {Peer, Path}.
 
 %% Connection Pool Logic
 
