@@ -3,6 +3,7 @@
 -module(hb_pmap).
 
 -export([parallel_map/3]).
+-include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
@@ -22,6 +23,10 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
                 Parent ! {hb_pmap_result, Ref, Fun(Item)}
             catch
                 Class:Reason:Stacktrace ->
+                    ?event(pmap_worker, {pmap_worker_crash,
+                        {class, Class},
+                        {reason, Reason}, 
+                        {stacktrace, {trace, Stacktrace}}}),
                     Parent ! {
                         hb_pmap_worker_crash,
                         Ref,
