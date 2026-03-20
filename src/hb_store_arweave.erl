@@ -209,26 +209,29 @@ load_tx(ID, StartOffset, Length, Opts) ->
                     <<"structured@1.0">>,
                     Opts
                 ),
-            case read_chunks(StartOffset, Length, Opts) of
-                {ok, Data} ->
-                    TXWithData = ar_tx:generate_chunk_tree(
-                        TXHeader#tx{ data = Data }),
-                    case TXWithData#tx.data_root =:= TXHeader#tx.data_root of
-                        true ->
-                            {
-                                ok,
-                                hb_message:convert(
-                                    TXWithData,
-                                    <<"structured@1.0">>,
-                                    <<"tx@1.0">>,
-                                    Opts
-                                )
-                            };
-                        false ->
-                            {error, {data_root_mismatch, ID}}
-                    end;
-                {error, Reason} ->
-                    {error, Reason}
+            case Length of
+                0 ->
+                    {ok, hb_message:convert(
+                        TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                _ ->
+                    case read_chunks(StartOffset, Length, Opts) of
+                        {ok, Data} ->
+                            TXWithData = ar_tx:generate_chunk_tree(
+                                TXHeader#tx{ data = Data }),
+                            case TXWithData#tx.data_root =:= TXHeader#tx.data_root of
+                                true ->
+                                    {ok, hb_message:convert(
+                                        TXWithData,
+                                        <<"structured@1.0">>,
+                                        <<"tx@1.0">>,
+                                        Opts
+                                    )};
+                                false ->
+                                    {error, {data_root_mismatch, ID}}
+                            end;
+                        {error, Reason} ->
+                            {error, Reason}
+                    end
             end
         end,
         hb_store_arweave_chunk_fetch_duration_seconds,
