@@ -875,7 +875,7 @@ register(State, Assignment, Opts) ->
             (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
             dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
                 verify_resource_authority(ResID, State, Req, Opts),
-        State2 =
+        State2 ?=
             case hb_maps:find(<<"weight">>, Req, Opts) of
                 {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
                 _ -> State
@@ -940,7 +940,9 @@ register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >
 end;
 
 register_resource(_, Weight, _, _) when not is_integer(Weight) ->
-    {error, {<<"Inavlid Weight type.">>}}.
+    {error, <<"Invalid Weight type.">>};
+register_resource(_, Weight, _, _) when is_integer(Weight), Weight < 0 ->
+    {error, <<"Weight must be a non-negative integer.">>}.
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
