@@ -14,7 +14,7 @@
 %%% with a refusal to execute.
 -module(hb_opts).
 -export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
--export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
+-export([default_message/0, default_message_with_env/0, default_routes/1, mimic_default_types/3]).
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
@@ -141,6 +141,7 @@ default_message() ->
         compute_mode => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
         gateway => <<"https://arweave.net">>,
+        gateway_priorities => [<<"https://arweave.net">>],
         bundler_ans104 => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
         priv_key_location => <<"hyperbeam-key.json">>,
@@ -267,7 +268,131 @@ default_message() ->
             vmm_type, guest_features
         ],
         name_resolvers => ?DEFAULT_NAME_RESOLVERS,
-        routes => [
+        routes => default_routes(#{}),
+        store =>
+            [
+                ?DEFAULT_PRIMARY_STORE,
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-mainnet">>
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
+                    <<"subindex">> => [
+                        #{
+                            <<"name">> => <<"Data-Protocol">>,
+                            <<"value">> => <<"ao">>
+                        }
+                    ],
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
+                }
+            ],
+        match_index => [?DEFAULT_PRIMARY_STORE],
+        priv_store =>
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-priv">>
+                }
+            ],
+        %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        % Should we use the latest cached state of a process when computing?
+        process_now_from_cache => false,
+        % Should we trust the GraphQL API when converting to ANS-104? Some GQL
+        % services do not provide the `anchor' or `last_tx' fields, so their
+        % responses are not verifiable.
+        ans104_trust_gql => true,
+        http_extra_opts =>
+            #{
+                force_message => true,
+                cache_control => [<<"always">>]
+            },
+        % Should the node store all signed messages?
+        store_all_signed => true,
+        % Should the node use persistent processes?
+        process_workers => false,
+        % Options for the router device
+        router_opts => #{
+            routes => []
+        },
+        on => #{
+            <<"request">> =>
+                [
+                    #{
+                        <<"device">> => <<"rate-limit@1.0">>
+                    },
+                    #{
+                        <<"device">> => <<"auth-hook@1.0">>,
+                        <<"path">> => <<"request">>,
+                        <<"when">> => #{
+                            <<"keys">> => [<<"authorization">>, <<"!">>]
+                        },
+                        <<"secret-provider">> =>
+                            #{
+                                <<"device">> => <<"http-auth@1.0">>,
+                                <<"access-control">> =>
+                                    #{ <<"device">> => <<"http-auth@1.0">> }
+                            }
+                    },
+                    #{
+                        <<"device">> => <<"name@1.0">>
+                    }
+                ]
+        },
+        scheduler_default_commitment_spec => <<"httpsig@1.0">>,
+        genesis_wasm_import_authorities =>
+            [
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ],
+        % Should the node track and expose prometheus metrics?
+        % We do not set this explicitly, so that the hb_features:test() value
+        % can be used to determine if we should expose metrics instead,
+        % dynamically changing the configuration based on whether we are running
+        % tests or not. To override this, set the `prometheus' option explicitly.
+        % prometheus => false
+        % Define the behaviour when accessing a file inside a manifest that 
+        % doesn't exists.
+        % Options:
+        % - fallback: Fallback to the index page
+        % - error: Return 404 Not Found
+        manifest_404 => fallback
+    }.
+
+%% @doc Build default node routes, honoring configured gateway priority for
+%% raw data fetches.
+default_routes(Opts) ->
+    DefaultGateway = maps:get(gateway, Opts, <<"https://arweave.net">>),
+    GatewayPriorities =
+        normalize_gateway_priorities(
+            maps:get(gateway_priorities, Opts, [DefaultGateway]),
+            DefaultGateway
+        ),
+    RawGatewayNodes =
+        lists:map(
+            fun(Prefix) ->
+                #{
+                    <<"prefix">> => Prefix,
+                    <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                }
+            end,
+            GatewayPriorities
+        ),
+    ArweaveRawGatewayNodes =
+        lists:map(
+            fun(Prefix) ->
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => Prefix,
+                    <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                }
+            end,
+            GatewayPriorities
+        ),
+    [
             %% Local CU routes.
             #{
                 <<"template">> => <<"/result/.*">>,
@@ -458,15 +583,13 @@ default_message() ->
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
-            % Raw data requests via arweave.net gateway.
+            % Raw data requests via configured gateway priority.
             #{
                 <<"template">> => <<"^/arweave/raw">>,
-                <<"node">> =>
-                    #{
-                        <<"match">> => <<"^/arweave">>,
-                        <<"with">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                    }
+                <<"nodes">> => ArweaveRawGatewayNodes,
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
             },
             %% General Arweave requests: race both chain nodes, take
             %% the first 200.
@@ -489,108 +612,35 @@ default_message() ->
                 <<"stop-after">> => 1,
                 <<"admissible-status">> => 200
             },
-            %% Raw data requests via arweave.net gateway. TODO: Update later.
+            %% Raw data requests via configured gateway priority.
             #{
                 <<"template">> => <<"/raw">>,
-                <<"node">> =>
-                    #{
-                        <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
-                    }
+                <<"nodes">> => RawGatewayNodes,
+                <<"parallel">> => true,
+                <<"stop-after">> => 1,
+                <<"admissible-status">> => 200
             }
-        ],
-        store =>
-            [
-                ?DEFAULT_PRIMARY_STORE,
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-mainnet">>
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"subindex">> => [
-                        #{
-                            <<"name">> => <<"Data-Protocol">>,
-                            <<"value">> => <<"ao">>
-                        }
-                    ],
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
-                }
-            ],
-        match_index => [?DEFAULT_PRIMARY_STORE],
-        priv_store =>
-            [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-priv">>
-                }
-            ],
-        %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
-        % Should we use the latest cached state of a process when computing?
-        process_now_from_cache => false,
-        % Should we trust the GraphQL API when converting to ANS-104? Some GQL
-        % services do not provide the `anchor' or `last_tx' fields, so their
-        % responses are not verifiable.
-        ans104_trust_gql => true,
-        http_extra_opts =>
-            #{
-                force_message => true,
-                cache_control => [<<"always">>]
-            },
-        % Should the node store all signed messages?
-        store_all_signed => true,
-        % Should the node use persistent processes?
-        process_workers => false,
-        % Options for the router device
-        router_opts => #{
-            routes => []
-        },
-        on => #{
-            <<"request">> =>
-                [
-                    #{
-                        <<"device">> => <<"rate-limit@1.0">>
-                    },
-                    #{
-                        <<"device">> => <<"auth-hook@1.0">>,
-                        <<"path">> => <<"request">>,
-                        <<"when">> => #{
-                            <<"keys">> => [<<"authorization">>, <<"!">>]
-                        },
-                        <<"secret-provider">> =>
-                            #{
-                                <<"device">> => <<"http-auth@1.0">>,
-                                <<"access-control">> =>
-                                    #{ <<"device">> => <<"http-auth@1.0">> }
-                            }
-                    },
-                    #{
-                        <<"device">> => <<"name@1.0">>
-                    }
-                ]
-        },
-        scheduler_default_commitment_spec => <<"httpsig@1.0">>,
-        genesis_wasm_import_authorities =>
-            [
-                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
-            ],
-        % Should the node track and expose prometheus metrics?
-        % We do not set this explicitly, so that the hb_features:test() value
-        % can be used to determine if we should expose metrics instead,
-        % dynamically changing the configuration based on whether we are running
-        % tests or not. To override this, set the `prometheus' option explicitly.
-        % prometheus => false
-        % Define the behaviour when accessing a file inside a manifest that 
-        % doesn't exists.
-        % Options:
-        % - fallback: Fallback to the index page
-        % - error: Return 404 Not Found
-        manifest_404 => fallback
-    }.
+        ].
+
+normalize_gateway_priorities(Priorities, _DefaultGateway) when is_list(Priorities) ->
+    Priorities;
+normalize_gateway_priorities(Priorities, DefaultGateway) when is_binary(Priorities) ->
+    Trimmed =
+        hb_util:bin(
+            string:trim(binary_to_list(Priorities), both, " []")
+        ),
+    case Trimmed of
+        <<>> -> [DefaultGateway];
+        _ ->
+            lists:map(
+                fun(Entry) ->
+                    hb_util:bin(string:trim(binary_to_list(Entry), both, " "))
+                end,
+                binary:split(Trimmed, <<",">>, [global])
+            )
+    end;
+normalize_gateway_priorities(_, DefaultGateway) ->
+    [DefaultGateway].
 
 %% @doc Get an option from the global options, optionally overriding with a
 %% local `Opts' map if `prefer' or `only' is set to `local'. If the `only' 

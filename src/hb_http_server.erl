@@ -32,10 +32,19 @@ start() ->
                 #{}
         end,
     MergedConfig =
-        hb_maps:merge(
-            hb_opts:default_message_with_env(),
-            Loaded
-        ),
+        case maps:is_key(routes, Loaded) of
+            true ->
+                hb_maps:merge(
+                    hb_opts:default_message_with_env(),
+                    Loaded
+                );
+            false ->
+                Merged = hb_maps:merge(
+                    hb_opts:default_message_with_env(),
+                    Loaded
+                ),
+                Merged#{ routes => hb_opts:default_routes(Merged) }
+        end,
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
