@@ -23,7 +23,7 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
                 Parent ! {hb_pmap_result, Ref, Fun(Item)}
             catch
                 Class:Reason:Stacktrace ->
-                    ?event(pmap_worker, {pmap_worker_crash,
+                    ?event(pmap_error, {pmap_worker_crashed,
                         {class, Class},
                         {reason, Reason}, 
                         {stacktrace, {trace, Stacktrace}}}),
