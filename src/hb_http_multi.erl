@@ -390,4 +390,56 @@ multirequest_test_() ->
             end}
         ]} end}.
 
+%% @doc Parallel race using the actual /arweave route config from hb_opts:
+%% one fast node returns 200 immediately, two slow nodes are still processing.
+%% The call must return before the slow nodes finish.
+parallel_race_stops_at_first_admissible_test_() ->
+    {timeout, 30, fun parallel_race_stops_at_first_admissible/0}.
+parallel_race_stops_at_first_admissible() ->
+    Delay = 500,
+    FastURL = hb_http_server:start_node(#{}),
+    SlowURL1 = hb_http_server:start_node(slow_node_opts(Delay)),
+    SlowURL2 = hb_http_server:start_node(slow_node_opts(Delay)),
+    Routes = maps:get(routes, hb_opts:default_message()),
+    [ArweaveRoute] =
+        [R || R <- Routes,
+            maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,
+            maps:is_key(<<"nodes">>, R)],
+    Config = ArweaveRoute#{
+        <<"nodes">> => [ao_node(FastURL), ao_node(SlowURL1), ao_node(SlowURL2)]
+    },
+    T0 = erlang:monotonic_time(millisecond),
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    ?assertMatch({ok, _}, Result),
+    ?assert(Elapsed < Delay).
+
+%% @doc Serial fallback: unreachable nodes are skipped until a live one
+%% responds with 200.
+serial_fallback_skips_non_admissible_test_() ->
+    {timeout, 30, fun serial_fallback_skips_non_admissible/0}.
+serial_fallback_skips_non_admissible() ->
+    GoodURL = hb_http_server:start_node(#{}),
+    Config = #{
+        <<"nodes">> => [dead_node(), dead_node(), ao_node(GoodURL)],
+        <<"parallel">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200
+    },
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    ?assertMatch({ok, _}, Result).
+
+%% @doc No admissible node: all unreachable, error tuple returned.
+no_admissible_node_returns_error_test_() ->
+    {timeout, 30, fun no_admissible_node_returns_error/0}.
+no_admissible_node_returns_error() ->
+    Config = #{
+        <<"nodes">> => [dead_node(), dead_node()],
+        <<"parallel">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200
+    },
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    ?assertMatch({error, {no_viable_responses, _}}, Result).
+
 -endif.

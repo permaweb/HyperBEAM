@@ -385,7 +385,7 @@ default_message() ->
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
                 <<"parallel">> => true,
-                <<"stop-after">> => 1,
+                <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
             %% Raw data requests via arweave.net gateway. TODO: Update later.
