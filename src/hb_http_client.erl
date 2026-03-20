@@ -13,8 +13,6 @@
 -export([init_prometheus/0]).
 
 -record(state, {
-	pid_by_peer = #{},
-	status_by_pid = #{},
 	opts = #{}
 }).
 
@@ -228,46 +226,34 @@ hackney_req(Args, Opts) ->
     end.
 
 gun_req(Args, Opts) ->
-    gun_req(Args, false, Opts).
-gun_req(Args, ReestablishedConnection, Opts) ->
 	StartTime = os:system_time(native),
 	#{ peer := Peer, path := Path, method := Method } = Args,
+	ConnectTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
 	Response =
-        case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
-            {ok, PID} ->
-                ar_rate_limiter:throttle(Peer, Path, Opts),
-                case do_gun_request(PID, Args, Opts) of
-                    {error, Error} when Error == {shutdown, normal};
-                            Error == noproc ->
-                        case ReestablishedConnection of
-                            true -> {error, client_error};
-                            false -> gun_req(Args, true, Opts)
-                        end;
-                    Reply ->
-                        Reply
-                end;
-            {'EXIT', _} ->
-                {error, client_error};
-            Error ->
-                ?event(http_client, {gun_error, Error}),
-                Error
-	    end,
+		case open_connection(Args, Opts) of
+			{error, _} = Err ->
+				Err;
+			{ok, PID} ->
+				case gun:await_up(PID, ConnectTimeout) of
+					{error, Reason} ->
+						gun:close(PID),
+						{error, Reason};
+					{ok, _Protocol} ->
+						ar_rate_limiter:throttle(Peer, Path, Opts),
+						Result = do_gun_request(PID, Args, Opts),
+						gun:close(PID),
+						Result
+				end
+		end,
 	EndTime = os:system_time(native),
-	%% Only log the metric for the top-level call to req/2 - not the recursive call
-	%% that happens when the connection is reestablished.
-	case ReestablishedConnection of
-		true ->
-			ok;
-		false ->
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Response),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            )
-	end,
+	record_duration(#{
+			<<"request-method">> => method_to_bin(Method),
+			<<"request-path">> => hb_util:bin(Path),
+			<<"status-class">> => get_status_class(Response),
+			<<"duration">> => EndTime - StartTime
+		},
+		Opts
+	),
 	Response.
 
 init_hackney_pool() ->
@@ -345,48 +331,6 @@ init(Opts) ->
         false -> {ok, #state{ opts = Opts }}
     end.
 
-handle_call({get_connection, Args, Opts}, From,
-		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
-	Peer = hb_maps:get(peer, Args, undefined, Opts),
-	case hb_maps:get(Peer, PIDPeer, not_found, Opts) of
-		not_found ->
-			{ok, PID} = open_connection(Args, hb_maps:merge(State#state.opts, Opts, Opts)),
-			MonitorRef = monitor(process, PID),
-			PIDPeer2 = hb_maps:put(Peer, PID, PIDPeer, Opts),
-			StatusByPID2 =
-                hb_maps:put(
-                    PID,
-                    {{connecting, [{From, Args}]}, MonitorRef, Peer},
-					StatusByPID,
-					Opts
-                ),
-			{
-                reply,
-                {ok, PID},
-                State#state{
-                    pid_by_peer = PIDPeer2,
-                    status_by_pid = StatusByPID2
-                }
-            };
-		PID ->
-			case hb_maps:get(PID, StatusByPID, undefined, Opts) of
-				{{connecting, PendingRequests}, MonitorRef, Peer} ->
-					StatusByPID2 =
-                        hb_maps:put(PID,
-                            {
-                                {connecting, [{From, Args} | PendingRequests]},
-                                MonitorRef,
-                                Peer
-                            },
-                            StatusByPID,
-							Opts
-                        ),
-					{noreply, State#state{ status_by_pid = StatusByPID2 }};
-				{connected, _MonitorRef, Peer} ->
-					{reply, {ok, PID}, State}
-			end
-	end;
-
 handle_call(Request, _From, State) ->
 	?event(warning, {unhandled_call, {module, ?MODULE}, {request, Request}}),
 	{reply, ok, State}.
@@ -395,114 +339,26 @@ handle_cast(Cast, State) ->
 	?event(warning, {unhandled_cast, {module, ?MODULE}, {cast, Cast}}),
 	{noreply, State}.
 
-handle_info({gun_up, PID, _Protocol}, #state{ status_by_pid = StatusByPID } = State) ->
-	case hb_maps:get(PID, StatusByPID, not_found) of
-		not_found ->
-			%% A connection timeout should have occurred.
-			{noreply, State};
-		{{connecting, PendingRequests}, MonitorRef, Peer} ->
-			[gen_server:reply(ReplyTo, {ok, PID}) || {ReplyTo, _} <- PendingRequests],
-			StatusByPID2 = hb_maps:put(PID, {connected, MonitorRef, Peer}, StatusByPID),
-			hb_prometheus:inc(gauge, outbound_connections),
-			{noreply, State#state{ status_by_pid = StatusByPID2 }};
-		{connected, _MonitorRef, Peer} ->
-			?event(warning,
-                {gun_up_pid_already_exists, {peer, Peer}}),
-			{noreply, State}
-	end;
+handle_info({gun_up, _PID, _Protocol}, State) ->
+	{noreply, State};
 
-handle_info({gun_error, PID, Reason},
-		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case hb_maps:get(PID, StatusByPID, not_found) of
-		not_found ->
-			?event(warning, {gun_connection_error_with_unknown_pid}),
-			{noreply, State};
-		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
-			Reason2 =
-				case Reason of
-					timeout ->
-						connect_timeout;
-					{Type, _} ->
-						Type;
-					_ ->
-						Reason
-				end,
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason2);
-				connected ->
-					hb_prometheus:dec(gauge, outbound_connections),
-					ok
-			end,
-			gun:shutdown(PID),
-			?event({connection_error, {reason, Reason}}),
-			{noreply, State#state{ status_by_pid = StatusByPID2, pid_by_peer = PIDByPeer2 }}
-	end;
+handle_info({gun_error, PID, Reason}, State) ->
+	?event(warning, {gun_connection_error, {pid, PID}, {reason, Reason}}),
+	{noreply, State};
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams},
-			#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case hb_maps:get(PID, StatusByPID, not_found) of
-		not_found ->
-			?event(warning,
-                {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
-			{noreply, State};
-		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
-			Reason2 =
-				case Reason of
-					{Type, _} ->
-						Type;
-					_ ->
-						Reason
-				end,
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason2);
-				_ ->
-					hb_prometheus:dec(gauge, outbound_connections),
-					ok
-			end,
-			{noreply,
-                State#state{
-                    status_by_pid = StatusByPID2,
-                    pid_by_peer = PIDByPeer2
-                }
-            }
-	end;
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams}, State) ->
+	?event(warning, {gun_connection_down, {pid, PID}, {protocol, Protocol}, {reason, Reason}}),
+	{noreply, State};
 
-handle_info({'DOWN', _Ref, process, PID, Reason},
-		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
-	case hb_maps:get(PID, StatusByPID, not_found) of
-		not_found ->
-			{noreply, State};
-		{Status, _MonitorRef, Peer} ->
-			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
-			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
-			case Status of
-				{connecting, PendingRequests} ->
-					reply_error(PendingRequests, Reason);
-				_ ->
-					hb_prometheus:dec(gauge, outbound_connections),
-					ok
-			end,
-			{noreply,
-                State#state{
-                    status_by_pid = StatusByPID2,
-                    pid_by_peer = PIDByPeer2
-                }
-            }
-	end;
+handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
+	?event(warning, {gun_process_down, {pid, PID}, {reason, Reason}}),
+	{noreply, State};
 
 handle_info(Message, State) ->
 	?event(warning, {unhandled_info, {module, ?MODULE}, {message, Message}}),
 	{noreply, State}.
 
-terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
-	?event(info,{http_client_terminating, {reason, Reason}}),
-	hb_maps:map(fun(PID, _Status) -> gun:shutdown(PID) end, StatusByPID),
+terminate(_Reason, _State) ->
 	ok.
 
 %%% ==================================================================
@@ -579,16 +435,6 @@ parse_peer(Peer, Opts) ->
         _ ->
             {error, {bad_peer, Peer}}
     end.
-
-reply_error([], _Reason) ->
-	ok;
-reply_error([PendingRequest | PendingRequests], Reason) ->
-	ReplyTo = element(1, PendingRequest),
-	Args = element(2, PendingRequest),
-	Method = hb_maps:get(method, Args),
-	record_response_status(Method, {error, Reason}),
-	gen_server:reply(ReplyTo, {error, Reason}),
-	reply_error(PendingRequests, Reason).
 
 do_gun_request(PID, Args, Opts) ->
 	Timer =
