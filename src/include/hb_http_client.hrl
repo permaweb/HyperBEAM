@@ -17,4 +17,4 @@
 
 %% Hackney pool
 -define(HACKNEY_POOL, hb_hackney_pool).
--define(DEFAULT_HACKNEY_POOL_SIZE, 1500).
+-define(DEFAULT_HACKNEY_MAX_CONNECTIONS, 100).

@@ -22,21 +22,11 @@
 
 %% @doc Use Opts to configure connection pool size.
 setup_conn(Opts) ->
-    ConnPoolReadSize = hb_opts:get(conn_pool_read_size, ?DEFAULT_CONN_POOL_READ_SIZE, Opts),
-    ConnPoolWriteSize = hb_opts:get(conn_pool_write_size, ?DEFAULT_CONN_POOL_WRITE_SIZE, Opts),
-    HackneyPoolSize = ConnPoolReadSize + ConnPoolWriteSize,
+    MaxConnections = hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
-    ?event(
-        connection_pool,
-        {conn,
-            {pool_read_num, ConnPoolReadSize},
-            {pool_write_num, ConnPoolWriteSize},
-            {hackney_pool_size, HackneyPoolSize}
-        }
-    ),
-    hackney_pool:set_max_connections(?HACKNEY_POOL, HackneyPoolSize),
-    hackney_pool:set_timeout(?HACKNEY_POOL, KeepAlive),
-    persistent_term:put(?CONN_TERM, {ConnPoolReadSize, ConnPoolWriteSize}).
+    ?event(connection_pool, {http_client_hackney_max_connections, MaxConnections}),
+    hackney_pool:set_max_connections(?HACKNEY_POOL, MaxConnections),
+    hackney_pool:set_timeout(?HACKNEY_POOL, KeepAlive).
 
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
@@ -300,7 +290,7 @@ init_ets_table(Table) ->
 
 init_hackney_pool(Opts) ->
     hackney_pool:start_pool(?HACKNEY_POOL, [
-        {max_connections, ?DEFAULT_HACKNEY_POOL_SIZE},
+        {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
 
