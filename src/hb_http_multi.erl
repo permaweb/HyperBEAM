@@ -190,7 +190,7 @@ parallel_multirequest(MaxWorkers, Nodes, Responses, StopAfter, Method, Path, Mes
     {Workers, Queue} = start_workers(MaxWorkers, Ref, Nodes, Method, Path, Message, Opts),
     parallel_responses([], [], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
 
-%% @doc Start a new fleet of workers, returning the list of worker PIDs.
+%% @doc Start a new fleet of workers, returning a list of {Pid, MonRef} tuples.
 start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     Parent = self(),
     {NewWorkerNodes, NewRemainingNodes} =
@@ -198,7 +198,7 @@ start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     {
         lists:map(
             fun(Node) ->
-                spawn(
+                spawn_monitor(
                     fun() ->
                         Res = hb_http:request(Method, Node, Path, Message, Opts),
                         receive no_reply -> stopping
@@ -268,17 +268,21 @@ parallel_responses(AdmissibleRes, AllRes, [], _, _, Ref, _Awaiting, _StopAfter, 
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
-    lists:foreach(fun(P) -> P ! no_reply end, Procs),
+    lists:foreach(fun({P, Mon}) -> demonitor(Mon, [flush]), P ! no_reply end, Procs),
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
-    lists:foreach(fun(P) -> exit(P, kill) end, Procs),
+    lists:foreach(fun({P, Mon}) -> demonitor(Mon, [flush]), exit(P, kill) end, Procs),
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
         {Ref, Pid, {Status, NewRes}} ->
-            WorkersWithoutPid = lists:delete(Pid, Procs),
+            case lists:keyfind(Pid, 1, Procs) of
+                {Pid, Mon} -> demonitor(Mon, [flush]);
+                false -> ok
+            end,
+            WorkersWithoutPid = lists:keydelete(Pid, 1, Procs),
             {RefilledWorkers, NewQueue} =
                 start_workers(1, Ref, Queue, Method, Path, Message, Opts),
             NewProcs = RefilledWorkers ++ WorkersWithoutPid,
@@ -312,7 +316,26 @@ parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message},
                     Statuses,
                     Opts
                 )
-        end
+        end;
+        {'DOWN', _Mon, process, Pid, Reason} ->
+            WorkersWithoutPid = lists:keydelete(Pid, 1, Procs),
+            {RefilledWorkers, NewQueue} =
+                start_workers(1, Ref, Queue, Method, Path, Message, Opts),
+            NewProcs = RefilledWorkers ++ WorkersWithoutPid,
+            NewAllRes = [{error, {worker_down, Reason}} | AllRes],
+            parallel_responses(
+                AdmissibleRes,
+                NewAllRes,
+                NewProcs,
+                NewQueue,
+                {Method, Path, Message},
+                Ref,
+                Awaiting,
+                StopAfter,
+                Admissible,
+                Statuses,
+                Opts
+            )
 end.
 
 %% @doc Empty the inbox of the current process for all messages with the given
@@ -324,3 +347,26 @@ empty_inbox(Ref) ->
     after 0 ->
         ok
     end.
+
+%%% Tests
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+%% @doc Parallel workers that crash (exception in hb_http:request) must not
+%% hang the caller. A node with opts but no uri causes badarg inside the
+%% worker. Without monitors the caller hangs forever (eunit timeout).
+parallel_worker_crash_recovers_test_() ->
+    {timeout, 5, fun parallel_worker_crash_recovers/0}.
+parallel_worker_crash_recovers() ->
+    CrashNode = #{<<"opts">> => #{http_client => httpc}},
+    Config = #{
+        <<"nodes">>             => [CrashNode, CrashNode],
+        <<"parallel">>          => true,
+        <<"stop-after">>        => true,
+        <<"admissible-status">> => 200
+    },
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    ?assertMatch({error, {no_viable_responses, _}}, Result).
+
+-endif.
