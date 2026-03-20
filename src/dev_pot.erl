@@ -293,19 +293,22 @@ balance(Addr, S, Opts) ->
 
 %% @doc Return the unclaimed yield across all resources for a specific address.
 unclaimed_yield(Addr, S, Opts) ->
-    ResourceIDs =
-        hb_maps:keys(
-            hb_private:reset(
-                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        ResourceIDs =
+            hb_maps:keys(
+                hb_private:reset(
+                    hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
+                ),
+                Opts
             ),
-            Opts
-        ),
-    lists:sum(
-        lists:map(
-            fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
-            ResourceIDs
+        lists:sum(
+            lists:map(
+                fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
+                ResourceIDs
+            )
         )
-    ).
+end.
 
 %% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
@@ -417,7 +420,6 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
-        % true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
         {ok, Resources} =
             hb_maps:find(
                 <<"resources">>,
@@ -895,34 +897,37 @@ end.
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
 register_resource(ResourceID, Weight, S, Opts) ->
-    % Run the global drip to ensure the state is up to date.
-    S0 = drip_global(S, Opts),
-    S1 = drip_resource(ResourceID, S0, Opts),
-    % Calculate the new total deposited units for the weighted global counter
-    % (`/total-weighted-units').
-    Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
-    OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
-    ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
-    % Update the total weighted units counter. Subtract the deposits at the old
-    % weight first, then add the deposits at the new weight.
-    LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
-    NewTotalWeightedUnits =
-        LastTotalWeightedUnits
-            - (OldWeight * ResourceDeposits)
-            + (Weight * ResourceDeposits),
-    % Update the resource and the global weighted units counter.
-    AfterSet =
-        hb_ao:set(
-            S1,
-            #{
-                <<"resources">> => #{
-                    ResourceID => Resource#{ <<"weight">> => Weight }
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        % Run the global drip to ensure the state is up to date.
+        S0 = drip_global(S, Opts),
+        S1 = drip_resource(ResourceID, S0, Opts),
+        % Calculate the new total deposited units for the weighted global counter
+        % (`/total-weighted-units').
+        Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
+        OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
+        % Update the total weighted units counter. Subtract the deposits at the old
+        % weight first, then add the deposits at the new weight.
+        LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+        NewTotalWeightedUnits =
+            LastTotalWeightedUnits
+                - (OldWeight * ResourceDeposits)
+                + (Weight * ResourceDeposits),
+        % Update the resource and the global weighted units counter.
+        AfterSet =
+            hb_ao:set(
+                S1,
+                #{
+                    <<"resources">> => #{
+                        ResourceID => Resource#{ <<"weight">> => Weight }
+                    },
+                    <<"total-weighted-units">> => NewTotalWeightedUnits
                 },
-                <<"total-weighted-units">> => NewTotalWeightedUnits
-            },
-            Opts
-        ),
-    send_weight_notice(ResourceID, Weight, AfterSet, Opts).
+                Opts
+            ),
+        send_weight_notice(ResourceID, Weight, AfterSet, Opts)
+end.
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
