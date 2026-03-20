@@ -401,9 +401,9 @@ escape_format(Else) -> Else.
 
 %% @doc Format an error message as a string.
 error(ErrorMsg, Opts) ->
-    Type = hb_ao:get(<<"type">>, ErrorMsg, <<"">>, Opts),
-    Details = hb_ao:get(<<"details">>, ErrorMsg, <<"">>, Opts),
-    Stacktrace = hb_ao:get(<<"stacktrace">>, ErrorMsg, <<"">>, Opts),
+    Type = hb_maps:get(<<"type">>, ErrorMsg, <<"[No type]">>, Opts),
+    Details = hb_maps:get(<<"details">>, ErrorMsg, <<"[No details]">>, Opts),
+    Stacktrace = hb_maps:get(<<"stacktrace">>, ErrorMsg, <<"[No trace]">>, Opts),
     hb_util:bin(
         [
             <<"Termination type: '">>, Type,
@@ -958,7 +958,7 @@ format_key(true, Committed, Key, ToPrint, Opts) ->
     case lists:member(NormKey = hb_ao:normalize_key(Key, Opts), Committed) of
         true when ToPrint == undefined -> <<"* ", NormKey/binary>>;
         true -> <<"* ", ToPrint/binary>>;
-        false -> format_key(false, Committed, Key, undefined, Opts)
+        false -> format_key(false, Committed, Key, ToPrint, Opts)
     end.
 
 %% @doc Return a formatted list of short IDs, given a raw list of IDs.

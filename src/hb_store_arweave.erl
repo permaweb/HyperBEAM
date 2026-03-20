@@ -77,24 +77,25 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
         {ok, OffsetBinary} ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
-            record_partition_metric(StartOffset),
             {ok, #{
                 <<"version">> => Version,
                 <<"codec-device">> => CodecName,
                 <<"start-offset">> => StartOffset,
                 <<"length">> => Length
             }};
-        _ -> not_found
+        _ ->
+            not_found
     end;
 read_offset(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, ID) ->
+read(StoreOpts, ID) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
         not_found -> do_read(StoreOpts, ID)
-    end.
+    end;
+read(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the provided Arweave index store
 %% as a source of offsets. After offsets have been found, the data is loaded
@@ -128,6 +129,7 @@ do_read(StoreOpts, ID) ->
                             {length, Length}
                         }
                     ),
+                    record_partition_metric(StartOffset, ok),
                     Loaded;
                 {error, Reason} ->
                     ?event(
@@ -141,6 +143,7 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
+                    record_partition_metric(StartOffset, not_found),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end
@@ -252,21 +255,15 @@ write_offset(
     hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
 
 %% @doc Record the partition that data is found in when it is requested.
-record_partition_metric(Offset) when is_integer(Offset) ->
-    spawn(
-        fun () ->
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    Partition = Offset div ?PARTITION_SIZE,
-                    prometheus_counter:inc(
-                        hb_store_arweave_requests_partition,
-                        [Partition],
-                        1
-                    )
-            end
-        end
-    ).
+record_partition_metric(Offset, Result) when is_integer(Offset) ->
+    spawn(fun() -> 
+        hb_prometheus:inc(
+            counter,
+            hb_store_arweave_requests_partition,
+            [Offset div ?PARTITION_SIZE, hb_util:bin(Result)],
+            1
+        )
+    end).
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
@@ -292,7 +289,7 @@ init_prometheus() ->
         counter,
         [
             {name, hb_store_arweave_requests_partition},
-            {labels, [partition]},
+            {labels, [partition, result]},
             {help, "Partition where chunks are being requested"}
         ]
     ),

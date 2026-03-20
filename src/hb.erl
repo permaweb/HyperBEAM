@@ -91,7 +91,7 @@
 -export([no_prod/3]).
 -export([read/1, read/2, debug_wait/4]).
 %%% Node wallet and address management:
--export([address/0, wallet/0, wallet/1]).
+-export([address/0, address/1, wallet/0, wallet/1]).
 -include("include/hb.hrl").
 
 %% @doc Initialize system-wide settings for the hyperbeam node.

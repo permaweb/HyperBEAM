@@ -88,7 +88,7 @@ request(Config, Method, Path, Message, Opts) ->
                 Opts
             )
         end,
-    ?event(http, {multirequest_results, {admissible_results, AdmissibleResults}, {all_responses, AllResponses}}),
+    ?event(debug_http, {multirequest_results, {admissible_results, AdmissibleResults}, {all_responses, AllResponses}}),
     case AdmissibleResults of
         [] -> {error, {no_viable_responses, AllResponses}};
         Results -> if Responses == 1 -> hd(Results); true -> Results end
@@ -155,7 +155,7 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, 
     {ErlStatus, Res} = hb_http:request(Method, Node, Path, Message, Opts),
     case is_admissible(ErlStatus, Res, Admissible, Statuses, Opts) of
         true ->
-            ?event(http, {admissible_status, {response, Res}}),
+            ?event(debug_http, {admissible_status, {response, Res}}),
             {AdmissibleAcc, AllAcc} = serial_multirequest(
                 Nodes,
                 Remaining - 1,
@@ -168,7 +168,7 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, 
             ),
             {[{ErlStatus, Res} | AdmissibleAcc], [{ErlStatus, Res} | AllAcc]};
         false ->
-            ?event(http, {inadmissible_status, {response, Res}}),
+            ?event(debug_http, {inadmissible_status, {response, Res}}),
             {AdmissibleAcc, AllAcc} = serial_multirequest(
                 Nodes,
                 Remaining,
