@@ -81,6 +81,15 @@
                 fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
+        debug_log =>
+            {
+                "HB_LOG",
+                fun topic_list_to_atoms/1,
+                {preparsed, false}
+            },
+        log_dir => {"HB_LOG_DIR", fun hb_util:bin/1, "logs"},
+        log_max_files => {"HB_LOG_MAX_FILES", fun hb_util:int/1, "5"},
+        log_max_bytes => {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
         lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
         default_index =>
@@ -258,6 +267,10 @@ default_message() ->
         node_history => [],
         debug_stack_depth => 40,
         debug_print => false,
+        debug_log => false,
+        log_dir => <<"logs">>,
+        log_max_files => 5,
+        log_max_bytes => 52428800,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
@@ -893,7 +906,11 @@ global_get_test() ->
     ?assertEqual(debug, ?MODULE:get(mode)),
     ?assertEqual(debug, ?MODULE:get(mode, production)),
     ?assertEqual(undefined, ?MODULE:get(unset_global_key)),
-    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)).
+    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)),
+    ?assertEqual(false, ?MODULE:get(debug_log)),
+    ?assertEqual(<<"logs">>, ?MODULE:get(log_dir)),
+    ?assertEqual(5, ?MODULE:get(log_max_files)),
+    ?assertEqual(52428800, ?MODULE:get(log_max_bytes)).
 
 local_get_test() ->
     Local = #{ only => local },
