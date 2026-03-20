@@ -43,7 +43,8 @@ response_status_to_atom(Status) ->
     end.
 
 request(Args, Opts) ->
-    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
+    Opts1 = hb_opts:mimic_default_types(Opts, existing, Opts),
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts1), Opts1).
 request(Args, RemainingRetries, Opts) ->
     Response = do_request(Args, Opts),
     case Response of
@@ -52,12 +53,13 @@ request(Args, RemainingRetries, Opts) ->
             StatusAtom = response_status_to_atom(Status),
             RetryResponses = hb_opts:get(http_retry_response, [], Opts),
             case lists:member(StatusAtom, RetryResponses) of
-            true -> maybe_retry(RemainingRetries, Args, Response, Opts);
+                true -> maybe_retry(RemainingRetries, Args, Response, Opts);
                 false -> Response
             end
     end.
 
 do_request(Args, Opts) ->
+    ?event(error, {hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts), {args, Args}}),
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
         gun -> gun_req(Args, Opts);
         httpc -> httpc_req(Args, Opts);
@@ -268,7 +270,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
 	end,
 	Response.
 
-init_hackney_pool(Opts) ->
+init_hackney_pool() ->
     hackney_pool:start_pool(?HACKNEY_POOL, [
         {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
@@ -318,7 +320,7 @@ maybe_invoke_monitor(Details, Opts) ->
 %%% ==================================================================
 
 init(Opts) ->
-    init_hackney_pool(Opts),
+    init_hackney_pool(),
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
             ?event({starting_prometheus_application,
