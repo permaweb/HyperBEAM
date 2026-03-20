@@ -1156,8 +1156,8 @@ deposit_non_binary_address_test() ->
     Opts = #{},
     % Non-binary addresses should fail
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(_, dev_pot:deposit(12345, ResourceOxygen, 10, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(alice, ResourceOxygen, 10, S0, Opts)).
+    ?assertMatch({error, _}, dev_pot:deposit(12345, ResourceOxygen, 10, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(alice, ResourceOxygen, 10, S0, Opts)).
 
 delegate_negative_amount_test() ->
     Alice = <<"alice">>,
