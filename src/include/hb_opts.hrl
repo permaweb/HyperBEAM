@@ -1,2 +1,2 @@
--define(DEFAULT_HTTP_CLIENT, gun).
+-define(DEFAULT_HTTP_CLIENT, hackney).
 
