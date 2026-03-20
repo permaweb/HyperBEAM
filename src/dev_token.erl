@@ -7,7 +7,7 @@
 %%% excluding in an `info/1` response.
 -export([handle_action/4]).
 %%% Public helpers.
--export([validate_address/1]).
+-export([validate_address/2]).
 -include_lib("include/hb.hrl").
 
 %% @doc `Action' values that should be handled by the `mint-device'.
@@ -81,7 +81,7 @@ handle_action(Action, Base, Req, Opts) ->
 balance(Base, Req, Opts) ->
     maybe
         {ok, Account} ?= hb_ao:resolve(Req, <<"balance">>, Opts),
-        true ?= validate_address(Account),
+        true ?= validate_address(Account, []),
         ?event(
             debug_token,
             {balance_request,
@@ -158,7 +158,7 @@ transfer(Base, Assignment, Opts) ->
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
-        true ?= validate_address(Recipient),
+        true ?= validate_address(Recipient, []),
         % Handle self-transfer: skip balance updates
         NewBaseAfterTransfer =
             case From =:= Recipient of
@@ -303,7 +303,7 @@ enforce_set_authority(Base, Req, Opts) ->
 %% @doc Validate address format for security. the validation
 %% allows binary addresses up to 128 bytes and prevent invalid
 %% addresses such as dev_trie reserved keys.
-validate_address(Address) when is_binary(Address) ->
+validate_address(Address, CustomList) when is_binary(Address), is_list(CustomList) ->
     case byte_size(Address) of
         0 -> {error, <<"Recipient address cannot be empty.">>};
         N when N > 128 -> {error, <<"Recipient address is too long.">>};
@@ -311,6 +311,8 @@ validate_address(Address) when is_binary(Address) ->
             maybe
                 true ?= (not dev_trie:is_reserved_key(Address))
                     orelse {error, <<"Recipient address uses a reserved internal key.">>},
+                true ?= (not is_reserved_custom_key(Address, CustomList))
+                    orelse {error, <<"Address is a reserved custom key">>},
                 % Check for path separators (security: prevent path traversal) and whitespaces.
                 case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
                     nomatch -> true;
@@ -318,9 +320,13 @@ validate_address(Address) when is_binary(Address) ->
                 end
             end
     end;
-validate_address(_) ->
+validate_address(_, _) ->
     {error, <<"Recipient address must be a binary.">>}.
-
+%% @doc Check if the given Key exists in the passed List
+is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
+    lists:member(Key, List);
+is_reserved_custom_key(_, _) -> 
+    false.
 send_error(Base, Assignment, Reason, Opts) when is_atom(Reason) ->
     send_error(Base, Assignment, atom_to_binary(Reason), Opts);
 send_error(Base, Assignment, Reason, Opts) when not is_binary(Reason) ->
