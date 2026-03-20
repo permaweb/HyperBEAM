@@ -370,8 +370,10 @@ withdraw(Base, Req, Opts) ->
     end.
 -spec withdraw(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     maybe
+        ExistingDepositOrError = get_deposit(Addr, ResourceID, S0, Opts),
+        true ?= is_integer(ExistingDepositOrError) orelse ExistingDepositOrError,
+        ExistingDeposit = ExistingDepositOrError,
         {ok, S1} ?= liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
         modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
     else
@@ -1028,7 +1030,9 @@ modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
             },
             Opts
         ),
-        ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
+        ExistingDepositOrError = get_deposit(Addr, ResourceID, DrippedS, Opts),
+        true ?= is_integer(ExistingDepositOrError) orelse ExistingDepositOrError,
+        ExistingDeposit = ExistingDepositOrError,
         BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
         CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
         Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
