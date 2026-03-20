@@ -228,96 +228,10 @@ process_function(PID, _Opts) ->
     end.
 
 %% @doc Resolve a readable process name from its registration or stack.
-process_name([], []) ->
-    <<"unknown">>;
 process_name([], Stack) ->
-    %% Prefer the outermost non-glue MFA (walk from stack bottom /
-    %% process entry). That matches a caller above pmap/proc_lib glue and
-    %% stays stable when the innermost slot is generic (e.g. timer:sleep) while
-    %% a user job remains deeper in the chain.
-    case mfa_from_stack(lists:reverse(Stack)) of
-        none ->
-            <<"unknown">>;
-        Found ->
-            mfa_to_label(Found)
-    end;
+    hb_format:process_from_trace(Stack);
 process_name(Name, _Stack) ->
     hb_util:bin(Name).
-
-%% @doc First non-glue MFA scanning `Stack` from its head.
-%% For `current_stacktrace` (innermost-first), use
-%% `mfa_from_stack(lists:reverse(Stack))` to pick the outermost meaningful
-%% caller.
-%% Returns `{Spawner, M, F, A}` where `Spawner` is `false` or the module
-%% that spawned the anonymous process (e.g. `hb_pmap`).
-mfa_from_stack(Stack) ->
-    mfa_from_stack(Stack, false).
-
-mfa_from_stack([], _) ->
-    none;
-mfa_from_stack([StackItem | Rest], Spawner) ->
-    case stack_item_is_glue(StackItem) of
-        true ->
-            mfa_from_stack(
-                Rest,
-                case check_spawner(StackItem) of
-                    false ->
-                        Spawner;
-                    NextSpawner ->
-                        NextSpawner
-                end
-            );
-        false ->
-            {
-                Spawner, 
-                element(1, StackItem),
-                element(2, StackItem),
-                element(3, StackItem)
-            }
-    end.
-
-%% @doc `hb_pmap` for a pmap worker spawn frame, else `false`.
-%% `{hb_pmap, _, _, _}` that implies a generated spawn fun
-check_spawner({hb_pmap, _, _, _}) ->
-    hb_pmap;
-check_spawner(_) ->
-    false.
-
-stack_item_is_glue({proc_lib, init_p_do_apply, _, _}) ->
-    true;
-stack_item_is_glue({hb_pmap, F, _, _}) ->
-    is_erlang_generated_fun_name(F);
-stack_item_is_glue(_) ->
-    false.
-
-%% @doc True for compiler-generated fun atoms like `'-foo/1-fun-0-'`.
-is_erlang_generated_fun_name(F) when is_atom(F) ->
-    case atom_to_binary(F, utf8) of
-        <<"-", Rest/binary>> ->
-            binary:match(Rest, <<"-fun-">>) =/= nomatch;
-        _ ->
-            false
-    end;
-is_erlang_generated_fun_name(_) ->
-    false.
-
-mfa_to_label({false, M, F, A}) ->
-    mfa_triple_to_label(M, F, A);
-mfa_to_label({Spawner, M, F, A}) when Spawner =/= false ->
-    <<
-        (hb_util:bin(Spawner))/binary,
-        "->",
-        (mfa_triple_to_label(M, F, A))/binary
-    >>.
-
-mfa_triple_to_label(M, F, A) ->
-    <<
-        (hb_util:bin(M))/binary,
-        ":",
-        (hb_util:bin(F))/binary,
-        "/",
-        (hb_util:bin(A))/binary
-    >>.
 
 %%% Tests
 
@@ -325,7 +239,7 @@ mfa_triple_to_label(M, F, A) ->
 %% (inner = head). Inner slots may be arbitrary MFAs; outer tail is pmap/proc_lib glue.
 process_name_from_stack_test() ->
     ?assertEqual(
-        <<"hb_pmap->job:run/1">>,
+        <<"hb_pmap->job:run">>,
         process_name(
             [],
             [
@@ -341,7 +255,7 @@ process_name_from_stack_test() ->
 %% @doc No spawner prefix when the trace has no pmap worker spawn closure.
 process_name_from_stack_no_pmap_prefix_test() ->
     ?assertEqual(
-        <<"job:run/1">>,
+        <<"job:run">>,
         process_name(
             [],
             [
