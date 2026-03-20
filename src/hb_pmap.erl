@@ -4,6 +4,7 @@
 
 -export([parallel_map/3]).
 -include_lib("eunit/include/eunit.hrl").
+-include("include/hb.hrl").
 
 parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
     Workers = max(1, MaxWorkers),
@@ -11,17 +12,18 @@ parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
     ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
     {ToSpawn, Remaining} =
         lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
-    ActiveRefs = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
-    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}),
+    Active = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
+    ResultsMap = collect(Active, Remaining, Fun, Parent, #{}),
     [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
 
 spawn_worker({Item, Ref}, Fun, Parent) ->
-    spawn(
+    Pid = spawn(
         fun() ->
             try
                 Parent ! {hb_pmap_result, Ref, Fun(Item)}
             catch
                 Class:Reason:Stacktrace ->
+                    ?event(pmap_error, {crash, {reason, Reason}, {stacktrace, Stacktrace}}),
                     Parent ! {
                         hb_pmap_worker_crash,
                         Ref,
@@ -32,29 +34,40 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
             end
         end
     ),
-    Ref.
+    {Pid, Ref}.
 
 collect([], [], _Fun, _Parent, Results) ->
     Results;
 collect(Active, Remaining, Fun, Parent, Results) ->
     receive
         {hb_pmap_result, Ref, Result} ->
-            NewResults = Results#{Ref => Result},
-            NewActive = lists:delete(Ref, Active),
-            case Remaining of
-                [] ->
-                    collect(NewActive, [], Fun, Parent, NewResults);
-                [Next | Rest] ->
-                    NextRef = spawn_worker(Next, Fun, Parent),
-                    collect(
-                        [NextRef | NewActive],
-                        Rest,
-                        Fun,
-                        Parent,
-                        NewResults
-                    )
+            case lists:keymember(Ref, 2, Active) of
+                false ->
+                    % Stale message from a previous crashed run — discard and
+                    % keep waiting without treating it as a free worker slot.
+                    collect(Active, Remaining, Fun, Parent, Results);
+                true ->
+                    NewResults = Results#{Ref => Result},
+                    NewActive = lists:keydelete(Ref, 2, Active),
+                    case Remaining of
+                        [] ->
+                            collect(NewActive, [], Fun, Parent, NewResults);
+                        [Next | Rest] ->
+                            NextWorker = spawn_worker(Next, Fun, Parent),
+                            collect(
+                                [NextWorker | NewActive],
+                                Rest,
+                                Fun,
+                                Parent,
+                                NewResults
+                            )
+                    end
             end;
         {hb_pmap_worker_crash, _Ref, Class, Reason, Stacktrace} ->
+            % Kill remaining workers so they don't leave stale messages in
+            % the caller's mailbox, which would cause over-spawning on the
+            % next parallel_map call.
+            [exit(Pid, kill) || {Pid, _} <- Active],
             throw({pmap_worker_crashed, Class, Reason, Stacktrace})
     end.
 
@@ -89,6 +102,30 @@ instrumented_normal_path_test() ->
         end,
         [0, 3, 10]
     ).
+
+%% @doc A crashed run leaves unread result messages in the mailbox.
+%% Each leftover message must be ignored — not treated as a finished worker
+%% that frees up a slot for a new one. If it were, every ghost message would
+%% silently add one extra worker, growing memory linearly until OOM.
+stale_messages_do_not_overspawn_test() ->
+    % Simulate two leftover messages from a previous crashed run.
+    self() ! {hb_pmap_result, make_ref(), stale},
+    self() ! {hb_pmap_result, make_ref(), stale},
+    Counters = atomics:new(4, []),
+    parallel_map(
+        [1, 2, 3],
+        fun(Item) ->
+            mark_worker_started(Counters),
+            timer:sleep(20),
+            mark_worker_completed(Counters),
+            Item
+        end,
+        1
+    ),
+    Peak = atomics:get(Counters, 4),
+    % With the fix: ghost messages are discarded, pool stays at 1.
+    % Without the fix: each ghost message spawned an extra worker, peak hit 3.
+    ?assert(Peak =< 1).
 
 %% @doc Verifies worker exceptions fail fast instead of hanging.
 worker_crash_fails_fast_test() ->
