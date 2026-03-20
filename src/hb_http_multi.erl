@@ -190,7 +190,7 @@ parallel_multirequest(MaxWorkers, Nodes, Responses, StopAfter, Method, Path, Mes
     {Workers, Queue} = start_workers(MaxWorkers, Ref, Nodes, Method, Path, Message, Opts),
     parallel_responses([], [], Workers, Queue, {Method, Path, Message}, Ref, Responses, StopAfter, Admissible, Statuses, Opts).
 
-%% @doc Start a new fleet of workers, returning a list of {Pid, MonRef} tuples.
+%% @doc Start a new fleet of workers, returning the list of worker PIDs.
 start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     Parent = self(),
     {NewWorkerNodes, NewRemainingNodes} =
@@ -198,9 +198,12 @@ start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
     {
         lists:map(
             fun(Node) ->
-                spawn_monitor(
+                spawn(
                     fun() ->
-                        Res = hb_http:request(Method, Node, Path, Message, Opts),
+                        Res =
+                            try hb_http:request(Method, Node, Path, Message, Opts)
+                            catch C:R -> {error, {worker_crash, C, R}}
+                            end,
                         receive no_reply -> stopping
                         after 0 -> Parent ! {Ref, self(), Res}
                         end
@@ -268,21 +271,17 @@ parallel_responses(AdmissibleRes, AllRes, [], _, _, Ref, _Awaiting, _StopAfter, 
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, false, _Admissible, _Statuses, _Opts) ->
-    lists:foreach(fun({P, Mon}) -> demonitor(Mon, [flush]), P ! no_reply end, Procs),
+    lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, true, _Admissible, _Statuses, _Opts) ->
-    lists:foreach(fun({P, Mon}) -> demonitor(Mon, [flush]), exit(P, kill) end, Procs),
+    lists:foreach(fun(P) -> exit(P, kill) end, Procs),
     empty_inbox(Ref),
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
         {Ref, Pid, {Status, NewRes}} ->
-            case lists:keyfind(Pid, 1, Procs) of
-                {Pid, Mon} -> demonitor(Mon, [flush]);
-                false -> ok
-            end,
-            WorkersWithoutPid = lists:keydelete(Pid, 1, Procs),
+            WorkersWithoutPid = lists:delete(Pid, Procs),
             {RefilledWorkers, NewQueue} =
                 start_workers(1, Ref, Queue, Method, Path, Message, Opts),
             NewProcs = RefilledWorkers ++ WorkersWithoutPid,
@@ -316,26 +315,7 @@ parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message},
                     Statuses,
                     Opts
                 )
-        end;
-        {'DOWN', _Mon, process, Pid, Reason} ->
-            WorkersWithoutPid = lists:keydelete(Pid, 1, Procs),
-            {RefilledWorkers, NewQueue} =
-                start_workers(1, Ref, Queue, Method, Path, Message, Opts),
-            NewProcs = RefilledWorkers ++ WorkersWithoutPid,
-            NewAllRes = [{error, {worker_down, Reason}} | AllRes],
-            parallel_responses(
-                AdmissibleRes,
-                NewAllRes,
-                NewProcs,
-                NewQueue,
-                {Method, Path, Message},
-                Ref,
-                Awaiting,
-                StopAfter,
-                Admissible,
-                Statuses,
-                Opts
-            )
+        end
 end.
 
 %% @doc Empty the inbox of the current process for all messages with the given
@@ -353,20 +333,61 @@ empty_inbox(Ref) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Parallel workers that crash (exception in hb_http:request) must not
-%% hang the caller. A node with opts but no uri causes badarg inside the
-%% worker. Without monitors the caller hangs forever (eunit timeout).
-parallel_worker_crash_recovers_test_() ->
-    {timeout, 5, fun parallel_worker_crash_recovers/0}.
-parallel_worker_crash_recovers() ->
-    CrashNode = #{<<"opts">> => #{http_client => httpc}},
-    Config = #{
-        <<"nodes">>             => [CrashNode, CrashNode],
-        <<"parallel">>          => true,
-        <<"stop-after">>        => true,
-        <<"admissible-status">> => 200
-    },
-    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
-    ?assertMatch({error, {no_viable_responses, _}}, Result).
+good()   -> ao_node(hb_http_server:start_node(#{})).
+slow(Ms) -> ao_node(hb_http_server:start_node(slow_node_opts(Ms))).
+crash()  -> #{<<"opts">> => #{http_client => httpc}}.
+
+ao_node(URL) ->
+    #{<<"uri">> => <<URL/binary, "~meta@1.0/info">>,
+      <<"opts">> => #{http_client => httpc}}.
+
+dead_node() ->
+    {ok, S} = gen_tcp:listen(0, []),
+    {ok, Port} = inet:port(S),
+    ok = gen_tcp:close(S),
+    #{<<"uri">> => iolist_to_binary(["http://localhost:", integer_to_list(Port)]),
+      <<"opts">> => #{http_client => httpc}}.
+
+slow_node_opts(Ms) ->
+    #{test_delay => Ms,
+      on => #{<<"request">> =>
+        #{<<"device">> => <<"test-device@1.0">>, <<"path">> => <<"delay">>}}}.
+
+multi(Nodes, Extra) ->
+    Config = Extra#{<<"nodes">> => Nodes, <<"admissible-status">> => 200},
+    hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}).
+
+multirequest_test_() ->
+    {setup,
+        fun() ->
+            #{fast => good(), slow1 => slow(500), slow2 => slow(500),
+              good1 => good(), good2 => good(), good3 => good()}
+        end,
+        fun(N) -> {timeout, 30, [
+            {"serial fallback", fun() ->
+                ?assertMatch({ok, _},
+                    multi([dead_node(), maps:get(fast, N)], #{}))
+            end},
+            {"parallel race", fun() ->
+                T0 = erlang:monotonic_time(millisecond),
+                ?assertMatch({ok, _},
+                    multi([maps:get(fast, N), maps:get(slow1, N), maps:get(slow2, N)],
+                        #{<<"parallel">> => true, <<"stop-after">> => true})),
+                ?assert(erlang:monotonic_time(millisecond) - T0 < 500)
+            end},
+            {"parallel broadcast", fun() ->
+                ?assertMatch([_, _, _],
+                    multi([dead_node(),
+                           maps:get(good1, N), maps:get(good2, N), maps:get(good3, N),
+                           maps:get(slow1, N)],
+                        #{<<"parallel">> => true, <<"responses">> => 3,
+                          <<"stop-after">> => false}))
+            end},
+            {"parallel crash", fun() ->
+                ?assertMatch({error, {no_viable_responses, _}},
+                    multi([crash(), crash()],
+                        #{<<"parallel">> => true, <<"stop-after">> => true}))
+            end}
+        ]} end}.
 
 -endif.
