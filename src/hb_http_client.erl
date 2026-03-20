@@ -22,7 +22,8 @@
 
 %% @doc Use Opts to configure connection pool size.
 setup_conn(Opts) ->
-    MaxConnections = hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
+    MaxConnections =
+        hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     ?event(connection_pool, {http_client_hackney_max_connections, MaxConnections}),
     hackney_pool:set_max_connections(?HACKNEY_POOL, MaxConnections),
@@ -57,7 +58,6 @@ request(Args, RemainingRetries, Opts) ->
     end.
 
 do_request(Args, Opts) ->
-    ?event(error, {hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts), {args, Args}}),
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
         gun -> gun_req(Args, Opts);
         httpc -> httpc_req(Args, Opts);
@@ -98,75 +98,70 @@ httpc_req(Args, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    {ok, {Host, Port}} = parse_peer(Peer, Opts),
-    Scheme = case Port of
-        443 -> "https";
-        _ -> "http"
-    end,
-    ?event(debug_http_client, {httpc_req, {explicit, Args}}),
-    URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
-    HeaderKV =
-        [
-            {binary_to_list(Key), binary_to_list(Value)}
-        ||
-            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
-        ] ++
-        [
-            {<<"cookie">>, CookieLine}
-        ||
-            CookieLine <-
-                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
-                    Binary when is_binary(Binary) ->
-                        [Binary];
-                    List when is_list(List) ->
-                        List
-                end
-        ],
-    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
-    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
-    Request =
-        case Method of
-            get ->
-                {
-                    URL,
-                    HeaderKV
-                };
-            _ ->
-                upload_metric(Body),
-                {
-                    URL,
-                    HeaderKV,
-                    binary_to_list(ContentType),
-                    Body
-                }
-        end,
-    ?event({http_client_outbound, Method, URL, Request}),
-    HTTPCOpts = [{full_result, true}, {body_format, binary}],
-	StartTime = os:system_time(native),
-    case httpc:request(Method, Request, [], HTTPCOpts) of
-        {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-            download_metric(RespBody),
-	        EndTime = os:system_time(native),
-            RespHeaders =
+    case parse_peer(Peer, Opts) of
+        {error, _} = Err -> Err;
+        {ok, {Host, Port}} ->
+            Scheme = case Port of
+                443 -> "https";
+                _ -> "http"
+            end,
+            ?event(debug_http_client, {httpc_req, {explicit, Args}}),
+            URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+            FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+            HeaderKV =
                 [
-                    {list_to_binary(Key), list_to_binary(Value)}
+                    {binary_to_list(Key), binary_to_list(Value)}
                 ||
-                    {Key, Value} <- RawRespHeaders
+                    {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+                ] ++
+                [
+                    {<<"cookie">>, CookieLine}
+                ||
+                    CookieLine <-
+                        case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                            Binary when is_binary(Binary) ->
+                                [Binary];
+                            List when is_list(List) ->
+                                List
+                        end
                 ],
-            ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Status),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            ),
-            {ok, Status, RespHeaders, RespBody};
-        {error, Reason} ->
-            ?event(http_client, {httpc_error, Reason}),
-            {error, Reason}
+            Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+            ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
+            Request =
+                case Method of
+                    get ->
+                        {URL, HeaderKV};
+                    _ ->
+                        upload_metric(Body),
+                        {URL, HeaderKV, binary_to_list(ContentType), Body}
+                end,
+            ?event({http_client_outbound, Method, URL, Request}),
+            HTTPCOpts = [{full_result, true}, {body_format, binary}],
+            StartTime = os:system_time(native),
+            case httpc:request(Method, Request, [], HTTPCOpts) of
+                {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+                    download_metric(RespBody),
+                    EndTime = os:system_time(native),
+                    RespHeaders =
+                        [
+                            {list_to_binary(Key), list_to_binary(Value)}
+                        ||
+                            {Key, Value} <- RawRespHeaders
+                        ],
+                    ?event(debug_http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+                    record_duration(#{
+                            <<"request-method">> => method_to_bin(Method),
+                            <<"request-path">> => hb_util:bin(Path),
+                            <<"status-class">> => get_status_class(Status),
+                            <<"duration">> => EndTime - StartTime
+                        },
+                        Opts
+                    ),
+                    {ok, Status, RespHeaders, RespBody};
+                {error, Reason} ->
+                    ?event(http_client, {httpc_error, Reason}),
+                    {error, Reason}
+            end
     end.
 
 hackney_req(Args, Opts) ->
@@ -256,6 +251,8 @@ gun_req(Args, Opts) ->
 	),
 	Response.
 
+%% @doc Start the hackney connection pool with default settings.
+%% Overridden at runtime by setup_conn/1 once node config is available.
 init_hackney_pool() ->
     hackney_pool:start_pool(?HACKNEY_POOL, [
         {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
