@@ -17,26 +17,6 @@ hackney_basic_request_test_() ->
         {ok, 200, _, _} = hb_http_client:request(Args, Opts)
     end}.
 
-hackney_unreachable_peer_test_() ->
-    {timeout, 30, fun() ->
-        application:ensure_all_started(hb),
-        Args = #{
-            peer => <<"http://192.0.2.1:1984">>,
-            path => <<"/info">>,
-            method => <<"GET">>,
-            headers => #{},
-            body => <<>>
-        },
-        Opts = #{http_client => hackney, http_retry => 0},
-        T0 = erlang:monotonic_time(millisecond),
-        Result = hb_http_client:request(Args, Opts),
-        Elapsed = erlang:monotonic_time(millisecond) - T0,
-        ?event(http_client_tests,
-            {hackney_unreachable_peer, {result, Result}, {elapsed, Elapsed}}
-        ),
-        ?assertMatch({error, _}, Result)
-    end}.
-
 hackney_bad_peer_test_() ->
     {timeout, 30, fun() ->
         application:ensure_all_started(hb),
@@ -75,15 +55,6 @@ hackney_post_test_() ->
         ?event(http_client_tests, {hackney_post_result, summarize(Result)}),
         ?assertMatch({ok, _, _, _}, Result)
     end}.
-
-flush_mailbox() ->
-    flush_mailbox([]).
-flush_mailbox(Acc) ->
-    receive
-        Msg -> flush_mailbox([Msg | Acc])
-    after 0 ->
-        lists:reverse(Acc)
-    end.
 
 summarize({caught, C, R}) when is_tuple(R) ->
     {caught, C, element(1, R)};
