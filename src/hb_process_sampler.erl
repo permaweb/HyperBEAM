@@ -228,41 +228,39 @@ process_function(PID, _Opts) ->
     end.
 
 %% @doc Resolve a readable process name from its registration or stack.
-process_name([], []) ->
-    <<"unknown">>;
 process_name([], Stack) ->
-    InitialCall = initial_call(lists:reverse(Stack)),
-    M = element(1, InitialCall),
-    F = element(2, InitialCall),
-    A = element(3, InitialCall),
-    <<
-        (hb_util:bin(M))/binary,
-        ":",
-        (hb_util:bin(F))/binary,
-        "/",
-        (hb_util:bin(A))/binary
-    >>;
+    hb_format:process_from_trace(Stack);
 process_name(Name, _Stack) ->
     hb_util:bin(Name).
 
-%% @doc Determine the initial stack frame for an anonymous process.
-initial_call([]) ->
-    {unknown, unknown, 0};
-initial_call([{proc_lib, init_p_do_apply, _A, _Location} | Stack]) ->
-    initial_call(Stack);
-initial_call([InitialCall | _Stack]) ->
-    InitialCall.
-
 %%% Tests
 
-%% @doc Ensure anonymous process names fall back to their initial call.
+%% @doc process_name/2: outermost non-glue MFA from a `current_stacktrace`-ordered list
+%% (inner = head). Inner slots may be arbitrary MFAs; outer tail is pmap/proc_lib glue.
 process_name_from_stack_test() ->
     ?assertEqual(
-        <<"hb_http_server:init/2">>,
+        <<"hb_pmap->job:run">>,
         process_name(
             [],
             [
-                {hb_http_server, init, 2, []},
+                {timer, sleep, 1, []},
+                {helper, nested, 1, []},
+                {job, run, 1, []},
+                {hb_pmap, '-spawn_worker/3-fun-0-', 4, []},
+                {proc_lib, init_p_do_apply, 3, []}
+            ]
+        )
+    ).
+
+%% @doc No spawner prefix when the trace has no pmap worker spawn closure.
+process_name_from_stack_no_pmap_prefix_test() ->
+    ?assertEqual(
+        <<"job:run">>,
+        process_name(
+            [],
+            [
+                {timer, sleep, 1, []},
+                {job, run, 1, []},
                 {proc_lib, init_p_do_apply, 3, []}
             ]
         )
