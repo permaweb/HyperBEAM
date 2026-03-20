@@ -112,7 +112,7 @@ do_read(StoreOpts, ID) ->
             Loaded =
                 case CodecName of
                     <<"ans104@1.0">> ->
-                        load_item(StartOffset, Length, StoreOpts);
+                        load_item(ID, StartOffset, Length, StoreOpts);
                     <<"tx@1.0">> ->
                         load_tx(ID, StartOffset, Length, StoreOpts)
                 end,
@@ -160,21 +160,28 @@ do_read(StoreOpts, ID) ->
 %% Returns an `ok' tuple with the deserialized item, or an `error' tuple with
 %% the reason. The `StartOffset` is the precise starting byte of the item _header_,
 %% not the data segment. The `Length` covers the full size of the item, including
-%% header.
-load_item(StartOffset, Length, Opts) ->
+%% header. The `ExpectedID` is verified against the deserialized item's ID to
+%% guard against stale offsets (e.g. after a reorg).
+load_item(ExpectedID, StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
             case read_chunks(StartOffset, Length, Opts) of
                 {ok, SerializedItem} ->
-                    {
-                        ok,
-                        hb_message:convert(
-                            ar_bundles:deserialize(SerializedItem),
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        )
-                    };
+                    Item = ar_bundles:deserialize(SerializedItem),
+                    case hb_util:encode(Item#tx.id) of
+                        ExpectedID ->
+                            {
+                                ok,
+                                hb_message:convert(
+                                    Item,
+                                    <<"structured@1.0">>,
+                                    <<"ans104@1.0">>,
+                                    Opts
+                                )
+                            };
+                        ActualID ->
+                            {error, {id_mismatch, ExpectedID, ActualID}}
+                    end;
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -339,6 +346,20 @@ write_read_tx_test() ->
     },
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
     ok.
+
+%% @doc Stale ANS-104 offset must return id_mismatch, not wrong data.
+%% Writes an ans104 offset for a fake ID pointing to a known bundle TX's
+%% data range. The deserialized item's ID won't match the fake ID.
+stale_ans104_offset_returns_error_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{<<"index-store">> => Store},
+    FakeID = <<"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>,
+    RealEndOffset = 363524457284025,
+    RealSize = 8387,
+    RealStartOffset = RealEndOffset - RealSize,
+    ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, RealStartOffset, RealSize),
+    Result = read(Opts, FakeID),
+    ?assertMatch({error, {id_mismatch, _, _}}, Result).
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
