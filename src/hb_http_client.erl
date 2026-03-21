@@ -498,7 +498,7 @@ await_response(Args, Opts) ->
 		{data, nofin, Data} ->
 			case Limit of
 				infinity ->
-					await_response(Args#{ acc := [Acc | Data] }, Opts);
+					await_response(Args#{ acc := [Acc, Data] }, Opts);
 				Limit ->
 					Counter2 = size(Data) + Counter,
 					case Limit >= Counter2 of
@@ -506,7 +506,7 @@ await_response(Args, Opts) ->
 							await_response(
                                 Args#{
                                     counter := Counter2,
-                                    acc := [Acc | Data]
+                                    acc := [Acc, Data]
                                 },
                                 Opts
                             );
@@ -517,7 +517,7 @@ await_response(Args, Opts) ->
 					end
 			end;
 		{data, fin, Data} ->
-			FinData = iolist_to_binary([Acc | Data]),
+			FinData = iolist_to_binary([Acc, Data]),
 			download_metric(FinData),
 			upload_metric(Args),
 			{ok,
@@ -649,8 +649,6 @@ record_duration(Details, Opts) ->
         end
     ).
 
-record_response_status(Method, Response) ->
-    record_response_status(Method, Response, undefined).
 record_response_status(Method, Response, Path) ->
 	hb_prometheus:inc(
         counter, 
