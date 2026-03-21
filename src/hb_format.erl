@@ -10,6 +10,7 @@
 -module(hb_format).
 %%% Public API.
 -export([term/1, term/2, term/3]).
+-export([format_debug/5]).
 -export([print/1, print/3, print/4, print/5, eunit_print/2]).
 -export([message/1, message/2, message/3]).
 -export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
@@ -30,15 +31,16 @@
 print(X) ->
     print(X, <<>>, #{}).
 print(X, Info, Opts) ->
-    io:format(
-        standard_error,
-        "=== HB DEBUG ===~s==>~n~s~n",
-        [Info, term(X, Opts, 0)]
-    ),
+    io:format(standard_error, "~s~n", [render_debug(X, Info, Opts)]),
     X.
 print(X, Mod, Func, LineNum) ->
     print(X, debug_trace(Mod, Func, LineNum, #{}), #{}).
 print(X, Mod, Func, LineNum, Opts) ->
+    io:format(standard_error, "~s~n", [format_debug(X, Mod, Func, LineNum, Opts)]),
+    X.
+
+%% @doc Format a debug message without writing it, preserving the standard layout.
+format_debug(X, Mod, Func, LineNum, Opts) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
     TSDiff = case Last of undefined -> 0; _ -> Now - Last end,
@@ -62,7 +64,16 @@ print(X, Mod, Func, LineNum, Opts) ->
                 ]
             )
         ),
-    print(X, Info, Opts).
+    render_debug(X, Info, Opts).
+
+%% @doc Render a debug message using the standard HyperBEAM layout.
+render_debug(X, Info, Opts) ->
+    hb_util:bin(
+        io_lib:format(
+            "=== HB DEBUG ===~s==>~n~s",
+            [Info, term(X, Opts, 0)]
+        )
+    ).
 
 %% @doc Retreive the server ID of the calling process, if known.
 server_id() ->
