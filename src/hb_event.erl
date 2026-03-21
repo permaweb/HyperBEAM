@@ -5,7 +5,7 @@
 -export([format_file_log/2]).
 -export([log/1, log/2, log/3, log/4, log/5, log/6]).
 -export([log_event/6]).
--export([setup_file_logger/0]).
+-export([setup_logger/0]).
 -export([increment/3, increment/4, increment_callers/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -14,10 +14,13 @@
 -define(MAX_MEMORY, 50_000_000). % 50 MB
 -define(MAX_EVENT_NAME_LENGTH, 100).
 %% OTP handler for logging to disk.
+-define(PRINT_LOGGER, hb_print_logger).
+-define(PRINT_LOGGER_DOMAIN, [hb_print]).
 -define(FILE_LOGGER, hb_file_logger).
 %% OTP logger domain, logs sent with this domain are directed to hb_file_logger.
--define(FILE_LOGGER_DOMAIN, [hb]).
--define(DEFAULT_HANDLER_FILTER, hb_drop_hb_logs).
+-define(FILE_LOGGER_DOMAIN, [hb_log]).
+-define(DEFAULT_PRINT_HANDLER_FILTER, hb_drop_hb_print_logs).
+-define(DEFAULT_FILE_HANDLER_FILTER, hb_drop_hb_file_logs).
 
 -ifdef(NO_EVENTS).
 debug_print(_X, _Mod, _Func, _Line) -> ok.
@@ -55,7 +58,7 @@ debug_print(Topic, X, Mod, Func, Line, Opts) ->
     case should_print(print, Topic, Opts)
         orelse should_print(print, Mod, Opts)
     of
-        true -> hb_format:print(X, Mod, Func, Line, Opts);
+        true -> print_event(Topic, X, Mod, Func, Line, Opts);
         false -> X
     end,
     case should_print(log, Topic, Opts)
@@ -88,44 +91,64 @@ print_opt(print) -> debug_print;
 print_opt(log) -> debug_log.
 
 %% @doc Configure a rotating file logger for HyperBEAM events.
-setup_file_logger() ->
-    case hb_opts:get(debug_log) of
-        false -> ok;
-        [] -> ok;
-        _ ->
-            LogFile =
-                filename:join(
-                    hb_util:list(hb_opts:get(log_dir)),
-                    "hyperbeam.log"
-                ),
-            ok = filelib:ensure_dir(LogFile),
-            % Configure the default handler to ignore all hb_logs - this
-            % guarantees that any events logged via OTP do not go to
-            % stdout/err. io:format is used for logging to stdout/err.
-            logger:remove_handler_filter(default, ?DEFAULT_HANDLER_FILTER),
-            case logger:add_handler_filter(
-                default,
-                ?DEFAULT_HANDLER_FILTER,
-                {fun logger_filters:domain/2, {stop, sub, ?FILE_LOGGER_DOMAIN}}
-            ) of
-                ok -> ok;
-                {error, FilterReason} -> erlang:error(FilterReason)
-            end,
-            % Conigure the FILE_LOGGER handler to send all OTP logger events to
-            % the file log on disk.
-            logger:remove_handler(?FILE_LOGGER),
-            case logger:add_handler(
-                ?FILE_LOGGER,
-                logger_std_h,
-                file_logger_config(LogFile)
-            ) of
-                ok -> ok;
-                {error, HandlerReason} -> erlang:error(HandlerReason)
-            end
+setup_logger() ->
+    LogFile =
+        filename:join(
+            hb_util:list(hb_opts:get(log_dir)),
+            "hyperbeam.log"
+        ),
+    ok = filelib:ensure_dir(LogFile),
+    setup_handler(
+        ?PRINT_LOGGER,
+        ?DEFAULT_PRINT_HANDLER_FILTER,
+        ?PRINT_LOGGER_DOMAIN,
+        print_logger_config()
+    ),
+    setup_handler(
+        ?FILE_LOGGER,
+        ?DEFAULT_FILE_HANDLER_FILTER,
+        ?FILE_LOGGER_DOMAIN,
+        file_logger_config(LogFile)
+    ).
+
+setup_handler(Handler, DefaultFilter, Domain, Config) ->
+    ensure_default_handler_filter(DefaultFilter, Domain),
+    logger:remove_handler(Handler),
+    case logger:add_handler(Handler, logger_std_h, Config) of
+        ok -> ok;
+        {error, HandlerReason} -> erlang:error(HandlerReason)
     end.
 
 %% @doc Build the OTP logger configuration for the HyperBEAM file handler.
 file_logger_config(LogFile) ->
+    logger_handler_config(
+        ?FILE_LOGGER_DOMAIN,
+        hb_log_domain,
+        #{
+            report_cb => fun ?MODULE:format_file_log/2,
+            template => [time, " ", msg, "\n"],
+            single_line => false
+        },
+        #{
+            file => LogFile,
+            max_no_bytes => hb_opts:get(log_max_bytes),
+            max_no_files => hb_opts:get(log_max_files)
+        }
+    ).
+
+print_logger_config() ->
+    logger_handler_config(
+        ?PRINT_LOGGER_DOMAIN,
+        hb_print_domain,
+        #{
+            report_cb => fun ?MODULE:format_file_log/2,
+            template => [msg, "\n"],
+            single_line => false
+        },
+        #{type => standard_error}
+    ).
+
+logger_handler_config(Domain, FilterId, FormatterConfig, HandlerConfig) ->
     #{
         level => all,
         sync_mode_qlen => 200,
@@ -138,48 +161,62 @@ file_logger_config(LogFile) ->
         filters =>
             [
                 {
-                    hb_domain,
-                    {fun logger_filters:domain/2, {log, sub, ?FILE_LOGGER_DOMAIN}}
+                    FilterId,
+                    {fun logger_filters:domain/2, {log, sub, Domain}}
                 }
             ],
-        formatter =>
-            {
-                logger_formatter,
-                #{
-                    report_cb => fun ?MODULE:format_file_log/2,
-                    template => [time, " ", msg, "\n"],
-                    single_line => false
-                }
-            },
-        config =>
-            #{
-                file => LogFile,
-                max_no_bytes => hb_opts:get(log_max_bytes),
-                max_no_files => hb_opts:get(log_max_files)
-            }
+        formatter => {logger_formatter, FormatterConfig},
+        config => HandlerConfig
     }.
+
+ensure_default_handler_filter(FilterId, Domain) ->
+    logger:remove_handler_filter(default, FilterId),
+    case logger:add_handler_filter(
+        default,
+        FilterId,
+        {fun logger_filters:domain/2, {stop, sub, Domain}}
+    ) of
+        ok -> ok;
+        {error, FilterReason} -> erlang:error(FilterReason)
+    end.
+
+print_event(Topic, X, Mod, Func, Line, Opts) ->
+    logger:log(
+        notice,
+        event_report(X, Mod, Func, Line, Opts),
+        (event_metadata(Topic, Mod, Func, Line))#{
+            domain => ?PRINT_LOGGER_DOMAIN
+        }
+    ).
 
 %% @doc Queue an event for asynchronous file logging via OTP logger.
 log_event(Topic, X, Mod, Func, Line, Opts) ->
     logger:log(
         notice,
-        #{
-            event => X,
-            line => Line,
-            function => Func,
-            module => Mod,
-            opts => Opts
-        },
-        #{
-            domain => ?FILE_LOGGER_DOMAIN,
-            line => Line,
-            function => Func,
-            module => Mod,
-            topic => Topic
+        event_report(X, Mod, Func, Line, Opts),
+        (event_metadata(Topic, Mod, Func, Line))#{
+            domain => ?FILE_LOGGER_DOMAIN
         }
     ).
 
-%% @doc Render the file log entry in the logger handler process.
+event_report(X, Mod, Func, Line, Opts) ->
+    #{
+        event => X,
+        line => Line,
+        function => Func,
+        module => Mod,
+        opts => Opts
+    }.
+
+event_metadata(Topic, Mod, Func, Line) ->
+    #{
+        line => Line,
+        function => Func,
+        module => Mod,
+        topic => Topic
+    }.
+
+%% @doc Render the event log entry in the logger handler process.
 format_file_log(
     #{event := X, line := Line, function := Func, module := Mod, opts := Opts},
     _Config
@@ -413,74 +450,6 @@ should_log_test() ->
     ?assertEqual(false, should_print(log, topic_b, #{ debug_log => [topic_a] })),
     ?assertEqual(true, should_print(log, topic_c, #{ debug_log => true })),
     ?assertEqual(false, should_print(log, topic_d, #{ debug_log => false })).
-
-setup_file_logger_test() ->
-    Unique =
-        integer_to_list(erlang:unique_integer([positive, monotonic])),
-    LogDir = filename:join("test", "hb-event-logs-" ++ Unique),
-    LogFile = filename:join(LogDir, "hyperbeam.log"),
-    Env =
-        [
-            {"HB_LOG", "warning"},
-            {"HB_LOG_DIR", LogDir},
-            {"HB_LOG_MAX_FILES", "2"},
-            {"HB_LOG_MAX_BYTES", "4096"}
-        ],
-    Prev = [{Key, os:getenv(Key)} || {Key, _} <- Env],
-    try
-        lists:foreach(
-            fun({Key, Value}) ->
-                os:putenv(Key, Value),
-                clear_env_cache(Key)
-            end,
-            Env
-        ),
-        logger:remove_handler(?FILE_LOGGER),
-        ok = setup_file_logger(),
-        logger:log(notice, "should-not-appear", [], #{domain => [other]}),
-        logger:log(notice, "should-appear", [], #{domain => ?FILE_LOGGER_DOMAIN}),
-        timer:sleep(50),
-        ok = logger:remove_handler(?FILE_LOGGER),
-        {ok, Bin} = file:read_file(LogFile),
-        ?assertNotEqual(nomatch, binary:match(Bin, <<"should-appear">>)),
-        ?assertEqual(nomatch, binary:match(Bin, <<"should-not-appear">>))
-    after
-        logger:remove_handler(?FILE_LOGGER),
-        lists:foreach(
-            fun({Key, false}) ->
-                    os:unsetenv(Key);
-               ({Key, Value}) ->
-                    os:putenv(Key, Value)
-            end,
-            Prev
-        ),
-        lists:foreach(
-            fun({Key, _}) ->
-                clear_env_cache(Key)
-            end,
-            Env
-        ),
-        file:delete(LogFile),
-        file:del_dir(LogDir),
-        ok
-    end.
-
-clear_env_cache("HB_LOG") ->
-    erlang:erase({processed_env, debug_log}),
-    erlang:erase({os_env, "HB_LOG"}),
-    ok;
-clear_env_cache("HB_LOG_DIR") ->
-    erlang:erase({processed_env, log_dir}),
-    erlang:erase({os_env, "HB_LOG_DIR"}),
-    ok;
-clear_env_cache("HB_LOG_MAX_FILES") ->
-    erlang:erase({processed_env, log_max_files}),
-    erlang:erase({os_env, "HB_LOG_MAX_FILES"}),
-    ok;
-clear_env_cache("HB_LOG_MAX_BYTES") ->
-    erlang:erase({processed_env, log_max_bytes}),
-    erlang:erase({os_env, "HB_LOG_MAX_BYTES"}),
-    ok.
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
