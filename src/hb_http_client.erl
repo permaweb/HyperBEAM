@@ -222,7 +222,7 @@ hackney_req(Args, Opts) ->
 
 gun_req(Args, Opts) ->
 	StartTime = os:system_time(native),
-	#{ peer := Peer, path := Path, method := Method } = Args,
+	#{ path := Path, method := Method } = Args,
 	ConnectTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
 	Response =
 		case open_connection(Args, Opts) of
@@ -234,7 +234,6 @@ gun_req(Args, Opts) ->
 						gun:close(PID),
 						{error, Reason};
 					{ok, _Protocol} ->
-						ar_rate_limiter:throttle(Peer, Path, Opts),
 						Result = do_gun_request(PID, Args, Opts),
 						gun:close(PID),
 						Result
