@@ -875,7 +875,10 @@ auto_stop_partial_index_test() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     HigherBlock = Block + 1,
-    NoIndexOpts = Opts#{ arweave_index_ids => false },
+    NoIndexOpts = Opts#{
+        arweave_index_ids => false,
+        arweave_index_blocks => true
+    },
     {ok, Block} =
         hb_ao:resolve(
             <<

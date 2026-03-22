@@ -513,6 +513,12 @@ fetch_and_collect(Offsets, Opts) ->
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
+%% Capped at 1M items (~256GB at 256KiB step). Ranges above this would
+%% require streaming chunk assembly, which is not currently supported.
+-define(MAX_OFFSET_LIST, 1_000_000).
+generate_offsets(Start, End, Step)
+        when (End - Start) div Step > ?MAX_OFFSET_LIST ->
+    error({range_too_large, (End - Start) div Step, ?MAX_OFFSET_LIST});
 generate_offsets(Start, End, Step) ->
     generate_offsets(Start, End, Step, []).
 
@@ -894,7 +900,7 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             Opts
         ),
     CacheRes =
-        case hb_opts:get(arweave_index_blocks, true, Opts) of
+        case hb_opts:get(arweave_index_blocks, false, Opts) of
             true -> dev_arweave_block_cache:write(Block, Opts);
             false -> skipped
         end,
