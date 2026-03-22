@@ -8,7 +8,7 @@
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 %%% Helper functions
--export([get_chunk/2, bundle_header/2]).
+-export([get_chunk/2, bundle_header/3, fetch_block/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -521,6 +521,12 @@ fetch_and_collect(Offsets, Opts) ->
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
+%% Capped at 1M items (~256GB at 256KiB step). Ranges above this would
+%% require streaming chunk assembly, which is not currently supported.
+-define(MAX_OFFSET_LIST, 1_000_000).
+generate_offsets(Start, End, Step)
+        when (End - Start) div Step > ?MAX_OFFSET_LIST ->
+    error({range_too_large, (End - Start) div Step, ?MAX_OFFSET_LIST});
 generate_offsets(Start, End, Step) ->
     generate_offsets(Start, End, Step, []).
 
@@ -647,7 +653,7 @@ get_chunk(Offset, Opts) ->
 
 %% @doc Read and decode the bundle header index at the given global start
 %% offset, returning the header size alongside the decoded index entries.
-bundle_header(BundleStartOffset, Opts) ->
+bundle_header(BundleStartOffset, MaxSize, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -660,10 +666,17 @@ bundle_header(BundleStartOffset, Opts) ->
             case ar_bundles:bundle_header_size(FirstChunk) of
                 invalid_bundle_header ->
                     {error, invalid_bundle_header};
+                HeaderSize when HeaderSize > MaxSize ->
+                    {error, invalid_bundle_header};
                 HeaderSize ->
-                    case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
+                    case read_bundle_header(
+                        BundleStartOffset, HeaderSize,
+                        FirstChunk, Opts
+                    ) of
                         {ok, HeaderBin} ->
-                            case ar_bundles:decode_bundle_header(HeaderBin) of
+                            case ar_bundles:decode_bundle_header(
+                                HeaderBin
+                            ) of
                                 {_Items, BundleIndex} ->
                                     {ok, HeaderSize, BundleIndex};
                                 invalid_bundle_header ->
@@ -746,13 +759,17 @@ block({height, Height}, Opts) ->
             }),
             {ok, Block};
         not_found ->
-            request(
-                <<"GET">>,
-                <<"/block/height/", (hb_util:bin(Height))/binary>>,
-                #{ <<"route-by">> => Height },
-                Opts
-            )
+            fetch_block({height, Height}, Opts)
     end.
+
+%% @doc Fetch a block header directly from the network, bypassing the cache.
+fetch_block({height, Height}, Opts) ->
+    request(
+        <<"GET">>,
+        <<"/block/height/", (hb_util:bin(Height))/binary>>,
+        #{ <<"route-by">> => Height },
+        Opts
+    ).
 
 %% @doc Retrieve the current block information from Arweave.
 current(_Base, _Request, Opts) ->
@@ -957,6 +974,27 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+%% @doc Garbage bytes produce a bundle_header_size that exceeds the TX
+%% data_size. The bundle_header/3 guard rejects it as invalid_bundle_header
+%% instead of attempting to allocate ~10^72 list elements in
+%% generate_offsets, which would OOM the node.
+bundle_header_garbage_guard_test() ->
+    Garbage = <<255:(32*8)>>,
+    HeaderSize = ar_bundles:bundle_header_size(Garbage),
+    TXDataSize = 10_000_000,
+    ?assert(HeaderSize > TXDataSize),
+    ?assertEqual(
+        {error, invalid_bundle_header},
+        bundle_header_with_size_check(HeaderSize, TXDataSize)
+    ).
+
+%% @doc Extracted guard logic from bundle_header/3 for unit testing.
+bundle_header_with_size_check(HeaderSize, MaxSize)
+        when HeaderSize > MaxSize ->
+    {error, invalid_bundle_header};
+bundle_header_with_size_check(_HeaderSize, _MaxSize) ->
+    ok.
 
 post_ans104_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },

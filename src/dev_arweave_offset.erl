@@ -207,30 +207,34 @@ read_remaining_data(StartOffset, HeaderSize, PrefixSize, Length, Opts) ->
 message_from_offset(TargetOffset, Opts) ->
     maybe
         {ok, ChunkJSON, FirstChunk} ?= chunk_from_offset(TargetOffset, Opts),
+        {BundleStartOffset, BundleSize} =
+            bundle_start_and_size(ChunkJSON),
         message_from_offset(
             TargetOffset,
-            bundle_start_offset(ChunkJSON),
+            BundleStartOffset,
+            BundleSize,
             TargetOffset,
             FirstChunk,
             Opts
         )
     end.
 
-%% @doc Recover the global start offset of the containing bundle from the end
-%% offset of the chunk in global space and its end offset inside the bundle.
-bundle_start_offset(ChunkJSON) ->
+%% @doc Recover the global start offset and total size of the containing
+%% bundle from the chunk metadata.
+bundle_start_and_size(ChunkJSON) ->
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, ChunkJSON)),
-    ChunkEndInBundle =
+    BundleSize =
         ar_merkle:extract_note(
             hb_util:decode(maps:get(<<"data_path">>, ChunkJSON))
         ),
-    AbsEnd - ChunkEndInBundle.
+    {AbsEnd - BundleSize, BundleSize}.
 
-message_from_offset(TargetOffset, BundleStartOffset, KnownOffset, KnownChunk, Opts) ->
+message_from_offset(TargetOffset, BundleStartOffset, BundleSize, KnownOffset, KnownChunk, Opts) ->
     maybe
         {ok, HeaderSize, BundleIndex} ?=
             dev_arweave:bundle_header(
                 BundleStartOffset,
+                BundleSize,
                 Opts
             ),
         {ok, ItemStartOffset, ItemSize} ?=
@@ -290,6 +294,7 @@ maybe_nested_item(
         message_from_offset(
             TargetOffset,
             ItemStartOffset + HeaderSize,
+            ItemSize - HeaderSize,
             KnownOffset,
             KnownChunk,
             Opts
@@ -447,21 +452,23 @@ bundle_message_offset_from_tx(TXID, Path, Opts) ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    bundled_index_offset(EndOffset - Size, Path, Opts).
+    bundled_index_offset(EndOffset - Size, Size, Path, Opts).
 
-bundled_index_offset(BundleStartOffset, [Index], Opts) ->
+bundled_index_offset(BundleStartOffset, Size, [Index], Opts) ->
     {ok, HeaderSize, BundleIndex} =
         dev_arweave:bundle_header(
             BundleStartOffset,
+            Size,
             Opts
         ),
     nth_bundle_item(Index, BundleStartOffset + HeaderSize, BundleIndex);
-bundled_index_offset(BundleStartOffset, [Index | Rest], Opts) ->
-    {ItemStartOffset, _ItemSize} =
-        bundled_index_offset(BundleStartOffset, [Index], Opts),
+bundled_index_offset(BundleStartOffset, Size, [Index | Rest], Opts) ->
+    {ItemStartOffset, ItemSize} =
+        bundled_index_offset(BundleStartOffset, Size, [Index], Opts),
     {ok, _ChunkJSON, FirstChunk} = chunk_from_offset(ItemStartOffset, Opts),
     {ok, HeaderSize, _HeaderTX} = deserialize_header(FirstChunk),
-    bundled_index_offset(ItemStartOffset + HeaderSize, Rest, Opts).
+    bundled_index_offset(
+        ItemStartOffset + HeaderSize, ItemSize - HeaderSize, Rest, Opts).
 
 nth_bundle_item(1, ItemStartOffset, [{_ID, Size} | _]) ->
     {ItemStartOffset, Size};
