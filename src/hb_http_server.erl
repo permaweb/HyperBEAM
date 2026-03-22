@@ -393,22 +393,32 @@ handle_request(RawReq, Body, ServerID) ->
         ReqSingleton ->
             try
                 CommitmentCodec =
-                    hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+                    hb_http:accept_to_codec(
+                        ReqSingleton, NodeMsg),
                 ?event(http,
                     {parsed_singleton,
                         {req_singleton, ReqSingleton},
                         {accept_codec, CommitmentCodec}},
                     #{}
                 ),
-                % Invoke the meta@1.0 device to handle the request.
-                {ok, Res} =
-                    dev_meta:handle(
-                        NodeMsg#{
-                            commitment_device => CommitmentCodec
-                        },
-                        ReqSingleton
-                    ),
-                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                DevOpts = NodeMsg#{
+                    commitment_device => CommitmentCodec
+                },
+                % For streamable raw arweave GETs, run the
+                % HEAD path through the full pipeline (hooks,
+                % auth) then stream the body at cowboy level.
+                case is_streamable_raw(Req) of
+                    {true, TXID} ->
+                        stream_after_head(
+                            Req, ReqSingleton, TXID,
+                            DevOpts);
+                    false ->
+                        {ok, Res} =
+                            dev_meta:handle(
+                                DevOpts, ReqSingleton),
+                        hb_http:reply(
+                            Req, ReqSingleton, Res, NodeMsg)
+                end
             catch
                 Type:Details:Stacktrace ->
                     handle_error(
@@ -464,6 +474,136 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
             <<"details">> => hb_util:bin(hb_format:remove_noise(DetailsStr))
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
+
+%% @doc Check whether a request is a streamable raw arweave GET
+%% (no Range header). Returns {true, TXID} or false.
+is_streamable_raw(Req) ->
+    case cowboy_req:method(Req) of
+        <<"GET">> ->
+            case cowboy_req:path(Req) of
+                <<"/~arweave@2.9/raw=", TXID/binary>> ->
+                    case cowboy_req:header(<<"range">>, Req) of
+                        undefined -> {true, TXID};
+                        _ -> false
+                    end;
+                _ -> false
+            end;
+        _ -> false
+    end.
+
+%% @doc Run the full AO-Core pipeline (hooks, auth,
+%% rate-limit) with head_only so the device returns metadata
+%% without buffering data. Hooks see the original GET.
+stream_after_head(Req, ReqSingleton, TXID, Opts) ->
+    ExtraOpts =
+        hb_opts:get(http_extra_opts, #{}, Opts),
+    case dev_meta:handle(
+        Opts#{
+            http_extra_opts =>
+                ExtraOpts#{ head_only => true }
+        },
+        ReqSingleton
+    ) of
+        {ok, #{
+            <<"data-offset">> := DataOffset,
+            <<"content-length">> := ContentLength,
+            <<"content-type">> := ContentType
+        } = HeadResult} ->
+            ?event(http,
+                {stream_raw_start,
+                    {txid, TXID},
+                    {content_length, ContentLength}}),
+            stream_body(
+                Req, DataOffset, ContentLength,
+                ContentType, HeadResult, Opts);
+        {ok, ErrorRes} ->
+            hb_http:reply(Req, ReqSingleton, ErrorRes, Opts);
+        {error, _} = Err ->
+            hb_http:reply(Req, ReqSingleton, Err, Opts)
+    end.
+
+%% @doc Send response headers and stream chunk data to the
+%% client. Uses chunked transfer (no Content-Length) so
+%% mid-stream failures are detectable by the client.
+stream_body(
+    Req, DataOffset, DataLength, ContentType,
+    HeadResult, Opts
+) ->
+    ReqHdr =
+        cowboy_req:header(
+            <<"access-control-request-headers">>,
+            Req, <<"">>),
+    CorsHeaders = #{
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"access-control-allow-methods">> =>
+            <<"GET, POST, PUT, DELETE, OPTIONS">>,
+        <<"access-control-expose-headers">> => <<"*">>,
+        <<"access-control-allow-headers">> => ReqHdr
+    },
+    % Pass through all fields from the HEAD result to
+    % preserve the full header contract. Maps and priv
+    % are excluded; lists are joined with ", ".
+    HeadHeaders =
+        maps:map(
+            fun(_K, V) when is_list(V) ->
+                    iolist_to_binary(
+                        lists:join(<<", ">>, [
+                            hb_util:bin(E) || E <- V
+                        ]));
+                (_K, V) ->
+                    hb_util:bin(V)
+            end,
+            hb_maps:filter(
+                fun(Key, V) ->
+                    not is_map(V)
+                        andalso Key =/= <<"body">>
+                        andalso Key =/= <<"priv">>
+                        andalso Key =/= <<"status">>
+                end,
+                HeadResult,
+                Opts
+            )
+        ),
+    Headers = maps:merge(
+        maps:merge(CorsHeaders, HeadHeaders),
+        #{<<"content-type">> => ContentType}),
+    StreamReq =
+        cowboy_req:stream_reply(200, Headers, Req),
+    % 10 chunks per read (~2.5MB window)
+    WindowSize = 10 * ?DATA_CHUNK_SIZE,
+    stream_loop(
+        StreamReq,
+        hb_util:int(DataOffset),
+        hb_util:int(DataLength),
+        WindowSize,
+        Opts).
+
+%% @doc Recursively fetch and send chunks until done.
+stream_loop(Req, _Offset, 0, _WindowSize, _Opts) ->
+    {ok, Req, no_state};
+stream_loop(Req, Offset, Remaining, WindowSize, Opts) ->
+    Size = min(WindowSize, Remaining),
+    case hb_store_arweave:read_chunks(Offset, Size, Opts) of
+        {ok, Data} ->
+            Fin = case Remaining - Size of
+                0 -> fin;
+                _ -> nofin
+            end,
+            cowboy_req:stream_body(Data, Fin, Req),
+            stream_loop(
+                Req, Offset + Size, Remaining - Size,
+                WindowSize, Opts);
+        {error, Reason} ->
+            % Do NOT send fin — let cowboy close the
+            % connection so the client sees a broken
+            % transfer rather than a clean EOF.
+            ?event(error,
+                {stream_chunk_failed,
+                    {offset, Offset},
+                    {remaining, Remaining},
+                    {reason, Reason}}),
+            {ok, Req, no_state}
+    end.
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->
