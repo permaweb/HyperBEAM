@@ -17,8 +17,13 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     {From, To} = parse_range(Request, Opts),
+    UseBlockCache =
+        hb_maps:get(
+            <<"block-cache">>, Request, <<"false">>, Opts),
+    CacheOpts =
+        Opts#{ block_cache => UseBlockCache =:= <<"true">> },
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-        <<"write">>  -> fetch_blocks(Request, From, To, Opts);
+        <<"write">>  -> fetch_blocks(Request, From, To, CacheOpts);
         <<"list">>   -> list_index(From, To, Opts);
         Mode ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
@@ -114,17 +119,25 @@ list_index_blocks(Current, To, Opts, Acc) ->
             list_index_blocks(Current - 1, To, Opts, Acc)
     end.
 
+%% @doc Fetch a block header. By default fetches directly from the
+%% network. When block_cache is true, reads from the local block
+%% cache first (faster for catch-up, but stale after reorgs).
 fetch_block_header(Height, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/block=",
-                (hb_util:bin(Height))/binary
-            >>,
-            Opts
-        )
+        case hb_opts:get(block_cache, false, Opts) of
+            true ->
+                hb_ao:resolve(
+                    <<
+                        ?ARWEAVE_DEVICE/binary,
+                        "/block=",
+                        (hb_util:bin(Height))/binary
+                    >>,
+                    Opts
+                );
+            false ->
+                dev_arweave:fetch_block({height, Height}, Opts)
+        end
     end).
 
 %% @doc Classify transactions as indexed or not-indexed.
@@ -377,12 +390,14 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
         Results
     ).
 
+%% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
 
+%% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Opts)
+        dev_arweave:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
 resolve_tx_headers(TXIDs, Opts) ->
@@ -956,6 +971,59 @@ negative_from_index_test() ->
     ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
     ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
     ok.
+
+reorg_test_() ->
+    {timeout, 300, fun() ->
+        {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+        BlockA = 1879926,
+        BlockB = 1879927,
+        Range =
+            <<"~copycat@1.0/arweave"
+              "&from=", (hb_util:bin(BlockB))/binary,
+              "&to=", (hb_util:bin(BlockA))/binary,
+              "&mode=write">>,
+        {ok, BlockA} = hb_ao:resolve(Range, Opts),
+        %% Save original state
+        {ok, CachedA} = dev_arweave_block_cache:read(BlockA, Opts),
+        {ok, CachedB} = dev_arweave_block_cache:read(BlockB, Opts),
+        TXIDsA = hb_maps:get(<<"txs">>, CachedA, [], Opts),
+        TXIDsB = hb_maps:get(<<"txs">>, CachedB, [], Opts),
+        AllTXIDs = TXIDsA ++ TXIDsB,
+        OriginalOffsets = maps:from_list(lists:map(
+            fun(TXID) ->
+                {ok, Off} =
+                    hb_store_arweave:read_offset(StoreOpts, TXID),
+                {TXID, Off}
+            end,
+            AllTXIDs
+        )),
+        %% Swap TX sets between cached blocks
+        dev_arweave_block_cache:write(
+            CachedA#{<<"txs">> => TXIDsB}, Opts),
+        dev_arweave_block_cache:write(
+            CachedB#{<<"txs">> => TXIDsA}, Opts),
+        %% Re-index (default: network fetch, no block-cache)
+        {ok, BlockA} = hb_ao:resolve(Range, Opts),
+        %% Offsets restored
+        lists:foreach(
+            fun(TXID) ->
+                {ok, Current} =
+                    hb_store_arweave:read_offset(StoreOpts, TXID),
+                Original = maps:get(TXID, OriginalOffsets),
+                ?assertEqual(Original, Current, TXID)
+            end,
+            AllTXIDs
+        ),
+        %% Hashes restored
+        {ok, AfterA} = dev_arweave_block_cache:read(BlockA, Opts),
+        {ok, AfterB} = dev_arweave_block_cache:read(BlockB, Opts),
+        ?assertEqual(
+            hb_maps:get(<<"indep_hash">>, CachedA, <<>>, Opts),
+            hb_maps:get(<<"indep_hash">>, AfterA, <<>>, Opts)),
+        ?assertEqual(
+            hb_maps:get(<<"indep_hash">>, CachedB, <<>>, Opts),
+            hb_maps:get(<<"indep_hash">>, AfterB, <<>>, Opts))
+    end}.
 
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
