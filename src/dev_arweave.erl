@@ -421,6 +421,10 @@ fetch_chunk_range(Offset, Length, Opts) ->
 %% Note: we don't want to *always* query an extra chunk because if it doesn't
 %% exist, dev_arweave will consider the dataitem missing.
 fetch_post_threshold(Offset, EndOffset, Opts) ->
+    hb_prometheus:observe(
+        EndOffset - Offset,
+        arweave_chunk_load_requested_bytes,
+        []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
@@ -453,6 +457,10 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
 %% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
 %% iteratively fill gaps until contiguous.
 fetch_pre_threshold(Offset, EndOffset, Opts) ->
+    hb_prometheus:observe(
+        EndOffset - Offset,
+        arweave_chunk_load_requested_bytes,
+        []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
