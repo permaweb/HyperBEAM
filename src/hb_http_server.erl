@@ -404,20 +404,32 @@ handle_request(RawReq, Body, ServerID) ->
                 DevOpts = NodeMsg#{
                     commitment_device => CommitmentCodec
                 },
-                % For streamable raw arweave GETs, run the
-                % HEAD path through the full pipeline (hooks,
-                % auth) then stream the body at cowboy level.
+                % For streamable arweave GETs, bypass the
+                % normal pipeline and stream chunk data at
+                % the cowboy level to avoid buffering large
+                % responses in memory.
                 case is_streamable_raw(Req) of
                     {true, TXID} ->
                         stream_after_head(
                             Req, ReqSingleton, TXID,
                             DevOpts);
                     false ->
-                        {ok, Res} =
-                            dev_meta:handle(
-                                DevOpts, ReqSingleton),
-                        hb_http:reply(
-                            Req, ReqSingleton, Res, NodeMsg)
+                        case is_streamable_txid(
+                            Req, DevOpts
+                        ) of
+                            {true, TXID} ->
+                                stream_txid(
+                                    Req, ReqSingleton,
+                                    TXID, DevOpts);
+                            false ->
+                                {ok, Res} =
+                                    dev_meta:handle(
+                                        DevOpts,
+                                        ReqSingleton),
+                                hb_http:reply(
+                                    Req, ReqSingleton,
+                                    Res, NodeMsg)
+                        end
                 end
             catch
                 Type:Details:Stacktrace ->
@@ -490,6 +502,58 @@ is_streamable_raw(Req) ->
             end;
         _ -> false
     end.
+
+%% @doc Check whether a request is a bare TXID GET for an
+%% Arweave-indexed item. Returns {true, TXID} or false.
+is_streamable_txid(Req, Opts) ->
+    case cowboy_req:method(Req) of
+        <<"GET">> ->
+            case cowboy_req:header(<<"range">>, Req) of
+                undefined ->
+                    case cowboy_req:path(Req) of
+                        <<"/", MaybeID/binary>>
+                                when ?IS_ID(MaybeID) ->
+                            check_arweave_index(
+                                MaybeID, Opts);
+                        _ -> false
+                    end;
+                _ -> false
+            end;
+        _ -> false
+    end.
+
+% Items below this size go through the normal pipeline,
+% preserving manifest resolution and full message semantics.
+-define(STREAM_THRESHOLD, 5_000_000).
+
+%% @doc Look up a TXID in the Arweave index. Only match
+%% items above the stream threshold so that small items
+%% (manifests, metadata) keep normal bare-ID behavior.
+check_arweave_index(TXID, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> false;
+        StoreOpts ->
+            case hb_store_arweave:read_offset(
+                StoreOpts, TXID
+            ) of
+                {ok, #{<<"length">> := Len}}
+                        when Len > ?STREAM_THRESHOLD ->
+                    {true, TXID};
+                _ -> false
+            end
+    end.
+
+%% @doc Stream a bare /<txid> request. Rewrites the path to
+%% go through the raw device so dev_meta runs the full hook
+%% pipeline (auth, rate-limit) while head_only prevents data
+%% buffering. Falls back to normal pipeline on errors.
+stream_txid(Req, ReqSingleton, TXID, Opts) ->
+    RawPath =
+        <<"/~arweave@2.9/raw=", TXID/binary>>,
+    RawSingleton =
+        ReqSingleton#{<<"path">> => RawPath},
+    stream_after_head(
+        Req, RawSingleton, TXID, Opts).
 
 %% @doc Run the full AO-Core pipeline (hooks, auth,
 %% rate-limit) with head_only so the device returns metadata
