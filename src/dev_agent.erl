@@ -42,8 +42,11 @@ run(Base, Req, Opts) ->
     Tools = default_tools(),
     Model = hb_ao:get(<<"agent-model">>, Req, ?DEFAULT_MODEL, Opts),
     MaxIter = hb_ao:get(<<"agent-max-iterations">>, Req, ?DEFAULT_MAX_ITERATIONS, Opts),
-    LLMFun = maps:get(<<"agent-llm-fun">>, Opts, fun default_call_llm/2),
-    ToolFun = maps:get(<<"agent-tool-fun">>, Opts, fun default_execute_tool/2),
+    %% Merge agent API config from Req/Base into Opts so that
+    %% Lua ao.resolve calls can pass config via message fields.
+    MergedOpts = merge_agent_config(Req, merge_agent_config(Base, Opts)),
+    LLMFun = maps:get(<<"agent-llm-fun">>, MergedOpts, fun default_call_llm/2),
+    ToolFun = maps:get(<<"agent-tool-fun">>, MergedOpts, fun default_execute_tool/2),
     Messages = [
         #{<<"role">> => <<"system">>, <<"content">> => SystemPrompt},
         #{<<"role">> => <<"user">>, <<"content">> => UserPrompt}
@@ -54,7 +57,7 @@ run(Base, Req, Opts) ->
         max_iterations => MaxIter,
         llm_fun => LLMFun,
         tool_fun => ToolFun,
-        opts => Opts
+        opts => MergedOpts
     },
     loop(Messages, 1, AgentOpts, Base).
 
@@ -259,6 +262,26 @@ truncate_result(Result) when is_binary(Result) ->
     Result;
 truncate_result(Result) ->
     truncate_result(iolist_to_binary(io_lib:format("~p", [Result]))).
+
+%%%===================================================================
+%%% Configuration Helpers
+%%%===================================================================
+
+%% @doc Merge agent API config from a Source message into Opts.
+%% Keys already present in Opts are not overwritten.
+%% This allows Lua ao.resolve calls to pass config via Req/Base.
+merge_agent_config(Source, Opts) ->
+    Keys = [<<"agent-api-peer">>, <<"agent-api-path">>, <<"agent-api-key">>],
+    lists:foldl(fun(Key, Acc) ->
+        case maps:is_key(Key, Acc) of
+            true -> Acc;
+            false ->
+                case hb_ao:get(Key, Source, not_found, Opts#{hashpath => ignore}) of
+                    not_found -> Acc;
+                    Val -> Acc#{Key => Val}
+                end
+        end
+    end, Opts, Keys).
 
 %%%===================================================================
 %%% Default Configuration (hardcoded for MVP)
@@ -556,6 +579,29 @@ unknown_tool_test() ->
     {ok, Result} = run(Base, Req, Opts),
     ?assertEqual(<<"I don't know that tool.">>,
                  maps:get(<<"agent-answer">>, Result)).
+
+%% @doc Test: Lua ao.resolve style call — config in Req, not Opts.
+%% Simulates: ao.resolve({path="/~agent@1.0/run", ["agent-api-peer"]=..., ...})
+lua_resolve_style_test() ->
+    LLMFun = mock_llm_sequence([
+        mock_text_response(<<"Paris">>)
+    ]),
+    Base = #{<<"device">> => <<"agent@1.0">>},
+    Req = #{
+        <<"path">> => <<"run">>,
+        <<"agent-user-prompt">> => <<"Capital of France?">>,
+        <<"agent-model">> => <<"test-model">>,
+        <<"agent-api-peer">> => <<"https://api.example.com">>,
+        <<"agent-api-path">> => <<"/v1/chat/completions">>,
+        <<"agent-api-key">> => <<"sk_test_key">>
+    },
+    Opts = #{
+        <<"agent-llm-fun">> => LLMFun,
+        <<"agent-tool-fun">> => fun default_execute_tool/2
+    },
+    {ok, Result} = run(Base, Req, Opts),
+    ?assertEqual(<<"Paris">>, maps:get(<<"agent-answer">>, Result)),
+    ?assertEqual(1, maps:get(<<"agent-iterations">>, Result)).
 
 %% @doc Integration test: Real LLM API call via Novita AI with tool use.
 %% This test calls a real OpenAI-compatible API, asks a question that
