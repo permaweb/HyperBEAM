@@ -149,7 +149,8 @@ extract_inference_params(Req, Opts) ->
         <<"temperature">>, <<"top_p">>, <<"n">>, <<"stream">>,
         <<"stop">>, <<"presence_penalty">>, <<"frequency_penalty">>,
         <<"logit_bias">>, <<"user">>, <<"seed">>, <<"top_k">>,
-        <<"repetition_penalty">>, <<"length_penalty">>, <<"early_stopping">>
+        <<"repetition_penalty">>, <<"length_penalty">>, <<"early_stopping">>,
+        <<"tools">>, <<"tool_choice">>
     ],
     Params = lists:foldl(
         fun(Key, Acc) ->

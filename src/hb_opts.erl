@@ -211,7 +211,8 @@ default_message() ->
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
             #{<<"name">> => <<"sev_gpu@1.0">>, <<"module">> => dev_sev_gpu},
-            #{<<"name">> => <<"inference@1.0">>, <<"module">> => dev_inference}
+            #{<<"name">> => <<"inference@1.0">>, <<"module">> => dev_inference},
+            #{<<"name">> => <<"agent@1.0">>, <<"module">> => dev_agent}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
