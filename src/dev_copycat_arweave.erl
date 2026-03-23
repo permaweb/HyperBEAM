@@ -28,21 +28,23 @@ arweave(_Base, Request, Opts) ->
 parse_range(Request, Opts) ->
     From =
         case hb_maps:find(<<"from">>, Request, Opts) of
-            {ok, Height} ->
-                RequestedFrom = hb_util:int(Height),
-                case RequestedFrom < 0 of
-                    true -> latest_height(Opts) + RequestedFrom;
-                    false -> RequestedFrom
-                end;
+            {ok, FromHeight} -> normalize_height(FromHeight, Opts);
             error ->
                 latest_height(Opts)
         end,
     To =
         case hb_maps:find(<<"to">>, Request, Opts) of
-            {ok, ToHeight} -> hb_util:int(ToHeight);
+            {ok, ToHeight} -> normalize_height(ToHeight, Opts);
             error -> undefined
         end,
     {From, To}.
+
+normalize_height(Height, Opts) ->
+    RequestedHeight = hb_util:int(Height),
+    case RequestedHeight < 0 of
+        true -> latest_height(Opts) + RequestedHeight;
+        false -> RequestedHeight
+    end.
 
 latest_height(Opts) ->
     case hb_ao:resolve(
@@ -113,7 +115,7 @@ list_index_blocks(Current, To, Opts, Acc) ->
     end.
 
 fetch_block_header(Height, Opts) ->
-    ?event(copycat_debug, {fetching_block, Height}),
+    ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
         hb_ao:resolve(
             <<
@@ -190,7 +192,7 @@ fetch_and_process_block(Current, To, Opts) ->
 process_block(BlockRes, Current, To, Opts) ->
     case BlockRes of
         {ok, Block} ->
-            ?event(copycat_debug, {{processing_block, Current},
+            ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
             case maybe_index_ids(Block, Opts) of
                 {block_skipped, Results} ->
@@ -284,7 +286,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
-    ?event(copycat_debug, {writing_index,
+    ?event(debug_copycat, {writing_index,
         {id, {explicit, TXID}},
         {offset, TXStartOffset},
         {size, TX#tx.data_size}
@@ -301,8 +303,12 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
     case is_bundle_tx(TX, Opts) of
         false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
         true ->
-            ?event(copycat_debug, {fetching_bundle_header, 
-                {tx_id, {explicit, TXID}},
+            % Lightweight processing of block transactions to depth 2. We
+            % can avoid loading the full L1 TX data into memory, and instead
+            % only load the bundle header. But as a result we're unable to
+            % recurse any deeper than L2 dataitems.
+            ?event(debug_copycat, {fetching_bundle_header, 
+                {tx_id, {string, TXID}},
                 {tx_end_offset, TXEndOffset},
                 {tx_data_size, TX#tx.data_size}
             }),
@@ -310,7 +316,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                 TXEndOffset, TX#tx.data_size, Opts
             ),
             case BundleRes of
-                {ok, {BundleIndex, HeaderSize}} ->
+                {ok, HeaderSize, BundleIndex} ->
                     % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
@@ -328,6 +334,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             BundleIndex
                         )
                     end),
+                    ?event(debug_copycat,
+                        {bundle_items_indexed,
+                            {tx_id, {string, TXID}},
+                            {items_count, ItemsCount}
+                        }),
                     % Single event increment for the batch
                     record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
                     #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
@@ -371,54 +382,8 @@ is_bundle_tx(TX, _Opts) ->
 
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        StartOffset = EndOffset - Size + 1,
-        case hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/chunk&offset=",
-                (hb_util:bin(StartOffset))/binary
-            >>,
-            Opts
-        ) of
-            {ok, FirstChunk} ->
-                % Most bundle headers can fit in a single chunk, but those with
-                % thousands of items might require multiple chunks to fully
-                % represent the item index.
-                HeaderSize = ar_bundles:bundle_header_size(FirstChunk),
-                case header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) of
-                    {ok, BundleHeader} ->
-                        {_ItemsBin, BundleIndex} =
-                            ar_bundles:decode_bundle_header(BundleHeader),
-                        {ok, {BundleIndex, HeaderSize}};
-                    Error ->
-                        Error
-                end;
-            Error ->
-                Error
-        end
+        dev_arweave:bundle_header(EndOffset - Size, Opts)
     end).
-
-header_chunk(invalid_bundle_header, _FirstChunk, _StartOffset, _Opts) ->
-    {error, invalid_bundle_header};
-header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
-        when HeaderSize =< byte_size(FirstChunk) ->
-    {ok, FirstChunk};
-header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
-    Res =
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/chunk&offset=",
-                (hb_util:bin(StartOffset + byte_size(FirstChunk)))/binary,
-                "&length=",
-                (hb_util:bin(HeaderSize - byte_size(FirstChunk)))/binary
-            >>,
-            Opts
-        ),
-    case Res of
-        {ok, OtherChunks} -> {ok, <<FirstChunk/binary, OtherChunks/binary>>};
-        Other -> Other
-    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
@@ -439,7 +404,7 @@ resolve_tx_headers(TXIDs, Opts) ->
 
 resolve_tx_header(TXID, Opts) ->
     try
-        ?event(copycat_debug, {fetching_tx, {explicit, TXID}}),
+        ?event(debug_copycat, {fetching_tx, {explicit, TXID}}),
         ResolveRes = observe_event(<<"tx_header">>, fun() ->
             hb_ao:resolve(
                 <<
@@ -579,7 +544,7 @@ small_bundle_header_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, HeaderSize}} =
+    {ok, HeaderSize, BundleIndex} =
         download_bundle_header(EndOffset, Size, Opts),
     ?assertEqual(1704, length(BundleIndex)),
     ?assertEqual(109088, HeaderSize),
@@ -600,7 +565,7 @@ large_bundle_header_test() ->
     OffsetMsg = hb_json:decode(OffsetBody),
     EndOffset = hb_util:int(maps:get(<<"offset">>, OffsetMsg)),
     Size = hb_util:int(maps:get(<<"size">>, OffsetMsg)),
-    {ok, {BundleIndex, HeaderSize}} =
+    {ok, HeaderSize, BundleIndex} =
         download_bundle_header(EndOffset, Size, Opts),
     ?assertEqual(15000, length(BundleIndex)),
     ?assertEqual(960032, HeaderSize),
@@ -940,16 +905,21 @@ auto_stop_partial_index_test() ->
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ok.
 
-negative_from_parse_range_test() ->
+negative_parse_range_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, Tip} =
         hb_ao:resolve(
             <<?ARWEAVE_DEVICE/binary, "/current/height">>,
             Opts
         ),
-    {From, To} = parse_range(#{ <<"from">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip) - 3, From),
-    ?assertEqual(undefined, To),
+    {NegativeFrom, UndefinedTo} =
+        parse_range(#{ <<"from">> => <<"-3">> }, Opts),
+    ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
+    ?assertEqual(undefined, UndefinedTo),
+    {PositiveFrom, NegativeTo} =
+        parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
+    ?assertEqual(10, PositiveFrom),
+    ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
     ok.
 
 negative_from_index_test() ->

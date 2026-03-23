@@ -106,13 +106,13 @@ await(Worker, GroupName, Base, Req, Opts) ->
             receive
                 {resolved, _, GroupName, {slot, RecvdSlot}, Res}
                         when RecvdSlot == TargetSlot orelse TargetSlot == any ->
-                    ?event(compute_debug, {notified_of_resolution,
+                    ?event(debug_compute, {notified_of_resolution,
                         {target, TargetSlot},
                         {group, GroupName}
                     }),
                     Res;
                 {resolved, _, GroupName, {slot, RecvdSlot}, _Res} ->
-                    ?event(compute_debug, {waiting_again,
+                    ?event(debug_compute, {waiting_again,
                         {target, TargetSlot},
                         {recvd, RecvdSlot},
                         {worker, Worker},
@@ -120,7 +120,7 @@ await(Worker, GroupName, Base, Req, Opts) ->
                     }),
                     await(Worker, GroupName, Base, Req, Opts);
                 {'DOWN', _R, process, Worker, _Reason} ->
-                    ?event(compute_debug,
+                    ?event(debug_compute,
                         {leader_died,
                             {group, GroupName},
                             {leader, Worker},

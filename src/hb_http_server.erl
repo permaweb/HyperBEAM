@@ -36,6 +36,7 @@ start() ->
             hb_opts:default_message_with_env(),
             Loaded
         ),
+    hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
@@ -77,6 +78,7 @@ start(Opts) ->
     ]),
     hb:init(),
     BaseOpts = set_default_opts(Opts),
+    ok = hb_process_sampler:ensure_started(BaseOpts),
     {ok, Listener, _Port} = new_server(BaseOpts),
     {ok, Listener}.
 
@@ -124,7 +126,7 @@ print_greeter(Config, PrivWallet) ->
                     io_lib:format(
                         "http://~s:~p",
                         [
-                            hb_opts:get(host, <<"localhost">>, Config),
+                            hb_opts:get(node_host, <<"localhost">>, Config),
                             hb_opts:get(port, 8734, Config)
                         ]
                     )
@@ -196,7 +198,7 @@ new_server(RawNodeMsg) ->
                 % Attempt to start the prometheus application, if possible.
                 try
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
-                    prometheus_registry:register_collectors([hb_metrics_collector, prometheus_ranch_collector]),
+                    prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
                         metrics_callback =>
                             fun prometheus_cowboy2_instrumenter:observe/1,
@@ -364,7 +366,7 @@ cors_reply(Req, _ServerID) ->
         <<"access-control-allow-methods">> =>
             <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>
     }, Req),
-    ?event(http_debug, {cors_reply, {req, Req}, {req2, Req2}}),
+    ?event(debug_http, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
 
 %% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 
@@ -571,6 +573,7 @@ start_node(Opts) ->
     hb:init(),
     hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
+    ok = hb_process_sampler:ensure_started(ServerOpts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (hb_util:bin(Port))/binary, "/">>.
 

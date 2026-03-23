@@ -199,7 +199,7 @@ default_url(Opts) ->
     case hb_opts:get(location_url, not_found, Opts) of
         not_found ->
             Port = hb_util:bin(hb_opts:get(port, 8734, Opts)),
-            Host = hb_opts:get(host, <<"localhost">>, Opts),
+            Host = hb_opts:get(node_host, <<"localhost">>, Opts),
             Protocol = hb_opts:get(protocol, http1, Opts),
             ProtoStr =
                 case Protocol of

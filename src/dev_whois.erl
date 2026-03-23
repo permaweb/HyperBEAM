@@ -17,7 +17,7 @@ echo(_, Req, Opts) ->
 node(_, _, Opts) ->
     case ensure_host(Opts) of
         {ok, NewOpts} ->
-            {ok, hb_opts:get(host, <<"unknown">>, NewOpts)};
+            {ok, hb_opts:get(node_host, <<"unknown">>, NewOpts)};
         Error ->
             Error
     end.
@@ -25,12 +25,12 @@ node(_, _, Opts) ->
 %% @doc Return the node message ensuring that the host is set. If it is not, we
 %% attempt to find the host information from the specified bootstrap node.
 ensure_host(Opts) ->
-    case hb_opts:get(host, <<"unknown">>, Opts) of
+    case hb_opts:get(node_host, <<"unknown">>, Opts) of
         <<"unknown">> ->
             case bootstrap_node_echo(Opts) of
                 {ok, Host} ->
                     % Set the host information in the persisted node message.
-                    hb_http_server:set_opts(NewOpts = Opts#{ host => Host }),
+                    hb_http_server:set_opts(NewOpts = Opts#{ node_host => Host }),
                     {ok, NewOpts};
                 Error ->
                     Error
