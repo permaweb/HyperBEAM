@@ -2,5 +2,6 @@
   "editor.detectIndentation": false,
   "editor.insertSpaces": true,
   "editor.tabSize": 4,
-  "editor.rulers": [80]
+  "editor.rulers": [80],
+  "cmake.sourceDirectory": "/home/jax/apuslabs/HyperBEAM/native/dev_sev_gpu_nif"
 }

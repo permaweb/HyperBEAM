@@ -131,3 +131,98 @@ update-hyperbuddy-ui:
 	echo "Downloading source code from Arweave..." && \
 	curl -sL "$(ARWEAVE_GATEWAY)/$$TX_ID" -o "$(HYPERBUDDY_UI_TARGET)" && \
 	echo "Successfully updated $(HYPERBUDDY_UI_TARGET)"
+
+DETERMINISTIC_INFERENCE_BRANCH = main
+DETERMINISTIC_INFERENCE_DIR = _build/deterministic-inference
+DETERMINISTIC_INFERENCE_REPO = https://github.com/apuslabs/deterministic-inference.git
+
+setup-python:
+	@if ! command -v python3 > /dev/null; then \
+		echo "Error: Python3 is not installed. Please install Python3 before continuing."; \
+		echo "For Ubuntu/Debian, you can install it with:"; \
+		echo "  sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"; \
+		exit 1; \
+	fi
+	@if ! command -v uv > /dev/null; then \
+		echo "Installing uv package manager..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+	fi
+
+# Set up deterministic-inference environment
+setup-inference: setup-python $(DETERMINISTIC_INFERENCE_DIR)
+	@echo "Setting up deterministic-inference..."
+	@cd $(DETERMINISTIC_INFERENCE_DIR) && \
+		uv sync && \
+		echo "Installed deterministic-inference package with uv."
+
+$(DETERMINISTIC_INFERENCE_DIR):
+	@echo "Cloning deterministic-inference repository..." && \
+		git clone -b $(DETERMINISTIC_INFERENCE_BRANCH) $(DETERMINISTIC_INFERENCE_REPO) $(DETERMINISTIC_INFERENCE_DIR) --single-branch && \
+		echo "Extracted deterministic-inference to $(DETERMINISTIC_INFERENCE_DIR)"
+
+CC_DIR = native/dev_sev_gpu
+# NVAT SDK Configuration  
+NVAT_SDK_BRANCH = main
+NVAT_SDK_REPO = https://github.com/NVIDIA/attestation-sdk.git
+NVAT_SDK_DIR = _build/attestation-sdk
+NVAT_BUILD_DIR = $(NVAT_SDK_DIR)/nv-attestation-sdk-cpp/build
+DEV_SEV_GPU_NIF_DIR = _build/dev_sev_gpu_nif
+
+# Check NVAT dependencies
+check-nvat-deps:
+	@missing=""; \
+	if ! command -v cmake > /dev/null; then missing="$$missing cmake"; fi; \
+	if ! command -v clang > /dev/null; then missing="$$missing clang"; fi; \
+	if ! command -v cargo > /dev/null; then missing="$$missing cargo(rust)"; fi; \
+	if ! pkg-config --exists libcurl 2>/dev/null; then missing="$$missing libcurl4-openssl-dev"; fi; \
+	if ! pkg-config --exists openssl 2>/dev/null; then missing="$$missing libssl-dev"; fi; \
+	if ! pkg-config --exists libxml-2.0 2>/dev/null; then missing="$$missing libxml2-dev"; fi; \
+	if ! pkg-config --exists xmlsec1 2>/dev/null; then missing="$$missing libxmlsec1-dev"; fi; \
+	if ! pkg-config --exists spdlog 2>/dev/null; then missing="$$missing libspdlog-dev"; fi; \
+	if [ -n "$$missing" ]; then \
+		echo "Error: Missing dependencies for nvat SDK:$$missing"; \
+		echo ""; \
+		echo "For Ubuntu/Debian, you can install them with:"; \
+		echo "  sudo apt-get update && sudo apt-get install -y cmake clang pkg-config \\"; \
+		echo "    libcurl4-openssl-dev libssl-dev libxml2-dev \\"; \
+		echo "    libxmlsec1-dev libxmlsec1-openssl libspdlog-dev"; \
+		echo ""; \
+		echo "For Rust, install with:"; \
+		echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"; \
+		exit 1; \
+	fi
+	@echo "All nvat dependencies are installed."
+
+# Clone attestation-sdk repository
+$(NVAT_SDK_DIR):
+	@echo "Cloning NVIDIA attestation-sdk repository..." && \
+	git clone -b $(NVAT_SDK_BRANCH) $(NVAT_SDK_REPO) $(NVAT_SDK_DIR) --single-branch && \
+	echo "Cloned attestation-sdk to $(NVAT_SDK_DIR)"
+
+# Build nvat library
+$(NVAT_BUILD_DIR)/libnvat.so: check-nvat-deps $(NVAT_SDK_DIR)
+	@echo "Building nvat SDK..." && \
+	cmake -S $(NVAT_SDK_DIR)/nv-attestation-sdk-cpp \
+		-B $(NVAT_BUILD_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_SHARED_LIBS=ON && \
+	cmake --build $(NVAT_BUILD_DIR) -j$$(nproc) && \
+	echo "Built nvat SDK successfully"
+
+# Build dev_sev_gpu NIF
+$(DEV_SEV_GPU_NIF_DIR)/dev_sev_gpu_nif.so: $(NVAT_BUILD_DIR)/libnvat.so
+	@echo "Building dev_sev_gpu NIF..." && \
+	cmake -S native/dev_sev_gpu_nif \
+		-B $(DEV_SEV_GPU_NIF_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DNVAT_SDK_DIR=$(CURDIR)/$(NVAT_SDK_DIR)/nv-attestation-sdk-cpp \
+		-DNVAT_BUILD_DIR=$(CURDIR)/$(NVAT_BUILD_DIR) \
+		-DNVAT_DEBUG_LOG=OFF && \
+	cmake --build $(DEV_SEV_GPU_NIF_DIR) && \
+	mkdir -p priv && \
+	cp $(DEV_SEV_GPU_NIF_DIR)/dev_sev_gpu_nif.so priv/ && \
+	echo "Built dev_sev_gpu NIF successfully"
+
+# Set up dev_sev_gpu environment (now uses nvat C++ SDK)
+setup-cc: $(DEV_SEV_GPU_NIF_DIR)/dev_sev_gpu_nif.so
+	@echo "Installed dev_sev_gpu NIF successfully."

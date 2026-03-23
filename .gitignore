@@ -30,7 +30,7 @@ rebar3.crashdump
 
 native/hb_beamr/*.o
 native/hb_beamr/*.d
-
+!native/dev_sev_gpu/NVGPULocalv4Policy.json
 priv/*
 .DS_STORE
 cache-*
@@ -46,3 +46,10 @@ mkdocs-site-manifest.csv
 !test/admissible-report-wallet.json
 !test/admissible-report.json
 !test/config.json
+
+__pycache__
+native/dev_sev_gpu/*.log
+
+.claude
+.specify
+CLAUDE.md

@@ -95,6 +95,11 @@ generate(_Msg, Req, Opts) ->
                 true -> {ok, Decoded};
                 false -> derive_key(Decoded, Req, Opts)
             end;
+        <<"Bearer ", Token/binary>> ->
+            case hb_maps:get(<<"raw">>, Req, false, Opts) of
+                true -> {ok, Token};
+                false -> {ok, Token}
+            end;
         undefined ->
             {error,
                 #{
