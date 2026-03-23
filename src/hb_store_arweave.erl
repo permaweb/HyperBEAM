@@ -131,10 +131,24 @@ do_read(StoreOpts, ID) ->
                     ),
                     record_partition_metric(StartOffset, ok),
                     Loaded;
-                {error, Reason} ->
+                {error, not_found} ->
+                    record_partition_metric(StartOffset, not_found),
                     ?event(
                         arweave_offsets,
                         {read_chunks_not_found, 
+                            {id, {explicit, ID}},
+                            {format_version, Version},
+                            {type, CodecName},
+                            {start_offset, StartOffset},
+                            {length, Length}
+                        }
+                    ),
+                    not_found;
+                {error, Reason} ->
+                    record_partition_metric(StartOffset, failure),
+                    ?event(
+                        error,
+                        {arweave_offsets_read_chunks, 
                             {id, {explicit, ID}},
                             {format_version, Version},
                             {type, CodecName},
@@ -143,10 +157,7 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
-                    record_partition_metric(StartOffset, not_found),
-                    if Reason =:= not_found -> not_found;
-                    true -> {error, Reason}
-                    end
+                    failure
             end;
         not_found ->
             ?event(
