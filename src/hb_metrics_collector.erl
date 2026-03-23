@@ -8,6 +8,7 @@
     ]
 ).
 -behaviour(prometheus_collector).
+-include("include/hb_http_client.hrl").
 %%====================================================================
 %% Collector API
 %%====================================================================
@@ -36,6 +37,29 @@ collect_mf(_Registry, Callback) ->
         )
     ),
 
+    {InUse, Free, Queue} = hackney_pool_stats(),
+    Callback(
+        create_gauge(
+            hackney_pool_in_use,
+            "Hackney connections currently in use",
+            InUse
+        )
+    ),
+    Callback(
+        create_gauge(
+            hackney_pool_free,
+            "Idle hackney connections available in the pool",
+            Free
+        )
+    ),
+    Callback(
+        create_gauge(
+            hackney_pool_queue,
+            "Requests waiting for a hackney connection",
+            Queue
+        )
+    ),
+
     ok.
 collect_metrics(system_load, SystemLoad) ->
     %% Return the gauge metric with no labels
@@ -45,15 +69,14 @@ collect_metrics(system_load, SystemLoad) ->
         ]
     );
 collect_metrics(process_uptime_seconds, Uptime) ->
-    %% Convert the uptime from milliseconds to seconds
     UptimeSeconds = Uptime / 1000,
-
-    %% Return the gauge metric with no labels
-    prometheus_model_helpers:gauge_metrics(
-        [
-            {[], UptimeSeconds}
-        ]
-    ).
+    prometheus_model_helpers:gauge_metrics([{[], UptimeSeconds}]);
+collect_metrics(hackney_pool_in_use, Value) ->
+    prometheus_model_helpers:gauge_metrics([{[], Value}]);
+collect_metrics(hackney_pool_free, Value) ->
+    prometheus_model_helpers:gauge_metrics([{[], Value}]);
+collect_metrics(hackney_pool_queue, Value) ->
+    prometheus_model_helpers:gauge_metrics([{[], Value}]).
 
 %%====================================================================
 %% Private Functions
@@ -81,6 +104,16 @@ safe_avg5() ->
         erlang:demonitor(MonRef, [flush]),
         receive {Ref, _} -> ok after 0 -> ok end,
         0
+    end.
+
+%% @doc Read hackney pool stats at scrape time.
+hackney_pool_stats() ->
+    try hackney_pool:get_stats(?HACKNEY_POOL) of
+        Stats ->
+            {proplists:get_value(in_use_count, Stats, 0),
+             proplists:get_value(free_count, Stats, 0),
+             proplists:get_value(queue_count, Stats, 0)}
+    catch _:_ -> {0, 0, 0}
     end.
 
 create_gauge(Name, Help, Data) ->
