@@ -118,19 +118,34 @@ build_request_body(Messages, Tools, Model) ->
         <<"tool_choice">> => <<"auto">>
     }).
 
-%% @doc Default LLM call via relay@1.0 to localhost:8080.
+%% @doc Default LLM call via relay@1.0.
+%% Supports configurable API endpoint and authentication:
+%%   agent-api-peer: Base URL (default: "http://localhost:8080")
+%%   agent-api-key:  Bearer token for Authorization header (optional)
 default_call_llm(RequestBody, Opts) ->
+    Peer = maps:get(<<"agent-api-peer">>,
+                    Opts, <<"http://localhost:8080">>),
+    ApiPath = maps:get(<<"agent-api-path">>,
+                       Opts, <<"/v1/chat/completions">>),
+    Payload0 = #{
+        <<"path">> => ApiPath,
+        <<"method">> => <<"POST">>,
+        <<"body">> => RequestBody,
+        <<"content-type">> => <<"application/json">>
+    },
+    Payload = case maps:get(<<"agent-api-key">>, Opts, undefined) of
+        undefined -> Payload0;
+        ApiKey ->
+            AuthHeader = <<"Bearer ", ApiKey/binary>>,
+            Payload0#{<<"authorization">> => AuthHeader}
+    end,
     case hb_ao:resolve(
         #{<<"device">> => <<"relay@1.0">>,
-          <<"content-type">> => <<"application/json">>},
+          <<"content-type">> => <<"application/json">>,
+          <<"peer">> => Peer},
         #{<<"path">> => <<"call">>,
           <<"target">> => <<"payload">>,
-          <<"payload">> => #{
-              <<"path">> => <<"/v1/chat/completions">>,
-              <<"method">> => <<"POST">>,
-              <<"body">> => RequestBody,
-              <<"content-type">> => <<"application/json">>
-          }},
+          <<"payload">> => Payload},
         Opts#{hashpath => ignore,
               cache_control => [<<"no-store">>, <<"no-cache">>]}
     ) of
@@ -541,3 +556,39 @@ unknown_tool_test() ->
     {ok, Result} = run(Base, Req, Opts),
     ?assertEqual(<<"I don't know that tool.">>,
                  maps:get(<<"agent-answer">>, Result)).
+
+%% @doc Integration test: Real LLM API call via Novita AI with tool use.
+%% This test calls a real OpenAI-compatible API, asks a question that
+%% requires an HTTP tool call, and verifies the full ReAct loop completes.
+%% Run with: rebar3 eunit --module=dev_agent --test=integration_real_api_test
+integration_real_api_test_() ->
+    {timeout, 120, fun() ->
+        application:ensure_all_started(gun),
+        ApiKey = <<"sk_VkH3T72Z7LsiDvc5oRvcCtuPciFNwKShHLOgs3LqGVI">>,
+        Base = #{<<"device">> => <<"agent@1.0">>},
+        Req = #{
+            <<"path">> => <<"run">>,
+            <<"agent-user-prompt">> =>
+                <<"Use the http_request tool to GET https://httpbin.org/get "
+                  "and tell me what the 'origin' IP address is from the response.">>,
+            <<"agent-model">> => <<"minimax/minimax-m2.7">>,
+            <<"agent-max-iterations">> => 5
+        },
+        Opts = #{
+            <<"agent-api-peer">> => <<"https://api.novita.ai">>,
+            <<"agent-api-path">> => <<"/openai/v1/chat/completions">>,
+            <<"agent-api-key">> => ApiKey,
+            protocol => http2
+        },
+        {ok, Result} = run(Base, Req, Opts),
+        Answer = maps:get(<<"agent-answer">>, Result),
+        Iterations = maps:get(<<"agent-iterations">>, Result),
+        ?debugFmt("~n=== Integration Test Result ===~n"
+                  "Answer: ~s~nIterations: ~p~nFull result: ~p~n",
+                  [Answer, Iterations, Result]),
+        %% Should have completed in more than 1 iteration (tool was called)
+        ?assert(Iterations >= 2),
+        %% Answer should contain meaningful content (not an error)
+        ?assert(byte_size(Answer) > 10),
+        ?assertNot(maps:is_key(<<"agent-error">>, Result))
+    end}.
