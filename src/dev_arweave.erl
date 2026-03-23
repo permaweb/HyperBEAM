@@ -421,11 +421,12 @@ fetch_chunk_range(Offset, Length, Opts) ->
 %% Note: we don't want to *always* query an extra chunk because if it doesn't
 %% exist, dev_arweave will consider the dataitem missing.
 fetch_post_threshold(Offset, EndOffset, Opts) ->
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} ->
-            % Check for one additional tail chunk if needed.
-            Sorted = sort_chunks(ChunkInfos),
+    Gen = offset_generator(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    Concurrency =
+        hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+    case fetch_windowed(Gen, Concurrency, Opts, []) of
+        {ok, AllChunks} ->
+            Sorted = sort_chunks(AllChunks),
             {ok, Binaries} = assemble_chunks(Sorted, Offset),
             ExpectedLength = EndOffset - Offset + 1,
             BinarySize = iolist_size(Binaries),
@@ -433,17 +434,23 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
                 false ->
                     {ok, Binaries};
                 true ->
+                    LastOffset = element(
+                        2, lists:last(Sorted)),
                     ExtraOffset = min(
-                        lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(debug_arweave, {fetching_extra_chunk,
-                        {binary_size, BinarySize},
-                        {expected_length, ExpectedLength},
-                        {extra_offset, ExtraOffset}}),
-                    case fetch_and_collect([ExtraOffset], Opts) of
+                        LastOffset + 1, EndOffset),
+                    ?event(debug_arweave,
+                        {fetching_extra_chunk,
+                            {binary_size, BinarySize},
+                            {expected_length, ExpectedLength},
+                            {extra_offset, ExtraOffset}}),
+                    case fetch_and_collect(
+                        [ExtraOffset], Opts
+                    ) of
                         {ok, ExtraInfos} ->
-                            assemble_chunks(Sorted ++ ExtraInfos, Offset);
-                        Error ->
-                            Error
+                            assemble_chunks(
+                                Sorted ++ ExtraInfos,
+                                Offset);
+                        Error -> Error
                     end
             end;
         Error -> Error
@@ -453,8 +460,10 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
 %% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
 %% iteratively fill gaps until contiguous.
 fetch_pre_threshold(Offset, EndOffset, Opts) ->
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
+    Gen = offset_generator(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    Concurrency =
+        hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+    case fetch_windowed(Gen, Concurrency, Opts, []) of
         {ok, ChunkInfos} ->
             fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
         Error -> Error
@@ -500,6 +509,21 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
             end
     end.
 
+%% @doc Pull offsets from a generator in windows and fetch
+%% each window in parallel. Accumulates all chunk infos.
+fetch_windowed(Gen, WindowSize, Opts, Acc) ->
+    case take(Gen, WindowSize) of
+        {[], _} -> {ok, Acc};
+        {Offsets, NextGen} ->
+            case fetch_and_collect(Offsets, Opts) of
+                {ok, Chunks} ->
+                    fetch_windowed(
+                        NextGen, WindowSize,
+                        Opts, Acc ++ Chunks);
+                Error -> Error
+            end
+    end.
+
 %% @doc Fetch chunks at the given offsets in parallel and parse the responses
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
@@ -511,17 +535,42 @@ fetch_and_collect(Offsets, Opts) ->
     ),
     collect_chunks(Results).
 
-%% @doc Generate a list of offsets from Start to End (inclusive) stepping by
-%% Step bytes. Used to produce candidate query offsets at 256KiB increments.
-generate_offsets(Start, End, Step) ->
-    generate_offsets(Start, End, Step, []).
+%% @doc Return a generator fun that yields offsets from Start
+%% to End (inclusive) stepping by Step bytes. Each call
+%% returns {Offset, NextGen} or done.
+offset_generator(Start, End, Step) ->
+    fun() ->
+        case Start > End of
+            true -> done;
+            false ->
+                {Start, offset_generator(Start + Step, End, Step)}
+        end
+    end.
 
-generate_offsets(Current, End, _Step, Acc) when Current > End ->
-    Offsets = lists:reverse(Acc),
-    ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
-    Offsets;
-generate_offsets(Current, End, Step, Acc) ->
-    generate_offsets(Current + Step, End, Step, [Current | Acc]).
+%% @doc Take up to N items from a generator. Returns
+%% {Items, NextGen} where NextGen is the remaining generator.
+take(Gen, N) -> take(Gen, N, []).
+take(Gen, 0, Acc) -> {lists:reverse(Acc), Gen};
+take(Gen, N, Acc) ->
+    case Gen() of
+        done -> {lists:reverse(Acc), fun() -> done end};
+        {Val, Next} -> take(Next, N - 1, [Val | Acc])
+    end.
+
+%% @doc Materialize all offsets from a generator into a list.
+generate_offsets(Start, End, Step) ->
+    drain(offset_generator(Start, End, Step)).
+
+drain(Gen) -> drain(Gen, []).
+drain(Gen, Acc) ->
+    case Gen() of
+        done ->
+            Offsets = lists:reverse(Acc),
+            ?event(debug_arweave,
+                {fetch_chunk_offsets, {offsets, Offsets}}),
+            Offsets;
+        {Val, Next} -> drain(Next, [Val | Acc])
+    end.
 
 %% @doc Parse a list of chunk fetch results into chunk info tuples.
 %% Fails fast on the first error.
