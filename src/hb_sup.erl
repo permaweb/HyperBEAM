@@ -32,7 +32,16 @@ init(Opts) ->
             type => worker,
             modules => [hb_http_client]
         },
-    {ok, {SupFlags, [GunChild | StoreChildren]}}.
+    HackneyMonitor =
+        #{
+            id => hb_hackney_monitor,
+            start => {hb_hackney_monitor, start_link, [Opts]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [hb_hackney_monitor]
+        },
+    {ok, {SupFlags, [GunChild, HackneyMonitor | StoreChildren]}}.
 
 %% @doc Generate a child spec for stores in the given Opts.
 store_children(Store) when not is_list(Store) ->
