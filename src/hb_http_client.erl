@@ -20,14 +20,20 @@
 %%% Public interface.
 %%% ==================================================================
 
-%% @doc Use Opts to configure connection pool size.
+%% @doc Use Opts to configure connection pool size across all shards.
 setup_conn(Opts) ->
     MaxConnections =
         hb_opts:get(http_client_hackney_max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS, Opts),
     KeepAlive = hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
     ?event(connection_pool, {http_client_hackney_max_connections, MaxConnections}),
-    hackney_pool:set_max_connections(?HACKNEY_POOL, MaxConnections),
-    hackney_pool:set_timeout(?HACKNEY_POOL, KeepAlive).
+    lists:foreach(
+        fun(I) ->
+            Pool = pool_name(I),
+            hackney_pool:set_max_connections(Pool, MaxConnections),
+            hackney_pool:set_timeout(Pool, KeepAlive)
+        end,
+        lists:seq(0, ?DEFAULT_HACKNEY_POOL_SHARDS - 1)
+    ).
 
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
@@ -191,7 +197,7 @@ hackney_req(Args, Opts) ->
             ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             RecvTimeout = hb_opts:get(http_client_send_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             HackneyOpts = [with_body,
-                {pool, ?HACKNEY_POOL},
+                {pool, pick_pool()},
                 {connect_timeout, ConnTimeout},
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
@@ -250,13 +256,28 @@ gun_req(Args, Opts) ->
 	),
 	Response.
 
-%% @doc Start the hackney connection pool with default settings.
+%% @doc Start sharded hackney connection pools with default settings.
 %% Overridden at runtime by setup_conn/1 once node config is available.
 init_hackney_pool() ->
-    hackney_pool:start_pool(?HACKNEY_POOL, [
-        {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
-        {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
-    ]).
+    lists:foreach(
+        fun(I) ->
+            hackney_pool:start_pool(pool_name(I), [
+                {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
+                {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
+            ])
+        end,
+        lists:seq(0, ?DEFAULT_HACKNEY_POOL_SHARDS - 1)
+    ).
+
+%% @doc Pick a pool shard based on caller process.
+pick_pool() ->
+    pool_name(erlang:phash2(self(), ?DEFAULT_HACKNEY_POOL_SHARDS)).
+
+%% @doc Build the atom name for a pool shard.
+pool_name(I) ->
+    binary_to_atom(
+        <<"hb_hackney_pool_", (integer_to_binary(I))/binary>>
+    ).
 
 %% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
 %% node message key. We invoke the given message with the `body' set to a signed
