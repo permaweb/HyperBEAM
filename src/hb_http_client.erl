@@ -217,6 +217,7 @@ hackney_req(Args, Opts) ->
                 Opts
             ),
             record_response_status(Method, Response, Path),
+            record_hackney_metrics(),
             Response
     end.
 
@@ -599,6 +600,14 @@ init_prometheus() ->
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
+	hb_prometheus:declare(gauge, [
+		{name, hackney_pool_in_use},
+		{help, "Hackney connections currently in use"}
+	]),
+	hb_prometheus:declare(gauge, [
+		{name, hackney_pool_queue},
+		{help, "Requests waiting for a hackney connection"}
+	]),
     ?event(started),
     ok.
 
@@ -635,6 +644,22 @@ record_duration(Details, Opts) ->
             )
         end
     ).
+
+%% @doc Snapshot hackney pool gauges and bump the
+%% @doc Snapshot hackney pool gauges after each request.
+record_hackney_metrics() ->
+    try hackney_pool:get_stats(?HACKNEY_POOL) of
+        Stats ->
+            InUse = proplists:get_value(
+                in_use_count, Stats, 0),
+            Queue = proplists:get_value(
+                queue_count, Stats, 0),
+            prometheus_gauge:set(
+                hackney_pool_in_use, InUse),
+            prometheus_gauge:set(
+                hackney_pool_queue, Queue)
+    catch _:_ -> ok
+    end.
 
 record_response_status(Method, Response) ->
     record_response_status(Method, Response, undefined).
