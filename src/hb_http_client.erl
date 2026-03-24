@@ -193,8 +193,7 @@ hackney_req(Args, Opts) ->
             HackneyOpts = [with_body,
                 {pool, ?HACKNEY_POOL},
                 {connect_timeout, ConnTimeout},
-                {recv_timeout, RecvTimeout},
-                {connect_options, [{nodelay, true}, {protocols, [http1]}]}],
+                {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
                 {ok, Status, RespHeaders, RespBody} ->
@@ -254,7 +253,6 @@ gun_req(Args, Opts) ->
 %% @doc Start the hackney connection pool with default settings.
 %% Overridden at runtime by setup_conn/1 once node config is available.
 init_hackney_pool() ->
-    application:set_env(hackney, default_protocols, [http1]),
     hackney_pool:start_pool(?HACKNEY_POOL, [
         {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
