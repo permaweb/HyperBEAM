@@ -849,11 +849,14 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
         end
 end.
 
-%% @doc Set the weight of a specific resource in the pot. Valid requesters to
-%% change resource parameters are:
-%% - The `State/parent' address, if set.
-%% - The `mint-authority' address, if set.
-%% - The `resource-authority' address for the resource.
+%% @doc Set resource parameters in the pot. Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% - `authority` security policy on the target resource, if configured
+%%
+%% N.B: `dev_security` is open-by-default when no valid/required/match policy
+%% is present, so absent authority config does not restrict this action. check
+%% AuthRes logic chain for better gating-understanding.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -873,10 +876,17 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
-        true ?=
-            (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
-            dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
-                verify_resource_authority(ResID, State, Req, Opts),
+        
+        AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+            true -> true;
+            false -> case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
+                true -> true;
+                {error, _} -> 
+                    verify_resource_authority(ResID, State, Req, Opts)
+                end  
+        end,
+        true ?= AuthRes,
+
         State2 ?=
             case hb_maps:find(<<"weight">>, Req, Opts) of
                 {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
