@@ -354,7 +354,11 @@ deposit(State, Assignment, Opts) ->
     end.
 -spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map().
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
+    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts);
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Deposit amount must be positive Integer.">>};
+deposit(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Deposit amount must be Integer.">>}.
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
@@ -378,7 +382,12 @@ withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0
         modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
     else
         {error, _} = WithdrawErr -> WithdrawErr
-    end.
+    end;
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error,  <<"Withdraw amount must be a positive Integer.">>};
+withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Withdraw amount must be an Integer.">>}.
+
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
 %% if the request is valid, otherwise returns `{error, Reason}'.
