@@ -568,8 +568,7 @@ decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
 decode_signature(Other) ->
     SigType = binary:part(Other, 0, 2),
     ?event(warning, {error_decoding_signature,
-        {sig_type, {explicit, SigType}},
-        {binary, Other}}),
+        {sig_type, {explicit, SigType}}}),
     {unsupported_tx_format, SigType}.
 
 %% @doc Decode tags from a binary format using Apache Avro.
