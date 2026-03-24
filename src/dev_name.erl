@@ -44,7 +44,14 @@ resolve(Key, _, Req, Opts) ->
 %% @doc Load a resolved name target if it is a cache reference, otherwise
 %% return the resolved value directly.
 maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
-    hb_cache:read(Resolved, Opts);
+    case hb_cache:read(Resolved, Opts) of 
+        {ok, _} = Result ->
+            Result;
+        not_found -> 
+            {store, not_found};
+        failure -> 
+            {store, failure}
+    end;
 maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
     {ok, hb_cache:ensure_loaded(Resolved, Opts)};
 maybe_load_resolved(Resolved, _Opts) ->
@@ -103,6 +110,10 @@ request(HookMsg, HookReq, Opts) ->
         ),
         {ok, #{ <<"body">> => ModReq }}
     else
+        {cache, not_found} ->
+            {error, not_found};
+        {cache, failure} ->
+            failure;
         Reason ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
