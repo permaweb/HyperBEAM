@@ -110,7 +110,7 @@ id(RawBase, Req, NodeOpts) ->
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
             ?event(ids, regenerating_id),
-            calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
+            calculate_id(hb_maps_raw:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
             % by module arithmetic of each of the IDs. The effect of this is that:
@@ -182,7 +182,7 @@ calculate_id(RawBase, Req, NodeOpts) ->
 %% @doc Locate the ID device of a message. The ID device is determined the
 %% `device' set in _all_ of the commitments. If no commitments are present,
 %% the default device (`httpsig@1.0') is used.
-id_device(#{ <<"commitments">> := Commitments }, Opts) ->
+id_device(#{ <<"commitments">> := Commitments }, Opts) when is_map(Commitments) ->
     % Get the device from the first commitment.
     UnfilteredDevs =
         hb_maps:map(
@@ -217,12 +217,12 @@ id_device(_, _) ->
 %% @doc Return the committers of a message that are present in the given request.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
-committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
-    {ok,
+committers(Base = #{ <<"commitments">> := Commitments }, Req, NodeOpts) when is_map(Commitments) ->
+    BaseCommitters = 
         hb_maps:values(
             hb_maps:filtermap(
                 fun(_ID, Commitment) ->
-                    case maps:get(<<"committer">>, Commitment, undefined) of
+                    case hb_maps:get(<<"committer">>, Commitment, undefined, NodeOpts) of
                         undefined -> false;
                         Committer -> {true, Committer}
                     end
@@ -231,8 +231,17 @@ committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
                 NodeOpts
             ),
             NodeOpts
-        )
-    };
+        ),
+    case length(BaseCommitters) of
+        0 -> 
+            case hb_maps:get(<<"...">>, Base, undefined, NodeOpts) of
+                undefined -> {ok, []};
+                Nested -> committers(Nested, Req, NodeOpts)
+            end;
+        _ -> {ok, BaseCommitters}
+    end;
+committers(#{ <<"...">> := Nested }, _Req, NodeOpts) ->
+    committers(Nested, _Req, NodeOpts);
 committers(_, _, _) ->
     {ok, []}.
 
@@ -301,7 +310,11 @@ verify(Self, Req, Opts) ->
         ),
     ?event(verify, {verify, {base_found, Base}}),
     Commitments = maps:get(<<"commitments">>, Base, #{}),
-    IDsToVerify = commitment_ids_from_request(Base, Req, Opts),
+    % TODO: Remove use_nested? We need to tell `commitment_ids_from_request/3' to
+    % not use nested commitment ids, as we don't want to verify them - only the
+    % top-level commitments.
+    IDsToVerify =
+        commitment_ids_from_request(Base, Req, Opts#{ use_nested => false }),
     % Generate the new commitment request base messsage by removing the keys
     % used by this function (path, committers, commitments) and returning the
     % remaining keys. This message will then be merged with each commitment
@@ -391,16 +404,24 @@ committed(Self, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     % Get the list of committed keys from each committer.
     CommitmentKeys =
-        lists:map(
+        lists:filtermap(
             fun(CommitmentID) ->
-                Commitment = maps:get(CommitmentID, Commitments),
-                % The committed keys will be a TABM encoded numbered map
-                % so we must decode it to its underlying list of normalized keys
-                % for comparison purposes.
-                hb_util:message_to_ordered_list(
-                    maps:get(<<"committed">>, Commitment),
-                    Opts
-                )
+                Commitment = maps:get(CommitmentID, Commitments, undefined),
+                case is_map(Commitment) of 
+                    true ->
+                        % The committed keys will be a TABM encoded numbered 
+                        % map so we must decode it to its underlying list of 
+                        % normalized keys for comparison purposes.
+                        {
+                            true,
+                            hb_util:message_to_ordered_list(
+                                maps:get(<<"committed">>, Commitment),
+                                Opts
+                            )
+                        };
+                    false ->
+                        false
+                end
             end,
             CommitmentIDs
         ),
@@ -449,7 +470,7 @@ committed(Self, Req, Opts) ->
 %% @doc Return a message with only the relevant commitments for a given request.
 %% See `commitment_ids_from_request/3' for more information on the request format.
 with_relevant_commitments(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
     Base#{ <<"commitments">> => maps:with(CommitmentIDs, Commitments) }.
 
@@ -460,13 +481,30 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% may specify `all' or `none' for each group. If no specifiers are provided,
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = 
+        case hb_opts:get(use_nested, true, Opts) of
+            false ->
+                case maps:get(<<"commitments">>, Base, #{}) of
+                    unset -> #{};
+                    <<"unset">> -> #{};
+                    C -> C
+                end;
+            true ->
+                hb_maps:get(<<"commitments">>, Base, #{}, Opts)
+        end,
+    case hb_opts:get(debug_verify, false, Opts) of
+        true ->
+            ?event(debug_commitments2, {doing_verify, {base, {explicit, Base}}, {req, {explicit, Req}}, {commitments, {explicit, Commitments}}}),
+            ok;
+        false ->
+            ok
+    end,
     ReqCommitters =
-        case maps:get(<<"committers">>, Req, <<"none">>) of
+        case hb_maps:get(<<"committers">>, Req, <<"none">>, Opts) of
             X when is_list(X) -> X;
             CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
         end,
-    RawReqCommitments = maps:get(<<"commitment-ids">>, Req, <<"none">>),
+    RawReqCommitments = hb_maps:get(<<"commitment-ids">>, Req, <<"none">>, Opts),
     ReqCommitments =
         case RawReqCommitments of
             X2 when is_list(X2) -> X2;
@@ -614,19 +652,8 @@ set(Base, NewValuesMsg, Opts) ->
     AfterMerge =
         case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
             <<"explicit">> ->
-                Merged = NewValues#{ <<"...">> => Base },
-                ?event(
-                    debug_test,
-                    {explicitly_merging, {base, Base}, {new_values, NewValues}}
-                ),
-                Merged;
+                NewValues#{ <<"...">> => Base };
             <<"deep">> ->
-                ?event(debug_test,
-                    {doing_deep_merge,
-                        {base, Base},
-                        {new_values, NewValues}
-                    }
-                ),
                 do_deep_merge(Base, NewValues, Opts)
         end,
     {ok, Normalized} = commit(AfterMerge, #{ <<"type">> => <<"unsigned">> }, Opts),
@@ -636,7 +663,7 @@ set(Base, NewValuesMsg, Opts) ->
 %% keys that are themselves messages.
 do_deep_merge(Base, Req, Opts) ->
     WithDeeplyMerged =
-        maps:map(
+        maps:filtermap(
             fun(Key, NewDeepMsg)
                     when ?IS_MESSAGE(NewDeepMsg) andalso
                     ?IS_MESSAGE(map_get(Key, Base)) ->
@@ -652,12 +679,21 @@ do_deep_merge(Base, Req, Opts) ->
                 ),
                 AfterMerge = hb_ao:set(OldDeepMsg, NewDeepMsg, Opts),
                 ?event(debug_test, {after_merge, AfterMerge}, Opts),
-                AfterMerge;
-            (_, V) -> V
+                {true, AfterMerge};
+            (K, V) -> 
+                % If the key is already in the base, and the value is the same,
+                % we ignore it.
+                case hb_cache:ensure_loaded(maps:get(K, Base, not_found), Opts) of
+                    V -> false;
+                    _ -> {true, V}
+                end
             end,
             Req
         ),
-    WithDeeplyMerged#{ <<"...">> => Base }.
+    case map_size(WithDeeplyMerged) of
+        0 -> Base;
+        _ -> WithDeeplyMerged#{ <<"...">> => Base }
+    end.
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, used to
@@ -667,27 +703,7 @@ do_deep_merge(Base, Req, Opts) ->
 set_path(Base, #{ <<"value">> := Value }, Opts) ->
     set_path(Base, Value, Opts);
 set_path(Base, Value, Opts) when not is_map(Value) ->
-    % Determine whether the `path' key is committed. If it is, we remove the
-    % commitment if the new value is different. We try to minimize work by
-    % doing the `hb_maps:get` first, as it is far cheaper than calculating
-    % the committed keys.
-    BaseWithCorrectedComms =
-        case hb_maps:get(<<"path">>, Base, undefined, Opts) of
-            Value -> Base;
-            _ ->
-                % The new value is different, but is it committed? If so, we
-                % must remove the commitments.
-                case hb_message:is_signed_key(<<"path">>, Base, Opts) of
-                  true -> hb_message:uncommitted(Base, Opts);
-                  false -> Base
-                end
-        end,
-    case Value of
-        unset ->
-            {ok, hb_maps:without([<<"path">>], BaseWithCorrectedComms, Opts)};
-        _ ->
-            BaseWithCorrectedComms#{ <<"path">> => Value }
-    end.
+    #{ <<"path">> => Value, <<"...">> => Base }.
 
 %% @doc Remove a key or keys from a message.
 remove(Base, #{ <<"item">> := Key }, Opts) ->
@@ -887,3 +903,86 @@ verify_test() ->
             #{ hashpath => ignore }
         )
     ).
+
+verify_nested_test() ->
+    Opts =  
+        #{
+            priv_wallet => hb:wallet()
+        },
+    RawMsg1 = #{ <<"a">> => #{ <<"b">> => <<"2">> } },
+    Msg1 = hb_message:commit(RawMsg1, Opts, #{ <<"type">> => <<"unsigned">> }),
+    RawMsg2 = hb_ao:set(Msg1, #{ <<"a/d">> => <<"3">> }, Opts),
+    Msg2 = hb_message:commit(RawMsg2, Opts, #{ <<"type">> => <<"unsigned">> }),
+    ?assertEqual(true, hb_message:verify(Msg1)),
+    ?assertEqual(true, hb_message:verify(Msg2)),
+    ?assertEqual(<<"2">>, hb_ao:get(<<"a/b">>, Msg2, Opts)),
+    ?assertEqual(<<"3">>, hb_ao:get(<<"a/d">>, Msg2, Opts)).
+
+committed_nested_test() ->
+    Wallet = hb:wallet(),
+    WalletAddress = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ priv_wallet => Wallet },
+    RawMsg1 = #{ <<"a">> => #{ <<"b">> => <<"2">> } },
+    Msg1 = 
+        hb_message:commit(RawMsg1, Opts, #{ <<"type">> => <<"unsigned">> }),
+    Msg2 = 
+        hb_message:commit(
+            hb_util:ok(set(Msg1, #{ <<"new-key">> => <<"new-value">> }, Opts)),
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+        ),
+    Msg3 = 
+        hb_message:commit(
+            hb_maps:without([<<"a">>], Msg2, Opts),
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+        ),
+    Msg3Committed =
+        hb_message:commit(Msg3, Opts, #{ <<"type">> => <<"unsigned">> }),
+    ?event(debug_test1, {msg3_committed, {explicit, Msg3Committed}}),
+
+    {ok, Committed1} = committed(Msg1, #{ <<"commitment-ids">> => <<"all">> }, Opts),
+    ?assertEqual([<<"a">>], Committed1),
+    ?assertEqual(true, hb_message:verify(Msg1)),
+
+    {ok, Committed2} = committed(Msg2, #{ <<"commitment-ids">> => <<"all">> }, Opts),
+    ?assertEqual([<<"...">>, <<"new-key">>], Committed2),
+    ?assertEqual(true, hb_message:verify(Msg2)),
+
+    {ok, Committed3} = committed(Msg3, #{ <<"commitment-ids">> => <<"all">> }, Opts),
+    ?event(debug_test1, {msg3, {explicit, Msg3}}),
+    ?event(debug_test1, {committed3, Committed3}),
+    ?assertEqual([<<"...">>,<<"a">>], Committed3),
+    ?assertEqual(true, hb_message:verify(Msg3)),
+    
+    Signed3 = hb_message:commit(Msg3, Opts, #{ <<"type">> => <<"signed">> }),
+    ?event(debug_test1, {signed3, {explicit, Signed3}}),
+    {ok, Committed3Signed} = committed(Signed3, #{ <<"commitment-ids">> => <<"all">> }, Opts),
+    ?event(debug_test1, {committed3_signed, Committed3Signed}),
+    ?assertEqual([<<"...">>,<<"a">>], Committed3Signed),
+    {ok, Committers3} = committers(Signed3, #{}, Opts),
+    ?event(debug_test1, {committers, Committers3}),
+    ?assertEqual([WalletAddress], Committers3),
+    ?event(debug_test1, {verified, Signed3}),
+    ?assertEqual(true, hb_message:verify(Signed3)),
+    
+    Msg4 = 
+        hb_message:commit(
+            hb_util:ok(
+                set(Signed3, #{ <<"new-key">> => <<"new-value-2">> }, Opts)
+            ),
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+        ),
+    ?event(debug_test1, {msg4, {explicit, Msg4}}),
+    {ok, Committed4} = committed(Msg4, #{ <<"commitment-ids">> => <<"all">> }, Opts),
+    ?event(debug_test1, {committed4, Committed4}),
+    ?assertEqual([<<"...">>,<<"new-key">>], Committed4),
+    {ok, Committers4} = committers(Msg4, #{}, Opts),
+    ?event(debug_test1, {committers4, Committers4}),
+    ?event(debug_test1, {verified, Msg4}),
+    ?assertEqual([WalletAddress], Committers4),
+    ?assertEqual(true, hb_message:verify(Msg4)),
+    WithoutCommitments = hb_maps:without([<<"commitments">>], Msg4, Opts),
+    ?event(debug_test1, {without_commitments, {WithoutCommitments}}, Opts),
+    ?assertEqual(true, hb_message:verify(WithoutCommitments)).

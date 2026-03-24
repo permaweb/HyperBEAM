@@ -46,7 +46,12 @@ request(_, Msg, Opts) ->
     end.
 
 server_id(Opts) ->
-    {?MODULE, hb_util:human_id(hb_opts:get(priv_wallet, undefined, Opts))}.
+    {
+        ?MODULE,
+        hb_util:human_id(
+            hb_maps:get(priv_wallet, Opts, undefined, Opts)
+        )
+    }.
 
 %% @doc Determine the reference of the caller.
 request_reference(Msg, Opts) ->

@@ -99,7 +99,7 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
     TABM =
         to_tabm(
             case is_map(Msg) of
-                true -> hb_maps:without([<<"priv">>], Msg, Opts);
+                true -> maps:without([<<"priv">>], Msg);
                 false -> Msg
             end,
             SourceFormat,
@@ -246,7 +246,7 @@ do_normalize_commitments(Msg, Opts, passive) ->
                     },
                     Opts
                 ),
-            MergedCommitments = hb_maps:merge(
+            MergedCommitments = hb_maps_raw:merge(
                 NewCommitments,
                 hb_maps:from_list(SignedCommitments),
                 Opts
@@ -433,34 +433,36 @@ commit(Msg, NotOpts, CodecName) when not is_map(NotOpts) ->
     error({deprecated_commit_call, {arg_must_be_node_msg, NotOpts}});
 commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
-commit(Msg, Opts, Spec) ->
+commit(Msg, Opts, RawSpec) ->
+    Spec = 
+        RawSpec#{
+            <<"commitment-device">> =>
+                case hb_maps:get(<<"commitment-device">>, RawSpec, none, Opts) of
+                    none ->
+                        case hb_maps:get(<<"device">>, RawSpec, none, Opts) of
+                            none ->
+                                FromOpts =
+                                    hb_opts:get(
+                                        commitment_device,
+                                        no_viable_commitment_device,
+                                        Opts
+                                    ),
+                                case FromOpts of
+                                    no_viable_commitment_device ->
+                                        throw(
+                                            {unset_commitment_device, RawSpec}
+                                        );
+                                    Device -> Device
+                                end;
+                            Device -> Device
+                        end;
+                    CommitmentDevice -> CommitmentDevice
+                end
+        },
     {ok, Signed} =
         dev_message:commit(
             Msg,
-            Spec#{
-                <<"commitment-device">> =>
-                    case hb_maps:get(<<"commitment-device">>, Spec, none, Opts) of
-                        none ->
-                            case hb_maps:get(<<"device">>, Spec, none, Opts) of
-                                none ->
-                                    FromOpts =
-                                        hb_opts:get(
-                                            commitment_device,
-                                            no_viable_commitment_device,
-                                            Opts
-                                        ),
-                                    case FromOpts of
-                                        no_viable_commitment_device ->
-                                            throw(
-                                                {unset_commitment_device, Spec}
-                                            );
-                                        Device -> Device
-                                    end;
-                                Device -> Device
-                            end;
-                        CommitmentDevice -> CommitmentDevice
-                    end
-            },
+            Spec,
             Opts
         ),
     Signed.
@@ -580,12 +582,12 @@ do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
 uncommitted(Msg) -> uncommitted(Msg, #{}).
 uncommitted(Bin, _Opts) when is_binary(Bin) -> Bin;
 uncommitted(Msg, Opts) ->
-    hb_maps:remove(<<"commitments">>, Msg, Opts).
+    hb_maps_raw:remove(<<"commitments">>, Msg, Opts).
 
 %% @doc Recursively remove commitments from a message.
 uncommitted_deep(Msg, Opts) ->
     % Remove commitments at the current level
-    MsgWithoutCommitments = hb_maps:remove(<<"commitments">>, Msg, Opts),
+    MsgWithoutCommitments = hb_maps_raw:remove(<<"commitments">>, Msg, Opts),
     % Recursively remove commitments from nested maps
     maps:map(
         fun(_Key, Value) when is_map(Value) ->
@@ -804,8 +806,8 @@ diff(_Val1, _Val2, _Opts) ->
 %% need to specify the keys that must be present.
 with_commitments(ID, Msg, Opts) when ?IS_ID(ID) ->
     with_commitments([ID], Msg, Opts);
-with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
-    ?event({with_commitments, {spec, Spec}, {commitments, Commitments}}),
+with_commitments(Spec, Msg = #{ <<"commitments">> := _ }, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     FilteredCommitments =
         hb_maps:filter(
             fun(ID, CommMsg) ->
@@ -818,28 +820,27 @@ with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
             Commitments,
             Opts
         ),
-    ?event({with_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 with_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
 %% @doc Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
 %% function, such that only messages that do _not_ match the spec are returned.
-without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
-    ?event({without_commitments, {spec, Spec}, {msg, Msg}, {commitments, Commitments}}),
+without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) when is_map(Commitments) ->
+    MsgWithComms = with_commitments(Spec, Msg, Opts),
+    Comms = 
+        hb_maps:get(
+            <<"commitments">>,
+            MsgWithComms,
+            #{},
+            Opts
+        ),
+    CommitmentKeys = hb_maps:keys(Comms),
     FilteredCommitments =
-        hb_maps:without(
-            hb_maps:keys(
-                hb_maps:get(
-                    <<"commitments">>,
-                    with_commitments(Spec, Msg, Opts),
-                    #{},
-                    Opts
-                )
-            ),
+        maps:without(
+            CommitmentKeys,
             Commitments
         ),
-    ?event({without_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 without_commitments(_Spec, Msg, _Opts) ->
     Msg.
@@ -896,7 +897,8 @@ commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
-commitments(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
+commitments(Spec, Msg, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     hb_maps:filtermap(
         fun(_ID, CommMsg) ->
             case match(Spec, CommMsg, primary, Opts) of

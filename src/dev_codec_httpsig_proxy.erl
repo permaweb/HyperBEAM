@@ -22,7 +22,7 @@
 commit(Device, Secret, Base, Req, Opts) ->
     % If there are no existing commitments, we use the unmodified base message.
     % If there are, we remove the uncommitted parts of the message.
-    ExistingComms = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
+    ExistingComms = hb_maps_raw:get(<<"commitments">>, Base, #{}, Opts),
     OnlyCommittedBase =
         case map_size(ExistingComms) of
             0 -> Base;

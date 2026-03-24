@@ -228,7 +228,7 @@ maybe_set(Map1, Map2, Opts) ->
         fun(Key, AccMap) ->
             case hb_maps:get(Key, Map2, undefined, Opts) of
                 undefined -> AccMap;
-                Value -> hb_maps:put(Key, Value, AccMap, Opts)
+                Value -> hb_maps_raw:put(Key, Value, AccMap, Opts)
             end
         end,
         Map1,

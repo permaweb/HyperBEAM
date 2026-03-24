@@ -88,7 +88,7 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
-    Req =
+    RawReq =
         prepare_request(
             hb_maps:get(
                 <<"codec-device">>,
@@ -102,6 +102,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             RawMessage,
             Opts
         ),
+    Req = hb_maps:expand(RawReq, Opts),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
     {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
@@ -257,7 +258,7 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
         outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts)
     end;
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
-    ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
+    ?event(http_outbound, {result_is_httpsig, {body, {explicit, Body}}}, Opts),
     {
         response_status_to_atom(Status),
         http_response_to_httpsig(Status, Headers, Body, Opts)
@@ -370,7 +371,8 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % set an explicit preference.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found -> 
+                hb_ao:set(WithoutPriv, #{ <<"accept-bundle">> => true }, Opts);
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -378,27 +380,34 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % the peer node should receive. This allows users to proxy requests to their
     % HB node from another port.
     WithSelfPort =
-        WithAcceptBundle#{
-            <<"ao-peer-port">> =>
-                hb_maps:get(
-                    <<"ao-peer-port">>,
-                    WithAcceptBundle,
-                    hb_opts:get(
-                        port_external,
-                        hb_opts:get(port, undefined, Opts),
+        hb_ao:set(
+            WithAcceptBundle,
+            #{
+                <<"ao-peer-port">> =>
+                    hb_maps:get(
+                        <<"ao-peer-port">>,
+                        WithAcceptBundle,
+                        hb_opts:get(
+                            port_external,
+                            hb_opts:get(port, undefined, Opts),
+                            Opts
+                        ),
                         Opts
-                    ),
-                    Opts
-                )
-        },
+                    )
+            },
+            Opts
+        ),
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
     BinPath = hb_path:normalize(hb_path:to_binary(Path)),
     ReqBase = #{ peer => BinPeer, path => BinPath, method => Method },
+    ?event(debug_httpc_req, {prepare_request, {format, Format}, {req_base, ReqBase}, {with_self_port, WithSelfPort}, {message, Message}}),
     case Format of
         <<"httpsig@1.0">> ->
+            Expanded = hb_maps:expand(WithSelfPort, Opts),
+            ?event(debug_httpc_req, {expanded, {explicit, Expanded}}),
             FullEncoding =
                 hb_message:convert(
-                    WithSelfPort,
+                    Expanded,
                     #{
                         <<"device">> => <<"httpsig@1.0">>,
                         <<"bundle">> => true
@@ -407,11 +416,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 ),
             Body = hb_maps:get(<<"body">>, FullEncoding, <<>>, Opts),
             Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
-			?event(http, {request_headers, {explicit, {headers, Headers}}}),
-			?event(http, {request_body, {explicit, {body, Body}}}),
+            MergedHeaders = maps:merge(MaybeCookie, Headers),
             hb_maps:merge(
                 ReqBase,
-                #{ headers => maps:merge(MaybeCookie, Headers), body => Body },
+                #{ headers => MergedHeaders, body => Body },
                 Opts
             );
         <<"ans104@1.0">> ->
@@ -480,14 +488,15 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    EncodedHeaders = hb_private:reset(HeadersWithCors),
-    ?event(http,
+    RawEncodedHeaders = hb_private:reset(HeadersWithCors),
+    EncodedHeaders = hb_maps:expand(RawEncodedHeaders, Opts),
+    ?event(
         {http_replying,
             {status, {explicit, Status}},
             {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
             {raw_message, RawMessage},
             {enc_headers, {explicit, EncodedHeaders}},
-            {enc_body, EncodedBody}
+            {enc_body, {explicit, EncodedBody}}
         }
     ),
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
@@ -661,7 +670,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 ),
             {
                 Status,
-                hb_maps:without([<<"body">>], EncMessage, Opts),
+                hb_maps_raw:without([<<"body">>], EncMessage, Opts),
                 hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
             };
         {_, <<"ans104@1.0">>, _} ->

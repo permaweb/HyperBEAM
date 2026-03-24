@@ -44,21 +44,20 @@ from(Link, _Req, _Opts) when ?IS_LINK(Link) -> {ok, Link};
 from(HTTP, _Req, Opts) ->
     % First, parse all headers excluding the signature-related headers, as they
     % are handled separately.
-    Headers = hb_maps:without([<<"body">>], HTTP, Opts),
+    Headers = hb_maps_raw:without([<<"body">>], HTTP, Opts),
     % Next, we need to potentially parse the body, get the ordering of the body
     % parts, and add them to the TABM.
     {OrderedBodyKeys, BodyTABM} = body_to_tabm(HTTP, Opts),
     % Merge the body keys with the headers.
-    WithBodyKeys = maps:merge(Headers, BodyTABM),
+    WithBodyKeys = hb_maps_raw:merge(Headers, BodyTABM, Opts),
     % Decode percent-encoded headers.
     WithIDs = decode_ids(WithBodyKeys, Opts),
     % Remove the signature-related headers, such that they can be reconstructed
     % from the commitments.
     MsgWithoutSigs =
-        hb_maps:without(
+        maps:without(
             [<<"signature">>, <<"signature-input">>, <<"commitments">>],
-            WithIDs,
-            Opts
+            WithIDs
         ),
     % Finally, we need to add the signatures to the TABM.
     Commitments =
@@ -74,11 +73,11 @@ from(HTTP, _Req, Opts) ->
         end,
     ?event({message_with_commitments, MsgWithSigs}),
     Res =
-        hb_maps:without(
+        hb_maps_raw:without(
             Removed =
-                hb_maps:keys(Commitments) ++
+                hb_maps_raw:keys(Commitments) ++
                 [<<"content-digest">>] ++
-                case maps:get(<<"content-type">>, MsgWithSigs, undefined) of
+                case hb_maps_raw:get(<<"content-type">>, MsgWithSigs, undefined, Opts) of
                     <<"multipart/", _/binary>> -> [<<"content-type">>];
                     _ -> []
                 end ++
@@ -95,8 +94,8 @@ from(HTTP, _Req, Opts) ->
 %% @doc Generate the body TABM from the `body' key of the encoded message.
 body_to_tabm(HTTP, Opts) ->
     % Extract the body and content-type from the HTTP message.
-    Body = hb_maps:get(<<"body">>, HTTP, no_body, Opts),
-    ContentType = hb_maps:get(<<"content-type">>, HTTP, undefined, Opts),
+    Body = hb_maps_raw:get(<<"body">>, HTTP, no_body, Opts),
+    ContentType = hb_maps_raw:get(<<"content-type">>, HTTP, undefined, Opts),
     {_, InlinedKey} = inline_key(HTTP),
     ?event({inlined_body_key, InlinedKey}),
     % Parse the body into a TABM.
@@ -119,7 +118,7 @@ body_to_tabm(HTTP, Opts) ->
                 % Merge all of the parts into a single TABM.
                 {ok, MergedParts} =
                     dev_codec_flat:from(
-                        maps:from_list(OrderedBodyTABMs),
+                        hb_maps_raw:from_list(OrderedBodyTABMs),
                         #{},
                         Opts
                     ),
@@ -210,7 +209,7 @@ from_body_part(InlinedKey, Part, Opts) ->
     RawHeaders = binary:split(RawHeadersBlock, ?CRLF, [global]),
     % Now we parse each header, splitting into {Key, Value}
     Headers =
-        hb_maps:from_list(lists:filtermap(
+        hb_maps_raw:from_list(lists:filtermap(
             fun(<<>>) -> false;
                (RawHeader) -> 
                     case binary:split(RawHeader, [<<": ">>]) of
@@ -224,7 +223,7 @@ from_body_part(InlinedKey, Part, Opts) ->
         )),
     % The Content-Disposition is from the parent message,
     % so we separate off from the rest of the headers
-    case hb_maps:get(<<"content-disposition">>, Headers, undefined, Opts) of
+    case hb_maps_raw:get(<<"content-disposition">>, Headers, undefined, Opts) of
         undefined ->
             % A Content-Disposition header is required for each part
             % in the multipart body
@@ -252,7 +251,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                     Opts
                 ),
             RestHeaders =
-                hb_maps:without(
+                hb_maps_raw:without(
                     [
                         <<"ao-body-key">>,
                         <<"content-digest">>,
@@ -264,17 +263,17 @@ from_body_part(InlinedKey, Part, Opts) ->
             PartNameSplit = binary:split(PartName, <<"/">>, [global]),
             NestedPartName = lists:last(PartNameSplit),
             ParsedPart =
-                case hb_maps:size(Commitments, Opts) of
+                case hb_maps_raw:size(Commitments, Opts) of
                     0 ->
                         WithoutTypes = maps:without([<<"ao-types">>], RestHeaders),
                         Types =
-                            hb_maps:get(
+                            hb_maps_raw:get(
                                 <<"ao-types">>,
                                 RestHeaders,
                                 <<>>,
                                 Opts
                             ),
-                        case {hb_maps:size(WithoutTypes, Opts), Types, RawBody} of
+                        case {hb_maps_raw:size(WithoutTypes, Opts), Types, RawBody} of
                             {0, <<"empty-message">>, <<>>} ->
                                 % The message is empty, so we return an empty
                                 % map.
@@ -293,7 +292,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                                 {_, RawBodyKey} = inline_key(Headers),
                                 RestHeaders#{ RawBodyKey => RawBody }
                         end;
-                    _ -> maps:get(NestedPartName, Commitments, #{})
+                    _ -> hb_maps_raw:get(NestedPartName, Commitments, #{}, Opts)
                 end,
             {PartName, ParsedPart}
     end.
@@ -315,8 +314,8 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
     %    if conflicts arise.
     % 5. The resulting combined message is returned to the user.
     {ok, EncOriginal} = to(TABM, maps:without([<<"index">>], Req), Opts),
-    OrigBody = hb_maps:get(<<"body">>, EncOriginal, <<>>, Opts),
-    OrigContentType = hb_maps:get(<<"content-type">>, EncOriginal, <<>>, Opts),
+    OrigBody = hb_maps_raw:get(<<"body">>, EncOriginal, <<>>, Opts),
+    OrigContentType = hb_maps_raw:get(<<"content-type">>, EncOriginal, <<>>, Opts),
     case {OrigBody, OrigContentType} of
         {<<>>, <<>>} ->
             % The message has no body or content-type set. Resolve the `index`
@@ -331,9 +330,9 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
                     % keys of the original in the event of conflict. Remove the
                     % `priv` message, if present.
                     Merged =
-                        hb_maps:merge(
+                        hb_maps_raw:merge(
                             hb_private:reset(IndexTABM),
-                            hb_maps:without(
+                            hb_maps_raw:without(
                                 [<<"body">>, <<"content-type">>],
                                 EncOriginal,
                                 Opts
@@ -369,7 +368,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
     % Ensure that the material for the message is loaded, if the request is
     % asking for a bundle.
     Msg =
-        case hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, Opts)) of
+        case hb_util:atom(hb_maps_raw:get(<<"bundle">>, Req, false, Opts)) of
             false -> encode_ids(TABM);
             true ->
                 % Convert back to the fully loaded structured@1.0 message, then
@@ -392,15 +391,14 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
     % HTTP headers. If we did not do this, ID keys would be lower-cased and
     % their comparability against the original keys would be lost.
     Stripped =
-        hb_maps:without(
+        maps:without(
             [
                 <<"commitments">>,
                 <<"signature">>,
                 <<"signature-input">>,
                 <<"priv">>
             ],
-            Msg,
-            Opts
+            Msg
         ),
     {InlineFieldHdrs, InlineKey} = inline_key(Stripped),
     Intermediate =
@@ -411,30 +409,42 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
         ),
     % Finally, add the signatures to the encoded HTTP message with the
     % commitments from the original message.
+    % io:format(standard_error, "converting_commitments_to_siginfo_0_pre_map: Msg: ~p~n", [Msg]),
+    Signature = hb_maps_raw:get(<<"signature">>, Msg, undefined, Opts),
+    % io:format(standard_error, "converting_commitments_to_siginfo_0_pre_map: Signature: ~p~n", [Signature]),
     CommitmentsMap =
-        case maps:get(<<"commitments">>, Msg, undefined) of
+        case hb_maps_raw:get(<<"commitments">>, Msg, undefined, Opts) of
             undefined ->
-                case maps:get(<<"signature">>, Msg, undefined) of
+                case hb_maps_raw:get(<<"signature">>, Msg, undefined, Opts) of
                     undefined -> #{};
                     Signature ->
-                        MaybeBundleTag = maps:with([<<"bundle">>], Msg),
+                        MaybeBundleTag = hb_maps_raw:with([<<"bundle">>], Msg, Opts),
+                        % TODO: Make this much better
+                        Committed =
+                        case hb_maps_raw:get(<<"committed">>, Msg, not_found, Opts) of
+                            not_found -> 
+                                case hb_maps_raw:get(<<"committed+link">>, Msg, not_found, Opts) of
+                                    not_found -> [];
+                                    CommittedLink -> hb_cache:ensure_loaded({link, CommittedLink, Opts}, Opts)
+                                end;
+                            C -> C
+                        end,
                         #{
                             Signature => MaybeBundleTag#{
                                 <<"signature">> => Signature,
-                                <<"keyid">> => maps:get(<<"keyid">>, Msg, <<>>),
+                                <<"keyid">> => hb_maps_raw:get(<<"keyid">>, Msg, <<>>, Opts),
                                 <<"commitment-device">> => <<"httpsig@1.0">>,
-                                <<"type">> => maps:get(<<"type">>, Msg, <<>>),
-                                <<"committed">> =>
-                                    maps:get(<<"committed">>, Msg, #{})
+                                <<"type">> => hb_maps_raw:get(<<"type">>, Msg, <<>>, Opts),
+                                <<"committed">> => Committed
+                                    % hb_maps_raw:get(<<"committed">>, Msg, #{}, Opts)
                             }
                         }
                 end;
             Commitments ->
                 Commitments
         end,
-    ?event({converting_commitments_to_siginfo, Msg}),
     {ok,
-        maps:merge(
+        hb_maps_raw:merge(
             Intermediate,
             dev_codec_httpsig_siginfo:commitments_to_siginfo(
                 TABM,
@@ -453,12 +463,12 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
         end,
     % Calculate the initial encoding from the TABM
     Enc0 =
-        maps:fold(
+        hb_maps_raw:fold(
             fun(<<"body">>, Value, AccMap) ->
-                    OldBody = maps:get(<<"body">>, AccMap, #{}),
+                    OldBody = hb_maps_raw:get(<<"body">>, AccMap, #{}, Opts),
                     AccMap#{ <<"body">> => OldBody#{ <<"body">> => Value } };
                (Key, Value, AccMap) when Key =:= InlineKey andalso InlineKey =/= not_set ->
-                    OldBody = maps:get(<<"body">>, AccMap, #{}),
+                    OldBody = hb_maps_raw:get(<<"body">>, AccMap, #{}, Opts),
                     AccMap#{ <<"body">> => OldBody#{ InlineKey => Value } };
                (Key, Value, AccMap) ->
                     field_to_http(AccMap, {Key, Value}, #{})
@@ -471,7 +481,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
             maps:without([<<"priv">>], TABM)
         ),
     ?event({prepared_body_map, {msg, Enc0}}),
-    BodyMap = maps:get(<<"body">>, Enc0, #{}),
+    BodyMap = hb_maps_raw:get(<<"body">>, Enc0, #{}, Opts),
     GroupedBodyMap = group_maps(BodyMap, <<>>, #{}, Opts),
     Enc1 =
         case GroupedBodyMap of
@@ -493,13 +503,13 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                 % In all other cases, the mapping fallsthrough to the case below 
                 % that properly encodes a nested body within a sub-part
                 ?event({encoding_single_body, {body, UserBody}, {http, Enc0}}),
-                hb_maps:put(<<"body">>, UserBody, Enc0, Opts);
+                hb_maps_raw:put(<<"body">>, UserBody, Enc0, Opts);
             _ ->
                 % Otherwise, we need to encode the body map as the
                 % multipart body of the HTTP message
                 ?event({encoding_multipart, {bodymap, {explicit, GroupedBodyMap}}}),
                 PartList = hb_util:to_sorted_list(
-                    hb_maps:map(
+                    hb_maps_raw:map(
                         fun(Key, M = #{ <<"body">> := _ }) when map_size(M) =:= 1 ->
                             % If the map has only one key, and it is `body',
                             % then we must encode part name with the additional
@@ -550,23 +560,25 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
     % Add the content-digest to the HTTP message. `add_content_digest/1'
     % will return a map with the `content-digest' key set, but the body removed,
     % so we merge the two maps together to maintain the body and the content-digest.
-    Enc2 = case hb_maps:get(<<"body">>, Enc1, <<>>, Opts) of
-        <<>> -> Enc1;
-        _ ->
-            ?event({adding_content_digest, {msg, Enc1}}),
-            hb_maps:merge(
-                Enc1,
-                dev_codec_httpsig:add_content_digest(Enc1, Opts),
-                Opts
-            )
-    end,
+    Enc2 =
+        case hb_maps_raw:get(<<"body">>, Enc1, <<>>, Opts) of
+            <<>> -> Enc1;
+            B ->
+                ?event({adding_content_digest, {msg, Enc1}}),
+                hb_maps_raw:put(
+                    <<"body">>,
+                    B,
+                    dev_codec_httpsig:add_content_digest(Enc1, Opts),
+                    Opts
+                )
+        end,
     ?event({final_body_map, {msg, Enc2}}),
     Enc2.
 
 %% @doc Transform all ID fields into their percent-encoded form.
 encode_ids(Msg) ->
     % Find all keys that are IDs.
-    maps:from_list(
+    hb_maps_raw:from_list(
         lists:map(
             fun({K, V}) when ?IS_ID(K) -> {hb_escape:encode(K), V};
                 ({K, V}) -> {K, V}
@@ -589,7 +601,7 @@ group_maps(Map) ->
     group_maps(Map, <<>>, #{}, #{}).
 group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
     ?event({group_maps, {map, Map}, {parent, Parent}, {top, Top}}),
-    {Flattened, NewTop} = hb_maps:fold(
+    {Flattened, NewTop} = hb_maps_raw:fold(
         fun(Key, Value, {CurMap, CurTop}) ->
             ?event({group_maps, {key, Key}, {value, Value}}),
             NormKey = hb_ao:normalize_key(Key),
@@ -611,11 +623,11 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                         true ->
                             Value
                         end,
-                    case hb_maps:size(NormMsg, Opts) of
+                    case hb_maps_raw:size(NormMsg, Opts) of
                         0 ->
                             {
                                 CurMap,
-                                hb_maps:put(
+                                hb_maps_raw:put(
                                     FlatK,
                                     #{ <<"ao-types">> => <<"empty-message">> },
                                     CurTop,
@@ -633,11 +645,13 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                         % within a part, so instead lift it to be a top level
                         % part
                         true ->
-                            NewTop = hb_maps:put(FlatK, Value, CurTop, Opts),
+                            NewTop =
+                                hb_maps_raw:put(FlatK, Value, CurTop, Opts),
                             {CurMap, NewTop};
                         % Encode the value in the current part
                         false ->
-                            NewCurMap = hb_maps:put(NormKey, Value, CurMap, Opts),
+                            NewCurMap =
+                                hb_maps_raw:put(NormKey, Value, CurMap, Opts),
                             {NewCurMap, CurTop}
                     end
             end
@@ -646,14 +660,13 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
         Map,
         Opts
     ),
-    case hb_maps:size(Flattened, Opts) of
+    case hb_maps_raw:size(Flattened, Opts) of
         0 -> NewTop;
         _ -> case Parent of
-            <<>> -> hb_maps:merge(NewTop, Flattened, Opts);
+            <<>> -> 
+                hb_maps_raw:merge(NewTop, Flattened, Opts);
             _ ->
-                Res = NewTop#{ Parent => Flattened },
-                ?event({returning_res, {res, Res}}),
-                Res
+                NewTop#{ Parent => Flattened }
         end
     end.
 
@@ -697,7 +710,7 @@ encode_body_part(PartName, BodyPart, InlineKey, Opts) ->
     case BodyPart of
         BPMap when is_map(BPMap) ->
             WithDisposition =
-                hb_maps:put(
+                hb_maps_raw:put(
                     <<"content-disposition">>,
                     Disposition,
                     BPMap,
@@ -729,14 +742,14 @@ inline_key(Msg, Opts) ->
     % The message can name a key whose value will be placed in the body as the
     % inline part. Otherwise, the Msg <<"body">> is used. If not present, the
     % Msg <<"data">> is used.
-    InlineBodyKey = hb_maps:get(<<"ao-body-key">>, Msg, false, Opts),
+    InlineBodyKey = hb_maps_raw:get(<<"ao-body-key">>, Msg, false, Opts),
     ?event({inlined, InlineBodyKey}),
     case {
         InlineBodyKey,
-        hb_maps:is_key(<<"body">>, Msg, Opts)
-            andalso not ?IS_LINK(maps:get(<<"body">>, Msg, Opts)),
-        hb_maps:is_key(<<"data">>, Msg, Opts)
-            andalso not ?IS_LINK(maps:get(<<"data">>, Msg, Opts))
+        hb_maps_raw:is_key(<<"body">>, Msg, Opts)
+            andalso not ?IS_LINK(hb_maps_raw:get(<<"body">>, Msg, undefined, Opts)),
+        hb_maps_raw:is_key(<<"data">>, Msg, Opts)
+            andalso not ?IS_LINK(hb_maps_raw:get(<<"data">>, Msg, undefined, Opts))
     } of
         % ao-body-key already exists, so no need to add one
         {Explicit, _, _} when Explicit =/= false -> {#{}, InlineBodyKey};
@@ -771,10 +784,10 @@ encode_http_flat_msg(Httpsig, Opts) ->
                 [<<HeaderName/binary, ": ", HVal/binary>> | Acc]
             end,
             [],
-            hb_maps:to_list(hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts), Opts)
+            hb_maps_raw:to_list(hb_maps_raw:without([<<"body">>, <<"priv">>], Httpsig, Opts), Opts)
         ),
     EncodedHeaders = iolist_to_binary(lists:join(?CRLF, lists:reverse(HeaderList))),
-    case hb_maps:get(<<"body">>, Httpsig, <<>>, Opts) of
+    case hb_maps_raw:get(<<"body">>, Httpsig, <<>>, Opts) of
         <<>> -> EncodedHeaders;
         % Some-Headers: some-value
         % content-type: image/png
@@ -787,8 +800,10 @@ encode_http_flat_msg(Httpsig, Opts) ->
 %% to be further encoded later.
 field_to_http(Httpsig, {Name, Value}, Opts) when is_map(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
-    OldBody = hb_maps:get(<<"body">>, Httpsig, #{}, Opts),
+    OldBody = hb_maps_raw:get(<<"body">>, Httpsig, #{}, Opts),
     Httpsig#{ <<"body">> => OldBody#{ NormalizedName => Value } };
+field_to_http(Httpsig, {Name, Value}, Opts) when is_atom(Value) ->
+    field_to_http(Httpsig, {Name, atom_to_binary(Value)}, Opts);
 field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
     % The default location where the value is encoded within the HTTP
@@ -800,15 +815,15 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     % Note that a "where" Opts may force the location of the encoded
     % value -- this is only a default location if not specified in Opts 
     DefaultWhere =
-        case {maps:get(where, Opts, headers), byte_size(Value)} of
+        case {hb_maps_raw:get(where, Opts, headers, Opts), byte_size(Value)} of
             {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH -> headers;
             _ -> body
         end,
-    case maps:get(where, Opts, DefaultWhere) of
+    case hb_maps_raw:get(where, Opts, DefaultWhere, Opts) of
         headers ->
             Httpsig#{ NormalizedName => Value };
         body ->
-            OldBody = hb_maps:get(<<"body">>, Httpsig, #{}, Opts),
+            OldBody = hb_maps_raw:get(<<"body">>, Httpsig, #{}, Opts),
             Httpsig#{ <<"body">> => OldBody#{ NormalizedName => Value } }
     end.
 
@@ -907,7 +922,7 @@ encode_message_with_links_test() ->
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
-    ?assertMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
+    ?assertMatch({link, _, _}, hb_maps_raw:get(<<"typed-key">>, Read, #{}, #{})),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),

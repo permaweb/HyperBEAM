@@ -649,7 +649,7 @@ test_wasm_process(WASMImage, Opts) ->
                 <<"image">> => WASMImageID
             }
         ),
-        #{ priv_wallet => Wallet }
+        Opts#{ priv_wallet => Wallet }
     ).
 
 test_wasm_stack_process(Opts, Stack) ->
@@ -680,11 +680,13 @@ test_wasm_stack_process(Opts, Stack) ->
                     <<"type">> => <<"Process">>
                 }
             ),
-        #{ priv_wallet => Wallet }
+        Opts#{ priv_wallet => Wallet }
     ).
 
 test_genesis_wasm_process() ->
-    Opts = #{
+    test_genesis_wasm_process(#{}).
+test_genesis_wasm_process(OrigOpts) ->
+    Opts = OrigOpts#{
         genesis_wasm_db_dir => "cache-mainnet-test/genesis-wasm",
         genesis_wasm_checkpoints_dir => "cache-mainnet-test/genesis-wasm/checkpoints",
         genesis_wasm_log_level => "error",
@@ -709,14 +711,16 @@ test_genesis_wasm_process() ->
                 <<"data-protocol">> => <<"ao">>,
                 <<"type">> => <<"Process">>
             }),
-        #{ priv_wallet => Wallet }
+        Opts#{ priv_wallet => Wallet }
     ).
 
 schedule_test_message(Base, Text) ->
     schedule_test_message(Base, Text, #{}).
 schedule_test_message(Base, Text, MsgBase) ->
-    Wallet = hb:wallet(),
-    UncommittedBase = hb_message:uncommitted(MsgBase),
+    schedule_test_message(Base, Text, MsgBase, #{}).
+schedule_test_message(Base, Text, MsgBase, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    UncommittedBase = hb_message:uncommitted(MsgBase, Opts#{ priv_wallet => Wallet }),
     Req =
         hb_message:commit(#{
                 <<"path">> => <<"schedule">>,
@@ -730,9 +734,9 @@ schedule_test_message(Base, Text, MsgBase) ->
                         #{ priv_wallet => Wallet }
                     )
             },
-            #{ priv_wallet => Wallet }
+            Opts#{ priv_wallet => Wallet }
         ),
-    hb_ao:resolve(Base, Req, #{}).
+    hb_ao:resolve(Base, Req, Opts).
 
 schedule_aos_call(Base, Code) ->
     schedule_aos_call(Base, Code, <<"Eval">>, #{}).
@@ -740,7 +744,7 @@ schedule_aos_call(Base, Code, Action) ->
     schedule_aos_call(Base, Code, Action, #{}).
 schedule_aos_call(Base, Code, Action, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    ProcID = hb_message:id(Base, all),
+    ProcID = hb_message:id(Base, all, Opts),
     Req =
         hb_message:commit(
             #{
@@ -749,10 +753,12 @@ schedule_aos_call(Base, Code, Action, Opts) ->
                 <<"target">> => ProcID,
                 <<"timestamp">> => os:system_time(millisecond)
             },
-            #{ priv_wallet => Wallet }
+            Opts#{ priv_wallet => Wallet }
         ),
-    schedule_test_message(Base, <<"TEST MSG">>, Req).
+    schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
+dedup_test_() -> 
+    {timeout, 9000, fun dedup_test/0}.
 dedup_test() ->
     application:ensure_all_started(hb),
     Opts = #{
@@ -760,9 +766,12 @@ dedup_test() ->
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
-    Base = test_genesis_wasm_process(),
+    ?event(debug_dedup_test, {opts, Opts}),
+    Base = test_genesis_wasm_process(Opts),
+    ?event(debug_dedup_test, {base, Base}),
     hb_cache:write(Base, Opts),
     ProcID = hb_message:id(Base, all),
+    ?event(debug_dedup_test, {proc_id, ProcID}),
     {ok, _SchedInit} =
         hb_ao:resolve(
             Base,
@@ -785,6 +794,7 @@ dedup_test() ->
             },
             Opts
         ),
+    ?event(debug_dedup_test, {msg_base, MsgBase}),
     UncommittedBase = hb_message:uncommitted(MsgBase),
     Req =
         hb_message:commit(
@@ -802,6 +812,7 @@ dedup_test() ->
             },
             Opts
         ),
+    ?event(debug_dedup_test, {req, Req}),
     % Schedule the message thrice
     {ok, _} = hb_ao:resolve(Base, Req, Opts),
     {ok, _} = hb_ao:resolve(Base, Req, Opts),
@@ -813,6 +824,7 @@ dedup_test() ->
             <<"schedule">>,
             Opts
         ),
+    ?event(debug_dedup_test, {scheduler_res, SchedulerRes}),
     % Assert successful double schedule
     ?assertEqual(
         hb_private:reset(
@@ -830,12 +842,14 @@ dedup_test() ->
             hb_ao:get(<<"assignments/4/body/commitments">>, SchedulerRes)
         )
     ),
+    ?event(debug_dedup_test, {scheduling_aos_call, Base}),
     % Schedule twice to avoid nonce warning
-    schedule_aos_call(Base, <<"return Number">>),
-    schedule_aos_call(Base, <<"return Number">>),
+    schedule_aos_call(Base, <<"return Number">>, <<"Eval">>, Opts),
+    schedule_aos_call(Base, <<"return Number">>, <<"Eval">>, Opts),
     % Compute with dedup - initialize number to 1, then two increments,
     % but the second increment should be skipped for dedup - expected result is 2
     {ok, Result} = hb_ao:resolve(Base, <<"now">>, Opts),
+    ?event(debug_dedup_test, {result, Result}),
     Data = hb_ao:get(<<"results/data">>, Result),
     ?assertEqual(<<"2">>, Data).
 spawn_and_execute_slot_test_() ->
@@ -889,11 +903,11 @@ compare_result_genesis_wasm_and_wasm() ->
     application:ensure_all_started(hb),
     Opts = #{
         priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        cache_control => <<"always">>
     },
+    ?event(debug_test, {opts, {explicit, Opts}}),
     % Test with genesis-wasm
-    MsgGenesisWasm = test_genesis_wasm_process(),
+    MsgGenesisWasm = test_genesis_wasm_process(Opts),
     hb_cache:write(MsgGenesisWasm, Opts),
     {ok, _SchedInitGenesisWasm} =
         hb_ao:resolve(
@@ -924,17 +938,19 @@ compare_result_genesis_wasm_and_wasm() ->
             Opts
         ),
     % Schedule messages
-    {ok, _} = schedule_aos_call(MsgGenesisWasm, <<"return 1+1">>),
-    {ok, _} = schedule_aos_call(MsgGenesisWasm, <<"return 2+2">>),
-    {ok, _} = schedule_aos_call(MsgWasm, <<"return 1+1">>),
-    {ok, _} = schedule_aos_call(MsgWasm, <<"return 2+2">>),
+    {ok, _} = schedule_aos_call(MsgGenesisWasm, <<"return 1+1">>, <<"Eval">>, Opts),
+    {ok, _} = schedule_aos_call(MsgGenesisWasm, <<"return 2+2">>, <<"Eval">>, Opts),
+    {ok, _} = schedule_aos_call(MsgWasm, <<"return 1+1">>, <<"Eval">>, Opts),
+    {ok, _} = schedule_aos_call(MsgWasm, <<"return 2+2">>, <<"Eval">>, Opts),
     % Get results
-    {ok, ResultGenesisWasm} = 
+    Res1 = 
         hb_ao:resolve(
             MsgGenesisWasm,
             #{ <<"path">> => <<"now">> },
             Opts
         ),
+    ?event(debug_test_1, {res1, {explicit, Res1}}),
+    {ok, ResultGenesisWasm} = Res1,
     {ok, ResultWasm} = 
         hb_ao:resolve(
             MsgWasm,
@@ -942,8 +958,8 @@ compare_result_genesis_wasm_and_wasm() ->
             Opts
         ),
     ?assertEqual(
-        hb_ao:get(<<"results/data">>, ResultGenesisWasm),
-        hb_ao:get(<<"results/data">>, ResultWasm)
+        hb_ao:get(<<"results/data">>, ResultGenesisWasm, Opts),
+        hb_ao:get(<<"results/data">>, ResultWasm, Opts)
     ).
 
 send_message_between_genesis_wasm_processes_test_() ->

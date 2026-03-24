@@ -44,7 +44,7 @@ from(List, Req, Opts) when is_list(List) ->
             Opts
         ),
     EncodingLists = lists:member(<<"list">>, find_encode_types(Req, Opts)),
-    EncodingHasAOTypes = hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts),
+    EncodingHasAOTypes = hb_maps_raw:is_key(<<"ao-types">>, DecodedAsMap, Opts),
     case EncodingLists orelse EncodingHasAOTypes of
         true ->
             AOTypes = decode_ao_types(DecodedAsMap, Opts),
@@ -65,12 +65,14 @@ from(List, Req, Opts) when is_list(List) ->
     end;
 from(Msg, Req, Opts) when is_map(Msg) ->
     % Normalize the message, offloading links to the cache.
-    NormLinks = hb_link:normalize(Msg, linkify_mode(Req, Opts), Opts),
+    LinkifyMode = linkify_mode(Req, Opts),
+    ?event({from, {msg, Msg}, {req, Req}, {linkify_mode, LinkifyMode}}),
+    NormLinks = hb_link:normalize(Msg, LinkifyMode, Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     EncodeTypes = find_encode_types(Req, Opts),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
-            case hb_maps:find(Key, NormKeysMap, Opts) of
+            case hb_maps_raw:find(Key, NormKeysMap, Opts) of
                 {ok, Value} when is_binary(Value) ->
                     {Types, [{Key, Value} | Values]};
                 {ok, Nested} when is_map(Nested) or is_list(Nested) ->
@@ -120,7 +122,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
     % Encode the AoTypes as a structured dictionary
     % And include as a field on the produced TABM
     WithTypes =
-        hb_maps:from_list(case Types of 
+        hb_maps_raw:from_list(case Types of 
             [] -> Values;
             T ->
                 AoTypes = iolist_to_binary(hb_structured_fields:dictionary(
@@ -135,7 +137,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                 [{<<"ao-types">>, AoTypes} | Values]
         end),
     % If the message has a `commitments' field, add it to the TABM unmodified.
-    {ok,
+    WithCommitments =
         case maps:get(<<"commitments">>, Msg, not_found) of
             not_found ->
                 WithTypes;
@@ -143,13 +145,13 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                 WithTypes#{
                     <<"commitments">> => Commitments
                 }
-        end
-    };
+        end,
+    {ok, WithCommitments};
 from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
 
 %% @doc Find the types that should be encoded from the request and options.
 find_encode_types(Req, Opts) ->
-    hb_maps:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES, Opts).
+    hb_maps_raw:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES, Opts).
 
 %% @doc Determine the type for a value.
 type(Int) when is_integer(Int) -> <<"integer">>;
@@ -160,7 +162,7 @@ type(Other) -> Other.
 
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
-    case hb_maps:get(<<"bundle">>, Req, not_found, Opts) of
+    case hb_maps_raw:get(<<"bundle">>, Req, not_found, Opts) of
         not_found -> hb_opts:get(linkify_mode, offload, Opts);
     	true ->
             % The request is asking for a bundle, so we should _not_ linkify.
@@ -189,7 +191,7 @@ to(TABM0, Req, Opts) ->
         maps:fold(
             fun (<<"ao-types">>, _Value, Acc) -> Acc;
             (RawKey, BinValue, Acc) when is_binary(BinValue) ->
-                case hb_maps:find(hb_ao:normalize_key(RawKey), Types, Opts) of
+                case hb_maps_raw:find(hb_ao:normalize_key(RawKey), Types, Opts) of
                     % The value is a binary, no parsing required
                     error -> Acc#{ RawKey => BinValue };
                     % Parse according to its type
@@ -233,9 +235,9 @@ encode_ao_types(Types, _Opts) ->
 %% as there can be no `ao-types'.
 decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->
-    decode_ao_types(hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);
+    decode_ao_types(hb_maps_raw:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);
 decode_ao_types(Bin, _Opts) when is_binary(Bin) ->
-    hb_maps:from_list(
+    hb_maps_raw:from_list(
         lists:map(
             fun({Key, {item, {_, Value}, _}}) ->
                 {hb_escape:decode(Key), Value}
@@ -256,8 +258,8 @@ is_list_from_ao_types(Types, _Opts) ->
 
 %% @doc Find the implicit keys of a TABM.
 implicit_keys(Req, Opts) ->
-    hb_maps:keys(
-        hb_maps:filtermap(
+    hb_maps_raw:keys(
+        hb_maps_raw:filtermap(
             fun(_Key, Val = <<"empty-", _/binary>>) -> {true, Val};
             (_Key, _Val) -> false
             end,
@@ -348,7 +350,7 @@ decode_value(list, Value) when is_binary(Value) ->
 decode_value(list, Value) when is_map(Value) ->
     hb_util:message_to_ordered_list(Value);
 decode_value(map, Value) ->
-    hb_maps:from_list(
+    hb_maps_raw:from_list(
         lists:map(
             fun({Key, {item, Item, _}}) ->
                 ?event({decoded_item, {explicit, Key}, Item}),

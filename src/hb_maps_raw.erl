@@ -16,7 +16,7 @@
 %%% Utilise the `hb_ao' module and read the documentation therein, saving
 %%% yourself from the inevitable issues that will arise from using this
 %%% module without understanding the full implications. You have been warned.
--module(hb_maps).
+-module(hb_maps_raw).
 -export([get/2, get/3, get/4, put/3, put/4, find/2, find/3]).
 -export([is_key/2, is_key/3, keys/1, keys/2, values/1, values/2]).
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
@@ -24,8 +24,6 @@
 -export([merge/2, merge/3, remove/2, remove/3]).
 -export([with/2, with/3, without/2, without/3, update_with/3, update_with/4]).
 -export([from_list/1, to_list/1, to_list/2]).
--export([expand/1, expand/2]).
--include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -spec get(Key :: term(), Map :: map()) -> term().
@@ -38,8 +36,6 @@ get(Key, Map, Default) ->
 
 %% @doc Get a value from a map, resolving links as they are encountered in both
 %% the TABM encoded link format, as well as the structured type.
-%% Additionally, honor message extensions by checking `<<"...">>` when a key is
-%% not found in the current map.
 -spec get(
     Key :: term(),
     Map :: map(),
@@ -47,34 +43,14 @@ get(Key, Map, Default) ->
     Opts :: map()
 ) -> term().
 get(Key, Map, Default, Opts) ->
-    LoadedMap = hb_cache:ensure_all_loaded(Map, Opts),
-    case maps:find(Key, LoadedMap) of
-        % TODO: unify
-        {ok, <<"unset">>} -> Default;
-        {ok, unset} -> Default;
-        {ok, Value} -> hb_cache:ensure_loaded(Value, Opts);
-        _ -> get_from_extension(Key, LoadedMap, Default, Opts)
-    end.
-
-get_from_extension(Key, LoadedMap, Default, Opts) ->
-    case maps:find(<<"...">>, LoadedMap) of
-        {ok, Expanded} ->
-            ExpandedLoaded = hb_cache:ensure_all_loaded(Expanded, Opts),
-            case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                true -> get(Key, ExpandedLoaded, Default, Opts);
-                false -> Default
-            end;
-        _ ->
-            case maps:find(<<"...+link">>, LoadedMap) of
-                {ok, LinkID} ->
-                    ExpandedLoaded = hb_cache:ensure_all_loaded({link, LinkID, Opts}, Opts),
-                    case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                        true -> get(Key, ExpandedLoaded, Default, Opts);
-                        false -> Default
-                    end;
-                _ -> Default
-            end
-    end.
+    hb_cache:ensure_loaded(
+        maps:get(
+            Key,
+            hb_cache:ensure_loaded(Map, Opts),
+            Default
+        ),
+        Opts
+    ).
 
 -spec find(Key :: term(), Map :: map()) -> {ok, term()} | error.
 find(Key, Map) ->
@@ -82,33 +58,9 @@ find(Key, Map) ->
 
 -spec find(Key :: term(), Map :: map(), Opts :: map()) -> {ok, term()} | error.
 find(Key, Map, Opts) ->
-    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
-    case maps:find(Key, LoadedMap) of
-        {ok, Value} -> {ok, hb_cache:ensure_loaded(Value, Opts)};
-        error -> find_from_extension(Key, LoadedMap, Opts)
-    end.
+    hb_cache:ensure_loaded(maps:find(Key, hb_cache:ensure_loaded(Map, Opts)), Opts).
 
-find_from_extension(Key, LoadedMap, Opts) ->
-    case maps:find(<<"...">>, LoadedMap) of
-        {ok, Expanded} ->
-            ExpandedLoaded = hb_cache:ensure_loaded(Expanded, Opts),
-            case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                true -> find(Key, ExpandedLoaded, Opts);
-                false -> error
-            end;
-        _ ->
-            case maps:find(<<"...+link">>, LoadedMap) of
-                {ok, LinkID} ->
-                    ExpandedLoaded = hb_cache:ensure_loaded({link, LinkID, Opts}, Opts),
-                    case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                        true -> find(Key, ExpandedLoaded, Opts);
-                        false -> error
-                    end;
-                _ -> error
-            end
-    end.
-
-    -spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
+-spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
 put(Key, Value, Map) ->
 	put(Key, Value, Map, #{}).
 
@@ -119,15 +71,7 @@ put(Key, Value, Map) ->
 	Opts :: map()
 ) -> map().
 put(Key, Value, Map, Opts) ->
-    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
-    case ?IS_EMPTY_MESSAGE(LoadedMap) of
-        true -> #{ Key => Value };
-        false -> 
-            case get(Key, LoadedMap, not_found, Opts) of
-                Value -> LoadedMap;
-                _ -> #{ Key => Value, <<"...">> => LoadedMap }
-            end
-    end.
+    maps:put(Key, Value, hb_cache:ensure_loaded(Map, Opts)).
 
 -spec is_key(Key :: term(), Map :: map()) -> boolean().
 is_key(Key, Map) ->
@@ -135,25 +79,7 @@ is_key(Key, Map) ->
 
 -spec is_key(Key :: term(), Map :: map(), Opts :: map()) -> boolean().
 is_key(Key, Map, Opts) ->
-    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
-    case maps:find(Key, LoadedMap) of
-        {ok, unset} -> false;
-        {ok, <<"unset">>} -> false;
-        {ok, _} -> true;
-        _ -> is_key_from_extension(Key, LoadedMap, Opts)
-    end.
-
-is_key_from_extension(Key, LoadedMap, Opts) ->
-    case maps:find(<<"...">>, LoadedMap) of
-        {ok, Expanded} ->
-            ExpandedLoaded = hb_cache:ensure_loaded(Expanded, Opts),
-            case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                true -> is_key(Key, ExpandedLoaded, Opts);
-                false -> false
-            end;
-        _ ->
-            false
-    end.
+    maps:is_key(Key, hb_cache:ensure_loaded(Map, Opts)).
 
 -spec keys(Map :: map()) -> [term()].
 keys(Map) ->
@@ -176,7 +102,7 @@ size(Map) ->
 
 -spec size(Map :: map(), Opts :: map()) -> non_neg_integer().
 size(Map, Opts) ->
-    maps:size(Map).
+    maps:size(hb_cache:ensure_loaded(Map, Opts)).
 
 -spec map(
     Fun :: fun((Key :: term(), Value :: term()) -> term()),
@@ -202,20 +128,15 @@ merge(Map1, Map2) ->
 
 -spec merge(Map1 :: map(), Map2 :: map(), Opts :: map()) -> map().
 merge(Map1, Map2, Opts) ->
-    LoadedMap1 = hb_cache:ensure_loaded(Map1, Opts),
-    LoadedMap2 = hb_cache:ensure_loaded(Map2, Opts),
-    case {?IS_EMPTY_MESSAGE(LoadedMap1), ?IS_EMPTY_MESSAGE(LoadedMap2)} of
-        {true, _} -> LoadedMap2;
-        {_, true} -> LoadedMap1;
-        {false, false} -> LoadedMap2#{ <<"...">> => LoadedMap1 }
-    end.
+    maps:merge(hb_cache:ensure_loaded(Map1, Opts), hb_cache:ensure_loaded(Map2, Opts)).
+
 -spec remove(Key :: term(), Map :: map()) -> map().
 remove(Key, Map) ->
 	remove(Key, Map, #{}).
 
 -spec remove(Key :: term(), Map :: map(), Opts :: map()) -> map().
 remove(Key, Map, Opts) ->
-    without([Key], Map, Opts).
+    maps:remove(Key, hb_cache:ensure_loaded(Map, Opts)).
 
 -spec with(Keys :: [term()], Map :: map()) -> map().
 with(Keys, Map) ->
@@ -231,23 +152,7 @@ without(Keys, Map) ->
 
 -spec without(Keys :: [term()], Map :: map(), Opts :: map()) -> map().
 without(Keys, Map, Opts) ->
-    UnsetKeys = 
-        lists:foldl(
-            fun(Key, Acc) -> 
-                case hb_maps:get(Key, Map, not_found, Opts) of
-                    not_found -> Acc;
-                    unset -> Acc;
-                    <<"unset">> -> Acc;
-                    _ -> Acc#{ Key => <<"unset">> }
-                end
-            end,
-            #{},
-            Keys
-        ),
-    case map_size(UnsetKeys) of
-        0 -> Map;
-        _ -> UnsetKeys#{ <<"...">> => Map }
-    end.
+    maps:without(Keys, hb_cache:ensure_loaded(Map, Opts)).
 
 -spec filter(
     Fun :: fun((Key :: term(), Value :: term()) -> boolean()),
@@ -287,7 +192,7 @@ filtermap(Fun, Map) ->
 filtermap(Fun, Map, Opts) ->
     maps:filtermap(
         fun(K, V) -> Fun(K, hb_cache:ensure_loaded(V, Opts)) end,
-        Map
+        hb_cache:ensure_loaded(Map, Opts)
     ).
 
 -spec fold(
@@ -308,7 +213,7 @@ fold(Fun, Acc, Map, Opts) ->
     maps:fold(
         fun(K, V, CurrAcc) -> Fun(K, hb_cache:ensure_loaded(V, Opts), CurrAcc) end,
         Acc,
-        Map
+        hb_cache:ensure_loaded(Map, Opts)
     ).
 
 -spec take(N :: non_neg_integer(), Map :: map()) -> map().
@@ -317,18 +222,7 @@ take(N, Map) ->
 
 -spec take(N :: non_neg_integer(), Map :: map(), Opts :: map()) -> map().
 take(N, Map, Opts) ->
-    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
-    case maps:find(N, LoadedMap) of
-        {ok, Value} ->
-            {Value, maps:remove(N, LoadedMap)};
-        error ->
-            case find(N, LoadedMap, Opts) of
-                {ok, Value} ->
-                    {Value, #{ N => <<"unset">>, <<"...">> => LoadedMap }};
-                error ->
-                    error
-            end
-    end.
+    maps:take(N, hb_cache:ensure_loaded(Map, Opts)).
 
 -spec update_with(
     Key :: term(),
@@ -345,11 +239,7 @@ update_with(Key, Fun, Map) ->
     Opts :: map()
 ) -> map().
 update_with(Key, Fun, Map, Opts) ->
-    case find(Key, Map, Opts) of
-        {ok, Value} ->
-            put(Key, Fun(Value), hb_cache:ensure_loaded(Map, Opts), Opts);
-        error -> erlang:error({badkey, Key})
-    end.
+    maps:update_with(Key, Fun, hb_cache:ensure_loaded(Map, Opts), Opts).
 
 -spec from_list(List :: [{Key :: term(), Value :: term()}]) -> map().
 from_list(List) ->
@@ -363,72 +253,6 @@ to_list(Map) ->
 to_list(Map, Opts) ->
     maps:to_list(hb_cache:ensure_loaded(Map, Opts)).
 
-%% @doc Expand message extensions (<<"...">>) into a merged map view.
-%% The extension key is treated as an overlay base and is omitted from
-%% the returned map.
-expand(Map) ->
-    expand(Map, #{}).
-expand(Map, Opts) ->
-    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
-    FlatMap =
-        case maps:find(<<"...">>, LoadedMap) of
-            {ok, Expanded} ->
-                ExpandedLoaded = hb_cache:ensure_loaded(Expanded, Opts),
-                case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                    true ->
-                        RecursiveExpanded = expand(ExpandedLoaded, Opts),
-                        maps:merge(
-                            RecursiveExpanded,
-                            maps:remove(<<"...">>, LoadedMap)
-                        );
-                    false ->
-                        LoadedMap
-                end;
-            _ ->
-                % TODO: unify cases
-                case maps:find(<<"...+link">>, LoadedMap) of
-                    {ok, LinkID} ->
-                        ExpandedLoaded = hb_cache:ensure_loaded({link, LinkID, Opts}, Opts),
-                        case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
-                            true -> 
-                                RecursiveExpanded = expand(ExpandedLoaded, Opts),
-                                maps:merge(
-                                    RecursiveExpanded,
-                                    maps:remove(<<"...+link">>, LoadedMap)
-                                );
-                            false -> LoadedMap
-                        end;
-                    _ ->
-                        LoadedMap
-                end
-        end,
-    % Recursively expand ... within each map value.
-    ExpandedMap =
-        maps:map(
-            fun(_, V) ->
-                Loaded = hb_cache:ensure_loaded(V, Opts),
-                case is_map(Loaded) andalso maps:is_key(<<"...">>, Loaded) of
-                    true -> expand(Loaded, Opts);
-                    false -> Loaded
-                end
-            end,
-            FlatMap
-        ),
-    UnsetKeys = 
-        maps:filtermap(
-            fun(Key, Value) ->
-                case Value of
-                    unset -> {true, <<"unset">>};
-                    <<"unset">> -> {true, <<"unset">>};
-                    _ -> false
-                end
-            end,
-            LoadedMap
-        ),
-    case map_size(UnsetKeys) of
-        0 -> ExpandedMap;
-        _ -> maps:without(maps:keys(UnsetKeys), ExpandedMap)
-    end.
 %%% Tests
 
 get_with_link_test() ->
@@ -508,52 +332,4 @@ filtermap_passively_loads_test() ->
     ?assertEqual(
         #{ 1 => 1, 2 => <<"TEST DATA">>, 3 => 3 },
         filtermap(fun(_, V) -> {true, V} end, Map)
-    ).
-
-get_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual(2, get(<<"a">>, Map, not_found)),
-    ?assertEqual(1, get(<<"b">>, Map, not_found)).
-
-find_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual({ok, 2}, find(<<"a">>, Map, #{})),
-    ?assertEqual({ok, 1}, find(<<"b">>, Map, #{})),
-    ?assertEqual(error, find(<<"c">>, Map, #{})).
-
-is_key_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual(true, is_key(<<"a">>, Map, #{})),
-    ?assertEqual(true, is_key(<<"b">>, Map, #{})),
-    ?assertEqual(false, is_key(<<"c">>, Map, #{})).
-
-keys_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual([<<"a">>, <<"b">>], lists:sort(keys(Map, #{}))).
-
-put_with_extension_test() ->
-    Map = #{ <<"a">> => 1 },
-    ?assertEqual(Map, put(<<"a">>, 1, Map, #{})),
-    ?assertEqual(#{ <<"b">> => 2, <<"...">> => Map }, put(<<"b">>, 2, Map, #{})).
-
-remove_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual(#{ <<"a">> => <<"unset">>, <<"...">> => Map }, remove(<<"a">>, Map, #{})).
-
-take_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual(
-        {2, #{ <<"a">> => <<"unset">>, <<"...">> => Map }},
-        take(<<"a">>, Map, #{})
-    ),
-    ?assertEqual(
-        {1, #{ <<"...">> => #{ <<"a">> => 2 } }},
-        take(<<"b">>, Map, #{})
-    ).
-
-update_with_extension_test() ->
-    Map = #{ <<"b">> => 1, <<"...">> => #{ <<"a">> => 2 } },
-    ?assertEqual(
-        #{ <<"a">> => 3, <<"...">> => Map },
-        update_with(<<"a">>, fun(V) -> V + 1 end, Map, #{})
     ).

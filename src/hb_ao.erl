@@ -241,12 +241,12 @@ resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_I
     % If the first message is an `as' with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
     ?event(ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
+    RemBase = hb_maps_raw:without([<<"path">>], Raw, Opts),
     ?event(subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
     Baseb = ensure_message_loaded(ID, Opts),
     ?event(subresolution, {loaded_message, {msg, Baseb}}, Opts),
     Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event(subresolution, {merged_message, {msg, Basec}}, Opts),
+    ?event(subresolution, {merged_message, {left, Baseb}, {right, RemBase}, {merged, Basec}}, Opts),
     Based = set(Basec, <<"device">>, DevID, Opts),
     ?event(subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
     resolve_stage(1, Based, Req, Opts);
@@ -276,12 +276,15 @@ resolve_stage(1, RawBase, ReqOuter = #{ <<"path">> := {as, DevID, ReqInner} }, O
     % of the sub-resolution directly.
     ?event(ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
     LoadedInner = ensure_message_loaded(ReqInner, Opts),
+    OuterWithoutPath = hb_maps_raw:remove(<<"path">>, ReqOuter, Opts),
+    InnerAsPath = 
+        if is_binary(LoadedInner) -> #{ <<"path">> => LoadedInner };
+        true -> LoadedInner
+    end,
     Req =
         hb_maps:merge(
-            set(ReqOuter, <<"path">>, unset, Opts),
-            if is_binary(LoadedInner) -> #{ <<"path">> => LoadedInner };
-            true -> LoadedInner
-            end,
+            OuterWithoutPath,
+            InnerAsPath,
 			Opts
         ),
     ?event(subresolution,
@@ -404,7 +407,7 @@ resolve_stage(4, Base, Req, Opts) ->
     % the `dev_process' device 'groups' all calls to the same process onto
     % calls to a single executor. By default, `{Base, Req}' is used as the
     % group name.
-    case hb_persistent:find_or_register(Base, Req, hb_maps:without(?TEMP_OPTS, Opts, Opts)) of
+    case hb_persistent:find_or_register(Base, Req, hb_maps_raw:without(?TEMP_OPTS, Opts, Opts)) of
         {leader, ExecName} ->
             % We are the leader for this resolution. Continue to the next stage.
             case hb_opts:get(spawn_worker, false, Opts) of
@@ -464,7 +467,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
     % execute Req on Base.
 	{ResolvedFunc, NewOpts} =
 		try
-            UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
+            UserOpts = hb_maps_raw:without(?TEMP_OPTS, Opts, Opts),
 			Key = hb_path:hd(Req, UserOpts),
 			% Try to load the device and get the function to call.
             ?event(
@@ -733,21 +736,21 @@ subresolve(RawBase, DevID, Req, Opts) ->
     % and instead apply the request message directly.
     case hb_path:from_message(request, Req, Opts) of
         undefined ->
-            Base3 =
-                case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
-                    0 -> Base2;
-                    _ ->
-                        set(
-							Base2,
-							set(Req, <<"path">>, unset, Opts),
-							Opts#{ force_message => false }
-						)
-                end,
-            ?event(subresolution,
-                {subresolve_modified_base, Base3},
-                Opts
-            ),
-            {ok, Base3};
+            % Base3 =
+            %     case map_size(maps:without([<<"path">>], Req)) of
+            %         0 -> Base2;
+            %         _ -> Base2
+            %             % set(
+			% 				% Base2,
+			% 				% set(Req, <<"path">>, unset, Opts),
+			% 				% Opts#{ force_message => false }
+			% 			% )
+            %     end,
+            % ?event(subresolution,
+            %     {subresolve_modified_base, Base3},
+            %     Opts
+            % ),
+            {ok, Base2};
         Path ->
             ?event(subresolution,
                 {exec_subrequest_on_base,
@@ -1006,10 +1009,11 @@ keys(Msg, Opts, remove) ->
 %% `HashPath' for each step.
 set(Base, Req, Opts) ->
     {ok, UnflattenedReq} = dev_codec_flat:from(Req, #{}, Opts),
-    ?event(debug_set, {unflattened_req, UnflattenedReq}, Opts),
+    % Expand the request to ensure that it is deep set.
+    ExpandedUnflattenedReq = hb_maps:expand(UnflattenedReq, Opts),
     device_set(
         Base,
-        UnflattenedReq,
+        ExpandedUnflattenedReq,
         Opts
     ).
 set(Base, Key, Value, Opts) ->
@@ -1024,16 +1028,9 @@ device_set(Base, Req, Mode, Opts) ->
     % Next, set the path of the base message individually if it is present in the
     % request.
     BaseWithPathSet =
-        case hb_maps:find(<<"path">>, Req, Opts) of
+        case hb_maps_raw:find(<<"path">>, Req, Opts) of
             {ok, Path} ->
-                hb_util:ok(
-                    resolve(
-                        Base,
-                        #{ <<"path">> => <<"set-path">>, <<"value">> => Path },
-                        InternalOpts
-                    ),
-                    Opts
-                );
+                #{ <<"path">> => Path, <<"...">> => Base };
             error ->
                 Base
         end,
@@ -1126,7 +1123,7 @@ normalize_keys(Other, _Opts) -> Other.
 %% @doc The execution options that are used internally by this module
 %% when calling itself.
 internal_opts(Opts) ->
-    hb_maps:merge(Opts, #{
+    maps:merge(Opts, #{
         topic => hb_opts:get(topic, ao_internal, Opts),
         hashpath => ignore,
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -1139,11 +1136,11 @@ internal_opts(Opts) ->
 execution_opts(Opts) ->
 	% First, determine the arguments to pass to the function.
 	% While calculating the arguments we unset the add_key option.
-	Opts1 = hb_maps:remove(trace, hb_maps:without(?TEMP_OPTS, Opts, Opts), Opts),
+	Opts1 = maps:remove(trace, maps:without(?TEMP_OPTS, Opts)),    
     % Unless the user has explicitly requested recursive spawning, we
     % unset the spawn_worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_maps:get(spawn_worker, Opts1, false, Opts) of
+    case maps:get(spawn_worker, Opts1, false) of
         recursive -> Opts1;
-        _ -> hb_maps:remove(spawn_worker, Opts1, Opts)
+        _ -> maps:remove(spawn_worker, Opts1)
     end.

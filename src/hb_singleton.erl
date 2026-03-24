@@ -141,7 +141,7 @@ from(RawMsg, Opts) ->
     ?event(parsing, {parsed_path, Path, Query}),
     MsgWithoutBasePath =
         hb_maps:merge(
-            hb_maps:remove(<<"path">>, RawMsg),
+            hb_maps_raw:remove(<<"path">>, RawMsg),
             Query
         ),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
@@ -300,8 +300,8 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
                 % messages. AO-Core will then simply set the device specifier
                 % and not execute a subresolve.
                 {
-                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
-                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
+                    hb_maps_raw:remove(<<"path">>, RawMsg, Opts),
+                    hb_maps_raw:remove(<<"path">>, RawAdditional, Opts)
                 };
             _BasePath ->
                 % When we have a non-empty path, we merge the messages in

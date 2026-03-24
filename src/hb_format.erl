@@ -704,11 +704,15 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
     % force calculation of the IDs here because that may cause significant
     % overhead unless the `debug_ids' option is set.
     KnownComms =
-        hb_maps:without(
-            [<<"commitments">>, <<"priv">>],
-            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-            Opts
-        ),
+        case is_map(C = hb_maps_raw:get(<<"commitments">>, Msg, #{}, Opts)) of 
+            true -> 
+                hb_maps_raw:without(
+                    [<<"commitments">>, <<"priv">>],
+                    C,
+                    Opts
+                );
+            _ -> #{}
+        end,
     MsgWithNormComms = #{ <<"commitments">> := Comms } =
         case map_size(KnownComms) == 0 andalso GenerateIDs of
             false -> Msg#{ <<"commitments">> => KnownComms };

@@ -150,7 +150,8 @@ report_ensure_loaded_not_found(Ref, Lk, Opts) ->
     throw(
         {necessary_message_not_found,
             hb_path:to_binary(lists:reverse(Ref)),
-            hb_link:format_unresolved(Lk, Opts, 0)
+            hb_link:format_unresolved(Lk, Opts, 0),
+            {opts, Opts}
         }
     ).
 
@@ -270,6 +271,8 @@ write(List, Opts) when is_list(List) ->
 write(Bin, Opts) when is_binary(Bin) ->
     do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
 
+do_write_message(Atom, Store, Opts) when is_atom(Atom) ->
+    do_write_message(hb_util:bin(Atom), Store, Opts);
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
     % Return the path.
@@ -317,7 +320,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     {ok, UncommittedID}.
 
 %% @doc Write a single key for a message into the store.
-write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
+write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) when is_map(RawCommitments) ->
     % The commitments are a special case: We calculate the single-part hashpath
     % for the `baseID/commitments` key, then write each commitment to the store
     % and link it to `baseCommHP/commitmentID`.
@@ -666,8 +669,12 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
 %% list of subpaths, returning a map of keys and their types.
 read_ao_types(Path, Subpaths, Store, Opts) ->
     ?event({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
-    case lists:member(<<"ao-types">>, Subpaths) of
-        true ->
+    % TODO: Better fix for hb_maps:expand resolving ao types
+    case {
+        hb_opts:get(resolve_types, true, Opts),
+        lists:member(<<"ao-types">>, Subpaths)
+    } of
+        {true, true} ->
             {ok, TypesBin} =
                 hb_store:read(
                     Store,
@@ -676,7 +683,7 @@ read_ao_types(Path, Subpaths, Store, Opts) ->
             Types = dev_codec_structured:decode_ao_types(TypesBin, Opts),
             ?event({parsed_ao_types, {types, Types}}),
             {ok, types_to_implicit(Types), Types};
-        false ->
+        {_, _} ->
             ?event({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
             {ok, #{}, #{}}
     end.
@@ -752,9 +759,9 @@ read_resolved(Base, Req, Opts) ->
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').
-read_in_memory_key(BaseMsg, NormKey, _Opts) ->
+read_in_memory_key(BaseMsg, NormKey, Opts) ->
     % For now, just wrap maps:find.
-    case maps:find(NormKey, BaseMsg) of
+    case hb_maps:find(NormKey, BaseMsg, Opts) of
         error ->
             ?event(read_cached, {key_not_found, {key, NormKey}}),
             not_found;

@@ -48,8 +48,8 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
     {ok, EncMsg} = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     {ok,
         #{
-            <<"body">> => hb_maps:get(<<"body">>, EncMsg, <<>>),
-            <<"headers">> => hb_maps:without([<<"body">>], EncMsg)
+            <<"body">> => hb_maps_raw:get(<<"body">>, EncMsg, <<>>),
+            <<"headers">> => hb_maps_raw:without([<<"body">>], EncMsg)
         }
     };
 serialize(Msg, _Req, Opts) ->
@@ -205,7 +205,14 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
             Opts
         ),
     % Extract the base commitments from the message.
-    Commitments = maps:get(<<"commitments">>, Msg, #{}),
+    % TODO: Fix this! We do not want to grab any nested commitments here.
+    % Should be simpler / util fn, though
+    Commitments = 
+        case maps:get(<<"commitments">>, Msg, #{}) of
+            unset -> #{};
+            <<"unset">> -> #{};
+            C -> C
+        end,
     CommittedKeys = keys_to_commit(Msg, Req, Opts),
     % Create the commitment with the appropriate keyid, committed keys, and 
     % bundle specifier.
@@ -361,7 +368,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
     EncodedKeys = maps:keys(Encoded),
     EncodedKeysWithBodyKey =
-        case hb_maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
+        case hb_maps_raw:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
             not_found ->
                 EncodedKeys;
             AOBodyKey ->
@@ -457,7 +464,7 @@ signature_base(EncodedMsg, Commitment, Opts) ->
 %% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.1
 signature_components_line(Req, Commitment, _Opts) ->
 	ComponentsLines =
-        lists:map(
+        lists:filtermap(
             fun(Name) ->
                 case maps:get(Name, Req, not_found) of
                     not_found ->
@@ -469,8 +476,10 @@ signature_components_line(Req, Commitment, _Opts) ->
                                 {commitment, Commitment}
                             }
                         );
-                    Value ->
-                        <<"\"", Name/binary, "\": ", Value/binary>>
+                    % TODO: what to do here?
+                    Value when is_map(Value) -> false;
+                    Value when is_binary(Value) ->
+                        {true, <<"\"", Name/binary, "\": ", Value/binary>>}
                 end
             end,
             maps:get(<<"committed">>, Commitment)

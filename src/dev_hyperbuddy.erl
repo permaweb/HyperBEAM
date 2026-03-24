@@ -124,7 +124,10 @@ format(Base, Req, Opts) ->
                     hb_format:message(
                         MsgLoaded,
                         Opts#{
-                            linkify_mode => discard,
+                            % TODO: this should be discard, but 
+                            % multiple_as_subresolutions_test is failing
+                            % (necessary message not found)
+                            linkify_mode => offload,
                             cache_control => [<<"no-cache">>, <<"no-store">>],
                             debug_print_truncate => TruncateKeys
                         }

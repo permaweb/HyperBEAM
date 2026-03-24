@@ -105,8 +105,9 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             Opts
         ),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
-    ID = hb_message:id(RawMsg, all),
-    ?event({encoding, {id, ID}, {msg, RawMsg}}),
+    ID = hb_message:id(RawMsg, all, Opts),
+    Verifies = hb_message:verify(RawMsg, all, Opts),
+    ?event({encoding, {id, ID}, {msg, RawMsg}, {verifies, Verifies}}),
 	{Owner, Signature, PublicKey} =
         case hb_message:signers(RawMsg, Opts) of
             [] -> {<<>>, <<>>, <<>>};
@@ -193,7 +194,9 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     }.
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
-prepare_tags(Msg, Opts) ->
+prepare_tags(RawMsg, Opts) ->
+    % TODO: Remove resolve_types
+    Msg = hb_maps:expand(RawMsg, Opts#{ resolve_types => false }),
     % Prepare an ANS-104 message for JSON-Struct construction.
     case hb_message:commitment(#{ <<"commitment-device">> => <<"ans104@1.0">> }, Msg, Opts) of
         {ok, _, Commitment} ->
@@ -221,7 +224,7 @@ prepare_header_case_tags(TABM, Opts) ->
             }
         end,
         hb_maps:to_list(
-            hb_maps:without(
+            hb_maps_raw:without(
                 [
                     <<"id">>, <<"anchor">>, <<"owner">>, <<"data">>,
                     <<"target">>, <<"signature">>, <<"commitments">>

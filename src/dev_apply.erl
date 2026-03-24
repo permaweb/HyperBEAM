@@ -275,13 +275,12 @@ apply_over_http_test() ->
             #{ priv_wallet => hb:wallet() }
         )
     ),
-    ?assertEqual(
-        {ok, <<"DATA">>},
+    Res = 
         hb_http:request(
             <<"GET">>,
             Node,
             <<"/user-path">>,
             Signed,
             #{ priv_wallet => hb:wallet() }
-        )
-    ).
+        ),
+    ?assertEqual({ok, <<"DATA">>}, Res).

@@ -223,7 +223,7 @@ is_exported(Info = #{ excludes := Excludes }, Key, Opts) ->
     NormKey = maybe_normalize_device_key(Key, existing),
     case lists:member(NormKey, lists:map(fun maybe_normalize_device_key/1, Excludes)) of
         true -> false;
-        false -> is_exported(hb_maps:remove(excludes, Info, Opts), Key, Opts)
+        false -> is_exported(hb_maps_raw:remove(excludes, Info, Opts), Key, Opts)
     end;
 is_exported(#{ exports := Exports }, Key, _Opts) ->
     lists:member(

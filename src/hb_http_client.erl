@@ -60,14 +60,15 @@ maybe_retry(Remaining, Args, ErrDetails, Opts) ->
     request(Args, Remaining - 1, Opts).
 
 httpc_req(Args, Opts) ->
-    #{
-        peer := Peer,
-        path := Path,
-        method := RawMethod,
-        headers := Headers,
-        body := Body
-    } = Args,
-    ?event({httpc_req, Args}),
+    ExpandedArgs = hb_maps:expand(Args, Opts),
+    ?event(debug_httpc_req, {expanded_args, ExpandedArgs}),
+    Peer = hb_maps:get(peer, ExpandedArgs, undefined, Opts),
+    Path = hb_maps:get(path, ExpandedArgs, undefined, Opts),
+    RawMethod = hb_maps:get(method, ExpandedArgs, undefined, Opts),
+    RawHeaders = hb_maps:get(headers, ExpandedArgs, #{}, Opts),
+    Headers = hb_maps:expand(RawHeaders, Opts),
+    ?event(debug_httpc_req, {headers, {raw, {explicit, RawHeaders}}, {expanded, {explicit, Headers}}}, Opts),
+    Body = hb_maps:get(body, ExpandedArgs, undefined, Opts),
     {Host, Port} = parse_peer(Peer, Opts),
     Scheme = case Port of
         443 -> "https";
@@ -75,7 +76,8 @@ httpc_req(Args, Opts) ->
     end,
     ?event(http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
-    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+    RawFilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+    FilteredHeaders = hb_maps:expand(RawFilteredHeaders, Opts),
     HeaderKV =
         [
             {binary_to_list(Key), binary_to_list(Value)}

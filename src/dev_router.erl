@@ -394,7 +394,10 @@ do_apply_route(
             {ok, NewPath};
         _ ->
             {error, invalid_replace_args}
-    end.
+    end;
+do_apply_route(Msg = #{ <<"...">> := _ }, Req, Opts) ->
+    Expanded = hb_maps:expand(Msg, Opts),
+    do_apply_route(Expanded, Req, Opts).
 
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this

@@ -299,7 +299,7 @@ start_worker(GroupName, Msg, Opts) ->
                     [
                         GroupName,
                         Msg,
-                        hb_maps:merge(Opts, #{
+                        hb_maps_raw:merge(Opts, #{
                             is_worker => true,
                             spawn_worker => false,
                             allow_infinite => true
