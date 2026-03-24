@@ -422,14 +422,14 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
-        {ok, Resources} =
+        {ok, Resources} ?=
             hb_maps:find(
                 <<"resources">>,
                 Base,
                 <<"No resources found in mint state.">>,
                 Opts
             ),
-        {ok, Resource} = 
+        {ok, Resource} ?= 
             hb_maps:find(
                 ResourceID,
                 Resources,
@@ -856,7 +856,7 @@ end.
 %%
 %% N.B: `dev_security` is open-by-default when no valid/required/match policy
 %% is present, so absent authority config does not restrict this action. check
-%% AuthRes logic chain for better gating-understanding.
+%% `AuthRes` logic chain for better gating-understanding.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
