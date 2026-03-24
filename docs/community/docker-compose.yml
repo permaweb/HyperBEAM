@@ -1,0 +1,13 @@
+services:
+  hyperbeam:
+    build: .
+    network_mode: "host"
+    environment:
+      - ARWEAVE_NODE=${ARWEAVE_NODE:-http://localhost:1984}
+      - HB_PORT=${HB_PORT:-8001}
+      - DATA_DIR=/data/rolling
+    volumes:
+      - hyperbeam-data:/data
+
+volumes:
+  hyperbeam-data:
