@@ -1125,8 +1125,8 @@ deposit_with_negative_amount_test() ->
     Opts = #{},
     % Negative deposits should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:deposit(Alice, ResourceOxygen, -10, S0, Opts)
     ).
 
@@ -1136,8 +1136,8 @@ withdraw_with_negative_amount_test() ->
     Opts = #{},
     % Negative withdrawals should be rejected
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:withdraw(Alice, ResourceOxygen, -5, S0, Opts)
     ).
 
@@ -1147,9 +1147,9 @@ deposit_non_integer_quantity_test() ->
     Opts = #{},
     % Non-integer quantities should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
 
 deposit_non_binary_address_test() ->
     ResourceOxygen = <<"oxygen">>,
@@ -1166,8 +1166,8 @@ delegate_negative_amount_test() ->
     Opts = #{},
     % Negative delegation amount should be rejected
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
     ).
 

@@ -572,7 +572,7 @@ delegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec delegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
     maybe
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
@@ -700,7 +700,11 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             )}
                 end
         end
-end.
+end;
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Delegation Amount must be a non-negative integer">>};
+delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Delegation Amount must be of integer type">>}.
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
@@ -724,7 +728,7 @@ undelegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec undelegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
     maybe
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
@@ -856,7 +860,11 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                         end
                 end
         end
-end.
+end;
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Undelegation Amount must be a non-negative integer">>};
+undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Undelegation Amount must be of integer type">>}.
 
 %% @doc Set resource parameters in the pot. Authorization is evaluated against:
 %% - `State/parent`, if set and equal to `from`
