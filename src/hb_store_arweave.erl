@@ -167,20 +167,20 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
         fun() ->
             case read_chunks(StartOffset, Length, Opts) of
                 {ok, SerializedItem} ->
-                    Item = ar_bundles:deserialize(SerializedItem),
+                    Item =
+                        ar_bundles:deserialize(SerializedItem),
                     case hb_util:encode(Item#tx.id) of
                         ExpectedID ->
-                            {
-                                ok,
-                                hb_message:convert(
-                                    Item,
-                                    <<"structured@1.0">>,
-                                    <<"ans104@1.0">>,
-                                    Opts
-                                )
-                            };
+                            {ok, hb_message:convert(
+                                Item,
+                                <<"structured@1.0">>,
+                                <<"ans104@1.0">>,
+                                Opts
+                            )};
                         ActualID ->
-                            {error, {id_mismatch, ExpectedID, ActualID}}
+                            {error,
+                                {id_mismatch,
+                                    ExpectedID, ActualID}}
                     end;
                 {error, Reason} ->
                     {error, Reason}
@@ -192,14 +192,17 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
 
 %% @doc Load a TX from the given start offset and length. The `StartOffset' is
 %% the start of the first chunk of the data and runs for the length of the data
-%% segment, ignoring header size. After reading chunks, verifies the data
-%% matches the TX header's data_root to guard against stale offsets.
+%% segment, ignoring header size.
 load_tx(ID, StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
             {ok, StructuredTXHeader} = hb_ao:resolve(
                 #{ <<"device">> => <<"arweave@2.9">> },
-                #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
+                #{
+                    <<"path">> => <<"tx">>,
+                    <<"tx">> => ID,
+                    <<"exclude-data">> => true
+                },
                 Opts
             ),
             TXHeader =
@@ -212,23 +215,19 @@ load_tx(ID, StartOffset, Length, Opts) ->
             case Length of
                 0 ->
                     {ok, hb_message:convert(
-                        TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                        TXHeader,
+                        <<"structured@1.0">>,
+                        <<"tx@1.0">>,
+                        Opts)};
                 _ ->
                     case read_chunks(StartOffset, Length, Opts) of
                         {ok, Data} ->
-                            TXWithData = ar_tx:generate_chunk_tree(
-                                TXHeader#tx{ data = Data }),
-                            case TXWithData#tx.data_root =:= TXHeader#tx.data_root of
-                                true ->
-                                    {ok, hb_message:convert(
-                                        TXWithData,
-                                        <<"structured@1.0">>,
-                                        <<"tx@1.0">>,
-                                        Opts
-                                    )};
-                                false ->
-                                    {error, {data_root_mismatch, ID}}
-                            end;
+                            {ok, hb_message:convert(
+                                TXHeader#tx{data = Data},
+                                <<"structured@1.0">>,
+                                <<"tx@1.0">>,
+                                Opts
+                            )};
                         {error, Reason} ->
                             {error, Reason}
                     end
@@ -358,8 +357,7 @@ write_read_tx_test() ->
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
     ok.
 
-%% @doc Stale ANS-104 offset must return id_mismatch, not wrong data.
-%% Writes an ans104 offset for a fake ID pointing to a known bundle TX's
+%% @doc Stale ANS-104 offset: fake ID pointing to a known bundle TX's
 %% data range. The deserialized item's ID won't match the fake ID.
 stale_ans104_offset_returns_error_test() ->
     Store = [hb_test_utils:test_store()],
@@ -372,10 +370,11 @@ stale_ans104_offset_returns_error_test() ->
     Result = read(Opts, FakeID),
     ?assertMatch({error, {id_mismatch, _, _}}, Result).
 
-%% @doc Stale TX offset must return data_root_mismatch, not wrong data.
+%% @doc Stale TX offset must crash with data_root_mismatch.
 %% Uses a real TX ID but points the offset at a different TX's data.
-%% The header is fetched by ID (correct), but the chunk data won't match
-%% the header's data_root.
+%% The header is fetched by ID (correct), but the chunk data won't
+%% match the header's data_root. The mismatch is caught by
+%% dev_arweave_common:normalize_data_root during conversion.
 stale_tx_offset_returns_error_test() ->
     Store = [hb_test_utils:test_store()],
     Opts = #{<<"index-store">> => Store},
@@ -383,8 +382,9 @@ stale_tx_offset_returns_error_test() ->
     WrongOffset = 155309918167286,
     WrongSize = 2,
     ok = write_offset(Opts, RealID, <<"tx@1.0">>, WrongOffset, WrongSize),
-    Result = read(Opts, RealID),
-    ?assertMatch({error, {data_root_mismatch, _}}, Result).
+    ?assertError(
+        {data_root_mismatch, _, _, _},
+        read(Opts, RealID)).
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
