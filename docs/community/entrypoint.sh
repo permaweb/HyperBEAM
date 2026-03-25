@@ -4,6 +4,7 @@ set -e
 ARWEAVE_NODE="${ARWEAVE_NODE:-http://localhost:1984}"
 HB_PORT="${HB_PORT:-8001}"
 DATA_DIR="${DATA_DIR:-/data/rolling}"
+AUTO_INDEX="${AUTO_INDEX:-true}"
 
 cat > /app/config.json <<EOF
 {
@@ -51,7 +52,9 @@ start_cron() {
     echo "Continuous indexing started."
 }
 
-start_cron &
+if [ "$AUTO_INDEX" = "true" ]; then
+    start_cron &
+fi
 
 export HB_CONFIG=/app/config.json
 exec /app/hb/bin/hb foreground
