@@ -352,11 +352,13 @@ deposit(State, Assignment, Opts) ->
     else
         Reason -> {error, Reason}
     end.
--spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map().
+-spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
     modify_deposit_state(Addr, ResourceID, Amount, S0, Opts);
 deposit(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
     {error, <<"Deposit amount must be positive Integer.">>};
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Deposit amount must be a non-zero positive Integer.">>};
 deposit(_, _, Amount, _, _) when not is_integer(Amount) ->
     {error, <<"Deposit amount must be Integer.">>}.
 
@@ -385,6 +387,8 @@ withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0
     end;
 withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
     {error,  <<"Withdraw amount must be a positive Integer.">>};
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Withdraw amount must be a non-zero positive Integer.">>};
 withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
     {error, <<"Withdraw amount must be an Integer.">>}.
 
@@ -702,9 +706,11 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount),
         end
 end;
 delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
-    {error, <<"Delegation Amount must be a non-negative integer">>};
+    {error, <<"Delegate Amount must be a non-negative integer">>};
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Delegate amount must be a non-zero positive Integer.">>};
 delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
-    {error, <<"Delegation Amount must be of integer type">>}.
+    {error, <<"Delegate Amount must be of integer type">>}.
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
@@ -862,9 +868,11 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount
         end
 end;
 undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
-    {error, <<"Undelegation Amount must be a non-negative integer">>};
+    {error, <<"Undelegate Amount must be a non-negative integer">>};
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Undelegate amount must be a non-zero positive Integer.">>};
 undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
-    {error, <<"Undelegation Amount must be of integer type">>}.
+    {error, <<"Undelegate Amount must be of integer type">>}.
 
 %% @doc Set resource parameters in the pot. Authorization is evaluated against:
 %% - `State/parent`, if set and equal to `from`

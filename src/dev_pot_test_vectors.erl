@@ -672,8 +672,8 @@ deposit_zero_amount_test() ->
     % Depositing 0 should be a no-op
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % deposit/5 has guard `when Amount > 0`, so calling with 0 should not match
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         dev_pot:deposit(Alice, ResourceOxygen, 0, S0, Opts)
     ).
 
@@ -695,8 +695,8 @@ delegate_zero_amount_test() ->
     Opts = #{},
     % Delegating 0 should not match the function guard
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
     ).
 
