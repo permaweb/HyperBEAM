@@ -190,10 +190,11 @@ hackney_req(Args, Opts) ->
             upload_metric(#{method => Method, body => Body}),
             ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             RecvTimeout = hb_opts:get(http_client_send_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
+            CheckoutTimeout = hb_opts:get(http_client_hackney_checkout_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             HackneyOpts = [with_body,
                 {pool, ?HACKNEY_POOL},
                 {connect_timeout, ConnTimeout},
-                {checkout_timeout, ?DEFAULT_CONNECT_TIMEOUT},
+                {checkout_timeout, CheckoutTimeout},
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
