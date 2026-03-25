@@ -47,8 +47,13 @@ maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
     case hb_cache:read(Resolved, Opts) of 
         {ok, _} = Result -> Result;
         not_found ->
-            %% Cache Not Found seperate from Not Found, and allow to reply 404 directly.
-            {cache, not_found};
+            case is_fail_fast_on(Opts) of 
+                true ->
+                    %% Cache Not Found seperate from Not Found, and allow to reply 404 directly.
+                    {cache, not_found};
+                false ->
+                    not_found
+            end;
         Result -> Result
     end;
 maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
@@ -177,6 +182,9 @@ name_from_host(ReqHost, RawNodeHost) ->
             <<>>
         ),
     name_from_host(WithoutNodeHost, no_host).
+
+is_fail_fast_on(Opts) ->
+    maps:get(dev_name_fail_fast, Opts, false).
 
 %%% Tests.
 
