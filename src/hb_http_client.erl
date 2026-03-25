@@ -193,6 +193,7 @@ hackney_req(Args, Opts) ->
             HackneyOpts = [with_body,
                 {pool, ?HACKNEY_POOL},
                 {connect_timeout, ConnTimeout},
+                {checkout_timeout, ?DEFAULT_CONNECT_TIMEOUT},
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
