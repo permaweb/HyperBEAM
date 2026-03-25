@@ -184,7 +184,7 @@ name_from_host(ReqHost, RawNodeHost) ->
     name_from_host(WithoutNodeHost, no_host).
 
 is_fail_fast_on(Opts) ->
-    maps:get(dev_name_fail_fast, Opts, false).
+    hb_util:bool(maps:get(dev_name_fail_fast, Opts, false)).
 
 %%% Tests.
 
