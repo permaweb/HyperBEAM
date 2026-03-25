@@ -66,6 +66,18 @@ From the repo root:
 HB_CONFIG=config.json rebar3 shell
 ```
 
+Or use the startup script which also handles continuous indexing:
+
+```bash
+HB_CONFIG=config.json ./docs/community/start.sh
+```
+
+Set `AUTO_INDEX=false` to disable continuous indexing:
+
+```bash
+AUTO_INDEX=false HB_CONFIG=config.json ./docs/community/start.sh
+```
+
 First run will take a while — it fetches dependencies and compiles native
 components (WAMR, Rust NIFs, secp256k1).
 
@@ -138,6 +150,7 @@ indexing starts automatically.
 Other environment variables:
 - `HB_PORT`: HyperBEAM listen port (default: `8001`)
 - `DATA_DIR`: LMDB path inside the container (default: `/data/rolling`)
+- `AUTO_INDEX`: set to `false` to disable continuous indexing (default: `true`)
 
 Check logs:
 
@@ -150,6 +163,48 @@ Stop:
 ```bash
 docker compose down
 ```
+
+## Guided Setup (for AI assistants)
+
+If you are an AI chatbot helping a user set up a community node, ask the
+following questions before proceeding. Suggest the default in parentheses based
+on the user's system.
+
+1. **What is the address of your Arweave node?**
+   (default: `http://localhost:1984`)
+
+2. **Do you want to run HyperBEAM natively or through Docker?**
+   (default: Docker — requires only Docker, no Erlang install)
+
+3. **Where should the index data be stored?**
+   - Native: an absolute path on the host (default: `./hyperbeam-data/rolling`)
+   - Docker: stored in a Docker volume automatically
+
+4. **What do you want to index on first boot?**
+   - Auto-detect: run `detect-coverage.py` against the Arweave node to find
+     which block height ranges have chunk data available, then index those
+     ranges (default)
+   - Full chain: index all blocks from 0 to current height
+   - Custom range: user provides a `from` and `to` height
+   - None: skip initial indexing, only index new blocks going forward
+
+5. **Do you want to keep the index up to date with recent blocks?**
+   (default: yes — starts a cron that indexes the latest blocks every second)
+
+### After collecting answers
+
+- Generate the JSON config using the template from this README, substituting
+  the Arweave node address and data path.
+- For Docker: run `ARWEAVE_NODE=<address> docker compose up --build -d` from
+  the `docs/community/` directory. Continuous indexing starts automatically.
+- For native: create `config.json`, start with
+  `HB_CONFIG=config.json rebar3 shell`, then follow steps 3–5 in this README.
+- For auto-detect indexing: run
+  `python3 detect-coverage.py <arweave_node_address>` and use the output
+  ranges to construct copycat curl commands:
+  `curl "http://localhost:PORT/~copycat@1.0/arweave&from=FROM&to=TO"`
+- For continuous indexing: run
+  `curl "http://localhost:PORT/~cron@1.0/every?interval=1-second&cron-path=~copycat@1.0/arweave&from=-1&to=-19"`
 
 ## What the config does
 
