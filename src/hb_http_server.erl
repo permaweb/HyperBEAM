@@ -478,19 +478,16 @@ allowed_methods(Req, State) ->
 %% the `Request'. If a server reference exists, updates the Cowboy environment
 %% variable 'node_msg' with the resulting options map.
 set_opts(Opts) ->
-    case hb_opts:get(http_server, no_server_ref, Opts) of
+    Normalized =
+        hb_opts:mimic_default_types(Opts, false, Opts),
+    case hb_opts:get(http_server, no_server_ref, Normalized) of
         no_server_ref ->
             ok;
         ServerRef ->
-            ok = cowboy:set_env(ServerRef, node_msg, Opts)
+            ok = cowboy:set_env(
+                ServerRef, node_msg, Normalized)
     end.
 set_opts(Request, Opts) ->
-    PreparedOpts =
-        hb_opts:mimic_default_types(
-            Opts,
-            false,
-            Opts
-        ),
     PreparedRequest =
         hb_opts:mimic_default_types(
             hb_message:uncommitted(Request),
@@ -499,7 +496,7 @@ set_opts(Request, Opts) ->
         ),
     MergedOpts =
         maps:merge(
-            PreparedOpts,
+            Opts,
             PreparedRequest
         ),
     ?event(set_opts, {merged_opts, {explicit, MergedOpts}}),

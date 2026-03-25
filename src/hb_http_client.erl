@@ -42,8 +42,7 @@ response_status_to_atom(Status) ->
     end.
 
 request(Args, Opts) ->
-    Opts1 = hb_opts:mimic_default_types(Opts, existing, Opts),
-    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts1), Opts1).
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
 request(Args, RemainingRetries, Opts) ->
     Response = do_request(Args, Opts),
     case Response of
