@@ -91,10 +91,8 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
 read_offset(_, _) -> not_found.
 
 %% @doc Read the data at the given key. Returns a lazy
-%% message with data-ref for Arweave-stored items. The
-%% data-ref flows through the pipeline; hb_http:reply
-%% detects it and streams. Call materialize/2 when full
-%% data is needed.
+%% message with data-ref for Arweave-stored items. Call
+%% materialize/2 when full data is needed.
 read(StoreOpts, ID) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
@@ -167,8 +165,9 @@ do_read(StoreOpts, ID) ->
     end.
 
 %% @doc Load an ANS-104 item header and return a message
-%% with a data-ref for lazy body loading. Fetches only
-%% the first chunk to parse the ANS-104 header.
+%% with the parsed header metadata plus a data-ref for
+%% lazy body loading. Fetches only the first chunk to
+%% parse the ANS-104 header.
 load_item(StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
@@ -176,16 +175,8 @@ load_item(StartOffset, Length, Opts) ->
             case read_chunks(StartOffset, HeaderSize, Opts) of
                 {ok, HeaderData} ->
                     case ar_bundles:deserialize_header(HeaderData) of
-                        {ok, HdrSize, _HeaderTX} ->
-                            {ok, #{
-                                <<"data-ref">> => #{
-                                    <<"codec">> =>
-                                        <<"ans104@1.0">>,
-                                    <<"offset">> =>
-                                        StartOffset,
-                                    <<"length">> => Length
-                                }
-                            }};
+                        {ok, _HdrSize, HeaderTX} ->
+                            {ok, lazy_item(HeaderTX, StartOffset, Length, Opts)};
                         _ ->
                             {error, invalid_ans104_header}
                     end;
@@ -197,19 +188,74 @@ load_item(StartOffset, Length, Opts) ->
         [load_item]
     ).
 
-%% @doc Return a lazy data-ref for a TX. The TX header
-%% is fetched via hb_ao:resolve which hits the TX cache
-%% (written by to_message) on repeat calls.
-load_tx(ID, StartOffset, Length, Opts) ->
-    {ok, Msg} = hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"tx">>,
-            <<"tx">> => ID,
-            <<"exclude-data">> => true
+%% @doc Convert a parsed ANS-104 header into a lazy message that preserves the
+%% item metadata while deferring body reads to materialize/2.
+lazy_item(HeaderTX, StartOffset, Length, Opts) ->
+    BaseFields = [<<"anchor">>, <<"target">>],
+    LazyHeader =
+        HeaderTX#tx{
+            id = dev_arweave_common:generate_id(HeaderTX, signed),
+            data = ?DEFAULT_DATA,
+            data_size = 0
         },
-        Opts
-    ),
+    Fields = dev_codec_ans104_from:fields(LazyHeader, <<>>, Opts),
+    Tags = dev_codec_ans104_from:tags(LazyHeader, Opts),
+    Data = #{},
+    CommittedKeys =
+        dev_codec_ans104_from:committed(
+            BaseFields,
+            LazyHeader,
+            Fields,
+            Tags,
+            Data,
+            Opts
+        ),
+    Base =
+        dev_codec_ans104_from:base(
+            CommittedKeys,
+            Fields,
+            Tags,
+            Data,
+            Opts
+        ),
+    Structured =
+        dev_codec_ans104_from:with_commitments(
+            BaseFields,
+            LazyHeader,
+            <<"ans104@1.0">>,
+            dev_codec_ans104_from:fields(LazyHeader, ?FIELD_PREFIX, Opts),
+            Tags,
+            Base,
+            CommittedKeys,
+            Opts
+        ),
+    Structured#{
+        <<"data-ref">> => #{
+            <<"codec">> => <<"ans104@1.0">>,
+            <<"offset">> => StartOffset,
+            <<"length">> => Length
+        }
+    }.
+
+%% @doc Return a lazy data-ref for a TX. The TX header
+%% is read from the dedicated TX header cache when
+%% available, falling back to `~arweave@2.9/tx`.
+load_tx(ID, StartOffset, Length, Opts) ->
+    {ok, Msg} =
+        case dev_arweave_tx_cache:read(ID, Opts) of
+            {ok, CachedTXHeader} ->
+                {ok, CachedTXHeader};
+            not_found ->
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"arweave@2.9">> },
+                    #{
+                        <<"path">> => <<"tx">>,
+                        <<"tx">> => ID,
+                        <<"exclude-data">> => true
+                    },
+                    Opts
+                )
+        end,
     {ok, Msg#{
         <<"data-ref">> => #{
             <<"codec">> => <<"tx@1.0">>,
@@ -412,3 +458,101 @@ write_read_fake_bundle_tx_test() ->
     {ok, TX} = materialize(LazyTX, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
+
+load_tx_from_cache_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{
+        <<"index-store">> => Store,
+        store => Store,
+        priv_wallet => hb:wallet()
+    },
+    ok = start(Opts),
+    Header = test_tx_header(Opts),
+    TXID = hb_message:id(Header, signed, Opts),
+    ok = dev_arweave_tx_cache:write(Header, Opts),
+    ok = write_offset(Opts, TXID, <<"tx@1.0">>, 0, 0),
+    {ok, LazyTX} = read(Opts, TXID),
+    ?assertEqual(Header, maps:remove(<<"data-ref">>, LazyTX)),
+    {ok, Materialized} = materialize(LazyTX, Opts),
+    ?assertEqual(TXID, hb_message:id(Materialized, signed, Opts)),
+    ?assertEqual(false, maps:is_key(<<"data">>, Materialized)).
+
+lazy_item_manifest_header_test() ->
+    Opts = #{},
+    JSON =
+        hb_json:encode(
+            #{
+                <<"paths">> => #{
+                    <<"index.html">> => #{ <<"id">> => <<"some-id">> }
+                },
+                <<"index">> => #{ <<"path">> => <<"index.html">> }
+            }
+        ),
+    SignedItem =
+        ar_bundles:sign_item(
+            ar_bundles:new_item(
+                <<>>,
+                <<>>,
+                [
+                    {
+                        <<"content-type">>,
+                        <<"application/x.arweave-manifest+json">>
+                    }
+                ],
+                JSON
+            ),
+            hb:wallet()
+        ),
+    FullItem =
+        hb_message:convert(
+            SignedItem,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+    LazyItem =
+        lazy_item(
+            SignedItem,
+            100,
+            byte_size(ar_bundles:serialize(SignedItem)),
+            Opts
+        ),
+    ?assertEqual(
+        <<"application/x.arweave-manifest+json">>,
+        maps:get(<<"content-type">>, LazyItem)
+    ),
+    ?assertEqual(false, maps:is_key(<<"data">>, LazyItem)),
+    ?assertEqual(
+        hb_message:id(FullItem, signed, Opts),
+        hb_message:id(LazyItem, signed, Opts)
+    ),
+    ?assertMatch(
+        {ok,
+            #{
+                <<"body">> := [
+                    {as, <<"manifest@1.0">>, _},
+                    #{<<"path">> := <<"index">>}
+                ]
+            }
+        },
+        dev_manifest:request(#{}, #{ <<"body">> => [LazyItem] }, Opts)
+    ).
+
+test_tx_header(Opts) ->
+    Msg =
+        hb_message:commit(
+            #{
+                <<"content-type">> => <<"text/plain">>,
+                <<"data">> => <<"test-data">>,
+                <<"test-key">> => <<"test-value">>
+            },
+            Opts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    TX = hb_message:convert(Msg, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
+    hb_message:convert(
+        TX#tx{ data = <<>> },
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ).

@@ -142,21 +142,34 @@ get_tx(Base, Request, Opts) ->
     case find_key(<<"tx">>, Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
-            request(
-                <<"GET">>,
-                <<"/tx/", TXID/binary>>,
-                Opts#{
-                    exclude_data =>
-                        hb_util:bool(
-                            find_key(
-                                <<"exclude-data">>,
-                                Base,
-                                Request,
-                                Opts
+            ExcludeData =
+                hb_util:bool(
+                    find_key(
+                        <<"exclude-data">>,
+                        Base,
+                        Request,
+                        Opts
+                    )
+                ),
+            case ExcludeData of
+                true ->
+                    case dev_arweave_tx_cache:read(TXID, Opts) of
+                        {ok, CachedTXHeader} ->
+                            {ok, CachedTXHeader};
+                        not_found ->
+                            request(
+                                <<"GET">>,
+                                <<"/tx/", TXID/binary>>,
+                                Opts#{ exclude_data => true }
                             )
-                        )
-                }
-            )
+                    end;
+                false ->
+                    request(
+                        <<"GET">>,
+                        <<"/tx/", TXID/binary>>,
+                        Opts#{ exclude_data => false }
+                    )
+            end
     end.
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
@@ -866,6 +879,8 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+    StructuredTXHeader =
+        hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
     ?event(debug_arweave,
         {arweave_tx_response,
             {path, {explicit, Path}},
@@ -876,7 +891,8 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
     ),
     case hb_opts:get(exclude_data, false, Opts) of
         true ->
-            {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+            _ = dev_arweave_tx_cache:write(StructuredTXHeader, Opts),
+            {ok, StructuredTXHeader};
         false ->
             case data(TXID, Opts) of
                 {ok, RawData} ->
@@ -885,9 +901,7 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
                         TX, <<"structured@1.0">>,
                         <<"tx@1.0">>, Opts)};
                 {error, not_found} ->
-                    {ok, hb_message:convert(
-                        TXHeader, <<"structured@1.0">>,
-                        <<"tx@1.0">>, Opts)};
+                    {ok, StructuredTXHeader};
                 Error ->
                     Error
             end
