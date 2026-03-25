@@ -53,6 +53,7 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @param Key The key to read.
 %% @returns {ok, Msg} on success or not_found if the key is missing.
 read(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
+    ?event(source_404, remote_node_not_an_id),
     not_found;
 read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),

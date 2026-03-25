@@ -166,7 +166,9 @@ resolve_many([ID], Opts) when ?IS_ID(ID) ->
     %    to use in looking up a cached result.
     ?event(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
     try {ok, ensure_message_loaded(ID, Opts)}
-    catch _:_:_ -> {error, not_found}
+    catch _:Reason:Stacktrace -> 
+        ?event(final_ao_core, {crash, {reason, Reason}, {stacktrace, Stacktrace}}),
+        {error, not_found}
     end;
 resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
     % We have been given a message rather than a list of messages, so we should
@@ -382,6 +384,7 @@ resolve_stage(3, Base, Req, Opts) when not is_map(Base) or not is_map(Req) ->
     % Validation check: If the messages are not maps, we cannot find a key
     % in them, so return not_found.
     ?event(debug_ao_core, {stage, 3, validation_check_type_error}, Opts),
+    ?event(final_ao_core, validation_check_type_error),
     {error, not_found};
 resolve_stage(3, Base, Req, Opts) ->
     ?event(debug_ao_core, {stage, 3, validation_check}, Opts),
