@@ -470,6 +470,15 @@ notify(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        {ok, Parent} ?=
+            hb_maps:find(
+                <<"parent">>,
+                State,
+                <<"No `parent` configured for notifications">>,
+                Opts
+            ),
+        true ?= (NotifyFrom =:= Parent) orelse
+            {error, <<"Invalid notification source">>},
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
@@ -477,6 +486,8 @@ notify(State, Assignment, Opts) ->
                 ForwardedMsg,
                 Opts
             ),
+        true ?= (Action =:= <<"register">>) orelse
+            {error, <<"Unsupported notification action">>},
         OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
             Action, 
