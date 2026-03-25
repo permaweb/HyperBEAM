@@ -7,6 +7,7 @@
 -export([start/0]).
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, reply/4, accept_to_codec/2]).
+-export([prepare_reply/3, prepare_reply_headers/3]).
 -export([req_to_tabm_singleton/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -482,43 +483,65 @@ reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReplyStartTime = os:system_time(millisecond),
-    KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
-    {ok, Req, Message} =
-        try reply_handle_cookies(InitReq, KeyNormMessage, Opts)
-        catch _Type:Error:_Stacktrace ->
-            ?event(warning, {reply_handle_cookies_error, {error, Error}}, Opts),
-            {ok, InitReq, KeyNormMessage}
-        end,
+    {ok, Req, Status, Message, DataRef} =
+        prepare_reply(
+            InitReq,
+            RawStatus,
+            RawMessage,
+            Opts
+        ),
     {Status, HeadersBeforeCors, EncodedBody} =
         encode_reply(
-            RawStatus,
+            Status,
             TABMReq,
             Message,
             Opts
         ),
-    % Get the CORS request headers from the message, if they exist.
-    ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
-    HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    EncodedHeaders = hb_private:reset(HeadersWithCors),
+    EncodedHeaders =
+        prepare_reply_headers(
+            Req,
+            HeadersBeforeCors,
+            Opts
+        ),
     ?event(debug_http,
         {http_replying,
             {status, {explicit, Status}},
-            {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
+            {path,
+                hb_maps:get(
+                    <<"path">>, Req,
+                    undefined_path, Opts)},
             {raw_message, RawMessage},
             {enc_headers, {explicit, EncodedHeaders}},
             {enc_body, EncodedBody}
         }
     ),
-    ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
-    PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
-    Fin =
-        case should_finalize_stream(Status, EncodedBody) of
-            true -> fin;
-            false -> nofin
-        end,
-    cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
+    ReqBeforeStream =
+        Req#{ resp_headers => EncodedHeaders },
+    PostStreamReq =
+        cowboy_req:stream_reply(
+            Status, #{}, ReqBeforeStream),
+    case DataRef of
+        #{<<"offset">> := Offset, <<"length">> := Len} ->
+            stream_data_ref(
+                PostStreamReq,
+                hb_util:int(Offset),
+                hb_util:int(Len),
+                Opts);
+        _ ->
+            Fin =
+                case should_finalize_stream(
+                    Status, EncodedBody
+                ) of
+                    true -> fin;
+                    false -> nofin
+                end,
+            cowboy_req:stream_body(
+                EncodedBody, Fin, PostStreamReq)
+    end,
     EndTime = os:system_time(millisecond),
-    ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
+    ReqDuration =
+        EndTime
+            - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
     record_request_metric(
         ReqDuration * 1000000,
@@ -526,17 +549,28 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         Status
     ),
     ?event(debug_http, {reply_headers, {explicit, PostStreamReq}}),
+    BodySize =
+        case DataRef of
+            #{<<"length">> := L} -> L;
+            _ -> byte_size(EncodedBody)
+        end,
     ?event(http_server_short,
         {sent,
             {status, Status},
-            {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
-            {body_size, byte_size(EncodedBody)},
+            {duration,
+                EndTime
+                    - hb_maps:get(
+                        start_time, Req,
+                        undefined, Opts)},
+            {body_size, BodySize},
             {method, cowboy_req:method(Req)},
             {ip, {string, real_ip(Req, Opts)}},
             {path,
                 {string,
                     uri_string:percent_decode(
-                        hb_maps:get(<<"path">>, TABMReq, <<"[NO PATH]">>, Opts)
+                        hb_maps:get(
+                            <<"path">>, TABMReq,
+                            <<"[NO PATH]">>, Opts)
                     )
                 }
             }
@@ -544,9 +578,81 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ),
     {ok, PostStreamReq, no_state}.
 
+%% @doc Normalize an outbound response, determine its HTTP status, and apply
+%% cookie handling. This helper does not encode a body or finalize headers.
+prepare_reply(InitReq, RawMessage, Opts) ->
+    Status =
+        case hb_maps:get(<<"status">>, RawMessage, not_found, Opts) of
+            not_found -> 200;
+            S -> S
+        end,
+    prepare_reply(InitReq, Status, RawMessage, Opts).
+prepare_reply(InitReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
+    prepare_reply(
+        InitReq,
+        binary_to_integer(BinStatus),
+        RawMessage,
+        Opts
+    );
+prepare_reply(InitReq, RawStatus, RawMessage, Opts) ->
+    KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
+    DataRef =
+        maps:get(<<"data-ref">>, KeyNormMessage, not_found),
+    CleanMessage =
+        maps:remove(<<"data-ref">>, KeyNormMessage),
+    {ok, Req, Message} =
+        try reply_handle_cookies(InitReq, CleanMessage, Opts)
+        catch _Type:Error:_Stacktrace ->
+            ?event(warning, {reply_handle_cookies_error, {error, Error}}, Opts),
+            {ok, InitReq, CleanMessage}
+        end,
+    {ok, Req, RawStatus, Message, DataRef}.
+
+%% @doc Add outbound CORS headers, reset private state,
+%% and ensure all values are binaries before sending to
+%% Cowboy (which crashes on integer header values).
+prepare_reply_headers(Req, HeadersBeforeCors, Opts) ->
+    ReqHdr =
+        cowboy_req:header(
+            <<"access-control-request-headers">>,
+            Req,
+            <<"">>
+        ),
+    Headers =
+        hb_private:reset(
+            add_cors_headers(
+                HeadersBeforeCors, ReqHdr, Opts)),
+    Headers.
+
 %% @doc Determine if the stream should be finalized.
 should_finalize_stream(429, _EncodedBody) -> true;
 should_finalize_stream(_, _EncodedBody) -> false.
+
+%% @doc Stream chunk data from a data-ref (offset+length)
+%% to the client. Fetches in ~2.5MB windows.
+stream_data_ref(Req, _Offset, 0, _Opts) ->
+    cowboy_req:stream_body(<<>>, fin, Req);
+stream_data_ref(Req, Offset, Remaining, Opts) ->
+    WindowSize = 10 * ?DATA_CHUNK_SIZE,
+    Size = min(WindowSize, Remaining),
+    case hb_store_arweave:read_chunks(Offset, Size, Opts) of
+        {ok, Data} ->
+            Fin = case Remaining - Size of
+                0 -> fin;
+                _ -> nofin
+            end,
+            cowboy_req:stream_body(Data, Fin, Req),
+            stream_data_ref(
+                Req, Offset + Size,
+                Remaining - Size, Opts);
+        {error, Reason} ->
+            ?event(error,
+                {stream_data_ref_failed,
+                    {offset, Offset},
+                    {remaining, Remaining},
+                    {reason, Reason}}),
+            ok
+    end.
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
@@ -784,7 +890,7 @@ accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when
         Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
         Opts
     );
-accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
+accept_to_codec(_OriginalReq, #{ <<"content-type">> := _CT }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
     Accept = hb_maps:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),

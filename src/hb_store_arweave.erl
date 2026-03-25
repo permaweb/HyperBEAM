@@ -7,6 +7,8 @@
 -export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
+%%% Lazy loading API:
+-export([materialize/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -88,8 +90,11 @@ read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
     end;
 read_offset(_, _) -> not_found.
 
-%% @doc Read the data at the given key, reading the `local-store' first if
-%% available.
+%% @doc Read the data at the given key. Returns a lazy
+%% message with data-ref for Arweave-stored items. The
+%% data-ref flows through the pipeline; hb_http:reply
+%% detects it and streams. Call materialize/2 when full
+%% data is needed.
 read(StoreOpts, ID) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
@@ -118,7 +123,12 @@ do_read(StoreOpts, ID) ->
                 end,
             case Loaded of
                 {ok, Message} ->
-                    hb_store_remote_node:maybe_cache(StoreOpts, Message),
+                    case maps:is_key(<<"data-ref">>, Message) of
+                        true -> ok;
+                        false ->
+                            hb_store_remote_node:maybe_cache(
+                                StoreOpts, Message)
+                    end,
                     ?event(
                         arweave_offsets,
                         {read_ok,
@@ -156,25 +166,29 @@ do_read(StoreOpts, ID) ->
             not_found
     end.
 
-%% @doc Load an ANS-104 item from the given start offset and length.
-%% Returns an `ok' tuple with the deserialized item, or an `error' tuple with
-%% the reason. The `StartOffset` is the precise starting byte of the item _header_,
-%% not the data segment. The `Length` covers the full size of the item, including
-%% header.
+%% @doc Load an ANS-104 item header and return a message
+%% with a data-ref for lazy body loading. Fetches only
+%% the first chunk to parse the ANS-104 header.
 load_item(StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
-            case read_chunks(StartOffset, Length, Opts) of
-                {ok, SerializedItem} ->
-                    {
-                        ok,
-                        hb_message:convert(
-                            ar_bundles:deserialize(SerializedItem),
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        )
-                    };
+            HeaderSize = min(Length, ?DATA_CHUNK_SIZE),
+            case read_chunks(StartOffset, HeaderSize, Opts) of
+                {ok, HeaderData} ->
+                    case ar_bundles:deserialize_header(HeaderData) of
+                        {ok, HdrSize, _HeaderTX} ->
+                            {ok, #{
+                                <<"data-ref">> => #{
+                                    <<"codec">> =>
+                                        <<"ans104@1.0">>,
+                                    <<"offset">> =>
+                                        StartOffset,
+                                    <<"length">> => Length
+                                }
+                            }};
+                        _ ->
+                            {error, invalid_ans104_header}
+                    end;
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -183,42 +197,26 @@ load_item(StartOffset, Length, Opts) ->
         [load_item]
     ).
 
-%% @doc Load a TX from the given start offset and length. The `StartOffset' is
-%% the start of the first chunk of the data and runs for the length of the data
-%% segment, ignoring header size.
+%% @doc Return a lazy data-ref for a TX. The TX header
+%% is fetched via hb_ao:resolve which hits the TX cache
+%% (written by to_message) on repeat calls.
 load_tx(ID, StartOffset, Length, Opts) ->
-    hb_prometheus:measure_and_report(
-        fun() ->
-            {ok, StructuredTXHeader} = hb_ao:resolve(
-                #{ <<"device">> => <<"arweave@2.9">> },
-                #{ <<"path">> => <<"tx">>, <<"tx">> => ID, <<"exclude-data">> => true },
-                Opts
-            ),
-            TXHeader =
-                hb_message:convert(
-                    StructuredTXHeader,
-                    <<"tx@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            case read_chunks(StartOffset, Length, Opts) of
-                {ok, SerializedItem} ->
-                    {
-                        ok,
-                        hb_message:convert(
-                            TXHeader#tx{ data = SerializedItem },
-                            <<"structured@1.0">>,
-                            <<"tx@1.0">>,
-                            Opts
-                        )
-                    };
-                {error, Reason} ->
-                    {error, Reason}
-            end
-        end,
-        hb_store_arweave_chunk_fetch_duration_seconds,
-        [load_tx]
-    ).
+    {ok, Msg} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"tx">>,
+            <<"tx">> => ID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ),
+    {ok, Msg#{
+        <<"data-ref">> => #{
+            <<"codec">> => <<"tx@1.0">>,
+            <<"offset">> => StartOffset,
+            <<"length">> => Length
+        }
+    }}.
 
 %% @doc Read the chunks from the given start offset and length using the 
 %% `~arweave@2.9` device.
@@ -232,6 +230,65 @@ read_chunks(StartOffset, Length, Opts) ->
         },
         Opts
     ).
+
+%% @doc Materialize a lazy message by fetching chunk data
+%% and rebuilding the full message structure. Messages
+%% without data-ref pass through unchanged.
+materialize(Msg, Opts) when is_map(Msg) ->
+    case maps:get(<<"data-ref">>, Msg, not_found) of
+        not_found -> {ok, Msg};
+        #{
+            <<"codec">> := <<"ans104@1.0">>,
+            <<"offset">> := Offset,
+            <<"length">> := Length
+        } ->
+            case read_chunks(Offset, Length, Opts) of
+                {ok, Data} ->
+                    {ok,
+                        hb_message:convert(
+                            ar_bundles:deserialize(Data),
+                            <<"structured@1.0">>,
+                            <<"ans104@1.0">>,
+                            Opts
+                        )
+                    };
+                {error, Reason} -> {error, Reason}
+            end;
+        #{
+            <<"codec">> := <<"tx@1.0">>,
+            <<"offset">> := Offset,
+            <<"length">> := Length
+        } ->
+            Header =
+                hb_message:convert(
+                    maps:remove(<<"data-ref">>, Msg),
+                    <<"tx@1.0">>,
+                    <<"structured@1.0">>,
+                    Opts
+                ),
+            case Length of
+                0 ->
+                    {ok, hb_message:convert(
+                        Header,
+                        <<"structured@1.0">>,
+                        <<"tx@1.0">>,
+                        Opts)};
+                _ ->
+                    case read_chunks(Offset, Length, Opts) of
+                        {ok, Data} ->
+                            {ok,
+                                hb_message:convert(
+                                    Header#tx{data = Data},
+                                    <<"structured@1.0">>,
+                                    <<"tx@1.0">>,
+                                    Opts
+                                )
+                            };
+                        {error, Reason} -> {error, Reason}
+                    end
+            end
+    end;
+materialize(Msg, _Opts) -> {ok, Msg}.
 
 %% @doc Write offset information to the index store.
 write_offset(
@@ -309,7 +366,8 @@ write_read_tx_test() ->
     Size = 8387,
     StartOffset = EndOffset - Size,
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
-    {ok, Bundle} = read(Opts, ID),
+    {ok, LazyBundle} = read(Opts, ID),
+    {ok, Bundle} = materialize(LazyBundle, Opts),
     ?assert(hb_message:verify(Bundle, all, #{})),
     {ok, Child} =
         hb_ao:resolve(
@@ -350,6 +408,7 @@ write_read_fake_bundle_tx_test() ->
     Size = 2,
     StartOffset = 155309918167286,
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
-    {ok, TX} = read(Opts, ID),
+    {ok, LazyTX} = read(Opts, ID),
+    {ok, TX} = materialize(LazyTX, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.

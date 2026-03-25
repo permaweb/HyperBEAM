@@ -516,9 +516,12 @@ index_ids_test() ->
     ?assertException(
         error,
         {badmatch,<<"\"address\":\"0x124e64C9Ed898d4A8B130F6ACb76b33E21CD711c\"", _/binary>>},
-        hb_store_arweave:read(
-            StoreOpts,
-            <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
+        begin
+            {ok, Lazy} = hb_store_arweave:read(
+                StoreOpts,
+                <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>),
+            hb_store_arweave:materialize(Lazy, StoreOpts)
+        end
     ),
     assert_bundle_read(
         <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
@@ -712,7 +715,8 @@ tx_with_no_data_test() ->
     % Value transfer
     Resolved = hb_ao:resolve(<<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>, Opts),
     ?assertMatch({ok, _}, Resolved),
-    {ok, StructuredTX} = Resolved,
+    {ok, LazyTX} = Resolved,
+    {ok, StructuredTX} = hb_store_arweave:materialize(LazyTX, Opts),
     ?assert(hb_message:verify(StructuredTX, all, Opts)),
     ?assertEqual(
         <<"XSQIgyDY1XUJNz79OeRHFaNpJZyaJSBd7XFsjWlZpNU">>,
@@ -1016,7 +1020,8 @@ assert_item_read(ItemID, Opts) ->
     ?event(debug_test, {resolving, {explicit, ItemID}}),
     Resolved = hb_ao:resolve(ItemID, Opts),
     ?assertMatch({ok, _}, Resolved, ItemID),
-    {ok, Item} = Resolved,
+    {ok, LazyItem} = Resolved,
+    {ok, Item} = hb_store_arweave:materialize(LazyItem, Opts),
     ?event(debug_test, {item, Item}),
     ?assert(hb_message:verify(Item, all, Opts)),
     ?assertEqual(ItemID, hb_message:id(Item, signed)),

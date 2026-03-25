@@ -276,58 +276,64 @@ get_raw(Base, Request, Opts) ->
     case head_raw(Base, Request, Opts) of
         not_found -> {error, not_found};
         Err = {error, _} -> Err;
-        {ok,
-            Header = #{
-                <<"raw-id">> := TXID,
-                <<"data-offset">> := ArweaveDataOffset,
-                <<"content-type">> := ContentType,
-                <<"content-length">> := FullContentLength
-            }
-        } ->
-        ?event(debug_raw, {raw_header,
-            {header, Header}}),
-        case parse_range_params(Request, Opts) of
-            {ok, StartRange, EndRange} ->
-                RangeLength = (EndRange - StartRange) + 1,
-                {ok, Data} =
-                    hb_store_arweave:read_chunks(
-                        ArweaveDataOffset + StartRange,
-                        RangeLength,
-                        Opts
-                    ),
-                {
-                    ok,
-                    Header#{
-                        <<"status">> => 206,
+        {ok, Header} ->
+            get_raw_body(Header, Request, Opts)
+    end.
+
+%% @doc Fetch the body data for a raw GET, handling Range
+%% requests and full downloads.
+get_raw_body(
+    Header = #{
+        <<"raw-id">> := TXID,
+        <<"data-offset">> := ArweaveDataOffset,
+        <<"content-type">> := ContentType,
+        <<"content-length">> := FullContentLength
+    },
+    Request,
+    Opts
+) ->
+    case parse_range_params(Request, Opts) of
+        {ok, StartRange, EndRange} ->
+            RangeLength = (EndRange - StartRange) + 1,
+            {ok, Data} =
+                hb_store_arweave:read_chunks(
+                    ArweaveDataOffset + StartRange,
+                    RangeLength,
+                    Opts
+                ),
+            {
+                ok,
+                Header#{
+                    <<"status">> => 206,
+                    <<"content-type">> => ContentType,
+                    <<"content-length">> => RangeLength,
+                    <<"content-range">> =>
+                        <<
+                            "bytes ",
+                            (hb_util:bin(StartRange))/binary,
+                            "-",
+                            (hb_util:bin(EndRange))/binary,
+                            "/",
+                            (hb_util:bin(FullContentLength))/binary
+                        >>,
+                    <<"body">> => Data
+                }
+            };
+        false ->
+            case hb_store_arweave:read_chunks(
+                ArweaveDataOffset, FullContentLength, Opts
+            ) of
+                {ok, Data} ->
+                    {ok, Header#{
                         <<"content-type">> => ContentType,
-                        <<"content-length">> => RangeLength,
-                        <<"content-range">> =>
-                            <<
-                                "bytes ",
-                                (hb_util:bin(StartRange))/binary,
-                                "-",
-                                (hb_util:bin(EndRange))/binary,
-                                "/",
-                                (hb_util:bin(FullContentLength))/binary
-                            >>,
                         <<"body">> => Data
-                    }
-                };
-            false ->
-                case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
-                    {ok, Data} ->
-                        {ok, Header#{
-                            <<"content-type">> => ContentType,
-                            <<"body">> => Data
-                        }};
-                    Error ->
-                        ?event(
-                            arweave,
-                            {raw_read_chunks_failed, {id, TXID}, {error, Error}},
-                            Opts
-                        ),
-                        Error
-                end
+                    }};
+                Error ->
+                    ?event(arweave,
+                        {raw_read_chunks_failed,
+                            {id, TXID}, {error, Error}},
+                        Opts),
+                    Error
             end
     end.
 
@@ -875,9 +881,13 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             case data(TXID, Opts) of
                 {ok, RawData} ->
                     TX = TXHeader#tx{ data = RawData },
-                    {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                    {ok, hb_message:convert(
+                        TX, <<"structured@1.0">>,
+                        <<"tx@1.0">>, Opts)};
                 {error, not_found} ->
-                    {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+                    {ok, hb_message:convert(
+                        TXHeader, <<"structured@1.0">>,
+                        <<"tx@1.0">>, Opts)};
                 Error ->
                     Error
             end

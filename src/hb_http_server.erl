@@ -17,6 +17,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+
 %% @doc Starts the HTTP server. Optionally accepts an `Opts' message, which
 %% is used as the source for server configuration settings, as well as the
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
@@ -255,7 +256,7 @@ start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ServerPID =
         spawn(fun() ->
             application:ensure_all_started(quicer),
-            {ok, Listener} =
+            {ok, _Listener} =
                 cowboy:start_quic(
                     ServerID, 
                     TransOpts = #{
@@ -389,26 +390,39 @@ handle_request(RawReq, Body, ServerID) ->
         }
     ),
     % Parse the HTTP request into HyerBEAM's message format.
-    try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
-        ReqSingleton ->
+    ParseResult =
+        try
+            {ok, hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)}
+        catch ParseError0:ParseDetails0:ParseStacktrace0 ->
+            {
+                parse_error,
+                ParseError0,
+                ParseDetails0,
+                ParseStacktrace0
+            }
+        end,
+    case ParseResult of
+        {ok, ReqSingleton} ->
             try
                 CommitmentCodec =
-                    hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+                    hb_http:accept_to_codec(
+                        ReqSingleton, NodeMsg),
                 ?event(http,
                     {parsed_singleton,
                         {req_singleton, ReqSingleton},
                         {accept_codec, CommitmentCodec}},
                     #{}
                 ),
-                % Invoke the meta@1.0 device to handle the request.
                 {ok, Res} =
                     dev_meta:handle(
                         NodeMsg#{
-                            commitment_device => CommitmentCodec
+                            commitment_device =>
+                                CommitmentCodec
                         },
                         ReqSingleton
                     ),
-                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                hb_http:reply(
+                    Req, ReqSingleton, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
                     handle_error(
@@ -419,16 +433,31 @@ handle_request(RawReq, Body, ServerID) ->
                         Stacktrace,
                         NodeMsg
                     )
-            end
-    catch ParseError:ParseDetails:ParseStacktrace ->
-        handle_error(
-            Req,
-            #{},
-            ParseError,
-            ParseDetails,
-            ParseStacktrace,
-            NodeMsg
-        )
+            end;
+        {parse_error, ParseError, ParseDetails, ParseStacktrace} ->
+            handle_error(
+                Req,
+                #{},
+                ParseError,
+                ParseDetails,
+                ParseStacktrace,
+                NodeMsg
+            )
+    end.
+
+%% @doc Determine the caller, honoring the `x-real-ip' header if present.
+real_ip(Req = #{ headers := RawHeaders }, Opts) ->
+    case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
+        undefined ->
+            {{A, B, C, D}, _} = cowboy_req:peer(Req),
+            hb_util:bin(
+                io_lib:format(
+                    "~b.~b.~b.~b",
+                    [A, B, C, D]
+                )
+            );
+        IP ->
+            IP
     end.
 
 %% @doc Return a 500 error response to the client.
@@ -663,3 +692,5 @@ restart_server_test() ->
         {ok, <<"server-2">>},
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{protocol => http2})
     ).
+
+
