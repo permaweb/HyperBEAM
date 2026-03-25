@@ -45,12 +45,11 @@ resolve(Key, _, Req, Opts) ->
 %% return the resolved value directly.
 maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
     case hb_cache:read(Resolved, Opts) of 
-        {ok, _} = Result ->
-            Result;
-        not_found -> 
-            {store, not_found};
-        failure -> 
-            {store, failure}
+        {ok, _} = Result -> Result;
+        not_found ->
+            %% Cache Not Found seperate from Not Found, and allow to reply 404 directly.
+            {cache, not_found};
+        Result -> Result
     end;
 maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
     {ok, hb_cache:ensure_loaded(Resolved, Opts)};
@@ -111,9 +110,7 @@ request(HookMsg, HookReq, Opts) ->
         {ok, #{ <<"body">> => ModReq }}
     else
         {cache, not_found} ->
-            {error, not_found};
-        {cache, failure} ->
-            failure;
+            {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
         Reason ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
