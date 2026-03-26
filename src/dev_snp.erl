@@ -439,11 +439,18 @@ extract_measurement_args(Msg, NodeOpts) ->
 -spec verify_report_integrity(ReportJSON :: binary()) ->
     {ok, true} | {error, report_signature_invalid}.
 verify_report_integrity(ReportJSON) ->
-    {ok, ReportIsValid} = dev_snp_nif:verify_signature(ReportJSON),
-    ?event({report_is_valid, ReportIsValid}),
-    case ReportIsValid of
-        true -> {ok, true};
-        false -> {error, report_signature_invalid}
+    verify_report_integrity(ReportJSON, 1).
+verify_report_integrity(ReportJSON, Attempt) ->
+    case dev_snp_nif:verify_signature(ReportJSON) of
+        {ok, true} -> {ok, true};
+        {ok, false} -> {error, report_signature_invalid};
+        {error, Reason} when Attempt < 4 ->
+            ?event({verify_signature_retry, {reason, Reason}, {attempt, Attempt}}),
+            timer:sleep(Attempt * 10000),
+            verify_report_integrity(ReportJSON, Attempt + 1);
+        {error, Reason} ->
+            ?event({verify_signature_failed, {reason, Reason}}),
+            {error, {verify_signature_failed, Reason}}
     end.
 
 %% @doc Check if the node's debug policy is enabled.
