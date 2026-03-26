@@ -157,8 +157,7 @@ raw(Base, Request, Opts) ->
 head_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
     case find_key(<<"raw">>, Base, Request, Opts) of
-        not_found -> {error, not_found};
-        TXID ->
+        TXID when ?IS_ID(TXID) ->
             % Read the data from the local cache.
             IndexStore = hb_store_arweave:store_from_opts(Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
@@ -182,7 +181,9 @@ head_raw(Base, Request, Opts) ->
                         Opts
                     ),
                     {error, not_found}
-            end
+            end;
+        _ -> 
+            {error, not_found}
     end.
 
 %% @doc Arweave transaction headers are not part of the Arweave data tree, and
