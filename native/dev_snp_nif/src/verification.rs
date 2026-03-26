@@ -278,8 +278,20 @@ fn verify_signature<'a>(
     let tcb_version = attestation_report.current_tcb;
 
     // Step 4: Request the certificate chain and VCEK.
-    let ca = request_cert_chain("Milan").unwrap();
-    let vcek = request_vcek(chip_id_array, tcb_version).unwrap();
+    let ca = match request_cert_chain("Milan") {
+        Ok(ca) => ca,
+        Err(e) => {
+            log_message("ERROR", file!(), line!(), &format!("CA chain request failed: {:?}", e));
+            return Ok((atom::error(), format!("CA chain request failed: {:?}", e)).encode(env));
+        }
+    };
+    let vcek = match request_vcek(chip_id_array, tcb_version) {
+        Ok(vcek) => vcek,
+        Err(e) => {
+            log_message("ERROR", file!(), line!(), &format!("VCEK request failed: {:?}", e));
+            return Ok((atom::error(), format!("VCEK request failed: {:?}", e)).encode(env));
+        }
+    };
 
     // Step 5: Verify the certificate chain.
     if let Err(e) = ca.verify() {

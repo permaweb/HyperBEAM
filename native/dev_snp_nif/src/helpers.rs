@@ -1,7 +1,7 @@
 use sev::certs::snp::{ca, Certificate};
 use sev::firmware::host::TcbVersion;
 use crate::logging::log_message;
-use reqwest::blocking::get; 
+use reqwest::blocking::get;
 
 /// Base URL for AMD's Key Distribution Service (KDS).
 const KDS_CERT_SITE: &str = "https://kdsintf.amd.com";
@@ -34,12 +34,15 @@ pub fn request_cert_chain(sev_prod_name: &str) -> Result<ca::Chain, Box<dyn std:
     //     &format!("Requesting AMD certificate chain from: {url}"),
     // );
 
-    // Perform the blocking GET request
     let response = get(&url)?;
+    if !response.status().is_success() {
+        return Err(format!("KDS returned HTTP {}: {}", response.status(), url).into());
+    }
     let body = response.bytes()?;
 
     // Parse the response as a PEM-encoded certificate chain
-    let chain = openssl::x509::X509::stack_from_pem(&body)?;
+    let chain = openssl::x509::X509::stack_from_pem(&body)
+        .map_err(|e| format!("Failed to parse cert chain PEM ({} bytes): {:?}", body.len(), e))?;
     if chain.len() < 2 {
         return Err("Expected at least two certificates (ARK and ASK) in the chain".into());
     }
@@ -98,12 +101,15 @@ pub fn request_vcek(
     //     &format!("Requesting VCEK from: {url}"),
     // );
 
-    // Perform the blocking GET request
     let response = get(&url)?;
+    if !response.status().is_success() {
+        return Err(format!("KDS returned HTTP {}: {}", response.status(), url).into());
+    }
     let rsp_bytes = response.bytes()?;
 
     // Parse the VCEK response as a DER-encoded certificate
-    let vcek_cert = Certificate::from_der(&rsp_bytes)?;
+    let vcek_cert = Certificate::from_der(&rsp_bytes)
+        .map_err(|e| format!("Failed to parse VCEK DER ({} bytes): {:?}", rsp_bytes.len(), e))?;
 
     // log_message("INFO", file!(), line!(), "Successfully fetched VCEK.");
     Ok(vcek_cert)
