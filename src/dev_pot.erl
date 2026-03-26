@@ -452,8 +452,9 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
         true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
     end.
 
-%% @doc Interpret `notify' messages as if they were direct deposit/withdrawal
-%% requests, if they are sent `from' our `parent' mint process (if set).
+%% @doc Interpret forwarded `register' notifications from the configured
+%% `parent' mint process. Notifications from any other sender, or notifications
+%% forwarding a non-`register' action, are rejected.
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=

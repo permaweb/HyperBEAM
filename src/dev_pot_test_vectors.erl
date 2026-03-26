@@ -1242,6 +1242,45 @@ multiple_delegations_outbox_order_test() ->
     ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
     ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
 
+notify_rejects_non_parent_source_test() ->
+    Parent = <<"parent">>,
+    Mallory = <<"mallory">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Mallory,
+                    <<"x-action">> => <<"register">>,
+                    <<"x-resource">> => ResourceOxygen,
+                    <<"x-weight">> => 2
+                }
+        },
+    ?assertMatch(
+        {error, <<"Invalid notification source">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
+
+notify_rejects_non_register_forward_action_test() ->
+    Parent = <<"parent">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Parent,
+                    <<"x-action">> => <<"deposit">>
+                }
+        },
+    ?assertMatch(
+        {error, <<"Unsupported notification action">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
+
 %%% Empty/Zero State Tests
 
 zero_mint_cap_test() ->
