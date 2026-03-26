@@ -194,6 +194,7 @@ hackney_req(Args, Opts) ->
             HackneyOpts = [with_body,
                 {pool, ?HACKNEY_POOL},
                 {connect_timeout, ConnTimeout},
+                {connect_options, [{nodelay, true}]},
                 {checkout_timeout, CheckoutTimeout},
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
