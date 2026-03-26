@@ -352,9 +352,15 @@ deposit(State, Assignment, Opts) ->
     else
         Reason -> {error, Reason}
     end.
--spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map().
+-spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
+    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts);
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Deposit amount must be positive Integer.">>};
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Deposit amount must be a non-zero positive Integer.">>};
+deposit(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Deposit amount must be Integer.">>}.
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
@@ -378,7 +384,14 @@ withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0
         modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
     else
         {error, _} = WithdrawErr -> WithdrawErr
-    end.
+    end;
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error,  <<"Withdraw amount must be a positive Integer.">>};
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Withdraw amount must be a non-zero positive Integer.">>};
+withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Withdraw amount must be an Integer.">>}.
+
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
 %% if the request is valid, otherwise returns `{error, Reason}'.
@@ -422,14 +435,14 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
-        {ok, Resources} =
+        {ok, Resources} ?=
             hb_maps:find(
                 <<"resources">>,
                 Base,
                 <<"No resources found in mint state.">>,
                 Opts
             ),
-        {ok, Resource} = 
+        {ok, Resource} ?= 
             hb_maps:find(
                 ResourceID,
                 Resources,
@@ -439,8 +452,9 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
         true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
     end.
 
-%% @doc Interpret `notify' messages as if they were direct deposit/withdrawal
-%% requests, if they are sent `from' our `parent' mint process (if set).
+%% @doc Interpret forwarded `register' notifications from the configured
+%% `parent' mint process. Notifications from any other sender, or notifications
+%% forwarding a non-`register' action, are rejected.
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=
@@ -457,6 +471,15 @@ notify(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        {ok, Parent} ?=
+            hb_maps:find(
+                <<"parent">>,
+                State,
+                <<"No `parent` configured for notifications">>,
+                Opts
+            ),
+        true ?= (NotifyFrom =:= Parent) orelse
+            {error, <<"Invalid notification source">>},
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
@@ -464,6 +487,8 @@ notify(State, Assignment, Opts) ->
                 ForwardedMsg,
                 Opts
             ),
+        true ?= (Action =:= <<"register">>) orelse
+            {error, <<"Unsupported notification action">>},
         OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
             Action, 
@@ -563,7 +588,7 @@ delegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec delegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
     maybe
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
@@ -691,7 +716,13 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                             )}
                 end
         end
-end.
+end;
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Delegate Amount must be a non-negative integer">>};
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Delegate amount must be a non-zero positive Integer.">>};
+delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Delegate Amount must be of integer type">>}.
 
 %% @doc Undelegate some quantity of a resource from one address to another.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
@@ -715,7 +746,7 @@ undelegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec undelegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
+undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
     maybe
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
@@ -847,13 +878,22 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                         end
                 end
         end
-end.
+end;
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Undelegate Amount must be a non-negative integer">>};
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Undelegate amount must be a non-zero positive Integer.">>};
+undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Undelegate Amount must be of integer type">>}.
 
-%% @doc Set the weight of a specific resource in the pot. Valid requesters to
-%% change resource parameters are:
-%% - The `State/parent' address, if set.
-%% - The `mint-authority' address, if set.
-%% - The `resource-authority' address for the resource.
+%% @doc Set resource parameters in the pot. Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% - `authority` security policy on the target resource, if configured
+%%
+%% N.B: `dev_security` is open-by-default when no valid/required/match policy
+%% is present, so absent authority config does not restrict this action. check
+%% `AuthRes` logic chain for better gating-understanding.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -873,10 +913,17 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
-        true ?=
-            (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
-            dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
-                verify_resource_authority(ResID, State, Req, Opts),
+        
+        AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+            true -> true;
+            false -> case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
+                true -> true;
+                {error, _} -> 
+                    verify_resource_authority(ResID, State, Req, Opts)
+                end  
+        end,
+        true ?= AuthRes,
+
         State2 ?=
             case hb_maps:find(<<"weight">>, Req, Opts) of
                 {ok, Weight} -> register_resource(ResID, Weight, State, Opts);

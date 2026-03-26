@@ -672,8 +672,8 @@ deposit_zero_amount_test() ->
     % Depositing 0 should be a no-op
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % deposit/5 has guard `when Amount > 0`, so calling with 0 should not match
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         dev_pot:deposit(Alice, ResourceOxygen, 0, S0, Opts)
     ).
 
@@ -695,8 +695,8 @@ delegate_zero_amount_test() ->
     Opts = #{},
     % Delegating 0 should not match the function guard
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
     ).
 
@@ -1125,8 +1125,8 @@ deposit_with_negative_amount_test() ->
     Opts = #{},
     % Negative deposits should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:deposit(Alice, ResourceOxygen, -10, S0, Opts)
     ).
 
@@ -1136,8 +1136,8 @@ withdraw_with_negative_amount_test() ->
     Opts = #{},
     % Negative withdrawals should be rejected
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:withdraw(Alice, ResourceOxygen, -5, S0, Opts)
     ).
 
@@ -1147,9 +1147,9 @@ deposit_non_integer_quantity_test() ->
     Opts = #{},
     % Non-integer quantities should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
 
 deposit_non_binary_address_test() ->
     ResourceOxygen = <<"oxygen">>,
@@ -1166,8 +1166,8 @@ delegate_negative_amount_test() ->
     Opts = #{},
     % Negative delegation amount should be rejected
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
     ).
 
@@ -1241,6 +1241,45 @@ multiple_delegations_outbox_order_test() ->
     [Notice1, Notice2] = Outbox,
     ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
     ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
+
+notify_rejects_non_parent_source_test() ->
+    Parent = <<"parent">>,
+    Mallory = <<"mallory">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Mallory,
+                    <<"x-action">> => <<"register">>,
+                    <<"x-resource">> => ResourceOxygen,
+                    <<"x-weight">> => 2
+                }
+        },
+    ?assertMatch(
+        {error, <<"Invalid notification source">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
+
+notify_rejects_non_register_forward_action_test() ->
+    Parent = <<"parent">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Parent,
+                    <<"x-action">> => <<"deposit">>
+                }
+        },
+    ?assertMatch(
+        {error, <<"Unsupported notification action">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
 
 %%% Empty/Zero State Tests
 
