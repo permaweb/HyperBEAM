@@ -22,7 +22,26 @@
         <<"register">>
     ]
 ).
-
+%% @doc `validate_address/2` built-in reserved keys list
+-define(AO_RESERVED_ADDRESS_KEYS,
+    [
+        <<"path">>,
+        <<"get">>,
+        <<"set">>,
+        <<"remove">>,
+        <<"verify">>,
+        <<"keys">>,
+        <<"id">>,
+        <<"commit">>,
+        <<"committed">>,
+        <<"committers">>,
+        <<"index">>,
+        <<"info">>,
+        <<"set_path">>,
+        <<"reserved_keys">>,
+        <<"is_reserved_key">>
+    ]
+).
 %%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
@@ -304,15 +323,16 @@ enforce_set_authority(Base, Req, Opts) ->
 %% allows binary addresses up to 128 bytes and prevent invalid
 %% addresses such as dev_trie reserved keys.
 validate_address(Address, CustomList) when is_binary(Address), is_list(CustomList) ->
+    ReservedKeys = ?AO_RESERVED_ADDRESS_KEYS ++ CustomList,
     case byte_size(Address) of
         0 -> {error, <<"Recipient address cannot be empty.">>};
         N when N > 128 -> {error, <<"Recipient address is too long.">>};
         _ ->
             maybe
                 true ?= (not dev_trie:is_reserved_key(Address))
-                    orelse {error, <<"Recipient address uses a reserved internal key.">>},
-                true ?= (not is_reserved_custom_key(Address, CustomList))
-                    orelse {error, <<"Address is a reserved custom key">>},
+                    orelse {error, <<"Recipient address uses a reserved trie internal key.">>},
+                true ?= (not is_reserved_custom_key(Address, ReservedKeys))
+                    orelse {error, <<"Address is a reserved ao/custom key">>},
                 % Check for path separators (security: prevent path traversal) and whitespaces.
                 case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
                     nomatch -> true;

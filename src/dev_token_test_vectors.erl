@@ -448,6 +448,43 @@ batch_mint_reserved_recipient_rejected_test() ->
     ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
     ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
 
+batch_mint_reserved_ao_recipient_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Mint recipients must be valid addresses">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Minter),
+                    <<"mode">> => <<"batch">>,
+                    <<"quantities">> => #{
+                        <<"get">> => 1,
+                        Recipient => 5
+                    }
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
@@ -500,6 +537,46 @@ reserved_recipient_transfer_rejected_test() ->
             #{
                 <<"from">> => AliceID,
                 <<"recipient">> => <<"device">>,
+                <<"quantity">> => 1
+            },
+            Alice,
+            Opts
+        ),
+    {ok, BalancesLink} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                <<"now">>,
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                <<"balances">>
+            ],
+            Opts
+        ),
+    ?assertEqual(1_000_000_000, get_balance(Base, AliceID, Opts)),
+    ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, BalancesLink, undefined, Opts)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
+
+reserved_ao_recipient_transfer_rejected_test() ->
+    Opts = opts(),
+    Alice = ar_wallet:new(),
+    AliceID = id(Alice),
+    Base =
+        generate_process(
+            #{
+                initial_balances => #{ AliceID => 1_000_000_000 }
+            },
+            Opts
+        ),
+    _SchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceID,
+                <<"recipient">> => <<"path">>,
                 <<"quantity">> => 1
             },
             Alice,
