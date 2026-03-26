@@ -209,7 +209,7 @@ account_balance(
 rate_limit_test() ->
     ServerOpts = #{
         rate_limit_requests => 2,
-        rate_limit_period => 1,
+        rate_limit_period => 3,
         rate_limit_max => 2,
         on =>
             #{
