@@ -394,7 +394,7 @@ mint_authority_mismatch_rejected_test() ->
             Opts
         ),
     ?assertEqual(
-        {error, <<"Mint authority mismatch.">>},
+        {error, <<"Minter MintAuthority mismatch.">>},
         dev_mint_authority:mint(
             Base,
             #{
