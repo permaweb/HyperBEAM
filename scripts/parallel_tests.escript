@@ -13,7 +13,7 @@ main(Args) ->
     io:format("=== Compiling (test profile) ===~n"),
     case run_command(
         "rebar3",
-        ["as", "test", "compile"],
+        compile_args(),
         [{"CFLAGS", "-fpermissive"}],
         stdout
     ) of
@@ -77,6 +77,14 @@ main(Args) ->
             io:format("~n"),
             io:format("Failed module logs in ~s/~n", [?LOG_DIR]),
             halt(1)
+    end.
+
+compile_args() ->
+    case os:getenv("TEST_HTTP_CACHE") of
+        "1" ->
+            ["as", "test,test_http_cache", "compile"];
+        _ ->
+            ["as", "test", "compile"]
     end.
 
 run_modules([], State = #{running := 0}) ->

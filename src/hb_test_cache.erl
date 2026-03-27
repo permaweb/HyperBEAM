@@ -1,8 +1,9 @@
 %%% @doc Transparent HTTP response cache for tests. Activated by setting
-%%% `http_client' to `hb_test_cache' (the test rebar3 profile does this
-%%% automatically via DEFAULT_HTTP_CLIENT). Caches successful GET responses
-%%% to external hosts on disk so repeated test runs avoid redundant network
-%%% round-trips.
+%%% `http_client' to `hb_test_cache'. The test rebar3 profile enables this
+%%% only when `TEST_HTTP_CACHE=1' is present in the environment; otherwise
+%%% tests use the normal default HTTP client (`hackney'). Caches successful
+%%% GET responses to external hosts on disk so repeated test runs avoid
+%%% redundant network round-trips.
 -module(hb_test_cache).
 -export([request/2]).
 
