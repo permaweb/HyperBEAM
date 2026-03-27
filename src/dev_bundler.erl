@@ -26,6 +26,7 @@
 -define(SERVER_NAME, bundler_server).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
+-define(DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT, 30_000). % 30 seconds.
 -define(DEFAULT_MAX_ITEMS, 1000).
 
 %%% Public interface.
@@ -157,6 +158,8 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
         {enqueue_item, Item} ->
             State1 = add_to_queue(Item, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
+        {dispatch_queue, _Timestamp} ->
+            server(assign_tasks(dispatch_queue(State)), Opts);
         {recover_bundle, CommittedTX, Items} ->
             State1 = recover_bundle(CommittedTX, Items, State),
             server(assign_tasks(State1), Opts);
@@ -195,6 +198,21 @@ add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes}, Opts) ->
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
     }),
+    if Queue =:= [] ->
+        ?event(bundler_short, scheduling_max_bundle_dispatch_timeout, Opts),
+        MaxBundleDispatchTimeout =
+            hb_opts:get(
+                bundler_max_bundle_dispatch_delay,
+                ?DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT,
+                Opts
+            ),
+        erlang:send_after(
+            MaxBundleDispatchTimeout,
+            self(),
+            {dispatch_queue, erlang:timestamp()}
+        );
+    true -> no_action
+    end,
     State#state{queue = NewQueue, bytes = NewBytes}.
 
 %% @doc Dispatch the queue if it is ready.
