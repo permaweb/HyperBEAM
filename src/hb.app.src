@@ -10,7 +10,8 @@
         ssl,
         cowboy,
         os_mon,
-        gun
+        gun,
+        hackney
     ]},
     {env, []},
     {modules, []},

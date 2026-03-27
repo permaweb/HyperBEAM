@@ -81,6 +81,15 @@
                 fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
+        debug_log =>
+            {
+                "HB_LOG",
+                fun topic_list_to_atoms/1,
+                {preparsed, false}
+            },
+        log_dir => {"HB_LOG_DIR", fun hb_util:bin/1, "logs"},
+        log_max_files => {"HB_LOG_MAX_FILES", fun hb_util:int/1, "5"},
+        log_max_bytes => {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
         lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
         default_index =>
@@ -139,7 +148,7 @@ default_message() ->
         hb_config_location => <<"config.flat">>,
         initialized => true,
         %% What HTTP client should the node use?
-        %% Options: gun, httpc
+        %% Options: gun, httpc, hackney
         http_client => ?DEFAULT_HTTP_CLIENT,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
@@ -245,6 +254,8 @@ default_message() ->
         http_client_keepalive => 120000,
         http_client_send_timeout => 300_000,
         port => 8734,
+        process_sampler => true,
+        process_sampler_interval => 15000,
         wasm_allow_aot => false,
         %% Options for the relay device
         relay_http_client => httpc,
@@ -258,6 +269,10 @@ default_message() ->
         node_history => [],
         debug_stack_depth => 40,
         debug_print => false,
+        debug_log => false,
+        log_dir => <<"logs">>,
+        log_max_files => 5,
+        log_max_bytes => 52428800,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
@@ -307,15 +322,15 @@ default_message() ->
                     [
                         #{
                             <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
                             <<"prefix">> => ?DEFAULT_GATEWAY,
-                            <<"opts">> => #{ http_client => gun, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         }
                     ]
             },
@@ -376,7 +391,7 @@ default_message() ->
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             },
             %% General Arweave requests: race all chain nodes, take
@@ -385,7 +400,7 @@ default_message() ->
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
                 <<"parallel">> => true,
-                <<"stop-after">> => 1,
+                <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
             %% Raw data requests via arweave.net gateway. TODO: Update later.
@@ -394,7 +409,7 @@ default_message() ->
                 <<"node">> =>
                     #{
                         <<"prefix">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             }
         ],
@@ -893,7 +908,11 @@ global_get_test() ->
     ?assertEqual(debug, ?MODULE:get(mode)),
     ?assertEqual(debug, ?MODULE:get(mode, production)),
     ?assertEqual(undefined, ?MODULE:get(unset_global_key)),
-    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)).
+    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)),
+    ?assertEqual(false, ?MODULE:get(debug_log)),
+    ?assertEqual(<<"logs">>, ?MODULE:get(log_dir)),
+    ?assertEqual(5, ?MODULE:get(log_max_files)),
+    ?assertEqual(52428800, ?MODULE:get(log_max_bytes)).
 
 local_get_test() ->
     Local = #{ only => local },

@@ -200,7 +200,10 @@ start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
             fun(Node) ->
                 spawn(
                     fun() ->
-                        Res = hb_http:request(Method, Node, Path, Message, Opts),
+                        Res =
+                            try hb_http:request(Method, Node, Path, Message, Opts)
+                            catch C:R -> {error, {worker_crash, C, R}}
+                            end,
                         receive no_reply -> stopping
                         after 0 -> Parent ! {Ref, self(), Res}
                         end
@@ -324,3 +327,119 @@ empty_inbox(Ref) ->
     after 0 ->
         ok
     end.
+
+%%% Tests
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+good()   -> ao_node(hb_http_server:start_node(#{})).
+slow(Ms) -> ao_node(hb_http_server:start_node(slow_node_opts(Ms))).
+crash()  -> #{<<"opts">> => #{http_client => httpc}}.
+
+ao_node(URL) ->
+    #{<<"uri">> => <<URL/binary, "~meta@1.0/info">>,
+      <<"opts">> => #{http_client => httpc}}.
+
+dead_node() ->
+    {ok, S} = gen_tcp:listen(0, []),
+    {ok, Port} = inet:port(S),
+    ok = gen_tcp:close(S),
+    #{<<"uri">> => iolist_to_binary(["http://localhost:", integer_to_list(Port)]),
+      <<"opts">> => #{http_client => httpc}}.
+
+slow_node_opts(Ms) ->
+    #{test_delay => Ms,
+      on => #{<<"request">> =>
+        #{<<"device">> => <<"test-device@1.0">>, <<"path">> => <<"delay">>}}}.
+
+multi(Nodes, Extra) ->
+    Config = Extra#{<<"nodes">> => Nodes, <<"admissible-status">> => 200},
+    hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}).
+
+multirequest_test_() ->
+    {setup,
+        fun() ->
+            #{fast => good(), slow1 => slow(500), slow2 => slow(500),
+              good1 => good(), good2 => good(), good3 => good()}
+        end,
+        fun(N) -> {timeout, 30, [
+            {"serial fallback", fun() ->
+                ?assertMatch({ok, _},
+                    multi([dead_node(), maps:get(fast, N)], #{}))
+            end},
+            {"parallel race", fun() ->
+                T0 = erlang:monotonic_time(millisecond),
+                ?assertMatch({ok, _},
+                    multi([maps:get(fast, N), maps:get(slow1, N), maps:get(slow2, N)],
+                        #{<<"parallel">> => true, <<"stop-after">> => true})),
+                ?assert(erlang:monotonic_time(millisecond) - T0 < 500)
+            end},
+            {"parallel broadcast", fun() ->
+                ?assertMatch([_, _, _],
+                    multi([dead_node(),
+                           maps:get(good1, N), maps:get(good2, N), maps:get(good3, N),
+                           maps:get(slow1, N)],
+                        #{<<"parallel">> => true, <<"responses">> => 3,
+                          <<"stop-after">> => false}))
+            end},
+            {"parallel crash", fun() ->
+                ?assertMatch({error, {no_viable_responses, _}},
+                    multi([crash(), crash()],
+                        #{<<"parallel">> => true, <<"stop-after">> => true}))
+            end}
+        ]} end}.
+
+%% @doc Parallel race using the actual /arweave route config from hb_opts:
+%% one fast node returns 200 immediately, two slow nodes are still processing.
+%% The call must return before the slow nodes finish.
+parallel_race_stops_at_first_admissible_test_() ->
+    {timeout, 30, fun parallel_race_stops_at_first_admissible/0}.
+parallel_race_stops_at_first_admissible() ->
+    Delay = 500,
+    FastURL = hb_http_server:start_node(#{}),
+    SlowURL1 = hb_http_server:start_node(slow_node_opts(Delay)),
+    SlowURL2 = hb_http_server:start_node(slow_node_opts(Delay)),
+    Routes = maps:get(routes, hb_opts:default_message()),
+    [ArweaveRoute] =
+        [R || R <- Routes,
+            maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,
+            maps:is_key(<<"nodes">>, R)],
+    Config = ArweaveRoute#{
+        <<"nodes">> => [ao_node(FastURL), ao_node(SlowURL1), ao_node(SlowURL2)]
+    },
+    T0 = erlang:monotonic_time(millisecond),
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    ?assertMatch({ok, _}, Result),
+    ?assert(Elapsed < Delay).
+
+%% @doc Serial fallback: unreachable nodes are skipped until a live one
+%% responds with 200.
+serial_fallback_skips_non_admissible_test_() ->
+    {timeout, 30, fun serial_fallback_skips_non_admissible/0}.
+serial_fallback_skips_non_admissible() ->
+    GoodURL = hb_http_server:start_node(#{}),
+    Config = #{
+        <<"nodes">> => [dead_node(), dead_node(), ao_node(GoodURL)],
+        <<"parallel">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200
+    },
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    ?assertMatch({ok, _}, Result).
+
+%% @doc No admissible node: all unreachable, error tuple returned.
+no_admissible_node_returns_error_test_() ->
+    {timeout, 30, fun no_admissible_node_returns_error/0}.
+no_admissible_node_returns_error() ->
+    Config = #{
+        <<"nodes">> => [dead_node(), dead_node()],
+        <<"parallel">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200
+    },
+    Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
+    ?assertMatch({error, {no_viable_responses, _}}, Result).
+
+-endif.

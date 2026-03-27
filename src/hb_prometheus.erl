@@ -37,7 +37,11 @@ declare(Type, Metric) ->
     case ensure_started() of
         ok ->
             try do_declare(Type, Metric)
-            catch error:mfa_already_exists -> ok
+            catch
+                error:mfa_already_exists ->
+                    ok;
+                error:{mf_already_exists, _, _} ->
+                    ok
             end;
         _ -> ok
     end.

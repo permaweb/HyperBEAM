@@ -1,7 +1,11 @@
 %%% @doc Wrapper for incrementing prometheus counters.
 -module(hb_event).
 -export([counters/0, diff/1, diff/2]).
+-export([debug_print/4, debug_print/5, debug_print/6]).
+-export([format_file_log/2]).
 -export([log/1, log/2, log/3, log/4, log/5, log/6]).
+-export([log_event/6]).
+-export([setup_logger/0]).
 -export([increment/3, increment/4, increment_callers/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -9,8 +13,19 @@
 -define(OVERLOAD_QUEUE_LENGTH, 10_000).
 -define(MAX_MEMORY, 50_000_000). % 50 MB
 -define(MAX_EVENT_NAME_LENGTH, 100).
+%% OTP handler for logging to disk.
+-define(PRINT_LOGGER, hb_print_logger).
+-define(PRINT_LOGGER_DOMAIN, [hb_print]).
+-define(FILE_LOGGER, hb_file_logger).
+%% OTP logger domain, logs sent with this domain are directed to hb_file_logger.
+-define(FILE_LOGGER_DOMAIN, [hb_log]).
+-define(DEFAULT_PRINT_HANDLER_FILTER, hb_drop_hb_print_logs).
+-define(DEFAULT_FILE_HANDLER_FILTER, hb_drop_hb_file_logs).
 
 -ifdef(NO_EVENTS).
+debug_print(_X, _Mod, _Func, _Line) -> ok.
+debug_print(_X, _Mod, _Func, _Line, _Opts) -> ok.
+debug_print(_Topic, _X, _Mod, _Func, _Line, _Opts) -> ok.
 log(_X) -> ok.
 log(_Topic, _X) -> ok.
 log(_Topic, _X, _Mod) -> ok.
@@ -28,34 +43,185 @@ log(Topic, X, Mod, Func, Line) -> log(Topic, X, Mod, Func, Line, #{}).
 log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, Mod, Func, Line, Opts) ->
-    % Check if the debug_print option has the topic in it if set.
-    case should_print(Topic, Opts) orelse should_print(Mod, Opts) of
-        true -> hb_format:print(X, Mod, Func, Line, Opts);
-        false -> X
-    end,
+    debug_print(Topic, X, Mod, Func, Line, Opts),
     try increment(Topic, X, Opts) catch _:_ -> ok end,
     % Return the logged value to the caller. This allows callers to insert 
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
+
+debug_print(X, Mod, Func, Line) ->
+    debug_print(X, Mod, Func, Line, #{}).
+debug_print(X, Mod, Func, Line, Opts) ->
+    debug_print(debug_print, X, Mod, Func, Line, Opts).
+debug_print(Topic, X, Mod, Func, Line, Opts) ->
+    case should_print(print, Topic, Opts)
+        orelse should_print(print, Mod, Opts)
+    of
+        true -> print_event(Topic, X, Mod, Func, Line, Opts);
+        false -> X
+    end,
+    case should_print(log, Topic, Opts)
+        orelse should_print(log, Mod, Opts)
+    of
+        true -> log_event(Topic, X, Mod, Func, Line, Opts);
+        false -> ok
+    end,
+    X.
 -endif.
 
-%% @doc Determine if the topic should be printed. Uses a cache in the process
-%% dictionary to avoid re-checking the same topic multiple times.
-should_print(Topic, Opts) ->
-    case erlang:get({event_print, Topic}) of
+%% @doc Determine if the topic should be printed or logged. Uses a cache in the
+%% process dictionary to avoid re-checking the same topic multiple times.
+should_print(Type, Topic, Opts) ->
+    case erlang:get({event_print, Type, Topic}) of
         {cached, X} -> X;
         undefined ->
             Result =
-                case hb_opts:get(debug_print, false, Opts) of
+                case hb_opts:get(print_opt(Type), false, Opts) of
                     EventList when is_list(EventList) ->
                         lists:member(Topic, EventList);
                     true -> true;
                     false -> false
                 end,
-            erlang:put({event_print, Topic}, {cached, Result}),
+            erlang:put({event_print, Type, Topic}, {cached, Result}),
             Result
     end.
+
+print_opt(print) -> debug_print;
+print_opt(log) -> debug_log.
+
+%% @doc Configure a rotating file logger for HyperBEAM events.
+setup_logger() ->
+    LogFile =
+        filename:join(
+            hb_util:list(hb_opts:get(log_dir)),
+            "hyperbeam.log"
+        ),
+    ok = filelib:ensure_dir(LogFile),
+    setup_handler(
+        ?PRINT_LOGGER,
+        ?DEFAULT_PRINT_HANDLER_FILTER,
+        ?PRINT_LOGGER_DOMAIN,
+        print_logger_config()
+    ),
+    setup_handler(
+        ?FILE_LOGGER,
+        ?DEFAULT_FILE_HANDLER_FILTER,
+        ?FILE_LOGGER_DOMAIN,
+        file_logger_config(LogFile)
+    ).
+
+setup_handler(Handler, DefaultFilter, Domain, Config) ->
+    ensure_default_handler_filter(DefaultFilter, Domain),
+    logger:remove_handler(Handler),
+    case logger:add_handler(Handler, logger_std_h, Config) of
+        ok -> ok;
+        {error, HandlerReason} -> erlang:error(HandlerReason)
+    end.
+
+%% @doc Build the OTP logger configuration for the HyperBEAM file handler.
+file_logger_config(LogFile) ->
+    logger_handler_config(
+        ?FILE_LOGGER_DOMAIN,
+        hb_log_domain,
+        #{
+            report_cb => fun ?MODULE:format_file_log/2,
+            template => [time, " ", msg, "\n"],
+            single_line => false
+        },
+        #{
+            file => LogFile,
+            max_no_bytes => hb_opts:get(log_max_bytes),
+            max_no_files => hb_opts:get(log_max_files)
+        }
+    ).
+
+print_logger_config() ->
+    logger_handler_config(
+        ?PRINT_LOGGER_DOMAIN,
+        hb_print_domain,
+        #{
+            report_cb => fun ?MODULE:format_file_log/2,
+            template => [msg, "\n"],
+            single_line => false
+        },
+        #{type => standard_error}
+    ).
+
+logger_handler_config(Domain, FilterId, FormatterConfig, HandlerConfig) ->
+    #{
+        level => all,
+        sync_mode_qlen => 200,
+        drop_mode_qlen => 200,
+        flush_qlen => 1000,
+        burst_limit_enable => true,
+        burst_limit_max_count => 500,
+        burst_limit_window_time => 1000,
+        filter_default => stop,
+        filters =>
+            [
+                {
+                    FilterId,
+                    {fun logger_filters:domain/2, {log, sub, Domain}}
+                }
+            ],
+        formatter => {logger_formatter, FormatterConfig},
+        config => HandlerConfig
+    }.
+
+ensure_default_handler_filter(FilterId, Domain) ->
+    logger:remove_handler_filter(default, FilterId),
+    case logger:add_handler_filter(
+        default,
+        FilterId,
+        {fun logger_filters:domain/2, {stop, sub, Domain}}
+    ) of
+        ok -> ok;
+        {error, FilterReason} -> erlang:error(FilterReason)
+    end.
+
+print_event(Topic, X, Mod, Func, Line, Opts) ->
+    logger:log(
+        notice,
+        event_report(X, Mod, Func, Line, Opts),
+        (event_metadata(Topic, Mod, Func, Line))#{
+            domain => ?PRINT_LOGGER_DOMAIN
+        }
+    ).
+
+%% @doc Queue an event for asynchronous file logging via OTP logger.
+log_event(Topic, X, Mod, Func, Line, Opts) ->
+    logger:log(
+        notice,
+        event_report(X, Mod, Func, Line, Opts),
+        (event_metadata(Topic, Mod, Func, Line))#{
+            domain => ?FILE_LOGGER_DOMAIN
+        }
+    ).
+
+event_report(X, Mod, Func, Line, Opts) ->
+    #{
+        event => X,
+        line => Line,
+        function => Func,
+        module => Mod,
+        opts => Opts
+    }.
+
+event_metadata(Topic, Mod, Func, Line) ->
+    #{
+        line => Line,
+        function => Func,
+        module => Mod,
+        topic => Topic
+    }.
+
+%% @doc Render the event log entry in the logger handler process.
+format_file_log(
+    #{event := X, line := Line, function := Func, module := Mod, opts := Opts},
+    _Config
+) ->
+    hb_format:format_debug(X, Mod, Func, Line, Opts).
 
 %% @doc Increment the counter for the given topic and message. Registers the
 %% counter if it doesn't exist. If the topic is `global', the message is ignored.
@@ -258,8 +424,8 @@ benchmark_print_lookup_test() ->
     Iterations =
         hb_test_utils:benchmark(
             fun() ->
-                should_print(test_module, DefaultOpts)
-                    orelse should_print(test_event, DefaultOpts)
+                should_print(print, test_module, DefaultOpts)
+                    orelse should_print(print, test_event, DefaultOpts)
             end,
             0.25
         ),
@@ -277,6 +443,12 @@ benchmark_increment_test() ->
     hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations),
     ?assert(Iterations >= 1000),
     ok.
+
+should_log_test() ->
+    ?assertEqual(true, should_print(log, topic_a, #{ debug_log => [topic_a] })),
+    ?assertEqual(false, should_print(log, topic_b, #{ debug_log => [topic_a] })),
+    ?assertEqual(true, should_print(log, topic_c, #{ debug_log => true })),
+    ?assertEqual(false, should_print(log, topic_d, #{ debug_log => false })).
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
