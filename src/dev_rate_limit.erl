@@ -35,6 +35,7 @@
 -define(DEFAULT_MIN, -1_000).
 -define(DEFAULT_REQS, 1000).
 -define(DEFAULT_PERIOD, 60).
+-define(NUM_WORKERS, 8).
 
 %% @doc `on/request' handler that triggers rate limit counting and returns a
 %% 429 status code and response if the limit is exceeded. The response includes
@@ -85,40 +86,49 @@ request(_, Msg, Opts) ->
             {ok, Msg}
     end.
 
-%% @doc The singleton ID of the rate limiter server. This allows us to run 
-%% multiple rate limiters on the same node if needed, each with its own
-%% configuration, but with all of the callers sharing the same rate limiter
-%% server.
-server_id(Opts) ->
-    {?MODULE, hb_util:human_id(hb_opts:get(priv_wallet, undefined, Opts))}.
+%% @doc Return the atom name for worker N (e.g. rate_limit_1 .. rate_limit_8).
+worker_name(N) ->
+    list_to_atom("rate_limit_" ++ integer_to_list(N)).
+
+%% @doc The unique registration ID for worker N on this node. Including the
+%% wallet ID allows multiple independent rate-limiter instances (one per node
+%% configuration) to coexist on the same BEAM.
+worker_id(N, Opts) ->
+    {worker_name(N), hb_util:human_id(hb_opts:get(priv_wallet, undefined, Opts))}.
+
+%% @doc Map a caller reference (IP address binary) to a worker shard index
+%% in the range 1..NUM_WORKERS using a consistent hash.
+shard(Reference) ->
+    (erlang:phash2(Reference) rem ?NUM_WORKERS) + 1.
 
 %% @doc Determine the reference of the caller. Presently only the `ip` form
 %% may be used to identify the caller.
 request_reference(Msg, Opts) -> hb_private:get(<<"ip">>, Msg, Opts).
 
 %% @doc Check if the caller is limited according to the current state of the
-%% rate limiter server.
+%% rate limiter server. Requests are sharded across ?NUM_WORKERS workers by
+%% the caller's IP address so that no single process becomes a bottleneck.
 is_limited(Reference, Opts) ->
-    PID = ensure_rate_limiter_started(Opts),
+    N = shard(Reference),
+    PID = ensure_worker_started(N, Opts),
     PID ! {request, self(), Reference},
     receive
         {incremented, Balance} when Balance > 0 -> false;
         {incremented, Balance} when Balance =< 0 -> {true, Balance}
     after ?LOOKUP_TIMEOUT ->
-        ?event(warning, {rate_limit_timeout, restarting}),
-        hb_name:unregister(server_id(Opts)),
+        ?event(warning, {rate_limit_timeout, {shard, N}, restarting}),
+        hb_name:unregister(worker_id(N, Opts)),
         is_limited(Reference, Opts)
     end.
 
-%% @doc Ensure that the rate limiter server is started and return the PID of
-%% the server. In the event of two instanteous spawns, one of the new processes 
-%% will fail with an error and the other will succeed. The effect to the caller
-%% is the same: A rate limiter is available to query.
-ensure_rate_limiter_started(Opts) ->
-    ServerID = server_id(Opts),
+%% @doc Ensure that worker N is started and return its PID. In the event of
+%% two simultaneous spawns, one will fail and the other will succeed; the
+%% effect to the caller is the same: a worker is available to query.
+ensure_worker_started(N, Opts) ->
+    WorkerID = worker_id(N, Opts),
     hb_name:singleton(
-        ServerID,
-        fun() -> start_server(ServerID, Opts) end
+        WorkerID,
+        fun() -> start_server(WorkerID, Opts) end
     ).
 
 start_server(ServerID, Opts) ->
