@@ -83,7 +83,14 @@ request(_, Msg, Opts) ->
             };
         false ->
             ?event(rate_limit, {rate_limit_allowed, {caller, Reference}}),
-            {ok, Msg}
+            {ok, Msg};
+        timeout ->
+            {error, 
+                #{
+                  <<"status">> => 503,
+                  <<"body">> => <<"Server overloaded">>
+                }
+            }
     end.
 
 %% @doc Return the atom name for worker N (e.g. rate_limit_1 .. rate_limit_8).
@@ -116,9 +123,8 @@ is_limited(Reference, Opts) ->
         {incremented, Balance} when Balance > 0 -> false;
         {incremented, Balance} when Balance =< 0 -> {true, Balance}
     after ?LOOKUP_TIMEOUT ->
-        ?event(warning, {rate_limit_timeout, {shard, N}, restarting}),
-        hb_name:unregister(worker_id(N, Opts)),
-        is_limited(Reference, Opts)
+        ?event(warning, {rate_limit_timeout, {shard, N}, {reference, Reference}, restarting}),
+        timeout
     end.
 
 %% @doc Ensure that worker N is started and return its PID. In the event of
