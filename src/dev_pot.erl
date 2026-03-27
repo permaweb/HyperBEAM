@@ -478,6 +478,7 @@ notify(State, Assignment, Opts) ->
                 <<"No `parent` configured for notifications">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(NotifyFrom, ?RESERVED_KEYS),
         true ?= (NotifyFrom =:= Parent) orelse
             {error, <<"Invalid notification source">>},
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
@@ -913,6 +914,7 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
+        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
         
         AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
             true -> true;
