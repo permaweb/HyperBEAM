@@ -35,6 +35,7 @@
 -define(DEFAULT_MIN, -1_000).
 -define(DEFAULT_REQS, 1000).
 -define(DEFAULT_PERIOD, 60).
+-define(TIMEOUT_RETRY_AFTER, <<"1">>).
 
 %% @doc `on/request' handler that triggers rate limit counting and returns a
 %% 429 status code and response if the limit is exceeded. The response includes
@@ -80,6 +81,15 @@ request(_, Msg, Opts) ->
                     <<"retry-after">> => RetryAfterBin
                 }
             };
+        timeout ->
+            {error,
+                #{
+                    <<"status">> => 429,
+                    <<"reason">> => <<"rate-limited">>,
+                    <<"body">> => <<"Rate limiter overloaded.">>,
+                    <<"retry-after">> => ?TIMEOUT_RETRY_AFTER
+                }
+            };
         false ->
             ?event(rate_limit, {rate_limit_allowed, {caller, Reference}}),
             {ok, Msg}
@@ -91,6 +101,18 @@ request(_, Msg, Opts) ->
 %% server.
 server_id(Opts) ->
     {?MODULE, hb_util:human_id(hb_opts:get(priv_wallet, undefined, Opts))}.
+
+%% @doc Stop the registered limiter process for the given options, if present.
+stop(Opts) ->
+    ServerID = server_id(Opts),
+    case hb_name:lookup(ServerID) of
+        Pid when is_pid(Pid) ->
+            hb_name:unregister(ServerID),
+            exit(Pid, kill),
+            ok;
+        undefined ->
+            ok
+    end.
 
 %% @doc Determine the reference of the caller. Presently only the `ip` form
 %% may be used to identify the caller.
@@ -105,9 +127,8 @@ is_limited(Reference, Opts) ->
         {incremented, Balance} when Balance > 0 -> false;
         {incremented, Balance} when Balance =< 0 -> {true, Balance}
     after ?LOOKUP_TIMEOUT ->
-        ?event(warning, {rate_limit_timeout, restarting}),
-        hb_name:unregister(server_id(Opts)),
-        is_limited(Reference, Opts)
+        ?event(warning, {rate_limit_timeout, returning_429}),
+        timeout
     end.
 
 %% @doc Ensure that the rate limiter server is started and return the PID of
@@ -209,7 +230,7 @@ account_balance(
 
 %%% Tests
 
-rate_limit_test() ->
+rate_limit_test_() ->
     ServerOpts = #{
         rate_limit_requests => 2,
         rate_limit_period => 1,
@@ -222,23 +243,28 @@ rate_limit_test() ->
                     }
             }
     },
-    ServerNode = hb_http_server:start_node(ServerOpts),
-    ?assertMatch(
-        {ok, _},
-        hb_http:get(ServerNode, <<"id">>, #{})
-    ),
-    ?debug_wait(100),
-    ?assertMatch(
-        {ok, _},
-        hb_http:get(ServerNode, <<"id">>, #{})
-    ),
-    ?debug_wait(100),
-    ?assertMatch(
-        {error, #{ <<"status">> := 429 }},
-        hb_http:get(ServerNode, <<"id">>, #{})
-    ).
+    {setup,
+        fun() -> stop(ServerOpts) end,
+        fun(_) -> stop(ServerOpts) end,
+        fun() ->
+            ServerNode = hb_http_server:start_node(ServerOpts),
+            ?assertMatch(
+                {ok, _},
+                hb_http:get(ServerNode, <<"id">>, #{})
+            ),
+            ?debug_wait(100),
+            ?assertMatch(
+                {ok, _},
+                hb_http:get(ServerNode, <<"id">>, #{})
+            ),
+            ?debug_wait(100),
+            ?assertMatch(
+                {error, #{ <<"status">> := 429 }},
+                hb_http:get(ServerNode, <<"id">>, #{})
+            )
+        end}.
 
-rate_limit_reset_test() ->
+rate_limit_reset_test_() ->
     ServerOpts = #{
         rate_limit_requests => 2,
         rate_limit_period => 1,
@@ -253,12 +279,17 @@ rate_limit_reset_test() ->
                     }
             }
     },
-    ServerNode = hb_http_server:start_node(ServerOpts),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
-    ?assertMatch(
-        {error, #{ <<"status">> := 429 }},
-        hb_http:get(ServerNode, <<"id">>, #{})
-    ),
-    timer:sleep(1_000),
-    ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})).
+    {setup,
+        fun() -> stop(ServerOpts) end,
+        fun(_) -> stop(ServerOpts) end,
+        fun() ->
+            ServerNode = hb_http_server:start_node(ServerOpts),
+            ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
+            ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{})),
+            ?assertMatch(
+                {error, #{ <<"status">> := 429 }},
+                hb_http:get(ServerNode, <<"id">>, #{})
+            ),
+            timer:sleep(1_000),
+            ?assertMatch({ok, _}, hb_http:get(ServerNode, <<"id">>, #{}))
+        end}.
