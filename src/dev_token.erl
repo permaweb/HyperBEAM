@@ -146,6 +146,9 @@ transfer(Base, Assignment, Opts) ->
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
+        % validate From/Recipient sanity
+        true ?= validate_address(From, []),
+        true ?= validate_address(Recipient, []),
         % Normalize the base's minting state for the sender.
         {ok, NormBase} ?=
             normalize_mint(
@@ -177,7 +180,6 @@ transfer(Base, Assignment, Opts) ->
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
-        true ?= validate_address(Recipient, []),
         % Handle self-transfer: skip balance updates
         NewBaseAfterTransfer =
             case From =:= Recipient of
@@ -304,18 +306,21 @@ secure_set(Base, Assignment, Opts) ->
 
 %% @doc Enforce that the caller is the `set' authority.
 enforce_set_authority(Base, Req, Opts) ->
-    Setter = hb_ao:get(<<"from">>, Req, Opts),
-    SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
-    case {Setter, SetAuthority} of
-        {not_found, _} -> 
-            {error, <<"No normalized `from` key found in request.">>};
-        {_, not_found} -> 
-            {error, <<"No set-authority found in `Base' state.">>};
-        {S, S} -> 
-            true;
-        _ -> 
-            {error, <<"Caller is not the `set-authority'.">>}
-    end.
+    maybe
+        Setter = hb_ao:get(<<"from">>, Req, Opts),
+        SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+        true ?= (Setter =/= not_found) orelse
+                {error, <<"Setter not found.">>},
+        true ?= (SetAuthority =/= not_found) orelse
+                {error, <<"SetAuthority not found.">>},
+        true ?= validate_address(Setter, []),
+        case {Setter, SetAuthority} of
+            {S, S} -> 
+                true;
+            _ -> 
+                {error, <<"Caller is not the `set-authority'.">>}
+        end
+end.
 
 %%% Helper functions.
 
@@ -325,23 +330,23 @@ enforce_set_authority(Base, Req, Opts) ->
 validate_address(Address, CustomList) when is_binary(Address), is_list(CustomList) ->
     ReservedKeys = ?AO_RESERVED_ADDRESS_KEYS ++ CustomList,
     case byte_size(Address) of
-        0 -> {error, <<"Recipient address cannot be empty.">>};
-        N when N > 128 -> {error, <<"Recipient address is too long.">>};
+        0 -> {error, <<"Address cannot be empty.">>};
+        N when N > 128 -> {error, <<"Address is too long.">>};
         _ ->
             maybe
                 true ?= (not dev_trie:is_reserved_key(Address))
-                    orelse {error, <<"Recipient address uses a reserved trie internal key.">>},
+                    orelse {error, <<"Address uses a reserved trie internal key.">>},
                 true ?= (not is_reserved_custom_key(Address, ReservedKeys))
                     orelse {error, <<"Address is a reserved ao/custom key">>},
                 % Check for path separators (security: prevent path traversal) and whitespaces.
                 case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
                     nomatch -> true;
-                    _ -> {error, <<"Recipient address cannot contain path separators or whitespaces">>}
+                    _ -> {error, <<"Address cannot contain path separators or whitespaces">>}
                 end
             end
     end;
 validate_address(_, _) ->
-    {error, <<"Recipient address must be a binary.">>}.
+    {error, <<"Address must be a binary.">>}.
 %% @doc Check if the given Key exists in the passed List
 is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
     lists:member(Key, List);
