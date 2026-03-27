@@ -154,11 +154,9 @@ start_server(ServerID, Opts) ->
 %% - `{balance, PID, Reference}': Return the current balance of the given reference.
 %% The `balance` call is not presently used, but seems sensible to have.
 server_loop(State) ->
-    ?event({server_loop, {state, State}}),
     receive
         {request, PID, Reference} ->
             NewState = debit(Reference, 1, State, Now = erlang:system_time(millisecond)),
-            ?event({state_after_debit, NewState}),
             Balance = account_balance(Reference, NewState, Now),
             ?event(
                 rate_limit_short,
@@ -197,7 +195,6 @@ account_balance(
         #{ max := Max, reqs := Reqs, period := Period, peers := Peers },
         Time
     ) ->
-    ?event({account_balance, {target, Reference}, {peers, Peers}, {time, Time}}),
     case maps:get(Reference, Peers, not_found) of
         infinity -> infinity;
         not_found -> Max;
