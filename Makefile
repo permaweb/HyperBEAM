@@ -4,7 +4,7 @@ compile:
 	rebar3 compile
 
 test:
-	scripts/parallel_tests.sh
+	scripts/parallel_tests.escript
 
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
