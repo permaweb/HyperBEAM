@@ -636,7 +636,6 @@ get_chunk(Offset, Opts) ->
     % when querying some *dataitems* does cause an error. So for now we will
     % leaeve the header out and continue to search for a case where it is
     % needed.
-    ?event(arweave_short, fetch_chunk, Opts),
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
