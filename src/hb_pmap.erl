@@ -14,10 +14,12 @@ parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
         lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
     ActiveRefs = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
     ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}),
-    [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
+    Result = [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs],
+    erlang:garbage_collect(),
+    Result.
 
 spawn_worker({Item, Ref}, Fun, Parent) ->
-    spawn(
+    spawn_opt(
         fun() ->
             try
                 Parent ! {hb_pmap_result, Ref, Fun(Item)}
@@ -35,7 +37,8 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
                         Stacktrace
                     }
             end
-        end
+        end,
+        [{fullsweep_after, 0}]
     ),
     Ref.
 
