@@ -504,12 +504,22 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-    Results = hb_pmap:parallel_map(
-        Offsets,
-        fun(O) -> get_chunk(O, Opts) end,
-        Concurrency
-    ),
-    collect_chunks(Results).
+    try
+        ChunkInfos =
+            lists:reverse(
+                hb_pmap:parallel_reduce(
+                    Offsets,
+                    fun(O) -> get_chunk(O, Opts) end,
+                    fun collect_chunk_result/2,
+                    [],
+                    Concurrency
+                )
+            ),
+        {ok, ChunkInfos}
+    catch
+        throw:{chunk_fetch_error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
@@ -523,14 +533,8 @@ generate_offsets(Current, End, _Step, Acc) when Current > End ->
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
 
-%% @doc Parse a list of chunk fetch results into chunk info tuples.
-%% Fails fast on the first error.
-collect_chunks(Results) ->
-    collect_chunks(Results, []).
-
-collect_chunks([], Acc) ->
-    {ok, lists:reverse(Acc)};
-collect_chunks([{ok, JSON} | Rest], Acc) ->
+%% @doc Parse a chunk fetch result into a chunk info tuple accumulator.
+collect_chunk_result({ok, JSON}, Acc) ->
     Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
     AbsStart = AbsEnd - byte_size(Chunk) + 1,
@@ -539,9 +543,9 @@ collect_chunks([{ok, JSON} | Rest], Acc) ->
             {abs_start, AbsStart}, 
             {abs_end, AbsEnd},
             {size, byte_size(Chunk)}}),
-    collect_chunks(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
-collect_chunks([{error, Reason} | _], _Acc) ->
-    {error, Reason}.
+    [{AbsStart, AbsEnd, Chunk} | Acc];
+collect_chunk_result({error, Reason}, _Acc) ->
+    throw({chunk_fetch_error, Reason}).
 
 %% @doc Sort chunk infos by start offset. If duplicate starts appear, log a
 %% warning since this should not happen.
@@ -943,6 +947,26 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+collect_chunk_result_success_test() ->
+    EncodedChunk = hb_util:encode(<<"abc">>),
+    ?assertEqual(
+        [{8, 10, <<"abc">>}],
+        collect_chunk_result(
+            {ok,
+                #{
+                    <<"chunk">> => EncodedChunk,
+                    <<"absolute_end_offset">> => <<"10">>
+                }},
+            []
+        )
+    ).
+
+collect_chunk_result_error_test() ->
+    ?assertThrow(
+        {chunk_fetch_error, timeout},
+        collect_chunk_result({error, timeout}, [])
+    ).
 
 post_ans104_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
