@@ -534,7 +534,6 @@ bundle_header_size(_) ->
     invalid_bundle_header.
 
 decode_bundle_header(<<Count:256/little-integer, Content/binary>>) ->
-    ?event(oom_debug, {decode_bundle_header, {count, Count}}),
     decode_bundle_header(Count, Content);
 decode_bundle_header(<<>>) ->
     {<<>>, []};

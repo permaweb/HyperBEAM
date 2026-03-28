@@ -307,7 +307,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
             % can avoid loading the full L1 TX data into memory, and instead
             % only load the bundle header. But as a result we're unable to
             % recurse any deeper than L2 dataitems.
-            ?event(oom_debug, {fetching_bundle_header, 
+            ?event(debug_copycat, {fetching_bundle_header, 
                 {tx_id, {string, TXID}},
                 {tx_end_offset, TXEndOffset},
                 {tx_data_size, TX#tx.data_size}
