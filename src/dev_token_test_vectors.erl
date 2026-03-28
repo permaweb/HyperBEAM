@@ -552,6 +552,33 @@ logo_set_once_then_update_rejected_test() ->
         )
     ).
 
+non_whitelisted_set_field_rejected_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => id(Setter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Attempted to set non-whitelisted fields.">>},
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Setter),
+                    <<"balances">> => #{ <<"fake">> => 1 }
+                }
+            },
+            Opts
+        )
+    ).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
