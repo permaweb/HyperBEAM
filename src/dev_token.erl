@@ -42,6 +42,15 @@
         <<"is_reserved_key">>
     ]
 ).
+
+%% @doc Immutable token metadata fields
+-define(IMMUTABLE_METADATA_FIELDS, [
+        <<"name">>,
+        <<"ticker">>,
+        <<"denomination">>,
+        <<"logo">>
+    ]
+).
 %%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
@@ -300,8 +309,33 @@ secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_set_authority(Base, Req, Opts),
+        % check for immutable state variable update attempts
+        true ?= enforce_immutable_fields(Base, Req, Opts),
         % Apply updates to base state
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
+    end.
+enforce_immutable_fields(Base, Req, Opts) ->
+    lists:foldl(
+        fun
+            (_Key, {error, _} = Err) ->
+                Err;
+            (Key, true) ->
+                immutable_not_already_set(Key, Base, Req, Opts)
+        end,
+        true,
+        ?IMMUTABLE_METADATA_FIELDS
+    ).
+
+immutable_not_already_set(Key, Base, Req, Opts) ->
+    case hb_maps:find(Key, Req, Opts) of
+        {ok, _NewValue} ->
+            case hb_maps:find(Key, Base, Opts) of
+                {ok, _Existing} -> {error, <<Key/binary, " is immutable once set.">>};
+                error -> true
+            end;
+        % immutable keys not present in Req
+        _ ->
+            true
     end.
 
 %% @doc Enforce that the caller is the `set' authority.
