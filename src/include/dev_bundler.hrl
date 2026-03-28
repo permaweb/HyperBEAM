@@ -9,7 +9,8 @@
     workers,
     task_queue,
     bundles,
-    opts
+    opts,
+    dispatch_ref
 }).
 
 -record(task, {
