@@ -514,7 +514,7 @@ fetch_and_collect(Offsets, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     Results = hb_pmap:parallel_map(
         Offsets,
-        fun(O) -> get_chunk(O, Opts) end,
+        fun(O) -> decode_chunk(get_chunk(O, Opts)) end,
         Concurrency
     ),
     collect_chunks(Results).
@@ -531,23 +531,29 @@ generate_offsets(Current, End, _Step, Acc) when Current > End ->
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
 
-%% @doc Parse a list of chunk fetch results into chunk info tuples.
-%% Fails fast on the first error.
+%% @doc Decode a chunk response into a {Start, End, Binary} tuple.
+%% Runs inside the pmap worker so raw JSON is GC'd per-worker.
+decode_chunk({ok, JSON}) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
+    AbsStart = AbsEnd - byte_size(Chunk) + 1,
+    ?event(debug_arweave,
+        {decode_chunk,
+            {abs_start, AbsStart},
+            {abs_end, AbsEnd},
+            {size, byte_size(Chunk)}}),
+    {ok, {AbsStart, AbsEnd, Chunk}};
+decode_chunk({error, _} = Err) ->
+    Err.
+
+%% @doc Collect decoded chunk results. Fails fast on the first error.
 collect_chunks(Results) ->
     collect_chunks(Results, []).
 
 collect_chunks([], Acc) ->
     {ok, lists:reverse(Acc)};
-collect_chunks([{ok, JSON} | Rest], Acc) ->
-    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
-    AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
-    AbsStart = AbsEnd - byte_size(Chunk) + 1,
-    ?event(debug_arweave, 
-        {collect_chunks,
-            {abs_start, AbsStart}, 
-            {abs_end, AbsEnd},
-            {size, byte_size(Chunk)}}),
-    collect_chunks(Rest, [{AbsStart, AbsEnd, Chunk} | Acc]);
+collect_chunks([{ok, ChunkInfo} | Rest], Acc) ->
+    collect_chunks(Rest, [ChunkInfo | Acc]);
 collect_chunks([{error, Reason} | _], _Acc) ->
     {error, Reason}.
 
