@@ -655,6 +655,7 @@ bundle_header(BundleStartOffset, Opts) ->
                 invalid_bundle_header ->
                     {error, invalid_bundle_header};
                 HeaderSize ->
+                    ?event(oom_debug, {bundle_header_size, {header_size, HeaderSize}}),
                     case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
                         {ok, HeaderBin} ->
                             case ar_bundles:decode_bundle_header(HeaderBin) of
