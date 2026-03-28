@@ -17,7 +17,7 @@ request(Args, Opts) ->
         false ->
             hb_http_client:request(Args, Opts#{http_client => hackney});
         true ->
-            Key = cache_key(Path),
+            Key = cache_key(Peer, Path),
             case read_cache(Key) of
                 {ok, Response} ->
                     io:put_chars(standard_error,
@@ -51,9 +51,9 @@ is_external("http://localhost" ++ _) -> false;
 is_external("http://127.0.0.1" ++ _) -> false;
 is_external(_) -> true.
 
-%% @doc Produce a hex-encoded SHA-256 hash of the path for use as filename.
-cache_key(Path) ->
-    Hash = crypto:hash(sha256, to_bin(Path)),
+%% @doc Produce a hex-encoded SHA-256 hash of peer + path for use as filename.
+cache_key(Peer, Path) ->
+    Hash = crypto:hash(sha256, <<(to_bin(Peer))/binary, (to_bin(Path))/binary>>),
     lists:flatten(
         [io_lib:format("~2.16.0b", [B]) || <<B>> <= Hash]
     ).
@@ -77,8 +77,10 @@ read_cache(Key) ->
 write_cache(Key, {ok, Status, _, _} = Response)
         when Status < 400 ->
     Path = cache_path(Key),
+    Tmp = Path ++ ".tmp",
     filelib:ensure_dir(Path),
-    file:write_file(Path, term_to_binary(Response));
+    ok = file:write_file(Tmp, term_to_binary(Response)),
+    file:rename(Tmp, Path);
 write_cache(_, _) ->
     ok.
 

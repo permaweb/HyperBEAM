@@ -10,6 +10,8 @@
 -define(PA_GLOB, "_build/test/lib/*/ebin").
 
 main(Args) ->
+    process_flag(trap_exit, true),
+    os:set_signal(sigterm, handle),
     io:format("=== Compiling (test profile) ===~n"),
     case run_command(
         "rebar3",
@@ -108,7 +110,10 @@ run_modules(Modules, State) ->
     receive
         {module_done, Result} ->
             print_result(Result),
-            run_modules(Modules, accumulate(Result, State))
+            run_modules(Modules, accumulate(Result, State));
+        {signal, _, _} ->
+            io:format("~nInterrupted — cleaning up~n"),
+            halt(1)
     end.
 
 run_module(Mod, Port) ->
