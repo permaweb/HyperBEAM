@@ -24,7 +24,7 @@
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
 %%% 
-%%% TODO:
+%%% TODO: ADDRESSED IN enforce_resource_config_authority & apply_resource_config
 %%% - Add `secure-set` (set guarded by address) for resource-weights and 
 %%%   supported resources.
 -module(dev_pot).
@@ -478,6 +478,7 @@ notify(State, Assignment, Opts) ->
                 <<"No `parent` configured for notifications">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(NotifyFrom, ?RESERVED_KEYS),
         true ?= (NotifyFrom =:= Parent) orelse
             {error, <<"Invalid notification source">>},
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
@@ -886,14 +887,10 @@ undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
 undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Undelegate Amount must be of integer type">>}.
 
-%% @doc Set resource parameters in the pot. Authorization is evaluated against:
-%% - `State/parent`, if set and equal to `from`
-%% - `mint-authority` security policy on the pot state, if configured
-%% - `authority` security policy on the target resource, if configured
-%%
-%% N.B: `dev_security` is open-by-default when no valid/required/match policy
-%% is present, so absent authority config does not restrict this action. check
-%% `AuthRes` logic chain for better gating-understanding.
+%% @doc Resource configuration entrypoint. Validates the target resource and
+%% caller, enforces resource-config authority via
+%% `enforce_resource_config_authority/5`, then applies supported
+%% resource-scoped config mutations.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -913,22 +910,43 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
-        
+        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
+        true ?= enforce_resource_config_authority(From, ResID, State, Req, Opts),
+        apply_resource_config(ResID, State, Req, Opts)
+    end.
+%% @doc Enforce authorization for resource configuration updates.
+%% Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% - `authority` security policy on the target resource, if configured
+%%
+%% N.B: `dev_security` is open-by-default when no valid/required/match policy
+%% is present, so absent authority config does not restrict this action. check
+%% `AuthRes` logic chain for better gating-understanding.
+enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
+    maybe
         AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
             true -> true;
-            false -> case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
-                true -> true;
-                {error, _} -> 
-                    verify_resource_authority(ResID, State, Req, Opts)
-                end  
+            false -> 
+                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
+                    true -> true;
+                    {error, _} -> 
+                        verify_resource_authority(ResID, State, Req, Opts)
+                    end  
         end,
-        true ?= AuthRes,
-
-        State2 ?=
+        true ?= AuthRes
+    end.
+%% @doc Apply supported resource-scoped configuration updates. If an earlier
+%% mutation fails, later mutations in the same request are not applied.
+apply_resource_config(ResID, State, Req, Opts) ->
+    maybe
+        State2 =
             case hb_maps:find(<<"weight">>, Req, Opts) of
                 {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
                 _ -> State
             end,
+        true ?= is_map(State2) orelse State2,
         case hb_maps:find(<<"resource-authority">>, Req, Opts) of
             {ok, ResAuth} ->
                 register_resource_authority(ResID, ResAuth, State2, Opts);
@@ -939,7 +957,6 @@ register(State, Assignment, Opts) ->
             ?event(debug_pot, {error, Reason}, Opts),
             Reason
     end.
-
 %% @doc Update the authority record for a specific resource in the pot.
 register_resource_authority(ResourceID, Authority, S, Opts) ->
     maybe
