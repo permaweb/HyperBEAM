@@ -887,14 +887,10 @@ undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
 undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Undelegate Amount must be of integer type">>}.
 
-%% @doc Set resource parameters in the pot. Authorization is evaluated against:
-%% - `State/parent`, if set and equal to `from`
-%% - `mint-authority` security policy on the pot state, if configured
-%% - `authority` security policy on the target resource, if configured
-%%
-%% N.B: `dev_security` is open-by-default when no valid/required/match policy
-%% is present, so absent authority config does not restrict this action. check
-%% `AuthRes` logic chain for better gating-understanding.
+%% @doc Resource configuration entrypoint. Validates the target resource and
+%% caller, enforces resource-config authority via
+%% `enforce_resource_config_authority/5`, then applies supported
+%% resource-scoped config mutations.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -918,7 +914,15 @@ register(State, Assignment, Opts) ->
         true ?= enforce_resource_config_authority(From, ResID, State, Req, Opts),
         apply_resource_config(ResID, State, Req, Opts)
     end.
-
+%% @doc Enforce authorization for resource configuration updates.
+%% Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% - `authority` security policy on the target resource, if configured
+%%
+%% N.B: `dev_security` is open-by-default when no valid/required/match policy
+%% is present, so absent authority config does not restrict this action. check
+%% `AuthRes` logic chain for better gating-understanding.
 enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
     maybe
@@ -933,7 +937,8 @@ enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
         end,
         true ?= AuthRes
     end.
-
+%% @doc Apply supported resource-scoped configuration updates. If an earlier
+%% mutation fails, later mutations in the same request are not applied.
 apply_resource_config(ResID, State, Req, Opts) ->
     maybe
         State2 =
