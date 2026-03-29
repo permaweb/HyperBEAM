@@ -57,7 +57,9 @@ whitelisted_auth_fields() -> [
     <<"set-authority">>, % admin rotation
     <<"mint-authority">>, % mint governor rotation
     <<"mint-authority-required">>, % future dev_security migration
-    <<"mint-authority-match">>
+    <<"mint-authority-match">>,
+    <<"set-authority-required">>,
+    <<"set-authority-match">>
     ]
     ++ ?IMMUTABLE_METADATA_FIELDS.
 
