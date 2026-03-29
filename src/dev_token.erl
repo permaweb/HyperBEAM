@@ -369,11 +369,11 @@ enforce_whitelisted_fields(Req, Opts) ->
         false -> {error, <<"Attempted to set non-whitelisted fields.">>}
     end.
 
-%% @doc Enforce that the caller is the `set' authority. If the process
-%% Base has any of the set-authority -required or -match configured, 
-%% `enforce_set_authority/3` will switch to dev_security:validate/5 
-%% (dimensional authority - more secure if configured correctly) - if not
-%% it fallback to the single From =:= PlainSetAuthority check.
+%% @doc Enforce that the caller is the `set` authority. If `Base` configures
+%% either `set-authority-required` or `set-authority-match`, this function
+%% delegates authorization to `dev_security:validate/5` for `set-authority`.
+%% Otherwise it falls back to legacy exact-match semantics:
+%% `Req/from =:= Base/set-authority`.
 enforce_set_authority(Base, Req, Opts) ->
     maybe
         Setter = hb_ao:get(<<"from">>, Req, Opts),
