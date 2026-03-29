@@ -607,6 +607,34 @@ set_authority_required_uses_dev_security_test() ->
         ),
     ?assertEqual(<<"logo-a">>, hb_ao:get(<<"logo">>, Updated, Opts)).
 
+set_authority_match_uses_dev_security_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    SetterID = id(Setter),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => [SetterID],
+                    <<"set-authority-match">> => 1
+                }
+            },
+            Opts
+        ),
+    {ok, Updated} =
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => SetterID,
+                    <<"logo">> => <<"logo-a">>
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(<<"logo-a">>, hb_ao:get(<<"logo">>, Updated, Opts)).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
