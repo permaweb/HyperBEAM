@@ -328,6 +328,7 @@ secure_set(Base, Assignment, Opts) ->
             ),
         % check for immutable state variable update attempts
         true ?= enforce_immutable_fields(Base, SetReq, Opts),
+        % check the auth is touching whitelisted fields only
         true ?= enforce_whitelisted_fields(SetReq, Opts),
         % Apply updates to base state
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
@@ -368,23 +369,50 @@ enforce_whitelisted_fields(Req, Opts) ->
         false -> {error, <<"Attempted to set non-whitelisted fields.">>}
     end.
 
-%% @doc Enforce that the caller is the `set' authority.
+%% @doc Enforce that the caller is the `set' authority. If the process
+%% Base has any of the set-authority -required or -match configured, 
+%% `enforce_set_authority/3` will switch to dev_security:validate/5 
+%% (dimensional authority - more secure if configured correctly) - if not
+%% it fallback to the single From =:= PlainSetAuthority check.
 enforce_set_authority(Base, Req, Opts) ->
     maybe
         Setter = hb_ao:get(<<"from">>, Req, Opts),
-        SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
         true ?= (Setter =/= not_found) orelse
                 {error, <<"Setter not found.">>},
-        true ?= (SetAuthority =/= not_found) orelse
-                {error, <<"SetAuthority not found.">>},
         true ?= validate_address(Setter, []),
-        case {Setter, SetAuthority} of
-            {S, S} -> 
-                true;
-            _ -> 
-                {error, <<"Caller is not the `set-authority'.">>}
-        end
-end.
+        SetAuthorityRequired =
+            hb_ao:get(<<"set-authority-required">>, Base, not_found, Opts),
+        SetAuthorityMatch =
+            hb_ao:get(<<"set-authority-match">>, Base, not_found, Opts),
+        AuthRes = case
+            (SetAuthorityRequired =/= not_found)
+            orelse
+            (SetAuthorityMatch =/= not_found)
+        of
+            true ->
+                dev_security:validate(
+                    <<"set-authority">>,
+                    Base,
+                    Req,
+                    Setter,
+                    Opts
+                );
+            false ->
+                SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+                case SetAuthority of
+                    not_found ->
+                        {error, <<"SetAuthority not found.">>};
+                    _ ->
+                        case {Setter, SetAuthority} of
+                            {S, S} ->
+                                true;
+                            _ ->
+                                {error, <<"Caller is not the `set-authority'.">>}
+                        end
+                end
+        end,
+        true ?= AuthRes
+	end.
 
 %%% Helper functions.
 
