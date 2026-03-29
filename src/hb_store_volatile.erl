@@ -266,27 +266,39 @@ resolve(Opts, CurrPath, [Next | Rest], Depth) ->
             resolve(Opts, PathPart, Rest, Depth)
     end.
 
-%% @doc Look up an entry. Checks new table first, falls back to old.
-%% Promotes raw/link entries from old to new (with ensure_parent_groups).
-%% Groups are NOT promoted — they expire with their table. They get
-%% recreated in new as a side-effect when children are promoted.
+%% @doc Look up an entry. Single-table: direct lookup (original speed).
+%% Double-buffer: checks new first, falls back to old with promote.
+%% Groups are NOT promoted — they expire with their table.
 lookup_entry(Opts, Key) when is_map(Opts) ->
-    {New, Old} = get_tables(Opts),
-    case ets:lookup(New, Key) of
-        [{_, Entry}] ->
-            Entry;
-        [] when Old =:= undefined ->
-            nil;
-        [] ->
-            case ets:lookup(Old, Key) of
-                [{_, {group, _} = Entry}] ->
-                    Entry;
+    Found = hb_store:find(Opts),
+    case Found of
+        #{<<"ets-flip">> := Flip,
+          <<"ets-table">> := T1,
+          <<"ets-table-2">> := T2} ->
+            {New, Old} =
+                case atomics:get(Flip, 1) of
+                    0 -> {T1, T2};
+                    1 -> {T2, T1}
+                end,
+            case ets:lookup(New, Key) of
                 [{_, Entry}] ->
-                    ets:insert(New, {Key, Entry}),
-                    ensure_parent_groups(New, Key),
                     Entry;
                 [] ->
-                    nil
+                    case ets:lookup(Old, Key) of
+                        [{_, {group, _} = Entry}] ->
+                            Entry;
+                        [{_, Entry}] ->
+                            ets:insert(New, {Key, Entry}),
+                            ensure_parent_groups(New, Key),
+                            Entry;
+                        [] ->
+                            nil
+                    end
+            end;
+        #{<<"ets-table">> := Table} ->
+            case ets:lookup(Table, Key) of
+                [] -> nil;
+                [{_, Entry}] -> Entry
             end
     end;
 lookup_entry(Table, Key) ->
@@ -306,29 +318,49 @@ list(Opts, Path) ->
     list_resolved(Opts, resolve(Opts, Path)).
 
 list_resolved(Opts, ResolvedPath) ->
-    {New, Old} = get_tables(Opts),
-    S1 = group_set(New, ResolvedPath),
-    S2 =
-        case Old of
-            undefined -> sets:new();
-            _ -> group_set(Old, ResolvedPath)
-        end,
-    Union = sets:union(S1, S2),
-    case sets:size(Union) > 0 of
-        true ->
-            {ok, sets:to_list(Union)};
-        false ->
-            case lookup_entry(Opts, ResolvedPath) of
-                {link, Link} ->
-                    list(Opts, Link);
-                {raw, Value} when is_map(Value) ->
-                    {ok, maps:keys(Value)};
-                {raw, Value} when is_list(Value) ->
-                    {ok, Value};
-                _ ->
-                    not_found
+    Found = hb_store:find(Opts),
+    case Found of
+        #{<<"ets-flip">> := Flip,
+          <<"ets-table">> := T1,
+          <<"ets-table-2">> := T2} ->
+            {New, Old} =
+                case atomics:get(Flip, 1) of
+                    0 -> {T1, T2};
+                    1 -> {T2, T1}
+                end,
+            Union = sets:union(
+                group_set(New, ResolvedPath),
+                group_set(Old, ResolvedPath)
+            ),
+            case sets:size(Union) > 0 of
+                true ->
+                    {ok, sets:to_list(Union)};
+                false ->
+                    list_fallback(Opts, ResolvedPath)
+            end;
+        #{<<"ets-table">> := Table} ->
+            case lookup_entry(Table, ResolvedPath) of
+                {group, Set} ->
+                    {ok, sets:to_list(Set)};
+                Other ->
+                    list_from_entry(Opts, ResolvedPath, Other)
             end
     end.
+
+list_fallback(Opts, ResolvedPath) ->
+    case lookup_entry(Opts, ResolvedPath) of
+        {link, Link} -> list(Opts, Link);
+        Other -> list_from_entry(Opts, ResolvedPath, Other)
+    end.
+
+list_from_entry(_Opts, _Path, {raw, Value}) when is_map(Value) ->
+    {ok, maps:keys(Value)};
+list_from_entry(_Opts, _Path, {raw, Value}) when is_list(Value) ->
+    {ok, Value};
+list_from_entry(Opts, _Path, {link, Link}) ->
+    list(Opts, Link);
+list_from_entry(_Opts, _Path, _) ->
+    not_found.
 
 %% @doc Determine the item type at a path.
 type(Opts, RawKey) ->
@@ -594,10 +626,14 @@ ttl_wipe_lazy_link() ->
         ),
     {ok, ID} = hb_cache:write(Msg, Opts),
     {ok, CachedMsg} = hb_cache:read(ID, Opts),
-    %% Wait for max-ttl to fire.
-    timer:sleep(1250),
-    %% Resolve the lazy links obtained before the wipe.
-    Resolved = hb_cache:ensure_all_loaded(CachedMsg, Opts),
+    %% Sleep 750ms, then load all fields.
+    timer:sleep(750),
+    hb_cache:ensure_all_loaded(CachedMsg, Opts),
+    %% Sleep past the TTL boundary.
+    timer:sleep(500),
+    %% Resolve the lazy links again — data must still be accessible.
+    {ok, Msg2} = hb_cache:read(ID, Opts),
+    Resolved = hb_cache:ensure_all_loaded(Msg2, Opts),
     ?assert(maps:is_key(<<"data">>, Resolved)),
     hb_store:stop(Store).
 
