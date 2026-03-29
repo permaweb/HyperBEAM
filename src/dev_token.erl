@@ -51,6 +51,18 @@
         <<"logo">>
     ]
 ).
+
+%% @doc Allowed Authority base parameters mutation
+whitelisted_auth_fields() -> [
+    <<"set-authority">>, % admin rotation
+    <<"mint-authority">>, % mint governor rotation
+    <<"mint-authority-required">>, % future dev_security migration
+    <<"mint-authority-match">>,
+    <<"set-authority-required">>,
+    <<"set-authority-match">>
+    ]
+    ++ ?IMMUTABLE_METADATA_FIELDS.
+
 %%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
@@ -304,13 +316,22 @@ ensure_mint_device(Base, Opts) ->
 %%% Secure `set' call orchestration.
 
 %% @doc Ensure that the caller is the `set' authority, and apply changes to the
-%% base state if so.
+%% base state if so. The setter can only mutuate whitelisted fields.
 secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_set_authority(Base, Req, Opts),
+        RawBody = hb_maps:get(<<"body">>, Assignment, #{}, Opts),
+        SetReq =
+            hb_maps:without(
+                [<<"from">>, <<"action">>, <<"path">>],
+                RawBody,
+                Opts
+            ),
         % check for immutable state variable update attempts
-        true ?= enforce_immutable_fields(Base, Req, Opts),
+        true ?= enforce_immutable_fields(Base, SetReq, Opts),
+        % check the auth is touching whitelisted fields only
+        true ?= enforce_whitelisted_fields(SetReq, Opts),
         % Apply updates to base state
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
@@ -338,23 +359,62 @@ immutable_not_already_set(Key, Base, Req, Opts) ->
             true
     end.
 
-%% @doc Enforce that the caller is the `set' authority.
+enforce_whitelisted_fields(Req, Opts) ->
+    Keys = hb_maps:keys(Req, Opts),
+    case
+        lists:all(
+            fun(Key) -> lists:member(Key, whitelisted_auth_fields()) end,
+            Keys
+        )
+    of
+        true -> true;
+        false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+    end.
+
+%% @doc Enforce that the caller is the `set` authority. If `Base` configures
+%% either `set-authority-required` or `set-authority-match`, this function
+%% delegates authorization to `dev_security:validate/5` for `set-authority`.
+%% Otherwise it falls back to legacy exact-match semantics:
+%% `Req/from =:= Base/set-authority`.
 enforce_set_authority(Base, Req, Opts) ->
     maybe
         Setter = hb_ao:get(<<"from">>, Req, Opts),
-        SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
         true ?= (Setter =/= not_found) orelse
                 {error, <<"Setter not found.">>},
-        true ?= (SetAuthority =/= not_found) orelse
-                {error, <<"SetAuthority not found.">>},
         true ?= validate_address(Setter, []),
-        case {Setter, SetAuthority} of
-            {S, S} -> 
-                true;
-            _ -> 
-                {error, <<"Caller is not the `set-authority'.">>}
-        end
-end.
+        SetAuthorityRequired =
+            hb_ao:get(<<"set-authority-required">>, Base, not_found, Opts),
+        SetAuthorityMatch =
+            hb_ao:get(<<"set-authority-match">>, Base, not_found, Opts),
+        AuthRes = case
+            (SetAuthorityRequired =/= not_found)
+            orelse
+            (SetAuthorityMatch =/= not_found)
+        of
+            true ->
+                dev_security:validate(
+                    <<"set-authority">>,
+                    Base,
+                    Req,
+                    Setter,
+                    Opts
+                );
+            false ->
+                SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+                case SetAuthority of
+                    not_found ->
+                        {error, <<"SetAuthority not found.">>};
+                    _ ->
+                        case {Setter, SetAuthority} of
+                            {S, S} ->
+                                true;
+                            _ ->
+                                {error, <<"Caller is not the `set-authority'.">>}
+                        end
+                end
+        end,
+        true ?= AuthRes
+	end.
 
 %%% Helper functions.
 
