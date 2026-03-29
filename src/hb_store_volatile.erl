@@ -258,3 +258,35 @@ max_ttl_test() ->
     timer:sleep(1250),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
     hb_store:stop(StoreOpts).
+
+%% @doc Write a message, obtain lazy links via hb_cache:read, wait
+%% for max-ttl to wipe the store, then resolve the lazy links.
+%% The data behind the links must still be accessible.
+ttl_wipe_lazy_link_test_() ->
+    {timeout, 10, fun ttl_wipe_lazy_link/0}.
+ttl_wipe_lazy_link() ->
+    Store =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-wipe-lazy-link">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(Store),
+    Opts = #{store => [Store], priv_wallet => hb:wallet()},
+    Msg =
+        hb_message:commit(
+            #{
+                <<"data">> => crypto:strong_rand_bytes(1024),
+                <<"content-type">> =>
+                    <<"application/octet-stream">>
+            },
+            Opts
+        ),
+    {ok, ID} = hb_cache:write(Msg, Opts),
+    {ok, CachedMsg} = hb_cache:read(ID, Opts),
+    %% Wait for max-ttl to fire.
+    timer:sleep(1250),
+    %% Resolve the lazy links obtained before the wipe.
+    Resolved = hb_cache:ensure_all_loaded(CachedMsg, Opts),
+    ?assert(maps:is_key(<<"data">>, Resolved)),
+    hb_store:stop(Store).
