@@ -1,13 +1,16 @@
-%%% @doc A lightweight in-memory HyperBEAM store backed by ETS. The store is
-%%% volatile: It does not persist data to disk ever, and -- critically -- can
-%%% be configured to expire all data periodically. This is useful for testing
-%%% and as a short-term in-memory cache, not for instances where an `ok` from
-%%% the `write` function should imply data persistence.
+%%% @doc A lightweight in-memory HyperBEAM store backed by ETS.
 %%%
-%%% This store keeps all data in-memory and does not flush to any persistent
-%%% backend. It supports the core `hb_store` interface semantics used by
-%%% `hb_store` and `hb_cache`: writes, reads, groups, links, type checks,
-%%% path resolution, and resets.
+%%% Two modes:
+%%% - No TTL: single ETS table, data persists until stop/reset.
+%%% - `max-ttl': Double-buffer table flip. Two ETS tables; writes go
+%%%   to both. Reads check the "new" table first, fall back to "old"
+%%%   with promote-on-read for raw/link entries. Every TTL/2 the old
+%%%   table is wiped and roles flip. Active data survives via promote;
+%%%   idle data expires atomically — no partial messages, no dangling
+%%%   links. Groups are never promoted directly; they are recreated in
+%%%   the new table as a side-effect of child promotes (via
+%%%   ensure_parent_groups). `list' unions group sets from both tables
+%%%   so children are always visible while either table holds them.
 -module(hb_store_volatile).
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([write/3, read/2, list/2, type/2, make_link/3, make_group/2, resolve/2]).
@@ -17,21 +20,51 @@
 -define(ROOT_GROUP, <<"/">>).
 -define(MAX_REDIRECTS, 32).
 
-%% @doc Start the ETS-backed store and return the store instance message.
-start(StoreOpts = #{ <<"name">> := Name }) ->
+%%%===================================================================
+%%% Store lifecycle
+%%%===================================================================
+
+%% @doc Create a new public ETS table with concurrency opts.
+new_table() ->
+    ets:new(hb_store_volatile, [
+        set, public,
+        {read_concurrency, true},
+        {write_concurrency, true}
+    ]).
+
+%% @doc Start the ETS-backed store. With max-ttl, creates two tables
+%% for double-buffer flip. Without, creates a single table.
+start(StoreOpts = #{<<"name">> := Name}) ->
     ?event(cache_ets, {starting_ets_store, Name}),
     Parent = self(),
     spawn(
         fun() ->
-            Table = ets:new(hb_store_volatile, [
-                set,
-                public,
-                {read_concurrency, true},
-                {write_concurrency, true}
-            ]),
-            Parent ! {ok, #{ <<"pid">> => self(), <<"ets-table">> => Table }},
-            maybe_start_ttl_timer(StoreOpts, self()),
-            owner_loop(StoreOpts)
+            T1 = new_table(),
+            case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
+                infinity ->
+                    Parent ! {ok, #{
+                        <<"pid">> => self(),
+                        <<"ets-table">> => T1
+                    }},
+                    owner_loop(StoreOpts);
+                _TTL ->
+                    T2 = new_table(),
+                    Flip = atomics:new(1, []),
+                    atomics:put(Flip, 1, 0),
+                    Parent ! {ok, #{
+                        <<"pid">> => self(),
+                        <<"ets-table">> => T1,
+                        <<"ets-table-2">> => T2,
+                        <<"ets-flip">> => Flip
+                    }},
+                    OwnerOpts = StoreOpts#{
+                        <<"ets-table">> => T1,
+                        <<"ets-table-2">> => T2,
+                        <<"ets-flip">> => Flip
+                    },
+                    maybe_start_flip_timer(OwnerOpts, self()),
+                    owner_loop(OwnerOpts)
+            end
         end
     ),
     receive
@@ -39,30 +72,61 @@ start(StoreOpts = #{ <<"name">> := Name }) ->
             {ok, InstanceMessage}
     end.
 
-%% @doc Owner loop for the ETS store. Simply waits for a stop message and exits.
-%% Until the store is stopped, the table will remain alive.
-owner_loop(StoreOpts) ->
+%% @doc Owner loop. Handles stop, manual reset, and table flips.
+owner_loop(OwnerOpts) ->
     receive
         {stop, From, Ref} ->
             From ! {ok, Ref},
             exit(normal);
         reset ->
-            reset(StoreOpts),
-            maybe_start_ttl_timer(StoreOpts, self()),
-            owner_loop(StoreOpts);
+            do_reset(OwnerOpts),
+            owner_loop(OwnerOpts);
+        table_flip ->
+            do_flip(OwnerOpts),
+            maybe_start_flip_timer(OwnerOpts, self()),
+            owner_loop(OwnerOpts);
         _ ->
-            owner_loop(StoreOpts)
+            owner_loop(OwnerOpts)
     end.
 
-maybe_start_ttl_timer(StoreOpts, PID) ->
-    case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
+%% @doc Schedule the next table flip at TTL/2 interval.
+maybe_start_flip_timer(OwnerOpts, PID) ->
+    case maps:get(<<"max-ttl">>, OwnerOpts, infinity) of
         infinity -> skip;
-        MaxTTL -> timer:send_after(hb_util:int(MaxTTL) * 1000, PID, reset)
+        TTL ->
+            TTLMs = hb_util:int(TTL) * 1000,
+            Interval = max(500, TTLMs div 2),
+            timer:send_after(Interval, PID, table_flip)
     end.
 
-%% @doc Stop the ETS owner process (which also drops the table).
+%% @doc Wipe the old table and flip roles.
+do_flip(OwnerOpts) ->
+    Flip = maps:get(<<"ets-flip">>, OwnerOpts),
+    T1 = maps:get(<<"ets-table">>, OwnerOpts),
+    T2 = maps:get(<<"ets-table-2">>, OwnerOpts),
+    OldTable =
+        case atomics:get(Flip, 1) of
+            0 -> T2;
+            1 -> T1
+        end,
+    ets:delete_all_objects(OldTable),
+    OldVal = atomics:get(Flip, 1),
+    atomics:put(Flip, 1, 1 - OldVal),
+    ?event(store_volatile, {table_flip, {wiped, OldTable}}).
+
+%% @doc Wipe all tables (used by manual reset).
+do_reset(OwnerOpts) ->
+    T1 = maps:get(<<"ets-table">>, OwnerOpts),
+    ets:delete_all_objects(T1),
+    case maps:get(<<"ets-table-2">>, OwnerOpts, undefined) of
+        undefined -> ok;
+        T2 -> ets:delete_all_objects(T2)
+    end,
+    ?event(store_volatile, {reset, OwnerOpts}).
+
+%% @doc Stop the ETS owner process (drops both tables).
 stop(Opts) ->
-    #{ <<"pid">> := Pid } = hb_store:find(Opts),
+    #{<<"pid">> := Pid} = hb_store:find(Opts),
     Pid ! {stop, self(), Ref = make_ref()},
     receive
         {ok, Ref} -> ok
@@ -70,25 +134,97 @@ stop(Opts) ->
         ok
     end.
 
-%% @doc Scope for this store backend.
 scope() -> local.
 scope(_) -> scope().
 
-%% @doc Remove all entries from the ETS table.
+%% @doc Public reset — wipes all tables.
 reset(Opts) ->
-    #{ <<"ets-table">> := Table } = hb_store:find(Opts),
-    ets:delete_all_objects(Table),
-    ?event(store_volatile, {reset, {table, Table}}),
+    Found = hb_store:find(Opts),
+    T1 = maps:get(<<"ets-table">>, Found),
+    ets:delete_all_objects(T1),
+    case maps:get(<<"ets-table-2">>, Found, undefined) of
+        undefined -> ok;
+        T2 -> ets:delete_all_objects(T2)
+    end,
+    ?event(store_volatile, {reset, {table, T1}}),
     ok.
+
+%%%===================================================================
+%%% Table helpers
+%%%===================================================================
+
+%% @doc Get {NewTable, OldTable}. Returns {T, undefined} when no TTL.
+get_tables(Opts) ->
+    Found = hb_store:find(Opts),
+    case maps:get(<<"ets-flip">>, Found, undefined) of
+        undefined ->
+            {maps:get(<<"ets-table">>, Found), undefined};
+        Flip ->
+            T1 = maps:get(<<"ets-table">>, Found),
+            T2 = maps:get(<<"ets-table-2">>, Found),
+            case atomics:get(Flip, 1) of
+                0 -> {T1, T2};
+                1 -> {T2, T1}
+            end
+    end.
+
+%% @doc Extract the group set from a table, or empty set.
+group_set(Table, Key) ->
+    case ets:lookup(Table, Key) of
+        [{_, {group, Set}}] -> Set;
+        _ -> sets:new()
+    end.
+
+%%%===================================================================
+%%% Write operations — always write to both tables
+%%%===================================================================
 
 %% @doc Write a value at the key path.
 write(Opts, RawKey, Value) ->
     Key = hb_store:join(RawKey),
-    #{ <<"ets-table">> := Table } = hb_store:find(Opts),
-    ensure_parent_groups(Table, Key),
+    {New, Old} = get_tables(Opts),
+    ensure_parent_groups(New, Key),
     ?event(store_volatile, {write, {key, Key}}),
-    ets:insert(Table, {Key, {raw, Value}}),
+    ets:insert(New, {Key, {raw, Value}}),
+    case Old of
+        undefined -> ok;
+        _ ->
+            ensure_parent_groups(Old, Key),
+            ets:insert(Old, {Key, {raw, Value}})
+    end,
     ok.
+
+%% @doc Create or replace a link from New to Existing.
+make_link(_, Link, Link) ->
+    ok;
+make_link(Opts, RawExisting, RawNew) ->
+    Existing = hb_store:join(RawExisting),
+    NewPath = hb_store:join(RawNew),
+    {NewT, OldT} = get_tables(Opts),
+    ensure_parent_groups(NewT, NewPath),
+    ets:insert(NewT, {NewPath, {link, Existing}}),
+    case OldT of
+        undefined -> ok;
+        _ ->
+            ensure_parent_groups(OldT, NewPath),
+            ets:insert(OldT, {NewPath, {link, Existing}})
+    end,
+    ok.
+
+%% @doc Ensure a group exists at the given path.
+make_group(Opts, RawKey) ->
+    Key = hb_store:join(RawKey),
+    {New, Old} = get_tables(Opts),
+    ensure_dir(New, Key),
+    case Old of
+        undefined -> ok;
+        _ -> ensure_dir(Old, Key)
+    end,
+    ok.
+
+%%%===================================================================
+%%% Read operations — new first, fallback old with promote
+%%%===================================================================
 
 %% @doc Read a value, following links when needed.
 read(Opts, RawKey) ->
@@ -111,7 +247,11 @@ read_resolved(Opts, Key, Depth) ->
 
 %% @doc Resolve links through a path segment-by-segment.
 resolve(Opts, Key) ->
-    resolve(Opts, <<>>, hb_path:term_to_path_parts(hb_store:join(Key), Opts), 0).
+    resolve(
+        Opts, <<>>,
+        hb_path:term_to_path_parts(hb_store:join(Key), Opts),
+        0
+    ).
 
 resolve(_Opts, CurrPath, [], _Depth) ->
     hb_store:join(CurrPath);
@@ -126,24 +266,68 @@ resolve(Opts, CurrPath, [Next | Rest], Depth) ->
             resolve(Opts, PathPart, Rest, Depth)
     end.
 
-%% @doc List child names under a group path.
-list(Opts, <<"">>) ->
-    list(Opts, ?ROOT_GROUP);
-list(Opts, <<"/">>) ->
-    list(Opts, ?ROOT_GROUP);
+%% @doc Look up an entry. Checks new table first, falls back to old.
+%% Promotes raw/link entries from old to new (with ensure_parent_groups).
+%% Groups are NOT promoted — they expire with their table. They get
+%% recreated in new as a side-effect when children are promoted.
+lookup_entry(Opts, Key) when is_map(Opts) ->
+    {New, Old} = get_tables(Opts),
+    case ets:lookup(New, Key) of
+        [{_, Entry}] ->
+            Entry;
+        [] when Old =:= undefined ->
+            nil;
+        [] ->
+            case ets:lookup(Old, Key) of
+                [{_, {group, _} = Entry}] ->
+                    Entry;
+                [{_, Entry}] ->
+                    ets:insert(New, {Key, Entry}),
+                    ensure_parent_groups(New, Key),
+                    Entry;
+                [] ->
+                    nil
+            end
+    end;
+lookup_entry(Table, Key) ->
+    case ets:lookup(Table, Key) of
+        [] -> nil;
+        [{_, Entry}] -> Entry
+    end.
+
+%%%===================================================================
+%%% Query operations
+%%%===================================================================
+
+%% @doc List child names under a group path. Unions both tables.
+list(Opts, Path) when Path =:= <<"">> orelse Path =:= <<"/">> ->
+    list_resolved(Opts, ?ROOT_GROUP);
 list(Opts, Path) ->
-    ResolvedPath = resolve(Opts, Path),
-    case lookup_entry(Opts, ResolvedPath) of
-        {group, Set} ->
-            {ok, sets:to_list(Set)};
-        {link, Link} ->
-            list(Opts, Link);
-        {raw, Value} when is_map(Value) ->
-            {ok, maps:keys(Value)};
-        {raw, Value} when is_list(Value) ->
-            {ok, Value};
-        _ ->
-            not_found
+    list_resolved(Opts, resolve(Opts, Path)).
+
+list_resolved(Opts, ResolvedPath) ->
+    {New, Old} = get_tables(Opts),
+    S1 = group_set(New, ResolvedPath),
+    S2 =
+        case Old of
+            undefined -> sets:new();
+            _ -> group_set(Old, ResolvedPath)
+        end,
+    Union = sets:union(S1, S2),
+    case sets:size(Union) > 0 of
+        true ->
+            {ok, sets:to_list(Union)};
+        false ->
+            case lookup_entry(Opts, ResolvedPath) of
+                {link, Link} ->
+                    list(Opts, Link);
+                {raw, Value} when is_map(Value) ->
+                    {ok, maps:keys(Value)};
+                {raw, Value} when is_list(Value) ->
+                    {ok, Value};
+                _ ->
+                    not_found
+            end
     end.
 
 %% @doc Determine the item type at a path.
@@ -160,60 +344,37 @@ type(Opts, RawKey) ->
             not_found
     end.
 
-%% @doc Ensure a group exists at the given path.
-make_group(Opts, RawKey) ->
-    Key = hb_store:join(RawKey),
-    #{ <<"ets-table">> := Table } = hb_store:find(Opts),
-    ensure_dir(Table, Key),
-    ok.
-
-%% @doc Create or replace a link from New to Existing.
-make_link(_, Link, Link) ->
-    ok;
-make_link(Opts, RawExisting, RawNew) ->
-    Existing = hb_store:join(RawExisting),
-    New = hb_store:join(RawNew),
-    #{ <<"ets-table">> := Table } = hb_store:find(Opts),
-    ensure_parent_groups(Table, New),
-    ets:insert(Table, {New, {link, Existing}}),
-    ok.
+%%%===================================================================
+%%% Path and group helpers
+%%%===================================================================
 
 join_path(<<>>, Next) ->
     hb_store:join(Next);
 join_path(CurrPath, Next) ->
     hb_store:join([CurrPath, Next]).
 
-lookup_entry(Opts, Key) when is_map(Opts) ->
-    #{ <<"ets-table">> := Table } = hb_store:find(Opts),
-    lookup_entry(Table, Key);
-lookup_entry(Table, Key) ->
-    case ets:lookup(Table, Key) of
-        [] ->
-            nil;
-        [{_, Entry}] ->
-            Entry
-    end.
-
 ensure_parent_groups(Table, Key) ->
     case filename:dirname(Key) of
         <<".">> ->
-            add_group_child(Table, ?ROOT_GROUP, filename:basename(Key));
+            add_group_child(
+                Table, ?ROOT_GROUP, filename:basename(Key));
         ParentDir ->
             ensure_dir(Table, ParentDir),
-            add_group_child(Table, ParentDir, filename:basename(Key))
+            add_group_child(
+                Table, ParentDir, filename:basename(Key))
     end.
 
 ensure_dir(Table, Path) ->
     PathParts = hb_path:term_to_path_parts(Path),
-    ensure_dir(Table, ?ROOT_GROUP, PathParts).
+    do_ensure_dir(Table, ?ROOT_GROUP, PathParts).
 
-ensure_dir(_Table, _CurrentGroup, []) ->
+do_ensure_dir(_Table, _CurrentGroup, []) ->
     ok;
-ensure_dir(Table, CurrentGroup, [Next | Rest]) ->
+do_ensure_dir(Table, CurrentGroup, [Next | Rest]) ->
     add_group_child(Table, CurrentGroup, Next),
     NextGroup = next_group_path(CurrentGroup, Next),
     ensure_group(Table, NextGroup),
-    ensure_dir(Table, NextGroup, Rest).
+    do_ensure_dir(Table, NextGroup, Rest).
 
 next_group_path(?ROOT_GROUP, Next) ->
     hb_store:join(Next);
@@ -236,11 +397,17 @@ add_group_child(Table, GroupPath, Child) ->
             _ ->
                 sets:new()
         end,
-    ets:insert(Table, {GroupPath, {group, sets:add_element(Child, Set)}}),
+    ets:insert(
+        Table,
+        {GroupPath, {group, sets:add_element(Child, Set)}}
+    ),
     ok.
 
+%%%===================================================================
 %%% Tests
+%%%===================================================================
 
+%% @doc Idle data expires after TTL (two flip cycles).
 max_ttl_test() ->
     StoreOpts =
         #{
@@ -258,6 +425,149 @@ max_ttl_test() ->
     timer:sleep(1250),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
     hb_store:stop(StoreOpts).
+
+%% @doc Demonstrates that a whole-table reset during a multi-step
+%% cache write leaves dangling links.
+ttl_corrupts_cache_structure_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-ttl-corrupt-test">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(StoreOpts),
+    hb_store:make_group(StoreOpts, <<"msg">>),
+    hb_store:write(StoreOpts, <<"data/hash1">>, <<"value">>),
+    hb_store:make_link(
+        StoreOpts, <<"data/hash1">>, <<"msg/key1">>),
+    ?assertEqual(
+        {ok, <<"value">>},
+        hb_store:read(StoreOpts, <<"msg/key1">>)
+    ),
+    timer:sleep(1250),
+    hb_store:make_group(StoreOpts, <<"msg2">>),
+    hb_store:make_link(
+        StoreOpts, <<"data/hash1">>, <<"msg2/key1">>),
+    ?assertEqual(
+        not_found,
+        hb_store:read(StoreOpts, <<"msg2/key1">>)
+    ),
+    ?assertEqual(
+        not_found,
+        hb_store:read(StoreOpts, <<"msg/key1">>)
+    ),
+    hb_store:stop(StoreOpts).
+
+%% @doc Active reads promote data across flips. Write two keys,
+%% read only one — it survives while the untouched key expires.
+active_read_survives_test_() ->
+    {timeout, 10, fun active_read_survives/0}.
+active_read_survives() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-active-survives">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(StoreOpts),
+    hb_store:write(StoreOpts, <<"a">>, <<"val-a">>),
+    hb_store:write(StoreOpts, <<"b">>, <<"val-b">>),
+    lists:foreach(
+        fun(_) ->
+            timer:sleep(200),
+            ?assertMatch(
+                {ok, _}, hb_store:read(StoreOpts, <<"a">>))
+        end,
+        lists:seq(1, 7)
+    ),
+    ?assertEqual(not_found, hb_store:read(StoreOpts, <<"b">>)),
+    ?assertEqual(
+        {ok, <<"val-a">>},
+        hb_store:read(StoreOpts, <<"a">>)
+    ),
+    {ok, Children} = hb_store:list(StoreOpts, <<"/">>),
+    ?assert(lists:member(<<"a">>, Children)),
+    ?assertNot(lists:member(<<"b">>, Children)),
+    hb_store:stop(StoreOpts).
+
+%% @doc Reading a deep child promotes it and recreates parent groups
+%% via ensure_parent_groups on promote.
+namespace_consistency_test_() ->
+    {timeout, 10, fun namespace_consistency_test/0}.
+namespace_consistency_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-namespace-test">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(StoreOpts),
+    hb_store:write(
+        StoreOpts, [<<"a">>, <<"b">>, <<"c">>], <<"deep">>),
+    lists:foreach(
+        fun(_) ->
+            timer:sleep(200),
+            ?assertMatch(
+                {ok, _},
+                hb_store:read(
+                    StoreOpts, [<<"a">>, <<"b">>, <<"c">>])
+            )
+        end,
+        lists:seq(1, 7)
+    ),
+    ?assertEqual(composite, hb_store:type(StoreOpts, <<"a">>)),
+    {ok, AChildren} = hb_store:list(StoreOpts, <<"a">>),
+    ?assert(lists:member(<<"b">>, AChildren)),
+    hb_store:stop(StoreOpts).
+
+%% @doc hb_cache:read either returns a complete message or not_found
+%% — never a group without children (no partial messages).
+no_partial_message_test_() ->
+    {timeout, 15, fun no_partial_message/0}.
+no_partial_message() ->
+    Store =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-no-partial">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(Store),
+    Opts = #{store => [Store], priv_wallet => hb:wallet()},
+    Msg =
+        hb_message:commit(
+            #{
+                <<"data">> => <<"no-partial-test">>,
+                <<"test-key">> => <<"test-value">>
+            },
+            Opts
+        ),
+    {ok, ID} = hb_cache:write(Msg, Opts),
+    Errors = lists:foldl(
+        fun(_, Acc) ->
+            timer:sleep(200),
+            case hb_cache:read(ID, Opts) of
+                {ok, CachedMsg} ->
+                    try
+                        Resolved =
+                            hb_cache:ensure_all_loaded(
+                                CachedMsg, Opts
+                            ),
+                        case maps:is_key(<<"data">>, Resolved) of
+                            true -> Acc;
+                            false -> Acc + 1
+                        end
+                    catch _:_ ->
+                        Acc + 1
+                    end;
+                not_found ->
+                    Acc
+            end
+        end,
+        0,
+        lists:seq(1, 10)
+    ),
+    hb_store:stop(Store),
+    ?assertEqual(0, Errors).
 
 %% @doc Write a message, obtain lazy links via hb_cache:read, wait
 %% for max-ttl to wipe the store, then resolve the lazy links.
@@ -290,3 +600,110 @@ ttl_wipe_lazy_link() ->
     Resolved = hb_cache:ensure_all_loaded(CachedMsg, Opts),
     ?assert(maps:is_key(<<"data">>, Resolved)),
     hb_store:stop(Store).
+
+%% @doc Full reads (ensure_all_loaded) promote all data, keeping the
+%% message alive across flip cycles.
+ensure_loaded_survives_test_() ->
+    {timeout, 15, fun ensure_loaded_survives/0}.
+ensure_loaded_survives() ->
+    Store =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-ensure-loaded-survives">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(Store),
+    Opts = #{store => [Store], priv_wallet => hb:wallet()},
+    Msg =
+        hb_message:commit(
+            #{
+                <<"data">> => crypto:strong_rand_bytes(1024),
+                <<"content-type">> =>
+                    <<"application/octet-stream">>
+            },
+            Opts
+        ),
+    {ok, ID} = hb_cache:write(Msg, Opts),
+    Errors = lists:foldl(
+        fun(_, Acc) ->
+            timer:sleep(100),
+            try
+                case hb_cache:read(ID, Opts) of
+                    {ok, CachedMsg} ->
+                        Resolved =
+                            hb_cache:ensure_all_loaded(
+                                CachedMsg, Opts
+                            ),
+                        case maps:is_key(<<"data">>, Resolved) of
+                            true -> Acc;
+                            false -> Acc + 1
+                        end;
+                    not_found ->
+                        Acc + 1
+                end
+            catch _:_ ->
+                Acc + 1
+            end
+        end,
+        0,
+        lists:seq(1, 20)
+    ),
+    hb_store:stop(Store),
+    ?assertEqual(0, Errors).
+
+%% @doc Group with two children. Read child mid-TTL. After TTL,
+%% active child survives (promoted), sibling is gone.
+read_child_ttl_promotes_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-read-child-ttl">>,
+            <<"max-ttl">> => 1
+        },
+    hb_store:start(StoreOpts),
+    hb_store:write(
+        StoreOpts, [<<"grp">>, <<"a">>], <<"val-a">>),
+    hb_store:write(
+        StoreOpts, [<<"grp">>, <<"b">>], <<"val-b">>),
+    ?assertEqual(
+        {ok, <<"val-a">>},
+        hb_store:read(StoreOpts, [<<"grp">>, <<"a">>])
+    ),
+    ?assertEqual(
+        {ok, <<"val-b">>},
+        hb_store:read(StoreOpts, [<<"grp">>, <<"b">>])
+    ),
+    % Read a mid-TTL to promote it
+    timer:sleep(500),
+    ?assertEqual(
+        {ok, <<"val-a">>},
+        hb_store:read(StoreOpts, [<<"grp">>, <<"a">>])
+    ),
+    % Wait for full TTL expiry
+    timer:sleep(750),
+    % a survived (promoted), b is gone
+    ?assertMatch(
+        {ok, _},
+        hb_store:read(StoreOpts, [<<"grp">>, <<"a">>])
+    ),
+    ?assertEqual(
+        not_found,
+        hb_store:read(StoreOpts, [<<"grp">>, <<"b">>])
+    ),
+    hb_store:stop(StoreOpts).
+
+%% @doc Backward compat: store without TTL works as before.
+no_ttl_backward_compat_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-no-ttl-compat">>
+        },
+    hb_store:start(StoreOpts),
+    hb_store:write(StoreOpts, <<"x">>, <<"y">>),
+    ?assertEqual(
+        {ok, <<"y">>}, hb_store:read(StoreOpts, <<"x">>)),
+    ?assertEqual(simple, hb_store:type(StoreOpts, <<"x">>)),
+    {ok, Root} = hb_store:list(StoreOpts, <<"/">>),
+    ?assert(lists:member(<<"x">>, Root)),
+    hb_store:stop(StoreOpts).
