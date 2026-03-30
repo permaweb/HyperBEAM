@@ -724,6 +724,7 @@ child_pot_test() ->
 
 %% @doc Test the viability of the `~mint-index@1.0` device, replicating delegation
 %% choices of other users.
+%% TODO: will fail till index is patched
 child_pots_with_index_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),

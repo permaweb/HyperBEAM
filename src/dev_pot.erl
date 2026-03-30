@@ -1195,6 +1195,8 @@ get_deposits(S = #{ <<"resources">> := Resources }, Opts) ->
         Resources,
         Opts
     ).
+%% @doc Return deposits for a specific resource, filtering out malformed
+%% deposit-address keys from state.
 get_deposits(ResourceID, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
@@ -1204,8 +1206,13 @@ get_deposits(ResourceID, S, Opts) ->
             #{},
             Opts
         ),
-        hb_maps:map(
-            fun(Addr, _) -> get_deposit(Addr, ResourceID, S, Opts) end,
+        hb_maps:filtermap(
+            fun(Addr, _) -> 
+                case get_deposit(Addr, ResourceID, S, Opts) of
+                    Qty when is_integer(Qty) -> {true, Qty};
+                    _ -> false
+                end
+            end,
             Ds,
             Opts
         )
