@@ -151,17 +151,20 @@ generate_sim_request(State, Opts) ->
         ),
     ?event({push_result, PushRes}),
     Slot = hb_ao:get(<<"slot">>, PushRes, Opts),
-    #{
-        <<"path">> => <<"compute">>,
-        <<"slot">> => Slot,
-        <<"intent">> =>
-            #{
-                <<"action">> => <<"transfer">>,
-                <<"ledger">> => Ledger,
-                <<"sender">> => hb_util:human_id(SenderWallet),
-                <<"recipient">> => hb_util:human_id(RecipientWallet),
-                <<"amount">> => Amount
-            }
+    {
+        ok,
+        #{
+            <<"path">> => <<"compute">>,
+            <<"slot">> => Slot,
+            <<"intent">> =>
+                #{
+                    <<"action">> => <<"transfer">>,
+                    <<"ledger">> => Ledger,
+                    <<"sender">> => hb_util:human_id(SenderWallet),
+                    <<"recipient">> => hb_util:human_id(RecipientWallet),
+                    <<"amount">> => Amount
+                }
+        }
     }.
 
 verify_net_balance_unchanged(OldState, _Req, NewState, Opts) ->
