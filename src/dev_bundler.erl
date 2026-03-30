@@ -26,6 +26,7 @@
 -define(SERVER_NAME, bundler_server).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
+-define(DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT, 30_000). % 30 seconds.
 -define(DEFAULT_MAX_ITEMS, 1000).
 
 %%% Public interface.
@@ -157,6 +158,9 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
         {enqueue_item, Item} ->
             State1 = add_to_queue(Item, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
+        {dispatch_queue, Timestamp} ->
+            ?event(bundler_short, {dispatched_queue_start, calendar:now_to_universal_time(Timestamp)}),
+            server(assign_tasks(dispatch_queue(State)), Opts);
         {recover_bundle, CommittedTX, Items} ->
             State1 = recover_bundle(CommittedTX, Items, State),
             server(assign_tasks(State1), Opts);
@@ -185,7 +189,7 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
 %% @doc Add an enqueue_item to the queue. Update the state with the new queue
 %% and approximate total byte size of the queue.
 %% Note: Item has already been verified and cached before reaching here.
-add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes}, Opts) ->
+add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes, dispatch_ref =  DispatchRef}, Opts) ->
     ItemSize = erlang:external_size(Item),
     NewQueue = [Item | Queue],
     NewBytes = Bytes + ItemSize,
@@ -195,7 +199,22 @@ add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes}, Opts) ->
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
     }),
-    State#state{queue = NewQueue, bytes = NewBytes}.
+    UpdatedDispatchRef = if Queue =:= [] ->
+        MaxBundleDispatchTimeout =
+            hb_opts:get(
+                bundler_max_bundle_dispatch_delay,
+                ?DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT,
+                Opts
+            ),
+        ?event(bundler_short, {scheduling_max_bundle_dispatch_timeout, {dispatch_timeout, MaxBundleDispatchTimeout}}, Opts),
+        erlang:send_after(
+            MaxBundleDispatchTimeout,
+            self(),
+            {dispatch_queue, erlang:timestamp()}
+        );
+    true -> DispatchRef
+    end,
+    State#state{queue = NewQueue, bytes = NewBytes, dispatch_ref = UpdatedDispatchRef}.
 
 %% @doc Dispatch the queue if it is ready.
 %% Only dispatches up to max_items at a time to respect the limit.
@@ -238,8 +257,12 @@ queue_bytes(Items) ->
 %% @doc Dispatch all currently queued items immediately.
 dispatch_queue(State = #state{queue = []}) ->
     State;
-dispatch_queue(State = #state{queue = Queue}) ->
-    create_bundle(Queue, State#state{queue = [], bytes = 0}).
+dispatch_queue(State = #state{queue = Queue, dispatch_ref = DispatchRef}) ->
+    case is_reference(DispatchRef) of 
+        true -> erlang:cancel_timer(DispatchRef);
+        false -> no_op
+    end,
+    create_bundle(Queue, State#state{queue = [], bytes = 0, dispatch_ref = undefined}).
 
 %% @doc Create a bundle and enqueue its initial post task.
 create_bundle([], State) ->
@@ -470,6 +493,9 @@ bundle_count_test() ->
 
 bundle_size_test() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
+
+bundle_dispatch_delay_test() -> 
+    test_bundle(#{ bundler_max_bundle_dispatch_delay => 3000  }).
 
 nested_bundle_test() ->
     Anchor = rand:bytes(32),
