@@ -335,7 +335,7 @@ generate_request(
         }
 ) ->
     seed(Spec#{ stage => {generate, request} }),
-    execute_generator(Gen, [State, Opts]);
+    normalize_generated_request(execute_generator(Gen, [State, Opts]));
 generate_request(
         Spec = #{
             requests := Gen,
@@ -345,10 +345,15 @@ generate_request(
         }
 ) ->
     seed(Spec#{ stage => {generate, request} }),
-    StateReq = execute_generator(Gen, [State, Opts]),
+    {StateTag, StateReq} =
+        normalize_generated_request(execute_generator(Gen, [State, Opts])),
     seed(Spec#{ stage => {generate, request} }),
-    ModelReq = execute_generator(Gen, [ModelState, Opts]),
-    {StateReq, ModelReq}.
+    {ModelTag, ModelReq} =
+        normalize_generated_request(execute_generator(Gen, [ModelState, Opts])),
+    {
+        combine_generated_request_tags(StateTag, ModelTag),
+        {StateReq, ModelReq}
+    }.
 
 %% @doc Execute a generator with a given set of arguments. If a list of generators
 %% is provided, a random one is selected and executed. If a single generator is
@@ -360,6 +365,15 @@ execute_generator(Generator, Args) when is_function(Generator) ->
     apply(Generator, Args);
 execute_generator(ExplicitResult, _) ->
     ExplicitResult.
+
+normalize_generated_request({Tag, Req}) when is_atom(Tag); is_binary(Tag) ->
+    {Tag, Req};
+normalize_generated_request(Req) ->
+    {ok, Req}.
+
+combine_generated_request_tags(noop, _Tag) -> noop;
+combine_generated_request_tags(_Tag, noop) -> noop;
+combine_generated_request_tags(Tag, _OtherTag) -> Tag.
 
 %% @doc Marshall execution of a request against a given state and node message.
 %% If no model state is provided, the request is executed against the primary
