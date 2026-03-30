@@ -55,9 +55,6 @@
 %% @doc Allowed Authority base parameters mutation
 whitelisted_auth_fields() -> [
     <<"set-authority">>, % admin rotation
-    <<"mint-authority">>, % mint governor rotation
-    <<"mint-authority-required">>, % future dev_security migration
-    <<"mint-authority-match">>,
     <<"set-authority-required">>,
     <<"set-authority-match">>
     ]
@@ -381,7 +378,6 @@ enforce_set_authority(Base, Req, Opts) ->
         Setter = hb_ao:get(<<"from">>, Req, Opts),
         true ?= (Setter =/= not_found) orelse
                 {error, <<"Setter not found.">>},
-        true ?= validate_address(Setter, []),
         SetAuthorityRequired =
             hb_ao:get(<<"set-authority-required">>, Base, not_found, Opts),
         SetAuthorityMatch =
@@ -400,21 +396,29 @@ enforce_set_authority(Base, Req, Opts) ->
                     Opts
                 );
             false ->
-                SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
-                case SetAuthority of
-                    not_found ->
-                        {error, <<"SetAuthority not found.">>};
-                    _ ->
-                        case {Setter, SetAuthority} of
-                            {S, S} ->
-                                true;
-                            _ ->
-                                {error, <<"Caller is not the `set-authority'.">>}
-                        end
-                end
+                enforce_legacy_set_authority(Setter, Base, Opts)
         end,
         true ?= AuthRes
 	end.
+
+enforce_legacy_set_authority(Setter, Base, Opts) ->
+    case validate_address(Setter, []) of
+        true ->
+            SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+            case SetAuthority of
+                not_found ->
+                    {error, <<"SetAuthority not found.">>};
+                _ ->
+                    case {Setter, SetAuthority} of
+                        {S, S} ->
+                            true;
+                        _ ->
+                            {error, <<"Caller is not the `set-authority'.">>}
+                    end
+            end;
+        {error, _} = Err ->
+            Err
+    end.
 
 %%% Helper functions.
 
