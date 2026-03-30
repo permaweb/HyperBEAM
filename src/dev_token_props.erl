@@ -19,6 +19,8 @@ opts() ->
 -define(USERS, 5).
 -define(MAX_INITIAL_BALANCE, 1_000_000_000_000_000_000).
 -define(MAX_TRANSFER_AMOUNT, 1_000_000_000_000_000_000 div 5).
+-define(NODE_WALLET_CACHE_KEY, {?MODULE, node_wallet}).
+-define(IDENTITIES_CACHE_KEY, {?MODULE, identities}).
 
 simulate_native_token_test() ->
     simulate(#{ <<"execution-device">> => <<"token@1.0">> }).
@@ -89,12 +91,36 @@ simulate_and_compare(Extras1, Extras2) ->
 
 generate_sim_opts(Spec = #{ users := Users }) ->
     BaseOpts = dev_token_props:opts(),
-    NodeWallet = ar_wallet:new(),
+    NodeWallet = cached_node_wallet(),
     BaseOpts#{
         priv_wallet => NodeWallet,
-        identities => generate_identities(Users),
+        identities => cached_identities(Users),
         spawn_extras => hb_opts:get(spawn_extras, #{}, Spec)
     }.
+
+cached_node_wallet() ->
+    case persistent_term:get(?NODE_WALLET_CACHE_KEY, not_found) of
+        not_found ->
+            Wallet = ar_wallet:new(),
+            persistent_term:put(?NODE_WALLET_CACHE_KEY, Wallet),
+            Wallet;
+        Wallet ->
+            Wallet
+    end.
+
+cached_identities(Users) ->
+    Cached = persistent_term:get(?IDENTITIES_CACHE_KEY, #{}),
+    case maps:get(Users, Cached, not_found) of
+        not_found ->
+            Identities = generate_identities(Users),
+            persistent_term:put(
+                ?IDENTITIES_CACHE_KEY,
+                Cached#{ Users => Identities }
+            ),
+            Identities;
+        Identities ->
+            Identities
+    end.
 
 generate_identities(Users) ->
     lists:foldl(
@@ -140,32 +166,63 @@ generate_initial_balances(Opts) ->
 
 generate_sim_request(State, Opts) ->
     ?event({generating_request_for_process, State}),
-    Ledger = dev_process_lib:process_id(State, Opts),
-    {ok, PushRes} =
-        dev_token_lib:transfer(
-            State,
-            SenderWallet = hb_invariant:pick(user_wallets(Opts)),
-            RecipientWallet = hb_invariant:pick(user_wallets(Opts)),
-            Amount = hb_invariant:int(?MAX_TRANSFER_AMOUNT),
-            Opts
-        ),
-    ?event({push_result, PushRes}),
-    Slot = hb_ao:get(<<"slot">>, PushRes, Opts),
-    {
-        ok,
-        #{
-            <<"path">> => <<"compute">>,
-            <<"slot">> => Slot,
-            <<"intent">> =>
+    SenderWallet = hb_invariant:pick(user_wallets(Opts)),
+    RecipientWallet = hb_invariant:pick(user_wallets(Opts)),
+    Amount = hb_invariant:int(?MAX_TRANSFER_AMOUNT),
+    fun(ExecState, ExecOpts) ->
+        Proc = hb_maps:get(<<"process">>, ExecState, ExecState, ExecOpts),
+        UserOpts = ExecOpts#{ priv_wallet => SenderWallet },
+        SystemOpts =
+            ExecOpts#{
+                priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), ExecOpts)
+            },
+        InnerReq =
+            hb_message:commit(
                 #{
-                    <<"action">> => <<"transfer">>,
-                    <<"ledger">> => Ledger,
-                    <<"sender">> => hb_util:human_id(SenderWallet),
+                    <<"action">> => <<"Transfer">>,
                     <<"recipient">> => hb_util:human_id(RecipientWallet),
-                    <<"amount">> => Amount
-                }
-        }
-    }.
+                    <<"quantity">> => Amount,
+                    <<"target">> => dev_process_lib:process_id(Proc, SystemOpts)
+                },
+                UserOpts
+            ),
+        {ok, _} = hb_cache:write(InnerReq, ExecOpts),
+        OuterReq =
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"push">>,
+                    <<"body">> => InnerReq
+                },
+                UserOpts
+            ),
+        case hb_ao:resolve(ExecState, OuterReq, SystemOpts) of
+            {ok, PushRes} ->
+                Slot = hb_ao:get(<<"slot">>, PushRes, ExecOpts),
+                hb_ao:resolve(
+                    ExecState,
+                    #{
+                        <<"path">> => <<"compute">>,
+                        <<"slot">> => Slot,
+                        <<"intent">> =>
+                            #{
+                                <<"action">> => <<"transfer">>,
+                                <<"ledger">> =>
+                                    dev_process_lib:process_id(
+                                        Proc,
+                                        ExecOpts
+                                    ),
+                                <<"sender">> => hb_util:human_id(SenderWallet),
+                                <<"recipient">> =>
+                                    hb_util:human_id(RecipientWallet),
+                                <<"amount">> => Amount
+                            }
+                    },
+                    ExecOpts
+                );
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end.
 
 verify_net_balance_unchanged(OldState, _Req, NewState, Opts) ->
     dev_token_lib:supply(initial, OldState, Opts)
