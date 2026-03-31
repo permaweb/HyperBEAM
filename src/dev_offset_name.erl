@@ -16,7 +16,24 @@
         <<"noble">>, <<"polished">>, <<"quiet">>, <<"rapid">>,
         <<"silent">>, <<"silver">>, <<"solar">>, <<"steady">>,
         <<"swift">>, <<"tidal">>, <<"velvet">>, <<"vivid">>,
-        <<"wild">>, <<"winter">>, <<"yellow">>, <<"zesty">>
+        <<"wild">>, <<"winter">>, <<"yellow">>, <<"zesty">>,
+        <<"ancient">>, <<"autumn">>, <<"azure">>, <<"bright">>,
+        <<"bronze">>, <<"crimson">>, <<"crystal">>, <<"curious">>,
+        <<"daring">>, <<"dusky">>, <<"eager">>, <<"frozen">>,
+        <<"glimmer">>, <<"hollow">>, <<"iron">>, <<"ivory">>,
+        <<"kindred">>, <<"lunar">>, <<"marble">>, <<"midnight">>,
+        <<"obsidian">>, <<"ocean">>, <<"opal">>, <<"patient">>,
+        <<"royal">>, <<"sacred">>, <<"scarlet">>, <<"shaded">>,
+        <<"ashen">>, <<"bitter">>, <<"hazy">>, <<"verdant">>,
+        <<"agile">>, <<"alpine">>, <<"apricot">>, <<"bold">>,
+        <<"breezy">>, <<"cobalt">>, <<"cosmic">>, <<"desert">>,
+        <<"electric">>, <<"emerald">>, <<"faithful">>, <<"fiery">>,
+        <<"glassy">>, <<"grassy">>, <<"humble">>, <<"icy">>,
+        <<"jolly">>, <<"lucky">>, <<"magnetic">>, <<"neat">>,
+        <<"nimble">>, <<"orange">>, <<"pepper">>, <<"rosy">>,
+        <<"rustic">>, <<"sandy">>, <<"smoky">>, <<"snowy">>,
+        <<"spotted">>, <<"sunny">>, <<"tranquil">>, <<"urban">>,
+        <<"warm">>, <<"wise">>, <<"woody">>, <<"young">>
     ]
 ).
 -define(NOUNS,
@@ -28,7 +45,24 @@
         <<"meadow">>, <<"mesa">>, <<"mist">>, <<"orchid">>,
         <<"pebble">>, <<"prairie">>, <<"quarry">>, <<"river">>,
         <<"rocket">>, <<"shadow">>, <<"summit">>, <<"thunder">>,
-        <<"valley">>, <<"willow">>, <<"wind">>, <<"zephyr">>
+        <<"valley">>, <<"willow">>, <<"wind">>, <<"zephyr">>,
+        <<"asteroid">>, <<"bay">>, <<"blossom">>, <<"branch">>,
+        <<"citadel">>, <<"cliff">>, <<"cove">>, <<"ember">>,
+        <<"feather">>, <<"fjord">>, <<"flare">>, <<"garden">>,
+        <<"glacier">>, <<"grove">>, <<"horizon">>, <<"jungle">>,
+        <<"kingfisher">>, <<"lantern">>, <<"lotus">>, <<"meteor">>,
+        <<"monsoon">>, <<"moon">>, <<"morning">>, <<"pine">>,
+        <<"reef">>, <<"signal">>, <<"stone">>, <<"sunrise">>,
+        <<"aurora">>, <<"bridge">>, <<"cascade">>, <<"voyage">>,
+        <<"airship">>, <<"arbor">>, <<"campfire">>, <<"caravan">>,
+        <<"chamber">>, <<"compass">>, <<"crown">>, <<"dawn">>,
+        <<"estuary">>, <<"firefly">>, <<"fountain">>, <<"galaxy">>,
+        <<"gate">>, <<"hearth">>, <<"hill">>, <<"lighthouse">>,
+        <<"orchard">>, <<"owl">>, <<"palace">>, <<"path">>,
+        <<"pearl">>, <<"planet">>, <<"pond">>, <<"prism">>,
+        <<"ridge">>, <<"sail">>, <<"spring">>, <<"star">>,
+        <<"stream">>, <<"temple">>, <<"torch">>, <<"tower">>,
+        <<"trail">>, <<"wheat">>, <<"wave">>, <<"wing">>
     ]
 ).
 
@@ -158,6 +192,10 @@ roundtrip_test() ->
         decode(encode(Offset))
     ).
 
+word_pool_size_test() ->
+    ?assertEqual(100, length(?ADJECTIVES)),
+    ?assertEqual(100, length(?NOUNS)).
+
 format_shape_test() ->
     [Adjective, Noun, Tail] =
         binary:split(encode(152974576623958), <<"-">>, [global]),
@@ -203,11 +241,24 @@ get_delegates_to_offset_target_test() ->
     ).
 
 reverse_alias_resolve_test() ->
-    Alias = <<"grand-brook-az9wqrtem2">>,
+    Offset = 386268681550466,
+    Alias = encode(Offset),
     {ok, Resolved} =
         hb_ao:resolve(
             #{ <<"device">> => <<"offset-name@1.0">> },
             Alias,
+            #{ offset_name_target => test_target_device() }
+        ),
+    ?assertEqual(
+        integer_to_binary(Offset),
+        maps:get(<<"resolved-offset">>, Resolved)
+    ).
+
+reverse_known_alias_fixture_test() ->
+    {ok, Resolved} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"offset-name@1.0">> },
+            <<"frozen-campfire-az9wqrtem2">>,
             #{ offset_name_target => test_target_device() }
         ),
     ?assertEqual(
