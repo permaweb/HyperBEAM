@@ -216,24 +216,11 @@ reset_owner_address(TX) ->
 
 normalize_data_root(Item = #tx{data = Bin, format = 1})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
-    NewRoot = ar_tx:data_root(legacy, Bin),
-    verify_data_root(Item, NewRoot),
-    Item#tx{data_root = NewRoot};
+    Item#tx{data_root = ar_tx:data_root(legacy, Bin)};
 normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
-    NewRoot = ar_tx:data_root(arweavejs, Bin),
-    verify_data_root(Item, NewRoot),
-    Item#tx{data_root = NewRoot};
+    Item#tx{data_root = ar_tx:data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
-
-%% @doc If data_root is already set (32 bytes), verify that
-%% the recomputed root matches. Unset roots are accepted.
-verify_data_root(#tx{data_root = <<>>}, _NewRoot) -> ok;
-verify_data_root(#tx{data_root = OldRoot}, NewRoot)
-        when OldRoot =:= NewRoot -> ok;
-verify_data_root(#tx{data_root = OldRoot} = TX, NewRoot) ->
-    error({data_root_mismatch,
-        hb_util:encode(TX#tx.id), OldRoot, NewRoot}).
 
 serialize_sig_type({rsa, 65537}) -> ?RSA_SIGN_TYPE;
 serialize_sig_type({ecdsa, secp256k1}) -> ?ECDSA_SIGN_TYPE;
