@@ -16,6 +16,8 @@
 -export([start_node/0, start_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
+%% Define the max size we can return in 500 error details field.
+-define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
 
 %% @doc Starts the HTTP server. Optionally accepts an `Opts' message, which
 %% is used as the source for server configuration settings, as well as the
@@ -458,11 +460,13 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         },
         NodeMsg
     ),
+    ErrorDetailsMaxSize = maps:get(error_details_max_size, NodeMsg, ?DEFAULT_ERROR_DETAILS_MAX_SIZE),
+    DetailsBin = hb_util:bin(hb_format:remove_noise(DetailsStr)),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =
         ErrorMsg#{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
-            <<"details">> => hb_util:bin(hb_format:remove_noise(DetailsStr))
+            <<"details">> => binary:part(DetailsBin, 0, min(ErrorDetailsMaxSize, byte_size(DetailsBin)))
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 
