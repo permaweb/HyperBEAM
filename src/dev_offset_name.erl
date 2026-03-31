@@ -1,7 +1,7 @@
 %%% @doc Allows Arweave offsets to be used via deterministic hostname-safe
 %%% aliases, then delegates the actual load to `arweave@2.9`.
 -module(dev_offset_name).
--export([info/1, alias/3, encode/1, decode/1]).
+-export([info/1, alias/3, offset/3, encode/1, decode/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -72,15 +72,13 @@ info(_Opts) ->
         excludes => [<<"keys">>, <<"set">>]
     }.
 
-%% @doc Return the deterministic alias for an offset. Supports both
-%% `/~offset-name@1.0/alias?offset=<offset>` and `/~offset-name@1.0/alias/<offset>`.
-alias(_Base, Req, Opts) ->
-    case hb_ao:get(<<"offset">>, Req, not_found, Opts) of
-        not_found ->
-            {ok, {as, alias_route_device(), #{}}};
-        Offset ->
-            encode_result(Offset)
-    end.
+%% @doc Route `/~offset-name@1.0/alias/<offset>` to the forward alias lookup.
+alias(_Base, _Req, _Opts) ->
+    {ok, {as, alias_route_device(), #{}}}.
+
+%% @doc Route `/~offset-name@1.0/offset/<alias>` to the reverse alias lookup.
+offset(_Base, _Req, _Opts) ->
+    {ok, {as, offset_route_device(), #{}}}.
 
 %% @doc Resolve an offset alias by decoding it back to a numeric offset, then
 %% delegating to the standard Arweave offset resolver.
@@ -136,11 +134,31 @@ alias_route_device() ->
 alias_lookup(Key, _, _Req, _Opts) ->
     encode_result(Key).
 
+offset_route_device() ->
+    #{
+        info =>
+            fun() ->
+                #{
+                    default => fun offset_lookup/4,
+                    excludes => [<<"keys">>, <<"set">>]
+                }
+            end
+    }.
+
+offset_lookup(Key, _, _Req, _Opts) ->
+    decode_result(Key).
+
 encode_result(Offset) ->
     try
         {ok, encode(Offset)}
     catch
         _:_ -> {error, not_found}
+    end.
+
+decode_result(Alias) ->
+    case decode(Alias) of
+        {ok, Offset} -> {ok, integer_to_binary(Offset)};
+        error -> {error, not_found}
     end.
 
 encode_base32(0) ->
@@ -271,17 +289,6 @@ get_delegates_to_offset_target_test() ->
         maps:get(<<"resolved-offset">>, Resolved)
     ).
 
-alias_query_param_test() ->
-    Offset = <<"152974576623958">>,
-    ?assertEqual(
-        {ok, encode(Offset)},
-        hb_ao:resolve(
-            #{ <<"device">> => <<"offset-name@1.0">> },
-            #{ <<"path">> => <<"alias">>, <<"offset">> => Offset },
-            #{}
-        )
-    ).
-
 alias_path_route_test() ->
     Offset = <<"152974576623958">>,
     ?assertEqual(
@@ -289,6 +296,17 @@ alias_path_route_test() ->
         hb_ao:resolve(
             #{ <<"device">> => <<"offset-name@1.0">> },
             <<"alias/152974576623958">>,
+            #{}
+        )
+    ).
+
+offset_path_route_test() ->
+    Alias = encode(152974576623958),
+    ?assertEqual(
+        {ok, <<"152974576623958">>},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"offset-name@1.0">> },
+            <<"offset/", Alias/binary>>,
             #{}
         )
     ).
