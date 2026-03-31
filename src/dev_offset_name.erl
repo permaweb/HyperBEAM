@@ -202,6 +202,19 @@ get_delegates_to_offset_target_test() ->
         maps:get(<<"resolved-offset">>, Resolved)
     ).
 
+reverse_alias_resolve_test() ->
+    Alias = <<"grand-brook-az9wqrtem2">>,
+    {ok, Resolved} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"offset-name@1.0">> },
+            Alias,
+            #{ offset_name_target => test_target_device() }
+        ),
+    ?assertEqual(
+        <<"386268681550466">>,
+        maps:get(<<"resolved-offset">>, Resolved)
+    ).
+
 name_resolver_lookup_test() ->
     Offset = 152974576623958,
     Alias = encode(Offset),
