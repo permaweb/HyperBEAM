@@ -260,6 +260,28 @@ ensure_initialized(RawBase, Req, Opts) ->
         Opts
     ).
 
+%% @doc Initialize public request time. Prefer scheduler-assigned outer time,
+%% but preserve legacy direct-call compatibility by falling back to `body/t`
+%% only when the configured outer time source is absent.
+ensure_initialized_public(RawBase, Assignment, Opts) ->
+    Base = maybe_initialize_subscriptions(RawBase, Assignment, Opts),
+    TimeSource = hb_maps:get(<<"t-source">>, Base, <<"timestamp">>, Opts),
+    case hb_maps:get(TimeSource, Assignment, not_found, Opts) of
+        not_found ->
+            Body = hb_ao:get(<<"body">>, Assignment, #{}, Opts),
+            NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, Base, 0, Opts), Opts),
+            hb_ao:set(
+                Base,
+                #{
+                    <<"t">> => NewT,
+                    <<"last-drip">> => hb_ao:get(<<"last-drip">>, Base, NewT, Opts)
+                },
+                Opts
+            );
+        _ ->
+            ensure_initialized(Base, Assignment, Opts)
+    end.
+
 %% @doc If the process has not yet initialized, do so. In either case, return the
 %% base state with the subscriptions initialized.
 maybe_initialize_subscriptions(Base, Req, Opts) ->
@@ -345,9 +367,7 @@ deposit(State, Assignment, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(State, Assignment, Opts),
-        Body = hb_maps:get(<<"body">>, Assignment),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{<<"t">> := NewT},
+        StateWithT = ensure_initialized_public(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
         Reason -> {error, Reason}
@@ -369,9 +389,7 @@ withdraw(Base, Req, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(Base, Req, Opts),
-        Body = hb_maps:get(<<"body">>, Req),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, Base)),
-        BaseWithT = Base#{<<"t">> := NewT},
+        BaseWithT = ensure_initialized_public(Base, Req, Opts),
         withdraw(Address, ResourceID, Amount, BaseWithT, Opts)
     end.
 -spec withdraw(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
@@ -579,8 +597,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        StateWithT = ensure_initialized_public(State, Assignment, Opts),
         {ok, NewState} ?=
             delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}
@@ -737,8 +754,7 @@ undelegate(State, Assignment, Opts) ->
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        StateWithT = ensure_initialized_public(State, Assignment, Opts),
         {ok, NewState} ?=
             undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}

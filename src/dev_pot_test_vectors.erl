@@ -723,6 +723,61 @@ delegate_to_self_test() ->
     ),
     ?assertEqual(0, Delegation).
 
+%% @doc Regression test: public `delegate/3` must use assignment time, not
+%% caller-controlled `body.t`.
+public_delegate_uses_assignment_timestamp_not_body_t_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    Assignment =
+        #{
+            <<"timestamp">> => 1,
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
+    TotalMinted =
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
+    ?assertEqual(1, hb_maps:get(<<"t">>, S1, undefined, Opts)),
+    ?assertEqual(1, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
+    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(50, TotalMinted).
+
+%% @doc Legacy direct-call compatibility: when no outer assignment time exists,
+%% public `delegate/3` still falls back to `body.t`.
+public_delegate_falls_back_to_body_t_without_assignment_timestamp_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
+    TotalMinted =
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
+    ?assertEqual(100, hb_maps:get(<<"t">>, S1, undefined, Opts)),
+    ?assertEqual(100, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
+    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assert(TotalMinted >= 99).
+
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
