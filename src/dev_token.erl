@@ -46,12 +46,25 @@
 %% @doc Return the configured `set` field whitelist. Defaults to open policy
 %% via wildcard unless `whitelisted-fields` is explicitly restricted.
 whitelisted_auth_fields(Base, Opts) ->
-    hb_ao:get(
-        <<"whitelisted-fields">>,
-        Base,
-        [<<"*">>],
-        Opts
-    ).
+    maybe
+        WhitelistedFields = hb_ao:get(
+            <<"whitelisted-fields">>,
+            Base,
+            [<<"*">>],
+            Opts
+        ),
+        ValidList = case WhitelistedFields of
+            V when is_list(V) -> V;
+            _ -> {error, <<"Invalid `whitelisted-fields` type.">>}
+        end,
+        true ?= is_list(ValidList),
+        
+        lists:filter(
+            fun(X) -> is_binary(X) andalso byte_size(X) > 0 end,
+            ValidList
+        )
+end.
+
 %%% `~process@1.0' interface implementation.
 
 %% @doc No-op on process initialization.
@@ -323,18 +336,22 @@ secure_set(Base, Assignment, Opts) ->
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
 enforce_whitelisted_fields(Base, Req, Opts) ->
-    Keys = hb_maps:keys(Req, Opts),
-    WhitelistedFields = whitelisted_auth_fields(Base, Opts),
-    case lists:member(<<"*">>, WhitelistedFields) of
-        true ->
-            true;
-        false ->
-            case lists:all(
-                fun(Key) -> lists:member(Key, WhitelistedFields) end,
-                Keys
-            ) of
-                true -> true;
-                false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+    maybe
+        Keys = hb_maps:keys(Req, Opts),
+        WhitelistedFields = whitelisted_auth_fields(Base, Opts),
+        true ?= is_list(WhitelistedFields) orelse
+                    {error, <<"Invalid `whitelisted-fields` type.">>},
+        case lists:member(<<"*">>, WhitelistedFields) of
+            true ->
+                true;
+            false ->
+                case lists:all(
+                    fun(Key) -> lists:member(Key, WhitelistedFields) end,
+                    Keys
+                ) of
+                    true -> true;
+                    false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+                end
             end
     end.
 
