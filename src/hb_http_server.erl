@@ -465,7 +465,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     FormattedErrorMsg =
         ErrorMsg#{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
-            <<"details">> => hb_util:bin(hb_format:truncate(hb_format:remove_noise(DetailsStr), ErrorDetailsMaxSize))
+            <<"details">> => hb_format:truncate(hb_util:bin(hb_format:remove_noise(DetailsStr)), ErrorDetailsMaxSize)
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 

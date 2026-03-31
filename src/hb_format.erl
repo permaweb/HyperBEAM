@@ -358,14 +358,6 @@ do_to_lines(In =[RawElem | Rest]) ->
         false -> Elem ++ ", " ++ do_to_lines(Rest)
     end.
 
-truncate(Str, MaxSize) when is_list(Str) ->
-    StrLen = length(Str),
-    StrEnd = case StrLen > MaxSize of
-        true -> "...";
-        false -> ""
-    end,
-    string:substr(Str, 1, min (StrLen, MaxSize)) ++ StrEnd;
-
 truncate(Bin, MaxSize) when is_binary(Bin) ->
     BinLen = byte_size(Bin),
     BinEnd = case BinLen > MaxSize of 
@@ -1101,26 +1093,14 @@ max_keys(Opts) ->
 
 %%% Tests
 
-truncate_list_no_truncation_test() ->
-    ?assertEqual("hello", truncate("hello", 10)).
-
-truncate_list_exact_size_test() ->
-    ?assertEqual("hello", truncate("hello", 5)).
-
-truncate_list_with_truncation_test() ->
-    ?assertEqual("he...", truncate("hello", 2)).
-
-truncate_binary_no_truncation_test() ->
+truncate_no_truncation_test() ->
     ?assertEqual(<<"hello">>, truncate(<<"hello">>, 10)).
 
-truncate_binary_exact_size_test() ->
+truncate_exact_size_test() ->
     ?assertEqual(<<"hello">>, truncate(<<"hello">>, 5)).
 
-truncate_binary_with_truncation_test() ->
+truncate_with_truncation_test() ->
     ?assertEqual(<<"he...">>, truncate(<<"hello">>, 2)).
 
-truncate_empty_list_test() ->
-    ?assertEqual("", truncate("", 5)).
-
-truncate_empty_binary_test() ->
+truncate_empty_test() ->
     ?assertEqual(<<>>, truncate(<<>>, 5)).
