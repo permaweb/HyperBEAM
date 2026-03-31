@@ -460,7 +460,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         },
         NodeMsg
     ),
-    ErrorDetailsMaxSize = maps:get(error_details_max_size, NodeMsg, ?DEFAULT_ERROR_DETAILS_MAX_SIZE),
+    ErrorDetailsMaxSize = hb_opts:get(error_details_max_size, ?DEFAULT_ERROR_DETAILS_MAX_SIZE, NodeMsg),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =
         ErrorMsg#{
