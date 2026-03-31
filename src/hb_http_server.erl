@@ -461,12 +461,11 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         NodeMsg
     ),
     ErrorDetailsMaxSize = maps:get(error_details_max_size, NodeMsg, ?DEFAULT_ERROR_DETAILS_MAX_SIZE),
-    DetailsBin = hb_util:bin(hb_format:remove_noise(DetailsStr)),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =
         ErrorMsg#{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
-            <<"details">> => binary:part(DetailsBin, 0, min(ErrorDetailsMaxSize, byte_size(DetailsBin)))
+            <<"details">> => hb_util:bin(hb_format:truncate(hb_format:remove_noise(DetailsStr), ErrorDetailsMaxSize))
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 
