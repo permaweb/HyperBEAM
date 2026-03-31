@@ -16,11 +16,13 @@
 -export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
 -export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
 -export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
+-export([truncate/2]).
 %%% Public Utility Functions.
 -export([escape_format/1, short_id/1, trace_to_list/1]).
 -export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -export([process_from_trace/1]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%% Characters that are considered noise and should be removed from strings
 %%% with the `remove_noise_[leading|trailing]' functions.
@@ -355,6 +357,23 @@ do_to_lines(In =[RawElem | Rest]) ->
         true -> lists:flatten(lists:join("\n", In));
         false -> Elem ++ ", " ++ do_to_lines(Rest)
     end.
+
+truncate(Str, MaxSize) when is_list(Str) ->
+    StrLen = length(Str),
+    StrEnd = case StrLen > MaxSize of
+        true -> "...";
+        false -> ""
+    end,
+    string:substr(Str, 1, min (StrLen, MaxSize)) ++ StrEnd;
+
+truncate(Bin, MaxSize) when is_binary(Bin) ->
+    BinLen = byte_size(Bin),
+    BinEnd = case BinLen > MaxSize of 
+        true -> <<"...">>;
+        false -> <<>>
+    end,
+    TruncatedBin = binary:part(Bin, 0, min(BinLen, MaxSize)),
+    <<TruncatedBin/binary, BinEnd/binary>>.
 
 %% @doc Remove any leading or trailing noise from a string.
 remove_noise(Str) ->
@@ -1079,3 +1098,29 @@ max_keys(Opts) ->
         infinity -> infinity;
         Term -> hb_util:int(Term)
     end.
+
+%%% Tests
+
+truncate_list_no_truncation_test() ->
+    ?assertEqual("hello", truncate("hello", 10)).
+
+truncate_list_exact_size_test() ->
+    ?assertEqual("hello", truncate("hello", 5)).
+
+truncate_list_with_truncation_test() ->
+    ?assertEqual("he...", truncate("hello", 2)).
+
+truncate_binary_no_truncation_test() ->
+    ?assertEqual(<<"hello">>, truncate(<<"hello">>, 10)).
+
+truncate_binary_exact_size_test() ->
+    ?assertEqual(<<"hello">>, truncate(<<"hello">>, 5)).
+
+truncate_binary_with_truncation_test() ->
+    ?assertEqual(<<"he...">>, truncate(<<"hello">>, 2)).
+
+truncate_empty_list_test() ->
+    ?assertEqual("", truncate("", 5)).
+
+truncate_empty_binary_test() ->
+    ?assertEqual(<<>>, truncate(<<>>, 5)).
