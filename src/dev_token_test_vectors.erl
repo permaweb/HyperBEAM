@@ -485,73 +485,6 @@ batch_mint_reserved_ao_recipient_rejected_test() ->
     ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
     ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
 
-immutable_name_update_rejected_test() ->
-    Opts = opts(),
-    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Base =
-        generate_process(
-            #{
-                extra => #{
-                    <<"set-authority">> => id(Setter)
-                }
-            },
-            Opts
-        ),
-    ?assertEqual(
-        {error, <<"name is immutable once set.">>},
-        dev_token:handle_action(
-            <<"set">>,
-            Base,
-            #{
-                <<"body">> => #{
-                    <<"from">> => id(Setter),
-                    <<"name">> => <<"New Token Name">>
-                }
-            },
-            Opts
-        )
-    ).
-
-logo_set_once_then_update_rejected_test() ->
-    Opts = opts(),
-    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Base =
-        generate_process(
-            #{
-                extra => #{
-                    <<"set-authority">> => id(Setter)
-                }
-            },
-            Opts
-        ),
-    {ok, WithLogo} =
-        dev_token:handle_action(
-            <<"set">>,
-            Base,
-            #{
-                <<"body">> => #{
-                    <<"from">> => id(Setter),
-                    <<"logo">> => <<"logo-a">>
-                }
-            },
-            Opts
-        ),
-    ?assertEqual(<<"logo-a">>, hb_ao:get(<<"logo">>, WithLogo, Opts)),
-    ?assertEqual(
-        {error, <<"logo is immutable once set.">>},
-        dev_token:handle_action(
-            <<"set">>,
-            WithLogo,
-            #{
-                <<"body">> => #{
-                    <<"from">> => id(Setter),
-                    <<"logo">> => <<"logo-b">>
-                }
-            },
-            Opts
-        )
-    ).
-
 non_whitelisted_set_field_rejected_test() ->
     Opts = opts(),
     Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
@@ -559,7 +492,16 @@ non_whitelisted_set_field_rejected_test() ->
         generate_process(
             #{
                 extra => #{
-                    <<"set-authority">> => id(Setter)
+                    <<"set-authority">> => id(Setter),
+                    <<"whitelisted-fields">> => [
+                        <<"set-authority">>,
+                        <<"set-authority-required">>,
+                        <<"set-authority-match">>,
+                        <<"name">>,
+                        <<"ticker">>,
+                        <<"denomination">>,
+                        <<"logo">>
+                    ]
                 }
             },
             Opts
@@ -577,6 +519,35 @@ non_whitelisted_set_field_rejected_test() ->
             },
             Opts
         )
+    ).
+
+default_whitelist_wildcard_allows_set_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => id(Setter)
+                }
+            },
+            Opts
+        ),
+    {ok, Updated} =
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Setter),
+                    <<"balances">> => #{ <<"fake">> => 1 }
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        1,
+        hb_ao:get(<<"fake">>, hb_ao:get(<<"balances">>, Updated, #{}, Opts), 0, Opts)
     ).
 
 set_authority_required_uses_dev_security_test() ->

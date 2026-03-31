@@ -43,22 +43,27 @@
     ]
 ).
 
-%% @doc Immutable token metadata fields
--define(IMMUTABLE_METADATA_FIELDS, [
-        <<"name">>,
-        <<"ticker">>,
-        <<"denomination">>,
-        <<"logo">>
-    ]
-).
-
-%% @doc Allowed Authority base parameters mutation
-whitelisted_auth_fields() -> [
-    <<"set-authority">>, % admin rotation
-    <<"set-authority-required">>,
-    <<"set-authority-match">>
-    ]
-    ++ ?IMMUTABLE_METADATA_FIELDS.
+%% @doc Return the configured `set` field whitelist. Defaults to open policy
+%% via wildcard unless `whitelisted-fields` is explicitly restricted.
+whitelisted_auth_fields(Base, Opts) ->
+    maybe
+        WhitelistedFields = hb_ao:get(
+            <<"whitelisted-fields">>,
+            Base,
+            [<<"*">>],
+            Opts
+        ),
+        ValidList = case WhitelistedFields of
+            V when is_list(V) -> V;
+            _ -> {error, <<"Invalid `whitelisted-fields` type.">>}
+        end,
+        true ?= is_list(ValidList),
+        
+        lists:filter(
+            fun(X) -> is_binary(X) andalso byte_size(X) > 0 end,
+            ValidList
+        )
+end.
 
 %%% `~process@1.0' interface implementation.
 
@@ -313,7 +318,7 @@ ensure_mint_device(Base, Opts) ->
 %%% Secure `set' call orchestration.
 
 %% @doc Ensure that the caller is the `set' authority, and apply changes to the
-%% base state if so. The setter can only mutuate whitelisted fields.
+%% base state if so. The setter can only mutate whitelisted fields.
 secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
@@ -325,47 +330,29 @@ secure_set(Base, Assignment, Opts) ->
                 RawBody,
                 Opts
             ),
-        % check for immutable state variable update attempts
-        true ?= enforce_immutable_fields(Base, SetReq, Opts),
-        % check the auth is touching whitelisted fields only
-        true ?= enforce_whitelisted_fields(SetReq, Opts),
-        % Apply updates to base state
+        % Check the auth is touching whitelisted fields only.
+        true ?= enforce_whitelisted_fields(Base, SetReq, Opts),
+        % Apply updates to base state.
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
-enforce_immutable_fields(Base, Req, Opts) ->
-    lists:foldl(
-        fun
-            (_Key, {error, _} = Err) ->
-                Err;
-            (Key, true) ->
-                immutable_not_already_set(Key, Base, Req, Opts)
-        end,
-        true,
-        ?IMMUTABLE_METADATA_FIELDS
-    ).
-
-immutable_not_already_set(Key, Base, Req, Opts) ->
-    case hb_maps:find(Key, Req, Opts) of
-        {ok, _NewValue} ->
-            case hb_maps:find(Key, Base, Opts) of
-                {ok, _Existing} -> {error, <<Key/binary, " is immutable once set.">>};
-                error -> true
-            end;
-        % immutable keys not present in Req
-        _ ->
-            true
-    end.
-
-enforce_whitelisted_fields(Req, Opts) ->
-    Keys = hb_maps:keys(Req, Opts),
-    case
-        lists:all(
-            fun(Key) -> lists:member(Key, whitelisted_auth_fields()) end,
-            Keys
-        )
-    of
-        true -> true;
-        false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+enforce_whitelisted_fields(Base, Req, Opts) ->
+    maybe
+        Keys = hb_maps:keys(Req, Opts),
+        WhitelistedFields = whitelisted_auth_fields(Base, Opts),
+        true ?= is_list(WhitelistedFields) orelse
+                    {error, <<"Invalid `whitelisted-fields` type.">>},
+        case lists:member(<<"*">>, WhitelistedFields) of
+            true ->
+                true;
+            false ->
+                case lists:all(
+                    fun(Key) -> lists:member(Key, WhitelistedFields) end,
+                    Keys
+                ) of
+                    true -> true;
+                    false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+                end
+            end
     end.
 
 %% @doc Enforce that the caller is the `set` authority. If `Base` configures
@@ -399,7 +386,7 @@ enforce_set_authority(Base, Req, Opts) ->
                 enforce_legacy_set_authority(Setter, Base, Opts)
         end,
         true ?= AuthRes
-	end.
+    end.
 
 enforce_legacy_set_authority(Setter, Base, Opts) ->
     case validate_address(Setter, []) of
