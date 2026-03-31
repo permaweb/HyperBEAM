@@ -1,7 +1,7 @@
 %%% @doc Allows Arweave offsets to be used via deterministic hostname-safe
 %%% aliases, then delegates the actual load to `arweave@2.9`.
 -module(dev_offset_name).
--export([info/1, encode/1, decode/1]).
+-export([info/1, alias/3, encode/1, decode/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -72,6 +72,16 @@ info(_Opts) ->
         excludes => [<<"keys">>, <<"set">>]
     }.
 
+%% @doc Return the deterministic alias for an offset. Supports both
+%% `/~offset-name@1.0/alias?offset=<offset>` and `/~offset-name@1.0/alias/<offset>`.
+alias(_Base, Req, Opts) ->
+    case hb_ao:get(<<"offset">>, Req, not_found, Opts) of
+        not_found ->
+            {ok, {as, alias_route_device(), #{}}};
+        Offset ->
+            encode_result(Offset)
+    end.
+
 %% @doc Resolve an offset alias by decoding it back to a numeric offset, then
 %% delegating to the standard Arweave offset resolver.
 get(Key, _, _Req, Opts) ->
@@ -111,6 +121,27 @@ decode(_Alias) ->
 
 target_device(Opts) ->
     hb_opts:get(offset_name_target, ?DEFAULT_TARGET_DEVICE, Opts).
+
+alias_route_device() ->
+    #{
+        info =>
+            fun() ->
+                #{
+                    default => fun alias_lookup/4,
+                    excludes => [<<"keys">>, <<"set">>]
+                }
+            end
+    }.
+
+alias_lookup(Key, _, _Req, _Opts) ->
+    encode_result(Key).
+
+encode_result(Offset) ->
+    try
+        {ok, encode(Offset)}
+    catch
+        _:_ -> {error, not_found}
+    end.
 
 encode_base32(0) ->
     <<"0">>;
@@ -238,6 +269,28 @@ get_delegates_to_offset_target_test() ->
     ?assertEqual(
         integer_to_binary(Offset),
         maps:get(<<"resolved-offset">>, Resolved)
+    ).
+
+alias_query_param_test() ->
+    Offset = <<"152974576623958">>,
+    ?assertEqual(
+        {ok, encode(Offset)},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"offset-name@1.0">> },
+            #{ <<"path">> => <<"alias">>, <<"offset">> => Offset },
+            #{}
+        )
+    ).
+
+alias_path_route_test() ->
+    Offset = <<"152974576623958">>,
+    ?assertEqual(
+        {ok, encode(Offset)},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"offset-name@1.0">> },
+            <<"alias/152974576623958">>,
+            #{}
+        )
     ).
 
 reverse_alias_resolve_test() ->
