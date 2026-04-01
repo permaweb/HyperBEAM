@@ -396,10 +396,9 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
             [
                 <<"commitments">>,
                 <<"signature">>,
-                <<"signature-input">>,
-                <<"priv">>
+                <<"signature-input">>
             ],
-            Msg,
+            hb_private:reset(Msg),
             Opts
         ),
     {InlineFieldHdrs, InlineKey} = inline_key(Stripped),
@@ -609,7 +608,30 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                                 Opts
                             );
                         true ->
-                            Value
+                            % Remove unsigned commitments
+                            WithOnlySignedCommits =
+                                hb_message:with_commitments(
+                                    #{ <<"committer">> => '_' },
+                                    Value,
+                                    Opts
+                                ),
+                            SignedCommitments =
+                                hb_maps:get(
+                                    <<"commitments">>,
+                                    WithOnlySignedCommits,
+                                    #{},
+                                    Opts
+                                ),
+                            case hb_maps:size(SignedCommitments, Opts) of
+                                0 ->
+                                    hb_maps:without(
+                                        [<<"commitments">>],
+                                        WithOnlySignedCommits,
+                                        Opts
+                                    );
+                                _ ->
+                                    WithOnlySignedCommits
+                            end
                         end,
                     case hb_maps:size(NormMsg, Opts) of
                         0 ->
