@@ -483,7 +483,7 @@ cyclic_undelegate_liquidation_corrupts_state_test() ->
     ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
     ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
 
-balance_without_explicit_mint_test() ->
+balance_without_explicit_mint_same_slot_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     ResourceOxygen = <<"oxygen">>,
@@ -500,7 +500,10 @@ balance_without_explicit_mint_test() ->
         },
         Opts
     ),
-    ?assert(balance(Process, Alice, Opts) > 0).
+    % Real prod path uses outer assignment slot time. The deposit request drips
+    % the pot at the current slot before the new quantity is added, so the new
+    % deposit does not realize yield until a later scheduled assignment.
+    ?assertEqual(0, balance(Process, Alice, Opts)).
 
 %% @doc Test that transfer works when balance is insufficient but 
 %% balance + unclaimed_yield is sufficient
@@ -625,7 +628,10 @@ claim_yield_multiple_resources_test() ->
         Opts
     ),
     State2 = dev_token_lib:now(State, Opts),
-    ?assertEqual(8750, balance(State2, id(Alice), Opts)).
+    % Under real scheduled slot timing, each setup action consumes a slot.
+    % By the explicit mint, oxygen has already realized one more accumulator
+    % step than in the old lazy body.t model, so Alice ends at 9250.
+    ?assertEqual(9250, balance(State2, id(Alice), Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->

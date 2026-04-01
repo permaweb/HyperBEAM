@@ -575,18 +575,10 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        case FromAddr =:= ToAddr of
-            true -> {ok, State};
-            false ->
-                delegate(
-                    FromAddr,
-                    ToAddr,
-                    ResourceID,
-                    Amount,
-                    ensure_initialized(State, Assignment, Opts),
-                    Opts
-                )
-        end
+        StateWithT = ensure_initialized(State, Assignment, Opts),
+        {ok, NewState} ?=
+            delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
+        {ok, NewState}
     else
         {error, _} = Err -> Err;
         Reason -> {error, Reason}
@@ -597,21 +589,22 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount),
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        ?event(
+            {delegating,
+                {from_addr, FromAddr},
+                {to_addr, ToAddr},
+                {resource_id, ResourceID},
+                {amount, Amount}
+            }
+        ),
+        GlobalDrippedS = drip_global(S, Opts),
+        S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
+        S1 = drip_user(FromAddr, S0, Opts),
+        S2 = drip_user(ToAddr, S1, Opts),
+        % Self-delegation is a noop
         case FromAddr =:= ToAddr of
-            true -> {ok, S};
+            true -> {ok, S2};
             false ->
-                ?event(
-                    {delegating,
-                        {from_addr, FromAddr},
-                        {to_addr, ToAddr},
-                        {resource_id, ResourceID},
-                        {amount, Amount}
-                    }
-                ),
-                GlobalDrippedS = drip_global(S, Opts),
-                S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
-                S1 = drip_user(FromAddr, S0, Opts),
-                S2 = drip_user(ToAddr, S1, Opts),
                 DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
                 case DelegatorDeposit >= Amount of
                     false ->
@@ -739,18 +732,10 @@ undelegate(State, Assignment, Opts) ->
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        case FromAddr =:= ToAddr of
-            true -> {ok, State};
-            false ->
-                undelegate(
-                    FromAddr,
-                    ToAddr,
-                    ResourceID,
-                    Amount,
-                    ensure_initialized(State, Assignment, Opts),
-                    Opts
-                )
-        end
+        StateWithT = ensure_initialized(State, Assignment, Opts),
+        {ok, NewState} ?=
+            undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
+        {ok, NewState}
     else
         {error, _} = Err -> Err;
         Reason -> {error, Reason}
@@ -761,10 +746,10 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        case FromAddr =:= ToAddr of
-            true -> {ok, S};
-            false ->
-                ExistingDelegationBefore =
+        ExistingDelegationBefore =
+            case FromAddr =:= ToAddr of
+                true -> 0;
+                false ->
                     hb_ao:get(
                         <<
                             "/resources/",
@@ -777,24 +762,33 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount
                         S,
                         0,
                         Opts
-                    ),
-                Validation =
+                    )
+            end,
+        Validation =
+            case FromAddr =:= ToAddr of
+                true -> ok;
+                false ->
                     case ExistingDelegationBefore >= Amount of
                         true -> ok;
                         false ->
                             {error, <<"Undelegation amount exceeds existing delegation.">>}
-                    end,
-                case Validation of
+                    end
+            end,
+        case Validation of
+            {error, _} = Err -> Err;
+            ok ->
+                RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+                case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
                     {error, _} = Err -> Err;
-                    ok ->
-                        RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
-                        case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
-                            {error, _} = Err -> Err;
-                            {ok, Liquidated} ->
-                                GlobalDrippedS = drip_global(Liquidated, Opts),
-                                DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
-                                S0 = drip_user(FromAddr, DrippedS, Opts),
-                                S1 = drip_user(ToAddr, S0, Opts),
+                    {ok, Liquidated} ->
+                        GlobalDrippedS = drip_global(Liquidated, Opts),
+                        DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
+                        S0 = drip_user(FromAddr, DrippedS, Opts),
+                        S1 = drip_user(ToAddr, S0, Opts),
+                        % Self-undelegation is a noop
+                        case FromAddr =:= ToAddr of
+                            true -> {ok, S1};
+                            false ->
                                 NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S1, Opts),
                                 S2 =
                                     hb_ao:set(
