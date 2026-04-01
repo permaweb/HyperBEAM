@@ -707,7 +707,8 @@ delegate_to_self_test() ->
     % Alice delegates to herself - should work but is a no-op in practice
     S0 = pot_state(Alice, ResourceOxygen, 10),
     S1 = delegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
-    % After delegating to self, deposit should still be 10 (5 removed, 5 added back)
+    ?assertEqual(S0, S1),
+    % After delegating to self, deposit should still be 10
     ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     % Self delegation is a noop, so no delegation record should be written
     Delegation = hb_ao:get(
@@ -723,9 +724,61 @@ delegate_to_self_test() ->
     ),
     ?assertEqual(0, Delegation).
 
+undelegate_to_self_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    S1 = undelegate(Alice, Alice, ResourceOxygen, 5, S0, Opts),
+    ?assertEqual(S0, S1).
+
 %% @doc Regression test: public `delegate/3` must use assignment time, not
 %% caller-controlled `body.t`.
 public_delegate_uses_assignment_timestamp_not_body_t_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
+    Assignment =
+        #{
+            <<"timestamp">> => 1,
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
+    TotalMinted =
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
+    ?assertEqual(1, hb_maps:get(<<"t">>, S1, undefined, Opts)),
+    ?assertEqual(1, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
+    ?assertEqual(9, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)),
+    ?assertEqual(
+        1,
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceOxygen/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S1,
+            0,
+            Opts
+        )
+    ),
+    ?assertEqual(50, TotalMinted).
+
+public_delegate_to_self_is_true_noop_test() ->
     Alice = <<"alice">>,
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
@@ -743,13 +796,27 @@ public_delegate_uses_assignment_timestamp_not_body_t_test() ->
                 }
         },
     {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
-    TotalMinted =
-        hb_maps:get(<<"minted">>, S1, 0, Opts)
-        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
-    ?assertEqual(1, hb_maps:get(<<"t">>, S1, undefined, Opts)),
-    ?assertEqual(1, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
-    ?assertEqual(10, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
-    ?assertEqual(50, TotalMinted).
+    ?assertEqual(S0, S1).
+
+public_undelegate_to_self_is_true_noop_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    Assignment =
+        #{
+            <<"timestamp">> => 1,
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:undelegate(S0, Assignment, Opts),
+    ?assertEqual(S0, S1).
 
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
