@@ -2,6 +2,7 @@
 -module(hb_prometheus).
 -export([ensure_started/0, declare/2, measure_and_report/2, measure_and_report/3]).
 -export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4]).
+-export([sample_check/0]).
 
 %% @doc Ensure the Prometheus application has been started. Caches startup
 %% failure with a timestamp to avoid repeated blocking ensure_all_started
@@ -57,11 +58,16 @@ do_declare(Type, _Metric) -> throw({unsupported_metric_type, Type}).
 measure_and_report(Fun, Metric) when is_function(Fun) ->
     measure_and_report(Fun, Metric, []).
 measure_and_report(Fun, Metric, Labels) when is_function(Fun) ->
-    Start = erlang:monotonic_time(),
-    try Fun()
-    after
-        DurationNative = erlang:monotonic_time() - Start,
-        observe(DurationNative, Metric, Labels)
+    case sample_check() of
+        true ->
+            Start = erlang:monotonic_time(),
+            try Fun()
+            after
+                DurationNative = erlang:monotonic_time() - Start,
+                observe(DurationNative, Metric, Labels)
+            end;
+        false ->
+            Fun()
     end.
 
 observe(Duration, Metric) when is_integer(Duration) ->
@@ -81,12 +87,17 @@ inc(Type, Metrics) ->
 inc(Type, Metrics, Labels) ->
     inc(Type, Metrics, Labels, 1).
 inc(Type, Metrics, Labels, Value) ->
-    case ensure_started() of
-        ok ->
-            try do_inc(Type, Metrics, Labels, Value)
-            catch error:mfa_already_exists -> ok
+    case sample_check() of
+        true ->
+            Rate = persistent_term:get(hb_prometheus_sample_rate, 100),
+            case ensure_started() of
+                ok ->
+                    try do_inc(Type, Metrics, Labels, Value * Rate)
+                    catch error:mfa_already_exists -> ok
+                    end;
+                _ -> ok
             end;
-        _ -> ok
+        false -> ok
     end.
 do_inc(counter, Name, Labels, Value) ->
     prometheus_counter:inc(Name, Labels, Value);
@@ -108,3 +119,40 @@ dec(Type, Metrics, Labels, Value) ->
 
 do_dec(gauge, Name, Labels, Value) ->
     prometheus_gauge:dec(Name, Labels, Value).
+
+%% @doc Check if this call should be sampled for metrics reporting.
+%% Uses a 2-slot atomics ref: slot 1 = call counter, slot 2 = timestamp
+%% of last checkpoint. Every `Rate' calls (default 100), checks elapsed
+%% time. If the last Rate calls took >1s (low throughput), resets the
+%% counter so all calls are reported. On hot paths (>100 calls/s),
+%% only 1 in Rate calls reports.
+sample_check() ->
+    C = case persistent_term:get(hb_prometheus_sample_counter, undefined) of
+        undefined ->
+            New = atomics:new(2, []),
+            atomics:put(New, 2, erlang:monotonic_time(second)),
+            persistent_term:put(hb_prometheus_sample_counter, New),
+            New;
+        Existing -> Existing
+    end,
+    Rate = case persistent_term:get(hb_prometheus_sample_rate, undefined) of
+        undefined ->
+            R = hb_opts:get(prometheus_sample_rate, 100, #{}),
+            persistent_term:put(hb_prometheus_sample_rate, R),
+            R;
+        R -> R
+    end,
+    case atomics:add_get(C, 1, 1) rem Rate of
+        0 ->
+            Now = erlang:monotonic_time(second),
+            Last = atomics:get(C, 2),
+            atomics:put(C, 2, Now),
+            case Now - Last > 0 of
+                true ->
+                    atomics:put(C, 1, 0),
+                    true;
+                false ->
+                    true
+            end;
+        _ -> false
+    end.
