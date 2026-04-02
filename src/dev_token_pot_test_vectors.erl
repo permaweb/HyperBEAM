@@ -445,7 +445,7 @@ pot_delegation_test() ->
         )
     ).
 
-cyclic_undelegate_liquidation_corrupts_state_test() ->
+cyclic_undelegate_liquidation_fails_cleanly_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
@@ -475,13 +475,16 @@ cyclic_undelegate_liquidation_corrupts_state_test() ->
     ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
     ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
     ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
-    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts),
-    ?assertEqual(20, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
-    ?assertEqual(-10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts)
+    ),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
     ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
-    ?assertEqual(-10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
-    ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
-    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
 
 balance_without_explicit_mint_same_slot_test() ->
     Opts = test_opts(),
