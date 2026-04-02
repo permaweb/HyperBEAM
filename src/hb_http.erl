@@ -530,7 +530,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         {sent,
             {status, Status},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
-            {body_size, byte_size(EncodedBody)},
+            {body_size, iolist_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
             {ip, {string, real_ip(Req, Opts)}},
             {path,

@@ -314,7 +314,7 @@ get_raw(Base, Request, Opts) ->
                     }
                 };
             false ->
-                case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
+                case fetch_chunk_range(ArweaveDataOffset, FullContentLength, Opts) of
                     {ok, Data} ->
                         {ok, Header#{
                             <<"content-type">> => ContentType,

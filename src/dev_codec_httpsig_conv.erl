@@ -481,7 +481,8 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                 ?event({encoding_empty_body, {msg, Enc0}}),
                 Enc0;
             #{ InlineKey := UserBody }
-                    when map_size(GroupedBodyMap) =:= 1 andalso is_binary(UserBody) ->
+                    when map_size(GroupedBodyMap) =:= 1
+                        andalso (is_binary(UserBody) orelse is_list(UserBody)) ->
                 % Simply set the sole body binary as the body of the
                 % HTTP message, no further encoding required
                 % 
