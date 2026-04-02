@@ -661,24 +661,22 @@ claim_yield_single_resource_test() ->
     },
     Process = generate_process(PotFields, TokenFields, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
-    NewBase = 
-        push_deposit(
-            Process,
-            ResourceOxygen,
-            AliceWallet,
-            10,
-            Opts
-        ),
-    ?event(pot_claim, {new_pot, NewBase}, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
     push_request(
-        NewBase,
+        Process,
         #{
             <<"action">> => <<"mint">>
         },
         AliceWallet,
         Opts
     ),
-    BaseAfterClaim = dev_token_lib:now(NewBase, Opts),
+    BaseAfterClaim = dev_token_lib:now(Process, Opts),
     ?event({after_claim, BaseAfterClaim}),
     ?assertEqual(8000, balance(BaseAfterClaim, AliceAddr,Opts)).
 
