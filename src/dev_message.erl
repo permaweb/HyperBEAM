@@ -949,6 +949,33 @@ set_ignore_undefined_test() ->
 	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
 		hb_private:reset(hb_util:ok(set(Base, Req, #{ hashpath => ignore })))).
 
+set_add_sibling_to_committed_message_survives_cache_roundtrip_test() ->
+    hb:init(),
+    Opts = #{
+        hashpath => ignore,
+        priv_wallet => ar_wallet:new(),
+        store => [hb_test_utils:test_store()]
+    },
+    Committed = hb_message:commit(#{ <<"one">> => 1 }, Opts),
+    {ok, Updated} =
+        hb_ao:resolve(
+            Committed,
+            #{ <<"path">> => <<"set">>, <<"two">> => 2 },
+            Opts
+        ),
+    ?assertEqual(2, hb_maps:get(<<"two">>, Updated, missing, Opts)),
+    {ok, ID} = hb_cache:write(Updated, Opts),
+    {ok, Reloaded} = hb_cache:read(ID, Opts),
+    ?assertEqual(
+        2,
+        hb_maps:get(
+            <<"two">>,
+            hb_cache:ensure_all_loaded(Reloaded, Opts),
+            missing,
+            Opts
+        )
+    ).
+
 verify_test_() ->
 	{foreach, fun () -> ok end, fun (_) -> ok end, [
 		{"RSA", fun () -> test_verify(?RSA_KEY_TYPE) end},
