@@ -130,6 +130,14 @@ undelegate_req(Resource, Addr, Qty) ->
         <<"quantity">> => Qty
     }.
 
+withdraw_req(Resource, Addr, Qty) ->
+    #{
+        <<"action">> => <<"withdraw">>,
+        <<"resource">> => Resource,
+        <<"address">> => Addr,
+        <<"quantity">> => Qty
+    }.
+
 transfer_req(Addr, Qty) ->
     transfer_req(Addr, Qty, #{}).
 transfer_req(Addr, Qty, Params) ->
@@ -338,6 +346,13 @@ push_undelegate(Process, Wallet, FromAddr, Resource, Qty, Opts) ->
         Opts
     ).
 
+push_withdraw(Process, Resource, Addr, Qty, Opts) ->
+    push_request(
+        Process,
+        withdraw_req(Resource, Addr, Qty),
+        Opts
+    ).
+
 %%% Test Cases.
 %%% ----------------------------------------------------------------------------
 
@@ -478,6 +493,47 @@ cyclic_undelegate_liquidation_fails_cleanly_test() ->
     ?assertMatch(
         {error, _},
         push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts)
+    ),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+withdraw_through_cyclic_liquidation_fails_cleanly_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_withdraw(Process, Resource, AliceAddr, 20, Opts)
     ),
     ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
     ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
