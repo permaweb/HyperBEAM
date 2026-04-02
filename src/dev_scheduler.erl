@@ -1229,7 +1229,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
         {ok, Body} ->
             ?event({encoded_for_legacy_scheduler, {encoded, Body}}),
             PostMsg = #{
-                <<"path">> => P = <<"/?process-id=", ProcID/binary>>,
+                <<"path">> => P = <<"/">>,
                 <<"body">> => Body,
                 <<"method">> => <<"POST">>
             },
