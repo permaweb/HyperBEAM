@@ -620,6 +620,44 @@ cyclic_undelegation_liquidation_still_succeeds_when_edge_is_not_reentered_test()
     ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
     ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
 
+cyclic_undelegation_from_charlie_to_alice_succeeds_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    {ok, _} = push_undelegate(Process, Charlie, AliceAddr, Resource, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
 plain_chain_undelegation_liquidates_successfully_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
