@@ -44,10 +44,21 @@ encode(ID) when ?IS_ID(ID) ->
 
 %%% Tests
 
-%% @doc If the sudbdomain provided isn't a valid ARNS or a 52 char subdomain 
-%% it should return 404 instead of HyperBEAM page.
-invalid_arns_and_not_52char_host_resolution_gives_404_test() ->
-    Opts = dev_name:test_arns_opts(),
+dev_b32_name_test_() ->
+    {inparallel, [
+        {timeout, 30, fun test_invalid_arns_and_not_52char_host_resolution_gives_404/0},
+        fun test_key_to_id/0,
+        {timeout, 30, fun test_empty_path_manifest/0},
+        {timeout, 30, fun test_resolve_52char_subdomain_asset_if_txid_not_present/0},
+        {timeout, 30, fun test_subdomain_matches_path_id_and_loads_asset/0},
+        fun test_subdomain_matches_path_id/0,
+        fun test_subdomain_does_not_match_path_id/0,
+        {timeout, 30, fun test_manifest_subdomain_matches_path_id/0},
+        {timeout, 30, fun test_manifest_subdomain_does_not_match_path_id/0}
+    ]}.
+
+test_invalid_arns_and_not_52char_host_resolution_gives_404() ->
+    Opts = (dev_name:test_arns_opts())#{ port => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, #{<<"status">> := 404}},
@@ -62,7 +73,7 @@ invalid_arns_and_not_52char_host_resolution_gives_404_test() ->
     ).
 
 %% @doc Unit test for 52 char subdomain to TX ID logic
-key_to_id_test() -> 
+test_key_to_id() ->
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     ?assertEqual(
         <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
@@ -70,7 +81,7 @@ key_to_id_test() ->
     ).
 
 %% @doc Resolving a 52 char subdomain without a TXID in the path should work.
-empty_path_manifest_test() ->
+test_empty_path_manifest() ->
     TestPath = <<"/">>,
     Opts = manifest_opts(),
     %% Test to load manifest with only subdomain
@@ -96,7 +107,7 @@ empty_path_manifest_test() ->
 
 %% @doc Loading assets from a manifest where only a 52 char subdomain is 
 %% provided should work. 
-resolve_52char_subdomain_asset_if_txid_not_present_test() ->
+test_resolve_52char_subdomain_asset_if_txid_not_present() ->
     TestPath = <<"/assets/ArticleBlock-Dtwjc54T.js">>,
     Opts = manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
@@ -122,7 +133,7 @@ resolve_52char_subdomain_asset_if_txid_not_present_test() ->
 
 %% @doc Loading assets from a manifest where a 52 char subdomain and TX ID 
 %% is provided should work.
-subdomain_matches_path_id_and_loads_asset_test() ->
+test_subdomain_matches_path_id_and_loads_asset() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>,
     Opts = manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
@@ -148,7 +159,7 @@ subdomain_matches_path_id_and_loads_asset_test() ->
 
 %% @doc Validate the behavior when a subdomain and primary path ID match. The
 %% duplicated ID in the request message stream should be ignored.
-subdomain_matches_path_id_test() ->
+test_subdomain_matches_path_id() ->
     #{ id1 := ID1, opts := Opts } = test_opts(),
     ?assertMatch(
         {ok, 1},
@@ -164,7 +175,7 @@ subdomain_matches_path_id_test() ->
 
 %% @doc Validate the behavior when a subdomain and primary path ID match. Both
 %% IDs should be executed, the subdomain first then the path ID.
-subdomain_does_not_match_path_id_test() ->
+test_subdomain_does_not_match_path_id() ->
     #{ id1 := ID1, id2 := ID2, opts := Opts }
         = test_opts(),
     ?assertMatch(
@@ -181,7 +192,7 @@ subdomain_does_not_match_path_id_test() ->
 
 %% @doc When both 52 char subdomain and TX ID are provided and equal, ignore 
 %% the TXID from the assets path. 
-manifest_subdomain_matches_path_id_test() ->
+test_manifest_subdomain_matches_path_id() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
@@ -208,7 +219,7 @@ manifest_subdomain_matches_path_id_test() ->
 %% the subdomain TXID is loaded, and tries to access the assets path defined.
 %% In this case, sinse no assets exists with this TX ID, it should load the 
 %% index.
-manifest_subdomain_does_not_match_path_id_test() ->
+test_manifest_subdomain_does_not_match_path_id() ->
     TestPath = <<"/1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
@@ -234,7 +245,7 @@ manifest_subdomain_does_not_match_path_id_test() ->
 
 test_opts() ->
     Store = [hb_test_utils:test_store()],
-    BaseOpts = #{ store => Store, priv_wallet => ar_wallet:new() },
+    BaseOpts = #{ store => Store, priv_wallet => ar_wallet:new(), port => 0 },
     Msg1 =
         #{
             <<"a">> => 1,
@@ -291,6 +302,8 @@ subdomain(ID, Opts) ->
 %% IDs.
 manifest_opts() ->
     (dev_manifest:test_env_opts())#{
+        port => 0,
+        http_client_hackney_recv_timeout => 30_000,
         name_resolvers => [#{ <<"device">> => <<"b32-name@1.0">> }],
         on =>
             #{

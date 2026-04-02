@@ -116,6 +116,10 @@ setup_handler(Handler, DefaultFilter, Domain, Config) ->
     logger:remove_handler(Handler),
     case logger:add_handler(Handler, logger_std_h, Config) of
         ok -> ok;
+        {error, {handler_not_added, {already_exist, _}}} -> ok;
+        {error, {handler_not_added, {already_started, _}}} -> ok;
+        {error, {already_exist, _}} -> ok;
+        {error, {already_started, _}} -> ok;
         {error, HandlerReason} -> erlang:error(HandlerReason)
     end.
 
@@ -177,6 +181,7 @@ ensure_default_handler_filter(FilterId, Domain) ->
         {fun logger_filters:domain/2, {stop, sub, Domain}}
     ) of
         ok -> ok;
+        {error, {already_exist, _}} -> ok;
         {error, FilterReason} -> erlang:error(FilterReason)
     end.
 
