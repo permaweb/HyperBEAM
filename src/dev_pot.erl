@@ -777,11 +777,17 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount
         case Validation of
             {error, _} = Err -> Err;
             ok ->
-                RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
-                case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
+                case ensure_undelegation_cover(
+                    FromAddr,
+                    ToAddr,
+                    ResourceID,
+                    Amount,
+                    S,
+                    Opts
+                ) of
                     {error, _} = Err -> Err;
-                    {ok, Liquidated} ->
-                        GlobalDrippedS = drip_global(Liquidated, Opts),
+                    {ok, Prepared} ->
+                        GlobalDrippedS = drip_global(Prepared, Opts),
                         DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
                         S0 = drip_user(FromAddr, DrippedS, Opts),
                         S1 = drip_user(ToAddr, S0, Opts),
@@ -880,6 +886,52 @@ undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
     {error, <<"Undelegate amount must be a non-zero positive Integer.">>};
 undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Undelegate Amount must be of integer type">>}.
+
+%% @doc Repeatedly liquidate the recipient until the requested undelegation is
+%% directly coverable, or fail if the outer delegation edge has already been
+%% consumed by recursive unwind.
+ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+    ExistingDelegation =
+        case FromAddr =:= ToAddr of
+            true -> 0;
+            false ->
+                hb_ao:get(
+                    <<
+                        "/resources/",
+                        ResourceID/binary,
+                        "/deposits/",
+                        FromAddr/binary,
+                        "/delegations/",
+                        ToAddr/binary
+                    >>,
+                    S,
+                    0,
+                    Opts
+                )
+        end,
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+    case FromAddr =:= ToAddr of
+        true ->
+            {ok, S};
+        false when ExistingDelegation < Amount ->
+            {error, <<"Undelegation amount exceeds existing delegation.">>};
+        false when RecipientDeposit >= Amount ->
+            {ok, S};
+        false ->
+            case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
+                {error, _} = Err ->
+                    Err;
+                {ok, Liquidated} ->
+                    ensure_undelegation_cover(
+                        FromAddr,
+                        ToAddr,
+                        ResourceID,
+                        Amount,
+                        Liquidated,
+                        Opts
+                    )
+            end
+    end.
 
 %% @doc Resource configuration entrypoint. Validates the target resource and
 %% caller, enforces resource-config authority via
