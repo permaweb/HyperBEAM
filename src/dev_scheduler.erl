@@ -176,6 +176,13 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
             ),
             ?event(next, {next_returning, {slot, NextAssignmentSlot}}),
 			?event(next_profiling, returning),
+            AssignmentWithOnlyCommitted =
+                hb_message:with_only_committed(NextAssignment, Opts),
+            hb_message:paranoid_verify(
+                scheduler_next,
+                AssignmentWithOnlyCommitted,
+                Opts
+            ),
             {ok, #{ <<"body">> => NextAssignment, <<"state">> => NextState }};
         slot_not_processable ->
             {error,
