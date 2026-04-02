@@ -148,12 +148,12 @@ deposit_generator(_State, Opts) ->
         hb_message:commit(
             #{
                 <<"path">> => <<"deposit">>,
+                <<"timestamp">> => hb_invariant:int(100_000),
                 <<"body">> => #{
                     <<"address">> => hb_util:human_id(Wallet),
                     <<"quantity">> => hb_invariant:int(1, 100_000),
                     <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
-                    <<"from">> => <<"foo">>, % TODO: What should this value be?
-                    <<"t">> => hb_invariant:int(100_000)
+                    <<"from">> => <<"foo">> % TODO: What should this value be?
                 }
             },
             Opts#{ priv_wallet => Wallet }
@@ -180,12 +180,12 @@ withdraw_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"withdraw">>,
+                        <<"timestamp">> => hb_invariant:int(100_000),
                         <<"body">> => #{
                             <<"address">> => UserAddr,
                             <<"quantity">> => hb_invariant:int(1, CurrentQty),
                             <<"resource">> => UserResourceID,
-                            <<"from">> => <<"foo">>, % TODO: What should this value be?
-                            <<"t">> => hb_invariant:int(100_000)
+                            <<"from">> => <<"foo">> % TODO: What should this value be?
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
@@ -216,12 +216,12 @@ delegate_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"delegate">>,
+                        <<"timestamp">> => hb_invariant:int(100_000),
                         <<"body">> => #{
                             <<"address">> => ToAddr,
                             <<"quantity">> => DelegatedQty,
                             <<"resource">> => UserResourceID,
-                            <<"from">> => FromAddr, 
-                            <<"t">> => hb_invariant:int(100_000)
+                            <<"from">> => FromAddr
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
@@ -247,12 +247,12 @@ undelegate_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"undelegate">>,
+                        <<"timestamp">> => hb_invariant:int(100_000),
                         <<"body">> => #{
                             <<"address">> => ToAddr,
                             <<"quantity">> => UndelegateQty,
                             <<"resource">> => ResourceID,
-                            <<"from">> => FromAddr, 
-                            <<"t">> => hb_invariant:int(100_000)
+                            <<"from">> => FromAddr
                         }
                     },
                     Opts#{ priv_wallet => Wallet }

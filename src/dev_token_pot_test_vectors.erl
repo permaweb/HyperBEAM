@@ -53,6 +53,22 @@ deposit(Process, Resource, Address, SubPath, Opts) ->
         Opts
     ).
 
+%% @doc Return the delegated quantity for the given edge.
+delegation(Process, Resource, FromAddr, ToAddr, Opts) ->
+    hb_ao:get(
+        <<
+            "now/resources/",
+            Resource/binary,
+            "/deposits/",
+            FromAddr/binary,
+            "/delegations/",
+            ToAddr/binary
+        >>,
+        Process,
+        0,
+        Opts
+    ).
+
 %% @doc Return the weight for a given resource on a `~pot@1.0' process.
 weight(RawProcess, Resource, Opts) ->
     Process = dev_token_lib:now(RawProcess, Opts),
@@ -429,7 +445,45 @@ pot_delegation_test() ->
         )
     ).
 
-balance_without_explicit_mint_test() ->
+cyclic_undelegate_liquidation_corrupts_state_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts),
+    ?assertEqual(20, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(-10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(-10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+balance_without_explicit_mint_same_slot_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     ResourceOxygen = <<"oxygen">>,
@@ -446,7 +500,10 @@ balance_without_explicit_mint_test() ->
         },
         Opts
     ),
-    ?assert(balance(Process, Alice, Opts) > 0).
+    % Real prod path uses outer assignment slot time. The deposit request drips
+    % the pot at the current slot before the new quantity is added, so the new
+    % deposit does not realize yield until a later scheduled assignment.
+    ?assertEqual(0, balance(Process, Alice, Opts)).
 
 %% @doc Test that transfer works when balance is insufficient but 
 %% balance + unclaimed_yield is sufficient
@@ -571,7 +628,10 @@ claim_yield_multiple_resources_test() ->
         Opts
     ),
     State2 = dev_token_lib:now(State, Opts),
-    ?assertEqual(8750, balance(State2, id(Alice), Opts)).
+    % Under real scheduled slot timing, each setup action consumes a slot.
+    % By the explicit mint, oxygen has already realized one more accumulator
+    % step than in the old lazy body.t model, so Alice ends at 9250.
+    ?assertEqual(9250, balance(State2, id(Alice), Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->

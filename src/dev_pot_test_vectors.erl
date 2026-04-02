@@ -723,6 +723,52 @@ delegate_to_self_test() ->
     ),
     ?assertEqual(0, Delegation).
 
+%% @doc Regression test: public `delegate/3` must use assignment time, not
+%% caller-controlled `body.t`.
+public_delegate_uses_assignment_timestamp_not_body_t_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
+    Assignment =
+        #{
+            <<"timestamp">> => 1,
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
+    TotalMinted =
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
+    ?assertEqual(1, hb_maps:get(<<"t">>, S1, undefined, Opts)),
+    ?assertEqual(1, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
+    ?assertEqual(9, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)),
+    ?assertEqual(
+        1,
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceOxygen/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S1,
+            0,
+            Opts
+        )
+    ),
+    ?assertEqual(50, TotalMinted).
+
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,

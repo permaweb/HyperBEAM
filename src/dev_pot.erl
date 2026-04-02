@@ -345,9 +345,7 @@ deposit(State, Assignment, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(State, Assignment, Opts),
-        Body = hb_maps:get(<<"body">>, Assignment),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{<<"t">> := NewT},
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
         Reason -> {error, Reason}
@@ -369,9 +367,7 @@ withdraw(Base, Req, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(Base, Req, Opts),
-        Body = hb_maps:get(<<"body">>, Req),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, Base)),
-        BaseWithT = Base#{<<"t">> := NewT},
+        BaseWithT = ensure_initialized(Base, Req, Opts),
         withdraw(Address, ResourceID, Amount, BaseWithT, Opts)
     end.
 -spec withdraw(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
@@ -579,8 +575,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         {ok, NewState} ?=
             delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}
@@ -737,8 +732,7 @@ undelegate(State, Assignment, Opts) ->
         true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         {ok, NewState} ?=
             undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}
