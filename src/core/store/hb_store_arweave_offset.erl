@@ -26,7 +26,7 @@
 %%% to contract to only the number of bytes actually necessary to represent it.
 %%% 
 -module(hb_store_arweave_offset).
--export([encode/3, decode/1, path/1]).
+-export([encode/3, decode/1, path/1, mismatch_path/1]).
 -include("include/hb.hrl").
 
 %% @doc Determine if a value is within a given unsigned bit range.
@@ -41,6 +41,10 @@
 %% of `~arweave@2.9/offset/` implied.
 path(ID) when ?IS_ID(ID) -> hb_util:native_id(ID);
 path(ID) -> throw({cannot_encode_path, ID}).
+
+mismatch_path(ID) when ?IS_ID(ID) ->
+    <<"mismatch/", (hb_util:native_id(ID))/binary>>;
+mismatch_path(ID) -> throw({cannot_encode_mismatch_path, ID}).
 
 %% @doc Encode the offset of the data if it is valid. Throws `cannot_encode_offset'
 %% if invalid.

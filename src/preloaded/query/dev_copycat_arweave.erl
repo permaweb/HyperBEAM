@@ -1,8 +1,9 @@
 %%% @doc A `~copycat@1.0' engine that fetches block data from an Arweave node for
 %%% replication. This engine works in _reverse_ chronological order by default.
 %%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
-%%% block where at least one TX is already indexed, then stops. If `to' is
-%%% provided, every block in the range is processed.
+%%% block that is already indexed at the requested depth (checked via block
+%%% markers first, then legacy per-TX fallback for pre-marker indexes). If `to'
+%%% is provided, every block in the range is processed.
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
@@ -11,6 +12,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+-define(BLOCK_MARKER_PREFIX, <<"block/">>).
+-define(CUTOVER_KEY, <<"block/marker-cutover-height">>).
+-define(DEPTH_SENTINEL, 99999).
 % By default we'll index blocks to depth 2 which is:
 % - depth 1: L1 TXs
 % - depth 2: L2 bundles and dataitems
@@ -66,8 +70,14 @@ arweave(_Base, Request, Opts) ->
                 {error, unavailable} -> {error, unavailable};
                 {ok, {From, To}} -> list_index(From, To, Opts)
             end;
+        <<"list-items">> ->
+            case parse_range(Request, Opts) of
+                {error, unavailable} -> {error, unavailable};
+                {ok, {From, To}} -> list_items_index(From, To, Opts)
+            end;
         Mode ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
+                "`. Supported modes are: write, list, list-items">>}
     end.
 %% @doc Set safe memory resource allocation cap for the in-memory
 %% bundle processing. in bytes.
@@ -84,6 +94,156 @@ get_depth_recursion_cap(Opts) ->
 %% from hb_opts.
 get_memory_safe_cap(Opts) ->
     hb_opts:get(copycat_memory_cap, undefined, Opts).
+
+%% @doc Return the store path for a block completion marker.
+block_indexed_path(Height) ->
+    <<?BLOCK_MARKER_PREFIX/binary, (hb_util:bin(Height))/binary>>.
+
+%% @doc Return the store path for a per-block item index at a given depth.
+block_items_path(Height, Depth) ->
+    <<"block/", (hb_util:bin(Height))/binary,
+        "/items/", (hb_util:bin(Depth))/binary>>.
+
+%% @doc Encode a list of 32-byte raw IDs into a single binary.
+encode_item_ids(IDs) ->
+    << <<ID:32/binary>> || ID <- IDs >>.
+
+%% @doc Decode a binary of concatenated 32-byte IDs into a list.
+%% Rejects binaries whose size is not a multiple of 32.
+decode_item_ids(<<>>) -> [];
+decode_item_ids(Bin) when byte_size(Bin) rem 32 =/= 0 ->
+    {error, invalid_item_ids_binary};
+decode_item_ids(Bin) ->
+    decode_item_ids_acc(Bin, []).
+
+decode_item_ids_acc(<<>>, Acc) -> lists:reverse(Acc);
+decode_item_ids_acc(<<ID:32/binary, Rest/binary>>, Acc) ->
+    decode_item_ids_acc(Rest, [ID | Acc]).
+
+%% @doc Shift all depth keys in an item ID map by Offset.
+shift_item_ids(Map, Offset) ->
+    maps:fold(
+        fun(Depth, IDs, Acc) -> Acc#{Depth + Offset => IDs} end,
+        #{},
+        Map
+    ).
+
+%% @doc Merge a list of depth→ID-list maps in one pass per depth key.
+merge_all_item_ids(Maps) ->
+    AllKeys = lists:usort(lists:flatmap(fun maps:keys/1, Maps)),
+    maps:from_list([
+        {K, lists:append([maps:get(K, M, []) || M <- Maps])}
+    || K <- AllKeys]).
+
+%% @doc Merge two depth→ID-list maps by concatenating lists at each depth.
+merge_item_ids(A, B) ->
+    maps:fold(
+        fun(Depth, IDs, Acc) ->
+            Existing = maps:get(Depth, Acc, []),
+            Acc#{Depth => Existing ++ IDs}
+        end,
+        A,
+        B
+    ).
+
+%% @doc Read the stored marker depth for a block, or undefined if none.
+read_block_marker_depth(Height, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> undefined;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, block_indexed_path(Height)) of
+                {ok, Bin} ->
+                    try binary_to_integer(Bin)
+                    catch _:_ -> undefined
+                    end;
+                not_found -> undefined
+            end
+    end.
+
+%% @doc Check if a block has been indexed at the given depth or deeper.
+is_block_indexed(undefined, _TargetDepth, _Opts) ->
+    false;
+is_block_indexed(Height, TargetDepth, Opts) ->
+    case read_block_marker_depth(Height, Opts) of
+        undefined -> false;
+        StoredDepth -> StoredDepth >= TargetDepth
+    end.
+
+%% @doc Write per-depth item ID lists for a block.
+%% Writes an entry for every depth from 1 through AchievedDepth (empty if
+%% no items at that level), plus any partial depths beyond AchievedDepth
+%% that were collected during indexing.
+write_block_item_ids(Height, AchievedDepth, ItemIDs, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> ok;
+        #{ <<"index-store">> := Store } ->
+            MaxStoredDepth = case maps:keys(ItemIDs) of
+                [] -> AchievedDepth;
+                Keys -> max(AchievedDepth, lists:max(Keys))
+            end,
+            Results = lists:map(
+                fun(D) ->
+                    IDs = maps:get(D, ItemIDs, []),
+                    Bin = encode_item_ids(IDs),
+                    hb_store:write(
+                        Store,
+                        block_items_path(Height, D),
+                        Bin
+                    )
+                end,
+                lists:seq(1, MaxStoredDepth)
+            ),
+            case lists:all(fun(R) -> R =:= ok end, Results) of
+                true -> ok;
+                false ->
+                    ?event(copycat_short,
+                        {block_item_ids_write_failed,
+                            {height, Height}}),
+                    {error, item_ids_write_failed}
+            end
+    end.
+
+%% @doc Write a block completion marker with the achieved depth.
+mark_block_indexed(Height, Depth, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> ok;
+        #{ <<"index-store">> := Store } ->
+            hb_store:write(
+                Store,
+                block_indexed_path(Height),
+                integer_to_binary(Depth)
+            )
+    end.
+
+%% @doc Read the persisted cutover height from the index store.
+read_cutover_height(Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> undefined;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, ?CUTOVER_KEY) of
+                {ok, Bin} -> hb_util:int(Bin);
+                not_found -> undefined
+            end
+    end.
+
+%% @doc Write the cutover height if not already set.
+ensure_cutover_height(Height, Opts) ->
+    case read_cutover_height(Opts) of
+        undefined ->
+            case hb_store_arweave:store_from_opts(Opts) of
+                no_store -> ok;
+                #{ <<"index-store">> := Store } ->
+                    hb_store:write(
+                        Store, ?CUTOVER_KEY, hb_util:bin(Height)),
+                    ?event(copycat_short,
+                        {marker_cutover_initialized,
+                            {height, Height}
+                        }
+                    )
+            end;
+        _ -> ok
+    end.
+
 %% @doc Normalize an owner address into the native ID form used for comparisons.
 normalize_owner_id(Addr) ->
     hb_util:native_id(hb_util:bin(Addr)).
@@ -404,18 +564,98 @@ list_index_blocks(Current, To, Opts, Acc) ->
                             list_index_blocks(Current - 1, To, Opts, Acc);
                         _ ->
                             BlockKey = hb_util:bin(Current),
-                            NewAcc = Acc#{
-                                BlockKey => #{
-                                    <<"indexed">> => IndexedTXs,
-                                    <<"not-indexed">> => NotIndexedTXs
-                                }
-                            },
+                            BlockInfo = assemble_block_info(
+                                Current, Block, Opts),
+                            WithItems = case maps:get(
+                                <<"depth">>, BlockInfo, undefined)
+                            of
+                                undefined -> BlockInfo;
+                                _ ->
+                                    BlockInfo#{
+                                        <<"items">> =>
+                                            read_block_item_counts(
+                                                Current, Opts)}
+                            end,
+                            NewAcc = Acc#{BlockKey => WithItems},
                             list_index_blocks(Current - 1, To, Opts, NewAcc)
                     end
             end;
         {error, _} ->
             list_index_blocks(Current - 1, To, Opts, Acc)
     end.
+
+%% @doc Build base block info with indexed/not-indexed TXs and optional depth.
+assemble_block_info(Height, Block, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    {IndexedTXs, NotIndexedTXs} = classify_txs(TXIDs, Opts),
+    Base = #{
+        <<"indexed">> => IndexedTXs,
+        <<"not-indexed">> => NotIndexedTXs
+    },
+    case read_block_depth(Height, Opts) of
+        undefined -> Base;
+        Depth -> Base#{<<"depth">> => Depth}
+    end.
+
+%% @doc Read the achieved depth from a block marker.
+read_block_depth(Height, Opts) ->
+    read_block_marker_depth(Height, Opts).
+
+%% @doc Probe item entries upward from depth 1, applying TransformFun to each.
+probe_block_items(Height, Opts, TransformFun) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> #{};
+        #{ <<"index-store">> := Store } ->
+            probe_block_items(Height, Store, 1, #{}, TransformFun)
+    end.
+
+probe_block_items(Height, Store, Depth, Acc, TransformFun) ->
+    case hb_store:read(Store, block_items_path(Height, Depth)) of
+        {ok, Bin} ->
+            Key = hb_util:bin(Depth),
+            probe_block_items(
+                Height, Store, Depth + 1,
+                Acc#{Key => TransformFun(Bin)}, TransformFun);
+        not_found ->
+            Acc
+    end.
+
+count_ids(Bin) when byte_size(Bin) rem 32 =:= 0 ->
+    byte_size(Bin) div 32;
+count_ids(_) -> <<"corrupt">>.
+
+decode_and_encode_ids(Bin) ->
+    case decode_item_ids(Bin) of
+        {error, _} -> <<"corrupt">>;
+        List -> [hb_util:encode(ID) || ID <- List]
+    end.
+
+read_block_item_counts(Height, Opts) ->
+    probe_block_items(Height, Opts, fun count_ids/1).
+
+read_block_item_ids(Height, Opts) ->
+    probe_block_items(Height, Opts, fun decode_and_encode_ids/1).
+
+%% @doc mode=list-items: return full item ID lists for a single block.
+list_items_index(From, To, _Opts) when From =/= To ->
+    {error, <<"mode=list-items requires from=to (single block only)">>};
+list_items_index(From, _To, Opts) ->
+    BlockKey = hb_util:bin(From),
+    BlockInfo = case fetch_block_header(From, Opts) of
+        {ok, Block} ->
+            Base = assemble_block_info(From, Block, Opts),
+            case maps:get(<<"depth">>, Base, undefined) of
+                undefined -> Base;
+                _ -> Base#{<<"items">> => read_block_item_ids(From, Opts)}
+            end;
+        {error, _} ->
+            #{<<"error">> => <<"block not found">>}
+    end,
+    JSON = hb_json:encode(#{BlockKey => BlockInfo}),
+    {ok, #{
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => JSON
+    }}.
 
 fetch_block_header(Height, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
@@ -445,7 +685,8 @@ classify_txs(TXIDs, Opts) ->
 
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
-%% is omitted, stop at the first block where any TX is already indexed.
+%% is omitted, stop at the first block already indexed at the requested depth
+%% (via block markers above cutover, or legacy per-TX check below cutover).
 fetch_blocks(Current, To, TargetDepth, _Opts) 
         when is_integer(To), Current < To ->
     ?event(copycat_short,
@@ -459,7 +700,7 @@ fetch_blocks(Current, undefined, _TargetDepth, _Opts) when Current < 0 ->
     {ok, 0};
 fetch_blocks(Current, undefined, TargetDepth, Opts) ->
     BlockRes = fetch_block_header(Current, Opts),
-    case is_already_indexed(BlockRes, Opts) of
+    case is_already_indexed(BlockRes, TargetDepth, Opts) of
         true ->
             ?event(copycat_short,
                 {arweave_block_indexing_completed,
@@ -479,13 +720,36 @@ fetch_blocks(Current, To, TargetDepth, Opts) ->
     end),
     fetch_blocks(Current - 1, To, TargetDepth, Opts).
 
-%% @doc Determine whether a fetched block is considered indexed.
-%% A block is indexed when any TX from its `txs' list is in the index.
-is_already_indexed({ok, Block}, Opts) ->
-    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
-is_already_indexed({error, _}, _Opts) ->
+%% @doc Determine whether a fetched block is considered indexed at the
+%% requested depth. Checks block markers first. For blocks at or above
+%% the cutover height, the marker is authoritative. For blocks below
+%% the cutover, falls back to legacy per-TX check.
+is_already_indexed({ok, Block}, TargetDepth, Opts) ->
+    Height = hb_maps:get(<<"height">>, Block, undefined, Opts),
+    case is_block_indexed(Height, TargetDepth, Opts) of
+        true ->
+            true;
+        false ->
+            case is_post_cutover(Height, Opts) of
+                true ->
+                    false;
+                false ->
+                    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+                    lists:any(
+                        fun(TXID) -> is_tx_indexed(TXID, Opts) end,
+                        TXIDs
+                    )
+            end
+    end;
+is_already_indexed({error, _}, _TargetDepth, _Opts) ->
     false.
+
+is_post_cutover(undefined, _Opts) -> false;
+is_post_cutover(Height, Opts) ->
+    case read_cutover_height(Opts) of
+        undefined -> false;
+        Cutover -> Height >= Cutover
+    end.
 
 fetch_and_process_block(Current, To, TargetDepth, Opts) ->
     BlockRes = fetch_block_header(Current, Opts),
@@ -513,17 +777,46 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     BundleTXs = maps:get(bundle_count, Results, 0),
                     SkippedTXs = maps:get(skipped_count, Results, 0),
-                    ?event(
-                        copycat_short,
-                        {arweave_block_indexed,
-                            {height, Current},
-                            {items_indexed, ItemsIndexed},
-                            {total_txs, TotalTXs},
-                            {bundle_txs, BundleTXs},
-                            {skipped_txs, SkippedTXs},
-                            {target, To}
-                        }
-                    )
+                    AchievedDepth = maps:get(
+                        achieved_depth, Results,
+                        max(2, TargetDepth)),
+                    ItemIDs = maps:get(item_ids, Results, #{}),
+                    maybe
+                        ok ?= write_block_item_ids(
+                            Current, AchievedDepth, ItemIDs, Opts),
+                        ok ?= mark_block_indexed(
+                            Current, AchievedDepth, Opts),
+                        ensure_cutover_height(Current, Opts),
+                        ?event(
+                            copycat_short,
+                            {arweave_block_indexed,
+                                {height, Current},
+                                {items_indexed, ItemsIndexed},
+                                {total_txs, TotalTXs},
+                                {bundle_txs, BundleTXs},
+                                {skipped_txs, SkippedTXs},
+                                {achieved_depth, AchievedDepth},
+                                {target, To}
+                            }
+                        )
+                    else
+                        {error, item_ids_write_failed} ->
+                            ?event(
+                                copycat_short,
+                                {arweave_block_metadata_failed,
+                                    {height, Current},
+                                    {target, To}
+                                }
+                            );
+                        _ ->
+                            ?event(
+                                copycat_short,
+                                {arweave_block_marker_failed,
+                                    {height, Current},
+                                    {target, To}
+                                }
+                            )
+                    end
             end;
         {error, _} = Error ->
             ?event(
@@ -561,15 +854,19 @@ maybe_index_block(Block, TargetDepth, Opts) ->
                     }};
                 {ok, TXs} ->
                     Height = hb_maps:get(<<"height">>, Block, 0, Opts),
+                    L1IDs = [TX#tx.id || TX <- TXs],
                     TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-                    % Filter out padding entries before processing
                     ValidTXs = lists:filter(
                         fun({{padding, _}, _}) -> false; (_) -> true end,
                         TXsWithData
                     ),
                     TXResults = process_block_txs(
                         ValidTXs, BlockStartOffset, TargetDepth, Opts),
-                    {block_cached, TXResults#{total_txs => TotalTXs}}
+                    ExistingIDs = maps:get(item_ids, TXResults, #{}),
+                    {block_cached, TXResults#{
+                        total_txs => TotalTXs,
+                        item_ids => ExistingIDs#{1 => L1IDs}
+                    }}
             end
     end.
 
@@ -583,8 +880,9 @@ parallel_map(Items, Fun, Opts) ->
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _TargetDepth, _Opts) ->
-    #{items_count => 0, bundle_count => 0, skipped_count => 0};
+process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, TargetDepth, _Opts) ->
+    #{items_count => 0, bundle_count => 0, skipped_count => 0,
+        achieved_depth => max(2, TargetDepth)};
 process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
@@ -605,11 +903,17 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
         )
     end),
     case is_bundle_tx(TX, Opts) of
-        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        false ->
+            #{items_count => 0, bundle_count => 0, skipped_count => 0,
+                achieved_depth => max(2, TargetDepth)};
         true when TargetDepth > 2 ->
-            % Indexing a block to depth 3 or greater means we need to load
-            % and recurse into each of the L1 TXs in the block.
-            maybe_process_l1_tx(TX#tx.id, #{}, TargetDepth - 1, false, Opts);
+            L1Result = process_l1_tx_direct(
+                TXStartOffset, TX#tx.data_size,
+                TargetDepth - 1, IndexStore, TXID, Opts),
+            L1Result#{
+                achieved_depth =>
+                    max(2, maps:get(achieved_depth, L1Result, 0))
+            };
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
@@ -625,7 +929,6 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             ),
             case BundleRes of
                 {ok, HeaderSize, BundleIndex} ->
-                    % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
@@ -642,6 +945,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                             BundleIndex
                         )
                     end),
+                    L2IDs = [ItemID || {ItemID, _Size} <- BundleIndex],
                     ?event(debug_copycat,
                         {bundle_items_indexed,
                             {tx_id, {string, TXID}},
@@ -649,7 +953,9 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                         }),
                     % Single event record for the batch
                     record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-                    #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+                    #{items_count => ItemsCount, bundle_count => 1,
+                        skipped_count => 0, achieved_depth => 2,
+                        item_ids => #{2 => L2IDs}};
                 {error, Reason} ->
                     ?event(
                         copycat_short,
@@ -658,7 +964,8 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                             {reason, Reason}
                         }
                     ),
-                    #{items_count => 0, bundle_count => 1, skipped_count => 1}
+                    #{items_count => 0, bundle_count => 1,
+                        skipped_count => 1, achieved_depth => 0}
             end
     end.
 
@@ -701,21 +1008,43 @@ process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
             TXWithData, BlockStartOffset, TargetDepth, Opts) end,
         Opts
     ),
-    lists:foldl(
+    Folded = lists:foldl(
         fun(Result, Acc) ->
             #{
-                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
-                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
-                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
+                items_count =>
+                    maps:get(items_count, Result, 0)
+                        + maps:get(items_count, Acc, 0),
+                bundle_count =>
+                    maps:get(bundle_count, Result, 0)
+                        + maps:get(bundle_count, Acc, 0),
+                skipped_count =>
+                    maps:get(skipped_count, Result, 0)
+                        + maps:get(skipped_count, Acc, 0),
+                achieved_depth =>
+                    min(
+                        maps:get(achieved_depth, Result, ?DEPTH_SENTINEL),
+                        maps:get(achieved_depth, Acc, ?DEPTH_SENTINEL)
+                    )
             }
         end,
-        #{items_count => 0, bundle_count => 0, skipped_count => 0},
+        #{items_count => 0, bundle_count => 0, skipped_count => 0,
+            achieved_depth => ?DEPTH_SENTINEL},
         Results
-    ).
+    ),
+    MergedIDs = merge_all_item_ids(
+        [maps:get(item_ids, R, #{}) || R <- Results]),
+    Folded2 = Folded#{item_ids => MergedIDs},
+    case maps:get(achieved_depth, Folded2) of
+        ?DEPTH_SENTINEL ->
+            Folded2#{achieved_depth => max(2, TargetDepth)};
+        _ ->
+            Folded2
+    end.
 
 %% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
 maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
-    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1},
+    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1,
+        achieved_depth => 0},
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
@@ -796,7 +1125,8 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
             #{
                 items_count => 0,
                 bundle_count => 1,
-                skipped_count => 1
+                skipped_count => 1,
+                achieved_depth => 0
             };
         FilterReason ->
             ?event(
@@ -809,10 +1139,26 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
             Skipped
     end.
 
+%% @doc Fast path for depth>2 block indexing. Skips offset lookup and
+%% header re-fetch since the caller already has both.
+process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
+    MemoryCap = get_memory_safe_cap(Opts),
+    case MemoryCap =/= undefined andalso Length > MemoryCap of
+        true ->
+            ?event(copycat_short,
+                {arweave_bundle_skipped,
+                    {tx_id, {explicit, EncodedTXID}},
+                    {reason, memory_safe_cap_exceeded}
+                }
+            ),
+            #{items_count => 0, bundle_count => 1,
+                skipped_count => 1, achieved_depth => 0};
+        false ->
+            process_l1_tx(
+                StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts)
+    end.
+
 %% @doc Load the L1 TX data into memory and index it.
-%% 
-%% TODO: process_l1_tx and process_block_tx are very similar and can/should
-%% be merged.
 process_l1_tx(
         StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
     case observe_copycat_l1_stage(
@@ -837,7 +1183,7 @@ process_l1_tx(
                 end
             ),
             case IndexRes of
-                {ok, ItemsCount} ->
+                {ok, ItemsCount, AchievedDepth, BundleIDs} ->
                     record_event_metrics(
                         <<"item_indexed">>,
                         ItemsCount,
@@ -846,7 +1192,9 @@ process_l1_tx(
                     #{
                         items_count => ItemsCount,
                         bundle_count => 1,
-                        skipped_count => 0
+                        skipped_count => 0,
+                        achieved_depth => 1 + AchievedDepth,
+                        item_ids => shift_item_ids(BundleIDs, 1)
                     };
                 {error, Reason} ->
                     ?event(
@@ -859,7 +1207,8 @@ process_l1_tx(
                     #{
                         items_count => 0,
                         bundle_count => 1,
-                        skipped_count => 1
+                        skipped_count => 1,
+                        achieved_depth => 0
                     }
             end;
         {error, Reason} ->
@@ -873,7 +1222,8 @@ process_l1_tx(
             #{
                 items_count => 0,
                 bundle_count => 1,
-                skipped_count => 1
+                skipped_count => 1,
+                achieved_depth => 0
             };
         not_found ->
             ?event(
@@ -886,7 +1236,8 @@ process_l1_tx(
             #{
                 items_count => 0,
                 bundle_count => 1,
-                skipped_count => 1
+                skipped_count => 1,
+                achieved_depth => 0
             }
     end.
 %% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
@@ -964,7 +1315,7 @@ query_l1_tx_offset(TXID, IndexStore, Opts) ->
 
 index_full_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
         when Depth =< 0 ->
-    {ok, 0};
+    {ok, 0, 0, #{}};
 index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
     case ar_bundles:decode_bundle_header(BundleData) of
         invalid_bundle_header ->
@@ -978,13 +1329,25 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
                 Depth,
                 Store,
                 Opts,
-                0
+                0,
+                ?DEPTH_SENTINEL,
+                [],
+                #{}
             )
     end.
 
 %% @doc Index bundle children from decoded bundle bytes and recurse descendants in-memory.
-index_full_bundle_items([], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
-    {ok, Count};
+%% Returns {ok, Count, MinAchievedDepth, ItemIDs} or {error, Reason}.
+%% ItemIDs is a map of relative-depth => list of raw 32-byte IDs.
+index_full_bundle_items(
+        [], _ItemsBin, _ItemStartOffset, Depth, _Store, _Opts,
+        Count, MinDepth, ThisLevelIDs, DescIDs) ->
+    FinalDepth = case MinDepth of
+        ?DEPTH_SENTINEL -> Depth;
+        _ -> 1 + MinDepth
+    end,
+    AllIDs = DescIDs#{1 => lists:reverse(ThisLevelIDs)},
+    {ok, Count, FinalDepth, AllIDs};
 index_full_bundle_items(
     [{ItemID, Size} | Rest],
     ItemsBin,
@@ -992,29 +1355,32 @@ index_full_bundle_items(
     Depth,
     Store,
     Opts,
-    Count
+    Count,
+    MinDepth,
+    ThisLevelIDs,
+    DescIDs
 ) when byte_size(ItemsBin) >= Size ->
     ItemBinary = binary:part(ItemsBin, 0, Size),
+    EncodedItemID = hb_util:encode(ItemID),
+    ParseResult = validate_and_flag_item_id(
+        ItemBinary, ItemID, EncodedItemID, Store),
     hb_store_arweave:write_offset(
         Store,
-        hb_util:encode(ItemID),
+        EncodedItemID,
         <<"ans104@1.0">>,
         ItemStartOffset,
         Size
     ),
-    DescendantCount =
-        case Depth > 1 of
-            true ->
-                index_full_bundle_descendants(
-                    ItemBinary,
-                    ItemStartOffset,
-                    Depth - 1,
-                    Store,
-                    Opts
-                );
-            false ->
-                0
+    {DescendantCount, ItemAchievedDepth, ChildIDs} =
+        case {Depth > 1, ParseResult} of
+            {true, {ok, HeaderSize, ParsedItem}} ->
+                index_full_bundle_descendants_parsed(
+                    ParsedItem, HeaderSize,
+                    ItemStartOffset, Depth - 1, Store, Opts);
+            _ ->
+                {0, Depth - 1, #{}}
         end,
+    ShiftedChildIDs = shift_item_ids(ChildIDs, 1),
     index_full_bundle_items(
         Rest,
         binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),
@@ -1022,38 +1388,78 @@ index_full_bundle_items(
         Depth,
         Store,
         Opts,
-        Count + 1 + DescendantCount
+        Count + 1 + DescendantCount,
+        min(MinDepth, ItemAchievedDepth),
+        [ItemID | ThisLevelIDs],
+        merge_item_ids(DescIDs, ShiftedChildIDs)
     );
-index_full_bundle_items(_BundleIndex, _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, _Count) ->
+index_full_bundle_items(
+        _BundleIndex, _ItemsBin, _ItemStartOffset, _Depth,
+        _Store, _Opts, _Count, _MinDepth, _ThisLevelIDs, _DescIDs) ->
     {error, invalid_bundle_header}.
 
-%% @doc Recurse into a nested bundle data item from in-memory bytes.
-index_full_bundle_descendants(_ItemBinary, _ItemStartOffset, Depth, _Store, _Opts)
+%% @doc Recurse into a nested data item using an already-parsed header.
+%% Returns {Count, AchievedDepth, ItemIDs}.
+index_full_bundle_descendants_parsed(
+        _ParsedItem, _HeaderSize, _ItemStartOffset, Depth, _Store, _Opts)
         when Depth =< 0 ->
-    0;
-index_full_bundle_descendants(ItemBinary, ItemStartOffset, Depth, Store, Opts) ->
-    try ar_bundles:deserialize_header(ItemBinary) of
-        {ok, HeaderSize, HeaderTX} ->
-            case is_bundle_tx(HeaderTX, Opts) of
-                true ->
-                    case index_full_bundle_bytes(
-                        HeaderTX#tx.data,
-                        ItemStartOffset + HeaderSize,
-                        Depth,
-                        Store,
-                        Opts
-                    ) of
-                        {ok, Count} -> Count;
-                        _ -> 0
-                    end;
-                false ->
-                    0
+    {0, 0, #{}};
+index_full_bundle_descendants_parsed(
+        ParsedItem, HeaderSize, ItemStartOffset, Depth, Store, Opts) ->
+    case is_bundle_tx(ParsedItem, Opts) of
+        true ->
+            case index_full_bundle_bytes(
+                ParsedItem#tx.data,
+                ItemStartOffset + HeaderSize,
+                Depth,
+                Store,
+                Opts
+            ) of
+                {ok, Count, ChildDepth, ChildIDs} ->
+                    {Count, ChildDepth, ChildIDs};
+                _ ->
+                    {0, 0, #{}}
             end;
+        false ->
+            {0, Depth, #{}}
+    end.
+
+%% @doc Validate an item ID by hashing the signature from the deserialized
+%% header. Returns {ok, HeaderSize, ParsedItem} on successful parse, or
+%% error if deserialization fails. Mismatch flags are written but don't
+%% prevent the item from being indexed.
+validate_and_flag_item_id(ItemBinary, DeclaredID, EncodedDeclaredID, Store) ->
+    try ar_bundles:deserialize_header(ItemBinary) of
+        {ok, HeaderSize, ParsedItem} ->
+            ComputedID = crypto:hash(sha256, ParsedItem#tx.signature),
+            case ComputedID =:= DeclaredID of
+                true ->
+                    ok;
+                false ->
+                    case Store of
+                        #{ <<"index-store">> := IndexStore } ->
+                            hb_store:write(
+                                IndexStore,
+                                hb_store_arweave_offset:mismatch_path(
+                                    DeclaredID),
+                                ComputedID
+                            );
+                        _ -> ok
+                    end,
+                    ?event(copycat_short,
+                        {item_id_mismatch,
+                            {declared_id, {explicit, EncodedDeclaredID}},
+                            {computed_id,
+                                {explicit, hb_util:encode(ComputedID)}}
+                        }
+                    )
+            end,
+            {ok, HeaderSize, ParsedItem};
         _ ->
-            0
+            error
     catch
         _:_ ->
-            0
+            error
     end.
 
 %% @doc Check whether a TX header indicates bundle content.
@@ -1545,6 +1951,9 @@ auto_stop_on_indexed_block_test_parallel() ->
     ?assert(has_any_indexed_tx(Higher1, Opts)),
     ?assert(has_any_indexed_tx(IndexedBlock, Opts)),
     ?assertNot(has_any_indexed_tx(IndexedBlock-1, Opts)),
+    ?assert(is_block_indexed(IndexedBlock, 2, Opts)),
+    ?assert(is_block_indexed(Higher1, 2, Opts)),
+    ?assert(is_block_indexed(Higher2, 2, Opts)),
     ok.
 
 explicit_to_reindexes_all_test_parallel() ->
@@ -1621,6 +2030,8 @@ auto_stop_partial_index_test_parallel() ->
     ?assert(has_any_indexed_tx(HigherBlock, Opts)),
     ?assert(has_any_indexed_tx(Block, Opts)),
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
+    ?assert(is_block_indexed(HigherBlock, 2, Opts)),
+    ?assertNot(is_block_indexed(Block, 2, Opts)),
     ok.
 
 negative_parse_range_test_parallel() ->
@@ -2189,3 +2600,330 @@ assert_indexed_range(From, To, _Opts) when From < To ->
 assert_indexed_range(From, To, Opts) ->
     ?assert(has_any_indexed_tx(From, Opts)),
     assert_indexed_range(From - 1, To, Opts).
+
+block_marker_depth_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary>>,
+            Opts
+        ),
+    ?assert(is_block_indexed(Block, 2, Opts)),
+    ?assertNot(is_block_indexed(Block, 3, Opts)),
+    ok.
+
+depth_1_normalizes_to_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    TX1 = #tx{
+        format = 2,
+        id = crypto:strong_rand_bytes(32),
+        data_size = 100,
+        tags = []
+    },
+    TX2 = #tx{
+        format = 2,
+        id = crypto:strong_rand_bytes(32),
+        data_size = 200,
+        tags = []
+    },
+    Tuples = [
+        {{TX1, <<>>}, 100},
+        {{TX2, <<>>}, 300}
+    ],
+    Result = process_block_txs(Tuples, 0, 1, Opts),
+    ?assertEqual(2, maps:get(achieved_depth, Result)),
+    Height = 88888888,
+    mark_block_indexed(Height, maps:get(achieved_depth, Result), Opts),
+    ?assert(is_block_indexed(Height, 1, Opts)),
+    ?assert(is_block_indexed(Height, 2, Opts)),
+    ?assertNot(is_block_indexed(Height, 3, Opts)),
+    ok.
+
+block_marker_cutover_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    LowerBlock = 1827941,
+    UpperBlock = 1827942,
+    {ok, UpperBlock} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(UpperBlock))/binary, "&to=",
+                (hb_util:bin(UpperBlock))/binary>>,
+            Opts
+        ),
+    Cutover = read_cutover_height(Opts),
+    ?assertNotEqual(undefined, Cutover),
+    ?assert(is_block_indexed(UpperBlock, 2, Opts)),
+    ?assertNot(is_block_indexed(LowerBlock, 2, Opts)),
+    ok.
+
+achieved_depth_block_depth_3_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            Opts
+        ),
+    ?assert(is_block_indexed(Block, 3, Opts)),
+    ok.
+
+invalid_bundle_bytes_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    StoreOpts = hb_store_arweave:store_from_opts(Opts),
+    ?assertEqual(
+        {error, invalid_bundle_header},
+        index_full_bundle_bytes(<<"not a bundle">>, 0, 2, StoreOpts, Opts)
+    ),
+    ok.
+
+small_block_depth_3_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1889322,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            Opts
+        ),
+    ?assert(is_block_indexed(Block, 3, Opts)),
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(Block, 1)),
+    ?assert(length(decode_item_ids(L1Bin)) > 0),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(Block, 2)),
+    ?assert(length(decode_item_ids(L2Bin)) > 0),
+    {ok, L3Bin} = hb_store:read(Store, block_items_path(Block, 3)),
+    L3IDs = decode_item_ids(L3Bin),
+    ?assertEqual(3, length(L3IDs)),
+    assert_item_read(
+        <<"npAzk_BomjWBQQr_xnmlhdxjyl97EJnNv_MAaXffs1s">>,
+        Opts),
+    ok.
+
+no_mismatch_flags_on_valid_bundles_test() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            Opts
+        ),
+    #{ <<"index-store">> := IndexStore } = StoreOpts,
+    ItemID = hb_util:native_id(
+        <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>),
+    ?assertEqual(
+        not_found,
+        hb_store:read(
+            IndexStore,
+            hb_store_arweave_offset:mismatch_path(ItemID)
+        )
+    ),
+    ok.
+
+mismatch_path_encoding_test() ->
+    ID = crypto:strong_rand_bytes(32),
+    Path = hb_store_arweave_offset:mismatch_path(ID),
+    ?assert(binary:match(Path, <<"mismatch/">>) =/= nomatch),
+    ok.
+
+exact_marker_depth_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            Opts
+        ),
+    #{ <<"index-store">> := Store } =
+        hb_store_arweave:store_from_opts(Opts),
+    {ok, StoredBin} =
+        hb_store:read(Store, block_indexed_path(Block)),
+    StoredDepth = binary_to_integer(StoredBin),
+    ?assertEqual(3, StoredDepth),
+    ok.
+
+fabricated_mismatch_test() ->
+    {_TestStore, StoreOpts, _Opts} = setup_index_opts(),
+    {Priv, Pub} = ar_wallet:new(),
+    Target = crypto:strong_rand_bytes(32),
+    Anchor = crypto:strong_rand_bytes(32),
+    Item = ar_bundles:sign_item(
+        ar_bundles:new_item(Target, Anchor, [], <<"test data">>),
+        {Priv, Pub}
+    ),
+    ItemBinary = ar_bundles:serialize(Item),
+    RealID = crypto:hash(sha256, Item#tx.signature),
+    FakeID = crypto:strong_rand_bytes(32),
+    EncodedFakeID = hb_util:encode(FakeID),
+    validate_and_flag_item_id(ItemBinary, FakeID, EncodedFakeID, StoreOpts),
+    #{ <<"index-store">> := IndexStore } = StoreOpts,
+    {ok, StoredActualID} =
+        hb_store:read(
+            IndexStore,
+            hb_store_arweave_offset:mismatch_path(FakeID)
+        ),
+    ?assertEqual(RealID, StoredActualID),
+    ?assertEqual(
+        not_found,
+        hb_store:read(
+            IndexStore,
+            hb_store_arweave_offset:mismatch_path(RealID)
+        )
+    ),
+    ok.
+
+block_item_ids_depth_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            Opts
+        ),
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1)),
+    L1IDs = decode_item_ids(L1Bin),
+    ?assert(length(L1IDs) > 0),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2)),
+    L2IDs = decode_item_ids(L2Bin),
+    ?assert(length(L2IDs) > 0),
+    L2Encoded = [hb_util:encode(ID) || ID <- L2IDs],
+    Pos54K = index_of(<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, L2Encoded),
+    PosOBK = index_of(<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, L2Encoded),
+    ?assert(is_integer(Pos54K)),
+    ?assert(is_integer(PosOBK)),
+    ?assert(Pos54K < PosOBK),
+    ?assertEqual(not_found, hb_store:read(Store, block_items_path(1827942, 3))),
+    ok.
+
+block_item_ids_depth_3_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=3">>,
+            Opts
+        ),
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1)),
+    L1Count = length(decode_item_ids(L1Bin)),
+    ?assertEqual(5, L1Count),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2)),
+    L2Count = length(decode_item_ids(L2Bin)),
+    ?assert(L2Count > 0),
+    {ok, L3Bin} = hb_store:read(Store, block_items_path(1827942, 3)),
+    L3Count = length(decode_item_ids(L3Bin)),
+    ?assert(L3Count >= 1),
+    L3IDs = decode_item_ids(L3Bin),
+    L3Encoded = [hb_util:encode(ID) || ID <- L3IDs],
+    ?assert(lists:member(
+        <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>, L3Encoded)),
+    ok.
+
+list_index_with_items_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            Opts
+        ),
+    {ok, ListResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=list">>,
+            Opts
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, ListResult)),
+    BlockInfo = maps:get(<<"1827942">>, Body),
+    ?assert(is_integer(maps:get(<<"depth">>, BlockInfo))),
+    Items = maps:get(<<"items">>, BlockInfo),
+    ?assert(maps:get(<<"1">>, Items) > 0),
+    ?assert(maps:get(<<"2">>, Items) > 0),
+    ok.
+
+list_items_single_block_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            Opts
+        ),
+    {ok, ListResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=list-items">>,
+            Opts
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, ListResult)),
+    BlockInfo = maps:get(<<"1827942">>, Body),
+    Items = maps:get(<<"items">>, BlockInfo),
+    L1Items = maps:get(<<"1">>, Items),
+    ?assert(is_list(L1Items)),
+    ?assert(length(L1Items) > 0),
+    L2Items = maps:get(<<"2">>, Items),
+    ?assert(is_list(L2Items)),
+    ?assert(length(L2Items) > 0),
+    {ok, Block} = fetch_block_header(1827942, Opts),
+    BlockTXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    ?assertEqual(BlockTXIDs, L1Items),
+    ?assert(lists:member(
+        <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, L2Items)),
+    ok.
+
+list_items_rejects_range_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {error, _} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827940&mode=list-items">>,
+            Opts
+        ),
+    ok.
+
+decode_item_ids_validation_test() ->
+    ?assertEqual([], decode_item_ids(<<>>)),
+    GoodBin = <<0:256, 1:256>>,
+    ?assertEqual(2, length(decode_item_ids(GoodBin))),
+    BadBin = <<0:240>>,
+    ?assertEqual({error, invalid_item_ids_binary}, decode_item_ids(BadBin)),
+    ok.
+
+corrupt_item_ids_read_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    Height = 99999999,
+    hb_store:write(Store, block_indexed_path(Height), <<"2">>),
+    hb_store:write(Store, block_items_path(Height, 1), <<0:256>>),
+    hb_store:write(Store, block_items_path(Height, 2), <<0:240>>),
+    Counts = read_block_item_counts(Height, Opts),
+    ?assertEqual(1, maps:get(<<"1">>, Counts)),
+    ?assertEqual(<<"corrupt">>, maps:get(<<"2">>, Counts)),
+    IDs = read_block_item_ids(Height, Opts),
+    ?assertEqual(1, length(maps:get(<<"1">>, IDs))),
+    ?assertEqual(<<"corrupt">>, maps:get(<<"2">>, IDs)),
+    ok.
+
+memory_cap_depth3_floors_to_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    CappedOpts = set_memory_safe_cap(1, Opts),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            CappedOpts
+        ),
+    ?assert(is_block_indexed(Block, 2, CappedOpts)),
+    ?assertNot(is_block_indexed(Block, 3, CappedOpts)),
+    ok.
+
+index_of(Elem, List) -> index_of(Elem, List, 1).
+
+index_of(_Elem, [], _N) -> not_found;
+index_of(Elem, [Elem | _], N) -> N;
+index_of(Elem, [_ | Rest], N) -> index_of(Elem, Rest, N + 1).
