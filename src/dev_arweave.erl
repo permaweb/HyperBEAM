@@ -8,7 +8,7 @@
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
 %%% Helper functions
--export([get_chunk/2, bundle_header/2]).
+-export([get_chunk/2, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -648,6 +648,8 @@ get_chunk(Offset, Opts) ->
 %% @doc Read and decode the bundle header index at the given global start
 %% offset, returning the header size alongside the decoded index entries.
 bundle_header(BundleStartOffset, Opts) ->
+    bundle_header(BundleStartOffset, infinity, Opts).
+bundle_header(BundleStartOffset, MaxSize, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -660,10 +662,17 @@ bundle_header(BundleStartOffset, Opts) ->
             case ar_bundles:bundle_header_size(FirstChunk) of
                 invalid_bundle_header ->
                     {error, invalid_bundle_header};
+                HeaderSize when HeaderSize > MaxSize ->
+                    {error, invalid_bundle_header};
                 HeaderSize ->
-                    case read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) of
+                    case read_bundle_header(
+                        BundleStartOffset, HeaderSize,
+                        FirstChunk, Opts
+                    ) of
                         {ok, HeaderBin} ->
-                            case ar_bundles:decode_bundle_header(HeaderBin) of
+                            case ar_bundles:decode_bundle_header(
+                                HeaderBin
+                            ) of
                                 {_Items, BundleIndex} ->
                                     {ok, HeaderSize, BundleIndex};
                                 invalid_bundle_header ->
@@ -748,7 +757,8 @@ block({height, Height}, Opts) ->
         not_found ->
             request(
                 <<"GET">>,
-                <<"/block/height/", (hb_util:bin(Height))/binary>>,
+                <<"/block/height/",
+                    (hb_util:bin(Height))/binary>>,
                 #{ <<"route-by">> => Height },
                 Opts
             )
@@ -957,6 +967,19 @@ event_request(Path, Method, Status, Extra) ->
     ?event(arweave_short, MergedTuple).
 
 %%% Tests
+
+%% @doc A fixed bad interior offset from a live TX is rejected by
+%% bundle_header/3 as invalid_bundle_header.
+bundle_header_garbage_guard_test() ->
+    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Server = hb_http_server:start_node(ServerOpts),
+    ProbeOffset = 376836336327208,
+    Size = 121798901,
+    ?assertEqual(
+        {error, invalid_bundle_header},
+        bundle_header(ProbeOffset - 1, Size, ServerOpts)
+    ).
+
 
 post_ans104_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },

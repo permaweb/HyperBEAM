@@ -377,12 +377,14 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
         Results
     ).
 
+%% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
 
+%% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Opts)
+        dev_arweave:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
 resolve_tx_headers(TXIDs, Opts) ->
@@ -875,7 +877,10 @@ auto_stop_partial_index_test() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     HigherBlock = Block + 1,
-    NoIndexOpts = Opts#{ arweave_index_ids => false },
+    NoIndexOpts = Opts#{
+        arweave_index_ids => false,
+        arweave_index_blocks => true
+    },
     {ok, Block} =
         hb_ao:resolve(
             <<

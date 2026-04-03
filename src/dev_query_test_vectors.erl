@@ -70,7 +70,8 @@ simple_blocks_query_test() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            store => [hb_test_utils:test_store()],
+            arweave_index_blocks => true
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node, Opts),
@@ -115,7 +116,8 @@ block_by_height_query_test() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            store => [hb_test_utils:test_store()],
+            arweave_index_blocks => true
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node, Opts),
