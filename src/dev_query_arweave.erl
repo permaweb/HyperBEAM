@@ -392,6 +392,9 @@ remove_annotations(IDs) -> lists:map(fun({_, _, ID}) -> ID end, IDs).
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
 %% avoiding materialisation of the full store.
+filter_offset_annotated(IDs, HeightRange, _Opts)
+        when HeightRange =:= undefined orelse HeightRange =:= null ->
+    IDs;
 filter_offset_annotated(IDs, Heights, Opts) ->
     {StartOffset, EndOffset} =
         block_range_to_offset_range(Heights, Opts),
