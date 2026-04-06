@@ -42,6 +42,20 @@ get_test_blocks(Node, Opts) ->
         lists:seq(InitialHeight, FinalHeight)
     ).
 
+%% @doc Use the `~copycat@1.0' device to fetch and index blocks from an Arweave
+%% node.
+copycat_blocks(Node, InitialHeight, FinalHeight, Opts) ->
+    hb_http:request(
+        <<"GET">>,
+        Node,
+        <<
+            "/~copycat@1.0/arweave?from=",
+            (hb_util:bin(InitialHeight))/binary, "&to=",
+            (hb_util:bin(FinalHeight))/binary
+        >>,
+        Opts
+    ).
+
 %% Helper function to write test message with Recipient
 write_test_message_with_recipient(Recipient, Opts) ->
     hb_cache:write(
@@ -549,6 +563,118 @@ transactions_query_combined_test() ->
         Res
     ).
 
+transactions_query_sort_by_block_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [Store],
+            arweave_index_blocks => true,
+            arweave_index_store => #{ <<"index-store">> => [Store] },
+            query_arweave_remote_block_ranges => false
+        },
+    Node = hb_http_server:start_node(Opts),
+    {ok, _} = copycat_blocks(Node, 1745749, 1745750, Opts),
+    EarlierID = <<"8uzMc5dGBuLCjBcRPEliphf-N8rUU0kEdc832IghlL0">>,
+    LaterID = <<"-4XP4eLTDEwu6pw8cHevuiPAIrVYNOEZv4b30UWPfFg">>,
+    VerifyFun =
+        fun(Order, First, Second) ->
+            Q = 
+                <<"""
+                    query($ids: [ID!], $sort: SortOrder) {
+                        transactions(
+                            ids: $ids,
+                            sort: $sort
+                        ) {
+                            edges {
+                                node {
+                                    id
+                                }
+                            }
+                        }
+                    }
+                """>>,
+            ?assertMatch(
+                {
+                    ok,
+                    #{
+                        <<"data">> := #{
+                            <<"transactions">> := #{
+                                <<"edges">> := [
+                                    #{ <<"node">> := #{ <<"id">> := First } },
+                                    #{ <<"node">> := #{ <<"id">> := Second } }
+                                ]
+                            }
+                        }
+                    }
+                },
+                dev_query_graphql:test_query(
+                    Node,
+                    Q,
+                    #{ <<"ids">> => [First, Second], <<"sort">> => Order },
+                    Opts
+                )
+            )
+        end,
+    VerifyFun(<<"HEIGHT_DESC">>, EarlierID, LaterID),
+    VerifyFun(<<"HEIGHT_ASC">>, LaterID, EarlierID).
+
+transactions_query_filter_by_block_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [Store],
+            arweave_index_blocks => true,
+            arweave_index_store => #{ <<"index-store">> => [Store] },
+            query_arweave_remote_block_ranges => false
+        },
+    Node = hb_http_server:start_node(Opts),
+    {ok, _} = copycat_blocks(Node, 1745749, 1745750, Opts),
+    EarlierID = <<"8uzMc5dGBuLCjBcRPEliphf-N8rUU0kEdc832IghlL0">>,
+    LaterID = <<"-4XP4eLTDEwu6pw8cHevuiPAIrVYNOEZv4b30UWPfFg">>,
+    VerifyFun =
+        fun(Start, End, Present, Absent) ->
+            Q = 
+                <<"""
+                    query($ids: [ID!], $min: Int, $max: Int) {
+                        transactions(
+                            ids: $ids,
+                            block: {min: $min, max: $max}
+                        ) {
+                            edges {
+                                node {
+                                    id
+                                }
+                            }
+                        }
+                    }
+                """>>,
+            {ok, #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges } } }} =
+                dev_query_graphql:test_query(
+                    Node,
+                    Q,
+                    #{
+                        <<"ids">> => Present ++ Absent,
+                        <<"min">> => Start,
+                        <<"max">> => End
+                    },
+                    Opts
+                ),
+            IDs = [ ID || #{ <<"node">> := #{ <<"id">> := ID } } <- Edges ],
+            lists:foreach(
+                fun(ID) -> ?assert(lists:member(ID, IDs)) end,
+                Present
+            ),
+            lists:foreach(
+                fun(ID) -> ?assertNot(lists:member(ID, IDs)) end,
+                Absent
+            )
+        end,
+    VerifyFun(1745749, 1745750, [EarlierID, LaterID], []),
+    VerifyFun(1745751, 1745752, [], [EarlierID, LaterID]),
+    VerifyFun(1745749, 1745749, [EarlierID], [LaterID]),
+    VerifyFun(1745750, 1745750, [LaterID], [EarlierID]).
 
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test() ->
