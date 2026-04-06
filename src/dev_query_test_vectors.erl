@@ -42,19 +42,34 @@ get_test_blocks(Node, Opts) ->
         lists:seq(InitialHeight, FinalHeight)
     ).
 
-%% @doc Use the `~copycat@1.0' device to fetch and index blocks from an Arweave
-%% node.
-copycat_blocks(Node, InitialHeight, FinalHeight, Opts) ->
+%% @doc Use the `~copycat@1.0' device to fetch and index blocks into a new testing
+%% node with its own local and index stores.
+test_env_with_blocks(InitialHeight, FinalHeight) ->
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => hb_test_utils:test_store(),
+            <<"local-store">> => LocalStore = hb_test_utils:test_store()
+        },
+    Opts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => [LocalStore, ArweaveStore],
+            arweave_index_blocks => true,
+            query_arweave_remote_block_ranges => true
+        },
+    Node = hb_http_server:start_node(Opts),
     hb_http:request(
         <<"GET">>,
         Node,
         <<
             "/~copycat@1.0/arweave?from=",
-            (hb_util:bin(InitialHeight))/binary, "&to=",
-            (hb_util:bin(FinalHeight))/binary
+                (hb_util:bin(InitialHeight))/binary, "&to=",
+                (hb_util:bin(FinalHeight))/binary
         >>,
         Opts
-    ).
+    ),
+    {ok, Node, Opts}.
 
 %% Helper function to write test message with Recipient
 write_test_message_with_recipient(Recipient, Opts) ->
@@ -564,19 +579,9 @@ transactions_query_combined_test() ->
     ).
 
 transactions_query_sort_by_block_test() ->
-    Store = hb_test_utils:test_store(),
-    Opts =
-        #{
-            priv_wallet => ar_wallet:new(),
-            store => [Store],
-            arweave_index_blocks => true,
-            arweave_index_store => #{ <<"index-store">> => [Store] },
-            query_arweave_remote_block_ranges => false
-        },
-    Node = hb_http_server:start_node(Opts),
-    {ok, _} = copycat_blocks(Node, 1745749, 1745750, Opts),
-    EarlierID = <<"8uzMc5dGBuLCjBcRPEliphf-N8rUU0kEdc832IghlL0">>,
-    LaterID = <<"-4XP4eLTDEwu6pw8cHevuiPAIrVYNOEZv4b30UWPfFg">>,
+    {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
+    LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
     VerifyFun =
         fun(Order, First, Second) ->
             Q = 
@@ -595,16 +600,13 @@ transactions_query_sort_by_block_test() ->
                     }
                 """>>,
             ?assertMatch(
-                {
-                    ok,
-                    #{
-                        <<"data">> := #{
-                            <<"transactions">> := #{
-                                <<"edges">> := [
-                                    #{ <<"node">> := #{ <<"id">> := First } },
-                                    #{ <<"node">> := #{ <<"id">> := Second } }
-                                ]
-                            }
+                #{
+                    <<"data">> := #{
+                        <<"transactions">> := #{
+                            <<"edges">> := [
+                                #{ <<"node">> := #{ <<"id">> := First } },
+                                #{ <<"node">> := #{ <<"id">> := Second } }
+                            ]
                         }
                     }
                 },
@@ -616,23 +618,13 @@ transactions_query_sort_by_block_test() ->
                 )
             )
         end,
-    VerifyFun(<<"HEIGHT_DESC">>, EarlierID, LaterID),
-    VerifyFun(<<"HEIGHT_ASC">>, LaterID, EarlierID).
+    VerifyFun(<<"HEIGHT_ASC">>, EarlierID, LaterID),
+    VerifyFun(<<"HEIGHT_DESC">>, LaterID, EarlierID).
 
 transactions_query_filter_by_block_test() ->
-    Store = hb_test_utils:test_store(),
-    Opts =
-        #{
-            priv_wallet => ar_wallet:new(),
-            store => [Store],
-            arweave_index_blocks => true,
-            arweave_index_store => #{ <<"index-store">> => [Store] },
-            query_arweave_remote_block_ranges => false
-        },
-    Node = hb_http_server:start_node(Opts),
-    {ok, _} = copycat_blocks(Node, 1745749, 1745750, Opts),
-    EarlierID = <<"8uzMc5dGBuLCjBcRPEliphf-N8rUU0kEdc832IghlL0">>,
-    LaterID = <<"-4XP4eLTDEwu6pw8cHevuiPAIrVYNOEZv4b30UWPfFg">>,
+    {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
+    LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
     VerifyFun =
         fun(Start, End, Present, Absent) ->
             Q = 
@@ -650,7 +642,7 @@ transactions_query_filter_by_block_test() ->
                         }
                     }
                 """>>,
-            {ok, #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges } } }} =
+            #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Edges } } } =
                 dev_query_graphql:test_query(
                     Node,
                     Q,
@@ -671,10 +663,10 @@ transactions_query_filter_by_block_test() ->
                 Absent
             )
         end,
-    VerifyFun(1745749, 1745750, [EarlierID, LaterID], []),
-    VerifyFun(1745751, 1745752, [], [EarlierID, LaterID]),
-    VerifyFun(1745749, 1745749, [EarlierID], [LaterID]),
-    VerifyFun(1745750, 1745750, [LaterID], [EarlierID]).
+    VerifyFun(1892158, 1892159, [EarlierID, LaterID], []),
+    VerifyFun(1892156, 1892157, [], [EarlierID, LaterID]),
+    VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
+    VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test() ->
