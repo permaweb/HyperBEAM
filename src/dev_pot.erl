@@ -23,6 +23,17 @@
 %%% their own mints using the same `pot` functionality as the parent, depositors
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
+%%%
+%%% Authority model:
+%%% - `deposit` / `withdraw` are authorized per resource by that resource's
+%%%   `authority` security policy.
+%%% - `weight` updates may be delegated per resource via `weight-authority`.
+%%% - resource config changes (`authority*`, `weight-authority*`) remain
+%%%   guarded by the pot-wide `mint-authority` policy, or by the configured
+%%%   `parent` when the pot is acting as a child mint.
+%%% - child mints trust their direct `parent` process for inherited resource
+%%%   config and writes; forwarded parent `register` notifications set both
+%%%   `resource-authority` and `weight-authority` to that parent process.
 %%% 
 %%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
@@ -419,7 +430,9 @@ parse_deposit_modification(Base, Assignment, Opts) ->
         {ok, {Address, ResourceID, Amount}}
     end.
 
-%% @doc Verify a request against the authority for a specific resource.
+%% @doc Verify a request against the resource-local `authority` policy for a
+%% specific resource. In prod mode, requests fail closed if the resource has no
+%% explicit authority policy configured.
 verify_resource_authority(ResourceID, Base, Req, Opts) ->
     maybe
         {ok, From} ?=
@@ -455,7 +468,9 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
 
 %% @doc Interpret forwarded `register' notifications from the configured
 %% `parent' mint process. Notifications from any other sender, or notifications
-%% forwarding a non-`register' action, are rejected.
+%% forwarding a non-`register' action, are rejected. Child mints trust their
+%% direct parent for inherited resource config, so forwarded notifications set
+%% both `resource-authority' and `weight-authority' to the parent process ID.
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=
@@ -944,9 +959,17 @@ ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     end.
 
 %% @doc Resource configuration entrypoint. Validates the target resource and
-%% caller, then applies supported resource-scoped config mutations. Weight
-%% updates can be delegated to a per-resource `weight-authority`, while
-%% authority rotation remains parent-or-mint-authority only.
+%% caller, then applies supported resource-scoped config mutations.
+%% 
+%% Authorization model:
+%% - `weight`-only updates may be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
+%%   - the resource-local `weight-authority`
+%% - updates touching `resource-authority*` or `weight-authority*` are treated
+%%   as admin mutations and may only be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -1070,8 +1093,8 @@ enforce_resource_config_authority(From, State, Req, Opts) ->
         true ?= AuthRes
     end.
 %% @doc Enforce authorization for weight-only updates. Parent may always
-%% reconfigure its children, explicit per-resource weight-authority can update
-%% the weight, and mint-authority remains the global override.
+%% reconfigure its children, explicit per-resource `weight-authority` can
+%% update the weight, and `mint-authority` remains the global override.
 enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
     maybe
@@ -1097,7 +1120,9 @@ enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
             end,
         true ?= AuthRes
     end.
-%% @doc Verify a request against the weight-authority for a specific resource.
+%% @doc Verify a request against the resource-local `weight-authority` policy
+%% for a specific resource. In prod mode, requests fail closed if the resource
+%% has no explicit weight-authority policy configured.
 verify_weight_authority(ResourceID, Base, Req, Opts) ->
     maybe
         {ok, From} ?=
