@@ -267,15 +267,13 @@ block_range_to_offset_range(Heights, Opts) ->
 %% block is not cached locally, falls back to `dev_arweave:block/2'.
 read_block(Height, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
-        {ok, Block} ->
-            {ok, Block};
+        {ok, Block} -> {ok, Block};
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
                 true ->
                     ?event({read_block_remote, {height, Height}}),
-                    dev_arweave:block({height, Height}, Opts);
-                _ ->
-                    not_found
+                    dev_arweave:block(#{}, #{ <<"block">> => Height }, Opts);
+                _ -> not_found
             end
     end.
 
@@ -402,7 +400,7 @@ filter_offset_annotated(IDs, Heights, Opts) ->
         lists:filter(
             fun({IDOffset, Length, _}) ->
                 ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
-                ((EndOffset =:= infinity) orelse (IDOffset + Length =< EndOffset))
+                    ((EndOffset =:= infinity) orelse (IDOffset + Length =< EndOffset))
             end,
             IDs
         ),
