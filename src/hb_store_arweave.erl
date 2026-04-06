@@ -122,7 +122,7 @@ do_read(StoreOpts, ID) ->
                     ?event(
                         arweave_offsets,
                         {read_ok,
-                            {id, {explicit, ID}},
+                            {id, {string, ID}},
                             {format_version, Version},
                             {type, CodecName},
                             {start_offset, StartOffset},
@@ -135,7 +135,7 @@ do_read(StoreOpts, ID) ->
                     ?event(
                         arweave_offsets,
                         {read_chunks_not_found, 
-                            {id, {explicit, ID}},
+                            {id, {string, ID}},
                             {format_version, Version},
                             {type, CodecName},
                             {start_offset, StartOffset},
