@@ -1157,7 +1157,7 @@ deserialize_ethereum_transaction_test() ->
         {<<"Chain-Id">>, <<"8453">>}
     ],
     ?assertEqual(ExpectedTags, Deserialized#tx.tags),
-    ?assertEqual(<<"zZHoADuo74sWmhEF0V-D4sxa4rj3rUR5_r7tSpWSmtY">>, b64fast:encode(Deserialized#tx.anchor)),
+    ?assertEqual(<<"zZHoADuo74sWmhEF0V-D4sxa4rj3rUR5_r7tSpWSmtY">>, hb_util:encode(Deserialized#tx.anchor)),
     ?assertEqual(<<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
         hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
     ?assert(verify_item(Deserialized)).
