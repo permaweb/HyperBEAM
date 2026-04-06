@@ -256,3 +256,29 @@ comma_separated_authority_config_supported_test() ->
             #{}
         )
     ).
+
+prod_mode_requires_explicit_policy_test() ->
+    ?assertEqual(
+        {error, <<"Security policy not configured.">>},
+        validate(
+            <<"authority">>,
+            #{},
+            #{},
+            [<<"alice">>],
+            #{ dev_security_mode => prod }
+        )
+    ).
+
+prod_mode_allows_explicit_single_signer_policy_test() ->
+    ?assertEqual(
+        true,
+        validate(
+            <<"authority">>,
+            #{
+                <<"authority">> => <<"alice">>
+            },
+            #{},
+            [<<"alice">>],
+            #{ dev_security_mode => prod }
+        )
+    ).

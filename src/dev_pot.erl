@@ -445,7 +445,14 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"Requested resource not initialized in mint state.">>,
                 Opts
             ),
-        true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
+        true ?=
+            dev_security:validate(
+                <<"authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
     end.
 
 %% @doc Interpret forwarded `register' notifications from the configured
@@ -493,7 +500,7 @@ notify(State, Assignment, Opts) ->
             #{
                 <<"type">> => <<"notification">>,
                 <<"original-from">> => OriginalFrom,
-                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom }
+                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom, <<"resource-authority">> => NotifyFrom }
             }, 
             Opts)
     end.
@@ -975,11 +982,11 @@ enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
         AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
             true -> true;
             false -> 
-                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
+                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts#{dev_security_mode => prod}) of
                     true -> true;
-                    {error, _} -> false
-                        % verify_resource_authority(ResID, State, Req, Opts)
-                    end  
+                    {error, _} ->
+                        {error, <<"Caller is not authorized to configure resources.">>}
+                end  
         end,
         true ?= AuthRes
     end.
