@@ -1,5 +1,12 @@
 %%% @doc An implementation of the Arweave GraphQL API, inside the `~query@1.0'
 %%% device.
+%%%
+%%% When an `hb_store_arweave' index is available, transaction results are
+%%% sorted by block height via the monotonically increasing Arweave data
+%%% offsets stored in `hb_store_arweave_offset'.  The `sort' argument on the
+%%% `transactions' query selects the order (`HEIGHT_DESC' by default,
+%%% `HEIGHT_ASC' for ascending).  A `block' range filter narrows results to
+%%% transactions whose offsets fall within the requested block heights.
 -module(dev_query_arweave).
 %%% AO-Core API:
 -export([query/4]).
@@ -35,6 +42,23 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {args, Args}
     }),
     Matches = match_args(Args, Opts),
+    Ordered =
+        case annotate_offsets(Matches, Opts) of
+            unavailable -> Matches;
+            Annotated ->
+                Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+                remove_annotations(
+                    sort_offset_annotated(
+                        filter_offset_annotated(
+                            Annotated,
+                            maps:get(<<"block">>, Args, undefined),
+                            Opts
+                        ),
+                        Order,
+                        Opts
+                    )
+                )
+        end,
     ?event({transactions_matches, Matches}),
     Messages =
         lists:filtermap(
@@ -44,7 +68,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
                     not_found -> false
                 end
             end,
-            Matches
+            Ordered
         ),
     {ok, Messages};
 query(Obj, <<"block">>, Args, Opts) ->
@@ -171,8 +195,95 @@ find_field_key(Field, Msg, Opts) ->
             end
     end.
 
+%% @doc Sort messages by their block height, if Arweave index store is available.
+%% Takes a list of IDs and returns the same list sorted by block height. IDs that
+%% do not have an offset are always placed at the end of the list -- regardless
+%% of the sort order.
+sort_offset_annotated(IDs, SortOrder, _Opts) ->
+    {WithOffset, WithoutOffset} =
+        lists:partition(
+            fun({Offset, _, _}) -> Offset =/= undefined end,
+            IDs
+        ),
+    Sorted =
+        case SortOrder of
+            <<"HEIGHT_ASC">> -> lists:keysort(1, WithOffset);
+            _ -> lists:reverse(lists:keysort(1, WithOffset))
+        end,
+    ?event(
+        {order_by_block,
+            {sort_order, SortOrder},
+            {with_offset, length(WithOffset)},
+            {without_offset, length(WithoutOffset)}
+        }
+    ),
+    Sorted ++ WithoutOffset.
+
+%% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
+%% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
+%% highest offset is not the max block height. It is 'infinity', such that TXs
+%% that are indexed but are not yet confirmed are included.
+block_range_to_offset_range(Heights, Opts) ->
+    StartOffset =
+        case hb_maps:get(<<"min">>, Heights, 0, Opts) of
+            0 -> 0;
+            RawMin ->
+                case read_block(hb_util:int(RawMin), Opts) of
+                    {ok, MinBlock} ->
+                        % The `weave_size` is the size at the _end_ of the block,
+                        % so we must subtract the start from it to find the 
+                        % starting byte of the block.
+                        WeaveSize = hb_util:int(
+                            hb_maps:get(<<"weave_size">>, MinBlock, 0, Opts)),
+                        BlockSize = hb_util:int(
+                            hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
+                        WeaveSize - BlockSize;
+                    not_found -> 0
+                end
+        end,
+    EndOffset =
+        case hb_maps:get(<<"max">>, Heights, infinity, Opts) of
+            infinity -> infinity;
+            RawMax ->
+                case read_block(hb_util:int(RawMax), Opts) of
+                    {ok, MaxBlock} ->
+                        hb_util:int(
+                            hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
+                        );
+                    not_found -> infinity
+                end
+        end,
+    ?event(
+        {calculated_offsets_from_block_range,
+            {block_range, Heights},
+            {start_offset, StartOffset},
+            {end_offset, EndOffset}
+        }
+    ),
+    {StartOffset, EndOffset}.
+
+%% @doc Read block metadata by height.  Tries the local block cache first;
+%% when `query_arweave_remote_block_ranges' is `true' (the default) and the
+%% block is not cached locally, falls back to `dev_arweave:block/2'.
+read_block(Height, Opts) ->
+    case dev_arweave_block_cache:read(Height, Opts) of
+        {ok, Block} ->
+            {ok, Block};
+        not_found ->
+            case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
+                true ->
+                    ?event({read_block_remote, {height, Height}}),
+                    dev_arweave:block({height, Height}, Opts);
+                _ ->
+                    not_found
+            end
+    end.
+
+%%% Match argument processing
+
 %% @doc Progressively generate matches from each argument for a transaction
-%% query.
+%% query.  The `block' range is applied as a post-filter over the candidate
+%% set rather than as a set-producing index lookup.
 match_args(Args, Opts) when is_map(Args) ->
     match_args(
         maps:to_list(
@@ -254,6 +365,46 @@ match(<<"recipients">>, Recipients, Opts) ->
     {ok, matching_commitments(<<"field-target">>, Recipients, Opts)};
 match(UnsupportedFilter, _, _) ->
     throw({unsupported_query_filter, UnsupportedFilter}).
+
+%%% Block range post-filter
+
+%% @doc Offset-annotate a list of IDs, returning {StartOffset, ID} pairs.
+annotate_offsets(IDs, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> unavailable;
+        StoreOpts -> annotate_offsets(IDs, StoreOpts, Opts)
+    end.
+annotate_offsets(IDs, StoreOpts, _Opts) ->
+    lists:map(
+        fun(ID) ->
+            case hb_store_arweave:read_offset(StoreOpts, ID) of
+                {ok, #{ <<"start-offset">> := Offset, <<"length">> := Length }} ->
+                    {Offset, Length, ID};
+                _ -> {undefined, undefined, ID}
+            end
+        end,
+        IDs
+    ).
+
+%% @doc Remove all annotations of start offset and length from a list of IDs.
+remove_annotations(IDs) -> lists:map(fun({_, _, ID}) -> ID end, IDs).
+
+%% @doc Apply the `block' height range as a post-filter over candidate IDs.
+%% Each candidate's offset is checked against the block range boundaries,
+%% avoiding materialisation of the full store.
+filter_offset_annotated(IDs, Heights, Opts) ->
+    {StartOffset, EndOffset} =
+        block_range_to_offset_range(Heights, Opts),
+    Filtered =
+        lists:filter(
+            fun({IDOffset, Length, _}) ->
+                ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
+                ((EndOffset =:= infinity) orelse (IDOffset + Length =< EndOffset))
+            end,
+            IDs
+        ),
+    ?event({filtered_out_of_range, length(IDs) - length(Filtered)}),
+    Filtered.
 
 %% @doc Return the base IDs for messages that have a matching commitment.
 matching_commitments(Field, Values, Opts) when is_list(Values) ->
