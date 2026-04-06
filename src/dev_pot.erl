@@ -966,18 +966,19 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
-        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
+        true ?= validate_signer_config(From, Opts),
+        HasAdminMutation =
+            hb_maps:find(<<"resource-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-match">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-match">>, Req, Opts) =/= error,
         true ?=
-            case {
-                hb_maps:find(<<"resource-authority">>, Req, Opts),
-                hb_maps:find(<<"weight-authority">>, Req, Opts),
-                hb_maps:find(<<"weight">>, Req, Opts)
-            } of
-                {{ok, _}, _, _} ->
+            case {HasAdminMutation, hb_maps:find(<<"weight">>, Req, Opts)} of
+                {true, _} ->
                     enforce_resource_config_authority(From, State, Req, Opts);
-                {_, {ok, _}, _} ->
-                    enforce_resource_config_authority(From, State, Req, Opts);
-                {_, _, {ok, _}} ->
+                {false, {ok, _}} ->
                     enforce_resource_weight_authority(ResID, From, State, Req, Opts);
                 _ ->
                     true
@@ -1000,10 +1001,53 @@ register(State, Assignment, Opts) ->
                 _ -> State2
             end,
         true ?= is_map(State3) orelse State3,
-        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
-            {ok, ResAuth} ->
-                register_resource_authority(ResID, ResAuth, State3, Opts);
-            _ -> State3
+        State4 =
+            case hb_maps:find(<<"weight-authority-required">>, Req, Opts) of
+                {ok, WeightRequired} ->
+                    register_resource_weight_authority_required(
+                        ResID,
+                        WeightRequired,
+                        State3,
+                        Opts
+                    );
+                _ -> State3
+            end,
+        true ?= is_map(State4) orelse State4,
+        State5 =
+            case hb_maps:find(<<"weight-authority-match">>, Req, Opts) of
+                {ok, WeightMatch} ->
+                    register_resource_weight_authority_match(
+                        ResID,
+                        WeightMatch,
+                        State4,
+                        Opts
+                    );
+                _ -> State4
+            end,
+        true ?= is_map(State5) orelse State5,
+        State6 =
+            case hb_maps:find(<<"resource-authority">>, Req, Opts) of
+                {ok, ResAuth} ->
+                    register_resource_authority(ResID, ResAuth, State5, Opts);
+                _ -> State5
+            end,
+        true ?= is_map(State6) orelse State6,
+        State7 =
+            case hb_maps:find(<<"resource-authority-required">>, Req, Opts) of
+                {ok, ResRequired} ->
+                    register_resource_authority_required(
+                        ResID,
+                        ResRequired,
+                        State6,
+                        Opts
+                    );
+                _ -> State6
+            end,
+        true ?= is_map(State7) orelse State7,
+        case hb_maps:find(<<"resource-authority-match">>, Req, Opts) of
+            {ok, ResMatch} ->
+                register_resource_authority_match(ResID, ResMatch, State7, Opts);
+            _ -> State7
         end
     end.
 %% @doc Enforce authorization for resource configuration updates.
@@ -1090,7 +1134,7 @@ verify_weight_authority(ResourceID, Base, Req, Opts) ->
 register_resource_authority(ResourceID, Authority, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        true ?= dev_token:validate_address(Authority, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
         hb_ao:set(
             S,
             <<"/resources/", ResourceID/binary, "/authority">>,
@@ -1098,11 +1142,33 @@ register_resource_authority(ResourceID, Authority, S, Opts) ->
             Opts
         )
 end.
+register_resource_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-match">>,
+            Match,
+            Opts
+        )
+end.
 %% @doc Update the weight-authority record for a specific resource in the pot.
 register_resource_weight_authority(ResourceID, Authority, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        true ?= dev_token:validate_address(Authority, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
         hb_ao:set(
             S,
             <<"/resources/", ResourceID/binary, "/weight-authority">>,
@@ -1110,6 +1176,65 @@ register_resource_weight_authority(ResourceID, Authority, S, Opts) ->
             Opts
         )
 end.
+register_resource_weight_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_weight_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-match">>,
+            Match,
+            Opts
+        )
+end.
+validate_signer_config(Value, Opts) when is_binary(Value) ->
+    try validate_signer_config(hb_util:binary_to_strings(Value), Opts)
+    catch
+        _:_ -> {error, <<"Signer config must be a valid binary or list.">>}
+    end;
+validate_signer_config(Value, Opts) when is_list(Value) ->
+    case Value of
+        [] ->
+            {error, <<"Signer config list must not be empty.">>};
+        _ ->
+            case lists:all(fun is_binary/1, Value) of
+                false ->
+                    {error, <<"Signer config list must contain binary addresses.">>};
+                true ->
+                    lists:foldl(
+                        fun(Signer, true) ->
+                            dev_token:validate_address(Signer, ?RESERVED_KEYS);
+                           (_Signer, {error, _} = Err) ->
+                            Err
+                        end,
+                        true,
+                        Value
+                    )
+            end
+    end;
+validate_signer_config(_, _) ->
+    {error, <<"Signer config must be a binary or a list.">>}.
+validate_match_config(Match) when is_integer(Match), Match >= 0 -> true;
+validate_match_config(Match) when is_binary(Match) ->
+    try binary_to_integer(Match) of
+        Int when is_integer(Int), Int >= 0 -> true;
+        _ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    catch
+        _:_ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    end;
+validate_match_config(_) ->
+    {error, <<"Match threshold must be a non-negative integer.">>}.
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
