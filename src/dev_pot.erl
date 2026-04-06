@@ -24,9 +24,7 @@
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
 %%% 
-%%% TODO: ADDRESSED IN enforce_resource_config_authority & apply_resource_config
-%%% - Add `secure-set` (set guarded by address) for resource-weights and 
-%%%   supported resources.
+%%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -495,13 +493,18 @@ notify(State, Assignment, Opts) ->
             {error, <<"Unsupported notification action">>},
         OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
-            Action, 
-            State, 
+            Action,
+            State,
             #{
                 <<"type">> => <<"notification">>,
                 <<"original-from">> => OriginalFrom,
-                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom, <<"resource-authority">> => NotifyFrom }
-            }, 
+                <<"body">> =>
+                    ForwardedMsg#{
+                        <<"from">> => NotifyFrom,
+                        <<"resource-authority">> => NotifyFrom,
+                        <<"weight-authority">> => NotifyFrom
+                    }
+            },
             Opts)
     end.
 
@@ -941,9 +944,9 @@ ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     end.
 
 %% @doc Resource configuration entrypoint. Validates the target resource and
-%% caller, enforces resource-config authority via
-%% `enforce_resource_config_authority/5`, then applies supported
-%% resource-scoped config mutations.
+%% caller, then applies supported resource-scoped config mutations. Weight
+%% updates can be delegated to a per-resource `weight-authority`, while
+%% authority rotation remains parent-or-mint-authority only.
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -964,18 +967,50 @@ register(State, Assignment, Opts) ->
                 Opts
             ),
         true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
-        true ?= enforce_resource_config_authority(From, State, Req, Opts),
-        apply_resource_config(ResID, State, Req, Opts)
+        true ?=
+            case {
+                hb_maps:find(<<"resource-authority">>, Req, Opts),
+                hb_maps:find(<<"weight-authority">>, Req, Opts),
+                hb_maps:find(<<"weight">>, Req, Opts)
+            } of
+                {{ok, _}, _, _} ->
+                    enforce_resource_config_authority(From, State, Req, Opts);
+                {_, {ok, _}, _} ->
+                    enforce_resource_config_authority(From, State, Req, Opts);
+                {_, _, {ok, _}} ->
+                    enforce_resource_weight_authority(ResID, From, State, Req, Opts);
+                _ ->
+                    true
+            end,
+        State2 =
+            case hb_maps:find(<<"weight">>, Req, Opts) of
+                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
+                _ -> State
+            end,
+        true ?= is_map(State2) orelse State2,
+        State3 =
+            case hb_maps:find(<<"weight-authority">>, Req, Opts) of
+                {ok, WeightAuth} ->
+                    register_resource_weight_authority(
+                        ResID,
+                        WeightAuth,
+                        State2,
+                        Opts
+                    );
+                _ -> State2
+            end,
+        true ?= is_map(State3) orelse State3,
+        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
+            {ok, ResAuth} ->
+                register_resource_authority(ResID, ResAuth, State3, Opts);
+            _ -> State3
+        end
     end.
 %% @doc Enforce authorization for resource configuration updates.
 %% Authorization is evaluated against:
 %% - `State/parent`, if set and equal to `from`
 %% - `mint-authority` security policy on the pot state, if configured
-%% - `authority` security policy on the target resource, if configured
-%%
-%% N.B: `dev_security` is open-by-default when no valid/required/match policy
-%% is present, so absent authority config does not restrict this action. check
-%% `AuthRes` logic chain for better gating-understanding.
+%% Resource-level write or weight authorities do not grant config authority.
 enforce_resource_config_authority(From, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
     maybe
@@ -990,25 +1025,66 @@ enforce_resource_config_authority(From, State, Req, Opts) ->
         end,
         true ?= AuthRes
     end.
-%% @doc Apply supported resource-scoped configuration updates. If an earlier
-%% mutation fails, later mutations in the same request are not applied.
-apply_resource_config(ResID, State, Req, Opts) ->
+%% @doc Enforce authorization for weight-only updates. Parent may always
+%% reconfigure its children, explicit per-resource weight-authority can update
+%% the weight, and mint-authority remains the global override.
+enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
     maybe
-        State2 =
-            case hb_maps:find(<<"weight">>, Req, Opts) of
-                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
-                _ -> State
+        AuthRes =
+            case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+                true -> true;
+                false ->
+                    case verify_weight_authority(ResourceID, State, Req, Opts) of
+                        true -> true;
+                        {error, _} ->
+                            case dev_security:validate(
+                                <<"mint-authority">>,
+                                State,
+                                Req,
+                                From,
+                                Opts#{ dev_security_mode => prod }
+                            ) of
+                                true -> true;
+                                {error, _} ->
+                                    {error, <<"Caller is not authorized to update resource weight.">>}
+                            end
+                    end
             end,
-        true ?= is_map(State2) orelse State2,
-        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
-            {ok, ResAuth} ->
-                register_resource_authority(ResID, ResAuth, State2, Opts);
-            _ -> State2
-        end
-    else
-        Reason -> 
-            ?event(debug_pot, {error, Reason}, Opts),
-            Reason
+        true ?= AuthRes
+    end.
+%% @doc Verify a request against the weight-authority for a specific resource.
+verify_weight_authority(ResourceID, Base, Req, Opts) ->
+    maybe
+        {ok, From} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, Resources} ?=
+            hb_maps:find(
+                <<"resources">>,
+                Base,
+                <<"No resources found in mint state.">>,
+                Opts
+            ),
+        {ok, Resource} ?=
+            hb_maps:find(
+                ResourceID,
+                Resources,
+                <<"Requested resource not initialized in mint state.">>,
+                Opts
+            ),
+        true ?=
+            dev_security:validate(
+                <<"weight-authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
     end.
 %% @doc Update the authority record for a specific resource in the pot.
 register_resource_authority(ResourceID, Authority, S, Opts) ->
@@ -1018,6 +1094,18 @@ register_resource_authority(ResourceID, Authority, S, Opts) ->
         hb_ao:set(
             S,
             <<"/resources/", ResourceID/binary, "/authority">>,
+            Authority,
+            Opts
+        )
+end.
+%% @doc Update the weight-authority record for a specific resource in the pot.
+register_resource_weight_authority(ResourceID, Authority, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(Authority, ?RESERVED_KEYS),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority">>,
             Authority,
             Opts
         )

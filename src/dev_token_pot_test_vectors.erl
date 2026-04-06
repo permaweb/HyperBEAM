@@ -99,12 +99,19 @@ id(Bin) when is_binary(Bin) ->
     << Bin/binary, Suffix/binary >>;
 id(Other) -> hb_util:human_id(Other).
 
-set_weight_req(Resource, Weight, Authority) ->
+set_weight_req(Resource, Weight) ->
+    #{
+        <<"action">> => <<"register">>,
+        <<"resource">> => Resource,
+        <<"weight">> => Weight
+    }.
+set_weight_req(Resource, Weight, ResourceAuthority, WeightAuthority) ->
     #{
         <<"action">> => <<"register">>,
         <<"resource">> => Resource,
         <<"weight">> => Weight,
-        <<"resource-authority">> => Authority
+        <<"resource-authority">> => ResourceAuthority,
+        <<"weight-authority">> => WeightAuthority
     }.
 
 deposit_req(Resource, Addr, Qty) ->
@@ -314,6 +321,7 @@ push_set_weight(Process, Resource, Weight, Opts) ->
         set_weight_req(
             Resource,
             Weight,
+            id(hb_opts:get(priv_wallet, no_wallet, Opts)),
             id(hb_opts:get(priv_wallet, no_wallet, Opts))
         ),
         Opts
@@ -433,6 +441,44 @@ simple_pot_process_test() ->
     ?assertEqual(1, balance(Process, id(Bob),Opts)),
     ?assertEqual(8999, balance(Process, id(Alice), Opts)),
     ?assertEqual(9000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
+weight_authority_can_update_weight_without_resource_config_authority_test() ->
+    Opts = test_opts(),
+    Resource = <<"oxygen">>,
+    WeightWallet = ar_wallet:new(),
+    ResourceWallet = ar_wallet:new(),
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_request(
+        Process,
+        set_weight_req(Resource, 100, id(ResourceWallet), id(WeightWallet)),
+        Opts
+    ),
+    ?assertEqual(100, weight(Process, Resource, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_request(
+            Process,
+            set_weight_req(Resource, 200),
+            ResourceWallet,
+            Opts
+        )
+    ),
+    ?assertEqual(100, weight(Process, Resource, Opts)),
+    push_request(
+        Process,
+        set_weight_req(Resource, 200),
+        WeightWallet,
+        Opts
+    ),
+    ?assertEqual(200, weight(Process, Resource, Opts)).
 
 pot_delegation_test() ->
     Opts = test_opts(),
