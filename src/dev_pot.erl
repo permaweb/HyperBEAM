@@ -977,8 +977,8 @@ enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
             false -> 
                 case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
                     true -> true;
-                    {error, _} -> 
-                        verify_resource_authority(ResID, State, Req, Opts)
+                    {error, _} -> false
+                        % verify_resource_authority(ResID, State, Req, Opts)
                     end  
         end,
         true ?= AuthRes

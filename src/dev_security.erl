@@ -81,6 +81,14 @@ validate(Key, Base, SubjectMsg, Opts) ->
     validate(Key, Base, SubjectMsg, hb_message:signers(SubjectMsg, Opts), Opts).
 validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
     maybe
+        true ?=
+            case is_prod_mode(Opts) of
+                true ->
+                    has_explicit_policy(Key, Base, Opts)
+                        orelse {error, <<"Security policy not configured.">>};
+                false ->
+                    true
+            end,
         %% Dedup identities so duplicate committers cannot satisfy min-N thresholds.
         From = lists:uniq(as_list(RawFrom, Opts)),
         ValidOrError = as_signer_config_list(hb_ao:get(Key, Base, [], Opts), Opts),
@@ -115,6 +123,18 @@ validate(Key, Base, SubjectMsg, RawFrom, Opts) ->
         ),
         satisfies_constraints(Key, From, RequiredList, Valid, Match, Opts)
 end.
+
+is_prod_mode(Opts) ->
+    case maps:get(dev_security_mode, Opts, maps:get(<<"dev-security-mode">>, Opts, dev)) of
+        prod -> true;
+        <<"prod">> -> true;
+        _ -> false
+    end.
+
+has_explicit_policy(Key, Base, Opts) ->
+    hb_ao:get(Key, Base, not_found, Opts) =/= not_found orelse
+    hb_ao:get(<<Key/binary, "-required">>, Base, not_found, Opts) =/= not_found orelse
+    hb_ao:get(<<Key/binary, "-match">>, Base, not_found, Opts) =/= not_found.
 
 %% @doc Validate that the request satisfies the given constraints.
 %% Returns true if:
