@@ -257,6 +257,115 @@ multiresource_modified_weight_test() ->
     ?assertEqual(12, dev_pot:balance(Bob, S5, Opts)),
     ok.
 
+weight_authority_match_requires_multiple_signers_test() ->
+    Admin = <<"admin">>,
+    WeightA = <<"weight-a">>,
+    WeightB = <<"weight-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"weight-authority">> => [WeightA, WeightB],
+                    <<"weight-authority-match">> => 2
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => WeightA
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    S2 =
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => [WeightA, WeightB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(200, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)).
+
+resource_authority_required_signer_is_enforced_test() ->
+    Admin = <<"admin">>,
+    Alice = <<"alice">>,
+    ResourceA = <<"resource-a">>,
+    ResourceB = <<"resource-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"resource-authority">> => [ResourceA, ResourceB],
+                    <<"resource-authority-required">> => [ResourceA],
+                    <<"resource-authority-match">> => 1
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => ResourceB
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(0, dev_pot:get_deposit(Alice, Resource, S1, Opts)),
+    S2 =
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => [ResourceA, ResourceB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(10, dev_pot:get_deposit(Alice, Resource, S2, Opts)).
+
 simple_delegation_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
