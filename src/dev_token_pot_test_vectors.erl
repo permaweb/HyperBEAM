@@ -99,11 +99,12 @@ id(Bin) when is_binary(Bin) ->
     << Bin/binary, Suffix/binary >>;
 id(Other) -> hb_util:human_id(Other).
 
-set_weight_req(Resource, Weight) ->
+set_weight_req(Resource, Weight, Authority) ->
     #{
         <<"action">> => <<"register">>,
         <<"resource">> => Resource,
-        <<"weight">> => Weight
+        <<"weight">> => Weight,
+        <<"resource-authority">> => Authority
     }.
 
 deposit_req(Resource, Addr, Qty) ->
@@ -199,6 +200,7 @@ generate_base_process_state(ExtraKeys, Opts) ->
 
 %% @doc Generate pot state for integration testing
 generate_pot_state(Params, Opts) ->
+    Authority = id(hb_opts:get(priv_wallet, no_wallet, Opts)),
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
     MintPropN = hb_maps:get(mint_prop_numerator, Params, 1, Opts),
     MintPropD = hb_maps:get(mint_prop_denominator, Params, 2, Opts),
@@ -225,6 +227,7 @@ generate_pot_state(Params, Opts) ->
     Merged = maps:merge(MaybeParent, MaybeIndexKeys),
     Merged#{
         <<"mint-device">> => hb_maps:get(mint_device, Params, <<"pot@1.0">>, Opts),
+        <<"mint-authority">> => hb_maps:get(mint_authority, Params, Authority, Opts),
         <<"mint-cap">> => MintCap,
         <<"mint-prop-numerator">> => MintPropN,
         <<"mint-prop-denominator">> => MintPropD,
@@ -308,7 +311,11 @@ push_request(Process, Body, Wallet, Opts) ->
 push_set_weight(Process, Resource, Weight, Opts) ->
     push_request(
         Process,
-        set_weight_req(Resource, Weight),
+        set_weight_req(
+            Resource,
+            Weight,
+            id(hb_opts:get(priv_wallet, no_wallet, Opts))
+        ),
         Opts
     ),
     dev_token_lib:now(Process, Opts).

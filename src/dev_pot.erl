@@ -964,7 +964,7 @@ register(State, Assignment, Opts) ->
                 Opts
             ),
         true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
-        true ?= enforce_resource_config_authority(From, ResID, State, Req, Opts),
+        true ?= enforce_resource_config_authority(From, State, Req, Opts),
         apply_resource_config(ResID, State, Req, Opts)
     end.
 %% @doc Enforce authorization for resource configuration updates.
@@ -976,7 +976,7 @@ register(State, Assignment, Opts) ->
 %% N.B: `dev_security` is open-by-default when no valid/required/match policy
 %% is present, so absent authority config does not restrict this action. check
 %% `AuthRes` logic chain for better gating-understanding.
-enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
+enforce_resource_config_authority(From, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
     maybe
         AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
