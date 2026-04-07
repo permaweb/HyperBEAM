@@ -30,10 +30,14 @@
 ).
 
 %% @doc Handle an Arweave GraphQL query for either transactions or blocks.
+query(List, <<"edges">>, _Args, _Opts) when is_list(List) ->
+    {ok, [{ok, Msg} || Msg <- List]};
 query(#{ <<"edges">> := Edges }, <<"edges">>, _Args, _Opts) ->
     {ok, [{ok, Edge} || Edge <- Edges]};
 query(#{ <<"node">> := Node }, <<"node">>, _Args, _Opts) ->
     {ok, Node};
+query(Msg, <<"node">>, _Args, _Opts) ->
+    {ok, Msg};
 query(#{ <<"pageInfo">> := PageInfo }, <<"pageInfo">>, _Args, _Opts) ->
     {ok, PageInfo};
 query(#{ <<"hasNextPage">> := HasNextPage }, <<"hasNextPage">>, _Args, _Opts) ->
@@ -195,9 +199,9 @@ find_field_key(Field, Msg, Opts) ->
 
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    {DroppedCount, AfterCursor} = drop_to_cursor(Args, Ordered, Opts),
+    {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(AfterCursor, CountToReturn, Opts),
+    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
     #{
         <<"count">> => hb_util:bin(ResultsCount),
         <<"edges">> => ResultsPage,
@@ -222,11 +226,25 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
 %% @doc Drop to the cursor position, returning the number of items dropped and
 %% the list of items after the cursor.
 drop_to_cursor(Args, Ordered, Opts) ->
-    drop_to_cursor(Args, Ordered, Opts, 0).
-drop_to_cursor({offset, Offset}, [#{ <<"offset">> := Offset } | _], _Opts, Index) ->
-    {Index, Offset};
-drop_to_cursor(After, [_ | Rest], Opts, Index) ->
-    drop_to_cursor(After, Rest, Opts, Index + 1).
+    drop_to_cursor(
+        hb_maps:get(<<"after">>, Args, null, Opts),
+        Ordered,
+        Opts,
+        0
+    ).
+drop_to_cursor(Cursor, Ordered, _Opts, Index)
+        when Cursor =:= null orelse Cursor =:= undefined orelse Ordered =:= [] ->
+    {Index, Ordered};
+drop_to_cursor(After, [AnnotatedID | Rest], Opts, Index) ->
+    ID = maps:get(<<"id">>, AnnotatedID, undefined),
+    Offset = maps:get(<<"offset">>, AnnotatedID, undefined),
+    case
+        (After =:= ID) orelse
+            ((Offset =/= undefined) andalso (After =:= hb_util:bin(Offset)))
+    of
+        true -> {Index + 1, Rest};
+        false -> drop_to_cursor(After, Rest, Opts, Index + 1)
+    end.
 
 %% @doc Return the page size, clamped to the maximum allowed.
 page_size(Args, Opts) ->
