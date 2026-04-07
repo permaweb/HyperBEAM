@@ -191,17 +191,14 @@ read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
 read(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    ReadRes =
-        hb_prometheus:measure_and_report(
-            fun() -> read_with_links(Opts, Path) end,
-            hb_store_lmdb_duration_seconds,
-            [read, Name]
-        ),
+    StartTime = erlang:monotonic_time(),
+    ReadRes = read_with_links(Opts, Path),
     case ReadRes of
         {ok, Value} ->
-            name_hit_metrics(Name),
+            sample_metrics(Name, StartTime, hit),
             {ok, Value};
         not_found ->
+            sample_metrics(Name, StartTime, miss),
             try
                 PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
                 case resolve_path_links(Opts, PathParts) of
@@ -615,13 +612,17 @@ reset(Opts) ->
             ok
     end.
 
-%% @doc Increment the hit metrics for the current store's name.
-name_hit_metrics(Name) ->
-    hb_prometheus:inc(
-      counter,
-      hb_store_lmdb_hit,
-      [Name],
-      1).
+%% @doc Sample roughly 1/1024 reads using the start timestamp and scale the
+%% hit counter by the same factor to preserve an approximate total.
+sample_metrics(_Name, StartTime, _Type) when (StartTime band 1023) =/= 0 ->
+    ok;
+sample_metrics(Name, StartTime, Type) ->
+    ReadTime = erlang:monotonic_time() - StartTime,
+    hb_prometheus:observe(ReadTime, hb_store_lmdb_duration_seconds, [read, Name]),
+    case Type of
+        hit -> hb_prometheus:inc(counter, hb_store_lmdb_hit, [Name], 1024);
+        miss -> ok
+    end.
 
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
