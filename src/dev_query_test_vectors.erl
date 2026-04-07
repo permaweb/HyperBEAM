@@ -668,6 +668,105 @@ transactions_query_filter_by_block_test() ->
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
+transactions_query_filter_by_block_excludes_unknown_offsets_test() ->
+    {ok, _Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"type">> => <<"Message">>,
+                <<"data">> => <<"local-only">>
+            },
+            Opts
+        ),
+    ?assertEqual(
+        not_found,
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+    ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"0">>,
+            <<"edges">> := []
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892158,
+                    <<"max">> => 1892158
+                }
+            },
+            Opts
+        )
+    ).
+
+transactions_query_filter_by_block_can_ignore_ranges_test() ->
+    {ok, _Node, BaseOpts} = test_env_with_blocks(1892159, 1892158),
+    Opts = BaseOpts#{ query_arweave_ignore_block_ranges => true },
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"type">> => <<"Message">>,
+                <<"data">> => <<"local-only">>
+            },
+            Opts
+        ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"1">>,
+            <<"edges">> := [
+                #{
+                    <<"id">> := ID,
+                    <<"node">> := _
+                }
+            ]
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892158,
+                    <<"max">> => 1892158
+                }
+            },
+            Opts
+        )
+    ).
+
+transactions_query_ids_preserve_arweave_tx_id_test() ->
+    {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
+    ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := _ }},
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+    ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"1">>,
+            <<"edges">> := [
+                #{
+                    <<"id">> := ID,
+                    <<"node">> := _
+                }
+            ]
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892487,
+                    <<"max">> => 1892487
+                }
+            },
+            Opts
+        )
+    ).
+
 transactions_query_cursor_by_offset_test() ->
     {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
     EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
