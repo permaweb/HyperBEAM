@@ -2,6 +2,7 @@
 -module(hb_prometheus).
 -export([ensure_started/0, declare/2, measure_and_report/2, measure_and_report/3]).
 -export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4]).
+-define(STARTED_CACHE_KEY, {?MODULE, started}).
 
 %% @doc Ensure the Prometheus application has been started. Caches startup
 %% failure with a timestamp to avoid repeated blocking ensure_all_started
@@ -29,8 +30,18 @@ wait_for_prometheus_started() ->
 %% The application itself may return `ok` to Erlang before it is actually ready
 %% for use, so we wait for the `ets` table to be created instead.
 is_started() ->
-    Info = ets:info(prometheus_registry_table),
-    Info =/= undefined.
+    case erlang:get(?STARTED_CACHE_KEY) of
+        true ->
+            true;
+        _ ->
+            case ets:whereis(prometheus_registry_table) of
+                undefined ->
+                    false;
+                _ ->
+                    erlang:put(?STARTED_CACHE_KEY, true),
+                    true
+            end
+    end.
 
 %% @doc Declare a new Prometheus metric in a replay-safe manner.
 declare(Type, Metric) ->
