@@ -13,6 +13,10 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%%% Default returned page size and maximum allowed page size.
+-define(DEFAULT_PAGE_SIZE, 10).
+-define(DEFAULT_MAX_PAGE_SIZE, 100).
+
 %% @doc The arguments that are supported by the Arweave GraphQL API.
 -define(SUPPORTED_QUERY_ARGS,
     [
@@ -26,14 +30,20 @@
 ).
 
 %% @doc Handle an Arweave GraphQL query for either transactions or blocks.
-query(List, <<"edges">>, _Args, _Opts) ->
-    {ok, [{ok, Msg} || Msg <- List]};
-query(Msg, <<"node">>, _Args, _Opts) ->
-    {ok, Msg};
+query(#{ <<"edges">> := Edges }, <<"edges">>, _Args, _Opts) ->
+    {ok, [{ok, Edge} || Edge <- Edges]};
+query(#{ <<"node">> := Node }, <<"node">>, _Args, _Opts) ->
+    {ok, Node};
+query(#{ <<"pageInfo">> := PageInfo }, <<"pageInfo">>, _Args, _Opts) ->
+    {ok, PageInfo};
+query(#{ <<"hasNextPage">> := HasNextPage }, <<"hasNextPage">>, _Args, _Opts) ->
+    {ok, HasNextPage};
+query(#{ <<"count">> := Count }, <<"count">>, _Args, _Opts) ->
+    {ok, Count};
 query(Obj, <<"transaction">>, Args, Opts) ->
     case query(Obj, <<"transactions">>, Args, Opts) of
-        {ok, []} -> {ok, null};
-        {ok, [Msg|_]} -> {ok, Msg}
+        {ok, #{ <<"edges">> := [] }} -> {ok, null};
+        {ok, #{ <<"edges">> := [#{ <<"node">> := Msg } | _] }} -> {ok, Msg}
     end;
 query(Obj, <<"transactions">>, Args, Opts) ->
     ?event({transactions_query,
@@ -44,33 +54,21 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     Matches = match_args(Args, Opts),
     Ordered =
         case annotate_offsets(Matches, Opts) of
-            unavailable -> Matches;
+            unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
             Annotated ->
                 Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                remove_annotations(
-                    sort_offset_annotated(
-                        filter_offset_annotated(
-                            Annotated,
-                            maps:get(<<"block">>, Args, undefined),
-                            Opts
-                        ),
-                        Order,
+                sort_offset_annotated(
+                    filter_offset_annotated(
+                        Annotated,
+                        maps:get(<<"block">>, Args, undefined),
                         Opts
-                    )
+                    ),
+                    Order,
+                    Opts
                 )
         end,
     ?event({transactions_matches, Matches}),
-    Messages =
-        lists:filtermap(
-            fun(Match) ->
-                case hb_cache:read(Match, Opts) of
-                    {ok, Msg} -> {true, Msg};
-                    not_found -> false
-                end
-            end,
-            Ordered
-        ),
-    {ok, Messages};
+    {ok, connection(Ordered, Args, Opts)};
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
         {ok, []} -> {ok, null};
@@ -195,20 +193,74 @@ find_field_key(Field, Msg, Opts) ->
             end
     end.
 
+connection(Ordered, Args, Opts) ->
+    ResultsCount = length(Ordered),
+    {DroppedCount, AfterCursor} = drop_to_cursor(Args, Ordered, Opts),
+    CountToReturn = page_size(Args, Opts),
+    ResultsPage = read_ids(AfterCursor, CountToReturn, Opts),
+    #{
+        <<"count">> => hb_util:bin(ResultsCount),
+        <<"edges">> => ResultsPage,
+        <<"pageInfo">> =>
+            #{
+                <<"hasNextPage">> =>
+                    (DroppedCount + length(ResultsPage)) < ResultsCount
+            }
+    }.
+
+%% @doc Build edges from a list of offset-annotated messages.
+read_ids([], _Count, _Opts) -> [];
+read_ids(_, 0, _Opts) -> [];
+read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} ->
+            [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
+        not_found ->
+            read_ids(Rest, Count, Opts)
+    end.
+
+%% @doc Drop to the cursor position, returning the number of items dropped and
+%% the list of items after the cursor.
+drop_to_cursor(Args, Ordered, Opts) ->
+    drop_to_cursor(Args, Ordered, Opts, 0).
+drop_to_cursor({offset, Offset}, [#{ <<"offset">> := Offset } | _], _Opts, Index) ->
+    {Index, Offset};
+drop_to_cursor(After, [_ | Rest], Opts, Index) ->
+    drop_to_cursor(After, Rest, Opts, Index + 1).
+
+%% @doc Return the page size, clamped to the maximum allowed.
+page_size(Args, Opts) ->
+    DefaultPageSize = hb_opts:get(default_page_size, ?DEFAULT_PAGE_SIZE, Opts),
+    MaxPageSize = hb_opts:get(max_page_size, ?DEFAULT_MAX_PAGE_SIZE, Opts),
+    max(
+        0,
+        min(
+            hb_maps:get(<<"first">>, Args, DefaultPageSize, Opts),
+            MaxPageSize
+        )
+    ).
+
 %% @doc Sort messages by their block height, if Arweave index store is available.
 %% Takes a list of IDs and returns the same list sorted by block height. IDs that
 %% do not have an offset are always placed at the end of the list -- regardless
 %% of the sort order.
-sort_offset_annotated(IDs, SortOrder, _Opts) ->
+sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
     {WithOffset, WithoutOffset} =
         lists:partition(
-            fun({Offset, _, _}) -> Offset =/= undefined end,
-            IDs
+            fun(AnnotatedID) -> maps:is_key(<<"offset">>, AnnotatedID) end,
+            AnnotatedIDs
         ),
-    Sorted =
+    Ascending =
+        lists:sort(
+            fun(#{ <<"offset">> := OffsetA }, #{ <<"offset">> := OffsetB }) ->
+                OffsetA < OffsetB
+            end,
+            WithOffset
+        ),
+    UserOrderSorted =
         case SortOrder of
-            <<"HEIGHT_ASC">> -> lists:keysort(1, WithOffset);
-            _ -> lists:reverse(lists:keysort(1, WithOffset))
+            <<"HEIGHT_ASC">> -> Ascending;
+            _ -> lists:reverse(Ascending)
         end,
     ?event(
         {order_by_block,
@@ -217,7 +269,7 @@ sort_offset_annotated(IDs, SortOrder, _Opts) ->
             {without_offset, length(WithoutOffset)}
         }
     ),
-    Sorted ++ WithoutOffset.
+    UserOrderSorted ++ WithoutOffset.
 
 %% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
 %% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
@@ -331,8 +383,7 @@ match(<<"height">>, Heights, Opts) ->
         case hb_maps:find(<<"max">>, Heights, Opts) of
             {ok, GivenMax} -> GivenMax;
             error ->
-                {ok, Latest} = dev_arweave_block_cache:latest(Opts),
-                Latest
+                hb_util:ok(dev_arweave_block_cache:latest(Opts))
         end,
     #{ store := ScopedStores } = scope(Opts),
     {ok,
@@ -377,34 +428,41 @@ annotate_offsets(IDs, StoreOpts, _Opts) ->
         fun(ID) ->
             case hb_store_arweave:read_offset(StoreOpts, ID) of
                 {ok, #{ <<"start-offset">> := Offset, <<"length">> := Length }} ->
-                    {Offset, Length, ID};
-                _ -> {undefined, undefined, ID}
+                    #{
+                        <<"id">> => ID,
+                        <<"offset">> => Offset,
+                        <<"length">> => Length
+                    };
+                _ ->
+                    #{ <<"id">> => ID }
             end
         end,
         IDs
     ).
 
-%% @doc Remove all annotations of start offset and length from a list of IDs.
-remove_annotations(IDs) -> lists:map(fun({_, _, ID}) -> ID end, IDs).
-
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
 %% avoiding materialisation of the full store.
-filter_offset_annotated(IDs, HeightRange, _Opts)
+filter_offset_annotated(AnnotatedIDs, HeightRange, _Opts)
         when HeightRange =:= undefined orelse HeightRange =:= null ->
-    IDs;
-filter_offset_annotated(IDs, Heights, Opts) ->
+    AnnotatedIDs;
+filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     {StartOffset, EndOffset} =
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun({IDOffset, Length, _}) ->
+            fun(UnknownOffset) when not is_map_key(<<"offset">>, UnknownOffset) ->
+                true;
+            (#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
                 ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
-                    ((EndOffset =:= infinity) orelse (IDOffset + Length =< EndOffset))
+                    (
+                        (EndOffset =:= infinity) orelse
+                            (IDOffset + Length =< EndOffset)
+                    )
             end,
-            IDs
+            AnnotatedIDs
         ),
-    ?event({filtered_out_of_range, length(IDs) - length(Filtered)}),
+    ?event({filtered_out_of_range, length(AnnotatedIDs) - length(Filtered)}),
     Filtered.
 
 %% @doc Return the base IDs for messages that have a matching commitment.

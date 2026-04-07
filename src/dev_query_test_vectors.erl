@@ -668,6 +668,116 @@ transactions_query_filter_by_block_test() ->
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
+transactions_query_cursor_by_offset_test() ->
+    {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
+    LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
+    StoreOpts = hb_store_arweave:store_from_opts(Opts),
+    {ok, #{ <<"start-offset">> := EarlierOffset }} =
+        hb_store_arweave:read_offset(StoreOpts, EarlierID),
+    {ok, #{ <<"start-offset">> := LaterOffset }} =
+        hb_store_arweave:read_offset(StoreOpts, LaterID),
+    Query =
+        <<"""
+            query($ids: [ID!], $sort: SortOrder, $first: Int, $after: String) {
+                transactions(
+                    ids: $ids,
+                    sort: $sort,
+                    first: $first,
+                    after: $after
+                ) {
+                    count
+                    pageInfo {
+                        hasNextPage
+                    }
+                    edges {
+                        cursor
+                        node {
+                            id
+                        }
+                    }
+                }
+            }
+        """>>,
+    VerifyFun =
+        fun(Order, FirstID, FirstOffset, SecondID, SecondOffset) ->
+            FirstRes =
+                dev_query_graphql:test_query(
+                    Node,
+                    Query,
+                    #{
+                        <<"ids">> => [EarlierID, LaterID],
+                        <<"sort">> => Order,
+                        <<"first">> => 1
+                    },
+                    Opts
+                ),
+            #{
+                <<"data">> := #{
+                    <<"transactions">> := #{
+                        <<"count">> := <<"2">>,
+                        <<"pageInfo">> := #{
+                            <<"hasNextPage">> := true
+                        },
+                        <<"edges">> := [
+                            #{
+                                <<"cursor">> := FirstCursor,
+                                <<"node">> := #{
+                                    <<"id">> := FirstID
+                                }
+                            }
+                        ]
+                    }
+                }
+            } = FirstRes,
+            ?assertEqual(hb_util:bin(FirstOffset), FirstCursor),
+            SecondRes =
+                dev_query_graphql:test_query(
+                    Node,
+                    Query,
+                    #{
+                        <<"ids">> => [EarlierID, LaterID],
+                        <<"sort">> => Order,
+                        <<"first">> => 1,
+                        <<"after">> => FirstID
+                    },
+                    Opts
+                ),
+            #{
+                <<"data">> := #{
+                    <<"transactions">> := #{
+                        <<"count">> := <<"2">>,
+                        <<"pageInfo">> := #{
+                            <<"hasNextPage">> := false
+                        },
+                        <<"edges">> := [
+                            #{
+                                <<"cursor">> := SecondCursor,
+                                <<"node">> := #{
+                                    <<"id">> := SecondID
+                                }
+                            }
+                        ]
+                    }
+                }
+            } = SecondRes,
+            ?assertEqual(hb_util:bin(SecondOffset), SecondCursor)
+        end,
+    VerifyFun(
+        <<"HEIGHT_ASC">>,
+        EarlierID,
+        EarlierOffset,
+        LaterID,
+        LaterOffset
+    ),
+    VerifyFun(
+        <<"HEIGHT_DESC">>,
+        LaterID,
+        LaterOffset,
+        EarlierID,
+        EarlierOffset
+    ).
+
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test() ->
     Opts =
