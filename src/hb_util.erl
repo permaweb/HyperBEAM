@@ -263,12 +263,12 @@ add_commas(List) -> List.
 
 %% @doc Encode a binary to URL safe base64 binary string.
 encode(Bin) ->
-    b64fast:encode(Bin).
+    b64rs:encode(Bin).
 
 %% @doc Try to decode a URL safe base64 into a binary or throw an error when
 %% invalid.
 decode(Input) ->
-    b64fast:decode(Input).
+    b64rs:decode(Input).
 
 %% @doc Safely encode a binary to URL safe base64.
 safe_encode(Bin) when is_binary(Bin) ->
