@@ -57,7 +57,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     Matches = match_args(Args, Opts),
     Ordered =
-        case annotate_offsets(Matches, Opts) of
+        case annotate_ids(Matches, Opts) of
             unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
             Annotated ->
                 Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
@@ -237,11 +237,8 @@ drop_to_cursor(Cursor, Ordered, _Opts, Index)
     {Index, Ordered};
 drop_to_cursor(After, [AnnotatedID | Rest], Opts, Index) ->
     ID = maps:get(<<"id">>, AnnotatedID, undefined),
-    Offset = maps:get(<<"offset">>, AnnotatedID, undefined),
-    case
-        (After =:= ID) orelse
-            ((Offset =/= undefined) andalso (After =:= hb_util:bin(Offset)))
-    of
+    Cursor = maps:get(<<"cursor">>, AnnotatedID, undefined),
+    case (After =:= ID) orelse (After =:= Cursor) of
         true -> {Index + 1, Rest};
         false -> drop_to_cursor(After, Rest, Opts, Index + 1)
     end.
@@ -436,27 +433,34 @@ match(UnsupportedFilter, _, _) ->
 %%% Block range post-filter
 
 %% @doc Offset-annotate a list of IDs, returning {StartOffset, ID} pairs.
-annotate_offsets(IDs, Opts) ->
+annotate_ids(IDs, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> unavailable;
-        StoreOpts -> annotate_offsets(IDs, StoreOpts, Opts)
+        StoreOpts -> annotate_offsets(IDs, StoreOpts, undefined, 0, Opts)
     end.
-annotate_offsets(IDs, StoreOpts, _Opts) ->
-    lists:map(
-        fun(ID) ->
-            case hb_store_arweave:read_offset(StoreOpts, ID) of
-                {ok, #{ <<"start-offset">> := Offset, <<"length">> := Length }} ->
-                    #{
-                        <<"id">> => ID,
-                        <<"offset">> => Offset,
-                        <<"length">> => Length
-                    };
-                _ ->
-                    #{ <<"id">> => ID }
-            end
+annotate_offsets([], _StoreOpts, _LastOffset, _Ordinate, _Opts) -> [];
+annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
+    {Offset, Annotated} =
+        case hb_store_arweave:read_offset(StoreOpts, ID) of
+            {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
+                {StartOffset, #{
+                    <<"id">> => ID,
+                    <<"offset">> => StartOffset,
+                    <<"length">> => Length
+                }};
+            _ ->
+                {undefined, #{ <<"id">> => ID }}
         end,
-        IDs
-    ).
+    {NewOrdinate, Postfix} =
+        case Offset =:= LastOffset of
+            true -> {Ordinate + 1, <<"-", (hb_util:bin(Ordinate + 1))/binary>>};
+            false -> {0, <<>>}
+        end,
+    WithCursor =
+        Annotated#{
+            <<"cursor">> => << (hb_util:bin(Offset))/binary, Postfix/binary >>
+        },
+    [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
