@@ -66,6 +66,10 @@ start(Opts = #{ <<"name">> := DataDir }) ->
             no_mem_init,
             no_sync
         ] ++
+        case maps:get(<<"read-ahead">>, Opts, true) of
+            true -> [];
+            false -> [no_readahead]
+        end ++
         case maps:get(<<"read-only">>, Opts, false) of
             true -> [no_lock];
             false -> []
