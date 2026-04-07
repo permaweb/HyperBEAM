@@ -363,20 +363,26 @@ match_args(Args, Opts) when is_map(Args) ->
 match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
+    PreparedResults = [prepare_match_ids(Result, Opts) || Result <- Results],
     Matches =
         lists:foldl(
             fun(Result, Acc) ->
-                hb_util:list_with(resolve_ids(Result, Opts), Acc)
+                hb_util:list_with(match_result_ids(Result), Acc)
             end,
-            resolve_ids(hd(Results), Opts),
-            tl(Results)
+            match_result_ids(hd(PreparedResults)),
+            tl(PreparedResults)
         ),
+    OutputMatches =
+        case explicit_match_ids(PreparedResults, Matches) of
+            [] -> Matches;
+            ExplicitMatches -> ExplicitMatches
+        end,
     hb_util:unique(
         lists:flatten(
             [
                 all_ids(ID, Opts)
             ||
-                ID <- Matches
+                ID <- OutputMatches
             ]
         )
     );
@@ -414,9 +420,9 @@ match(<<"height">>, Heights, Opts) ->
         )
     };
 match(<<"id">>, ID, _Opts) ->
-    {ok, [ID]};
+    {ok, {explicit_ids, [ID]}};
 match(<<"ids">>, IDs, _Opts) ->
-    {ok, IDs};
+    {ok, {explicit_ids, IDs}};
 match(<<"tags">>, Tags, Opts) ->
     hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
 match(<<"owners">>, Owners, Opts) ->
@@ -469,18 +475,26 @@ filter_offset_annotated(AnnotatedIDs, HeightRange, _Opts)
         when HeightRange =:= undefined orelse HeightRange =:= null ->
     AnnotatedIDs;
 filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
+    case hb_opts:get(query_arweave_ignore_block_ranges, false, Opts) of
+        true ->
+            AnnotatedIDs;
+        false ->
+            do_filter_offset_annotated(AnnotatedIDs, Heights, Opts)
+    end.
+do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
     {StartOffset, EndOffset} =
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun(UnknownOffset) when not is_map_key(<<"offset">>, UnknownOffset) ->
-                true;
-            (#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
-                ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
-                    (
-                        (EndOffset =:= infinity) orelse
-                            (IDOffset + Length =< EndOffset)
-                    )
+            fun
+                (#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
+                    ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
+                        (
+                            (EndOffset =:= infinity) orelse
+                                (IDOffset + Length =< EndOffset)
+                        );
+                (_) ->
+                    false
             end,
             AnnotatedIDs
         ),
@@ -540,6 +554,32 @@ all_ids(ID, Opts) ->
 scope(Opts) ->
     Scope = hb_opts:get(query_arweave_scope, [local], Opts),
     hb_store:scope(Opts, Scope).
+
+prepare_match_ids({explicit_ids, RawIDs}, Opts) ->
+    {explicit_ids, RawIDs, resolve_ids(RawIDs, Opts)};
+prepare_match_ids(IDs, Opts) ->
+    resolve_ids(IDs, Opts).
+
+match_result_ids({explicit_ids, _RawIDs, ResolvedIDs}) ->
+    ResolvedIDs;
+match_result_ids(IDs) ->
+    IDs.
+
+explicit_match_ids(Results, Matches) ->
+    hb_util:unique(
+        lists:flatten(
+            [
+                [
+                    RawID
+                ||
+                    {RawID, ResolvedID} <- lists:zip(RawIDs, ResolvedIDs),
+                    lists:member(ResolvedID, Matches)
+                ]
+            ||
+                {explicit_ids, RawIDs, ResolvedIDs} <- Results
+            ]
+        )
+    ).
 
 %% @doc Resolve a list of IDs to their store paths, using the stores provided.
 resolve_ids(IDs, Opts) ->
