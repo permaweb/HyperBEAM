@@ -13,6 +13,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
+%% Start a spawn process with the amount of binary data expected to allocate
+%% Chunk Size in Base64/JSON format.
+-define(DEFAULT_MIN_HEAP_SIZE, 367_000).
+-define(DEFAULT_FULL_SWEAP_AFTER, 0).
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
@@ -512,10 +516,14 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+    FetchAndCollectMinHeapSize = hb_opts:get(arweave_chunk_fetch_min_heap_size, ?DEFAULT_MIN_HEAP_SIZE, Opts),
+    FetchAndCollectFullSweapAfter = hb_opts:get(arweave_chunk_fetch_full_sweap_aftger, ?DEFAULT_FULL_SWEAP_AFTER, Opts),
     Results = hb_pmap:parallel_map(
         Offsets,
         fun(O) -> decode_chunk(get_chunk(O, Opts)) end,
-        Concurrency
+        Concurrency,
+        [{min_heap_size, FetchAndCollectMinHeapSize}, 
+            {fullsweep_after, FetchAndCollectFullSweapAfter}]
     ),
     collect_chunks(Results).
 

@@ -2,22 +2,24 @@
 %% Spawns up to MaxWorkers workers and refills the pool as workers complete.
 -module(hb_pmap).
 
--export([parallel_map/3]).
+-export([parallel_map/3, parallel_map/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
+    parallel_map(Items, Fun, MaxWorkers, []).
+parallel_map(Items, Fun, MaxWorkers, SpawnOpts) when is_list(Items), is_function(Fun, 1) ->
     Workers = max(1, MaxWorkers),
     Parent = self(),
     ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
     {ToSpawn, Remaining} =
         lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
-    ActiveRefs = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
-    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}),
+    ActiveRefs = [spawn_worker(IWR, Fun, Parent, SpawnOpts) || IWR <- ToSpawn],
+    ResultsMap = collect(ActiveRefs, Remaining, Fun, SpawnOpts, Parent, #{}),
     [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
 
-spawn_worker({Item, Ref}, Fun, Parent) ->
-    spawn(
+spawn_worker({Item, Ref}, Fun, Parent, Opts) ->
+    spawn_opt(
         fun() ->
             try
                 Parent ! {hb_pmap_result, Ref, Fun(Item)}
@@ -35,26 +37,28 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
                         Stacktrace
                     }
             end
-        end
+        end,
+        Opts 
     ),
     Ref.
 
-collect([], [], _Fun, _Parent, Results) ->
+collect([], [], _Fun, _SpawnOpts, _Parent, Results) ->
     Results;
-collect(Active, Remaining, Fun, Parent, Results) ->
+collect(Active, Remaining, Fun, SpawnOpts, Parent, Results) ->
     receive
         {hb_pmap_result, Ref, Result} ->
             NewResults = Results#{Ref => Result},
             NewActive = lists:delete(Ref, Active),
             case Remaining of
                 [] ->
-                    collect(NewActive, [], Fun, Parent, NewResults);
+                    collect(NewActive, [], Fun, SpawnOpts, Parent, NewResults);
                 [Next | Rest] ->
-                    NextRef = spawn_worker(Next, Fun, Parent),
+                    NextRef = spawn_worker(Next, Fun, Parent, SpawnOpts),
                     collect(
                         [NextRef | NewActive],
                         Rest,
                         Fun,
+                        SpawnOpts,
                         Parent,
                         NewResults
                     )
