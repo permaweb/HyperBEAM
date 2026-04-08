@@ -1362,7 +1362,7 @@ delegation_notice_message_format_test() ->
     ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice, not_found, Opts)),
     ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, Notice, not_found, Opts)).
 
-undelegate_notice_has_negative_quantity_test() ->
+undelegate_notice_has_positive_quantity_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
     ResourceOxygen = <<"oxygen">>,
@@ -1377,7 +1377,7 @@ undelegate_notice_has_negative_quantity_test() ->
     % Outbox is newest first, so undelegate notice is first
     [UndelegateNotice, _] = Outbox,
     Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
-    ?assert(Quantity =< 0).
+    ?assert(Quantity >= 0).
 
 multiple_delegations_outbox_order_test() ->
     Alice = <<"alice">>,

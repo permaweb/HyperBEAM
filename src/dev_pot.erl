@@ -1336,7 +1336,7 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
                 true -> <<"withdraw">>
                 end,
             <<"address">> => FromAddr,
-            <<"quantity">> => Amount,
+            <<"quantity">> => abs(Amount),
             <<"resource">> => ResourceID
         },
         S,
