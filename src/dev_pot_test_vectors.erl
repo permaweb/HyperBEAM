@@ -1367,7 +1367,8 @@ undelegate_notice_has_positive_quantity_test() ->
     Bob = <<"bob">>,
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
-    % Undelegation notice should have negative or zero quantity
+    % Undelegation notice should encode direction via `action', with a
+    % positive quantity so downstream `withdraw` handlers can accept it.
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
     S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
@@ -1376,8 +1377,11 @@ undelegate_notice_has_positive_quantity_test() ->
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
     [UndelegateNotice, _] = Outbox,
-    Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
-    ?assert(Quantity >= 0).
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(<<"withdraw">>, hb_maps:get(<<"action">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(Alice, hb_maps:get(<<"address">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(5, hb_maps:get(<<"quantity">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, UndelegateNotice, not_found, Opts)).
 
 multiple_delegations_outbox_order_test() ->
     Alice = <<"alice">>,
