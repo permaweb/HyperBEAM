@@ -12,7 +12,7 @@
 -export([register/3, subscribe/3, unsubscribe/3]).
 %%% Query wrappers.
 -export([now/2, balance/3, balance_total/3, balances/2, balances/3]).
--export([execution_balance/3]).
+-export([normalized_balance/3]).
 -export([supply/2, supply/3]).
 -export([subscribers/3, subscribers/4]).
 -export([subledger_supply/3, user_supply/3]).
@@ -209,9 +209,9 @@ balance(ProcMsg, ID, Opts) ->
 
 %% @doc Retrieve a single balance through the execution device's `balance`
 %% path, allowing lazy mint devices to normalize account state first.
-execution_balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
-    execution_balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
-execution_balance(ProcMsg, ID, Opts) ->
+normalized_balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
+    normalized_balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
+normalized_balance(ProcMsg, ID, Opts) ->
     CurrentSlot = hb_ao:get(<<"slot/current">>, ProcMsg, Opts),
     Res =
         hb_ao:resolve_many(

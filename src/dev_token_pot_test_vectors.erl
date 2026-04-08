@@ -872,7 +872,7 @@ transfer_with_unclaimed_yield_test() ->
     % Initial: 500, Minted: 5000, New total: 5500
     ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
-execution_balance_normalizes_lazy_mint_test() ->
+normalized_balance_normalizes_lazy_mint_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     AliceAddr = id(Alice),
@@ -908,7 +908,7 @@ execution_balance_normalizes_lazy_mint_test() ->
     % non-normalized /now 'stale' balance
     ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
     % normalized balance (now balance + claimable balance)
-    ?assertEqual(5500, dev_token_lib:execution_balance(Process, AliceAddr, Opts)).
+    ?assertEqual(5500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
 
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
