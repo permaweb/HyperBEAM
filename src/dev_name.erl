@@ -103,15 +103,18 @@ request(HookMsg, HookReq, Opts) ->
         ),
         {ok, #{ <<"body">> => ModReq }}
     else
-        Reason ->
+        {skip, Reason} ->
+            ?event({name_resolution_skipped, {reason, Reason}}),
+            {ok, HookReq};
+        Other ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
                     ?event({request_hook_404, root_path}),
-                    % No path provided should return 404 if not resolved
-                    % (via name resolvers or 52 char subdomain)
+                    % If no path is provided, we should return 404 if we could
+                    % not resolve the name component.
                     {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
                 _ ->
-                    ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
+                    ?event({request_hook_skip, {cause, Other}, {hook_req, HookReq}}),
                     {ok, HookReq}
             end
     end.
@@ -155,20 +158,23 @@ permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
 name_from_host(Host, no_host) ->
+    % Handle the case where no host key is present in the node message. This 
+    % logic is also used when parsing of the host key from the node message
+    % fails, or the node message host is not found in the client provided value
+    % (node claims to be `x.com`, but the user request is for `abc.y.com`).
     case binary:split(Host, <<".">>, [global, trim_all]) of
-        [_Host] -> {error, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
+        [_Host] -> {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
         [Name|_] -> {ok, Name}
     end;
 name_from_host(ReqHost, RawNodeHost) ->
-    NodeHost = uri_string:parse(RawNodeHost),
-    ?event({node_host, NodeHost}),
-    WithoutNodeHost =
-        binary:replace(
-            ReqHost,
-            maps:get(host, NodeHost),
-            <<>>
-        ),
-    name_from_host(WithoutNodeHost, no_host).
+    case uri_string:parse(RawNodeHost) of
+        #{ host := NodeHostName } ->
+            case binary:split(ReqHost, <<".", NodeHostName/binary>>) of
+                [Subdomain, <<>>] -> {ok, Subdomain};
+                _ -> name_from_host(ReqHost, no_host)
+            end;
+        _ -> name_from_host(ReqHost, no_host)
+    end.
 
 %%% Tests.
 
@@ -323,6 +329,40 @@ arns_host_resolution_test() ->
             #{
                 <<"path">> => <<"content-type">>,
                 <<"host">> => <<"001_permabytes.localhost">>
+            },
+            Opts
+        )
+    ).
+
+arns_host_resolution_with_node_host_test() ->
+    Opts = (test_arns_opts())#{ node_host => <<"http://localhost">>, port => 0 },
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, <<"text/html">>},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"content-type">>,
+                <<"host">> => <<"001_permabytes.localhost">>
+            },
+            Opts
+        )
+    ).
+
+localhost_root_request_skips_name_resolution_test() ->
+    Opts = (test_arns_opts())#{ port => 0 },
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok,
+            #{
+                <<"status">> := 307,
+                <<"location">> := <<"/~hyperbuddy@1.0/index">>
+            }},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => <<"localhost">>
             },
             Opts
         )
