@@ -875,6 +875,7 @@ transfer_with_unclaimed_yield_test() ->
 normalized_balance_normalizes_lazy_mint_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
     AliceAddr = id(Alice),
     ResourceOxygen = <<"oxygen">>,
     PotFields = #{
@@ -902,13 +903,16 @@ normalized_balance_normalizes_lazy_mint_test() ->
         #{
             <<"action">> => <<"mint">>
         },
-        Alice,
+        Bob,
         Opts
     ),
-    % non-normalized /now 'stale' balance
+    % Raw `now/balances` remains stale because explicit `mint` advances global
+    % pot state, but does not claim Alice's user-specific lazy yield.
     ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
-    % normalized balance (now balance + claimable balance)
-    ?assertEqual(5500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
+    % After the global mint, Alice has 7000 lazy claimable yield on top of her
+    % explicit 500 token balance.
+    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
+    ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
 
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
