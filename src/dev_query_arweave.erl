@@ -55,7 +55,7 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches = match_args(Args, Opts),
+    Matches = filter_explicit_ids(match_args(Args, Opts), Args, Opts),
     Ordered =
         case annotate_ids(Matches, Opts) of
             unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
@@ -363,29 +363,14 @@ match_args(Args, Opts) when is_map(Args) ->
 match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
-    PreparedResults = [prepare_match_ids(Result, Opts) || Result <- Results],
+    ResolvedResults = [ resolve_ids(Result, Opts) || Result <- Results ],
     Matches =
         lists:foldl(
-            fun(Result, Acc) ->
-                hb_util:list_with(match_result_ids(Result), Acc)
-            end,
-            match_result_ids(hd(PreparedResults)),
-            tl(PreparedResults)
+            fun(Result, Acc) -> hb_util:list_with(Result, Acc) end,
+            hd(ResolvedResults),
+            tl(ResolvedResults)
         ),
-    OutputMatches =
-        case explicit_match_ids(PreparedResults, Matches) of
-            [] -> Matches;
-            ExplicitMatches -> ExplicitMatches
-        end,
-    hb_util:unique(
-        lists:flatten(
-            [
-                all_ids(ID, Opts)
-            ||
-                ID <- OutputMatches
-            ]
-        )
-    );
+    hb_util:unique(lists:flatten([ all_ids(ID, Opts) || ID <- Matches ]));
 match_args([{Field, X} | Rest], Acc, Opts) ->
     MatchRes = match(Field, X, Opts),
     ?event({match, {field, Field}, {arg, X}, {match_res, MatchRes}}),
@@ -420,9 +405,9 @@ match(<<"height">>, Heights, Opts) ->
         )
     };
 match(<<"id">>, ID, _Opts) ->
-    {ok, {explicit_ids, [ID]}};
+    {ok, [ID]};
 match(<<"ids">>, IDs, _Opts) ->
-    {ok, {explicit_ids, IDs}};
+    {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
     hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
 match(<<"owners">>, Owners, Opts) ->
@@ -449,11 +434,14 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
     {Offset, Annotated} =
         case hb_store_arweave:read_offset(StoreOpts, ID) of
             {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
-                {StartOffset, #{
-                    <<"id">> => ID,
-                    <<"offset">> => StartOffset,
-                    <<"length">> => Length
-                }};
+                {
+                    StartOffset,
+                    #{
+                        <<"id">> => ID,
+                        <<"offset">> => StartOffset,
+                        <<"length">> => Length
+                    }
+                };
             _ ->
                 {undefined, #{ <<"id">> => ID }}
         end,
@@ -486,15 +474,13 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun
-                (#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
+            fun(#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
                     ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
                         (
                             (EndOffset =:= infinity) orelse
                                 (IDOffset + Length =< EndOffset)
                         );
-                (_) ->
-                    false
+                (_) -> false
             end,
             AnnotatedIDs
         ),
@@ -540,12 +526,14 @@ commitment_id_to_base_id(ID, Opts) ->
         not_found -> not_found
     end.
 
-%% @doc Find all IDs for a message, by any of its other IDs.
+%% @doc Find all IDs for a message, by any of its other IDs. It achieves this
+%% by resolving the given ID, recursing through its links, then returning all
+%% of the IDs found in that `BaseID/commitments' key.
 all_ids(ID, Opts) ->
-    Store = hb_opts:get(store, no_store, Opts),
-    case hb_store:list(Store, << ID/binary, "/commitments">>) of
-        {ok, []} -> [ID];
-        {ok, CommitmentIDs} -> CommitmentIDs;
+    Store = scoped_store(Opts),
+    ResolvedID = resolve_id(ID, Store),
+    case hb_store:list(Store, << ResolvedID/binary, "/commitments">>) of
+        {ok, CommitmentIDs} -> hb_util:unique([ID | CommitmentIDs]);
         _ -> [ID]
     end.
 
@@ -555,41 +543,36 @@ scope(Opts) ->
     Scope = hb_opts:get(query_arweave_scope, [local], Opts),
     hb_store:scope(Opts, Scope).
 
-prepare_match_ids({explicit_ids, RawIDs}, Opts) ->
-    {explicit_ids, RawIDs, resolve_ids(RawIDs, Opts)};
-prepare_match_ids(IDs, Opts) ->
-    resolve_ids(IDs, Opts).
+scoped_store(Opts) ->
+    hb_opts:get(store, no_store, scope(Opts)).
 
-match_result_ids({explicit_ids, _RawIDs, ResolvedIDs}) ->
-    ResolvedIDs;
-match_result_ids(IDs) ->
-    IDs.
+filter_explicit_ids(IDs, Args, Opts) ->
+    case explicit_ids(Args, Opts) of
+        [] -> IDs;
+        ExplicitIDs -> [ID || ID <- IDs, lists:member(ID, ExplicitIDs)]
+    end.
 
-explicit_match_ids(Results, Matches) ->
+%% @doc Return the explicit IDs from the arguments, if given. Searches for
+%% both `ids' and `id' keys.
+explicit_ids(Args, Opts) ->
     hb_util:unique(
-        lists:flatten(
-            [
-                [
-                    RawID
-                ||
-                    {RawID, ResolvedID} <- lists:zip(RawIDs, ResolvedIDs),
-                    lists:member(ResolvedID, Matches)
-                ]
-            ||
-                {explicit_ids, RawIDs, ResolvedIDs} <- Results
-            ]
-        )
+        case hb_maps:get(<<"ids">>, Args, [], Opts) of
+            IDs when is_list(IDs) -> IDs;
+            _ -> []
+        end ++
+        case hb_maps:find(<<"id">>, Args, Opts) of
+            {ok, ID} -> [ID];
+            error -> []
+        end
     ).
 
 %% @doc Resolve a list of IDs to their store paths, using the stores provided.
 resolve_ids(IDs, Opts) ->
-    Scoped = scope(Opts),
-    lists:map(
-        fun(ID) ->
-            case hb_cache:read(ID, Opts) of
-                {ok, Msg} -> hb_message:id(Msg, uncommitted, Scoped);
-                not_found -> ID
-            end
-        end,
-        IDs
-    ).
+    Store = scoped_store(Opts),
+    [ resolve_id(ID, Store) || ID <- IDs ].
+
+resolve_id(ID, Store) ->
+    case hb_store:resolve(Store, ID) of
+        Resolved when is_binary(Resolved) -> Resolved;
+        _ -> ID
+    end.
