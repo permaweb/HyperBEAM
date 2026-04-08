@@ -58,6 +58,7 @@ make_group(_, _) -> not_found.
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
+    ?event({store_arweave, {type, ID}}),
     case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
         {ok, _Offset} -> simple;
         _ -> not_found

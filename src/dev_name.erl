@@ -44,7 +44,18 @@ resolve(Key, _, Req, Opts) ->
 %% @doc Load a resolved name target if it is a cache reference, otherwise
 %% return the resolved value directly.
 maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
-    hb_cache:read(Resolved, Opts);
+    case hb_cache:read(Resolved, Opts) of 
+        {ok, _} = Result -> Result;
+        not_found ->
+            case is_fail_fast_on(Opts) of 
+                true ->
+                    %% Cache Not Found seperate from Not Found, and allow to reply 404 directly.
+                    {cache, not_found};
+                false ->
+                    not_found
+            end;
+        Result -> Result
+    end;
 maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
     {ok, hb_cache:ensure_loaded(Resolved, Opts)};
 maybe_load_resolved(Resolved, _Opts) ->
@@ -103,6 +114,8 @@ request(HookMsg, HookReq, Opts) ->
         ),
         {ok, #{ <<"body">> => ModReq }}
     else
+        {cache, not_found} ->
+            {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
         Reason ->
             case maps:get(<<"body">>, HookReq, []) of 
                 [] ->
@@ -169,6 +182,9 @@ name_from_host(ReqHost, RawNodeHost) ->
             <<>>
         ),
     name_from_host(WithoutNodeHost, no_host).
+
+is_fail_fast_on(Opts) ->
+    hb_util:bool(maps:get(dev_name_fail_fast, Opts, false)).
 
 %%% Tests.
 
