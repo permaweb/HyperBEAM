@@ -127,7 +127,7 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
     Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
-            <<"path">> => <<"/~bundler@1.0/tx&codec-device=ans104@1.0">>,
+            <<"path">> => <<"/~bundler@1.0/tx?codec-device=ans104@1.0">>,
             <<"content-type">> => <<"application/octet-stream">>,
             <<"body">> => SerializedTX
         },
