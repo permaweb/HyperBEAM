@@ -285,7 +285,9 @@ raw_default_message() ->
         <<"commitment-device">> => <<"httpsig@1.0">>,
         % Copycat-specific options.
         <<"copycat-memory-cap">> => 6 * 1024 * 1024 * 1024,
+        <<"copycat-memory-budget">> => 6 * 1024 * 1024 * 1024,
         <<"copycat-depth-recursion-cap">> => 6, % 2x the deepest we've seen to date
+        <<"arweave-block-workers">> => 3,
         % Dev options
         <<"mode">> => debug,
         <<"profiling">> => true,

@@ -12,7 +12,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
--define(BLOCK_MARKER_PREFIX, <<"block/">>).
 -define(CUTOVER_KEY, <<"block/marker-cutover-height">>).
 -define(DEPTH_SENTINEL, 99999).
 % By default we'll index blocks to depth 2 which is:
@@ -70,14 +69,14 @@ arweave(_Base, Request, Opts) ->
                 {error, unavailable} -> {error, unavailable};
                 {ok, {From, To}} -> list_index(From, To, Opts)
             end;
-        <<"list-items">> ->
+        <<"inventory">> ->
             case parse_range(Request, Opts) of
                 {error, unavailable} -> {error, unavailable};
-                {ok, {From, To}} -> list_items_index(From, To, Opts)
+                {ok, {From, To}} -> inventory_index(From, To, Opts)
             end;
         Mode ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
-                "`. Supported modes are: write, list, list-items">>}
+                "`. Supported modes are: write, list, inventory">>}
     end.
 %% @doc Set safe memory resource allocation cap for the in-memory
 %% bundle processing. in bytes.
@@ -95,9 +94,22 @@ get_depth_recursion_cap(Opts) ->
 get_memory_safe_cap(Opts) ->
     hb_opts:get(copycat_memory_cap, undefined, Opts).
 
+%% @doc Return the effective per-TX memory cap, clamped to the global budget.
+%% Lazily initializes the budget pool on first call.
+effective_memory_cap(Opts) ->
+    Budget = hb_opts:get(
+        copycat_memory_budget, 6 * 1024 * 1024 * 1024, Opts),
+    hb_copycat_budget:ensure_started(Budget),
+    PoolSize = hb_copycat_budget:get_budget(),
+    Cap = get_memory_safe_cap(Opts),
+    case Cap of
+        undefined -> PoolSize;
+        _ -> min(Cap, PoolSize)
+    end.
+
 %% @doc Return the store path for a block completion marker.
 block_indexed_path(Height) ->
-    <<?BLOCK_MARKER_PREFIX/binary, (hb_util:bin(Height))/binary>>.
+    <<"block/", (hb_util:bin(Height))/binary, "/depth">>.
 
 %% @doc Return the store path for a per-block item index at a given depth.
 block_items_path(Height, Depth) ->
@@ -636,26 +648,36 @@ read_block_item_counts(Height, Opts) ->
 read_block_item_ids(Height, Opts) ->
     probe_block_items(Height, Opts, fun decode_and_encode_ids/1).
 
-%% @doc mode=list-items: return full item ID lists for a single block.
-list_items_index(From, To, _Opts) when From =/= To ->
-    {error, <<"mode=list-items requires from=to (single block only)">>};
-list_items_index(From, _To, Opts) ->
-    BlockKey = hb_util:bin(From),
-    BlockInfo = case fetch_block_header(From, Opts) of
-        {ok, Block} ->
-            Base = assemble_block_info(From, Block, Opts),
-            case maps:get(<<"depth">>, Base, undefined) of
-                undefined -> Base;
-                _ -> Base#{<<"items">> => read_block_item_ids(From, Opts)}
-            end;
-        {error, _} ->
-            #{<<"error">> => <<"block not found">>}
-    end,
-    JSON = hb_json:encode(#{BlockKey => BlockInfo}),
+%% @doc mode=inventory: return per-depth item ID lists from the local index store.
+%% Supports range queries. The inventory read itself is local-only (no network).
+%% Note: range parsing may call latest_height/1 if from/to are omitted or negative.
+inventory_index(From, undefined, Opts) ->
+    inventory_index(From, 0, Opts);
+inventory_index(From, To, _Opts) when From < To ->
+    {ok, #{
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => hb_json:encode(#{})
+    }};
+inventory_index(From, To, Opts) ->
+    Result = inventory_local(From, To, Opts, #{}),
+    JSON = hb_json:encode(Result),
     {ok, #{
         <<"content-type">> => <<"application/json">>,
         <<"body">> => JSON
     }}.
+
+inventory_local(Current, To, _Opts, Acc) when Current < To -> Acc;
+inventory_local(Current, To, Opts, Acc) ->
+    case read_block_depth(Current, Opts) of
+        undefined ->
+            inventory_local(Current - 1, To, Opts, Acc);
+        Depth ->
+            ItemIDs = read_block_item_ids(Current, Opts),
+            BlockKey = hb_util:bin(Current),
+            BlockInfo = #{<<"depth">> => Depth, <<"items">> => ItemIDs},
+            inventory_local(Current - 1, To, Opts,
+                Acc#{BlockKey => BlockInfo})
+    end.
 
 fetch_block_header(Height, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
@@ -687,7 +709,7 @@ classify_txs(TXIDs, Opts) ->
 %% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
 %% is omitted, stop at the first block already indexed at the requested depth
 %% (via block markers above cutover, or legacy per-TX check below cutover).
-fetch_blocks(Current, To, TargetDepth, _Opts) 
+fetch_blocks(Current, To, TargetDepth, _Opts)
         when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
@@ -699,26 +721,97 @@ fetch_blocks(Current, To, TargetDepth, _Opts)
 fetch_blocks(Current, undefined, _TargetDepth, _Opts) when Current < 0 ->
     {ok, 0};
 fetch_blocks(Current, undefined, TargetDepth, Opts) ->
-    BlockRes = fetch_block_header(Current, Opts),
-    case is_already_indexed(BlockRes, TargetDepth, Opts) of
-        true ->
+    BlockWorkers = block_workers(Opts),
+    fetch_blocks_open_ended(Current, TargetDepth, BlockWorkers, Opts);
+fetch_blocks(Current, To, TargetDepth, Opts) ->
+    BlockWorkers = block_workers(Opts),
+    fetch_blocks_ranged(Current, To, TargetDepth, BlockWorkers, Opts).
+
+block_workers(Opts) ->
+    max(1, hb_opts:get(arweave_block_workers, 3, Opts)).
+
+%% @doc Process a known range of blocks in parallel batches.
+fetch_blocks_ranged(Current, To, TargetDepth, _Workers, _Opts)
+        when Current < To ->
+    ?event(copycat_short,
+        {arweave_block_indexing_completed,
+            {reached_target, To},
+            {target_depth, TargetDepth}
+        }
+    ),
+    {ok, To};
+fetch_blocks_ranged(Current, To, TargetDepth, Workers, Opts) ->
+    BatchEnd = max(To, Current - Workers + 1),
+    Heights = lists:seq(Current, BatchEnd, -1),
+    hb_pmap:parallel_map(
+        Heights,
+        fun(H) ->
+            observe_event(<<"block_indexed">>, fun() ->
+                fetch_and_process_block(H, To, TargetDepth, Opts)
+            end)
+        end,
+        Workers
+    ),
+    fetch_blocks_ranged(BatchEnd - 1, To, TargetDepth, Workers, Opts).
+
+%% @doc Process blocks until an already-indexed block is found.
+%% Fetches headers in parallel, stops at the first indexed block,
+%% then processes the unindexed prefix in parallel.
+fetch_blocks_open_ended(Current, _TargetDepth, _Workers, _Opts)
+        when Current < 0 ->
+    {ok, 0};
+fetch_blocks_open_ended(Current, TargetDepth, Workers, Opts) ->
+    BatchEnd = max(0, Current - Workers + 1),
+    Heights = lists:seq(Current, BatchEnd, -1),
+    HeaderResults = hb_pmap:parallel_map(
+        Heights,
+        fun(H) -> {H, fetch_block_header(H, Opts)} end,
+        Workers
+    ),
+    case find_indexed_prefix(HeaderResults, TargetDepth, Opts) of
+        {all_unindexed, ToProcess} ->
+            process_prefetched_blocks(
+                ToProcess, TargetDepth, Workers, Opts),
+            fetch_blocks_open_ended(
+                BatchEnd - 1, TargetDepth, Workers, Opts);
+        {stop_at, StopHeight, ToProcess} ->
+            process_prefetched_blocks(
+                ToProcess, TargetDepth, Workers, Opts),
             ?event(copycat_short,
                 {arweave_block_indexing_completed,
-                    {stop_at_indexed_block, Current}
+                    {stop_at_indexed_block, StopHeight}
                 }
             ),
-            {ok, Current};
+            {ok, StopHeight}
+    end.
+
+%% @doc Walk header results in order, return the unindexed prefix and
+%% either the stop height or all_unindexed.
+find_indexed_prefix(HeaderResults, TargetDepth, Opts) ->
+    find_indexed_prefix(HeaderResults, TargetDepth, Opts, []).
+
+find_indexed_prefix([], _TargetDepth, _Opts, Acc) ->
+    {all_unindexed, lists:reverse(Acc)};
+find_indexed_prefix([{H, BlockRes} | Rest], TargetDepth, Opts, Acc) ->
+    case is_already_indexed(BlockRes, TargetDepth, Opts) of
+        true ->
+            {stop_at, H, lists:reverse(Acc)};
         false ->
+            find_indexed_prefix(
+                Rest, TargetDepth, Opts, [{H, BlockRes} | Acc])
+    end.
+
+%% @doc Process a list of {Height, BlockRes} tuples in parallel.
+process_prefetched_blocks(Blocks, TargetDepth, Workers, Opts) ->
+    hb_pmap:parallel_map(
+        Blocks,
+        fun({H, BlockRes}) ->
             observe_event(<<"block_indexed">>, fun() ->
-                process_block(BlockRes, Current, undefined, TargetDepth, Opts)
-            end),
-            fetch_blocks(Current - 1, undefined, TargetDepth, Opts)
-    end;
-fetch_blocks(Current, To, TargetDepth, Opts) ->
-    observe_event(<<"block_indexed">>, fun() ->
-        fetch_and_process_block(Current, To, TargetDepth, Opts)
-    end),
-    fetch_blocks(Current - 1, To, TargetDepth, Opts).
+                process_block(BlockRes, H, undefined, TargetDepth, Opts)
+            end)
+        end,
+        Workers
+    ).
 
 %% @doc Determine whether a fetched block is considered indexed at the
 %% requested depth. Checks block markers first. For blocks at or above
@@ -1079,12 +1172,13 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
                 true -> bundle;
                 false -> not_bundle
             end,
-        within_memory_cap ?=
-            case Length =< get_memory_safe_cap(Opts) of
-                true -> within_memory_cap;
-                false -> memory_safe_cap_exceeded
+        within_effective_cap ?=
+            case Length =< effective_memory_cap(Opts) of
+                true -> within_effective_cap;
+                false -> effective_cap_exceeded
             end,
-        process_l1_tx(
+        ok ?= hb_copycat_budget:lease(Length),
+        try process_l1_tx(
             StartOffset,
             Length,
             Depth,
@@ -1092,6 +1186,9 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
             EncodedTXID,
             Opts
         )
+        after
+            hb_copycat_budget:release(Length)
+        end
     else
         {error, Reason} ->
             ?event(
@@ -1114,12 +1211,12 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
                 }
             ),
             Skipped;
-        memory_safe_cap_exceeded ->
+        effective_cap_exceeded ->
             ?event(
                 copycat_short,
                 {arweave_bundle_skipped,
                     {tx_id, {explicit, EncodedTXID}},
-                    {reason, memory_safe_cap_exceeded}
+                    {reason, effective_cap_exceeded}
                 }
             ),
             #{
@@ -1142,20 +1239,26 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
 %% @doc Fast path for depth>2 block indexing. Skips offset lookup and
 %% header re-fetch since the caller already has both.
 process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
-    MemoryCap = get_memory_safe_cap(Opts),
-    case MemoryCap =/= undefined andalso Length > MemoryCap of
+    EffectiveCap = effective_memory_cap(Opts),
+    case Length > EffectiveCap of
         true ->
             ?event(copycat_short,
                 {arweave_bundle_skipped,
                     {tx_id, {explicit, EncodedTXID}},
-                    {reason, memory_safe_cap_exceeded}
+                    {reason, effective_cap_exceeded}
                 }
             ),
             #{items_count => 0, bundle_count => 1,
                 skipped_count => 1, achieved_depth => 0};
         false ->
-            process_l1_tx(
-                StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts)
+            ok = hb_copycat_budget:lease(Length),
+            try
+                process_l1_tx(
+                    StartOffset, Length, Depth,
+                    IndexStore, EncodedTXID, Opts)
+            after
+                hb_copycat_budget:release(Length)
+            end
     end.
 
 %% @doc Load the L1 TX data into memory and index it.
@@ -2847,20 +2950,21 @@ list_index_with_items_test() ->
     ?assert(maps:get(<<"2">>, Items) > 0),
     ok.
 
-list_items_single_block_test() ->
+inventory_single_block_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} =
         hb_ao:resolve(
             <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
             Opts
         ),
-    {ok, ListResult} =
+    {ok, InvResult} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=list-items">>,
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=inventory">>,
             Opts
         ),
-    Body = hb_json:decode(hb_maps:get(<<"body">>, ListResult)),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
     BlockInfo = maps:get(<<"1827942">>, Body),
+    ?assert(is_integer(maps:get(<<"depth">>, BlockInfo))),
     Items = maps:get(<<"items">>, BlockInfo),
     L1Items = maps:get(<<"1">>, Items),
     ?assert(is_list(L1Items)),
@@ -2868,20 +2972,26 @@ list_items_single_block_test() ->
     L2Items = maps:get(<<"2">>, Items),
     ?assert(is_list(L2Items)),
     ?assert(length(L2Items) > 0),
-    {ok, Block} = fetch_block_header(1827942, Opts),
-    BlockTXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    ?assertEqual(BlockTXIDs, L1Items),
+    ?assertEqual(5, length(L1Items)),
     ?assert(lists:member(
         <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, L2Items)),
     ok.
 
-list_items_rejects_range_test() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {error, _} =
-        hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827940&mode=list-items">>,
-            Opts
-        ),
+inventory_range_test() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    #{ <<"index-store">> := Store } = StoreOpts,
+    hb_store:write(Store, block_indexed_path(77777777), <<"2">>),
+    hb_store:write(Store, block_items_path(77777777, 1), <<0:256>>),
+    hb_store:write(Store, block_items_path(77777777, 2), <<>>),
+    hb_store:write(Store, block_indexed_path(77777778), <<"2">>),
+    hb_store:write(Store, block_items_path(77777778, 1), <<1:256>>),
+    hb_store:write(Store, block_items_path(77777778, 2), <<>>),
+    {ok, InvResult} = inventory_index(77777778, 77777777, Opts),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
+    ?assert(maps:is_key(<<"77777777">>, Body)),
+    ?assert(maps:is_key(<<"77777778">>, Body)),
+    ?assertEqual(2, maps:get(<<"depth">>, maps:get(<<"77777777">>, Body))),
+    ?assertEqual(2, maps:get(<<"depth">>, maps:get(<<"77777778">>, Body))),
     ok.
 
 decode_item_ids_validation_test() ->
