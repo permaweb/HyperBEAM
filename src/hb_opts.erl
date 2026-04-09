@@ -425,17 +425,10 @@ default_message() ->
                     <<"arweave-node">> => ?DEFAULT_GATEWAY
                 },
                 #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"subindex">> => [
-                        #{
-                            <<"name">> => <<"Data-Protocol">>,
-                            <<"value">> => <<"ao">>
-                        }
-                    ],
-                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
+                    <<"store-module">> => hb_store_remote_node,
+                    <<"only-ids">> => true,
+                    <<"name">> => <<"remote-default-gateway">>,
+                    <<"node">> => <<"https://arweave.net">>,
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
