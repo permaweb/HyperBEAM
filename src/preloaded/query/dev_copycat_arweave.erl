@@ -116,6 +116,21 @@ block_items_path(Height, Depth) ->
     <<"block/", (hb_util:bin(Height))/binary,
         "/items/", (hb_util:bin(Depth))/binary>>.
 
+%% @doc Return the store path for a parent index entry.
+parent_path(ItemID) when byte_size(ItemID) =:= 32 ->
+    <<"parent/", ItemID/binary>>.
+
+%% @doc Encode a parent entry for storage.
+encode_parent_entry(Height, block) when is_integer(Height) ->
+    <<0, Height:64/big-unsigned>>;
+encode_parent_entry(ParentID, bundle) when byte_size(ParentID) =:= 32 ->
+    <<1, ParentID:32/binary>>.
+
+%% @doc Write a parent entry for an item to the index store.
+write_parent(ItemID, ParentData, Type, Store) ->
+    Entry = encode_parent_entry(ParentData, Type),
+    hb_store:write(Store, parent_path(ItemID), Entry).
+
 %% @doc Encode a list of 32-byte raw IDs into a single binary.
 encode_item_ids(IDs) ->
     << <<ID:32/binary>> || ID <- IDs >>.
@@ -746,9 +761,13 @@ fetch_blocks_ranged(Current, To, TargetDepth, Workers, Opts) ->
     hb_pmap:parallel_map(
         Heights,
         fun(H) ->
-            observe_event(<<"block_indexed">>, fun() ->
-                fetch_and_process_block(H, To, TargetDepth, Opts)
-            end)
+            case is_block_indexed(H, TargetDepth, Opts) of
+                true -> ok;
+                false ->
+                    observe_event(<<"block_indexed">>, fun() ->
+                        fetch_and_process_block(H, To, TargetDepth, Opts)
+                    end)
+            end
         end,
         Workers
     ),
@@ -954,7 +973,7 @@ maybe_index_block(Block, TargetDepth, Opts) ->
                         TXsWithData
                     ),
                     TXResults = process_block_txs(
-                        ValidTXs, BlockStartOffset, TargetDepth, Opts),
+                        ValidTXs, BlockStartOffset, TargetDepth, Height, Opts),
                     ExistingIDs = maps:get(item_ids, TXResults, #{}),
                     {block_cached, TXResults#{
                         total_txs => TotalTXs,
@@ -973,10 +992,10 @@ parallel_map(Items, Fun, Opts) ->
 
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, TargetDepth, _Opts) ->
+process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, TargetDepth, _BlockHeight, _Opts) ->
     #{items_count => 0, bundle_count => 0, skipped_count => 0,
         achieved_depth => max(2, TargetDepth)};
-process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
+process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, BlockHeight, Opts) ->
     IndexStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
@@ -995,6 +1014,8 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             TX#tx.data_size
         )
     end),
+    #{ <<"index-store">> := ParentStore } = IndexStore,
+    write_parent(TX#tx.id, BlockHeight, block, ParentStore),
     case is_bundle_tx(TX, Opts) of
         false ->
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
@@ -1002,7 +1023,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
         true when TargetDepth > 2 ->
             L1Result = process_l1_tx_direct(
                 TXStartOffset, TX#tx.data_size,
-                TargetDepth - 1, IndexStore, TXID, Opts),
+                TargetDepth - 1, IndexStore, TXID, TX#tx.id, Opts),
             L1Result#{
                 achieved_depth =>
                     max(2, maps:get(achieved_depth, L1Result, 0))
@@ -1032,6 +1053,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                                     ItemStartOffset,
                                     Size
                                 ),
+                                write_parent(ItemID, TX#tx.id, bundle, ParentStore),
                                 {ItemStartOffset + Size, ItemsCountAcc + 1}
                             end,
                             {TXStartOffset + HeaderSize, 0},
@@ -1094,11 +1116,11 @@ header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
 %% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
 %% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
 %% Returns a map with keys: items_count, bundle_count, skipped_count.
-process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
+process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, BlockHeight, Opts) ->
     Results = parallel_map(
         ValidTXs,
         fun(TXWithData) -> process_block_tx(
-            TXWithData, BlockStartOffset, TargetDepth, Opts) end,
+            TXWithData, BlockStartOffset, TargetDepth, BlockHeight, Opts) end,
         Opts
     ),
     Folded = lists:foldl(
@@ -1184,6 +1206,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
             Depth,
             IndexStore,
             EncodedTXID,
+            hb_util:decode(EncodedTXID),
             Opts
         )
         after
@@ -1238,7 +1261,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
 
 %% @doc Fast path for depth>2 block indexing. Skips offset lookup and
 %% header re-fetch since the caller already has both.
-process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
+process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, ParentID, Opts) ->
     EffectiveCap = effective_memory_cap(Opts),
     case Length > EffectiveCap of
         true ->
@@ -1255,7 +1278,7 @@ process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) 
             try
                 process_l1_tx(
                     StartOffset, Length, Depth,
-                    IndexStore, EncodedTXID, Opts)
+                    IndexStore, EncodedTXID, ParentID, Opts)
             after
                 hb_copycat_budget:release(Length)
             end
@@ -1263,7 +1286,7 @@ process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) 
 
 %% @doc Load the L1 TX data into memory and index it.
 process_l1_tx(
-        StartOffset, Length, Depth, IndexStore, EncodedTXID, Opts) ->
+        StartOffset, Length, Depth, IndexStore, EncodedTXID, ParentID, Opts) ->
     case observe_copycat_l1_stage(
         <<"l1_read_chunks">>,
         fun() -> hb_store_arweave:read_chunks(StartOffset, Length, Opts) end
@@ -1279,6 +1302,7 @@ process_l1_tx(
                                 StartOffset,
                                 Depth,
                                 IndexStore,
+                                ParentID,
                                 Opts
                             )
                         end
@@ -1416,10 +1440,10 @@ query_l1_tx_offset(TXID, IndexStore, Opts) ->
             {error, not_found}
     end.
 
-index_full_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _Opts)
+index_full_bundle_bytes(_BundleData, _BundleStartOffset, Depth, _Store, _ParentID, _Opts)
         when Depth =< 0 ->
     {ok, 0, 0, #{}};
-index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
+index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, ParentID, Opts) ->
     case ar_bundles:decode_bundle_header(BundleData) of
         invalid_bundle_header ->
             {error, invalid_bundle_header};
@@ -1431,6 +1455,7 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
                 BundleStartOffset + HeaderSize,
                 Depth,
                 Store,
+                ParentID,
                 Opts,
                 0,
                 ?DEPTH_SENTINEL,
@@ -1443,7 +1468,7 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
 %% Returns {ok, Count, MinAchievedDepth, ItemIDs} or {error, Reason}.
 %% ItemIDs is a map of relative-depth => list of raw 32-byte IDs.
 index_full_bundle_items(
-        [], _ItemsBin, _ItemStartOffset, Depth, _Store, _Opts,
+        [], _ItemsBin, _ItemStartOffset, Depth, _Store, _ParentID, _Opts,
         Count, MinDepth, ThisLevelIDs, DescIDs) ->
     FinalDepth = case MinDepth of
         ?DEPTH_SENTINEL -> Depth;
@@ -1457,6 +1482,7 @@ index_full_bundle_items(
     ItemStartOffset,
     Depth,
     Store,
+    ParentID,
     Opts,
     Count,
     MinDepth,
@@ -1474,12 +1500,14 @@ index_full_bundle_items(
         ItemStartOffset,
         Size
     ),
+    #{ <<"index-store">> := IdxStore } = Store,
+    write_parent(ItemID, ParentID, bundle, IdxStore),
     {DescendantCount, ItemAchievedDepth, ChildIDs} =
         case {Depth > 1, ParseResult} of
             {true, {ok, HeaderSize, ParsedItem}} ->
                 index_full_bundle_descendants_parsed(
                     ParsedItem, HeaderSize,
-                    ItemStartOffset, Depth - 1, Store, Opts);
+                    ItemStartOffset, Depth - 1, Store, ItemID, Opts);
             _ ->
                 {0, Depth - 1, #{}}
         end,
@@ -1490,6 +1518,7 @@ index_full_bundle_items(
         ItemStartOffset + Size,
         Depth,
         Store,
+        ParentID,
         Opts,
         Count + 1 + DescendantCount,
         min(MinDepth, ItemAchievedDepth),
@@ -1498,17 +1527,17 @@ index_full_bundle_items(
     );
 index_full_bundle_items(
         _BundleIndex, _ItemsBin, _ItemStartOffset, _Depth,
-        _Store, _Opts, _Count, _MinDepth, _ThisLevelIDs, _DescIDs) ->
+        _Store, _ParentID, _Opts, _Count, _MinDepth, _ThisLevelIDs, _DescIDs) ->
     {error, invalid_bundle_header}.
 
 %% @doc Recurse into a nested data item using an already-parsed header.
 %% Returns {Count, AchievedDepth, ItemIDs}.
 index_full_bundle_descendants_parsed(
-        _ParsedItem, _HeaderSize, _ItemStartOffset, Depth, _Store, _Opts)
+        _ParsedItem, _HeaderSize, _ItemStartOffset, Depth, _Store, _ParentID, _Opts)
         when Depth =< 0 ->
     {0, 0, #{}};
 index_full_bundle_descendants_parsed(
-        ParsedItem, HeaderSize, ItemStartOffset, Depth, Store, Opts) ->
+        ParsedItem, HeaderSize, ItemStartOffset, Depth, Store, ParentID, Opts) ->
     case is_bundle_tx(ParsedItem, Opts) of
         true ->
             case index_full_bundle_bytes(
@@ -1516,6 +1545,7 @@ index_full_bundle_descendants_parsed(
                 ItemStartOffset + HeaderSize,
                 Depth,
                 Store,
+                ParentID,
                 Opts
             ) of
                 {ok, Count, ChildDepth, ChildIDs} ->
@@ -2736,7 +2766,7 @@ depth_1_normalizes_to_2_test() ->
         {{TX1, <<>>}, 100},
         {{TX2, <<>>}, 300}
     ],
-    Result = process_block_txs(Tuples, 0, 1, Opts),
+    Result = process_block_txs(Tuples, 0, 1, 88888888, Opts),
     ?assertEqual(2, maps:get(achieved_depth, Result)),
     Height = 88888888,
     mark_block_indexed(Height, maps:get(achieved_depth, Result), Opts),
@@ -2780,7 +2810,7 @@ invalid_bundle_bytes_test() ->
     StoreOpts = hb_store_arweave:store_from_opts(Opts),
     ?assertEqual(
         {error, invalid_bundle_header},
-        index_full_bundle_bytes(<<"not a bundle">>, 0, 2, StoreOpts, Opts)
+        index_full_bundle_bytes(<<"not a bundle">>, 0, 2, StoreOpts, <<0:256>>, Opts)
     ),
     ok.
 
@@ -3030,6 +3060,190 @@ memory_cap_depth3_floors_to_2_test() ->
         ),
     ?assert(is_block_indexed(Block, 2, CappedOpts)),
     ?assertNot(is_block_indexed(Block, 3, CappedOpts)),
+    ok.
+
+parent_encode_decode_test() ->
+    BlockEntry = encode_parent_entry(12345, block),
+    ?assertEqual(<<0, 12345:64/big-unsigned>>, BlockEntry),
+    BundleID = crypto:strong_rand_bytes(32),
+    BundleEntry = encode_parent_entry(BundleID, bundle),
+    ?assertEqual(<<1, BundleID:32/binary>>, BundleEntry),
+    Combined = <<BlockEntry/binary, BundleEntry/binary>>,
+    Decoded = hb_store_arweave:decode_parent_entries(Combined),
+    ?assertEqual([{12345, block}, {BundleID, bundle}], Decoded),
+    ok.
+
+parent_not_found_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    StoreOpts2 = hb_store_arweave:store_from_opts(Opts),
+    UnknownID = crypto:strong_rand_bytes(32),
+    ?assertEqual(not_found, hb_store_arweave:read_parent(StoreOpts2, UnknownID)),
+    ok.
+
+parent_depth_2_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=2">>,
+            Opts
+        ),
+    StoreOpts2 = hb_store_arweave:store_from_opts(Opts),
+    {ok, InvResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&mode=inventory">>,
+            Opts
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
+    BlockInfo = maps:get(hb_util:bin(Block), Body),
+    L1Items = maps:get(<<"1">>, maps:get(<<"items">>, BlockInfo)),
+    L1ID = hb_util:decode(hd(L1Items)),
+    {ok, [{Block, block}]} = hb_store_arweave:read_parent(StoreOpts2, L1ID),
+    L2Items = maps:get(<<"2">>, maps:get(<<"items">>, BlockInfo)),
+    case L2Items of
+        [] -> ok;
+        [FirstL2 | _] ->
+            L2ID = hb_util:decode(FirstL2),
+            {ok, [{L2Parent, bundle}]} =
+                hb_store_arweave:read_parent(StoreOpts2, L2ID),
+            ?assert(lists:member(
+                hb_util:encode(L2Parent), L1Items))
+    end,
+    ok.
+
+parent_depth_3_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1889322,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=3">>,
+            Opts
+        ),
+    StoreOpts2 = hb_store_arweave:store_from_opts(Opts),
+    {ok, InvResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&mode=inventory">>,
+            Opts
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
+    BlockInfo = maps:get(hb_util:bin(Block), Body),
+    L3Items = maps:get(<<"3">>, maps:get(<<"items">>, BlockInfo)),
+    ?assert(length(L3Items) > 0),
+    L2Items = maps:get(<<"2">>, maps:get(<<"items">>, BlockInfo)),
+    L3ID = hb_util:decode(hd(L3Items)),
+    {ok, [{L3Parent, bundle}]} =
+        hb_store_arweave:read_parent(StoreOpts2, L3ID),
+    ?assert(lists:member(hb_util:encode(L3Parent), L2Items)),
+    ok.
+
+parent_corrupt_data_test() ->
+    ?assertEqual([], hb_store_arweave:decode_parent_entries(<<>>)),
+    ?assertEqual(
+        {error, corrupt_parent_data},
+        hb_store_arweave:decode_parent_entries(<<5, 1, 2, 3>>)),
+    Truncated = <<0, 1, 2, 3>>,
+    ?assertEqual(
+        {error, corrupt_parent_data},
+        hb_store_arweave:decode_parent_entries(Truncated)),
+    ValidThenCorrupt = <<0, 100:64/big-unsigned, 99>>,
+    ?assertEqual(
+        {error, corrupt_parent_data},
+        hb_store_arweave:decode_parent_entries(ValidThenCorrupt)),
+    ok.
+
+parent_endpoint_block_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=2">>,
+            Opts
+        ),
+    {ok, InvResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&mode=inventory">>,
+            Opts
+        ),
+    InvBody = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
+    BlockInfo = maps:get(hb_util:bin(Block), InvBody),
+    L1Items = maps:get(<<"1">>, maps:get(<<"items">>, BlockInfo)),
+    L1EncodedID = hd(L1Items),
+    {ok, ParentResult} =
+        hb_ao:resolve(
+            <<"~arweave@2.9/parent=", L1EncodedID/binary>>,
+            Opts
+        ),
+    ?assertEqual(
+        <<"application/json">>,
+        hb_maps:get(<<"content-type">>, ParentResult)),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, ParentResult)),
+    Parents = maps:get(<<"parents">>, Body),
+    ?assertEqual(1, length(Parents)),
+    [Entry] = Parents,
+    ?assertEqual(<<"block">>, maps:get(<<"type">>, Entry)),
+    ?assertEqual(Block, maps:get(<<"height">>, Entry)),
+    ok.
+
+parent_endpoint_bundle_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1827942,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&depth=2">>,
+            Opts
+        ),
+    {ok, InvResult} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=",
+                (hb_util:bin(Block))/binary, "&to=",
+                (hb_util:bin(Block))/binary, "&mode=inventory">>,
+            Opts
+        ),
+    InvBody = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
+    BlockInfo = maps:get(hb_util:bin(Block), InvBody),
+    L1Items = maps:get(<<"1">>, maps:get(<<"items">>, BlockInfo)),
+    L2Items = maps:get(<<"2">>, maps:get(<<"items">>, BlockInfo)),
+    ?assert(length(L2Items) > 0),
+    L2EncodedID = hd(L2Items),
+    {ok, ParentResult} =
+        hb_ao:resolve(
+            <<"~arweave@2.9/parent=", L2EncodedID/binary>>,
+            Opts
+        ),
+    ?assertEqual(
+        <<"application/json">>,
+        hb_maps:get(<<"content-type">>, ParentResult)),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, ParentResult)),
+    [Entry] = maps:get(<<"parents">>, Body),
+    ?assertEqual(<<"bundle">>, maps:get(<<"type">>, Entry)),
+    ParentID = maps:get(<<"id">>, Entry),
+    ?assert(lists:member(ParentID, L1Items)),
+    ok.
+
+parent_endpoint_not_found_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    FakeID = <<"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>,
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
+            <<"~arweave@2.9/parent=", FakeID/binary>>,
+            Opts
+        )
+    ),
     ok.
 
 index_of(Elem, List) -> index_of(Elem, List, 1).

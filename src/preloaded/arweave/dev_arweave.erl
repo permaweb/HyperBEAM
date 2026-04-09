@@ -7,7 +7,7 @@
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, chunk/3, block/3, parent/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
@@ -751,6 +751,48 @@ only_if_cached(Req, Opts) ->
         <<"only-if-cached">>,
         hb_maps:get(<<"cache-control">>, Req, [], Opts)
     ).
+
+%% @doc Look up the parent (block or bundle) that contains an item.
+parent(Base, Request, Opts) ->
+    case find_key(<<"parent">>, Base, Request, Opts) of
+        not_found ->
+            {error, not_found};
+        ID ->
+            StoreOpts = hb_store_arweave:store_from_opts(Opts),
+            try hb_store_arweave:read_parent(StoreOpts, ID) of
+                {ok, [{Height, block} | _]} ->
+                    Entry = #{
+                        <<"type">> => <<"block">>,
+                        <<"height">> => Height
+                    },
+                    {ok, #{
+                        <<"content-type">> => <<"application/json">>,
+                        <<"body">> =>
+                            hb_json:encode(#{<<"parents">> => [Entry]})
+                    }};
+                {ok, [{ParentID, bundle} | _]} ->
+                    Entry = #{
+                        <<"type">> => <<"bundle">>,
+                        <<"id">> => hb_util:encode(ParentID)
+                    },
+                    {ok, #{
+                        <<"content-type">> => <<"application/json">>,
+                        <<"body">> =>
+                            hb_json:encode(#{<<"parents">> => [Entry]})
+                    }};
+                {error, Reason} ->
+                    ?event(warning,
+                        {parent_read_error, {id, ID}, {reason, Reason}}),
+                    {error, not_found};
+                not_found ->
+                    {error, not_found}
+            catch
+                error:function_clause ->
+                    {error, not_found};
+                error:badarg ->
+                    {error, not_found}
+            end
+    end.
 
 %% @doc Retrieve the current block information from Arweave.
 current(_Base, _Request, Opts) ->

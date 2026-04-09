@@ -6,7 +6,7 @@
 %%% Unused Store API:
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
--export([store_from_opts/1, write_offset/5, read_offset/3, read_chunks/3]).
+-export([store_from_opts/1, write_offset/5, read_offset/3, read_parent/2, decode_parent_entries/1, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -93,6 +93,35 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
             not_found
     end;
 read_offset(_, _, _) -> not_found.
+
+%% @doc Read the parent entries for an item from the index store.
+read_parent(#{ <<"index-store">> := IndexStore }, ID) ->
+    NormalizedID = hb_util:native_id(ID),
+    ParentPath = <<"parent/", NormalizedID/binary>>,
+    case hb_store:read(IndexStore, ParentPath) of
+        {ok, Bin} ->
+            case decode_parent_entries(Bin) of
+                {error, _} = Err -> Err;
+                Entries -> {ok, Entries}
+            end;
+        _ ->
+            not_found
+    end;
+read_parent(_, _) -> not_found.
+
+decode_parent_entries(<<>>) -> [];
+decode_parent_entries(<<0, Height:64/big-unsigned, Rest/binary>>) ->
+    case decode_parent_entries(Rest) of
+        {error, _} = Err -> Err;
+        Tail -> [{Height, block} | Tail]
+    end;
+decode_parent_entries(<<1, ParentID:32/binary, Rest/binary>>) ->
+    case decode_parent_entries(Rest) of
+        {error, _} = Err -> Err;
+        Tail -> [{ParentID, bundle} | Tail]
+    end;
+decode_parent_entries(_Corrupt) ->
+    {error, corrupt_parent_data}.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
