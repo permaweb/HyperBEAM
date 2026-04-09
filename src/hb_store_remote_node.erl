@@ -59,7 +59,7 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
     HTTPRes =
         hb_http:get(
             Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
+            #{ <<"path">> => <<"/~cache@1.0/read?target=", Key/binary>> },
             Opts
         ),
     case HTTPRes of
