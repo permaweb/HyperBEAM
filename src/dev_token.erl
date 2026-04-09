@@ -267,6 +267,33 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
 mint(Base, Assignment, Opts) ->
     as_mint_device(<<"mint">>, Base, Assignment, Opts).
 
+%% @doc Public persisted `mint` requests may target either the global scope
+%% (no `subject`) or the caller's own account. Internal normalization paths call
+%% `mint/3` directly and do not pass through this gate.
+secure_mint(Base, Assignment, Opts) ->
+    maybe
+        {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
+        case hb_maps:find(<<"subject">>, Req, Opts) of
+            error ->
+                mint(Base, Assignment, Opts);
+            {ok, Subject} ->
+                maybe
+                    {ok, From} ?=
+                        hb_maps:find(
+                            <<"from">>,
+                            Req,
+                            <<"No `from' address provided.">>,
+                            Opts
+                        ),
+                    true ?= validate_address(From, []),
+                    true ?= validate_address(Subject, []),
+                    true ?= (From =:= Subject) orelse
+                        {error, <<"Invalid mint caller.">>},
+                    mint(Base, Assignment, Opts)
+                end
+        end
+    end.
+
 %% @doc Execute the mint device's main key, but return the state in its 
 %% unmodified form if the execution returns an error.
 normalize_mint(Base, Assignment, Opts) ->
@@ -284,11 +311,12 @@ is_supported_mint_action(Action) ->
 %% send_error/4 codepath.
 action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
+        true when Action =:= <<"mint">> -> secure_mint(Base, Req, Opts);
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
             send_error(Base, Req, <<"unsupported action: ", Action/binary>>, Opts)
-    end.
+        end.
 
 %% @doc Run a given `path' on the mint device.
 as_mint_device(Path, Base, Req, Opts) ->
