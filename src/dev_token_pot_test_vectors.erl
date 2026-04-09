@@ -914,6 +914,86 @@ normalized_balance_normalizes_lazy_mint_test() ->
     ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
     ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
 
+%% @doc Test that public global mint still advances pot accrual state even when
+%% no `subject' is provided.
+public_global_mint_still_drips_without_subject_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    BobWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 500},
+        total_supply => 500
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>
+        },
+        BobWallet,
+        Opts
+    ),
+    ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(7500, hb_ao:get(<<"now/minted">>, Process, Opts)),
+    ?assertEqual(7, hb_ao:get(<<"now/accumulator">>, Process, Opts)),
+    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
+
+%% @doc Test that invalid subject addresses are rejected before mint-device
+%% dispatch and do not mutate persisted state.
+public_mint_rejects_invalid_subject_address_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 1000},
+        total_supply => 1000
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"subject">> => <<"keys">>
+        },
+        AliceWallet,
+        Opts
+    ),
+    ?assertEqual(1000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
 %% @doc Test that public persisted mint forwards `body.subject` for foreign
 %% callers too, allowing the request to persist the subject claim.
 public_mint_allows_foreign_subject_test() ->
