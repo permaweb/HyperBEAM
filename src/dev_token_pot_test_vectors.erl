@@ -914,8 +914,9 @@ normalized_balance_normalizes_lazy_mint_test() ->
     ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
     ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
 
-%% @doc Test that public persisted mint cannot claim yield for another account.
-public_mint_rejects_foreign_subject_test() ->
+%% @doc Test that public persisted mint forwards `body.subject` for foreign
+%% callers too, allowing the request to persist the subject claim.
+public_mint_allows_foreign_subject_test() ->
     Opts = test_opts(),
     AliceWallet = ar_wallet:new(),
     BobWallet = ar_wallet:new(),
@@ -950,10 +951,11 @@ public_mint_rejects_foreign_subject_test() ->
         BobWallet,
         Opts
     ),
-    ?assertEqual(1000, dev_token_lib:balance(Process, AliceAddr, Opts)),
-    ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
-%% @doc Test that public persisted mint may still claim yield for the caller.
+%% @doc Test that public persisted mint forwards `body.subject` for the caller,
+%% allowing the request to persist the subject claim.
 public_mint_allows_self_subject_test() ->
     Opts = test_opts(),
     AliceWallet = ar_wallet:new(),
