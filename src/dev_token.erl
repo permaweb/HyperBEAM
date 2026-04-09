@@ -262,38 +262,23 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
 %%% Mint device orchestration.
 
 %% @doc Call the mint device's main entrypoint, allowing it to handle explicit
-%% mint requests, normalize its state (prior to `transfer's, etc), or ignore
-%% the request altogether.
+%% mint requests, normalize its state (prior to `transfer`s, etc), or ignore
+%% the request altogether. If a public token `mint` request includes
+%% `body.subject`, hoist it to the top-level request shape expected by the mint
+%% device before dispatch.
 mint(Base, Assignment, Opts) ->
-    as_mint_device(<<"mint">>, Base, Assignment, Opts).
-
-%% @doc Public persisted `mint` requests may target either the global scope
-%% (no `subject`) or the caller's own account. Internal normalization paths call
-%% `mint/3` directly and do not pass through this gate.
-secure_mint(Base, Assignment, Opts) ->
     case hb_ao:resolve(Assignment, <<"body">>, Opts) of
-        {error, _} = Err ->
-            Err;
+        {error, _} ->
+            as_mint_device(<<"mint">>, Base, Assignment, Opts);
         {ok, Req} ->
             case hb_maps:find(<<"subject">>, Req, Opts) of
                 error ->
-                    mint(Base, Assignment, Opts);
+                    as_mint_device(<<"mint">>, Base, Assignment, Opts);
                 {ok, Subject} ->
                     maybe
-                        {ok, From} ?=
-                            hb_maps:find(
-                                <<"from">>,
-                                Req,
-                                <<"No `from' address provided.">>,
-                                Opts
-                            ),
-                        true ?= validate_address(From, []),
                         true ?= validate_address(Subject, []),
-                        true ?= (From =:= Subject) orelse
-                            {error, <<"Invalid mint caller.">>},
                         MintReq1 = hb_ao:set(Assignment, <<"subject">>, Subject, Opts),
-                        MintReq2 = hb_ao:set(MintReq1, <<"from">>, From, Opts),
-                        mint(Base, MintReq2, Opts)
+                        as_mint_device(<<"mint">>, Base, MintReq1, Opts)
                     end
             end
     end.
@@ -315,7 +300,7 @@ is_supported_mint_action(Action) ->
 %% send_error/4 codepath.
 action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
-        true when Action =:= <<"mint">> -> secure_mint(Base, Req, Opts);
+        true when Action =:= <<"mint">> -> mint(Base, Req, Opts);
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
