@@ -953,6 +953,44 @@ public_mint_rejects_foreign_subject_test() ->
     ?assertEqual(1000, dev_token_lib:balance(Process, AliceAddr, Opts)),
     ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
+%% @doc Test that public persisted mint may still claim yield for the caller.
+public_mint_allows_self_subject_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 1000},
+        total_supply => 1000
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"subject">> => AliceAddr
+        },
+        AliceWallet,
+        Opts
+    ),
+    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
     Opts = test_opts(),

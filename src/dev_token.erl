@@ -271,27 +271,31 @@ mint(Base, Assignment, Opts) ->
 %% (no `subject`) or the caller's own account. Internal normalization paths call
 %% `mint/3` directly and do not pass through this gate.
 secure_mint(Base, Assignment, Opts) ->
-    maybe
-        {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
-        case hb_maps:find(<<"subject">>, Req, Opts) of
-            error ->
-                mint(Base, Assignment, Opts);
-            {ok, Subject} ->
-                maybe
-                    {ok, From} ?=
-                        hb_maps:find(
-                            <<"from">>,
-                            Req,
-                            <<"No `from' address provided.">>,
-                            Opts
-                        ),
-                    true ?= validate_address(From, []),
-                    true ?= validate_address(Subject, []),
-                    true ?= (From =:= Subject) orelse
-                        {error, <<"Invalid mint caller.">>},
-                    mint(Base, Assignment, Opts)
-                end
-        end
+    case hb_ao:resolve(Assignment, <<"body">>, Opts) of
+        {error, _} = Err ->
+            Err;
+        {ok, Req} ->
+            case hb_maps:find(<<"subject">>, Req, Opts) of
+                error ->
+                    mint(Base, Assignment, Opts);
+                {ok, Subject} ->
+                    maybe
+                        {ok, From} ?=
+                            hb_maps:find(
+                                <<"from">>,
+                                Req,
+                                <<"No `from' address provided.">>,
+                                Opts
+                            ),
+                        true ?= validate_address(From, []),
+                        true ?= validate_address(Subject, []),
+                        true ?= (From =:= Subject) orelse
+                            {error, <<"Invalid mint caller.">>},
+                        MintReq1 = hb_ao:set(Assignment, <<"subject">>, Subject, Opts),
+                        MintReq2 = hb_ao:set(MintReq1, <<"from">>, From, Opts),
+                        mint(Base, MintReq2, Opts)
+                    end
+            end
     end.
 
 %% @doc Execute the mint device's main key, but return the state in its 
