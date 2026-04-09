@@ -872,6 +872,48 @@ transfer_with_unclaimed_yield_test() ->
     % Initial: 500, Minted: 5000, New total: 5500
     ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
+normalized_balance_normalizes_lazy_mint_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 500},
+        total_supply => 500
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        Alice,
+        10,
+        Opts
+    ),
+    push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>
+        },
+        Bob,
+        Opts
+    ),
+    % Raw `now/balances` remains stale because explicit `mint` advances global
+    % pot state, but does not claim Alice's user-specific lazy yield.
+    ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    % After the global mint, Alice has 7000 lazy claimable yield on top of her
+    % explicit 500 token balance.
+    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
+    ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
+
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
     Opts = test_opts(),
