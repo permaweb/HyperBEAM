@@ -262,10 +262,26 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
 %%% Mint device orchestration.
 
 %% @doc Call the mint device's main entrypoint, allowing it to handle explicit
-%% mint requests, normalize its state (prior to `transfer's, etc), or ignore
-%% the request altogether.
+%% mint requests, normalize its state (prior to `transfer`s, etc), or ignore
+%% the request altogether. If a public token `mint` request includes
+%% `body.subject`, hoist it to the top-level request shape expected by the mint
+%% device before dispatch.
 mint(Base, Assignment, Opts) ->
-    as_mint_device(<<"mint">>, Base, Assignment, Opts).
+    case hb_ao:resolve(Assignment, <<"body">>, Opts) of
+        {error, _} ->
+            as_mint_device(<<"mint">>, Base, Assignment, Opts);
+        {ok, Req} ->
+            case hb_maps:find(<<"subject">>, Req, Opts) of
+                error ->
+                    as_mint_device(<<"mint">>, Base, Assignment, Opts);
+                {ok, Subject} ->
+                    maybe
+                        true ?= validate_address(Subject, []),
+                        MintReq1 = hb_ao:set(Assignment, <<"subject">>, Subject, Opts),
+                        as_mint_device(<<"mint">>, Base, MintReq1, Opts)
+                    end
+            end
+    end.
 
 %% @doc Execute the mint device's main key, but return the state in its 
 %% unmodified form if the execution returns an error.
@@ -284,11 +300,12 @@ is_supported_mint_action(Action) ->
 %% send_error/4 codepath.
 action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
+        true when Action =:= <<"mint">> -> mint(Base, Req, Opts);
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
             send_error(Base, Req, <<"unsupported action: ", Action/binary>>, Opts)
-    end.
+        end.
 
 %% @doc Run a given `path' on the mint device.
 as_mint_device(Path, Base, Req, Opts) ->
