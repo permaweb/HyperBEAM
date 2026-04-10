@@ -12,6 +12,11 @@
 %%% - `performance-weight': Weight factor for perf scoring (default 1).
 %%% - `pricing-weight': Weight factor for price scoring (default 1).
 %%% - `score-preference': Decay exponent for scoring (default 1).
+%%% - `trusted-peer': Wallet address whose signed registrations bypass the
+%%%   admissibility check.
+%%% - `is-admissible': Device resolved against a registration body to decide
+%%%   whether the request may register a new node. Default device resolves
+%%%   to `<<"true">>' (open registration).
 -module(dev_router_perf).
 -export([init/3, compute/3, snapshot/3, normalize/3]).
 -export([duration/3, register/3, recalculate/3]).
@@ -23,20 +28,12 @@
 %% @doc Compute dispatcher for process@1.0 compatibility.
 compute(Base, Req, Opts) ->
     Body = hb_ao:get(<<"body">>, Req, Req, Opts),
-    %% TODO: THIS IS WIERD IS THERE A BETTER WAY???
-    %% Falls back to `path' because hb_http_client:maybe_invoke_monitor
-    %% sends duration data with `path => <<"duration">>' (not `action').
-    Action = 
-        case hb_ao:get(<<"action">>, Body, not_found, Opts) of
-            not_found -> hb_ao:get(<<"path">>, Body, not_found, Opts);
-            A -> A
-        end,
-    case Action of
+    case hb_ao:get(<<"action">>, Body, not_found, Opts) of
         <<"register">> -> register(Base, Body, Opts);
         <<"recalculate">> -> recalculate(Base, Body, Opts);
         <<"duration">> -> duration(Base, Body, Opts);
         _ ->
-            ?event({erroe_report, <<"Action not supported.">>}),
+            ?event(router_perf, {action_not_supported, {body, Body}}),
             {ok, Base}
     end.
 
@@ -78,24 +75,71 @@ duration(RawBase, Req, Opts) ->
     end.
 
 %% @doc Register a new node on a route. Supports both:
-%% - `match'/`with' format 
-%% - `prefix'/`price'/`topup' format 
+%% - `match'/`with' format
+%% - `prefix'/`price'/`topup' format
 %% Generates `http_reference' from the node's URL (with or prefix).
+%%
+%% Registration is gated by either of:
+%% - `trusted-peer': if any committer of the request matches the configured
+%%   trusted peer wallet address, the registration is accepted unconditionally.
+%% - `is-admissible': otherwise the configured admissibility device is
+%%   resolved against the request body. The default device returns `true' for
+%%   backward compatibility, so deployments must opt in to a stricter check.
 register(RawBase, Req, Opts) ->
     Base = ensure_defaults(RawBase, Opts),
     Body = hb_ao:get(<<"body">>, Req, Req, Opts),
-    Route = hb_ao:get(<<"route">>, Body, Opts),
-    Template = hb_ao:get(<<"template">>, Route, Opts),
-    Routes = hb_ao:get(<<"routes">>, Base, [], Opts),
-    InitialPerf = 
-        to_float(hb_ao:get(<<"initial-performance">>, Base, 30000, Opts)),
-    HttpRef = node_url(Route, Opts),
-    Node = build_node(Route, HttpRef, InitialPerf, Opts),
-    RouteConfig = extract_route_config(Route, Opts),
-    {UpdatedRoutes, _} = 
-        add_node_to_route(Routes, Template, Node, RouteConfig, Opts),
-    NewBase = hb_ao:set(Base, #{ <<"routes">> => UpdatedRoutes }, Opts),
-    recalculate(NewBase, Req, Opts).
+    case is_admissible(Base, Body, Opts) of
+        true ->
+            Route = hb_ao:get(<<"route">>, Body, Opts),
+            Template = hb_ao:get(<<"template">>, Route, Opts),
+            Routes = hb_ao:get(<<"routes">>, Base, [], Opts),
+            InitialPerf =
+                to_float(
+                    hb_ao:get(<<"initial-performance">>, Base, 30000, Opts)
+                ),
+            HttpRef = node_url(Route, Opts),
+            Node = build_node(Route, HttpRef, InitialPerf, Opts),
+            RouteConfig = extract_route_config(Route, Opts),
+            {UpdatedRoutes, _} =
+                add_node_to_route(Routes, Template, Node, RouteConfig, Opts),
+            NewBase =
+                hb_ao:set(Base, #{ <<"routes">> => UpdatedRoutes }, Opts),
+            recalculate(NewBase, Req, Opts);
+        false ->
+            ?event(router_perf,
+                {register_rejected, {body, Body}}),
+            {ok, Base}
+    end.
+
+%% @doc Check whether a registration request is admissible.
+%% Returns `true' if either the request is signed by the configured
+%% `trusted-peer' or the configured `is-admissible' device resolves to
+%% `<<"true">>'.
+is_admissible(Base, Body, Opts) ->
+    case is_trusted_peer(Base, Body, Opts) of
+        true -> true;
+        false -> resolve_is_admissible(Base, Body, Opts)
+    end.
+
+is_trusted_peer(Base, Body, Opts) ->
+    case hb_ao:get(<<"trusted-peer">>, Base, not_found, Opts) of
+        not_found -> false;
+        TrustedPeer ->
+            Signers = hb_message:signers(Body, Opts),
+            lists:member(TrustedPeer, Signers)
+    end.
+
+resolve_is_admissible(Base, Body, Opts) ->
+    Device = hb_ao:get(<<"is-admissible">>, Base, not_found, Opts),
+    case Device of
+        not_found -> true;
+        _ ->
+            case hb_ao:resolve(Device, Body, Opts) of
+                {ok, <<"true">>} -> true;
+                {ok, true} -> true;
+                _ -> false
+            end
+    end.
 
 %% @doc Recompute weights for all nodes in all routes.
 %% Weight = inverse performance -- lower ms = higher weight, normalized.
