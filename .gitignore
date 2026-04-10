@@ -50,6 +50,7 @@ mkdocs-site-manifest.csv
 __pycache__
 native/dev_sev_gpu/*.log
 
+.agents
 .claude
 .specify
 CLAUDE.md
