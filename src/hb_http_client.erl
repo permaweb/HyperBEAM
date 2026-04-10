@@ -191,7 +191,7 @@ hackney_req(Args, Opts) ->
             ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             RecvTimeout = hb_opts:get(http_client_hackney_recv_timeout, ?DEFAULT_HACKNEY_RECEIVE_TIMEOUT, Opts),
             CheckoutTimeout = hb_opts:get(http_client_hackney_checkout_timeout, ?DEFAULT_HACKNEY_CHECKOUT_TIMEOUT, Opts),
-            HackneyOpts = [with_body,
+            HackneyOpts = [async,
                 {pool, ?HACKNEY_POOL},
                 {connect_timeout, ConnTimeout},
                 {connect_options, [{nodelay, true}]},
@@ -199,13 +199,8 @@ hackney_req(Args, Opts) ->
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
-                {ok, Status, RespHeaders, RespBody} ->
-                    download_metric(RespBody),
-                    ?event(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
-                    {ok, Status, RespHeaders, RespBody};
-                {ok, Status, RespHeaders} ->
-                    ?event(debug_http_client, {hackney_resp, Status, RespHeaders, no_body}),
-                    {ok, Status, RespHeaders, <<>>};
+                {ok, Ref} ->
+                    collect_async_response(Ref, RecvTimeout);
                 {error, Reason} ->
                     ?event(http_client, {hackney_error, Reason}),
                     {error, Reason}
@@ -221,6 +216,55 @@ hackney_req(Args, Opts) ->
             ),
             record_response_status(Method, Response, Path),
             Response
+    end.
+
+%% @doc Collect an async hackney response into a single
+%% {ok, Status, Headers, Body} tuple, preserving the same
+%% return shape as the synchronous with_body mode.
+collect_async_response(Ref, Timeout) ->
+    receive
+        {hackney_response, Ref, {status, Status, _Reason}} ->
+            collect_async_headers(Ref, Status, Timeout);
+        {hackney_response, Ref, {error, Reason}} ->
+            ?event(http_client, {hackney_error, Reason}),
+            {error, Reason}
+    after Timeout ->
+        hackney:cancel_request(Ref),
+        ?event(http_client, {hackney_error, timeout}),
+        {error, timeout}
+    end.
+
+collect_async_headers(Ref, Status, Timeout) ->
+    receive
+        {hackney_response, Ref, {headers, Headers}} ->
+            collect_async_body(Ref, Status, Headers, [], Timeout);
+        {hackney_response, Ref, {error, Reason}} ->
+            ?event(http_client, {hackney_error, Reason}),
+            {error, Reason}
+    after Timeout ->
+        hackney:cancel_request(Ref),
+        ?event(http_client, {hackney_error, timeout}),
+        {error, timeout}
+    end.
+
+collect_async_body(Ref, Status, Headers, Acc, Timeout) ->
+    receive
+        {hackney_response, Ref, done} ->
+            Body = iolist_to_binary(lists:reverse(Acc)),
+            download_metric(Body),
+            ?event(debug_http_client,
+                {hackney_resp, Status, Headers, Body}),
+            {ok, Status, Headers, Body};
+        {hackney_response, Ref, {error, Reason}} ->
+            ?event(http_client, {hackney_error, Reason}),
+            {error, Reason};
+        {hackney_response, Ref, Data} when is_binary(Data) ->
+            collect_async_body(
+                Ref, Status, Headers, [Data | Acc], Timeout)
+    after Timeout ->
+        hackney:cancel_request(Ref),
+        ?event(http_client, {hackney_error, timeout}),
+        {error, timeout}
     end.
 
 gun_req(Args, Opts) ->
