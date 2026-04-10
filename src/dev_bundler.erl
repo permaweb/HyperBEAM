@@ -36,10 +36,28 @@ tx(Base, Req, Opts) ->
     item(Base, Req, Opts).
 
 %% @doc Implements an `up.arweave.net'-compatible endpoint for
-%% bundling messages. 
+%% bundling messages.
 item(_Base, Req, Opts) ->
     ServerPID = ensure_server(Opts),
-    case verify_item(Req, Opts) of
+    % Extract the actual item based on bundler-subject if present
+    ItemToProcess = case hb_maps:get(<<"bundler-subject">>, Req, Opts) of
+        SubjectKey when is_binary(SubjectKey) ->
+            case hb_maps:get(SubjectKey, Req, Opts) of
+                NestedMsg when is_map(NestedMsg) ->
+                    % Extract the binary data, deserialize and convert to structured format
+                    BinaryBody = hb_maps:get(<<"data">>, NestedMsg, Opts),
+                    DeserializedItem = ar_bundles:deserialize(BinaryBody),
+                    hb_message:convert(
+                        DeserializedItem,
+                        <<"structured@1.0">>,
+                        <<"ans104@1.0">>,
+                        Opts
+                    );
+                _ -> Req
+            end;
+        _ -> Req
+    end,
+    case verify_item(ItemToProcess, Opts) of
         {ok, Item} ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
@@ -195,6 +213,7 @@ add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes, dispatch_ref =  
     NewBytes = Bytes + ItemSize,
     ?event(bundler_short, {queueing_item, 
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
+        {item, {explicit, Item}},
         {size, erlang:external_size(Item)},
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
