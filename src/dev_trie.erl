@@ -35,14 +35,12 @@ keys(Trie, Opts) ->
 
 collect_keys(TrieNode, Prefix, Opts, Acc) ->
     EdgeLabels = edges(TrieNode, Opts),
-    IsLeafTerminal = length(EdgeLabels) =:= 0,
     NodeValue = hb_maps:find(<<"node-value">>, TrieNode, Opts),
-    IsInteriorTerminal =
+    IsTerminal =
         case NodeValue of
             error -> false;
             _ -> true
         end,
-    IsTerminal = IsLeafTerminal orelse IsInteriorTerminal,
     NewAcc =
         case IsTerminal of
             true -> [Prefix|Acc];
@@ -523,6 +521,10 @@ basic_key_collection_test() ->
         ],
         keys(Trie, #{})
     ).
+
+initial_balances_trie_has_no_keys_test() ->
+    Trie = #{<<"device">> => <<"trie@1.0">>},
+    ?assertEqual([], keys(Trie, #{})).
 
 verify_test() ->
     Trie = hb_ao:set(
