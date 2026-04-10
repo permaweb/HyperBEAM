@@ -105,6 +105,14 @@ set_weight_req(Resource, Weight) ->
         <<"resource">> => Resource,
         <<"weight">> => Weight
     }.
+set_weight_req(Resource, Weight, ResourceAuthority, WeightAuthority) ->
+    #{
+        <<"action">> => <<"register">>,
+        <<"resource">> => Resource,
+        <<"weight">> => Weight,
+        <<"resource-authority">> => ResourceAuthority,
+        <<"weight-authority">> => WeightAuthority
+    }.
 
 deposit_req(Resource, Addr, Qty) ->
     #{
@@ -125,6 +133,14 @@ delegate_req(Resource, Addr, Qty) ->
 undelegate_req(Resource, Addr, Qty) ->
     #{
         <<"action">> => <<"undelegate">>,
+        <<"resource">> => Resource,
+        <<"address">> => Addr,
+        <<"quantity">> => Qty
+    }.
+
+withdraw_req(Resource, Addr, Qty) ->
+    #{
+        <<"action">> => <<"withdraw">>,
         <<"resource">> => Resource,
         <<"address">> => Addr,
         <<"quantity">> => Qty
@@ -191,6 +207,7 @@ generate_base_process_state(ExtraKeys, Opts) ->
 
 %% @doc Generate pot state for integration testing
 generate_pot_state(Params, Opts) ->
+    Authority = id(hb_opts:get(priv_wallet, no_wallet, Opts)),
     MintCap = hb_maps:get(mint_cap, Params, 10000, Opts),
     MintPropN = hb_maps:get(mint_prop_numerator, Params, 1, Opts),
     MintPropD = hb_maps:get(mint_prop_denominator, Params, 2, Opts),
@@ -217,6 +234,7 @@ generate_pot_state(Params, Opts) ->
     Merged = maps:merge(MaybeParent, MaybeIndexKeys),
     Merged#{
         <<"mint-device">> => hb_maps:get(mint_device, Params, <<"pot@1.0">>, Opts),
+        <<"mint-authority">> => hb_maps:get(mint_authority, Params, Authority, Opts),
         <<"mint-cap">> => MintCap,
         <<"mint-prop-numerator">> => MintPropN,
         <<"mint-prop-denominator">> => MintPropD,
@@ -300,7 +318,12 @@ push_request(Process, Body, Wallet, Opts) ->
 push_set_weight(Process, Resource, Weight, Opts) ->
     push_request(
         Process,
-        set_weight_req(Resource, Weight),
+        set_weight_req(
+            Resource,
+            Weight,
+            id(hb_opts:get(priv_wallet, no_wallet, Opts)),
+            id(hb_opts:get(priv_wallet, no_wallet, Opts))
+        ),
         Opts
     ),
     dev_token_lib:now(Process, Opts).
@@ -335,6 +358,13 @@ push_undelegate(Process, Wallet, FromAddr, Resource, Qty, Opts) ->
         Process,
         undelegate_req(Resource, FromAddr, Qty),
         Wallet,
+        Opts
+    ).
+
+push_withdraw(Process, Resource, Addr, Qty, Opts) ->
+    push_request(
+        Process,
+        withdraw_req(Resource, Addr, Qty),
         Opts
     ).
 
@@ -412,6 +442,44 @@ simple_pot_process_test() ->
     ?assertEqual(8999, balance(Process, id(Alice), Opts)),
     ?assertEqual(9000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
+weight_authority_can_update_weight_without_resource_config_authority_test() ->
+    Opts = test_opts(),
+    Resource = <<"oxygen">>,
+    WeightWallet = ar_wallet:new(),
+    ResourceWallet = ar_wallet:new(),
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_request(
+        Process,
+        set_weight_req(Resource, 100, id(ResourceWallet), id(WeightWallet)),
+        Opts
+    ),
+    ?assertEqual(100, weight(Process, Resource, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_request(
+            Process,
+            set_weight_req(Resource, 200),
+            ResourceWallet,
+            Opts
+        )
+    ),
+    ?assertEqual(100, weight(Process, Resource, Opts)),
+    push_request(
+        Process,
+        set_weight_req(Resource, 200),
+        WeightWallet,
+        Opts
+    ),
+    ?assertEqual(200, weight(Process, Resource, Opts)).
+
 pot_delegation_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
@@ -445,7 +513,7 @@ pot_delegation_test() ->
         )
     ).
 
-cyclic_undelegate_liquidation_corrupts_state_test() ->
+cyclic_undelegate_liquidation_fails_cleanly_test() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
@@ -475,13 +543,256 @@ cyclic_undelegate_liquidation_corrupts_state_test() ->
     ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
     ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
     ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
-    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts),
-    ?assertEqual(20, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
-    ?assertEqual(-10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts)
+    ),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
     ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
-    ?assertEqual(-10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+withdraw_through_cyclic_liquidation_fails_cleanly_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_withdraw(Process, Resource, AliceAddr, 20, Opts)
+    ),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+withdraw_through_cyclic_liquidation_can_recover_principal_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    ?assertMatch(
+        {error, _},
+        push_withdraw(Process, Resource, AliceAddr, 20, Opts)
+    ),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    {ok, _} = push_withdraw(Process, Resource, AliceAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+cyclic_undelegation_can_be_unwound_in_safe_steps_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertMatch(
+        {error, _},
+        push_undelegate(Process, Alice, BobAddr, Resource, 20, Opts)
+    ),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 10, Opts),
+    {ok, _} = push_undelegate(Process, Charlie, AliceAddr, Resource, 10, Opts),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 10, Opts),
+    ?assertEqual(10, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
     ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
     ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+cyclic_undelegation_liquidation_still_succeeds_when_edge_is_not_reentered_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 10, Opts),
+    {ok, _} = push_undelegate(Process, Charlie, AliceAddr, Resource, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 10, Opts),
+    ?assertEqual(10, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+cyclic_undelegation_from_charlie_to_alice_succeeds_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    push_delegate(Process, Resource, Charlie, AliceAddr, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(20, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)),
+    {ok, _} = push_undelegate(Process, Charlie, AliceAddr, Resource, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, CharlieAddr, AliceAddr, Opts)).
+
+plain_chain_undelegation_liquidates_successfully_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Charlie = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    BobAddr = id(Bob),
+    CharlieAddr = id(Charlie),
+    Resource = <<"oxygen">>,
+    Process =
+        generate_process(
+            #{
+                mint_cap => 10_000,
+                mint_prop_numerator => 1,
+                mint_prop_denominator => 2
+            },
+            Opts
+        ),
+    push_set_weight(Process, Resource, 100, Opts),
+    push_deposit(Process, Resource, Alice, 10, Opts),
+    push_delegate(Process, Resource, Alice, BobAddr, 10, Opts),
+    push_delegate(Process, Resource, Bob, CharlieAddr, 10, Opts),
+    ?assertEqual(0, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(10, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)),
+    {ok, _} = push_undelegate(Process, Alice, BobAddr, Resource, 10, Opts),
+    ?assertEqual(10, deposit(Process, Resource, AliceAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, BobAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, deposit(Process, Resource, CharlieAddr, <<"quantity">>, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, AliceAddr, BobAddr, Opts)),
+    ?assertEqual(0, delegation(Process, Resource, BobAddr, CharlieAddr, Opts)).
 
 balance_without_explicit_mint_same_slot_test() ->
     Opts = test_opts(),
@@ -561,6 +872,207 @@ transfer_with_unclaimed_yield_test() ->
     % Initial: 500, Minted: 5000, New total: 5500
     ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
+normalized_balance_normalizes_lazy_mint_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    AliceAddr = id(Alice),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 500},
+        total_supply => 500
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        Alice,
+        10,
+        Opts
+    ),
+    push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>
+        },
+        Bob,
+        Opts
+    ),
+    % Raw `now/balances` remains stale because explicit `mint` advances global
+    % pot state, but does not claim Alice's user-specific lazy yield.
+    ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    % After the global mint, Alice has 7000 lazy claimable yield on top of her
+    % explicit 500 token balance.
+    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
+    ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
+
+%% @doc Test that public global mint still advances pot accrual state even when
+%% no `subject' is provided.
+public_global_mint_still_drips_without_subject_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    BobWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 500},
+        total_supply => 500
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>
+        },
+        BobWallet,
+        Opts
+    ),
+    ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(7500, hb_ao:get(<<"now/minted">>, Process, Opts)),
+    ?assertEqual(7, hb_ao:get(<<"now/accumulator">>, Process, Opts)),
+    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
+
+%% @doc Test that invalid subject addresses are rejected before mint-device
+%% dispatch and do not mutate persisted state.
+public_mint_rejects_invalid_subject_address_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 1000},
+        total_supply => 1000
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"subject">> => <<"keys">>
+        },
+        AliceWallet,
+        Opts
+    ),
+    ?assertEqual(1000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
+%% @doc Test that public persisted mint forwards `body.subject` for foreign
+%% callers too, allowing the request to persist the subject claim.
+public_mint_allows_foreign_subject_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    BobWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 1000},
+        total_supply => 1000
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"subject">> => AliceAddr
+        },
+        BobWallet,
+        Opts
+    ),
+    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
+%% @doc Test that public persisted mint forwards `body.subject` for the caller,
+%% allowing the request to persist the subject claim.
+public_mint_allows_self_subject_test() ->
+    Opts = test_opts(),
+    AliceWallet = ar_wallet:new(),
+    AliceAddr = id(AliceWallet),
+    ResourceOxygen = <<"oxygen">>,
+    PotFields = #{
+        mint_cap => 10000,
+        mint_prop_numerator => 1,
+        mint_prop_denominator => 2,
+        t => 0,
+        last_drip => 0
+    },
+    TokenFields = #{
+        initial_balances => #{AliceAddr => 1000},
+        total_supply => 1000
+    },
+    Process = generate_process(PotFields, TokenFields, Opts),
+    push_set_weight(Process, ResourceOxygen, 100, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
+    _ = push_request(
+        Process,
+        #{
+            <<"action">> => <<"mint">>,
+            <<"subject">> => AliceAddr
+        },
+        AliceWallet,
+        Opts
+    ),
+    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
     Opts = test_opts(),
@@ -580,24 +1092,22 @@ claim_yield_single_resource_test() ->
     },
     Process = generate_process(PotFields, TokenFields, Opts),
     push_set_weight(Process, ResourceOxygen, 100, Opts),
-    NewBase = 
-        push_deposit(
-            Process,
-            ResourceOxygen,
-            AliceWallet,
-            10,
-            Opts
-        ),
-    ?event(pot_claim, {new_pot, NewBase}, Opts),
+    push_deposit(
+        Process,
+        ResourceOxygen,
+        AliceWallet,
+        10,
+        Opts
+    ),
     push_request(
-        NewBase,
+        Process,
         #{
             <<"action">> => <<"mint">>
         },
         AliceWallet,
         Opts
     ),
-    BaseAfterClaim = dev_token_lib:now(NewBase, Opts),
+    BaseAfterClaim = dev_token_lib:now(Process, Opts),
     ?event({after_claim, BaseAfterClaim}),
     ?assertEqual(8000, balance(BaseAfterClaim, AliceAddr,Opts)).
 

@@ -23,10 +23,19 @@
 %%% their own mints using the same `pot` functionality as the parent, depositors
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
+%%%
+%%% Authority model:
+%%% - `deposit` / `withdraw` are authorized per resource by that resource's
+%%%   `authority` security policy.
+%%% - `weight` updates may be delegated per resource via `weight-authority`.
+%%% - resource config changes (`authority*`, `weight-authority*`) remain
+%%%   guarded by the pot-wide `mint-authority` policy, or by the configured
+%%%   `parent` when the pot is acting as a child mint.
+%%% - child mints trust their direct `parent` process for inherited resource
+%%%   config and writes; forwarded parent `register` notifications set both
+%%%   `resource-authority` and `weight-authority` to that parent process.
 %%% 
-%%% TODO: ADDRESSED IN enforce_resource_config_authority & apply_resource_config
-%%% - Add `secure-set` (set guarded by address) for resource-weights and 
-%%%   supported resources.
+%%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -421,7 +430,9 @@ parse_deposit_modification(Base, Assignment, Opts) ->
         {ok, {Address, ResourceID, Amount}}
     end.
 
-%% @doc Verify a request against the authority for a specific resource.
+%% @doc Verify a request against the resource-local `authority` policy for a
+%% specific resource. In prod mode, requests fail closed if the resource has no
+%% explicit authority policy configured.
 verify_resource_authority(ResourceID, Base, Req, Opts) ->
     maybe
         {ok, From} ?=
@@ -445,12 +456,21 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"Requested resource not initialized in mint state.">>,
                 Opts
             ),
-        true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
+        true ?=
+            dev_security:validate(
+                <<"authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
     end.
 
 %% @doc Interpret forwarded `register' notifications from the configured
 %% `parent' mint process. Notifications from any other sender, or notifications
-%% forwarding a non-`register' action, are rejected.
+%% forwarding a non-`register' action, are rejected. Child mints trust their
+%% direct parent for inherited resource config, so forwarded notifications set
+%% both `resource-authority' and `weight-authority' to the parent process ID.
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=
@@ -488,13 +508,18 @@ notify(State, Assignment, Opts) ->
             {error, <<"Unsupported notification action">>},
         OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
-            Action, 
-            State, 
+            Action,
+            State,
             #{
                 <<"type">> => <<"notification">>,
                 <<"original-from">> => OriginalFrom,
-                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom }
-            }, 
+                <<"body">> =>
+                    ForwardedMsg#{
+                        <<"from">> => NotifyFrom,
+                        <<"resource-authority">> => NotifyFrom,
+                        <<"weight-authority">> => NotifyFrom
+                    }
+            },
             Opts)
     end.
 
@@ -777,11 +802,17 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount
         case Validation of
             {error, _} = Err -> Err;
             ok ->
-                RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
-                case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
+                case ensure_undelegation_cover(
+                    FromAddr,
+                    ToAddr,
+                    ResourceID,
+                    Amount,
+                    S,
+                    Opts
+                ) of
                     {error, _} = Err -> Err;
-                    {ok, Liquidated} ->
-                        GlobalDrippedS = drip_global(Liquidated, Opts),
+                    {ok, Prepared} ->
+                        GlobalDrippedS = drip_global(Prepared, Opts),
                         DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
                         S0 = drip_user(FromAddr, DrippedS, Opts),
                         S1 = drip_user(ToAddr, S0, Opts),
@@ -881,10 +912,64 @@ undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
 undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Undelegate Amount must be of integer type">>}.
 
+%% @doc Repeatedly liquidate the recipient until the requested undelegation is
+%% directly coverable, or fail if the outer delegation edge has already been
+%% consumed by recursive unwind.
+ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+    ExistingDelegation =
+        case FromAddr =:= ToAddr of
+            true -> 0;
+            false ->
+                hb_ao:get(
+                    <<
+                        "/resources/",
+                        ResourceID/binary,
+                        "/deposits/",
+                        FromAddr/binary,
+                        "/delegations/",
+                        ToAddr/binary
+                    >>,
+                    S,
+                    0,
+                    Opts
+                )
+        end,
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+    case FromAddr =:= ToAddr of
+        true ->
+            {ok, S};
+        false when ExistingDelegation < Amount ->
+            {error, <<"Undelegation amount exceeds existing delegation.">>};
+        false when RecipientDeposit >= Amount ->
+            {ok, S};
+        false ->
+            case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
+                {error, _} = Err ->
+                    Err;
+                {ok, Liquidated} ->
+                    ensure_undelegation_cover(
+                        FromAddr,
+                        ToAddr,
+                        ResourceID,
+                        Amount,
+                        Liquidated,
+                        Opts
+                    )
+            end
+    end.
+
 %% @doc Resource configuration entrypoint. Validates the target resource and
-%% caller, enforces resource-config authority via
-%% `enforce_resource_config_authority/5`, then applies supported
-%% resource-scoped config mutations.
+%% caller, then applies supported resource-scoped config mutations.
+%% 
+%% Authorization model:
+%% - `weight`-only updates may be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
+%%   - the resource-local `weight-authority`
+%% - updates touching `resource-authority*` or `weight-authority*` are treated
+%%   as admin mutations and may only be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -904,58 +989,177 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
-        true ?= dev_token:validate_address(From, ?RESERVED_KEYS),
-        true ?= enforce_resource_config_authority(From, ResID, State, Req, Opts),
-        apply_resource_config(ResID, State, Req, Opts)
-    end.
-%% @doc Enforce authorization for resource configuration updates.
-%% Authorization is evaluated against:
-%% - `State/parent`, if set and equal to `from`
-%% - `mint-authority` security policy on the pot state, if configured
-%% - `authority` security policy on the target resource, if configured
-%%
-%% N.B: `dev_security` is open-by-default when no valid/required/match policy
-%% is present, so absent authority config does not restrict this action. check
-%% `AuthRes` logic chain for better gating-understanding.
-enforce_resource_config_authority(From, ResID, State, Req, Opts) ->
-    ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
-    maybe
-        AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
-            true -> true;
-            false -> 
-                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) of
-                    true -> true;
-                    {error, _} -> 
-                        verify_resource_authority(ResID, State, Req, Opts)
-                    end  
-        end,
-        true ?= AuthRes
-    end.
-%% @doc Apply supported resource-scoped configuration updates. If an earlier
-%% mutation fails, later mutations in the same request are not applied.
-apply_resource_config(ResID, State, Req, Opts) ->
-    maybe
+        true ?= validate_signer_config(From, Opts),
+        HasAdminMutation =
+            hb_maps:find(<<"resource-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-match">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-match">>, Req, Opts) =/= error,
+        true ?=
+            case {HasAdminMutation, hb_maps:find(<<"weight">>, Req, Opts)} of
+                {true, _} ->
+                    enforce_resource_config_authority(From, State, Req, Opts);
+                {false, {ok, _}} ->
+                    enforce_resource_weight_authority(ResID, From, State, Req, Opts);
+                _ ->
+                    true
+            end,
         State2 =
             case hb_maps:find(<<"weight">>, Req, Opts) of
                 {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
                 _ -> State
             end,
         true ?= is_map(State2) orelse State2,
-        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
-            {ok, ResAuth} ->
-                register_resource_authority(ResID, ResAuth, State2, Opts);
-            _ -> State2
+        State3 =
+            case hb_maps:find(<<"weight-authority">>, Req, Opts) of
+                {ok, WeightAuth} ->
+                    register_resource_weight_authority(
+                        ResID,
+                        WeightAuth,
+                        State2,
+                        Opts
+                    );
+                _ -> State2
+            end,
+        true ?= is_map(State3) orelse State3,
+        State4 =
+            case hb_maps:find(<<"weight-authority-required">>, Req, Opts) of
+                {ok, WeightRequired} ->
+                    register_resource_weight_authority_required(
+                        ResID,
+                        WeightRequired,
+                        State3,
+                        Opts
+                    );
+                _ -> State3
+            end,
+        true ?= is_map(State4) orelse State4,
+        State5 =
+            case hb_maps:find(<<"weight-authority-match">>, Req, Opts) of
+                {ok, WeightMatch} ->
+                    register_resource_weight_authority_match(
+                        ResID,
+                        WeightMatch,
+                        State4,
+                        Opts
+                    );
+                _ -> State4
+            end,
+        true ?= is_map(State5) orelse State5,
+        State6 =
+            case hb_maps:find(<<"resource-authority">>, Req, Opts) of
+                {ok, ResAuth} ->
+                    register_resource_authority(ResID, ResAuth, State5, Opts);
+                _ -> State5
+            end,
+        true ?= is_map(State6) orelse State6,
+        State7 =
+            case hb_maps:find(<<"resource-authority-required">>, Req, Opts) of
+                {ok, ResRequired} ->
+                    register_resource_authority_required(
+                        ResID,
+                        ResRequired,
+                        State6,
+                        Opts
+                    );
+                _ -> State6
+            end,
+        true ?= is_map(State7) orelse State7,
+        case hb_maps:find(<<"resource-authority-match">>, Req, Opts) of
+            {ok, ResMatch} ->
+                register_resource_authority_match(ResID, ResMatch, State7, Opts);
+            _ -> State7
         end
-    else
-        Reason -> 
-            ?event(debug_pot, {error, Reason}, Opts),
-            Reason
+    end.
+%% @doc Enforce authorization for resource configuration updates.
+%% Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% Resource-level write or weight authorities do not grant config authority.
+enforce_resource_config_authority(From, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
+    maybe
+        AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+            true -> true;
+            false -> 
+                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts#{dev_security_mode => prod}) of
+                    true -> true;
+                    {error, _} ->
+                        {error, <<"Caller is not authorized to configure resources.">>}
+                end  
+        end,
+        true ?= AuthRes
+    end.
+%% @doc Enforce authorization for weight-only updates. Parent may always
+%% reconfigure its children, explicit per-resource `weight-authority` can
+%% update the weight, and `mint-authority` remains the global override.
+enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
+    maybe
+        AuthRes =
+            case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+                true -> true;
+                false ->
+                    case verify_weight_authority(ResourceID, State, Req, Opts) of
+                        true -> true;
+                        {error, _} ->
+                            case dev_security:validate(
+                                <<"mint-authority">>,
+                                State,
+                                Req,
+                                From,
+                                Opts#{ dev_security_mode => prod }
+                            ) of
+                                true -> true;
+                                {error, _} ->
+                                    {error, <<"Caller is not authorized to update resource weight.">>}
+                            end
+                    end
+            end,
+        true ?= AuthRes
+    end.
+%% @doc Verify a request against the resource-local `weight-authority` policy
+%% for a specific resource. In prod mode, requests fail closed if the resource
+%% has no explicit weight-authority policy configured.
+verify_weight_authority(ResourceID, Base, Req, Opts) ->
+    maybe
+        {ok, From} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, Resources} ?=
+            hb_maps:find(
+                <<"resources">>,
+                Base,
+                <<"No resources found in mint state.">>,
+                Opts
+            ),
+        {ok, Resource} ?=
+            hb_maps:find(
+                ResourceID,
+                Resources,
+                <<"Requested resource not initialized in mint state.">>,
+                Opts
+            ),
+        true ?=
+            dev_security:validate(
+                <<"weight-authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
     end.
 %% @doc Update the authority record for a specific resource in the pot.
 register_resource_authority(ResourceID, Authority, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
-        true ?= dev_token:validate_address(Authority, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
         hb_ao:set(
             S,
             <<"/resources/", ResourceID/binary, "/authority">>,
@@ -963,6 +1167,99 @@ register_resource_authority(ResourceID, Authority, S, Opts) ->
             Opts
         )
 end.
+register_resource_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-match">>,
+            Match,
+            Opts
+        )
+end.
+%% @doc Update the weight-authority record for a specific resource in the pot.
+register_resource_weight_authority(ResourceID, Authority, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority">>,
+            Authority,
+            Opts
+        )
+end.
+register_resource_weight_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_weight_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-match">>,
+            Match,
+            Opts
+        )
+end.
+validate_signer_config(Value, Opts) when is_binary(Value) ->
+    try validate_signer_config(hb_util:binary_to_strings(Value), Opts)
+    catch
+        _:_ -> {error, <<"Signer config must be a valid binary or list.">>}
+    end;
+validate_signer_config(Value, Opts) when is_list(Value) ->
+    case Value of
+        [] ->
+            {error, <<"Signer config list must not be empty.">>};
+        _ ->
+            case lists:all(fun is_binary/1, Value) of
+                false ->
+                    {error, <<"Signer config list must contain binary addresses.">>};
+                true ->
+                    lists:foldl(
+                        fun(Signer, true) ->
+                            dev_token:validate_address(Signer, ?RESERVED_KEYS);
+                           (_Signer, {error, _} = Err) ->
+                            Err
+                        end,
+                        true,
+                        Value
+                    )
+            end
+    end;
+validate_signer_config(_, _) ->
+    {error, <<"Signer config must be a binary or a list.">>}.
+validate_match_config(Match) when is_integer(Match), Match >= 0 -> true;
+validate_match_config(Match) when is_binary(Match) ->
+    try binary_to_integer(Match) of
+        Int when is_integer(Int), Int >= 0 -> true;
+        _ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    catch
+        _:_ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    end;
+validate_match_config(_) ->
+    {error, <<"Match threshold must be a non-negative integer.">>}.
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
@@ -1039,7 +1336,7 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
                 true -> <<"withdraw">>
                 end,
             <<"address">> => FromAddr,
-            <<"quantity">> => Amount,
+            <<"quantity">> => abs(Amount),
             <<"resource">> => ResourceID
         },
         S,

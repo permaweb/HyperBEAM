@@ -257,6 +257,115 @@ multiresource_modified_weight_test() ->
     ?assertEqual(12, dev_pot:balance(Bob, S5, Opts)),
     ok.
 
+weight_authority_match_requires_multiple_signers_test() ->
+    Admin = <<"admin">>,
+    WeightA = <<"weight-a">>,
+    WeightB = <<"weight-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"weight-authority">> => [WeightA, WeightB],
+                    <<"weight-authority-match">> => 2
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => WeightA
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    S2 =
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => [WeightA, WeightB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(200, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)).
+
+resource_authority_required_signer_is_enforced_test() ->
+    Admin = <<"admin">>,
+    Alice = <<"alice">>,
+    ResourceA = <<"resource-a">>,
+    ResourceB = <<"resource-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"resource-authority">> => [ResourceA, ResourceB],
+                    <<"resource-authority-required">> => [ResourceA],
+                    <<"resource-authority-match">> => 1
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => ResourceB
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(0, dev_pot:get_deposit(Alice, Resource, S1, Opts)),
+    S2 =
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => [ResourceA, ResourceB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(10, dev_pot:get_deposit(Alice, Resource, S2, Opts)).
+
 simple_delegation_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
@@ -1253,12 +1362,13 @@ delegation_notice_message_format_test() ->
     ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice, not_found, Opts)),
     ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, Notice, not_found, Opts)).
 
-undelegate_notice_has_negative_quantity_test() ->
+undelegate_notice_has_positive_quantity_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
-    % Undelegation notice should have negative or zero quantity
+    % Undelegation notice should encode direction via `action', with a
+    % positive quantity so downstream `withdraw` handlers can accept it.
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
     S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
@@ -1267,8 +1377,11 @@ undelegate_notice_has_negative_quantity_test() ->
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
     [UndelegateNotice, _] = Outbox,
-    Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
-    ?assert(Quantity =< 0).
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(<<"withdraw">>, hb_maps:get(<<"action">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(Alice, hb_maps:get(<<"address">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(5, hb_maps:get(<<"quantity">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, UndelegateNotice, not_found, Opts)).
 
 multiple_delegations_outbox_order_test() ->
     Alice = <<"alice">>,

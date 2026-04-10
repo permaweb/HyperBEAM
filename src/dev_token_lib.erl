@@ -12,6 +12,7 @@
 -export([register/3, subscribe/3, unsubscribe/3]).
 %%% Query wrappers.
 -export([now/2, balance/3, balance_total/3, balances/2, balances/3]).
+-export([normalized_balance/3]).
 -export([supply/2, supply/3]).
 -export([subscribers/3, subscribers/4]).
 -export([subledger_supply/3, user_supply/3]).
@@ -205,6 +206,34 @@ balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
     balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
 balance(ProcMsg, ID, Opts) ->
     hb_ao:get(<<"now/balances/", ID/binary>>, ProcMsg, 0, Opts).
+
+%% @doc Retrieve a single balance through the execution device's `balance`
+%% path, allowing lazy mint devices to normalize account state first.
+normalized_balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
+    normalized_balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
+normalized_balance(ProcMsg, ID, Opts) ->
+    CurrentSlot = hb_ao:get(<<"slot/current">>, ProcMsg, Opts),
+    Res =
+        hb_ao:resolve_many(
+            [
+                ProcMsg,
+                #{ <<"path">> => <<"now">> },
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                #{
+                    <<"path">> => <<"balance">>,
+                    <<"balance">> => ID,
+                    <<"slot">> => hb_cache:ensure_loaded(CurrentSlot, Opts)
+                }
+            ],
+            Opts
+        ),
+    case Res of
+        {ok, Balance} -> Balance;
+        {error, not_found} -> 0
+    end.
 
 %% @doc Get the total balance for an ID across all ledgers in a set.
 balance_total(Procs, ID, Opts) ->
