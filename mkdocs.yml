@@ -34,6 +34,7 @@ nav:
       - '~json@1.0': 'devices/json-at-1-0.md'
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
+      - '~agent@1.0': 'devices/agent-at-1-0.md'
   - Resources:
     # - Overview: 'resources/source-code/index.md'
     - FAQ: 'resources/reference/faq.md'
