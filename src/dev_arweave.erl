@@ -92,13 +92,15 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     Res;
 
 post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
-    TX = hb_message:convert(Request, <<"ans104@1.0">>, Opts),
-    Serialized = ar_bundles:serialize(TX),
-    LogExtra = [
-        {codec, <<"ans104@1.0">>},
-        {id, {explicit, hb_util:human_id(TX#tx.id)}}
-    ],
-    post_binary_ans104(Serialized, LogExtra, Opts).
+    hb_http:post(
+        hb_opts:get(bundler_ans104, not_found, Opts),
+        #{
+            <<"path">> => <<"/~bundler@1.0/tx">>,
+            <<"bundler-subject">> => <<"body">>,
+            <<"body">> => Request
+        },
+        Opts
+    ).
 
 
 post_tx_header(TX, Opts) ->
@@ -124,15 +126,15 @@ post_binary_ans104(SerializedTX, Opts) ->
     post_binary_ans104(SerializedTX, LogExtra, Opts).
 
 post_binary_ans104(SerializedTX, LogExtra, Opts) ->
+    Request = #{
+        <<"content-type">> => <<"application/octet-stream">>,
+        <<"body">> => SerializedTX
+    },
     Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
-        #{
+        Request#{
             <<"path">> => <<"/~bundler@1.0/tx">>,
-            <<"bundler-subject">> => <<"body">>,
-            <<"body">> => #{
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"data">> => SerializedTX
-            }
+            <<"bundler-subject">> => <<"body">>
         },
         Opts
     ),
