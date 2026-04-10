@@ -127,12 +127,16 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
     Res = hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
-            <<"path">> => <<"/~bundler@1.0/tx?codec-device=ans104@1.0">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => SerializedTX
+            <<"path">> => <<"/~bundler@1.0/tx">>,
+            <<"bundler-subject">> => <<"body">>,
+            <<"body">> => #{
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"data">> => SerializedTX
+            }
         },
         Opts
     ),
+    ?event({ post_binary_ans104_res, {explicit, Res} }),
     to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
 %% @doc Get a transaction from the Arweave node, as indicated by the
