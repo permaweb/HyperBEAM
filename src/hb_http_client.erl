@@ -277,29 +277,25 @@ record_duration(Details, Opts) ->
                     (Key) ->
                         hb_util:list(maps:get(Key, Details))
                 end,
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ ->
-                    prometheus_histogram:observe(
-                        http_request_duration_seconds,
-                        lists:map(
-                            GetFormat,
-                            [
-                                <<"request-method">>,
-                                <<"status-class">>,
-                                <<"request-category">>
-                            ]
-                        ),
-                        maps:get(<<"duration">>, Details)
-                    )
-            end,
-            HookReq =
-                #{ <<"body">> =>
-                    hb_message:commit(
-                        maybe_add_reference(Details, Opts),
-                        Opts
-                    )
+            Labels = lists:map(
+                GetFormat,
+                [
+                    <<"request-method">>,
+                    <<"status-class">>,
+                    <<"request-category">>
+                ]
+            ),
+            hb_prometheus:observe(
+                maps:get(<<"duration">>, Details),
+                http_client_duration_seconds,
+                Labels
+            ),
+            BodyDetails =
+                (maybe_add_reference(Details, Opts))#{
+                    <<"action">> => <<"duration">>
                 },
+            HookReq =
+                #{ <<"body">> => hb_message:commit(BodyDetails, Opts) },
             dev_hook:on(<<"http-client/response">>, HookReq, Opts)
         end
     ).
@@ -625,40 +621,6 @@ init_prometheus() ->
 	]),
     ?event(started),
     ok.
-
-%% @doc Record the duration of the request in an async process. We write the 
-%% data to prometheus if the application is enabled, as well as invoking the
-%% `http_monitor' if appropriate.
-record_duration(Details, Opts) ->
-    spawn(
-        fun() ->
-            % Prometheus works only with strings as lists, so we encode the 
-            % data before granting it.
-            GetFormat =
-                fun
-                    (<<"request-category">>) ->
-                        path_to_category(maps:get(<<"request-path">>, Details));
-                    (Key) ->
-                        hb_util:list(maps:get(Key, Details))
-                end,
-            Labels = lists:map(
-                GetFormat,
-                [
-                    <<"request-method">>,
-                    <<"status-class">>,
-                    <<"request-category">>
-                ]),
-            hb_prometheus:observe(
-                maps:get(<<"duration">>, Details),
-                http_client_duration_seconds,
-                Labels
-            ),
-            maybe_invoke_monitor(
-                Details#{ <<"path">> => <<"duration">> },
-                Opts
-            )
-        end
-    ).
 
 record_response_status(Method, Response) ->
     record_response_status(Method, Response, undefined).
