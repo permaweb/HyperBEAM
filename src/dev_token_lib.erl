@@ -156,7 +156,7 @@ unsubscribe(ProcMsg, Action, Target, Opts) ->
     push(
         ProcMsg,
         #{
-            <<"action">> => Action,
+            <<"action">> => <<"unsubscribe">>,
             <<"subscribe-action">> => Action,
             <<"subscribe-target">> => Target
         },
