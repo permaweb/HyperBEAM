@@ -2,8 +2,5 @@
   "editor.detectIndentation": false,
   "editor.insertSpaces": true,
   "editor.tabSize": 4,
-"editor.rulers": [
-    80
-],
-"cmake.sourceDirectory": "/Users/nickj/arc/repos/HyperBEAMNeo/_build/wamr"
+  "editor.rulers": [80]
 }
