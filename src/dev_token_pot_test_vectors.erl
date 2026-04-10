@@ -914,6 +914,26 @@ normalized_balance_normalizes_lazy_mint_test() ->
     ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
     ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
 
+%% @doc Ensure raw `dev_token_lib:supply/2` ignores trie metadata and returns
+%% the numeric sum of persisted balances.
+raw_supply_ignores_trie_metadata_test() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    Process =
+        generate_process(
+            #{},
+            #{
+                initial_balances => #{
+                    id(Alice) => 500,
+                    id(Bob) => 250
+                },
+                total_supply => 750
+            },
+            Opts
+        ),
+    ?assertEqual(750, dev_token_lib:supply(Process, Opts)).
+
 %% @doc Test that public global mint still advances pot accrual state even when
 %% no `subject' is provided.
 public_global_mint_still_drips_without_subject_test() ->
