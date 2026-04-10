@@ -292,7 +292,10 @@ list_replace(List, Idx, Value) ->
     {Before, [_ | After]} = lists:split(Idx - 1, List),
     Before ++ [Value | After].
 
-%% @doc Apply a duration update to the node matching Reference across all routes.
+%% @doc Apply a duration update to every node whose `http_reference' matches
+%% Reference, across all routes.
+%% TODO: scope by (route, reference) so the same URL in multiple routes does
+%% not cross-contaminate weights.
 update_node_performance(Routes, Reference, Duration, ChangeFactor, Opts) ->
     lists:map(
         fun(Route) ->
