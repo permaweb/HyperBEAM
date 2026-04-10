@@ -15,9 +15,16 @@
 info(_) -> #{ default => fun default/4 }.
 
 default(Key, _Base, Req, _Opts) ->
-    Rate = binary_to_integer(Key),
-    ?event({request, {rate, Rate}}),
-    case Rate > 0 andalso rand:uniform(Rate) =:= 1 of
-        true -> {ok, Req};
-        false -> {error, <<"Filtered by chance gate.">>}
+    try binary_to_integer(Key) of
+        Rate when Rate > 0 ->
+            ?event({request, {rate, Rate}}),
+            case rand:uniform(Rate) =:= 1 of
+                true -> {ok, Req};
+                false -> {error, <<"Filtered by chance gate.">>}
+            end;
+        _ ->
+            {error, <<"chance@1.0 rate must be a positive integer.">>}
+    catch
+        error:badarg ->
+            {error, <<"chance@1.0 rate must be a valid integer.">>}
     end.
