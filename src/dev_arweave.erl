@@ -136,7 +136,6 @@ post_binary_ans104(SerializedTX, LogExtra, Opts) ->
         },
         Opts
     ),
-    ?event({ post_binary_ans104_res, {explicit, Res} }),
     to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
 %% @doc Get a transaction from the Arweave node, as indicated by the
