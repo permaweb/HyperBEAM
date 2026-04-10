@@ -265,7 +265,7 @@ supply(ProcMsg, Opts) ->
     supply(now, ProcMsg, Opts).
 supply(Mode, ProcMsg, Opts) ->
     BalancesVal = maps:values(balances(Mode, ProcMsg, Opts)),
-    Balances = lists:filter(fun is_integer/1, BalancesVal),
+    Balances = lists:filter(fun is_number/1, BalancesVal),
     lists:sum(Balances).
 
 %% @doc Calculate the supply of tokens in all sub-ledgers, from the balances of
