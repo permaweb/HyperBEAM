@@ -434,7 +434,9 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 CheckpointSigners
             ) orelse untrusted,
         true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
-        CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
+        CheckpointData = hb_maps:get(<<"data">>, CheckpointMessage, not_found, Opts),
+        true ?= CheckpointData =/= not_found orelse missing_checkpoint_data,
+        CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, not_found, Opts),
         ProcID = dev_process_lib:process_id(Proc, #{}, Opts),
         true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
         % Normalize the checkpoint message into a process state message with 
@@ -479,6 +481,12 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 <<"body">> =>
                     <<"Checkpoint message is not signed by a trusted snapshot "
                         "authority.">>
+            }};
+        missing_checkpoint_data ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message is missing data.">>
             }}
     end.
 

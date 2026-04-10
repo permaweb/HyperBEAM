@@ -673,7 +673,17 @@ ensure_loaded(Base, Req, Opts) ->
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
-                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
+                    Process =
+                        case hb_maps:get(
+                            <<"process">>,
+                            LoadedSnapshotMsg,
+                            not_found,
+                            Opts
+                        ) of
+                            P when is_map(P) -> P;
+                            not_found -> throw({error, missing_snapshot_process});
+                            _ -> throw({error, invalid_snapshot_process})
+                        end,
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
                             #{ <<"type">> => <<"hmac-sha256">>},
