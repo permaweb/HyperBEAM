@@ -150,7 +150,8 @@ get_tx(Base, Request, Opts) ->
                             ) of
                                 {ok, #{ <<"body">> := ResultMsg }} ->
                                     {ok, ResultMsg};
-                                {error, Reason} -> {error, Reason}
+                                {error, Reason} -> {error, Reason};
+                                {failure, Reason} -> {error, Reason}
                             end;
                         false -> {error, not_admissible}
                     end;
