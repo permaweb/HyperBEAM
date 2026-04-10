@@ -669,17 +669,18 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {_, <<"httpsig@1.0">>, _} ->
+            IsBundle = hb_message:is_bundle(Message, Opts),
             TABM =
                 hb_message:convert(
                     Message,
                     tabm,
-                    <<"structured@1.0">>,
+                    #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => IsBundle },
                     Opts#{ topic => ao_internal }
                 ),
             {ok, EncMessage} =
                 dev_codec_httpsig:to(
                     TABM,
-                    case AcceptBundle of
+                    case AcceptBundle or IsBundle of
                         true ->
                             #{
                                 <<"path">> => <<"to">>,

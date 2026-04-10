@@ -66,6 +66,7 @@
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
+-export([is_bundle/2]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -992,3 +993,12 @@ default_tx_message() ->
 default_tx_list() ->
     Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
     lists:zip(Keys, tl(tuple_to_list(#tx{}))).
+
+is_bundle(Message, Opts) ->
+    Commitments = maps:get(<<"commitments">>,  Message, #{}),
+    MessageID = hb_message:id(Message, signed, Opts),
+    case maps:get(MessageID, Commitments, #{}) of
+        #{<<"bundle">> := Value} -> hb_util:bool(Value);
+        _ -> false
+    end.
+
