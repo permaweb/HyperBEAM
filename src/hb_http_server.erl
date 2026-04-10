@@ -79,6 +79,7 @@ start(Opts) ->
     hb:init(),
     BaseOpts = set_default_opts(Opts),
     ok = hb_process_sampler:ensure_started(BaseOpts),
+    ok = hb_system_monitor:ensure_started(BaseOpts),
     {ok, Listener, _Port} = new_server(BaseOpts),
     {ok, Listener}.
 
@@ -574,6 +575,7 @@ start_node(Opts) ->
     hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
     ok = hb_process_sampler:ensure_started(ServerOpts),
+    ok = hb_system_monitor:ensure_started(ServerOpts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (hb_util:bin(Port))/binary, "/">>.
 
