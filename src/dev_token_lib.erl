@@ -264,7 +264,9 @@ balances(Prefix, ProcMsg, Opts) ->
 supply(ProcMsg, Opts) ->
     supply(now, ProcMsg, Opts).
 supply(Mode, ProcMsg, Opts) ->
-    lists:sum(maps:values(balances(Mode, ProcMsg, Opts))).
+    BalancesVal = maps:values(balances(Mode, ProcMsg, Opts)),
+    Balances = lists:filter(fun is_integer/1, BalancesVal),
+    lists:sum(Balances).
 
 %% @doc Calculate the supply of tokens in all sub-ledgers, from the balances of
 %% the root ledger.
@@ -276,14 +278,15 @@ subledger_supply(RootProc, AllProcs, Opts) ->
 user_supply(Proc, AllProcs, Opts) ->
     NormProcs = normalize_without_root(Proc, AllProcs),
     SubledgerIDs = maps:keys(NormProcs),
-    lists:sum(
+    Vals =
         maps:values(
             maps:without(
                 SubledgerIDs,
                 balances(now, Proc, Opts)
             )
-        )
-    ).
+        ),
+    NumericVals = lists:filter(fun is_number/1, Vals),
+    lists:sum(NumericVals).
 
 %% @doc Get the local expectation of a ledger's balances with peer ledgers.
 ledgers(ProcMsg, Opts) ->
