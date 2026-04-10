@@ -164,19 +164,26 @@ extract_inference_params(Req, Opts) ->
     ),
     hb_cache:ensure_all_loaded(Params, Opts).
 
-relay_to_backend(Method, Path, Body, Opts) ->
+relay_to_backend(Method, DefaultPath, Body, Opts) ->
+    Peer = maps:get(<<"agent-api-peer">>, Opts, <<"http://localhost:8080">>),
+    Path = maps:get(<<"agent-api-path">>, Opts, DefaultPath),
+    Payload0 = #{
+        <<"path">>         => Path,
+        <<"method">>       => Method,
+        <<"body">>         => Body,
+        <<"content-type">> => <<"application/json">>
+    },
+    Payload = case maps:get(<<"agent-api-key">>, Opts, undefined) of
+        undefined -> Payload0;
+        ApiKey    -> Payload0#{<<"authorization">> => <<"Bearer ", ApiKey/binary>>}
+    end,
     hb_ao:resolve(
-        #{<<"device">> => <<"relay@1.0">>, <<"content-type">> => <<"application/json">>},
-        #{
-            <<"path">> => <<"call">>,
-            <<"target">> => <<"payload">>,
-            <<"payload">> => #{
-                <<"path">> => Path,
-                <<"method">> => Method,
-                <<"body">> => Body,
-                <<"content-type">> => <<"application/json">>
-            }
-        },
+        #{<<"device">>       => <<"relay@1.0">>,
+          <<"content-type">> => <<"application/json">>,
+          <<"peer">>         => Peer},
+        #{<<"path">>   => <<"call">>,
+          <<"target">> => <<"payload">>,
+          <<"payload">> => Payload},
         Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}
     ).
 

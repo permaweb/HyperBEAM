@@ -5,9 +5,10 @@
 %%%
 %%% Architecture:
 %%%   dev_agent (standalone device)
-%%%     ├── Calls LLM via relay@1.0 → localhost:8080/v1/chat/completions
+%%%     ├── Calls LLM via inference@1.0 (OpenAI-compatible, local or remote)
+%%%     │     └── inference@1.0 relays via relay@1.0 to the configured peer
 %%%     ├── Parses OpenAI tool_calls format
-%%%     ├── Executes tools via relay@1.0 (HTTP requests)
+%%%     ├── Executes built-in tools (http_request, lookup_data, …)
 %%%     └── Manages conversation history internally (Erlang recursion)
 %%%
 %%% Usage:
@@ -121,34 +122,19 @@ build_request_body(Messages, Tools, Model) ->
         <<"tool_choice">> => <<"auto">>
     }).
 
-%% @doc Default LLM call via relay@1.0.
-%% Supports configurable API endpoint and authentication:
-%%   agent-api-peer: Base URL (default: "http://localhost:8080")
-%%   agent-api-key:  Bearer token for Authorization header (optional)
+%% @doc Default LLM call via inference@1.0.
+%% inference@1.0 relays to any OpenAI-compatible provider via relay@1.0,
+%% making local and remote LLM backends interchangeable from the agent's
+%% perspective. Supported Opts keys (consumed by inference@1.0/relay@1.0):
+%%   agent-api-peer: Base URL           (default: "http://localhost:8080")
+%%   agent-api-path: Completions path   (default: "/v1/chat/completions")
+%%   agent-api-key:  Bearer token       (optional)
 default_call_llm(RequestBody, Opts) ->
-    Peer = maps:get(<<"agent-api-peer">>,
-                    Opts, <<"http://localhost:8080">>),
-    ApiPath = maps:get(<<"agent-api-path">>,
-                       Opts, <<"/v1/chat/completions">>),
-    Payload0 = #{
-        <<"path">> => ApiPath,
-        <<"method">> => <<"POST">>,
-        <<"body">> => RequestBody,
-        <<"content-type">> => <<"application/json">>
-    },
-    Payload = case maps:get(<<"agent-api-key">>, Opts, undefined) of
-        undefined -> Payload0;
-        ApiKey ->
-            AuthHeader = <<"Bearer ", ApiKey/binary>>,
-            Payload0#{<<"authorization">> => AuthHeader}
-    end,
     case hb_ao:resolve(
-        #{<<"device">> => <<"relay@1.0">>,
-          <<"content-type">> => <<"application/json">>,
-          <<"peer">> => Peer},
-        #{<<"path">> => <<"call">>,
-          <<"target">> => <<"payload">>,
-          <<"payload">> => Payload},
+        #{<<"device">>    => <<"inference@1.0">>,
+          <<"chat-mode">> => true},
+        #{<<"path">> => <<"completions">>,
+          <<"body">> => RequestBody},
         Opts#{hashpath => ignore,
               cache_control => [<<"no-store">>, <<"no-cache">>]}
     ) of
@@ -224,6 +210,14 @@ execute_tool_calls(ToolCalls, ToolFun, Opts) ->
 %% @doc Default tool executor. Dispatches by function name.
 default_execute_tool(#{name := <<"http_request">>, args := Args}, Opts) ->
     execute_http_request(Args, Opts);
+default_execute_tool(#{name := <<"lookup_data">>, args := Args}, Opts) ->
+    execute_lookup(Args, Opts);
+default_execute_tool(#{name := <<"search_messages">>, args := Args}, Opts) ->
+    execute_search(Args, Opts);
+default_execute_tool(#{name := <<"get_arweave_tx">>, args := Args}, Opts) ->
+    execute_get_arweave_tx(Args, Opts);
+default_execute_tool(#{name := <<"bundle_item">>, args := Args}, Opts) ->
+    execute_bundle_item(Args, Opts);
 default_execute_tool(#{name := Name}, _Opts) ->
     <<"Unknown tool: ", Name/binary>>.
 
@@ -251,6 +245,71 @@ execute_http_request(Args, Opts) ->
             hb_ao:get(<<"body">>, Res, <<"No body">>, Opts);
         {error, Reason} ->
             iolist_to_binary(io_lib:format("HTTP request failed: ~p", [Reason]))
+    end.
+
+%% @doc Look up an item from the local cache by ID via lookup@1.0.
+execute_lookup(Args, Opts) ->
+    ID = maps:get(<<"id">>, Args, <<>>),
+    case hb_ao:resolve(
+        #{<<"device">> => <<"lookup@1.0">>},
+        #{<<"path">> => <<"read">>, <<"target">> => ID},
+        Opts#{hashpath => ignore}
+    ) of
+        {ok, Res} when is_map(Res) -> hb_json:encode(Res);
+        {ok, Res} when is_binary(Res) -> Res;
+        {ok, Res} -> hb_util:bin(Res);
+        {error, not_found} -> <<"Not found: ", ID/binary>>;
+        {error, Reason} ->
+            iolist_to_binary(io_lib:format("Lookup failed: ~p", [Reason]))
+    end.
+
+%% @doc Search the node cache for messages matching a key-value spec via query@1.0.
+execute_search(Args, Opts) ->
+    MatchSpec = maps:get(<<"match">>, Args, #{}),
+    ReturnType = maps:get(<<"return">>, Args, <<"paths">>),
+    %% Merge match keys into the request so query@1.0's `all' path picks them up.
+    Req = maps:merge(MatchSpec, #{<<"path">> => <<"all">>, <<"return">> => ReturnType}),
+    case hb_ao:resolve(
+        #{<<"device">> => <<"query@1.0">>},
+        Req,
+        Opts#{hashpath => ignore}
+    ) of
+        {ok, Results} -> hb_json:encode(Results);
+        {error, Reason} ->
+            iolist_to_binary(io_lib:format("Search failed: ~p", [Reason]))
+    end.
+
+%% @doc Fetch an Arweave transaction by TXID via arweave@2.9-pre.
+execute_get_arweave_tx(Args, Opts) ->
+    TXID = maps:get(<<"id">>, Args, <<>>),
+    case hb_ao:resolve(
+        #{<<"device">> => <<"arweave@2.9-pre">>},
+        #{<<"path">> => <<"tx">>, <<"tx">> => TXID},
+        Opts#{hashpath => ignore}
+    ) of
+        {ok, Res} when is_map(Res) -> hb_json:encode(Res);
+        {ok, Res} when is_binary(Res) -> Res;
+        {ok, Res} -> hb_util:bin(Res);
+        {error, not_found} -> <<"Transaction not found: ", TXID/binary>>;
+        {error, Reason} ->
+            iolist_to_binary(io_lib:format("Arweave TX fetch failed: ~p", [Reason]))
+    end.
+
+%% @doc Submit a data item to Arweave via the node's bundler@1.0.
+execute_bundle_item(Args, Opts) ->
+    Data = maps:get(<<"data">>, Args, <<>>),
+    ContentType = maps:get(<<"content_type">>, Args, <<"text/plain">>),
+    case hb_ao:resolve(
+        #{<<"device">> => <<"bundler@1.0">>},
+        #{<<"path">> => <<"item">>,
+          <<"data">> => Data,
+          <<"content-type">> => ContentType},
+        Opts#{hashpath => ignore}
+    ) of
+        {ok, Res} when is_binary(Res) -> Res;
+        {ok, Res} -> hb_util:bin(Res);
+        {error, Reason} ->
+            iolist_to_binary(io_lib:format("Bundle failed: ~p", [Reason]))
     end.
 
 %% @doc Truncate tool results to avoid exceeding LLM context limits.
@@ -289,13 +348,23 @@ merge_agent_config(Source, Opts) ->
 
 default_system_prompt() ->
     <<"You are a helpful AI assistant running on the AO network. "
-      "You can make HTTP requests using the http_request tool. "
+      "You have the following tools available:\n"
+      "- http_request: Make HTTP requests to any URL.\n"
+      "- lookup_data: Retrieve a cached message or data item by its ID.\n"
+      "- search_messages: Search the node cache for messages matching key-value criteria.\n"
+      "- get_arweave_tx: Fetch an Arweave transaction by its transaction ID.\n"
+      "- bundle_item: Submit data to be bundled and uploaded to Arweave.\n"
       "When you have enough information to answer the user's question, "
       "respond with a text message (do not call any tools). "
       "Keep responses concise.">>.
 
 default_tools() ->
-    [#{
+    [tool_def(http_request), tool_def(lookup_data),
+     tool_def(search_messages), tool_def(get_arweave_tx),
+     tool_def(bundle_item)].
+
+tool_def(http_request) ->
+    #{
         <<"type">> => <<"function">>,
         <<"function">> => #{
             <<"name">> => <<"http_request">>,
@@ -325,7 +394,95 @@ default_tools() ->
                 <<"required">> => [<<"url">>]
             }
         }
-    }].
+    };
+tool_def(lookup_data) ->
+    #{
+        <<"type">> => <<"function">>,
+        <<"function">> => #{
+            <<"name">> => <<"lookup_data">>,
+            <<"description">> =>
+                <<"Retrieve a message or data item from the node's local cache by its ID.">>,
+            <<"parameters">> => #{
+                <<"type">> => <<"object">>,
+                <<"properties">> => #{
+                    <<"id">> => #{
+                        <<"type">> => <<"string">>,
+                        <<"description">> => <<"The hash ID of the item to retrieve.">>
+                    }
+                },
+                <<"required">> => [<<"id">>]
+            }
+        }
+    };
+tool_def(search_messages) ->
+    #{
+        <<"type">> => <<"function">>,
+        <<"function">> => #{
+            <<"name">> => <<"search_messages">>,
+            <<"description">> =>
+                <<"Search the node's cache for messages matching key-value criteria.">>,
+            <<"parameters">> => #{
+                <<"type">> => <<"object">>,
+                <<"properties">> => #{
+                    <<"match">> => #{
+                        <<"type">> => <<"object">>,
+                        <<"description">> =>
+                            <<"JSON object of key-value pairs to match against cached messages.">>
+                    },
+                    <<"return">> => #{
+                        <<"type">> => <<"string">>,
+                        <<"enum">> => [<<"paths">>, <<"messages">>, <<"count">>],
+                        <<"description">> =>
+                            <<"What to return: paths (default), full messages, or count.">>
+                    }
+                },
+                <<"required">> => [<<"match">>]
+            }
+        }
+    };
+tool_def(get_arweave_tx) ->
+    #{
+        <<"type">> => <<"function">>,
+        <<"function">> => #{
+            <<"name">> => <<"get_arweave_tx">>,
+            <<"description">> =>
+                <<"Fetch an Arweave transaction header by its 43-character base64url transaction ID.">>,
+            <<"parameters">> => #{
+                <<"type">> => <<"object">>,
+                <<"properties">> => #{
+                    <<"id">> => #{
+                        <<"type">> => <<"string">>,
+                        <<"description">> => <<"The Arweave transaction ID.">>
+                    }
+                },
+                <<"required">> => [<<"id">>]
+            }
+        }
+    };
+tool_def(bundle_item) ->
+    #{
+        <<"type">> => <<"function">>,
+        <<"function">> => #{
+            <<"name">> => <<"bundle_item">>,
+            <<"description">> =>
+                <<"Submit a data item to be bundled and uploaded to Arweave.">>,
+            <<"parameters">> => #{
+                <<"type">> => <<"object">>,
+                <<"properties">> => #{
+                    <<"data">> => #{
+                        <<"type">> => <<"string">>,
+                        <<"description">> => <<"The data content to store on Arweave.">>
+                    },
+                    <<"content_type">> => #{
+                        <<"type">> => <<"string">>,
+                        <<"description">> =>
+                            <<"Content-Type of the data. Defaults to text/plain.">>
+                    }
+                },
+                <<"required">> => [<<"data">>]
+            }
+        }
+    }.
 
 %%%===================================================================
 %%% Tests
@@ -389,7 +546,7 @@ mock_tool_fun_with_tracker(Result) ->
     end,
     {Fun, Tracker}.
 
-%% @doc Test 1: LLM directly returns text answer, no tool calls.
+%% @doc LLM directly returns text answer, no tool calls.
 single_turn_no_tools_test() ->
     LLMFun = mock_llm_sequence([
         mock_text_response(<<"Hello! How can I help you?">>)
@@ -407,7 +564,7 @@ single_turn_no_tools_test() ->
                  maps:get(<<"agent-answer">>, Result)),
     ?assertEqual(1, maps:get(<<"agent-iterations">>, Result)).
 
-%% @doc Test 2: LLM calls a tool, then returns final answer.
+%% @doc LLM calls a tool, then returns final answer.
 single_tool_call_test() ->
     ToolCall = make_tool_call(
         <<"call_1">>,
@@ -431,7 +588,7 @@ single_tool_call_test() ->
                  maps:get(<<"agent-answer">>, Result)),
     ?assertEqual(2, maps:get(<<"agent-iterations">>, Result)).
 
-%% @doc Test 3: LLM returns multiple tool calls in a single response.
+%% @doc LLM returns multiple tool calls in a single response.
 multiple_tool_calls_test() ->
     ToolCall1 = make_tool_call(
         <<"call_1">>, <<"http_request">>,
@@ -461,7 +618,7 @@ multiple_tool_calls_test() ->
     ?assertEqual(2, length(Calls)),
     ets:delete(Tracker).
 
-%% @doc Test 4: Max iterations reached, agent force-stops.
+%% @doc Max iterations reached, agent force-stops.
 max_iterations_test() ->
     %% LLM always returns tool_calls, never a final answer
     ToolCall = make_tool_call(
@@ -485,7 +642,7 @@ max_iterations_test() ->
                  maps:get(<<"agent-error">>, Result)),
     ?assertEqual(3, maps:get(<<"agent-iterations">>, Result)).
 
-%% @doc Test 5: Tool execution returns an error, which is passed back to LLM.
+%% @doc Tool execution returns an error, which is passed back to LLM.
 tool_error_handling_test() ->
     ToolCall = make_tool_call(
         <<"call_err">>, <<"http_request">>,
@@ -509,7 +666,7 @@ tool_error_handling_test() ->
                  maps:get(<<"agent-answer">>, Result)),
     ?assertEqual(2, maps:get(<<"agent-iterations">>, Result)).
 
-%% @doc Test 6: Verify conversation history format is correct OpenAI format.
+%% @doc Verify conversation history is in correct OpenAI format.
 message_history_test() ->
     ToolCall = make_tool_call(
         <<"call_hist">>, <<"http_request">>,
@@ -549,7 +706,7 @@ message_history_test() ->
     ?assertEqual(<<"tool output">>, maps:get(<<"content">>, ToolMsg)),
     ets:delete(MessageTracker).
 
-%% @doc Test: truncate_result works correctly.
+%% @doc truncate_result/1 correctly truncates long binaries.
 truncate_result_test() ->
     Short = <<"short">>,
     ?assertEqual(Short, truncate_result(Short)),
@@ -558,7 +715,7 @@ truncate_result_test() ->
     ?assert(byte_size(Truncated) < 5000),
     ?assert(binary:match(Truncated, <<"[truncated]">>) =/= nomatch).
 
-%% @doc Test: unknown tool returns error message.
+%% @doc Unknown tool name returns a descriptive error binary.
 unknown_tool_test() ->
     ToolCall = make_tool_call(
         <<"call_unk">>, <<"unknown_func">>,
@@ -603,26 +760,110 @@ lua_resolve_style_test() ->
     ?assertEqual(<<"Paris">>, maps:get(<<"agent-answer">>, Result)),
     ?assertEqual(1, maps:get(<<"agent-iterations">>, Result)).
 
-%% @doc Integration test: Real LLM API call via Novita AI with tool use.
-%% This test calls a real OpenAI-compatible API, asks a question that
-%% requires an HTTP tool call, and verifies the full ReAct loop completes.
+%% @doc lookup_data tool call is routed with correct args.
+lookup_data_tool_test() ->
+    ToolCall = make_tool_call(<<"c_lookup">>, <<"lookup_data">>,
+                              #{<<"id">> => <<"deadbeef123">>}),
+    LLMFun = mock_llm_sequence([
+        mock_tool_call_response([ToolCall]),
+        mock_text_response(<<"Found the item.">>)
+    ]),
+    ToolFun = fun(#{name := <<"lookup_data">>, args := Args}, _Opts) ->
+        ?assertEqual(<<"deadbeef123">>, maps:get(<<"id">>, Args)),
+        <<"mock cached data">>
+    end,
+    Base = #{<<"device">> => <<"agent@1.0">>},
+    Req = #{<<"path">> => <<"run">>,
+            <<"agent-user-prompt">> => <<"Look up the item">>},
+    Opts = #{<<"agent-llm-fun">> => LLMFun, <<"agent-tool-fun">> => ToolFun},
+    {ok, Result} = run(Base, Req, Opts),
+    ?assertEqual(<<"Found the item.">>, maps:get(<<"agent-answer">>, Result)),
+    ?assertEqual(2, maps:get(<<"agent-iterations">>, Result)).
+
+%% @doc search_messages tool call is routed with correct args.
+search_messages_tool_test() ->
+    ToolCall = make_tool_call(<<"c_search">>, <<"search_messages">>,
+                              #{<<"match">> => #{<<"type">> => <<"Process">>},
+                                <<"return">> => <<"paths">>}),
+    LLMFun = mock_llm_sequence([
+        mock_tool_call_response([ToolCall]),
+        mock_text_response(<<"Found 2 processes.">>)
+    ]),
+    ToolFun = fun(#{name := <<"search_messages">>, args := Args}, _Opts) ->
+        Match = maps:get(<<"match">>, Args),
+        ?assertEqual(<<"Process">>, maps:get(<<"type">>, Match)),
+        ?assertEqual(<<"paths">>, maps:get(<<"return">>, Args)),
+        <<"[\"/path/a\",\"/path/b\"]">>
+    end,
+    Base = #{<<"device">> => <<"agent@1.0">>},
+    Req = #{<<"path">> => <<"run">>,
+            <<"agent-user-prompt">> => <<"Find all processes">>},
+    Opts = #{<<"agent-llm-fun">> => LLMFun, <<"agent-tool-fun">> => ToolFun},
+    {ok, Result} = run(Base, Req, Opts),
+    ?assertEqual(<<"Found 2 processes.">>, maps:get(<<"agent-answer">>, Result)).
+
+%% @doc get_arweave_tx tool call is routed with correct args.
+get_arweave_tx_tool_test() ->
+    TXID = <<"43characterbase64urlTXIDxxxxxxxxxxxxxxxx123">>,
+    ToolCall = make_tool_call(<<"c_tx">>, <<"get_arweave_tx">>,
+                              #{<<"id">> => TXID}),
+    LLMFun = mock_llm_sequence([
+        mock_tool_call_response([ToolCall]),
+        mock_text_response(<<"Transaction found.">>)
+    ]),
+    ToolFun = fun(#{name := <<"get_arweave_tx">>, args := Args}, _Opts) ->
+        ?assertEqual(TXID, maps:get(<<"id">>, Args)),
+        <<"{\"id\":\"", TXID/binary, "\"}">>
+    end,
+    Base = #{<<"device">> => <<"agent@1.0">>},
+    Req = #{<<"path">> => <<"run">>,
+            <<"agent-user-prompt">> => <<"Get the Arweave TX">>},
+    Opts = #{<<"agent-llm-fun">> => LLMFun, <<"agent-tool-fun">> => ToolFun},
+    {ok, Result} = run(Base, Req, Opts),
+    ?assertEqual(<<"Transaction found.">>, maps:get(<<"agent-answer">>, Result)).
+
+%% @doc bundle_item tool call is routed with correct args.
+bundle_item_tool_test() ->
+    Data = <<"Hello Arweave">>,
+    ToolCall = make_tool_call(<<"c_bundle">>, <<"bundle_item">>,
+                              #{<<"data">> => Data,
+                                <<"content_type">> => <<"text/plain">>}),
+    LLMFun = mock_llm_sequence([
+        mock_tool_call_response([ToolCall]),
+        mock_text_response(<<"Data submitted to Arweave.">>)
+    ]),
+    ToolFun = fun(#{name := <<"bundle_item">>, args := Args}, _Opts) ->
+        ?assertEqual(Data, maps:get(<<"data">>, Args)),
+        ?assertEqual(<<"text/plain">>, maps:get(<<"content_type">>, Args)),
+        <<"Message queued.">>
+    end,
+    Base = #{<<"device">> => <<"agent@1.0">>},
+    Req = #{<<"path">> => <<"run">>,
+            <<"agent-user-prompt">> => <<"Store this to Arweave">>},
+    Opts = #{<<"agent-llm-fun">> => LLMFun, <<"agent-tool-fun">> => ToolFun},
+    {ok, Result} = run(Base, Req, Opts),
+    ?assertEqual(<<"Data submitted to Arweave.">>, maps:get(<<"agent-answer">>, Result)).
+
+%% @doc Integration test: real LLM API call via OpenRouter with tool use.
+%% Requires a valid OPENROUTER_API_KEY environment variable or direct substitution.
 %% Run with: rebar3 eunit --module=dev_agent --test=integration_real_api_test
 integration_real_api_test_() ->
     {timeout, 120, fun() ->
         application:ensure_all_started(gun),
-        ApiKey = <<"sk_VkH3T72Z7LsiDvc5oRvcCtuPciFNwKShHLOgs3LqGVI">>,
+        ApiKey = list_to_binary(
+            os:getenv("OPENROUTER_API_KEY", "sk-or-v1-YOUR_KEY_HERE")),
         Base = #{<<"device">> => <<"agent@1.0">>},
         Req = #{
             <<"path">> => <<"run">>,
             <<"agent-user-prompt">> =>
                 <<"Use the http_request tool to GET https://httpbin.org/get "
                   "and tell me what the 'origin' IP address is from the response.">>,
-            <<"agent-model">> => <<"minimax/minimax-m2.7">>,
+            <<"agent-model">> => <<"openai/gpt-4o-mini">>,
             <<"agent-max-iterations">> => 5
         },
         Opts = #{
-            <<"agent-api-peer">> => <<"https://api.novita.ai">>,
-            <<"agent-api-path">> => <<"/openai/v1/chat/completions">>,
+            <<"agent-api-peer">> => <<"https://openrouter.ai">>,
+            <<"agent-api-path">> => <<"/api/v1/chat/completions">>,
             <<"agent-api-key">> => ApiKey,
             protocol => http2
         },
