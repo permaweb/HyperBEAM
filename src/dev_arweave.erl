@@ -8,6 +8,7 @@
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
+-export([is_tx_admissible_hook/3]).
 %%% Helper functions
 -export([get_chunk/2, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
@@ -167,11 +168,41 @@ is_tx_admissible(Base, Request, Opts) ->
         {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
         CommIDs = maps:keys(maps:get(<<"commitments">>, Request, #{})),
         true ?=
-            lists:member(TXID, CommIDs) andalso 
+            lists:member(TXID, CommIDs) andalso
             hb_message:verify(Request, all, Opts)
     else
         _ -> false
     end.
+
+%% @doc Hook adapter for the `http-client/response' chain. Decodes the raw
+%% upstream response via `dev_codec_httpsig:from/3' and runs
+%% `is_tx_admissible/3' against the result.
+is_tx_admissible_hook(_Base, HookReq, Opts) ->
+    Body     = hb_maps:get(<<"body">>, HookReq, #{}, Opts),
+    Path     = hb_maps:get(<<"request-path">>, Body, <<>>, Opts),
+    Priv     = hb_maps:get(<<"priv">>, HookReq, #{}, Opts),
+    Response = hb_maps:get(<<"response">>, Priv, #{}, Opts),
+    case extract_txid_from_path(Path) of
+        {ok, TXID} ->
+            case dev_codec_httpsig:from(Response, #{}, Opts) of
+                {ok, Decoded} ->
+                    case is_tx_admissible(#{<<"tx">> => TXID}, Decoded, Opts) of
+                    true  -> {ok, HookReq};
+                        false -> {error, not_admissible}
+                    end;
+                _ ->
+                    {error, decode_failed}
+            end;
+        error ->
+            {ok, HookReq}
+    end.
+
+extract_txid_from_path(<<"/", TXID:43/binary>>) ->
+    {ok, TXID};
+extract_txid_from_path(<<"/", TXID:43/binary, "/", _/binary>>) ->
+    {ok, TXID};
+extract_txid_from_path(_) ->
+    error.
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
