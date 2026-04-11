@@ -28,7 +28,15 @@
 %% @doc Compute dispatcher for process@1.0 compatibility.
 compute(Base, Req, Opts) ->
     Body = hb_ao:get(<<"body">>, Req, Req, Opts),
-    case hb_ao:get(<<"action">>, Body, not_found, Opts) of
+    %% TODO: THIS IS WIERD IS THERE A BETTER WAY???
+    %% Falls back to `path' because hb_http_client:maybe_invoke_monitor
+    %% sends duration data with `path => <<"duration">>' (not `action').
+    Action = 
+        case hb_ao:get(<<"action">>, Body, not_found, Opts) of
+            not_found -> hb_ao:get(<<"path">>, Body, not_found, Opts);
+            A -> A
+        end,
+    case Action of
         <<"register">> -> register(Base, Body, Opts);
         <<"recalculate">> -> recalculate(Base, Body, Opts);
         <<"duration">> -> duration(Base, Body, Opts);
