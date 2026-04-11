@@ -380,14 +380,18 @@ bundler_optimistic_cache_test() ->
         store => hb_test_utils:test_store(hb_store_lmdb)
     }),
     try
-        Serialized = ar_bundles:serialize(L2Bundle),
+        StructuredBundle = hb_message:convert(
+            L2Bundle,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            #{}
+        ),
         ?assertMatch({ok, _}, hb_http:post(
             Node,
             #{
-                <<"device">> => <<"bundler@1.0">>,
-                <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"body">> => Serialized
+                <<"path">> => <<"/~bundler@1.0/tx">>,
+                <<"bundler-subject">> => <<"body">>,
+                <<"body">> => StructuredBundle
             },
             #{}
         )),

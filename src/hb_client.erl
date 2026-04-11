@@ -107,86 +107,57 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
-upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
-    dev_arweave:post_binary_ans104(Msg, Opts);
-upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
+upload(Msg, Opts, CommitmentDevice) ->
     ?event({uploading_item, Msg}),
     dev_arweave:post_tx(
         #{ <<"device">> => <<"arweave@2.9">> },
         Msg,
         Opts,
-        <<"ans104@1.0">>
-    );
-upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
-    dev_arweave:post_tx(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        Msg,
-        Opts,
-        <<"tx@1.0">>
+        CommitmentDevice
     ).
 
 %%% Tests
 
-upload_empty_raw_ans104_test() ->
-    Serialized = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"TEST">>
-        }, hb:wallet())
-    ),
-    ?event({uploading_item, Serialized}),
-    Result = upload(Serialized, #{}, <<"ans104@1.0">>),
-    ?event({upload_result, Result}),
-    ?assertMatch({ok, _}, Result).
-
-upload_raw_ans104_test() ->
-    Serialized = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"TEST">>,
-            tags = [{<<"test-tag">>, <<"test-value">>}]
-        }, hb:wallet())
-    ),
-    ?event({uploading_item, Serialized}),
-    Result = upload(Serialized, #{}, <<"ans104@1.0">>),
-    ?event({upload_result, Result}),
-    ?assertMatch({ok, _}, Result).
-
-upload_raw_ans104_with_anchor_test() ->
-    Serialized = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"TEST">>,
-            anchor = crypto:strong_rand_bytes(32),
-            tags = [{<<"test-tag">>, <<"test-value">>}]
-        }, hb:wallet())
-    ),
-    ?event({uploading_item, Serialized}),
-    Result = upload(Serialized, #{}, <<"ans104@1.0">>),
-    ?event({upload_result, Result}),
-    ?assertMatch({ok, _}, Result).
+upload_test_opts() ->
+    #{
+        bundler_ans104 => hb_http_server:start_node(#{}),
+        priv_wallet => hb:wallet()
+    }.
 
 upload_empty_message_test() ->
-    Msg = #{ <<"data">> => <<"TEST">> },
-    Committed = 
-        hb_message:commit(
-            Msg,
-            #{ priv_wallet => hb:wallet() },
-            <<"ans104@1.0">>
-        ),
-    Result = upload(Committed, #{}, <<"ans104@1.0">>),
-    ?event({upload_result, Result}),
-    ?assertMatch({ok, _}, Result).
+    Opts = upload_test_opts(),
+    try
+        Msg = #{ <<"data">> => <<"TEST">> },
+        Committed = 
+            hb_message:commit(
+                Msg,
+                Opts,
+                <<"ans104@1.0">>
+            ),
+        Result = upload(Committed, Opts, <<"ans104@1.0">>),
+        ?event({upload_result, Result}),
+        ?assertMatch({ok, _}, Result)
+    after
+        dev_bundler:stop_server()
+    end.
 
 upload_single_layer_message_test() ->
-    Msg = #{
-        <<"data">> => <<"TEST">>,
-        <<"basic">> => <<"value">>,
-        <<"integer">> => 1
-    },
-    Committed = 
-        hb_message:commit(
-            Msg,
-            #{ priv_wallet => hb:wallet() },
-            <<"ans104@1.0">>
-        ),
-    Result = upload(Committed, #{}, <<"ans104@1.0">>),
-    ?event({upload_result, Result}),
-    ?assertMatch({ok, _}, Result).
+    Opts = upload_test_opts(),
+    try
+        Msg = #{
+            <<"data">> => <<"TEST">>,
+            <<"basic">> => <<"value">>,
+            <<"integer">> => 1
+        },
+        Committed = 
+            hb_message:commit(
+                Msg,
+                Opts,
+                <<"ans104@1.0">>
+            ),
+        Result = upload(Committed, Opts, <<"ans104@1.0">>),
+        ?event({upload_result, Result}),
+        ?assertMatch({ok, _}, Result)
+    after
+        dev_bundler:stop_server()
+    end.
