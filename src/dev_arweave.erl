@@ -178,23 +178,19 @@ is_tx_admissible(Base, Request, Opts) ->
 %% upstream response via `dev_codec_httpsig:from/3' and runs
 %% `is_tx_admissible/3' against the result.
 is_tx_admissible_hook(_Base, HookReq, Opts) ->
-    Body     = hb_maps:get(<<"body">>, HookReq, #{}, Opts),
-    Path     = hb_maps:get(<<"request-path">>, Body, <<>>, Opts),
-    Priv     = hb_maps:get(<<"priv">>, HookReq, #{}, Opts),
+    Body = hb_maps:get(<<"body">>, HookReq, #{}, Opts),
+    Path = hb_maps:get(<<"request-path">>, Body, <<>>, Opts),
+    Priv = hb_maps:get(<<"priv">>, HookReq, #{}, Opts),
     Response = hb_maps:get(<<"response">>, Priv, #{}, Opts),
-    case extract_txid_from_path(Path) of
-        {ok, TXID} ->
-            case dev_codec_httpsig:from(Response, #{}, Opts) of
-                {ok, Decoded} ->
-                    case is_tx_admissible(#{<<"tx">> => TXID}, Decoded, Opts) of
-                    true  -> {ok, HookReq};
-                        false -> {error, not_admissible}
-                    end;
-                _ ->
-                    {error, decode_failed}
-            end;
-        error ->
-            {ok, HookReq}
+    maybe
+        {ok, TXID} ?= extract_txid_from_path(Path),
+        {ok, Decoded} ?= dev_codec_httpsig:from(Response, #{}, Opts),
+        true ?= is_tx_admissible(#{<<"tx">> => TXID}, Decoded, Opts),
+        {ok, HookReq}
+    else
+        error -> {ok, HookReq};
+        false -> {error, not_admissible};
+        _ -> {error, decode_failed}
     end.
 
 extract_txid_from_path(<<"/", TXID:43/binary>>) ->
