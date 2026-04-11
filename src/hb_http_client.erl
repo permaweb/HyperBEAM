@@ -155,6 +155,7 @@ httpc_req(Args, Opts) ->
                             <<"status-class">> => get_status_class(Status),
                             <<"duration">> => EndTime - StartTime
                         },
+                        response_to_map({ok, Status, RespHeaders, RespBody}),
                         Opts
                     ),
                     {ok, Status, RespHeaders, RespBody};
@@ -217,6 +218,7 @@ hackney_req(Args, Opts) ->
                     <<"status-class">> => get_status_class(Response),
                     <<"duration">> => EndTime - StartTime
                 },
+                response_to_map(Response),
                 Opts
             ),
             record_response_status(Method, Response, Path),
@@ -249,6 +251,7 @@ gun_req(Args, Opts) ->
 			<<"status-class">> => get_status_class(Response),
 			<<"duration">> => EndTime - StartTime
 		},
+		response_to_map(Response),
 		Opts
 	),
 	Response.
@@ -264,7 +267,7 @@ init_hackney_pool() ->
 %% @doc Record the duration of the request in an async process. We write the
 %% data to prometheus if the application is enabled, as well as firing the
 %% `http-client/response' hook if configured.
-record_duration(Details, Opts) ->
+record_duration(Details, Response, Opts) ->
     spawn(
         fun() ->
             % First, write to prometheus if it is enabled. Prometheus works
@@ -290,12 +293,15 @@ record_duration(Details, Opts) ->
                 http_client_duration_seconds,
                 Labels
             ),
-            BodyDetails =
-                (maybe_add_reference(Details, Opts))#{
-                    <<"action">> => <<"duration">>
-                },
             HookReq =
-                #{ <<"body">> => hb_message:commit(BodyDetails, Opts) },
+                #{
+                    <<"body">> =>
+                        hb_message:commit(
+                            maybe_add_reference(Details, Opts),
+                            Opts
+                        ),
+                    <<"priv">> => #{<<"response">> => Response}
+                },
             dev_hook:on(<<"http-client/response">>, HookReq, Opts)
         end
     ).
@@ -306,6 +312,20 @@ maybe_add_reference(Details, Opts) ->
         not_found -> Details;
         Ref -> Details#{ <<"reference">> => Ref }
     end.
+
+%% @doc Convert a raw HTTP response tuple into a HB map of lowercased
+%% header keys and a `<<"body">>' field, suitable for passing into
+%% `dev_codec_httpsig:from/3'.
+response_to_map({ok, _Status, Headers, Body}) ->
+    HeaderMap =
+        maps:from_list(
+            [
+                {string:lowercase(hb_util:bin(K)), hb_util:bin(V)}
+            ||
+                {K, V} <- Headers
+            ]
+        ),
+    HeaderMap#{<<"body">> => Body}.
 
 %%% ==================================================================
 %%% gen_server callbacks.
