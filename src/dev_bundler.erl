@@ -41,24 +41,10 @@ item(_Base, Req, Opts) ->
     ServerPID = ensure_server(Opts),
     ItemToProcess =
         case hb_maps:find(<<"bundler-subject">>, Req, Opts) of
-            {ok, SubjectKey} ->
-                case hb_maps:find(SubjectKey, Req, Opts) of
-                    {ok, Binary} when is_binary(Binary) ->
-                        hb_message:convert(
-                            ar_bundles:deserialize(Binary),
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        );
-                    {ok, Subject} ->
-                        Subject;
-                    error ->
-                        Req
-                end;
-            error ->
-                Req
+            {ok, SubjectKey} -> hb_maps:get(SubjectKey, Req, Req, Opts);
+            error -> Req
         end,
-    case verify_item(ItemToProcess, Opts) of
+    case verify_message(ItemToProcess, Opts) of
         {ok, Item} ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
@@ -71,39 +57,65 @@ item(_Base, Req, Opts) ->
                         <<"timestamp">> => erlang:system_time(millisecond)
                     }};
                 {error, Reason} ->
-                    ?event(bundler_short, {cache_write_failed,
-                        {id, {explicit, ItemID}}, {reason, Reason}}),
+                    ?event(
+                        bundler_short,
+                        {cache_write_failed,
+                            {id, {explicit, ItemID}},
+                            {reason, Reason}
+                        }
+                    ),
                     {error, #{
                         <<"status">> => 500,
-                        <<"error">> => <<"cache_write_failed">>,
-                        <<"details">> => list_to_binary(io_lib:format("~p", [Reason]))
+                        <<"error">> => <<"cache-write-failed">>,
+                        <<"details">> => error_to_bin(Reason)
                     }}
             end;
         {error, Reason} ->
             {error, #{
                 <<"status">> => 400,
-                <<"error">> => <<"invalid_item">>,
-                <<"details">> => list_to_binary(io_lib:format("~p", [Reason]))
+                <<"error">> => <<"invalid-item">>,
+                <<"details">> => error_to_bin(Reason)
             }}
     end.
 
-%% @doc Verify an item by extracting committed fields and checking signatures.
+%% @doc Verify the subject by extracting committed fields and checking signatures.
 %% Returns {ok, Item} or {error, Reason}.
-verify_item(Req, Opts) ->
+verify_message(Req, Opts) ->
     case hb_message:with_only_committed(Req, Opts) of
         {ok, Item} ->
-            case hb_message:verify(Item, all, Opts) of
-                true -> {ok, Item};
-                false ->
-                    ?event(bundler_short, {verify_failed, 
-                        {id, {explicit, hb_message:id(Item, signed, Opts)}},
-                        {reason, signature_verification_failed}}),
-                    {error, signature_verification_failed}
+            case hb_message:signers(Item, Opts) of
+                [] ->
+                    ?event(
+                        bundler_short,
+                        {verify_failed, {reason, unsigned_item}}
+                    ),
+                    {error, unsigned_item};
+                _ ->
+                    case hb_message:verify(Item, all, Opts) of
+                        true -> {ok, Item};
+                        false ->
+                            ?event(
+                                bundler_short,
+                                {verify_failed,
+                                    {id,
+                                        {string, hb_message:id(Item, signed, Opts)}
+                                    },
+                                    {reason, signature_verification_failed}
+                                },
+                                Opts
+                            ),
+                            {error, signature_verification_failed}
+                    end
             end;
         {error, Reason} ->
             ?event(bundler_short, {verify_failed, {reason, Reason}}),
             {error, Reason}
     end.
+
+%% @doc Format an error signifier for external responses.
+error_to_bin({error, Reason}) -> error_to_bin(Reason);
+error_to_bin(Reason) ->
+    binary:replace(hb_util:bin(Reason), <<"_">>, <<"-">>, [global]).
 
 %% @doc Cache an item.
 %% Returns ok or {error, Reason}.
@@ -616,11 +628,13 @@ unsigned_dataitem_test() ->
                 data = <<"testdata">>,
                 tags = [{<<"tag1">>, <<"value1">>}]
             },
-        % This should probably be a 4XX error, but for now the hb_http_server
-        % throws an exception when a message is not signed.
         Response = post_data_item(Node, Item, ClientOpts),
         ?assertMatch(
-            {failure, #{ <<"status">> := 500 }},
+            {error, #{
+                <<"status">> := 400,
+                <<"error">> := <<"invalid-item">>,
+                <<"details">> := <<"unsigned-item">>
+            }},
             Response)
     after
         %% Always cleanup, even if test fails
@@ -1259,17 +1273,18 @@ invalid_item_test() ->
         ),
         % Tamper with the data after signing (this invalidates the signature)
         TamperedItem = Item#tx{data = <<"tampereddata">>},
-        % Posting via HTTP fails upstream during ANS104 decode/verify.
-        PostResult = post_data_item(Node, TamperedItem, ClientOpts),
-        ?assertMatch({failure, #{<<"status">> := 500}}, PostResult),
-        % Calling dev_bundler directly should return the intended 400.
         StructuredItem = hb_message:convert(
             TamperedItem, <<"structured@1.0">>, <<"ans104@1.0">>, TestOpts),
+        PostResult = post_data_item(Node, TamperedItem, ClientOpts),
+        ?assertMatch({error, #{
+            <<"status">> := 400,
+            <<"error">> := <<"invalid-item">>,
+            <<"details">> := <<"signature-verification-failed">>}}, PostResult),
         DirectResult = dev_bundler:item(#{}, StructuredItem, TestOpts),
         ?assertMatch({error, #{
             <<"status">> := 400,
-            <<"error">> := <<"invalid_item">>,
-            <<"details">> := <<"signature_verification_failed">>}}, DirectResult),
+            <<"error">> := <<"invalid-item">>,
+            <<"details">> := <<"signature-verification-failed">>}}, DirectResult),
         ok
     after
         stop_test_servers(ServerHandle)
@@ -1298,7 +1313,7 @@ cache_write_failure_test() ->
         Result = dev_bundler:item(#{}, StructuredItem, BadOpts),
         ?assertMatch({error, #{
             <<"status">> := 500,
-            <<"error">> := <<"cache_write_failed">>}}, Result),
+            <<"error">> := <<"cache-write-failed">>}}, Result),
         ok
     after
         stop_server()
@@ -1406,14 +1421,18 @@ new_data_item(Index, Size, Wallet) ->
     ).
 
 post_data_item(Node, Item, Opts) ->
-    Serialized = ar_bundles:serialize(Item),
+    StructuredItem = hb_message:convert(
+        Item,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        Opts
+    ),
     hb_http:post(
         Node,
         #{
-            <<"device">> => <<"bundler@1.0">>,
-            <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized
+            <<"path">> => <<"/~bundler@1.0/tx">>,
+            <<"bundler-subject">> => <<"body">>,
+            <<"body">> => StructuredItem
         },
         Opts
     ).

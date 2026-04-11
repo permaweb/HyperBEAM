@@ -6,7 +6,7 @@
 -module(dev_arweave).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
--export([post_tx_header/2, post_tx/3, post_tx/4, post_binary_ans104/2, post_json_chunk/2]).
+-export([post_tx_header/2, post_tx/3, post_tx/4, post_json_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
@@ -74,6 +74,9 @@ extract_target(Base, Request, Opts) ->
             not_found
     end.
 
+%% @doc Handle dispatch of Arweave base-layer TX records or ANS-104 nested 
+%% transactions. Both are expected in their `structured@1.0` forms as input and
+%% converted to their commitment codecs during their dispatch flows.
 post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
     Res = post_tx_header(TX, Opts),
@@ -90,7 +93,6 @@ post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
             ok
     end,
     Res;
-
 post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
     hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
@@ -101,7 +103,6 @@ post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
         },
         Opts
     ).
-
 
 post_tx_header(TX, Opts) ->
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
@@ -117,28 +118,6 @@ post_tx_header(TX, Opts) ->
         LogExtra,
         Opts
     ).
-
-post_binary_ans104(SerializedTX, Opts) ->
-    LogExtra = [
-        {codec, <<"ans104@1.0">>},
-        {id, unknown}
-    ],
-    post_binary_ans104(SerializedTX, LogExtra, Opts).
-
-post_binary_ans104(SerializedTX, LogExtra, Opts) ->
-    Request = #{
-        <<"content-type">> => <<"application/octet-stream">>,
-        <<"body">> => SerializedTX
-    },
-    Res = hb_http:post(
-        hb_opts:get(bundler_ans104, not_found, Opts),
-        Request#{
-            <<"path">> => <<"/~bundler@1.0/tx">>,
-            <<"bundler-subject">> => <<"body">>
-        },
-        Opts
-    ),
-    to_message(<<"/tx">>, <<"POST">>, Res, LogExtra, Opts).
 
 %% @doc Get a transaction from the Arweave node, as indicated by the
 %% `tx` key in the request or base message. By default, this embeds the data
@@ -977,7 +956,7 @@ event_request(Path, Method, Status, Extra) ->
 %% bundle_header/3 as invalid_bundle_header.
 bundle_header_garbage_guard_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
-    Server = hb_http_server:start_node(ServerOpts),
+    _Server = hb_http_server:start_node(ServerOpts),
     ProbeOffset = 376836336327208,
     Size = 121798901,
     ?assertEqual(
@@ -987,100 +966,60 @@ bundle_header_garbage_guard_test() ->
 
 
 post_ans104_message_test() ->
-    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    Port = rand:uniform(10000) + 10000,
+    ServerOpts = #{
+        store => [hb_test_utils:test_store()],
+        port => Port,
+        bundler_ans104 => iolist_to_binary(
+            io_lib:format("http://localhost:~p/", [Port])
+        )
+    },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
         #{
             store => [hb_test_utils:test_store()],
             priv_wallet => hb:wallet()
         },
-    Msg =
-        hb_message:commit(
+    try
+        Msg =
+            hb_message:commit(
+                #{
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"Process">>,
+                    <<"data">> => <<"test-data">>
+                },
+                ClientOpts,
+                #{ <<"commitment-device">> => <<"ans104@1.0">> }
+            ),
+        {ok, PostRes} =
+            hb_http:post(
+                Server,
+                Msg#{
+                    <<"path">> => <<"/~arweave@2.9/tx">>
+                },
+                ClientOpts
+            ),
+        ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+        ?event(debug_test, {post_res, PostRes}),
+        SignedID = hb_message:id(Msg, signed, ClientOpts),
+        {ok, GetRes} =
+            hb_http:get(
+                Server, <<"/", SignedID/binary>>,
+                ClientOpts
+            ),
+        ?assertMatch(
             #{
-                <<"variant">> => <<"ao.N.1">>,
-                <<"type">> => <<"Process">>,
-                <<"data">> => <<"test-data">>
+                <<"status">> := 200,
+                <<"variant">> := <<"ao.N.1">>,
+                <<"type">> := <<"Process">>,
+                <<"data">> := <<"test-data">>
             },
-            ClientOpts,
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+            GetRes
         ),
-    {ok, PostRes} =
-        hb_http:post(
-            Server,
-            Msg#{
-                <<"path">> => <<"/~arweave@2.9/tx">>
-            },
-            ClientOpts
-        ),
-    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
-    ?event(debug_test, {post_res, PostRes}),
-    SignedID = hb_message:id(Msg, signed, ClientOpts),
-    {ok, GetRes} =
-        hb_http:get(
-            Server, <<"/", SignedID/binary>>,
-            ClientOpts
-        ),
-    ?assertMatch(
-        #{
-            <<"status">> := 200,
-            <<"variant">> := <<"ao.N.1">>,
-            <<"type">> := <<"Process">>,
-            <<"data">> := <<"test-data">>
-        },
-        GetRes
-    ),
-    ok.
-
-post_ans104_binary_test() ->
-    ServerOpts = #{ store => [hb_test_utils:test_store()] },
-    Server = hb_http_server:start_node(ServerOpts),
-    ClientOpts =
-        #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => hb:wallet()
-        },
-    Msg =
-        hb_message:commit(
-            #{
-                <<"variant">> => <<"ao.N.1">>,
-                <<"type">> => <<"Process">>,
-                <<"data">> => <<"test-data">>
-            },
-            ClientOpts,
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }
-        ),
-    DataItem = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, ClientOpts),
-    ?event(debug_test, {data_item, DataItem}),
-    Serialized = ar_bundles:serialize(DataItem),
-    {ok, PostRes} =
-        hb_http:post(
-            Server,
-            #{
-                <<"device">> => <<"arweave@2.9">>,
-                <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"body">> => Serialized
-            },
-            ClientOpts
-        ),
-    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
-    ?event(debug_test, {post_res, PostRes}),
-    SignedID = hb_message:id(Msg, signed, ClientOpts),
-    {ok, GetRes} =
-        hb_http:get(
-            Server, <<"/", SignedID/binary>>,
-            ClientOpts
-        ),
-    ?assertMatch(
-        #{
-            <<"status">> := 200,
-            <<"variant">> := <<"ao.N.1">>,
-            <<"type">> := <<"Process">>,
-            <<"data">> := <<"test-data">>
-        },
-        GetRes
-    ),
-    ok.
+        ok
+    after
+        dev_bundler:stop_server()
+    end.
 
 post_tx_message_test() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
