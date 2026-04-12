@@ -55,9 +55,14 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches = filter_explicit_ids(match_args(Args, Opts), Args, Opts),
+    Matches = match_args(Args, Opts),
+    WithExplicit =
+        case explicit_ids(Args, Opts) of
+            [] -> Matches;
+            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+        end,
     Ordered =
-        case annotate_ids(Matches, Opts) of
+        case annotate_ids(WithExplicit, Opts) of
             unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
             Annotated ->
                 Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
@@ -197,6 +202,8 @@ find_field_key(Field, Msg, Opts) ->
             end
     end.
 
+%% @doc Generate the connection response for a ordered, annotated list of 
+%% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
     {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
@@ -212,7 +219,8 @@ connection(Ordered, Args, Opts) ->
             }
     }.
 
-%% @doc Build edges from a list of offset-annotated messages.
+%% @doc Read IDs into their Arweave GraphQL-compliant object form, from a list
+%% of offset-annotated messages.
 read_ids([], _Count, _Opts) -> [];
 read_ids(_, 0, _Opts) -> [];
 read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
@@ -363,22 +371,30 @@ match_args(Args, Opts) when is_map(Args) ->
 match_args([], [], _Opts) -> [];
 match_args([], Results, Opts) ->
     ?event({match_args_results, Results}),
-    ResolvedResults = [ resolve_ids(Result, Opts) || Result <- Results ],
+    Store = scoped_store(Opts),
+    % For every ID in every result, we resolve it to its uncommitted ID form.
+    ResolvedResults =
+        [
+            [ hb_store:resolve(Store, ID) || ID <- Result ]
+        ||
+            Result <- Results
+        ],
+    % Next, we find the intersection of all the results. Having the uncommitted 
+    % ID gives us their 'neutral' form: correctly returning a result with `SignedID1`
+    % from one matcher and `SignedID2` from another matcher -- while they are
+    % unequal, but pertain to the same message.
     Matches =
         lists:foldl(
             fun(Result, Acc) -> hb_util:list_with(Result, Acc) end,
             hd(ResolvedResults),
             tl(ResolvedResults)
         ),
-    hb_util:unique(lists:flatten([ all_ids(ID, Opts) || ID <- Matches ]));
+    hb_util:unique(lists:flatten([ all_signed_ids(ID, Store, Opts) || ID <- Matches ]));
 match_args([{Field, X} | Rest], Acc, Opts) ->
-    MatchRes = match(Field, X, Opts),
-    ?event({match, {field, Field}, {arg, X}, {match_res, MatchRes}}),
-    case MatchRes of
-        {ok, Result} ->
-            match_args(Rest, [Result | Acc], Opts);
-        _Error ->
-            match_args(Rest, Acc, Opts)
+    ?event({match, {field, Field}, {arg, X}}),
+    case match(Field, X, Opts) of
+        {ok, Result} -> match_args(Rest, [Result | Acc], Opts);
+        _Error -> match_args(Rest, Acc, Opts)
     end.
 
 %% @doc Generate a match upon `tags' in the arguments, if given.
@@ -391,7 +407,7 @@ match(<<"height">>, Heights, Opts) ->
             error ->
                 hb_util:ok(dev_arweave_block_cache:latest(Opts))
         end,
-    #{ store := ScopedStores } = scope(Opts),
+    ScopedStores = scoped_store(Opts),
     {ok,
         lists:filtermap(
             fun(Height) ->
@@ -529,50 +545,45 @@ commitment_id_to_base_id(ID, Opts) ->
 %% @doc Find all IDs for a message, by any of its other IDs. It achieves this
 %% by resolving the given ID, recursing through its links, then returning all
 %% of the IDs found in that `BaseID/commitments' key.
-all_ids(ID, Opts) ->
-    Store = scoped_store(Opts),
-    ResolvedID = resolve_id(ID, Store),
+all_signed_ids(ID, Store, _Opts) ->
+    ResolvedID = hb_store:resolve(Store, ID),
     case hb_store:list(Store, << ResolvedID/binary, "/commitments">>) of
-        {ok, CommitmentIDs} -> hb_util:unique([ID | CommitmentIDs]);
+        {ok, CommitmentIDs} ->
+            lists:filter(
+                fun(CommitmentID) ->
+                    ResolvedCommitmentMsgID =
+                        hb_store:resolve(
+                            Store,
+                            <<
+                                ResolvedID/binary,
+                                "/commitments/",
+                                CommitmentID/binary,
+                                "/committer"
+                            >>
+                        ),
+                    hb_store:read(Store, ResolvedCommitmentMsgID) =/= not_found
+                end,
+                CommitmentIDs
+            );
         _ -> [ID]
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be
 %% scoped by setting the `query_arweave_scope' option.
-scope(Opts) ->
-    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
-    hb_store:scope(Opts, Scope).
-
 scoped_store(Opts) ->
-    hb_opts:get(store, no_store, scope(Opts)).
-
-filter_explicit_ids(IDs, Args, Opts) ->
-    case explicit_ids(Args, Opts) of
-        [] -> IDs;
-        ExplicitIDs -> [ID || ID <- IDs, lists:member(ID, ExplicitIDs)]
-    end.
+    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
+    hb_opts:get(store, no_store, hb_store:scope(Opts, Scope)).
 
 %% @doc Return the explicit IDs from the arguments, if given. Searches for
 %% both `ids' and `id' keys.
 explicit_ids(Args, Opts) ->
     hb_util:unique(
-        case hb_maps:get(<<"ids">>, Args, [], Opts) of
+        case hb_maps:get(<<"ids">>, Args, null, Opts) of
             IDs when is_list(IDs) -> IDs;
             _ -> []
         end ++
-        case hb_maps:find(<<"id">>, Args, Opts) of
-            {ok, ID} -> [ID];
-            error -> []
+        case hb_maps:get(<<"id">>, Args, null, Opts) of
+            ID when is_binary(ID) -> [ID];
+            _ -> []
         end
     ).
-
-%% @doc Resolve a list of IDs to their store paths, using the stores provided.
-resolve_ids(IDs, Opts) ->
-    Store = scoped_store(Opts),
-    [ resolve_id(ID, Store) || ID <- IDs ].
-
-resolve_id(ID, Store) ->
-    case hb_store:resolve(Store, ID) of
-        Resolved when is_binary(Resolved) -> Resolved;
-        _ -> ID
-    end.
