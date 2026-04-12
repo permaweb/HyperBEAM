@@ -6,6 +6,7 @@
 -module(dev_arweave).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_json_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2, bundle_header/2, bundle_header/3]).
@@ -772,6 +773,14 @@ price(Base, Request, Opts) ->
 tx_anchor(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/tx_anchor">>, Opts).
 
+%% @doc Retrieve either a list of the pending TXIDs on the configured Arweave
+%% nodes, or a specific unconfirmed transaction header by its TXID.
+pending(Base, Request, Opts) ->
+    case find_key(<<"pending">>, Base, Request, Opts) of
+        not_found -> request(<<"GET">>, <<"/tx/pending">>, Opts);
+        TXID -> request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts)
+    end.
+
 %%% Internal Functions
 
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
@@ -865,6 +874,9 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
     Status = maps:get(<<"status">>, Response, 200),
     event_request(Path, <<"POST">>, Status, LogExtra),
     {ok, Response};
+to_message(Path = <<"/tx/pending">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    {ok, hb_json:decode(Body)};
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
@@ -889,6 +901,14 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
                 Error ->
                     Error
             end
+    end;
+to_message(Path = <<"/unconfirmed_tx/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    try
+        TX = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+        {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)}
+    catch
+        _:_ -> {error, invalid_mempool_tx}
     end;
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
