@@ -7,7 +7,7 @@
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
--export([post_tx_header/2, post_tx/3, post_tx/4, post_json_chunk/2]).
+-export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
@@ -337,34 +337,40 @@ list_find(Key, [{XKey, Value} | Rest], Default) ->
     true -> list_find(Key, Rest, Default)
     end.
 
-%% @doc Retrieve the data of an Arweave message that has been indexed.
-data(TXID, Opts) ->
-    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
-
+%% @doc Retrieve a chunk or range of bytes from an Arweave node, or post a 
+%% single chunk. Notably, as well as wrapping the Arweave node's normal
+%% `GET /chunk' API, it also supports additional facilities:
+%% - `GET` with `length`: Returns precisely the range of bytes specified by the
+%%   offset and length.
+%% - `GET` with `txid`: `GET`s a chunk or range of bytes from the given offset,
+%%   relative to the given transaction's data root.
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> get_chunk_range(Base, Request, Opts)
+        <<"GET">> -> get_chunk(Base, Request, Opts)
     end.
 
+%% @doc Post a single chunk to the Arweave node, via its JSON encoding
 post_chunk(_Base, Request, Opts) ->
-    Serialized = hb_json:encode(Request),
-    post_json_chunk(Serialized, Opts).
-
-post_json_chunk(JSON, Opts) ->
+    post_chunk(Request, Opts).
+post_chunk(Request, Opts) ->
     hb_http:post(
         hb_opts:get(gateway, not_found, Opts),
         #{
             <<"path">> => <<"/chunk">>,
-            <<"body">> => JSON
+            <<"body">> => hb_json:encode(Request)
         },
         Opts
     ).
 
-get_chunk_range(_Base, Request, Opts) ->
-    Offset = hb_util:int(hb_ao:get(<<"offset">>, Request, Opts)),
-    Length = hb_util:int(hb_ao:get(<<"length">>, Request, 1, Opts)),
-    case fetch_chunk_range(Offset, Length, Opts) of
+%% @doc Retrieve a chunk or slice of bytes by its offset, either relative to the
+%% global Arweave data tree, or relative to the start of a specific pending
+%% transaction.
+get_chunk(_Base, Request, Opts) ->
+    Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
+    Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
+    MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
+    case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
         {ok, Chunks} ->
             Data = iolist_to_binary(Chunks),
             case hb_maps:is_key(<<"length">>, Request, Opts) of
@@ -377,24 +383,25 @@ get_chunk_range(_Base, Request, Opts) ->
             {error, Reason}
     end.
 
-%% @doc Fetch a range of chunks in parallel. Dispatches to pre-threshold or
-%% post-threshold algorithm depending on the offset. A single TX/data-item
-%% cannot span the strict data split threshold, so mixed ranges are rejected.
-fetch_chunk_range(Offset, Length, Opts) ->
-    EndOffset = Offset + Length - 1,
-    ?event(debug_arweave, {fetch_chunk_range,
-        {offset, Offset},
-        {end_offset, EndOffset},
-        {size, Length}}),
-    case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
-          EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
-        {true, true} ->
-            fetch_post_threshold(Offset, EndOffset, Opts);
-        {false, false} ->
-            fetch_pre_threshold(Offset, EndOffset, Opts);
-        {false, true} ->
-            {error, chunk_range_spans_strict_data_split_threshold}
-    end.
+%% @doc Fetch a range of chunks in parallel. Determines the appropriate algorithm
+%% to use to get the chunks based on offset, length, and an optional relative
+%% transaction ID. Notably, this function returns the binary for all of the
+%% chunks that were fetched, not just the requested length. This allows callers
+%% to avoid wasted additional requests in some circumstances, but also requires
+%% them to handle truncation themselves.
+fetch_chunk_range(Offset, Length, undefined, Opts)
+        when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
+        ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
+    get_chunk_range_fixed_size(Offset, (Offset + Length - 1), Opts);
+fetch_chunk_range(Offset, Length, undefined, Opts)
+        when (Offset < ?STRICT_DATA_SPLIT_THRESHOLD) andalso
+        ((Offset + Length - 1) < ?STRICT_DATA_SPLIT_THRESHOLD) ->
+    get_chunk_range_variable_size(Offset, (Offset + Length - 1), Opts);
+fetch_chunk_range(_Offset, _Length, undefined, _Opts) ->
+    {error, chunk_range_spans_strict_data_split_threshold};
+fetch_chunk_range(Offset, Length, RelativeTXID, Opts)
+        when is_binary(RelativeTXID) ->
+    get_chunk_range_relative(Offset, Length, RelativeTXID, Opts).
 
 %% @doc Post-threshold: chunks occupy fixed 256KiB buckets. Query at
 %% DATA_CHUNK_SIZE increments up to EndOffset, and if the assembled data is
@@ -405,7 +412,7 @@ fetch_chunk_range(Offset, Length, Opts) ->
 %% 
 %% Note: we don't want to *always* query an extra chunk because if it doesn't
 %% exist, dev_arweave will consider the dataitem missing.
-fetch_post_threshold(Offset, EndOffset, Opts) ->
+get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
@@ -441,15 +448,51 @@ fetch_post_threshold(Offset, EndOffset, Opts) ->
 %% @doc Pre-threshold: chunks can be any size <= 256KiB. First pass at
 %% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
 %% iteratively fill gaps until contiguous.
-fetch_pre_threshold(Offset, EndOffset, Opts) ->
+get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
         []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
+        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
+        Error -> Error
+    end.
+
+%% @doc Return a chunk or range of bytes relative to a specific, unconfirmed,
+%% transaction's data root.
+get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
+    hb_prometheus:observe(
+        Length,
+        arweave_chunk_load_requested_bytes,
+        []
+    ),
+    Offsets =
+        generate_offsets(
+            max(1, Offset + 1),
+            (Offset + Length),
+            ?DATA_CHUNK_SIZE
+        ),
+    GETFun =
+        fun(XOffset) ->
+            pending(
+                #{},
+                #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
+                Opts
+            )
+        end,
+    case fetch_and_collect(Offsets, GETFun, Opts) of
         {ok, ChunkInfos} ->
-            fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
+            Concatenated =
+                hb_util:bin(
+                    lists:map(
+                        fun(JSONStruct) ->
+                            hb_util:decode(maps:get(<<"chunk">>, JSONStruct))
+                        end,
+                        ChunkInfos
+                    )
+                ),
+            {ok, Concatenated};
         Error -> Error
     end.
 
@@ -496,19 +539,19 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
 %% @doc Fetch chunks at the given offsets in parallel and parse the responses
 %% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
 fetch_and_collect(Offsets, Opts) ->
-    Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-    Results = hb_pmap:parallel_map(
+    fetch_and_collect(
         Offsets,
-        fun(O) -> decode_chunk(get_chunk(O, Opts)) end,
-        Concurrency
-    ),
-    collect_chunks(Results).
+        fun(Offset) -> decode_chunk(get_chunk(Offset, Opts)) end,
+        Opts
+    ).
+fetch_and_collect(Offsets, GETFun, Opts) ->
+    Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
+    collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
 generate_offsets(Start, End, Step) ->
     generate_offsets(Start, End, Step, []).
-
 generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets = lists:reverse(Acc),
     ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
@@ -778,7 +821,35 @@ tx_anchor(_Base, _Request, Opts) ->
 pending(Base, Request, Opts) ->
     case find_key(<<"pending">>, Base, Request, Opts) of
         not_found -> request(<<"GET">>, <<"/tx/pending">>, Opts);
-        TXID -> request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts)
+        TXID ->
+            case hb_maps:find(<<"offset">>, Request, Opts) of
+                error ->
+                    % Retreive a bare TX header by its TXID
+                    request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
+                {ok, RawOffset} ->
+                    Offset = hb_util:int(RawOffset),
+                    % Download an unconfirmed chunk by its offset
+                    request(
+                        <<"GET">>,
+                        <<
+                            "/unconfirmed_chunk/",
+                            TXID/binary,
+                            "/",
+                            (hb_util:bin(Offset))/binary
+                        >>,
+                        Opts#{
+                            exclude_data =>
+                                hb_util:bool(
+                                    find_key(
+                                        <<"exclude-data">>,
+                                        Base,
+                                        Request,
+                                        Opts
+                                    )
+                                )
+                        }
+                    )
+            end
     end.
 
 %%% Internal Functions
@@ -792,18 +863,6 @@ find_key(Key, Base, Request, Opts) ->
         hb_maps:get(Key, Base, not_found, Opts),
         Opts
     ).
-
-exclude_data(Base, Request, Opts) ->
-    RawValue =
-        hb_ao:get_first(
-            [
-                {Request, <<"exclude-data">>},
-                {Base, <<"exclude-data">>}
-            ],
-            false,
-            Opts
-        ),
-    hb_util:bool(RawValue).
 
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
@@ -877,39 +936,10 @@ to_message(Path = <<"/tx">>, <<"POST">>, {ok, Response}, LogExtra, _Opts) ->
 to_message(Path = <<"/tx/pending">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, hb_json:decode(Body)};
-to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-    ?event(debug_arweave,
-        {arweave_tx_response,
-            {path, {explicit, Path}},
-            {raw_body, {explicit, Body}},
-            {body, {explicit, hb_json:decode(Body)}},
-            {tx, TXHeader}
-        }
-    ),
-    case hb_opts:get(exclude_data, false, Opts) of
-        true ->
-            {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
-        false ->
-            case data(TXID, Opts) of
-                {ok, RawData} ->
-                    TX = TXHeader#tx{ data = RawData },
-                    {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
-                {error, not_found} ->
-                    {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
-                Error ->
-                    Error
-            end
-    end;
-to_message(Path = <<"/unconfirmed_tx/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
-    event_request(Path, <<"GET">>, 200, LogExtra),
-    try
-        TX = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-        {ok, hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts)}
-    catch
-        _:_ -> {error, invalid_mempool_tx}
-    end;
+to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
+    to_tx_message(pending, ID, Path, Result, LogExtra, Opts);
+to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
+    to_tx_message(tx, TXID, Path, Result, LogExtra, Opts);
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
@@ -939,12 +969,10 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
     {ok, Block};
 to_message(Path = <<"/price/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    Price = hb_util:int(Body),
-    {ok, Price};
+    {ok, hb_util:int(Body)};
 to_message(Path = <<"/tx_anchor">>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    Anchor = hb_util:decode(Body),
-    {ok, Anchor};
+    {ok, hb_util:decode(Body)};
 to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     % All other responses that are `OK' status are converted from JSON to an
@@ -961,6 +989,53 @@ to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             Body,
             <<"structured@1.0">>,
             <<"json@1.0">>,
+            Opts
+        )
+    }.
+
+%% @doc Generic handler for parsing a TX response from the Arweave node,
+%% including optionally adding the data payload if appropriate.
+to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
+    event_request(Path, <<"GET">>, 200, LogExtra),
+    TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+    ?event(debug_arweave,
+        {arweave_tx_response,
+            {type, Type},
+            {id, {string, ID}},
+            {path, {string, Path}},
+            {raw_body, {explicit, Body}},
+            {body, {explicit, hb_json:decode(Body)}},
+            {tx, TXHeader}
+        }
+    ),
+    {ok, Data} =
+        case hb_opts:get(exclude_data, false, Opts) of
+            true -> {ok, ?DEFAULT_DATA};
+            false ->
+                DataRes =
+                    case Type of
+                        tx ->
+                            request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
+                        pending ->
+                            get_chunk_range_relative(
+                                0,
+                                TXHeader#tx.data_size,
+                                ID,
+                                Opts
+                            )
+                    end,
+                case DataRes of
+                    {ok, RawData} -> {ok, RawData};
+                    {error, not_found} -> {ok, ?DEFAULT_DATA};
+                    Error -> Error    
+                end
+        end,
+    {
+        ok,
+        hb_message:convert(
+            TXHeader#tx{ data = Data },
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
             Opts
         )
     }.

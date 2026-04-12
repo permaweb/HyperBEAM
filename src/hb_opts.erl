@@ -355,6 +355,19 @@ default_message() ->
             #{
                 <<"template">> => 
                     #{
+                        <<"path">> => <<"^/arweave/unconfirmed_chunk">>,
+                        <<"method">> => <<"GET">>
+                    },
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"choose">> => length(?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"parallel">> => 1,
+                <<"responses">> => 1,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => 
+                    #{
                         <<"path">> => <<"^/arweave/chunk">>,
                         <<"method">> => <<"POST">>
                     },
