@@ -1048,9 +1048,9 @@ transaction_query_with_anchor_test() ->
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
-    {ok, ID} =
+    {ok, _UnsignedID} =
         hb_cache:write(
-            hb_message:convert(
+            Msg = hb_message:convert(
                 ar_bundles:sign_item(
                     #tx {
                         anchor = AnchorID = crypto:strong_rand_bytes(32),
@@ -1064,6 +1064,7 @@ transaction_query_with_anchor_test() ->
             ),
             Opts
         ),
+    SignedID = hb_message:id(Msg, signed, Opts),
     EncodedAnchor = hb_util:encode(AnchorID),
     Query =
         <<"""
@@ -1082,7 +1083,7 @@ transaction_query_with_anchor_test() ->
             Node,
             Query,
             #{
-                <<"id">> => ID
+                <<"id">> => SignedID
             },
             Opts
         ),
