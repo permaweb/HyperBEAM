@@ -2022,8 +2022,9 @@ route_multirequest_parallel_limit() ->
     ?assertEqual([1, 2, 3], WorkerBodies),
     % With 3 peers of 300ms each: `parallel = 2` should complete in about two
     % waves (~600ms), not one (~300ms) or fully serial (~900ms).
-    ?assert(Duration >= 450),
-    ?assert(Duration < 850).
+    ?event({duration, Duration}),
+    ?assert(Duration >= 600),
+    ?assert(Duration < 900).
 
 %% @doc Test that a full production-style route configuration (matching a
 %% typical config.json) resolves every request type correctly: single-node
