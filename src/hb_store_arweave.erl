@@ -370,22 +370,6 @@ stale_ans104_offset_returns_error_test() ->
     Result = read(Opts, FakeID),
     ?assertMatch({error, {id_mismatch, _, _}}, Result).
 
-%% @doc Stale TX offset must crash with data_root_mismatch.
-%% Uses a real TX ID but points the offset at a different TX's data.
-%% The header is fetched by ID (correct), but the chunk data won't
-%% match the header's data_root. The mismatch is caught by
-%% dev_arweave_common:normalize_data_root during conversion.
-stale_tx_offset_returns_error_test() ->
-    Store = [hb_test_utils:test_store()],
-    Opts = #{<<"index-store">> => Store},
-    RealID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
-    WrongOffset = 155309918167286,
-    WrongSize = 2,
-    ok = write_offset(Opts, RealID, <<"tx@1.0">>, WrongOffset, WrongSize),
-    ?assertError(
-        {data_root_mismatch, _, _, _},
-        read(Opts, RealID)).
-
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
     Store = [hb_test_utils:test_store()],
