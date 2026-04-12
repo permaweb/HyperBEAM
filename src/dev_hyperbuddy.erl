@@ -229,22 +229,29 @@ return_templated_file_test() ->
     ).
 
 return_custom_json_test() ->
-    ?assertMatch(
-        {ok,
-            #{
-                <<"body">> := JSONBin,
-                <<"content-type">> := <<"application/json">>
-            }
-        } when byte_size(JSONBin) > 0,
-        hb_ao:resolve(
-            #{
-                <<"device">> => <<"hyperbuddy@1.0">>
-            },
-            <<"custom.json">>,
-            #{
-                hyperbuddy_serve => #{
-                    <<"custom.json">> => <<"test.json">>
+    Base = hb_util:bin(code:priv_dir(hb)),
+    Filename = <<Base/binary, "/html/hyperbuddy@1.0/test.json">>,
+    ok = file:write_file(Filename, <<"{\"status\":\"ok\"}">>),
+    try
+        ?assertMatch(
+            {ok,
+                #{
+                    <<"body">> := JSONBin,
+                    <<"content-type">> := <<"application/json">>
                 }
-            }
+            } when byte_size(JSONBin) > 0,
+            hb_ao:resolve(
+                #{
+                    <<"device">> => <<"hyperbuddy@1.0">>
+                },
+                <<"custom.json">>,
+                #{
+                    hyperbuddy_serve => #{
+                        <<"custom.json">> => <<"test.json">>
+                    }
+                }
+            )
         )
-    ).
+    after
+        file:delete(Filename)
+    end.
