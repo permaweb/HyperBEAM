@@ -668,6 +668,215 @@ transactions_query_filter_by_block_test() ->
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
+transactions_query_filter_by_block_excludes_unknown_offsets_test() ->
+    {ok, _Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"type">> => <<"Message">>,
+                <<"data">> => <<"local-only">>
+            },
+            Opts
+        ),
+    ?assertEqual(
+        not_found,
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+    ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"0">>,
+            <<"edges">> := []
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892158,
+                    <<"max">> => 1892158
+                }
+            },
+            Opts
+        )
+    ).
+
+transactions_query_filter_by_block_can_ignore_ranges_test() ->
+    {ok, _Node, BaseOpts} = test_env_with_blocks(1892159, 1892158),
+    Opts = BaseOpts#{ query_arweave_ignore_block_ranges => true },
+    {ok, ID} =
+        hb_cache:write(
+            #{
+                <<"type">> => <<"Message">>,
+                <<"data">> => <<"local-only">>
+            },
+            Opts
+        ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"1">>,
+            <<"edges">> := [
+                #{
+                    <<"id">> := ID,
+                    <<"node">> := _
+                }
+            ]
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892158,
+                    <<"max">> => 1892158
+                }
+            },
+            Opts
+        )
+    ).
+
+transactions_query_ids_preserve_arweave_tx_id_test() ->
+    {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
+    ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := _ }},
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+    ),
+    ?assertMatch(
+        {ok, #{
+            <<"count">> := <<"1">>,
+            <<"edges">> := [
+                #{
+                    <<"id">> := ID,
+                    <<"node">> := _
+                }
+            ]
+        }},
+        dev_query_arweave:query(
+            #{},
+            <<"transactions">>,
+            #{
+                <<"ids">> => [ID],
+                <<"block">> => #{
+                    <<"min">> => 1892487,
+                    <<"max">> => 1892487
+                }
+            },
+            Opts
+        )
+    ).
+
+transactions_query_cursor_by_offset_test() ->
+    {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
+    EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
+    LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
+    StoreOpts = hb_store_arweave:store_from_opts(Opts),
+    {ok, #{ <<"start-offset">> := EarlierOffset }} =
+        hb_store_arweave:read_offset(StoreOpts, EarlierID),
+    {ok, #{ <<"start-offset">> := LaterOffset }} =
+        hb_store_arweave:read_offset(StoreOpts, LaterID),
+    Query =
+        <<"""
+            query($ids: [ID!], $sort: SortOrder, $first: Int, $after: String) {
+                transactions(
+                    ids: $ids,
+                    sort: $sort,
+                    first: $first,
+                    after: $after
+                ) {
+                    count
+                    pageInfo {
+                        hasNextPage
+                    }
+                    edges {
+                        cursor
+                        node {
+                            id
+                        }
+                    }
+                }
+            }
+        """>>,
+    VerifyFun =
+        fun(Order, FirstID, FirstOffset, SecondID, SecondOffset) ->
+            FirstRes =
+                dev_query_graphql:test_query(
+                    Node,
+                    Query,
+                    #{
+                        <<"ids">> => [EarlierID, LaterID],
+                        <<"sort">> => Order,
+                        <<"first">> => 1
+                    },
+                    Opts
+                ),
+            #{
+                <<"data">> := #{
+                    <<"transactions">> := #{
+                        <<"count">> := <<"2">>,
+                        <<"pageInfo">> := #{
+                            <<"hasNextPage">> := true
+                        },
+                        <<"edges">> := [
+                            #{
+                                <<"cursor">> := FirstCursor,
+                                <<"node">> := #{
+                                    <<"id">> := FirstID
+                                }
+                            }
+                        ]
+                    }
+                }
+            } = FirstRes,
+            ?assertEqual(hb_util:bin(FirstOffset), FirstCursor),
+            SecondRes =
+                dev_query_graphql:test_query(
+                    Node,
+                    Query,
+                    #{
+                        <<"ids">> => [EarlierID, LaterID],
+                        <<"sort">> => Order,
+                        <<"first">> => 1,
+                        <<"after">> => FirstID
+                    },
+                    Opts
+                ),
+            #{
+                <<"data">> := #{
+                    <<"transactions">> := #{
+                        <<"count">> := <<"2">>,
+                        <<"pageInfo">> := #{
+                            <<"hasNextPage">> := false
+                        },
+                        <<"edges">> := [
+                            #{
+                                <<"cursor">> := SecondCursor,
+                                <<"node">> := #{
+                                    <<"id">> := SecondID
+                                }
+                            }
+                        ]
+                    }
+                }
+            } = SecondRes,
+            ?assertEqual(hb_util:bin(SecondOffset), SecondCursor)
+        end,
+    VerifyFun(
+        <<"HEIGHT_ASC">>,
+        EarlierID,
+        EarlierOffset,
+        LaterID,
+        LaterOffset
+    ),
+    VerifyFun(
+        <<"HEIGHT_DESC">>,
+        LaterID,
+        LaterOffset,
+        EarlierID,
+        EarlierOffset
+    ).
+
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test() ->
     Opts =
@@ -839,9 +1048,9 @@ transaction_query_with_anchor_test() ->
             store => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
-    {ok, ID} =
+    {ok, _UnsignedID} =
         hb_cache:write(
-            hb_message:convert(
+            Msg = hb_message:convert(
                 ar_bundles:sign_item(
                     #tx {
                         anchor = AnchorID = crypto:strong_rand_bytes(32),
@@ -855,6 +1064,7 @@ transaction_query_with_anchor_test() ->
             ),
             Opts
         ),
+    SignedID = hb_message:id(Msg, signed, Opts),
     EncodedAnchor = hb_util:encode(AnchorID),
     Query =
         <<"""
@@ -873,7 +1083,7 @@ transaction_query_with_anchor_test() ->
             Node,
             Query,
             #{
-                <<"id">> => ID
+                <<"id">> => SignedID
             },
             Opts
         ),
