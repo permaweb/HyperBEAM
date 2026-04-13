@@ -3,9 +3,23 @@
 %%% supports writing messages to the store, if the node message has the
 %%% writer's address in its `cache_writers' key.
 -module(dev_cache).
--export([read/3, write/3, link/3, read_from_cache/2]).
+-export([read/3, write/3, link/3, read_from_cache/2, expected_response/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%% @doc An `is-admissible`-compliant key that verifies a `~cache@1.0/read`
+%% response contains the message we expect, and that it is valid. Additionally,
+%% if the `http-reference` key is set, we execute the `on/client/valid-response`
+%% hook.
+expected_response(Base, Req, Opts) ->
+    maybe
+        {ok, Response} ?= hb_maps:get(<<"body">>, Req, Opts),
+        {ok, Expected} ?= hb_maps:get(<<"expected">>, Base, Opts),
+        {ok, Commitments} ?= hb_maps:get(<<"commitments">>, Response, #{}, Opts),
+        true ?= lists:member(Expected, Commitments),
+        hb_message:verify(Response, #{ <<"commitment-ids">> => [Expected] }, Opts)
+    else _ -> false
+    end.
 
 %% @doc Read data from the cache.
 %% Retrieves data corresponding to a key from a local store.
