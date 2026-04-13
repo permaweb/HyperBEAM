@@ -175,9 +175,10 @@ head_raw(Base, Request, Opts) ->
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,
-                        <<"offset">> := StartOffset,
+                        <<"offset">> := RawOffset,
                         <<"length">> := Length
                     }} ->
+                        StartOffset = hb_store_arweave:root_offset(RawOffset, Opts),
                         CodecFun =
                             case CodecDevice of
                                 <<"ans104@1.0">> -> fun head_raw_ans104/4;
@@ -209,15 +210,14 @@ head_raw(Base, Request, Opts) ->
 %% @doc Arweave transaction headers are not part of the Arweave data tree, and
 %% thus we do not add their header bytes to the offset in order to read their
 %% data.
-head_raw_tx(TXID, StartOffset, Length, Opts) ->
+head_raw_tx(TXID, Offset, Length, Opts) ->
+    BaseReq = #{ <<"exclude-data">> => true },
     {ok, StructuredTXHeader} =
-        get_tx(
-            #{ <<"tx">> => TXID },
-            #{ <<"exclude-data">> => true },
-            Opts
-        ),
+        if is_integer(Offset) -> get_tx(#{}, BaseReq#{ <<"tx">> => TXID }, Opts);
+        true -> pending(#{}, BaseReq#{ <<"pending">> => TXID }, Opts)
+        end,
     ContentType =
-        hb_ao:get(
+        hb_maps:get(
             <<"content-type">>,
             StructuredTXHeader,
             <<"application/octet-stream">>,
@@ -226,21 +226,29 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
                     [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    {ok,
-        #{
-            <<"raw-id">> => TXID,
-            <<"offset">> => StartOffset,
-            <<"data-offset">> => StartOffset,
-            <<"content-type">> => ContentType,
-            <<"header-length">> => 0,
-            <<"content-length">> => Length,
-            <<"accept-ranges">> => <<"bytes">>
-        }
-    }.
+    {ok, #{
+        <<"raw-id">> => TXID,
+        <<"offset">> => Offset,
+        <<"data-offset">> => Offset,
+        <<"content-type">> => ContentType,
+        <<"header-length">> => 0,
+        <<"content-length">> => Length,
+        <<"accept-ranges">> => <<"bytes">>
+    }}.
 
 %% @doc ANS-104 headers are stored as part of the global Arweave data tree, so
 %% so to read the data associated with their IDs, we must first read the header
 %% chunk, deserialize it, and offset our data read from its starting offset.
+head_raw_ans104(TXID, Offset, Length, _Opts) when not is_integer(Offset) ->
+    {ok, #{
+        <<"raw-id">> => TXID,
+        <<"offset">> => Offset,
+        <<"data-offset">> => Offset,
+        <<"content-type">> => <<"application/octet-stream">>,
+        <<"header-length">> => 0,
+        <<"content-length">> => Length,
+        <<"accept-ranges">> => <<"bytes">>
+    }};
 head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
     ?event(debug_raw, {head_raw_ans104, {txid, TXID}, {arweave_offset, ArweaveOffset}, {length, Length}}),
     HeaderReq =
@@ -298,6 +306,16 @@ get_raw(Base, Request, Opts) ->
     case head_raw(Base, Request, Opts) of
         not_found -> {error, not_found};
         Err = {error, _} -> Err;
+        {ok,
+            Header = #{
+                <<"data-offset">> := DataOffset,
+                <<"content-length">> := ContentLength
+            }
+        } when not is_integer(DataOffset) ->
+            case hb_store_arweave:read_chunks(DataOffset, ContentLength, Opts) of
+                {ok, Data} -> {ok, Header#{ <<"body">> => Data }};
+                Error -> Error
+            end;
         {ok,
             Header = #{
                 <<"raw-id">> := TXID,
