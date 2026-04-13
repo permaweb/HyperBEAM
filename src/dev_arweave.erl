@@ -830,6 +830,12 @@ pending(Base, Request, Opts) ->
                     request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
                 {ok, RawOffset} ->
                     try hb_util:int(RawOffset) of
+                        Offset when Offset < 0 ->
+                            {error, #{
+                                <<"status">> => 400,
+                                <<"content-type">> => <<"application/json">>,
+                                <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
+                            }};
                         Offset ->
                             % Download an unconfirmed chunk by its offset
                             request(
@@ -854,7 +860,11 @@ pending(Base, Request, Opts) ->
                             )
                     catch
                         _:_ ->
-                            {error, not_found}
+                            {error, #{
+                                <<"status">> => 400,
+                                <<"content-type">> => <<"application/json">>,
+                                <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
+                            }}
                     end
             end
     end.
@@ -1590,18 +1600,24 @@ head_raw_invalid_id_returns_not_found_test() ->
         )
     ).
 
-pending_invalid_offset_returns_not_found_test() ->
-    ?assertEqual(
-        {error, not_found},
+pending_invalid_offset_returns_invalid_offset_test() ->
+    {error, Error} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             #{
                 <<"path">> => <<"pending">>,
-                <<"pending">> => <<"lol">>,
-                <<"offset">> => <<"abc">>
+                <<"pending">> => <<"cat">>,
+                <<"offset">> => <<"dog">>
             },
             #{}
-        )
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 400,
+            <<"content-type">> := <<"application/json">>,
+            <<"body">> := <<"{\"error\":\"invalid_offset\"}">>
+        },
+        Error
     ).
 
 head_raw_ans104_test() ->
