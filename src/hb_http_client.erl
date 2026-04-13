@@ -325,7 +325,9 @@ response_to_map({ok, _Status, Headers, Body}) ->
                 {K, V} <- Headers
             ]
         ),
-    HeaderMap#{<<"body">> => Body}.
+    HeaderMap#{<<"body">> => Body};
+response_to_map(_) ->
+    #{}.    
 
 %%% ==================================================================
 %%% gen_server callbacks.
