@@ -263,7 +263,7 @@ admissible_response(Response, IsAdmissible, Opts) ->
                 {admissible_response, 
                     {class, Class}, 
                     {reason, Reason}, 
-                    {stacktrace, Stacktrace}
+                    {stacktrace, {trace, Stacktrace}}
                 }
             ),
             false
