@@ -62,6 +62,36 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
             #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
             Opts
         ),
+    handle_read_response(Key, HTTPRes, Opts);
+read(Opts = #{ <<"nodes">> := Nodes }, Key) ->
+    ?event(store_remote_node, {executing_read, {nodes, Nodes}, {key, Key}}),
+    HTTPRes =
+        hb_http:request(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/~cache@1.0/read">>,
+                <<"target">> => Key,
+                <<"multirequest-responses">> => 1,
+                <<"multirequest-stop-after">> => true,
+                <<"multirequest-admissible">> => #{
+                    <<"device">> => <<"cache@1.0">>,
+                    <<"path">> => <<"expected-response">>
+                }
+            },
+            Opts#{
+                routes =>
+                    [
+                        #{
+                            <<"template">> => <<"/~cache@1.0/read">>,
+                            <<"nodes">> => Nodes,
+                            <<"opts">> => Opts
+                        }
+                    ]
+            }
+        ),
+    handle_read_response(Key, HTTPRes, Opts).
+
+handle_read_response(Key, HTTPRes, Opts) ->
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
@@ -72,8 +102,7 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
-    end;
-read(_, _) -> not_found.
+    end.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -252,3 +281,29 @@ read_only_ids_test() ->
            <<"only-ids">> => true }
 	],
     ?assertEqual(not_found, hb_cache:read(ID, #{ store => RemoteStore })).
+
+multiread_test() ->
+    LocalStore1 = hb_test_utils:test_store(),
+    {ok, ID} =
+        hb_cache:write(
+            <<"message">>, 
+            #{ store => LocalStore1 }
+        ),
+    Node1 =
+        hb_http_server:start_node(
+            #{ store => [LocalStore1] }
+        ),
+    Node2 =
+        hb_http_server:start_node(
+            #{ store => [hb_test_utils:test_store()] }
+        ),
+    RemoteStore =
+        [#{
+            <<"store-module">> => hb_store_remote_node,
+            <<"nodes">> => [Node1, Node2]
+        }],
+    {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
+    ?assertMatch(
+        #{ <<"message">> := <<"message">> },
+        hb_cache:ensure_all_loaded(RetrievedMsg)
+    ).
