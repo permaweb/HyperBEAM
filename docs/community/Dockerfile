@@ -1,4 +1,4 @@
-FROM erlang:27 AS builder
+FROM --platform=linux/amd64 erlang:27 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     git \
     pkg-config \
     libssl-dev \
+    zlib1g-dev \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -19,9 +20,12 @@ ARG HB_REPO=https://github.com/permaweb/HyperBEAM.git
 WORKDIR /app
 RUN git clone --depth 1 --branch ${HB_BRANCH} ${HB_REPO} .
 
-RUN touch config.flat && rebar3 release
+RUN sed -i '63a\\t\t-DCMAKE_THREAD_LIBS_INIT:STRING=-lpthread \\' Makefile && \
+    sed -i '64a\\t\t-DCMAKE_HAVE_THREADS_LIBRARY:BOOL=ON \\' Makefile && \
+    sed -i '65a\\t\t-DCMAKE_USE_PTHREADS_INIT:BOOL=ON \\' Makefile && \
+    touch config.flat && rebar3 release
 
-FROM ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     libssl3 \

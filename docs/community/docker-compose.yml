@@ -1,7 +1,8 @@
 services:
   hyperbeam:
     build: .
-    network_mode: "host"
+    ports:
+      - "8001:8001"
     environment:
       - ARWEAVE_NODE=${ARWEAVE_NODE:-http://localhost:1984}
       - HB_PORT=${HB_PORT:-8001}
