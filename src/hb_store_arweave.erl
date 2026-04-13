@@ -274,7 +274,8 @@ record_partition_metric(Offset, Result) when is_integer(Offset) ->
             [Offset div ?PARTITION_SIZE, hb_util:bin(Result)],
             1
         )
-    end).
+    end);
+record_partition_metric(_, _) -> ok.
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
