@@ -57,12 +57,15 @@ find_self_test() ->
         }),
     PeerNode =
         hb_http_server:start_node(#{
-            port => Port = rand:uniform(40000) + 10000,
+            port => 0,
             priv_wallet => ar_wallet:new(),
             host_bootstrap_node => BoostrapNode,
             http_client => httpc
         }),
+    % Extract the actual port from the URL returned by start_node
+    <<"http://localhost:", PortAndSlash/binary>> = PeerNode,
+    Port = hd(binary:split(PortAndSlash, <<"/">>)),
     ?event({nodes, {peer, PeerNode}, {bootstrap, BoostrapNode}}),
     {ok, ReceivedPeerHost} = hb_http:get(PeerNode, <<"/~whois@1.0/node">>, #{}),
     ?event({find_self_test, ReceivedPeerHost}),
-    ?assertEqual(<<"127.0.0.1:", (hb_util:bin(Port))/binary>>, ReceivedPeerHost).
+    ?assertEqual(<<"127.0.0.1:", Port/binary>>, ReceivedPeerHost).

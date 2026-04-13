@@ -258,12 +258,11 @@ relay_nearest_test() ->
 %% key to sign the request during proxying. The initial request is not signed,
 %% such that the first node would otherwise reject the request outright.
 commit_request_test() ->
-    Port = 10000 + rand:uniform(10000),
     Wallet = ar_wallet:new(),
     Executor =
         hb_http_server:start_node(
             #{
-                port => Port,
+                port => 0,
                 force_signed_requests => true
             }
         ),

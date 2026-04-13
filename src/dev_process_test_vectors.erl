@@ -299,7 +299,7 @@ http_wasm_process_by_id_test() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),
     Node = hb_http_server:start_node(Opts = #{
-        port => 10000 + rand:uniform(10000),
+        port => 0,
         priv_wallet => SchedWallet,
         cache_control => <<"always">>,
         process_async_cache => false,
@@ -390,7 +390,7 @@ aos_state_access_via_http_test_() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
         Node = hb_http_server:start_node(Opts = test_opts(#{
-            port => 10000 + rand:uniform(10000),
+            port => 0,
             priv_wallet => Wallet,
             cache_control => <<"always">>,
             store => hb_test_utils:test_store(),

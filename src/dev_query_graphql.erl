@@ -12,7 +12,7 @@
 
 %%% Constants.
 -define(DEFAULT_QUERY_TIMEOUT, 10000).
--define(START_TIMEOUT, 3000).
+-define(START_TIMEOUT, 30000).
 
 %%% `Message' query keys.
 -define(MESSAGE_QUERY_KEYS,
@@ -38,18 +38,48 @@ ensure_started(Opts) ->
     case hb_name:lookup(graphql_controller) of
         PID when is_pid(PID) -> ok;
         undefined ->
-            Parent = self(),
-            PID =
-                spawn_link(
-                    fun() ->
-                        init(Opts),
-                        Parent ! {started, self()},
-                        receive stop -> ok end
-                    end
-                ),
-            receive {started, PID} -> ok
-            after ?START_TIMEOUT -> exit(graphql_start_timeout)
+            % Serialise initialisation: the first caller grabs the init lock
+            % and spawns the controller, waiting for it to signal readiness.
+            % Other concurrent callers poll until the controller appears.
+            case hb_name:register(graphql_init_lock, self()) of
+                ok ->
+                    Parent = self(),
+                    Ref = make_ref(),
+                    _CtrlPid = spawn(fun() ->
+                        case catch init(Opts) of
+                            ok ->
+                                Parent ! {graphql_started, Ref},
+                                receive stop -> ok end;
+                            Error ->
+                                Parent ! {graphql_failed, Ref, Error}
+                        end
+                    end),
+                    Result =
+                        receive
+                            {graphql_started, Ref} -> ok;
+                            {graphql_failed, Ref, Error} -> {error, Error}
+                        after ?START_TIMEOUT ->
+                            {error, graphql_start_timeout}
+                        end,
+                    hb_name:unregister(graphql_init_lock),
+                    case Result of
+                        ok -> ok;
+                        {error, Reason} -> exit(Reason)
+                    end;
+                error ->
+                    % Another caller holds the init lock; wait for controller.
+                    wait_for_graphql_controller(?START_TIMEOUT)
             end
+    end.
+
+wait_for_graphql_controller(0) ->
+    exit(graphql_start_timeout);
+wait_for_graphql_controller(Remaining) ->
+    case hb_name:lookup(graphql_controller) of
+        PID when is_pid(PID) -> ok;
+        undefined ->
+            timer:sleep(10),
+            wait_for_graphql_controller(Remaining - 10)
     end.
 
 %% @doc Initialize the GraphQL schema and context. Should only be called once.

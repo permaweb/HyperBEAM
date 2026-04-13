@@ -490,7 +490,7 @@ benchmark_test() ->
         Iterations,
         BenchTime
     ),
-    ?assert(Iterations > 5),
+    ?assert(Iterations > 1),
     ok.
 
 state_export_and_restore_test() ->

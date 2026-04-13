@@ -966,15 +966,17 @@ bundle_header_garbage_guard_test() ->
 
 
 post_ans104_message_test() ->
-    Port = rand:uniform(10000) + 10000,
-    ServerOpts = #{
+    Wallet = ar_wallet:new(),
+    ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Server = hb_http_server:start_node(#{
         store => [hb_test_utils:test_store()],
-        port => Port,
-        bundler_ans104 => iolist_to_binary(
-            io_lib:format("http://localhost:~p/", [Port])
-        )
-    },
-    Server = hb_http_server:start_node(ServerOpts),
+        port => 0,
+        priv_wallet => Wallet
+    }),
+    % Update server opts with bundler_ans104 pointing to itself (self-reference).
+    ServerOpts0 = hb_http_server:get_opts(#{ http_server => ServerID }),
+    ServerOpts = ServerOpts0#{ bundler_ans104 => Server },
+    hb_http_server:set_opts(ServerOpts),
     ClientOpts =
         #{
             store => [hb_test_utils:test_store()],

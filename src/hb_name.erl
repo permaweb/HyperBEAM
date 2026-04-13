@@ -246,8 +246,14 @@ wait_for_cleanup(Name, Retries) ->
 all_test() ->
     hb_name:register(test_name, self()),
     ?assert(lists:member({test_name, self()}, hb_name:all())),
-    BaseRegistered = length(hb_name:all()),
+    Before = sets:from_list(hb_name:all()),
     spawn_test_workers(random),
-    ?assertEqual(BaseRegistered + ?CONCURRENT_REGISTRATIONS, length(hb_name:all())),
+    AfterSpawn = sets:from_list(hb_name:all()),
+    % The newly registered worker names should all appear in all().
+    NewNames = sets:subtract(AfterSpawn, Before),
+    ?assertEqual(?CONCURRENT_REGISTRATIONS, sets:size(NewNames)),
     timer:sleep(1000),
-    ?assertEqual(BaseRegistered, length(hb_name:all())).
+    % After workers die, their names should have been cleaned up.
+    AfterCleanup = sets:from_list(hb_name:all()),
+    StillPresent = sets:intersection(AfterCleanup, NewNames),
+    ?assertEqual(0, sets:size(StillPresent)).

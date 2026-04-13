@@ -613,9 +613,9 @@ set_node_opts_test() ->
 %% manages node history, and updates server state.
 set_opts_test() ->
     DefaultOpts = hb_opts:default_message_with_env(),
-    start_node(DefaultOpts#{ 
-        priv_wallet => Wallet = ar_wallet:new(), 
-        port => rand:uniform(10000) + 10000 
+    start_node(DefaultOpts#{
+        priv_wallet => Wallet = ar_wallet:new(),
+        port => 0
     }),
     Opts = get_opts(#{ 
         http_server => hb_util:human_id(ar_wallet:to_address(Wallet))

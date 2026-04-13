@@ -318,8 +318,13 @@ temp_file(Ext) ->
 
 %%% Tests.
 
-eprof_fun_test() -> test_engine(function, <<"eprof">>).
-eprof_resolution_test() -> test_engine(resolution, <<"eprof">>).
+%% @doc Run eprof tests sequentially — eprof is a global OTP gen_server and
+%% cannot be used by two tests simultaneously.
+eprof_tests_() ->
+    {inorder, [
+        fun() -> test_engine(function, <<"eprof">>) end,
+        fun() -> test_engine(resolution, <<"eprof">>) end
+    ]}.
 
 -ifdef(ENABLE_EFLAME).
 eflame_fun_test() -> test_engine(function, <<"eflame">>).

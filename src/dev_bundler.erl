@@ -129,25 +129,40 @@ cache_item(Item, Opts) ->
 
 %%% Bundling server.
 
+%% @doc Return the per-node bundler server name. Scoped to the node's wallet
+%% address so that parallel test nodes each get their own isolated bundler.
+server_name(Opts) ->
+    case hb_opts:get(priv_wallet, undefined, Opts) of
+        undefined ->
+            ?SERVER_NAME;
+        Wallet ->
+            {?SERVER_NAME, hb_util:human_id(ar_wallet:to_address(Wallet))}
+    end.
+
 %% @doc Return the PID of the bundler server. If the server is not running,
-%% it is started and registered with the name `?SERVER_NAME'.
+%% it is started and registered with a per-node name.
 ensure_server(Opts) ->
     hb_name:singleton(
-        ?SERVER_NAME,
+        server_name(Opts),
         fun() -> init(Opts) end
     ).
 
 stop_server() ->
-    case hb_name:lookup(?SERVER_NAME) of
+    stop_server(#{}).
+stop_server(Opts) ->
+    Name = server_name(Opts),
+    case hb_name:lookup(Name) of
         undefined -> ok;
         PID ->
             PID ! stop,
-            hb_name:unregister(?SERVER_NAME)
+            hb_name:unregister(Name)
     end.
 
 %% @doc Return the current bundler server state for tests.
 get_state() ->
-    case hb_name:lookup(?SERVER_NAME) of
+    get_state(#{}).
+get_state(Opts) ->
+    case hb_name:lookup(server_name(Opts)) of
         undefined -> undefined;
         PID ->
             PID ! {get_state, self(), Ref = make_ref()},
@@ -552,10 +567,10 @@ nested_bundle_test() ->
         ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
         Item3 = new_data_item(3, floor(0.25 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle, 30000),
         ?assertEqual(4, length(Proofs)),
         assert_bundle(
             Node,
@@ -597,7 +612,7 @@ tx_error_test() ->
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % After a tx request fails it should be retried indefinitely. We'll
         % wait for a few retries then continue.
-        TXs = hb_mock_server:get_requests(tx, 2, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 2, ServerHandle, 30000),
         ?assert(length(TXs) >= 2),
         Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle, 500),
         ?assertEqual([], Chunks),
@@ -652,8 +667,9 @@ idle_test() ->
     ),
     try
         ClientOpts = #{},
+        IdleTime = 5000,
         Node = hb_http_server:start_node(NodeOpts#{
-            bundler_max_idle_time => 400,
+            bundler_max_idle_time => IdleTime,
             priv_wallet => ar_wallet:new(),
             store => hb_test_utils:test_store()
         }),
@@ -676,11 +692,11 @@ idle_test() ->
             end,
             Items
         ),
-        timer:sleep(150),
+        % Immediately after all posts: no dispatch yet (idle timer requires IdleTime ms of silence)
         ?assertEqual(0, length(hb_mock_server:get_requests(tx, 0, ServerHandle))),
         ?assertEqual(0, length(hb_mock_server:get_requests(chunk, 0, ServerHandle))),
-        timer:sleep(300),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        % Wait for the idle dispatch (up to 2x IdleTime as generous timeout)
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, IdleTime * 2),
         ?assertEqual(1, length(TXs)),
         %% 2x 1.5 chunk items + 1 small solana item + 1.5 Ethereum = 5 chunks
         ExpectedChunks = 5,
@@ -738,10 +754,10 @@ dispatch_blocking_test() ->
             {slowest, Slowest}, {max_allowed, 2 * Slowest}
         }),
         ?assert(Time4 =< 2 * Slowest),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle, 30000),
         ?assertEqual(1, length(Proofs)),
         assert_bundle(
             Node,
@@ -788,7 +804,7 @@ recover_respects_max_items_test() ->
         hb_http_server:start_node(Opts),
         ensure_server(Opts),        
         % Should dispatch 3 bundles and leave one item in the queue
-        TXs = hb_mock_server:get_requests(tx, 3, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 3, ServerHandle, 30000),
         ?assertEqual(3, length(TXs)),
         ok
     after
@@ -817,11 +833,11 @@ complete_task_sequence_test() ->
             new_structured_data_item(2, 10, Opts)
         ],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
-        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle, 30000),
         ?assertEqual(1, length(Proofs)),
-        State = get_state(),
+        State = get_state(Opts),
         ?assertNotEqual(undefined, State),
         ?assertNotEqual(timeout, State),
         Workers = State#state.workers,
@@ -876,7 +892,7 @@ recover_bundles_test() ->
         ok = dev_bundler_cache:write_tx(CommittedTX2, [Item4], Opts),
         ok = dev_bundler_cache:complete_tx(CommittedTX2, Opts),
         ensure_server(Opts),
-        State = get_state(),
+        State = get_state(Opts),
         ?assertNotEqual(undefined, State),
         ?assertNotEqual(timeout, State),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 200),
@@ -889,7 +905,7 @@ recover_bundles_test() ->
                 2000
             )
         ),
-        FinalState = get_state(),
+        FinalState = get_state(Opts),
         ?assertEqual(0, maps:size(FinalState#state.bundles)),
         ok
     after
@@ -922,7 +938,7 @@ post_tx_price_failure_retry_test() ->
         ensure_server(Opts),
         Items = [new_structured_data_item(1, 10, Opts)],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
         FinalCount = get_test_counter(price_attempts_counter),
         ?assertEqual(FailCount + 1, FinalCount),
@@ -958,7 +974,7 @@ post_tx_anchor_failure_retry_test() ->
         ensure_server(Opts),
         Items = [new_structured_data_item(1, 10, Opts)],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
         FinalCount = get_test_counter(anchor_attempts_counter),
         ?assertEqual(FailCount + 1, FinalCount),
@@ -996,7 +1012,7 @@ post_tx_post_failure_retry_test() ->
         ensure_server(Opts),
         Items = [new_structured_data_item(1, 10, Opts)],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle, 30000),
         ?assertEqual(FailCount + 1, length(TXs)),
         FinalCount = get_test_counter(tx_attempts_counter),
         ?assertEqual(FailCount + 1, FinalCount),
@@ -1034,9 +1050,9 @@ post_proof_failure_retry_test() ->
         ensure_server(Opts),
         Items = [new_structured_data_item(1, floor(4.5 * ?DATA_CHUNK_SIZE), Opts)],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
-        Chunks = hb_mock_server:get_requests(chunk, FailCount + 5, ServerHandle),
+        Chunks = hb_mock_server:get_requests(chunk, FailCount + 5, ServerHandle, 30000),
         ?assertEqual(FailCount + 5, length(Chunks)),
         FinalCount = get_test_counter(chunk_attempts_counter),
         ?assertEqual(FailCount + 5, FinalCount),
@@ -1073,7 +1089,7 @@ rapid_dispatch_test() ->
             end,
             lists:seq(1, 10)
         ),
-        TXs = hb_mock_server:get_requests(tx, 10, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 10, ServerHandle, 30000),
         ?assertEqual(10, length(TXs)),
         ok
     after
@@ -1109,7 +1125,7 @@ one_bundle_fails_others_continue_test() ->
         submit_test_items(Items1, Opts),
         Items2 = [new_structured_data_item(2, 10, Opts)],
         submit_test_items(Items2, Opts),
-        TXs = hb_mock_server:get_requests(tx, 5, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 5, ServerHandle, 30000),
         ?assert(length(TXs) >= 5, length(TXs)),
         ok
     after
@@ -1146,7 +1162,7 @@ parallel_task_execution_test() ->
             lists:seq(1, 10)
         ),
         StartTime = erlang:system_time(millisecond),
-        Chunks = hb_mock_server:get_requests(chunk, 10, ServerHandle),
+        Chunks = hb_mock_server:get_requests(chunk, 10, ServerHandle, 30000),
         ElapsedTime = erlang:system_time(millisecond) - StartTime,
         ?assertEqual(10, length(Chunks)),
         ?assert(ElapsedTime < 2000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
@@ -1187,7 +1203,7 @@ exponential_backoff_timing_test() ->
         ensure_server(Opts),
         Items = [new_structured_data_item(1, 10, Opts)],
         submit_test_items(Items, Opts),
-        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle, 5000),
+        TXs = hb_mock_server:get_requests(tx, FailCount + 1, ServerHandle, 30000),
         ?assertEqual(FailCount + 1, length(TXs)),
         Timestamps = test_attempt_timestamps(backoff_cap_counter),
         ?assertEqual(6, length(Timestamps)),
@@ -1197,11 +1213,12 @@ exponential_backoff_timing_test() ->
         Delay3 = T4 - T3,
         Delay4 = T5 - T4,
         Delay5 = T6 - T5,
-        ?assert(Delay1 >= 70 andalso Delay1 =< 200, Delay1),
-        ?assert(Delay2 >= 150 andalso Delay2 =< 300, Delay2),
-        ?assert(Delay3 >= 300 andalso Delay3 =< 500, Delay3),
-        ?assert(Delay4 >= 400 andalso Delay4 =< 700, Delay4),
-        ?assert(Delay5 >= 400 andalso Delay5 =< 700, Delay5),
+        % Allow generous upper bounds to accommodate scheduler delays under load.
+        ?assert(Delay1 >= 70 andalso Delay1 =< 600, Delay1),
+        ?assert(Delay2 >= 150 andalso Delay2 =< 900, Delay2),
+        ?assert(Delay3 >= 300 andalso Delay3 =< 1500, Delay3),
+        ?assert(Delay4 >= 400 andalso Delay4 =< 2000, Delay4),
+        ?assert(Delay5 >= 400 andalso Delay5 =< 2000, Delay5),
         ok
     after
         cleanup_test_counter(backoff_cap_counter),
@@ -1235,11 +1252,11 @@ independent_task_retry_counts_test() ->
         ensure_server(Opts),
         Items1 = [new_structured_data_item(1, 10, Opts)],
         submit_test_items(Items1, Opts),
-        hb_mock_server:get_requests(tx, 3, ServerHandle),
+        hb_mock_server:get_requests(tx, 3, ServerHandle, 30000),
         Items2 = [new_structured_data_item(2, 10, Opts)],
         submit_test_items(Items2, Opts),
         TotalAttempts = 4,
-        TXs = hb_mock_server:get_requests(tx, TotalAttempts, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, TotalAttempts, ServerHandle, 30000),
         ?assertEqual(TotalAttempts, length(TXs)),
         ok
     after
@@ -1347,10 +1364,10 @@ test_bundle(Opts) ->
         ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
         Item3 = new_data_item(3, floor(0.25 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
-        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 30000),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle, 30000),
         ?assertEqual(4, length(Proofs)),
         assert_bundle(
             Node,

@@ -26,11 +26,10 @@ test_store(Mod, Tag) ->
         <<
             "cache-TEST/run-",
             Tag/binary, "-",
-            (integer_to_binary(erlang:system_time(millisecond)))/binary
+            (integer_to_binary(
+                erlang:unique_integer([positive, monotonic])
+            ))/binary
         >>,
-    % Wait a tiny interval to ensure that any further tests will get their own
-    % directory.
-    timer:sleep(1),
     filelib:ensure_dir(binary_to_list(TestDir)),
     #{ <<"store-module">> => Mod, <<"name">> => TestDir }.
 

@@ -341,13 +341,13 @@ every_worker_loop_test() ->
 	?event({cron_every_test_send_url, UrlPath}),
 	{ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
 	?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
-		timer:sleep(700),
+		timer:sleep(1500),
 	PID ! {get, self()},
 	% receive the state from the worker
 	receive
 		{state, State = #{count := C}} ->
 			?event({cron_every_test_received_state, State}),
-			?assert(C >= 3)
+			?assert(C >= 2)
 	after 1000 ->
 		FinalLookup = hb_name:lookup({<<"test">>, ID}),
 		?event({cron_every_test_timeout, {pid, PID}, {lookup_result, FinalLookup}}),

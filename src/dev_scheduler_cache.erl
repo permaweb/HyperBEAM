@@ -210,7 +210,7 @@ concurrent_scheduler_write_test() ->
                     {write_result, Slot, Result} -> 
                         ?event(testing, {write_result, Slot, Result}),
                         Result
-                after 5000 ->
+                after 30000 ->
                     timeout
                 end
             end,
@@ -267,15 +267,15 @@ concurrent_read_write_test() ->
         end,
         lists:seq(1, 10)
     ),
-    receive 
+    receive
         writer_done -> ok
-    after 15000 -> 
-        ?assert(false) 
+    after 60000 ->
+        ?assert(false)
     end,
     AllReaderResults = lists:map(fun(ReaderNum) ->
         receive
             {reader_done, ReaderNum, Results} -> Results
-        after 5000 ->
+        after 30000 ->
             ?assert(false),
             []
         end

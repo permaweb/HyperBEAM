@@ -1934,9 +1934,7 @@ many_clients(Opts) ->
     ?assert(Iterations > 10).
 
 benchmark_suite_test_() ->
-	{timeout, 10, fun() -> 
-		rand:seed(exsplus, erlang:timestamp()),
-		Port = 30000 + rand:uniform(10000),
+	{timeout, 10, fun() ->
 		Bench = [
 			{benchmark, "benchmark", fun single_resolution/1},
 			{multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
@@ -1944,21 +1942,21 @@ benchmark_suite_test_() ->
 		filelib:ensure_dir(
 			binary_to_list(Base = <<"cache-TEST/run-">>)
 		),
-		hb_test_utils:suite_with_opts(Bench, benchmark_suite(Port, Base))
+		hb_test_utils:suite_with_opts(Bench, benchmark_suite(Base))
 	end}.
 
-benchmark_suite(Port, Base) ->
-    PortBin = integer_to_binary(Port),
+benchmark_suite(Base) ->
+    Tag = integer_to_binary(erlang:unique_integer([positive, monotonic])),
     [
         #{
             name => fs,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-A">>
+                store => #{ <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<Base/binary, Tag/binary, "-A">>
                 },
                 scheduling_mode => local_confirmation,
-                port => Port
+                port => 0
             },
             desc => <<"FS store, local conf.">>
         },
@@ -1966,11 +1964,11 @@ benchmark_suite(Port, Base) ->
             name => fs_aggressive,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-B">>
+                store => #{ <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<Base/binary, Tag/binary, "-B">>
                 },
                 scheduling_mode => aggressive,
-                port => Port + 1
+                port => 0
             },
             desc => <<"FS store, aggressive conf.">>
         },
@@ -1978,11 +1976,11 @@ benchmark_suite(Port, Base) ->
             name => rocksdb,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-C">>
+                store => #{ <<"store-module">> => hb_store_rocksdb,
+                    <<"name">> => <<Base/binary, Tag/binary, "-C">>
                 },
                 scheduling_mode => local_confirmation,
-                port => Port + 2
+                port => 0
             },
             desc => <<"RocksDB store, local conf.">>
         },
@@ -1990,11 +1988,11 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_aggressive,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-D">>
+                store => #{ <<"store-module">> => hb_store_rocksdb,
+                    <<"name">> => <<Base/binary, Tag/binary, "-D">>
                 },
                 scheduling_mode => aggressive,
-                port => Port + 3
+                port => 0
             },
             desc => <<"RocksDB store, aggressive conf.">>
         },
@@ -2002,13 +2000,8 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_extreme_aggressive_h3,
             requires => [http3],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> =>
-                          <<
-                              Base/binary,
-                              "run-",
-                              (integer_to_binary(Port+4))/binary
-                          >>
+                store => #{ <<"store-module">> => hb_store_rocksdb,
+                    <<"name">> => <<Base/binary, Tag/binary, "-E">>
                 },
                 scheduling_mode => aggressive,
                 protocol => http3,
