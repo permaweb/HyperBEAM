@@ -7,6 +7,7 @@
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
+-export([root_offset/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -81,12 +82,11 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
         ),
     case ReadRes of
         {ok, OffsetBinary} ->
-            {Version, CodecName, StartOffset, Length} =
+            {CodecName, Offset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
             {ok, #{
-                <<"version">> => Version,
                 <<"codec-device">> => CodecName,
-                <<"start-offset">> => StartOffset,
+                <<"offset">> => Offset,
                 <<"length">> => Length
             }};
         _ ->
@@ -120,18 +120,19 @@ do_read(StoreOpts, ID) ->
     case read_offset(StoreOpts, ID) of
         {ok,
             #{
-                <<"version">> := Version,
-                <<"codec-device">> := CodecName,
-                <<"start-offset">> := StartOffset,
+                <<"codec-device">> := Codec,
+                <<"offset">> := Offset,
                 <<"length">> := Length
-            }} ->
+            }
+        } ->
             Loaded =
-                case CodecName of
-                    <<"ans104@1.0">> ->
-                        load_item(ID, StartOffset, Length, StoreOpts);
-                    <<"tx@1.0">> ->
-                        load_tx(ID, StartOffset, Length, StoreOpts)
-                end,
+                load_message(
+                    Codec,
+                    ID,
+                    root_offset(Offset, StoreOpts),
+                    Length,
+                    StoreOpts
+                ),
             case Loaded of
                 {ok, Message} ->
                     hb_store_remote_node:maybe_cache(StoreOpts, Message),
@@ -139,128 +140,121 @@ do_read(StoreOpts, ID) ->
                         arweave_offsets,
                         {read_ok,
                             {id, {string, ID}},
-                            {format_version, Version},
-                            {type, CodecName},
-                            {start_offset, StartOffset},
+                            {codec, Codec},
+                            {offset, Offset},
                             {length, Length}
                         }
                     ),
-                    record_partition_metric(StartOffset, ok, StoreOpts),
+                    record_partition_metric(Offset, ok, StoreOpts),
                     Loaded;
                 {error, Reason} ->
                     ?event(
                         arweave_offsets,
                         {read_chunks_not_found, 
                             {id, {string, ID}},
-                            {format_version, Version},
-                            {type, CodecName},
-                            {start_offset, StartOffset},
+                            {codec, Codec},
+                            {offset, Offset},
                             {length, Length},
                             {reason, Reason}
                         }
                     ),
-                    record_partition_metric(StartOffset, not_found, StoreOpts),
+                    record_partition_metric(Offset, not_found, StoreOpts),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end
             end;
         not_found ->
-            ?event(
-                arweave_offsets,
-                {miss, {id, {explicit, ID}}}
-            ),
+            ?event(arweave_offsets, {miss, {id, {explicit, ID}}}),
             not_found
     end.
 
+%% @doc Takes a `read_offset/2' result and returns it, normalized to the
+%% outer-most root that is known: Either the mempool or a global byte offset.
+root_offset(relative, _Store) -> relative;
+root_offset(GlobalOffset, _Store) when is_integer(GlobalOffset) -> GlobalOffset;
+root_offset(Offset, Store) -> root_offset(Offset, 0, Store).
+root_offset(#{ <<"relative">> := P, <<"offset">> := Off }, Acc, Store) ->
+    case read_offset(Store, P) of
+        {ok, Next = #{ <<"relative">> := _, <<"offset">> := _ }} ->
+            % We have another relative offset. Continue.
+            root_offset(Next, Acc + Off, Store);
+        {ok, relative} ->
+            % We have reached an unconfirmed TX as the root of the relative offset
+            % chain, so we return an offset against that.
+            #{ <<"relative">> => P, <<"offset">> => Acc + Off };
+        {ok, GlobalOffset} when is_integer(GlobalOffset) ->
+            % We have reached a confirmed TX as the root of the relative offset
+            % chain, so we return a global offset.
+            GlobalOffset + Acc + Off;
+        _ ->
+            % The result was unknown, so we total accumulator and current offset
+            % and return it with the `relative` key intact.
+            #{ <<"relative">> => P, <<"offset">> => Acc + Off }
+    end;
+root_offset(Other, _, _) -> Other.
+
+%% @doc Load a TX from Arweave. Supports either confirmed or pending TXs.
+load_message(<<"tx@1.0">>, ID, Type, _Length, Opts) ->
+    % Determine the correct path to hit to load the TX. Confirmed TXs require
+    % `tx=ID`, while pending TXs require `pending=ID`.
+    PathKeys =
+        if Type =:= relative -> #{ <<"path">> => <<"pending">>, <<"pending">> => ID };
+        true -> #{ <<"path">> => <<"tx">>, <<"tx">> => ID }
+        end,
+    hb_prometheus:measure_and_report(
+        fun() ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                PathKeys#{ <<"exclude-data">> => false },
+                Opts
+            )
+        end,
+        hb_store_arweave_chunk_fetch_duration_seconds,
+        [load_tx]
+    );
 %% @doc Load an ANS-104 item from the given start offset and length.
-%% Returns an `ok' tuple with the deserialized item, or an `error' tuple with
-%% the reason. The `StartOffset` is the precise starting byte of the item _header_,
+%% The `StartOffset` is the precise starting byte of the item _header_,
 %% not the data segment. The `Length` covers the full size of the item, including
 %% header. The `ExpectedID` is verified against the deserialized item's ID to
 %% guard against stale offsets (e.g. after a reorg).
-load_item(ExpectedID, StartOffset, Length, Opts) ->
+load_message(<<"ans104@1.0">>, ID, Offset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
-            case read_chunks(StartOffset, Length, Opts) of
+            case read_chunks(Offset, Length, Opts) of
                 {ok, SerializedItem} ->
-                    Item =
-                        ar_bundles:deserialize(SerializedItem),
+                    Item = ar_bundles:deserialize(SerializedItem),
                     case hb_util:encode(Item#tx.id) of
-                        ExpectedID ->
+                        ID ->
                             {ok, hb_message:convert(
                                 Item,
                                 <<"structured@1.0">>,
                                 <<"ans104@1.0">>,
                                 Opts
                             )};
-                        ActualID ->
-                            {error,
-                                {id_mismatch,
-                                    ExpectedID, ActualID}}
+                        _ -> {error, {id_mismatch, ID}}
                     end;
-                {error, Reason} ->
-                    {error, Reason}
+                {error, Reason} -> {error, Reason}
             end
         end,
         hb_store_arweave_chunk_fetch_duration_seconds,
         [load_item]
     ).
 
-%% @doc Load a TX from the given start offset and length. The `StartOffset' is
-%% the start of the first chunk of the data and runs for the length of the data
-%% segment, ignoring header size.
-load_tx(ID, StartOffset, Length, Opts) ->
-    hb_prometheus:measure_and_report(
-        fun() ->
-            {ok, StructuredTXHeader} = hb_ao:resolve(
-                #{ <<"device">> => <<"arweave@2.9">> },
-                #{
-                    <<"path">> => <<"tx">>,
-                    <<"tx">> => ID,
-                    <<"exclude-data">> => true
-                },
-                Opts
-            ),
-            TXHeader =
-                hb_message:convert(
-                    StructuredTXHeader,
-                    <<"tx@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            case Length of
-                0 ->
-                    {ok, hb_message:convert(
-                        TXHeader,
-                        <<"structured@1.0">>,
-                        <<"tx@1.0">>,
-                        Opts)};
-                _ ->
-                    case read_chunks(StartOffset, Length, Opts) of
-                        {ok, Data} ->
-                            {ok, hb_message:convert(
-                                TXHeader#tx{data = Data},
-                                <<"structured@1.0">>,
-                                <<"tx@1.0">>,
-                                Opts
-                            )};
-                        {error, Reason} ->
-                            {error, Reason}
-                    end
-            end
-        end,
-        hb_store_arweave_chunk_fetch_duration_seconds,
-        [load_tx]
-    ).
-
 %% @doc Read the chunks from the given start offset and length using the 
 %% `~arweave@2.9` device.
-read_chunks(StartOffset, Length, Opts) ->
+read_chunks(Offset, Length, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"chunk">>,
-            <<"offset">> => StartOffset + 1,
+            <<"offset">> =>
+                % TODO: The rationale for this seems to be that Arweave offsets
+                % start at the last byte of the previous chunk. It is unclear
+                % whether it is wise to apply this offset here, or perhaps it
+                % should be applied in the device key itself.
+                if is_integer(Offset) -> Offset + 1;
+                true -> Offset
+                end,
             <<"length">> => Length
         },
         Opts
