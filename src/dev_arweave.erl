@@ -829,28 +829,33 @@ pending(Base, Request, Opts) ->
                     % Retreive a bare TX header by its TXID
                     request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
                 {ok, RawOffset} ->
-                    Offset = hb_util:int(RawOffset),
-                    % Download an unconfirmed chunk by its offset
-                    request(
-                        <<"GET">>,
-                        <<
-                            "/unconfirmed_chunk/",
-                            TXID/binary,
-                            "/",
-                            (hb_util:bin(Offset))/binary
-                        >>,
-                        Opts#{
-                            exclude_data =>
-                                hb_util:bool(
-                                    find_key(
-                                        <<"exclude-data">>,
-                                        Base,
-                                        Request,
-                                        Opts
-                                    )
-                                )
-                        }
-                    )
+                    try hb_util:int(RawOffset) of
+                        Offset ->
+                            % Download an unconfirmed chunk by its offset
+                            request(
+                                <<"GET">>,
+                                <<
+                                    "/unconfirmed_chunk/",
+                                    TXID/binary,
+                                    "/",
+                                    (hb_util:bin(Offset))/binary
+                                >>,
+                                Opts#{
+                                    exclude_data =>
+                                        hb_util:bool(
+                                            find_key(
+                                                <<"exclude-data">>,
+                                                Base,
+                                                Request,
+                                                Opts
+                                            )
+                                        )
+                                }
+                            )
+                    catch
+                        _:_ ->
+                            {error, not_found}
+                    end
             end
     end.
 
@@ -1580,6 +1585,20 @@ head_raw_invalid_id_returns_not_found_test() ->
                 <<"path">> => <<"raw">>,
                 <<"raw">> => <<"lol">>,
                 <<"method">> => <<"HEAD">>
+            },
+            #{}
+        )
+    ).
+
+pending_invalid_offset_returns_not_found_test() ->
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"pending">>,
+                <<"pending">> => <<"lol">>,
+                <<"offset">> => <<"abc">>
             },
             #{}
         )
