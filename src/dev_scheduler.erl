@@ -1533,12 +1533,14 @@ redirect_from_graphql_test_() ->
     {timeout, 60, fun redirect_from_graphql/0}.
 redirect_from_graphql() ->
     start(),
+    TestStore = hb_test_utils:test_store(),
     Opts =
-        #{ store =>
-            [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-                #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
-            ]
+        #{
+            store =>
+                [
+                    TestStore,
+                    #{ <<"store-module">> => hb_store_gateway }
+                ]
         },
     {ok, Msg} = hb_cache:read(<<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, Opts),
     ?assertMatch(
@@ -1603,14 +1605,12 @@ http_init() -> http_init(#{}).
 http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
+    TestStore = hb_test_utils:test_store(),
 	ExtendedOpts = Opts#{
 		priv_wallet => Wallet,
 		store => [
-			#{
-                <<"store-module">> => hb_store_volatile,
-                <<"name">> => <<"cache-TEST/volatile">>
-            },
-			#{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
+            TestStore,
+            #{ <<"store-module">> => hb_store_gateway }
 		]
 	},
     Node = hb_http_server:start_node(ExtendedOpts),
@@ -1663,17 +1663,18 @@ http_get_schedule(N, PMsg, From, To, Format) ->
 http_get_schedule_redirect_test_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
+    start(),
+    TestStore = hb_test_utils:test_store(),
     Opts =
         #{
             store =>
                 [
-                    #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-                    #{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }
+                    TestStore,
+                    #{ <<"store-module">> => hb_store_gateway }
                 ],
-                scheduler_follow_redirects => false
+            scheduler_follow_redirects => false
         },
     {N, _Wallet} = http_init(Opts),
-    start(),
     ProcID = <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, Opts),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
