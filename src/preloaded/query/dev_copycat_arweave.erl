@@ -29,6 +29,8 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+        <<"mempool">> ->
+            index_mempool(Request, Opts);
         <<"write">> ->
             case hb_maps:find(<<"id">>, Request, Opts) of
                 {ok, TXID} ->
@@ -1660,6 +1662,92 @@ get_index_store(Opts) ->
         #{ <<"index-store">> := Store } -> Store;
         _ -> throw(no_index_store_available)
     end.
+
+%% @doc Scan the mempool and index any accessible unconfirmed TXs.
+index_mempool(_Request, Opts) ->
+    case dev_arweave:pending(#{}, #{}, Opts) of
+        {ok, TXIDs} when is_list(TXIDs) ->
+            Results = parallel_map(TXIDs,
+                fun(TXID) -> index_mempool_tx(TXID, Opts) end, Opts),
+            Summary = lists:foldl(fun(R, Acc) ->
+                K = case R of
+                    ok -> indexed; existing -> existing;
+                    missing_data -> missing_data; _ -> failed
+                end,
+                Acc#{ K => maps:get(K, Acc) + 1 }
+            end, #{ indexed => 0, existing => 0,
+                    missing_data => 0, failed => 0 }, Results),
+            ?event(copycat_short, {mempool_scan_completed, Summary}),
+            {ok, Summary};
+        Error -> Error
+    end.
+
+index_mempool_tx(TXID, Opts) ->
+    case is_tx_indexed(TXID, Opts) of
+        true -> existing;
+        false ->
+            case dev_arweave:pending(#{}, #{ <<"pending">> => TXID }, Opts) of
+                {ok, StructuredTX} ->
+                    TX = hb_message:convert(StructuredTX,
+                        <<"tx@1.0">>, <<"structured@1.0">>, Opts),
+                    case has_mempool_data(TX) of
+                        true -> write_mempool_offsets(TXID, TX, Opts);
+                        false -> missing_data
+                    end;
+                _ -> failed
+            end
+    end.
+
+has_mempool_data(#tx{ data_size = 0 }) -> true;
+has_mempool_data(#tx{ data = D, data_size = S })
+        when is_binary(D) -> byte_size(D) =:= S;
+has_mempool_data(_) -> false.
+
+write_mempool_offsets(TXID, TX, Opts) ->
+    Store = hb_store_arweave:store_from_opts(Opts),
+    ok = hb_store_arweave:write_offset(
+        Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
+    write_mempool_children(Store, TXID, TX, Opts),
+    ok.
+
+write_mempool_children(Store, TXID, TX, Opts) ->
+    case is_bundle_tx(TX, Opts) of
+        true ->
+            try ar_bundles:decode_bundle_header(TX#tx.data) of
+                {ItemsBin, BundleIndex} ->
+                    HeaderSize = byte_size(TX#tx.data) - byte_size(ItemsBin),
+                    write_mempool_items(Store, TXID, BundleIndex, HeaderSize);
+                _ -> ok
+            catch _:_ -> ok
+            end;
+        false ->
+            case standalone_item_id(TX) of
+                {ok, ItemID} ->
+                    Ref = #{ <<"relative">> => TXID, <<"offset">> => 0 },
+                    hb_store_arweave:write_offset(
+                        Store, ItemID, <<"ans104@1.0">>,
+                        Ref, TX#tx.data_size);
+                not_found -> ok
+            end
+    end.
+
+write_mempool_items(_Store, _TXID, [], _Offset) -> ok;
+write_mempool_items(Store, TXID, [{ItemID, Size} | Rest], Offset) ->
+    Ref = #{ <<"relative">> => TXID, <<"offset">> => Offset },
+    hb_store_arweave:write_offset(
+        Store, hb_util:encode(ItemID), <<"ans104@1.0">>, Ref, Size),
+    write_mempool_items(Store, TXID, Rest, Offset + Size).
+
+standalone_item_id(#tx{ data = Data }) when is_binary(Data), Data =/= <<>> ->
+    try
+        Item = ar_bundles:deserialize(Data),
+        case ar_bundles:verify_item(Item) of
+            true -> {ok, hb_util:encode(Item#tx.id)};
+            false -> not_found
+        end
+    catch _:_ -> not_found
+    end;
+standalone_item_id(_) -> not_found.
 
 %%% Tests
 
