@@ -1,22 +1,36 @@
 %%% @doc Succinct encoding and decoding for Arweave data offset indexing.
 %%% Arweave data items are extremely numerous (>25,000,000,000 as of Feb 2026), and
 %%% as such small optimizations to the encoding of their offsets have a significant
-%%% effect. For exampple, a single byte sized in the encoding at time of writing
+%%% effect. For example, a single byte sized in the encoding at time of writing
 %%% saves ~25 GB of storage.
 %%% 
-%%% The encoding is as follows:
-%%%     << Version:4, Codec:4, StartOffset:64, Length/binary >>
+%%% Version 1 of the encoding is as follows:
+%%%     Encoded ::= MempoolTX | RelativeRef | ConfirmedMessage
+%%%     MempoolTX ::= << Version:4, 0:4 >>
+%%%     RelativeRef ::= << Version:4, Codec:4, RELATIVE:64, ParentID:256, Range >>
+%%%     ConfirmedMessage ::= << Version:4, Codec:4, Range >>
+%%%     Range ::= << Offset:64, Length:unsigned-variable-length-integer >>
 %%% where:
 %%%     - Version: 4-bit unsigned integer. Max: 15. Current: version `1`.
-%%%     - Codec: 4-bit unsigned integer. Max: 15.
-%%%     - StartOffset: 64-bit uint. Max: 2^64-1.
-%%%     - Length: unsigned variable-length integer.
+%%%     - Codec: 4-bit unsigned integer. Max: 15. Registry included below.
+%%%     - Offset: 64-bit uint. Max: 2^64-1.
+%%%     - RELATIVE: An atom, expressing that the offset is relative to the start
+%%%       of another transaction, rather than the start of the Arweave global 
+%%%       address space. Always expressed as 2^64-1.
+%%%     - ParentID: The ID of a parent message for a relative offset, 256-bit uint.
+%%%     - Length: big-endian unsigned variable-length integer.
+%%%     - MempoolTX: Always << 1:4, 0: 4>>, indicating the version and that the
+%%%       key refers to an Arweave transaction that is not yet confirmed.
+%%%     - RelativeRef: A reference to an offset inside an unconfirmed Arweave
+%%%       transaction, yet to receive a global offset.
+%%%     - ConfirmedMessage: A message (any codec) that has been confirmed and has
+%%%       received a global offset.
 %%% 
-%%% Codecs:
+%%% Codec Registry:
 %%%     - 0: `tx@1.0`: An Arweave transaction.
-%%%     - 1: [Reserved for ANS-102: The initial JSON data item format.]
+%%%     - 1: `ans102@1.0`: The initial JSON data item format.
 %%%     - 2: `~ans104@1.0`: Binary data items.
-%%%     - 3: [Reserved for `~httpsig@1.0`: RFC-9421 compatible HTTP signed messages.]
+%%%     - 3: `~httpsig@1.0`: RFC-9421 compatible HTTP signed messages.
 %%% 
 %%% Codec indexes should, in general, be sorted by the time of their first write
 %%% to Arweave: Arweave TXs as 0, ANS-102 as 1, ANS-104 as 2, etc.
@@ -24,7 +38,6 @@
 %%% All `length` values are read by decoding all of the remaining bytes in the 
 %%% offset encoding as an unsigned big-endian integer. This allows the length
 %%% to contract to only the number of bytes actually necessary to represent it.
-%%% 
 -module(hb_store_arweave_offset).
 -export([encode/3, decode/1, path/1, mismatch_path/1]).
 -include("include/hb.hrl").
@@ -33,6 +46,7 @@
 -define(IN_BIT_RANGE(X, Bits), (X >= 0 andalso X < (1 bsl Bits))).
 
 -define(OFFSET_SZ, (8*8)). % 64-bit uint. Max: 2^64-1.
+-define(OFFSET_MAX, ((1 bsl ?OFFSET_SZ) - 1)).
 -define(FORMAT_VERSION, 1). % 4-bit uint. Max: 15.
 
 %% @doc Reserved for future use. At the present time, store containing offsets are
