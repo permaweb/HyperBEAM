@@ -50,16 +50,9 @@ graphql(Req, Base, Opts) ->
 %% @doc Return whether a GraphQL esponse in a message has transaction results.
 %% This key is used in HB's gateway client multirequest configuration to
 %% determine if the response from the node should be considered admissible.
-has_results(Base, Req, Opts) ->
-    JSON =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Base}, <<"body">>},
-                {{as, <<"message@1.0">>, Req}, <<"body">>}
-            ],
-            <<"{}">>,
-            Opts
-        ),
+has_results(_Base, RawReq, Opts) ->
+    Req = hb_maps:get(<<"body">>, RawReq, #{}, Opts),
+    JSON = hb_maps:get(<<"body">>, Req, <<>>, Opts),
     Decoded = hb_json:decode(JSON),
     ?event(debug_multi, {has_results, {decoded_json, Decoded}}),
     case Decoded of
