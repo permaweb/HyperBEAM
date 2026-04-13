@@ -158,7 +158,7 @@ head_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
     case find_key(<<"raw">>, Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID ->
+        TXID when ?IS_ID(TXID) ->
             % Read the data from the local cache.
             IndexStore = hb_store_arweave:store_from_opts(Opts),
             case hb_store_arweave:read_offset(IndexStore, TXID) of
@@ -182,7 +182,9 @@ head_raw(Base, Request, Opts) ->
                         Opts
                     ),
                     {error, not_found}
-            end
+            end;
+        _ ->
+            {error, not_found}
     end.
 
 %% @doc Arweave transaction headers are not part of the Arweave data tree, and
@@ -1567,6 +1569,20 @@ head_raw_tx_test() ->
     ?assertEqual(
         {ok, 0},
         hb_maps:find(<<"header-length">>, Result, Opts)
+    ).
+
+head_raw_invalid_id_returns_not_found_test() ->
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => <<"lol">>,
+                <<"method">> => <<"HEAD">>
+            },
+            #{}
+        )
     ).
 
 head_raw_ans104_test() ->
