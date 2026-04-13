@@ -392,19 +392,13 @@ basic_test() ->
 first_request_always_return_503_test() ->
     {ok, #{
         opts := Opts0,
-        unsigned3 := UnsignedID3,
-        blacklist := BlacklistID
+        unsigned3 := UnsignedID3
     }} = setup_test_env(),
     %% Try to call an external node to force take more time 
     %% to initialize.
-    BlacklistHostNode = hb_http_server:start_node(Opts0),
     Opts1 = 
         Opts0#{
-            blacklist_providers =>
-                [<<
-                    "/~relay@1.0/call?relay-method=GET&relay-path=",
-                        BlacklistHostNode/binary, BlacklistID/binary
-                >>]
+            blacklist_providers => [<<"/~test-device@1.0/delay?duration=200">>]
         },
     Node = hb_http_server:start_node(Opts1#{blacklist_timeout => 0}),
     ?assertMatch(
