@@ -2,7 +2,7 @@
 [{<<"accept">>,{pkg,<<"accept">>,<<"0.3.7">>},1},
  {<<"b64rs">>,
   {git,"https://github.com/permaweb/b64rs.git",
-       {ref,"c6da6b61634b14e423e8f95ad51a7694bffb2438"}},
+       {ref,"94b7d8e51d9a44f3bd12b7d138dd0d2cb74c169f"}},
   0},
  {<<"base32">>,{pkg,<<"base32">>,<<"1.0.0">>},0},
  {<<"certifi">>,{pkg,<<"certifi">>,<<"2.15.0">>},1},
