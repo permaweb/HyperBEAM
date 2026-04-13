@@ -175,7 +175,7 @@ head_raw(Base, Request, Opts) ->
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,
-                        <<"start-offset">> := StartOffset,
+                        <<"offset">> := StartOffset,
                         <<"length">> := Length
                     }} ->
                         CodecFun =
@@ -404,22 +404,47 @@ post_chunk(Request, Opts) ->
 %% global Arweave data tree, or relative to the start of a specific pending
 %% transaction.
 get_chunk(_Base, Request, Opts) ->
-    Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
-    Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
-    MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
+    {ok, Offset, Length, MaybeRelativeTXID} = extract_chunk_params(Request, Opts),
     case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
         {ok, Chunks} ->
-            Data = iolist_to_binary(Chunks),
-            case hb_maps:is_key(<<"length">>, Request, Opts) of
-                true ->
-                    {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
-                false ->
-                    {ok, Data}
+            Data = hb_util:bin(Chunks),
+            case Length of
+                undefined ->
+                    {ok, Data};
+                Length ->
+                    {
+                        ok,
+                        binary:part(Data, 0, min(hb_util:int(Length), byte_size(Data)))
+                    }
             end;
         {error, Reason} ->
             {error, Reason}
     end.
 
+%% @doc Extract the parameters from a chunk request. Supports both global offsets
+%% and relative offset+parent ID pairs.
+extract_chunk_params(Request, Opts) ->
+    Length = hb_maps:get(<<"length">>, Request, undefined, Opts),
+    case hb_maps:find(<<"offset">>, Request, Opts) of
+        {ok, RelativeInfo} when is_map(RelativeInfo) ->
+            {ok, RelativeOffset} = hb_maps:find(<<"offset">>, RelativeInfo, Opts),
+            {ok, RelativeTXID} = hb_maps:find(<<"relative">>, RelativeInfo, Opts),
+            {ok, hb_util:int(RelativeOffset), Length, RelativeTXID};
+        {ok, Offset} when is_integer(Offset) orelse is_binary(Offset) ->
+            {
+                ok,
+                hb_util:int(Offset),
+                Length,
+                hb_maps:get(<<"pending">>, Request, undefined, Opts)
+            }
+    end.
+
+%% @doc Fetch a range of chunks in parallel. Determines the appropriate algorithm
+%% to use to get the chunks based on offset, length, and an optional relative
+%% transaction ID. Notably, this function returns the binary for all of the
+%% chunks that were fetched, not just the requested length. This allows callers
+%% to avoid wasted additional requests in some circumstances, but also requires
+%% them to handle truncation themselves.
 fetch_chunk_range(Offset, Length, undefined, Opts)
         when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
         ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
@@ -1029,25 +1054,18 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         }
     ),
     {ok, Data} =
-        case hb_opts:get(exclude_data, false, Opts) of
-            true -> {ok, ?DEFAULT_DATA};
+        case (TXHeader#tx.data_size == 0) orelse hb_opts:get(exclude_data, false, Opts) of
+            true -> {ok, <<>>};
             false ->
-                DataRes =
-                    case Type of
-                        tx ->
-                            request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
-                        pending ->
-                            get_chunk_range_relative(
-                                0,
-                                TXHeader#tx.data_size,
-                                ID,
-                                Opts
-                            )
-                    end,
-                case DataRes of
-                    {ok, RawData} -> {ok, RawData};
-                    {error, not_found} -> {ok, ?DEFAULT_DATA};
-                    Error -> Error    
+                case Type of
+                    tx -> request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
+                    pending ->
+                        get_chunk_range_relative(
+                            0,
+                            TXHeader#tx.data_size,
+                            ID,
+                            Opts
+                        )
                 end
         end,
     {
