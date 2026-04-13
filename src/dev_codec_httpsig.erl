@@ -299,14 +299,26 @@ keys_to_commit(Base, _Req, Opts) ->
 add_content_digest(Msg, _Opts) ->
     case maps:get(<<"body">>, Msg, not_found) of
         Body when is_binary(Body) ->
-            % Remove the body from the message and add the content-digest,
-            % encoded as a structured field.
             (maps:without([<<"body">>], Msg))#{
                 <<"content-digest">> =>
                     hb_util:bin(hb_structured_fields:dictionary(
                         #{
                             <<"sha-256">> =>
                                 {item, {binary, hb_crypto:sha256(Body)}, []}
+                        }
+                    ))
+            };
+        CS = {chunk_stream, _, _, _} ->
+            %% Compute digest by streaming through chunks — never holds
+            %% the full body in memory. The body tuple is preserved for
+            %% hb_http:reply to stream later.
+            Digest = hb_chunk_store:content_digest(CS),
+            Msg#{
+                <<"content-digest">> =>
+                    hb_util:bin(hb_structured_fields:dictionary(
+                        #{
+                            <<"sha-256">> =>
+                                {item, {binary, Digest}, []}
                         }
                     ))
             };

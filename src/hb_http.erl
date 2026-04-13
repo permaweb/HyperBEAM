@@ -489,13 +489,30 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             ?event(warning, {reply_handle_cookies_error, {error, Error}}, Opts),
             {ok, InitReq, KeyNormMessage}
         end,
-    {Status, HeadersBeforeCors, EncodedBody} =
+    {ChunkStreamBody, MessageForCodec} =
+        case hb_maps:get(<<"body">>, Message, undefined, Opts) of
+            CS = {chunk_stream, _, _, _} ->
+                {CS,
+                    maps:put(
+                        <<"content-length">>,
+                        element(4, CS) - element(3, CS) + 1,
+                        maps:remove(<<"body">>, Message)
+                    )};
+            _ ->
+                {undefined, Message}
+        end,
+    {Status, HeadersBeforeCors, EncodedBody0} =
         encode_reply(
             RawStatus,
             TABMReq,
-            Message,
+            MessageForCodec,
             Opts
         ),
+    EncodedBody =
+        case ChunkStreamBody of
+            undefined -> EncodedBody0;
+            _ -> ChunkStreamBody
+        end,
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
@@ -511,12 +528,21 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ),
     ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
-    Fin =
-        case should_finalize_stream(Status, EncodedBody) of
-            true -> fin;
-            false -> nofin
+    BodySize =
+        case EncodedBody of
+            {chunk_stream, StreamFun, RangeStart, RangeEnd} ->
+                stream_chunks(StreamFun, RangeStart, RangeEnd, true,
+                    PostStreamReq),
+                RangeEnd - RangeStart + 1;
+            _ ->
+                Fin =
+                    case should_finalize_stream(Status, EncodedBody) of
+                        true -> fin;
+                        false -> nofin
+                    end,
+                cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
+                iolist_size(EncodedBody)
         end,
-    cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
@@ -530,7 +556,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         {sent,
             {status, Status},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
-            {body_size, byte_size(EncodedBody)},
+            {body_size, BodySize},
             {method, cowboy_req:method(Req)},
             {ip, {string, real_ip(Req, Opts)}},
             {path,
@@ -547,6 +573,39 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
 %% @doc Determine if the stream should be finalized.
 should_finalize_stream(429, _EncodedBody) -> true;
 should_finalize_stream(_, _EncodedBody) -> false.
+
+%% @doc Stream chunk data to the client one chunk at a time, trimming the
+%% first and last chunks to match the requested byte range.
+stream_chunks(StreamFun, RangeStart, RangeEnd, IsFirst, Req) ->
+    case StreamFun() of
+        {{AbsStart, AbsEnd, Chunk}, NextFun} ->
+            Trimmed =
+                case IsFirst andalso AbsStart < RangeStart of
+                    true ->
+                        Skip = RangeStart - AbsStart,
+                        binary:part(Chunk, Skip, byte_size(Chunk) - Skip);
+                    false ->
+                        Chunk
+                end,
+            Final =
+                case AbsEnd >= RangeEnd of
+                    true ->
+                        Excess = AbsEnd - RangeEnd,
+                        binary:part(Trimmed, 0,
+                            byte_size(Trimmed) - Excess);
+                    false ->
+                        Trimmed
+                end,
+            case AbsEnd >= RangeEnd of
+                true ->
+                    cowboy_req:stream_body(Final, fin, Req);
+                false ->
+                    cowboy_req:stream_body(Final, nofin, Req),
+                    stream_chunks(NextFun, RangeStart, RangeEnd, false, Req)
+            end;
+        done ->
+            cowboy_req:stream_body(<<>>, fin, Req)
+    end.
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message with the cookies removed. Both

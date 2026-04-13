@@ -9,7 +9,7 @@
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
--export([get_chunk/2, bundle_header/2, bundle_header/3]).
+-export([get_chunk/2, decode_chunk/1, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -299,18 +299,27 @@ get_raw(Base, Request, Opts) ->
                     }
                 };
             false ->
-                case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
-                    {ok, Data} ->
+                ChunkOffset = ArweaveDataOffset + 1,
+                case fetch_chunk_meta(
+                    ChunkOffset, FullContentLength, Opts
+                ) of
+                    {ok, SortedMeta} ->
+                        RangeEnd =
+                            ChunkOffset + FullContentLength - 1,
+                        StreamFun =
+                            build_chunk_info_stream(
+                                SortedMeta, Opts
+                            ),
                         {ok, Header#{
                             <<"content-type">> => ContentType,
-                            <<"body">> => Data
+                            <<"body">> =>
+                                {chunk_stream, StreamFun,
+                                    ChunkOffset, RangeEnd}
                         }};
                     Error ->
-                        ?event(
-                            arweave,
-                            {raw_read_chunks_failed, {id, TXID}, {error, Error}},
-                            Opts
-                        ),
+                        ?event(arweave,
+                            {raw_read_chunks_failed,
+                                {id, TXID}, {error, Error}}, Opts),
                         Error
                 end
             end
@@ -413,6 +422,14 @@ fetch_chunk_range(Offset, Length, RelativeTXID, Opts)
 %% Note: we don't want to *always* query an extra chunk because if it doesn't
 %% exist, dev_arweave will consider the dataitem missing.
 get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
+    case get_chunk_range_fixed_size_infos(Offset, EndOffset, Opts) of
+        {ok, Sorted} -> assemble_chunks(Sorted, Offset);
+        Error -> Error
+    end.
+
+%% @doc Fetch fixed-size chunks and return sorted ChunkInfos without
+%% assembling. Includes tail-chunk repair.
+get_chunk_range_fixed_size_infos(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
@@ -420,24 +437,19 @@ get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
         {ok, ChunkInfos} ->
-            % Check for one additional tail chunk if needed.
             Sorted = sort_chunks(ChunkInfos),
             {ok, Binaries} = assemble_chunks(Sorted, Offset),
             ExpectedLength = EndOffset - Offset + 1,
             BinarySize = iolist_size(Binaries),
             case BinarySize < ExpectedLength of
                 false ->
-                    {ok, Binaries};
+                    {ok, Sorted};
                 true ->
                     ExtraOffset = min(
                         lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(debug_arweave, {fetching_extra_chunk,
-                        {binary_size, BinarySize},
-                        {expected_length, ExpectedLength},
-                        {extra_offset, ExtraOffset}}),
                     case fetch_and_collect([ExtraOffset], Opts) of
                         {ok, ExtraInfos} ->
-                            assemble_chunks(Sorted ++ ExtraInfos, Offset);
+                            {ok, sort_chunks(Sorted ++ ExtraInfos)};
                         Error ->
                             Error
                     end
@@ -449,13 +461,22 @@ get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
 %% DATA_CHUNK_SIZE increments plus one extra candidate chunk, then
 %% iteratively fill gaps until contiguous.
 get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
+    case get_chunk_range_variable_size_infos(Offset, EndOffset, Opts) of
+        {ok, Sorted} -> assemble_chunks(Sorted, Offset);
+        Error -> Error
+    end.
+
+%% @doc Fetch variable-size chunks and return sorted ChunkInfos without
+%% assembling. Includes gap-fill repair.
+get_chunk_range_variable_size_infos(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
         []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
+        {ok, ChunkInfos} ->
+            fill_gaps_infos(ChunkInfos, Offset, EndOffset, Opts);
         Error -> Error
     end.
 
@@ -496,54 +517,47 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
         Error -> Error
     end.
 
-%% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
-%% of each gap until the entire range [Offset, EndOffset] is covered.
-fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
+%% @doc Like fill_gaps but returns sorted ChunkInfos without assembling.
+fill_gaps_infos(ChunkInfos, Offset, EndOffset, Opts) ->
     Sorted = sort_chunks(ChunkInfos),
     case find_gaps(Sorted, Offset, EndOffset) of
         [] ->
-            assemble_chunks(Sorted, Offset);
+            {ok, Sorted};
         Gaps ->
-            % WARNING: the find_gaps logic is untested in production and may not
-            % be needed. We have yet to find an L1 TX that is chunked in such
-            % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
-            ?event(debug_arweave,
-                {fill_gaps, 
-                    {offset, Offset},
-                    {end_offset, EndOffset},
-                    {chunks,
-                        [
-                            {Start, End, byte_size(Chunk)}
-                        ||
-                            {Start, End, Chunk} <- Sorted
-                        ]
-                    },
-                    {gap_offsets, GapOffsets}
-                }
-            ),
-            ?event(warning,
-                {fetch_chunk_gap_handling_untested,
-                    {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
-                    ?event(debug_arweave, {fill_gaps, NewInfos}),
-                    fill_gaps(
-                        Sorted ++ NewInfos,
-                        Offset, EndOffset, Opts
+                    fill_gaps_infos(
+                        Sorted ++ NewInfos, Offset, EndOffset, Opts
                     );
                 Error -> Error
             end
     end.
 
-%% @doc Fetch chunks at the given offsets in parallel and parse the responses
-%% into {AbsoluteStartOffset, AbsoluteEndOffset, ChunkBinary} tuples.
+
+
+%% @doc Fetch chunks at the given offsets via `hb_chunk_store` and collect
+%% results from the store. Dedup and QoS are handled by the stream server.
 fetch_and_collect(Offsets, Opts) ->
-    fetch_and_collect(
-        Offsets,
-        fun(Offset) -> decode_chunk(get_chunk(Offset, Opts)) end,
-        Opts
-    ).
+    case hb_chunk_store:ensure_chunks(Offsets, Opts) of
+        ok ->
+            Results = lists:map(
+                fun(O) ->
+                    case hb_chunk_store:get(O, Opts) of
+                        {ok, ChunkInfo} -> {ok, ChunkInfo};
+                        not_found -> {error, {chunk_not_found, O}}
+                    end
+                end,
+                Offsets
+            ),
+            collect_chunks(Results);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Variant that accepts a custom fetch function. Bypasses
+%% hb_chunk_store — used by get_chunk_range_relative for unconfirmed TXs
+%% where chunks are fetched via the pending path, not by absolute offset.
 fetch_and_collect(Offsets, GETFun, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
@@ -558,6 +572,128 @@ generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets;
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
+
+%% @doc Build a streaming iterator from sorted metadata tuples
+%% `[{AbsStart, AbsEnd, QueryOffset}]`. Each call reads one chunk binary
+%% from the hb_chunk_store store on demand — only one chunk is in memory
+%% at a time.
+build_chunk_info_stream([], _Opts) ->
+    fun() -> done end;
+build_chunk_info_stream([{AbsStart, AbsEnd, QueryOffset} | Rest], Opts) ->
+    fun() ->
+        {ok, {_, _, Binary}} = hb_chunk_store:get(QueryOffset, Opts),
+        {{AbsStart, AbsEnd, Binary}, build_chunk_info_stream(Rest, Opts)}
+    end.
+
+
+
+%% @doc Fetch all chunks for a range (including repairs), return sorted
+%% lightweight metadata `[{AbsStart, AbsEnd, QueryOffset}]`. No chunk
+%% binaries are loaded — coverage is computed from offset metadata only.
+fetch_chunk_meta(Offset, Length, Opts) ->
+    case fetch_chunk_infos_tagged(Offset, Length, Opts) of
+        {ok, Sorted} ->
+            Meta = [{S, E, QO} || {QO, S, E} <- Sorted],
+            {ok, Meta};
+        Error ->
+            Error
+    end.
+
+%% @doc Like fetch_chunk_infos but returns `[{QueryOffset, ChunkInfo}]`
+%% pairs so the original query offset is preserved for store lookups.
+fetch_chunk_infos_tagged(Offset, Length, Opts) ->
+    EndOffset = Offset + Length - 1,
+    case {Offset >= ?STRICT_DATA_SPLIT_THRESHOLD,
+          EndOffset >= ?STRICT_DATA_SPLIT_THRESHOLD} of
+        {true, true} ->
+            fetch_post_threshold_tagged(Offset, EndOffset, Opts);
+        {false, false} ->
+            fetch_pre_threshold_tagged(Offset, EndOffset, Opts);
+        {false, true} ->
+            {error, chunk_range_spans_strict_data_split_threshold}
+    end.
+
+fetch_post_threshold_tagged(Offset, EndOffset, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case ensure_and_collect_meta(Offsets, Opts) of
+        {ok, Tagged} ->
+            Sorted = sort_tagged(Tagged),
+            CoveredSize = tagged_coverage(Sorted, Offset),
+            ExpectedLength = EndOffset - Offset + 1,
+            case CoveredSize < ExpectedLength of
+                false ->
+                    {ok, Sorted};
+                true ->
+                    ExtraOffset = min(
+                        lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
+                    case ensure_and_collect_meta([ExtraOffset], Opts) of
+                        {ok, Extra} ->
+                            {ok, sort_tagged(Sorted ++ Extra)};
+                        Error -> Error
+                    end
+            end;
+        Error -> Error
+    end.
+
+fetch_pre_threshold_tagged(Offset, EndOffset, Opts) ->
+    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
+    case ensure_and_collect_meta(Offsets, Opts) of
+        {ok, Tagged} ->
+            fill_gaps_tagged(Tagged, Offset, EndOffset, Opts);
+        Error -> Error
+    end.
+
+fill_gaps_tagged(Tagged, Offset, EndOffset, Opts) ->
+    Sorted = sort_tagged(Tagged),
+    MetaInfos = [{S, E, QO} || {QO, S, E} <- Sorted],
+    case find_gaps(MetaInfos, Offset, EndOffset) of
+        [] ->
+            {ok, Sorted};
+        Gaps ->
+            GapOffsets = [Start || {Start, _End} <- Gaps],
+            case ensure_and_collect_meta(GapOffsets, Opts) of
+                {ok, New} ->
+                    fill_gaps_tagged(Sorted ++ New, Offset, EndOffset, Opts);
+                Error -> Error
+            end
+    end.
+
+sort_tagged(Tagged) ->
+    lists:sort(fun({_, S1, _}, {_, S2, _}) -> S1 =< S2 end, Tagged).
+
+%% @doc Calculate covered bytes from tagged metadata, with first-chunk trim.
+tagged_coverage(Sorted, Offset) ->
+    lists:foldl(
+        fun({_QO, ChunkStart, ChunkEnd}, Acc) ->
+            Size = ChunkEnd - ChunkStart + 1,
+            case ChunkStart < Offset of
+                true -> Acc + Size - (Offset - ChunkStart);
+                false -> Acc + Size
+            end
+        end,
+        0,
+        Sorted
+    ).
+
+%% @doc Ensure chunks are fetched, then read only metadata from the store.
+%% Returns `{ok, [{QueryOffset, AbsStart, AbsEnd}]}` — no binaries loaded.
+ensure_and_collect_meta(Offsets, Opts) ->
+    case hb_chunk_store:ensure_chunks(Offsets, Opts) of
+        ok ->
+            Results = lists:map(
+                fun(O) ->
+                    case hb_chunk_store:get_meta(O, Opts) of
+                        not_found -> {error, {chunk_not_found, O}};
+                        {ok, {AbsStart, AbsEnd}} ->
+                            {ok, {O, AbsStart, AbsEnd}}
+                    end
+                end,
+                Offsets
+            ),
+            collect_chunks(Results);
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Decode a chunk response into a {Start, End, Binary} tuple.
 %% Runs inside the pmap worker so raw JSON is GC'd per-worker.
@@ -1451,7 +1587,8 @@ get_tx_basic_data_exclude_data_test() ->
         Opts
     ),
     ?event(debug_test, {raw_data, RawData}),
-    Data = hb_ao:get(<<"body">>, RawData, Opts),
+    RawBody = hb_ao:get(<<"body">>, RawData, Opts),
+    Data = hb_chunk_store:materialize(RawBody),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
@@ -1487,7 +1624,8 @@ get_tx_data_tag_exclude_data_test() ->
         },
         Opts
     ),
-    Data = hb_ao:get(<<"body">>, RawData, Opts),
+    RawBody = hb_ao:get(<<"body">>, RawData, Opts),
+    Data = hb_chunk_store:materialize(RawBody),
     StructuredWithData = Structured#{ <<"data">> => Data },
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),

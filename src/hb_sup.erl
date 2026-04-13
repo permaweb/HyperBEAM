@@ -32,7 +32,16 @@ init(Opts) ->
             type => worker,
             modules => [hb_http_client]
         },
-    {ok, {SupFlags, [GunChild | StoreChildren]}}.
+    ChunkStreamChild =
+        #{
+            id => hb_chunk_store,
+            start => {hb_chunk_store, start_link, [Opts]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [hb_chunk_store]
+        },
+    {ok, {SupFlags, [GunChild, ChunkStreamChild | StoreChildren]}}.
 
 %% @doc Generate a child spec for stores in the given Opts.
 store_children(Store) when not is_list(Store) ->
