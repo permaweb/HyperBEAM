@@ -221,7 +221,8 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
             }
         ),
     {ok,
-        #{
+        with_human_offset(
+            #{
             <<"raw-id">> => TXID,
             <<"offset">> => StartOffset,
             <<"data-offset">> => StartOffset,
@@ -229,7 +230,9 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
             <<"header-length">> => 0,
             <<"content-length">> => Length,
             <<"accept-ranges">> => <<"bytes">>
-        }
+            },
+            Opts
+        )
     }.
 
 %% @doc ANS-104 headers are stored as part of the global Arweave data tree, so
@@ -248,7 +251,7 @@ head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
             do_head_raw_ans104(TXID, ArweaveOffset, Length, HeaderChunk, Opts);
         {error, Error} -> {error, Error}
     end.
-do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
+do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, Opts) ->
     {ok, HeaderSize, HeaderTX} = ar_bundles:deserialize_header(Data),
     ContentType =
         list_find(
@@ -257,7 +260,8 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
             <<"application/octet-stream">>
         ),
     {ok,
-        #{
+        with_human_offset(
+            #{
             <<"raw-id">> => TXID,
             <<"offset">> => ArweaveOffset,
             <<"data-offset">> => ArweaveOffset + HeaderSize,
@@ -265,8 +269,18 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
             <<"header-length">> => HeaderSize,
             <<"content-length">> => Length - HeaderSize,
             <<"accept-ranges">> => <<"bytes">>
-        }
+            },
+            Opts
+        )
     }.
+
+%% @doc Add a human-readable representation of the raw data offset when it is
+%% representable in the active what-words vocabulary.
+with_human_offset(Head = #{ <<"data-offset">> := DataOffset }, _Opts) ->
+    case dev_what_words:offset_to_name(DataOffset) of
+        {ok, HumanOffset} -> Head#{ <<"human-offset">> => HumanOffset };
+        _ -> Head
+    end.
 
 %% @doc Get raw transaction *data* and `content-type` of an Arweave message.
 %% Does not deserialize the message, nor return signature information. Included
@@ -1451,6 +1465,12 @@ head_raw_tx_test() ->
     ?assertEqual(
         {ok, 0},
         hb_maps:find(<<"header-length">>, Result, Opts)
+    ),
+    ?assertEqual(
+        dev_what_words:offset_to_name(
+            hb_util:ok(hb_maps:find(<<"data-offset">>, Result, Opts))
+        ),
+        hb_maps:find(<<"human-offset">>, Result, Opts)
     ).
 
 head_raw_ans104_test() ->
@@ -1478,6 +1498,12 @@ head_raw_ans104_test() ->
     ?assertEqual(
         {ok, 575},
         hb_maps:find(<<"content-length">>, Result, Opts)
+    ),
+    ?assertEqual(
+        dev_what_words:offset_to_name(
+            hb_util:ok(hb_maps:find(<<"data-offset">>, Result, Opts))
+        ),
+        hb_maps:find(<<"human-offset">>, Result, Opts)
     ).
 
 get_raw_range_tx_test() ->
@@ -1498,6 +1524,12 @@ get_raw_range_tx_test() ->
     ?assertEqual(
         {ok, <<"{\"d">>},
         hb_maps:find(<<"body">>, Result, Opts)
+    ),
+    ?assertEqual(
+        dev_what_words:offset_to_name(
+            hb_util:ok(hb_maps:find(<<"data-offset">>, Result, Opts))
+        ),
+        hb_maps:find(<<"human-offset">>, Result, Opts)
     ),
     {ok, Result2} =
         hb_ao:resolve(

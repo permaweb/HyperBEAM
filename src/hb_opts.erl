@@ -44,6 +44,7 @@
 -define(DEFAULT_NAME_RESOLVERS,
     [
         #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"device">> => <<"what-words@1.0">> },
         #{ <<"device">> => <<"b32-name@1.0">> },
         <<
             "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
@@ -221,6 +222,7 @@ default_message() ->
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
+            #{<<"name">> => <<"what-words@1.0">>, <<"module">> => dev_what_words},
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
