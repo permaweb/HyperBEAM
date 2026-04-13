@@ -7,6 +7,7 @@
 -export([resolve/2, write/3, make_link/3, make_group/2]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
+-export([root_offset/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
