@@ -1008,37 +1008,39 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             {tx, TXHeader}
         }
     ),
-    {ok, Data} =
+    DataRes =
         case hb_opts:get(exclude_data, false, Opts) of
-            true -> {ok, ?DEFAULT_DATA};
+            true ->
+                {ok, ?DEFAULT_DATA};
             false ->
-                DataRes =
-                    case Type of
-                        tx ->
-                            request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
-                        pending ->
-                            get_chunk_range_relative(
-                                0,
-                                TXHeader#tx.data_size,
-                                ID,
-                                Opts
-                            )
-                    end,
-                case DataRes of
-                    {ok, RawData} -> {ok, RawData};
-                    {error, not_found} -> {ok, ?DEFAULT_DATA};
-                    Error -> Error    
+                case Type of
+                    tx ->
+                        request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
+                    pending ->
+                        get_chunk_range_relative(
+                            0,
+                            TXHeader#tx.data_size,
+                            ID,
+                            Opts
+                        )
                 end
         end,
-    {
-        ok,
-        hb_message:convert(
-            TXHeader#tx{ data = Data },
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    }.
+    case DataRes of
+        {ok, RawData} ->
+            {
+                ok,
+                hb_message:convert(
+                    TXHeader#tx{ data = RawData },
+                    <<"structured@1.0">>,
+                    <<"tx@1.0">>,
+                    Opts
+                )
+            };
+        {error, not_found} ->
+            {ok, hb_message:convert(TXHeader, <<"structured@1.0">>, <<"tx@1.0">>, Opts)};
+        Error ->
+            Error
+    end.
 
 event_request(Path, Method, Status, Extra) ->
     BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
@@ -1213,6 +1215,52 @@ best_response_non_map_error_round_trips_test() ->
         {error, FailedConnect},
         to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
     ).
+
+tx_raw_fetch_error_round_trips_test() ->
+    {ok, MockNode, MockHandle} = hb_mock_server:start([
+        {"/raw/:id", tx_raw, {500, <<"boom">>}}
+    ]),
+    ClientOpts = post_tx_json_client_opts(),
+    HeaderBody = post_tx_json_payload(ClientOpts),
+    TXID = maps:get(<<"id">>, hb_json:decode(HeaderBody)),
+    Opts =
+        ClientOpts#{
+            routes => [
+                #{
+                    <<"template">> =>
+                        #{
+                            <<"path">> => <<"^/arweave/raw">>,
+                            <<"method">> => <<"GET">>
+                        },
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"match">> => <<"^/arweave">>,
+                                <<"with">> => MockNode,
+                                <<"opts">> => #{ http_client => httpc }
+                            }
+                        ],
+                    <<"parallel">> => 1,
+                    <<"responses">> => 1,
+                    <<"stop-after">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+    try
+        ?assertMatch(
+            {error, _},
+            to_message(
+                <<"/tx/", TXID/binary>>,
+                <<"GET">>,
+                {ok, #{ <<"body">> => HeaderBody }},
+                [],
+                Opts
+            )
+        )
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
 
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
     {ok, MockNode1, MockHandle1} = hb_mock_server:start([
