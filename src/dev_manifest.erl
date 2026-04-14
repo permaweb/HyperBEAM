@@ -203,7 +203,17 @@ linkify(Manifest, _Opts) ->
 
 %%% Tests
 
-resolve_test() ->
+dev_manifest_test_() ->
+    {inparallel, [
+        {timeout, 60, fun test_resolve/0},
+        {timeout, 60, fun test_manifest_default_fallback/0},
+        {timeout, 60, fun test_manifest_404_error/0},
+        {timeout, 60, fun test_manifest_inner_redirect/0},
+        {timeout, 60, fun test_access_key_path_in_manifest/0},
+        {timeout, 60, fun test_manifest_should_fallback_on_not_found_path/0}
+    ]}.
+
+test_resolve() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         on => #{
@@ -263,7 +273,7 @@ resolve_test() ->
         hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
 
-manifest_default_fallback_test() ->
+test_manifest_default_fallback() ->
     Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
@@ -274,7 +284,7 @@ manifest_default_fallback_test() ->
     ),
     ok.
 
-manifest_404_error_test() ->
+test_manifest_404_error() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         manifest_404 => error
@@ -346,7 +356,7 @@ manifest_download_via_raw_endpoint_test_ignore() ->
     ).
 
 %% @doc Accessing `/TXID` of a manifest transaction should access the index key.
-manifest_inner_redirect_test() ->
+test_manifest_inner_redirect() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
@@ -360,7 +370,7 @@ manifest_inner_redirect_test() ->
     ).
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
-access_key_path_in_manifest_test() ->
+test_access_key_path_in_manifest() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -374,7 +384,7 @@ access_key_path_in_manifest_test() ->
 
 %% This works with `not_found.js` but doesn't follow the logic if under a 
 %% folder structure, like `assets/not_found.js .
-manifest_should_fallback_on_not_found_path_test() ->
+test_manifest_should_fallback_on_not_found_path() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
