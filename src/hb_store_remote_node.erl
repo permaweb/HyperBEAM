@@ -247,6 +247,44 @@ make_group(_StoreOpts, _Path) -> not_found.
 %%% Tests
 %%%--------------------------------------------------------------------
 
+multinode_env() ->
+    Node1Store = [hb_test_utils:test_store()],                                                            
+    Node2Store = [hb_test_utils:test_store()],
+    Wallet1 = ar_wallet:new(),
+    Wallet2 = ar_wallet:new(),
+    Opts1 = #{ priv_wallet => Wallet1, store => Node1Store },
+    Opts2 = #{ priv_wallet => Wallet2, store => Node2Store },
+    Msg1 = hb_message:commit(#{ <<"key1">> => <<"message1">>, <<"key2">> => 2 }, Opts1),
+    Msg2 = hb_message:commit(#{ <<"key2">> => <<"message2">> }, Opts2),
+    BothMsg =
+        hb_message:commit(
+            #{ <<"key-both">> => <<"value-both">> },
+            Opts1
+        ),
+    {ok, ID1} = hb_cache:write(Msg1, Opts1),
+    {ok, ID2} = hb_cache:write(Msg2, Opts2),
+    {ok, IDBoth} = hb_cache:write(BothMsg, Opts1),
+    {ok, IDBoth} = hb_cache:write(BothMsg, Opts2),
+    Node1 = hb_http_server:start_node(Opts1),
+    Node2 = hb_http_server:start_node(Opts2),
+    RemoteStore =
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"nodes">> => [
+                #{ <<"prefix">> => Node1, <<"http-reference">> => <<"node1">> }, 
+                #{ <<"prefix">> => Node2, <<"http-reference">> => <<"node2">> }
+            ],
+            <<"parallel">> => 1
+        },
+    #{
+        ids_single => [ID1, ID2],
+        id_both => [IDBoth],
+        nodes => [Node1, Node2],
+        stores => [Node1Store, Node2Store],
+        opts => [Opts1, Opts2],
+        remote_store => RemoteStore
+    }.
+
 %% @doc Test that we can create a store, write a random message to it, then
 %% start a remote node with that store, and read the message from it.
 read_test() ->
@@ -284,42 +322,79 @@ read_only_ids_test() ->
 			<<"message">>, 
 			#{ store => LocalStore }
 		),
-    Node =
-        hb_http_server:start_node(
-            #{
-                store => LocalStore
-            }
-        ),
-    RemoteStore = [
-		#{ <<"store-module">> => hb_store_remote_node,
-           <<"node">> => Node,
-           <<"only-ids">> => true }
-	],
-    ?assertEqual(not_found, hb_cache:read(ID, #{ store => RemoteStore })).
+    Node = hb_http_server:start_node(#{ store => LocalStore }),
+    RemoteStore =
+		#{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => Node,
+            <<"only-ids">> => true
+        },
+    ?assertEqual(not_found, hb_cache:read(ID, #{ store => [RemoteStore] })).
 
 multiread_test() ->
-    LocalStore1 = hb_test_utils:test_store(),                                                            
-    Wallet = ar_wallet:new(),                                                                            
-    Msg = hb_message:commit(#{ <<"key">> => <<"message">> }, #{priv_wallet => Wallet}),                                
-    {ok, ID} = hb_cache:write(Msg, #{ store => LocalStore1 }),   
-    Node1 =
-        hb_http_server:start_node(
-            #{ store => [LocalStore1] }
-        ),
-    Node2 =
-        hb_http_server:start_node(
-            #{ store => [hb_test_utils:test_store()] }
-        ),
-    RemoteStore =
-        [#{
-            <<"store-module">> => hb_store_remote_node,
-            <<"nodes">> => [
-                #{ <<"prefix">> => Node1 }, 
-                #{ <<"prefix">> => Node2 }
-            ]
-        }],
-    {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
+    #{ ids_single := [ID1, ID2], remote_store := RemoteStore } = multinode_env(),
     ?assertMatch(
-        #{ <<"key">> := <<"message">>}, 
-        RetrievedMsg
+        {ok, #{ <<"key1">> := <<"message1">>}},
+        hb_cache:read(ID1, #{ store => RemoteStore })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := <<"message2">>}},
+        hb_cache:read(ID2, #{ store => RemoteStore })
+    ).
+
+multiread_enforces_valid_response_test() ->
+    #{
+        ids_single := [ID1|_],
+        stores := [Store1|_],
+        remote_store := RemoteStore
+    } = multinode_env(),
+    % Overwrite the message in the first nodes with an invalid value, such that
+    % `hb_message:verify` should fail. Start by reading the message back and
+    % checking that it is accessible (and valid) to start with.
+    ?assertMatch(
+        {ok, #{ <<"key1">> :=  _ }},
+        hb_cache:read(ID1, #{ store => RemoteStore })
+    ),
+    {ok, Msg} = hb_cache:read(ID1, #{ store => Store1 }),
+    CorruptMsg = Msg#{ <<"key1">> => <<"corrupt-value">> },
+    {ok, CorruptID} = hb_cache:write(CorruptMsg, #{ store => Store1 }),
+    ?assertMatch(not_found, hb_cache:read(CorruptID, #{ store => RemoteStore })).
+
+multiread_enforces_expected_id_response_test() ->
+    #{
+        id_both := IDBoth,
+        ids_single := [ID1, ID2],
+        stores := [Store1, Store2],
+        remote_store := RemoteStore
+    } = multinode_env(),
+    % Force an invalid link on one node to the nessage stored in both nodes.
+    FakeID = hb_util:human_id(<<0:256>>),
+    ok = hb_store:make_link(Store1, IDBoth, FakeID),
+    % Check we can read the message back from the store locally. This would be
+    % a local node store integrity failure if it were to happen in the wild, but
+    % our security model assumes that the local store is trustworthy for local
+    % computation.
+    {ok, RetrievedMsg} = hb_cache:read(FakeID, #{ store => Store1 }),
+    ?assertMatch(
+        #{ <<"key-both">> := <<"value-both">> },
+        hb_cache:ensure_all_loaded(RetrievedMsg)
+    ),
+    % Ensure that we _cannot_ read the message back from the remote node. This
+    % should fail despite the remote peer returning a valid message (with the 
+    % wrong message) because the `multirequest-admissible' directive will fail.
+    ?assertMatch(
+        not_found,
+        hb_cache:read(FakeID, #{ store => RemoteStore })
+    ),
+    % Now try linking ID2 to ID1 on the first node+store. The first node will
+    % return first but with the wrong message. It should fail and trigger a
+    % call to the second node, which should return it correctly.
+    ok = hb_store:make_link(Store1, ID1, ID2),
+    ?assert(
+        hb_cache:read(ID2, #{ store => Store1 }) =/=
+        hb_cache:read(ID2, #{ store => Store2 })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := <<"message2">>}},
+        hb_cache:read(ID2, #{ store => RemoteStore })
     ).
