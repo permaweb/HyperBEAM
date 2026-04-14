@@ -16,34 +16,57 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    {From, To} = parse_range(Request, Opts),
-    case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-        <<"write">>  -> fetch_blocks(Request, From, To, Opts);
-        <<"list">>   -> list_index(From, To, Opts);
-        Mode ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    case parse_range(Request, Opts) of
+        {error, unavailable} -> 
+            {error, unavailable};
+        {ok, {From, To}} ->
+            case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+                <<"write">> -> fetch_blocks(Request, From, To, Opts);
+                <<"list">> -> list_index(From, To, Opts);
+                Mode ->
+                    {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+            end
     end.
 
 %% @doc Parse the range from the request.
 parse_range(Request, Opts) ->
-    From =
-        case hb_maps:find(<<"from">>, Request, Opts) of
-            {ok, FromHeight} -> normalize_height(FromHeight, Opts);
-            error ->
-                latest_height(Opts)
-        end,
-    To =
-        case hb_maps:find(<<"to">>, Request, Opts) of
-            {ok, ToHeight} -> normalize_height(ToHeight, Opts);
-            error -> undefined
-        end,
-    {From, To}.
+    maybe
+        {ok, From} ?=
+            case hb_maps:find(<<"from">>, Request, Opts) of
+                {ok, FromHeight} -> normalize_height(FromHeight, Opts);
+                error -> latest_height(Opts)
+            end,
+        {ok, To} ?=
+            case hb_maps:find(<<"to">>, Request, Opts) of
+                {ok, ToHeight} -> normalize_height(ToHeight, Opts);
+                error -> {ok, undefined}
+            end,
+        case From < 0 orelse (is_integer(To) andalso To < 0) of
+            true ->
+                ?event(copycat_short,
+                    {height_resolved_negative,
+                        {from, From}, {to, To}}),
+                {error, unavailable};
+            false ->
+                {ok, {From, To}}
+        end
+    else
+        {error, Reason} ->
+            ?event(copycat_short,
+                {latest_height_failed, {reason, Reason}}),
+            {error, unavailable}
+    end.
 
 normalize_height(Height, Opts) ->
     RequestedHeight = hb_util:int(Height),
     case RequestedHeight < 0 of
-        true -> latest_height(Opts) + RequestedHeight;
-        false -> RequestedHeight
+        true ->
+            case latest_height(Opts) of
+                {ok, Tip} -> {ok, Tip + RequestedHeight};
+                {error, _} = Err -> Err
+            end;
+        false ->
+            {ok, RequestedHeight}
     end.
 
 latest_height(Opts) ->
@@ -51,8 +74,8 @@ latest_height(Opts) ->
         <<?ARWEAVE_DEVICE/binary, "/current/height">>,
         Opts
     ) of
-        {ok, ResolvedHeight} -> hb_util:int(ResolvedHeight);
-        {error, _} -> 0
+        {ok, ResolvedHeight} -> {ok, hb_util:int(ResolvedHeight)};
+        {error, Reason} -> {error, Reason}
     end.
 
 %% @doc Check if a transaction ID is indexed in the arweave index store.
@@ -917,19 +940,90 @@ negative_parse_range_test() ->
             <<?ARWEAVE_DEVICE/binary, "/current/height">>,
             Opts
         ),
-    {NegativeFrom, UndefinedTo} =
+    {ok, {NegativeFrom, UndefinedTo}} =
         parse_range(#{ <<"from">> => <<"-3">> }, Opts),
     ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
     ?assertEqual(undefined, UndefinedTo),
-    {PositiveFrom, NegativeTo} =
+    {ok, {PositiveFrom, NegativeTo}} =
         parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
     ?assertEqual(10, PositiveFrom),
     ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
     ok.
 
+latest_height_failure_test() ->
+    {ok, MockURL, MockHandle} = hb_mock_server:start([
+        {"/block/current", block_current, {500, <<"Internal Server Error">>}}
+    ]),
+    TestStore = hb_test_utils:test_store(),
+    Opts = #{
+        store => [TestStore],
+        routes => [
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> => [
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => MockURL,
+                        <<"opts">> => #{ http_client => httpc }
+                    }
+                ],
+                <<"parallel">> => true,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            }
+        ]
+    },
+    try
+        ?assertMatch(
+            {error, unavailable},
+            parse_range(#{}, Opts)
+        ),
+        ?assertMatch(
+            {error, unavailable},
+            hb_ao:resolve(
+                <<"~copycat@1.0/arweave&mode=write">>, Opts)
+        )
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
+
+negative_resolved_height_test() ->
+    {ok, MockURL, MockHandle} = hb_mock_server:start([
+        {"/block/current", block_current,
+            {200, <<"{\"height\": 5}">>}}
+    ]),
+    TestStore = hb_test_utils:test_store(),
+    Opts = #{
+        store => [TestStore],
+        arweave_index_blocks => false,
+        routes => [
+            #{
+                <<"template">> => <<"^/arweave">>,
+                <<"nodes">> => [
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => MockURL,
+                        <<"opts">> => #{ http_client => httpc }
+                    }
+                ],
+                <<"parallel">> => true,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            }
+        ]
+    },
+    try
+        ?assertMatch(
+            {error, unavailable},
+            parse_range(#{ <<"from">> => <<"-10">> }, Opts)
+        )
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
+
 negative_from_index_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    Tip = latest_height(Opts),
+    {ok, Tip} = latest_height(Opts),
     StopBlock = 1827942,
     StartBlock = 1827943,
     OffsetFromTip = Tip - StartBlock,
