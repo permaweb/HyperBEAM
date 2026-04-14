@@ -315,7 +315,7 @@ embed_status({ErlStatus, Res}, NodeMsg) when is_map(Res) ->
     case lists:member(<<"status">>, hb_message:committed(Res, all, NodeMsg)) of
         false ->
             HTTPCode = status_code({ErlStatus, Res}, NodeMsg),
-            {ok, Res#{ <<"status">> => HTTPCode }};
+            {ok, Res#{ <<"status">> => hb_util:bin(HTTPCode) }};
         true ->
             {ok, Res}
     end;
