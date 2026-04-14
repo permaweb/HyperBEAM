@@ -9,16 +9,38 @@
 
 %% @doc An `is-admissible`-compliant key that verifies a `~cache@1.0/read`
 %% response contains the message we expect, and that it is valid. Additionally,
-%% if the `http-reference` key is set, we execute the `on/client/valid-response`
+%% if the `http-reference` key is set, we execute the `on/cache-valid-response`
 %% hook.
 expected_response(Base, Req, Opts) ->
     maybe
         {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
         {ok, Commitments} ?= hb_maps:find(<<"commitments">>, Response, Opts),
-        true ?= lists:member(Expected, maps:keys(Commitments)),
-        hb_message:verify(Response, #{ <<"commitment-ids">> => [Expected] }, Opts)
-    else _ -> false
+        CommIDs = maps:keys(Commitments),
+        ?event(debug_admissible,
+            {expected_response,
+                {response, {explicit, Response}},
+                {expected, Expected},
+                {commitments, CommIDs}
+            }
+        ),
+        true ?= lists:member(Expected, CommIDs) orelse expected_id_not_found,
+        {ok, OnlyCommitted} = hb_message:with_only_committed(Response, Opts),
+        true ?=
+            hb_message:verify(
+                OnlyCommitted,
+                #{ <<"commitment-ids">> => [Expected] },
+                Opts
+            ) orelse invalid_commitment,
+        dev_hook:on(
+            [<<"~cache@1.0">>, <<"admissible-response">>],
+            Response,
+            Opts
+        ),
+        {ok, true}
+    else Reason ->
+        ?event(debug_admissible, {expected_response_error, Reason}),
+        {ok, false}
     end.
 
 %% @doc Read data from the cache.

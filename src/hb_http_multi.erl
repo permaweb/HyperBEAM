@@ -248,14 +248,15 @@ admissible_response(Response, IsAdmissible, Opts) ->
                     Opts
                 ),
             <<"body">> => Response,
-            <<"http-reference">> => hb_opts:get(http_reference, not_found, Opts)
+            <<"http-reference">> => hb_opts:get(http_reference, undefined, Opts)
         },
-    try hb_ao:resolve(Req, Opts) of
+    ?event(debug_admissible, {admissible_response, {request, Req}, {opts, Opts}}),
+    try hb_ao:resolve(Req, Opts#{ hashpath => ignore }) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
-            ?event(debug_multi, {admissible_result, {result, Res}}),
+            ?event(debug_admissible, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
         {error, Reason} ->
-            ?event(debug_multi, {admissible_error, {reason, Reason}}),
+            ?event(debug_admissible, {admissible_error, {reason, Reason}}),
             false
     catch 
         Class:Reason:Stacktrace ->
