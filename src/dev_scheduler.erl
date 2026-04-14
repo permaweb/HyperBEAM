@@ -381,7 +381,7 @@ post_schedule(Base, Req, Opts) ->
         ToSched ->
             do_post_schedule(Base, Req, ToSched, Opts)
     catch
-        error:{necessary_message_not_found, _, _} ->
+        throw:{necessary_message_not_found, _, _} ->
             {error,
                 #{
                     <<"status">> => 404,
