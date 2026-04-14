@@ -811,7 +811,6 @@ get_schedule(Base, Req, Opts) ->
     From =
         case hb_ao:get(<<"from">>, Req, not_found, Opts) of
             not_found -> 0;
-            X when X < 0 -> 0;
             FromRes -> 
                 case hb_util:safe_int(FromRes) of
                     {ok, FromInt} when FromInt < 0 -> 0;
