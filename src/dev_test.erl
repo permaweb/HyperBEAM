@@ -212,7 +212,7 @@ mangle(Base, _Req, Opts) ->
 
 %%% Logged messages functionality
 
--define(LOG_PREFIX, "~test-device@1.0/request-").
+-define(LOG_PREFIX, "~test-device@1.0").
 
 %% @doc Determines the store to use for logging requests.
 determine_log_store(Base, _Req, Opts) ->
@@ -232,8 +232,8 @@ log_request(Base, Req, Opts) ->
     hb_store:make_link(
         Store,
         ReqID,
-        <<?LOG_PREFIX/binary, Timestamp/binary>>)
-    ,
+        <<?LOG_PREFIX, "/request-", Timestamp/binary>>
+    ),
     {ok, ReqID}.
 
 %% @doc Return all logs of requests to the device.
@@ -245,15 +245,20 @@ logs(Base, Req, Opts) ->
             Logs =
                 maps:from_list(
                     lists:map(
-                        fun(K = <<?LOG_PREFIX, TimeBin/binary>>) ->
-                            {ok, Request} = hb_cache:read(K, LogOpts),
+                        fun(K = <<"request-", TimeBin/binary>>) ->
+                            {ok, Request} =
+                                hb_cache:read(
+                                    <<"~test-device@1.0/", K/binary>>,
+                                    LogOpts
+                                ),
                             {hb_util:int(TimeBin), Request}
                         end,
                         LogKeys
                     )
                 ),
             {ok, Logs};
-        _ -> {ok, #{}}
+        _ ->
+            {error, <<"No logs found.">>}
     end.
 
 %%% Tests
