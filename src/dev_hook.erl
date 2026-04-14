@@ -92,7 +92,7 @@ find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
-    case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
+    case hb_util:deep_get(HookName, hb_opts:get(on, #{}, Opts), [], Opts) of
         Handler when is_map(Handler) -> 
             case hb_util:is_ordered_list(Handler, Opts) of
                 true ->
