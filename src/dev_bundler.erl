@@ -83,28 +83,54 @@ item(_Base, Req, Opts) ->
 verify_message(Req, Opts) ->
     case hb_message:with_only_committed(Req, Opts) of
         {ok, Item} ->
-            case hb_message:signers(Item, Opts) of
-                [] ->
+            case hb_message:commitment(
+                #{ <<"commitment-device">> => <<"ans104@1.0">> },
+                Item,
+                Opts
+            ) of
+                not_found ->
                     ?event(
                         bundler_short,
-                        {verify_failed, {reason, unsigned_item}}
+                        {verify_failed, {reason, no_ans104_commitment}}
                     ),
-                    {error, unsigned_item};
-                _ ->
-                    case hb_message:verify(Item, all, Opts) of
-                        true -> {ok, Item};
-                        false ->
+                    {error, no_ans104_commitment};
+                multiple_matches ->
+                    ?event(
+                        bundler_short,
+                        {verify_failed, {reason, multiple_ans104_commitments}}
+                    ),
+                    {error, multiple_ans104_commitments};
+                {ok, _, _} ->
+                    case hb_message:signers(Item, Opts) of
+                        [] ->
                             ?event(
                                 bundler_short,
-                                {verify_failed,
-                                    {id,
-                                        {string, hb_message:id(Item, signed, Opts)}
-                                    },
-                                    {reason, signature_verification_failed}
-                                },
-                                Opts
+                                {verify_failed, {reason, unsigned_item}}
                             ),
-                            {error, signature_verification_failed}
+                            {error, unsigned_item};
+                        _ ->
+                            case hb_message:verify(Item, all, Opts) of
+                                true -> {ok, Item};
+                                false ->
+                                    ?event(
+                                        bundler_short,
+                                        {verify_failed,
+                                            {id,
+                                                {string,
+                                                    hb_message:id(
+                                                        Item,
+                                                        signed,
+                                                        Opts
+                                                    )
+                                                }
+                                            },
+                                            {reason,
+                                                signature_verification_failed}
+                                        },
+                                        Opts
+                                    ),
+                                    {error, signature_verification_failed}
+                            end
                     end
             end;
         {error, Reason} ->
@@ -624,20 +650,88 @@ unsigned_dataitem_test() ->
             store => hb_test_utils:test_store(),
             debug_print => false
         }),
-        Item = #tx{
+        TestData = [
+            #tx{
+                data = <<"testdata">>,
+                tags = [{<<"Tag1">>, <<"Value1">>}]
+            },
+            #tx{
                 data = <<"testdata">>,
                 tags = [{<<"tag1">>, <<"value1">>}]
-            },
-        Response = post_data_item(Node, Item, ClientOpts),
-        ?assertMatch(
-            {error, #{
-                <<"status">> := 400,
-                <<"error">> := <<"invalid-item">>,
-                <<"details">> := <<"unsigned-item">>
-            }},
-            Response)
+            }
+        ],
+        lists:foreach(
+            fun(Item) ->
+                Response = post_data_item(Node, Item, ClientOpts),
+                ?assertMatch(
+                    {error, #{
+                        <<"status">> := 400,
+                        <<"error">> := <<"invalid-item">>,
+                        <<"details">> := <<"no-ans104-commitment">>
+                    }},
+                    Response
+                )
+            end,
+            TestData
+        )
     after
         %% Always cleanup, even if test fails
+        stop_test_servers(ServerHandle)
+    end.
+
+unsupported_payload_types_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
+    ),
+    try
+        TestOpts = NodeOpts#{
+            priv_wallet => ar_wallet:new(),
+            store => hb_test_utils:test_store(),
+            debug_print => false,
+            bundler_max_items => 1
+        },
+        Node = hb_http_server:start_node(TestOpts),
+        UnsupportedItems = [
+            hb_message:commit(
+                #{
+                    <<"body">> => <<"httpsig-body">>,
+                    <<"test-tag">> => <<"httpsig-signed-unsupported">>
+                },
+                TestOpts,
+                <<"httpsig@1.0">>
+            ),
+            hb_message:commit(
+                #{
+                    <<"body">> => <<"httpsig-body">>,
+                    <<"test-tag">> => <<"httpsig-unsigned-unsupported">>
+                },
+                TestOpts,
+                #{ <<"device">> => <<"httpsig@1.0">>, <<"type">> => <<"unsigned">> }
+            ),
+            hb_message:commit(
+                #{
+                    <<"body">> => <<"tx-body">>,
+                    <<"test-tag">> => <<"tx-signed-unsupported">>
+                },
+                TestOpts,
+                #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }
+            )
+        ],
+        lists:foreach(
+            fun(Item) ->
+                ?assertMatch(
+                    {error, #{ <<"status">> := 400 }},
+                    post_bundler_msg(Node, Item, TestOpts)
+                )
+            end,
+            UnsupportedItems
+        )
+    after
         stop_test_servers(ServerHandle)
     end.
 
@@ -1427,22 +1521,23 @@ post_data_item(Node, Item, Opts) ->
         <<"ans104@1.0">>,
         Opts
     ),
+    post_bundler_msg(Node, StructuredItem, Opts).
+
+post_bundler_msg(Node, Msg, Opts) ->
     hb_http:post(
         Node,
         #{
             <<"path">> => <<"/~bundler@1.0/tx">>,
             <<"bundler-subject">> => <<"body">>,
-            <<"body">> => StructuredItem
+            <<"body">> => Msg
         },
         Opts
     ).
 
-assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
-    %% Reconstitute the transaction with its data from the POSTed payloads.
+reconstitute_bundle_tx(TXRequest, Proofs) ->
     TXBinary = maps:get(<<"body">>, TXRequest),
     TXJSON = hb_json:decode(TXBinary),
     TXHeader = ar_tx:json_struct_to_tx(TXJSON),
-    %% Decode all chunks with their offsets, sort by offset, then concatenate
     ChunksWithOffsets = lists:map(
         fun(ChunkRequest) ->
             ProofBinary = maps:get(<<"body">>, ChunkRequest),
@@ -1461,10 +1556,14 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
         end,
         Proofs
     ),
-    SortedChunks = lists:sort(fun({O1, _}, {O2, _}) -> O1 =< O2 end, ChunksWithOffsets),
+    SortedChunks =
+        lists:sort(fun({O1, _}, {O2, _}) -> O1 =< O2 end, ChunksWithOffsets),
     Chunks = [Chunk || {_Offset, Chunk} <- SortedChunks],
     DataBinary = iolist_to_binary(Chunks),
-    TX = TXHeader#tx{ data = DataBinary },
+    TXHeader#tx{ data = DataBinary }.
+
+assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
+    TX = reconstitute_bundle_tx(TXRequest, Proofs),
     ?event(debug_test, {tx, TX}),
     ?assert(ar_tx:verify(TX)),
     ?assertEqual(Anchor, TX#tx.anchor),
@@ -1474,18 +1573,24 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
     ?event(debug_test, {tx_structured, TXStructured}),
     ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
     %% Verify individual data items in the bundle
+    {_ItemsBin, BundleIndex} = ar_bundles:decode_bundle_header(TX#tx.data),
     BundleDeserialized = ar_bundles:deserialize(TX),
     ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
     ?assertEqual(length(ExpectedItems), maps:size(BundleDeserialized#tx.data)),
     %% Verify each data item's signature and match with expected items
     lists:foreach(
-        fun({Index, ExpectedItem}) ->
+        fun({Index, {IndexID, _Size}, ExpectedItem}) ->
             Key = integer_to_binary(Index),
             BundledItem = maps:get(Key, BundleDeserialized#tx.data),
             ?assert(ar_bundles:verify_item(BundledItem)),
+            ?assertEqual(IndexID, ar_bundles:id(BundledItem, signed)),
             ?assertEqual(ExpectedItem, BundledItem)
         end,
-        lists:zip(lists:seq(1, length(ExpectedItems)), ExpectedItems)
+        lists:zip3(
+            lists:seq(1, length(ExpectedItems)),
+            BundleIndex,
+            ExpectedItems
+        )
     ),
     ?assertEqual(undefined, TX#tx.manifest),
     ?assertEqual(undefined, BundleDeserialized#tx.manifest),
