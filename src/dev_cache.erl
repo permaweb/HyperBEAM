@@ -13,10 +13,10 @@
 %% hook.
 expected_response(Base, Req, Opts) ->
     maybe
-        {ok, Response} ?= hb_maps:get(<<"body">>, Req, Opts),
-        {ok, Expected} ?= hb_maps:get(<<"expected">>, Base, Opts),
-        {ok, Commitments} ?= hb_maps:get(<<"commitments">>, Response, #{}, Opts),
-        true ?= lists:member(Expected, Commitments),
+        {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
+        {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
+        {ok, Commitments} ?= hb_maps:find(<<"commitments">>, Response, Opts),
+        true ?= lists:member(Expected, maps:keys(Commitments)),
         hb_message:verify(Response, #{ <<"commitment-ids">> => [Expected] }, Opts)
     else _ -> false
     end.

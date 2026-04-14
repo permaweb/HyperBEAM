@@ -28,6 +28,9 @@ scope(_StoreOpts) ->
 %% @returns The resolved key.
 resolve(#{ <<"node">> := Node }, Key) ->
     ?event({remote_resolve, {node, Node}, {key, Key}}),
+    Key;
+resolve(#{ <<"nodes">> := Nodes }, Key) ->
+    ?event({remote_resolve, {nodes, Nodes}, {key, Key}}),
     Key.
 
 %% @doc Determine the type of value at a given key.
@@ -37,8 +40,8 @@ resolve(#{ <<"node">> := Node }, Key) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key whose value type is determined.
 %% @returns simple if found, or not_found otherwise.
-type(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event({remote_type, {node, Node}, {key, Key}}),
+type(Opts, Key) when is_map_key(<<"node">>, Opts); is_map_key(<<"nodes">>, Opts) ->
+    ?event({remote_type, {opts, Opts}, {key, Key}}),
     case read(Opts, Key) of
         not_found -> not_found;
         _ -> simple
@@ -75,7 +78,8 @@ read(Opts = #{ <<"nodes">> := Nodes }, Key) ->
                 <<"multirequest-stop-after">> => true,
                 <<"multirequest-admissible">> => #{
                     <<"device">> => <<"cache@1.0">>,
-                    <<"path">> => <<"expected-response">>
+                    <<"path">> => <<"expected-response">>,
+                    <<"expected">> => Key
                 }
             },
             Opts#{
@@ -283,12 +287,10 @@ read_only_ids_test() ->
     ?assertEqual(not_found, hb_cache:read(ID, #{ store => RemoteStore })).
 
 multiread_test() ->
-    LocalStore1 = hb_test_utils:test_store(),
-    {ok, ID} =
-        hb_cache:write(
-            <<"message">>, 
-            #{ store => LocalStore1 }
-        ),
+    LocalStore1 = hb_test_utils:test_store(),                                                            
+    Wallet = ar_wallet:new(),                                                                            
+    Msg = hb_message:commit(#{ <<"key">> => <<"message">> }, #{priv_wallet => Wallet}),                                
+    {ok, ID} = hb_cache:write(Msg, #{ store => LocalStore1 }),   
     Node1 =
         hb_http_server:start_node(
             #{ store => [LocalStore1] }
@@ -300,10 +302,13 @@ multiread_test() ->
     RemoteStore =
         [#{
             <<"store-module">> => hb_store_remote_node,
-            <<"nodes">> => [Node1, Node2]
+            <<"nodes">> => [
+                #{ <<"prefix">> => Node1 }, 
+                #{ <<"prefix">> => Node2 }
+            ]
         }],
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
     ?assertMatch(
-        #{ <<"message">> := <<"message">> },
-        hb_cache:ensure_all_loaded(RetrievedMsg)
+        #{ <<"key">> := <<"message">>}, 
+        RetrievedMsg
     ).
