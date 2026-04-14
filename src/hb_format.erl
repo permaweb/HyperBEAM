@@ -358,6 +358,7 @@ do_to_lines(In =[RawElem | Rest]) ->
         false -> Elem ++ ", " ++ do_to_lines(Rest)
     end.
 
+%% @doc Truncate binary (if larger than) to a max size.
 truncate(Bin, MaxSize) when is_binary(Bin) ->
     BinLen = byte_size(Bin),
     BinEnd = case BinLen > MaxSize of 
