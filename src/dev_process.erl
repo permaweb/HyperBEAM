@@ -224,32 +224,36 @@ compute(Base, Req, Opts) ->
                     {error, not_found}
             end;
         RawSlot ->
-            Slot = hb_util:int(RawSlot),
-            case dev_process_cache:read(ProcID, Slot, Opts) of
-                {ok, Result} ->
-                    % The result is already cached, so we can return it.
-                    ?event(
-                        {compute_result_cached,
-                            {proc_id, ProcID},
-                            {slot, Slot},
-                            {result, Result}
-                        }
-                    ),
-                    {ok, without_snapshot(Result, Opts)};
-                not_found ->
-                    {ok, Loaded} = ensure_loaded(ProcBase, Req, Opts),
-                    ?event(compute,
-                        {computing, {process_id, ProcID},
-                        {to_slot, Slot}},
-                        Opts
-                    ),
-                    compute_to_slot(
-                        ProcID,
-                        Loaded,
-                        Req,
-                        Slot,
-                        Opts
-                    )
+            case hb_util:safe_int(RawSlot) of
+                {ok, Slot} ->
+                    case dev_process_cache:read(ProcID, Slot, Opts) of
+                        {ok, Result} ->
+                            % The result is already cached, so we can return it.
+                            ?event(
+                                {compute_result_cached,
+                                    {proc_id, ProcID},
+                                    {slot, Slot},
+                                    {result, Result}
+                                }
+                            ),
+                            {ok, without_snapshot(Result, Opts)};
+                        not_found ->
+                            {ok, Loaded} = ensure_loaded(ProcBase, Req, Opts),
+                            ?event(compute,
+                                {computing, {process_id, ProcID},
+                                {to_slot, Slot}},
+                                Opts
+                            ),
+                            compute_to_slot(
+                                ProcID,
+                                Loaded,
+                                Req,
+                                Slot,
+                                Opts
+                            )
+                    end;
+                {error, _} ->
+                    {error, invalid_slot}
             end
     end.
 

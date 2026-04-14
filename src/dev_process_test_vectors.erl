@@ -549,6 +549,20 @@ prior_results_accessible_test_() ->
 		)
 	end}.
 
+invalid_compute_slot_test_() ->
+    {timeout, 30, fun() ->
+        Opts = test_opts(),
+        Base = aos_process(Opts),
+        ?assertEqual(
+            {error, invalid_slot},
+            hb_ao:resolve(
+                Base,
+                #{ <<"path">> => <<"compute">>, <<"slot">> => <<"abc">> },
+                Opts
+            )
+        )
+    end}.
+
 persistent_process_test() ->
     {timeout, 30, fun() ->
         Opts = test_opts(),
