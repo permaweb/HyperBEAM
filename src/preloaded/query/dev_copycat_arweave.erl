@@ -54,12 +54,16 @@ arweave(_Base, Request, Opts) ->
                             }}                         
                     end;
                 error ->
-                    TargetDepth = request_depth(Request, ?DEFAULT_BLOCK_DEPTH, Opts),
                     case parse_range(Request, Opts) of
-                        {error, unavailable} -> {error, unavailable};
+                        {error, unavailable} ->
+                            {error, unavailable};
                         {ok, {From, To}} ->
+                            TargetDepth = request_depth(
+                                Request, ?DEFAULT_BLOCK_DEPTH, Opts),
                             ?event(copycat_short,
-                                {indexing_blocks, {from, From}, {to, To}, {depth, TargetDepth}}
+                                {indexing_blocks,
+                                    {from, From}, {to, To},
+                                    {depth, TargetDepth}}
                             ),
                             fetch_blocks(From, To, TargetDepth, Opts)
                     end
