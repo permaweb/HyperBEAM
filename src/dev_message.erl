@@ -271,9 +271,10 @@ commit(Self, Req, Opts) ->
             CommitOpts
         ),
     % Encode to a TABM
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Base, Opts),
     Loaded =
         ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, CommitOpts),
+            hb_message:convert(OnlyCommitted, tabm, CommitOpts),
             Opts
         ),
     {ok, Committed} =
@@ -297,10 +298,11 @@ commit(Self, Req, Opts) ->
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(RawBase, Opts),
     Base =
         hb_message:convert(
             ensure_commitments_loaded(
-                RawBase,
+                OnlyCommitted,
                 Opts
             ),
             tabm,
