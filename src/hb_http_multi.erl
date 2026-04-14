@@ -250,7 +250,7 @@ admissible_response(Response, IsAdmissible, Opts) ->
             <<"body">> => Response,
             <<"http-reference">> => hb_opts:get(http_reference, not_found, Opts)
         },
-    try hb_ao:resolve(Req, Opts#{ force_message => false }) of
+    try hb_ao:resolve(Req, Opts) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
