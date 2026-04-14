@@ -58,18 +58,23 @@ type(Opts, Key) when is_map_key(<<"node">>, Opts); is_map_key(<<"nodes">>, Opts)
 read(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
     not_found;
 read(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
-    HTTPRes =
-        hb_http:get(
-            Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
-            Opts
+    OptsWithoutNode = maps:remove(<<"node">>, Opts),
+    read(OptsWithoutNode#{ <<"nodes">> => [#{ <<"prefix">> => Node }] }, Key);
+read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
+    MultirequestDirectives =
+        maps:filter(
+            fun(<<"multirequest-", _/binary>>, _) -> true; (_, _) -> false end,
+            StoreOpts
         ),
-    handle_read_response(Key, HTTPRes, Opts);
-read(Opts = #{ <<"nodes">> := Nodes }, Key) ->
-    ?event(store_remote_node, {executing_read, {nodes, Nodes}, {key, Key}}),
-    HTTPRes =
-        hb_http:request(
+    ?event(
+        {read,
+            {nodes, Nodes},
+            {key, Key},
+            {multirequest_directives, MultirequestDirectives}
+        }
+    ),
+    HTTPReq =
+        maps:merge(
             #{
                 <<"method">> => <<"GET">>,
                 <<"path">> => <<"/~cache@1.0/read">>,
@@ -82,26 +87,32 @@ read(Opts = #{ <<"nodes">> := Nodes }, Key) ->
                     <<"expected">> => Key
                 }
             },
-            Opts#{
+            MultirequestDirectives
+        ),
+    ?event(store_remote_node, {http_request, HTTPReq}),
+    HTTPRes =
+        hb_http:request(
+            HTTPReq,
+            #{
                 routes =>
                     [
                         #{
                             <<"template">> => <<"/~cache@1.0/read">>,
                             <<"nodes">> => Nodes,
-                            <<"opts">> => Opts
+                            <<"opts">> => StoreOpts
                         }
                     ]
             }
         ),
-    handle_read_response(Key, HTTPRes, Opts).
+    handle_read_response(Key, HTTPRes, StoreOpts).
 
-handle_read_response(Key, HTTPRes, Opts) ->
+handle_read_response(Key, HTTPRes, StoreOpts) ->
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
+            {ok, Msg} = hb_message:with_only_committed(Res, StoreOpts),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(Opts, Msg, [Key]),
+            maybe_cache(StoreOpts, Msg, [Key]),
             {ok, Msg};
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
