@@ -19,7 +19,7 @@ expected_response(Base, Req, Opts) ->
         CommIDs = maps:keys(Commitments),
         ?event(debug_admissible,
             {expected_response,
-                {response, {explicit, Response}},
+                {response, Response},
                 {expected, Expected},
                 {commitments, CommIDs}
             }

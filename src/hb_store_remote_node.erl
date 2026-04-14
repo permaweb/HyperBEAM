@@ -89,21 +89,18 @@ read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
             },
             MultirequestDirectives
         ),
+    % TODO: When `opts` key normalization lands, we should re-work this.
     MaybeHooks =
         case maps:find(<<"on">>, StoreOpts) of
             {ok, Hooks} -> #{ on => Hooks };
             error -> #{}
         end,
-    ?event(
-        store_remote_node,
-        {remote_read, {request, HTTPReq}, {hooks, MaybeHooks}}
-    ),
+    ?event({remote_read, {request, HTTPReq}, {hooks, MaybeHooks}}),
     HTTPRes =
         hb_http:request(
             HTTPReq,
             MaybeHooks#{
-                store => [#{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-sadness">> }],
-                match_index => false,
+                cache_control => [<<"no-cache">>, <<"no-store">>],
                 routes =>
                     [
                         #{
@@ -121,7 +118,7 @@ handle_read_response(Key, {ok, Res}, StoreOpts) ->
     {ok, Msg} = hb_message:with_only_committed(Res, StoreOpts),
     ?event(
         debug_admissible,
-        {remote_read, {only_committed, {explicit, Msg}}, {raw_response, Res}}
+        {remote_read, {only_committed, Msg}, {raw_response, Res}}
     ),
     maybe_cache(StoreOpts, Msg, [Key]),
     {ok, Msg};
@@ -443,20 +440,19 @@ multiread_swapped_id_test() ->
         hb_cache:read(ID2, #{ store => RemoteStore })
     ).
 
-multiread_admissible_responsehook_test() ->
+multiread_admissible_response_hook_test() ->
     #{
         ids_single := [ID1|_],
-        stores := [Store1|_],
         remote_store := BaseRemoteStore
     } = multinode_env(),
     % Ensure that we can execute a hook on valid read responses.
-    LogStore = hb_test_utils:test_store(),
+    LogStore = [hb_test_utils:test_store()],
     RemoteStore =
         BaseRemoteStore#{
             <<"on">> => #{
                 <<"~cache@1.0">> =>
                     #{
-                        <<"valid-response">> => #{
+                        <<"admissible-response">> => #{
                             <<"device">> => <<"test-device@1.0">>,
                             <<"store">> => LogStore,
                             <<"path">> => <<"log-request">>
