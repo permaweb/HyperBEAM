@@ -129,7 +129,7 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
 %% 
 %% If the response is `ok', we check the status and the response message against
 %% the configuration.
-is_admissible(ok, Res, Admissible, Statuses, Opts) ->
+is_admissible(ok, Res, Admissible, Statuses, Node, Opts) ->
     ?event(debug_multi,
         {is_admissible,
             {response, Res},
@@ -139,10 +139,11 @@ is_admissible(ok, Res, Admissible, Statuses, Opts) ->
     ),
     AdmissibleStatus = admissible_status(Res, Statuses),
     ?event(debug_multi, {admissible_status, {result, AdmissibleStatus}}),
-    AdmissibleResponse = admissible_response(Res, Admissible, Opts),
+    NodeOpts = hb_maps:get(<<"opts">>, Node, Opts),
+    AdmissibleResponse = admissible_response(Res, Admissible, NodeOpts, Opts),
     ?event(debug_multi, {admissible_response, {result, AdmissibleResponse}}),
     AdmissibleStatus andalso AdmissibleResponse;
-is_admissible(_, _, _, _, _) -> false.
+is_admissible(_, _, _, _, _, _) -> false.
 
 %% @doc Serially request a message, collecting responses until the required
 %% number of responses have been gathered. Ensure that the statuses are
@@ -153,7 +154,7 @@ serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Admissible, _Statuses,
 serial_multirequest([], _, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> {[], []};
 serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, Statuses, Opts) ->
     {ErlStatus, Res} = hb_http:request(Method, Node, Path, Message, Opts),
-    case is_admissible(ErlStatus, Res, Admissible, Statuses, Opts) of
+    case is_admissible(ErlStatus, Res, Admissible, Statuses, Node, Opts) of
         true ->
             ?event(debug_http, {admissible_status, {response, Res}}),
             {AdmissibleAcc, AllAcc} = serial_multirequest(
@@ -200,12 +201,12 @@ start_workers(Count, Ref, Nodes, Method, Path, Message, Opts) ->
             fun(Node) ->
                 spawn(
                     fun() ->
-                        Res =
+                        {Status, Res} =
                             try hb_http:request(Method, Node, Path, Message, Opts)
                             catch C:R -> {error, {worker_crash, C, R}}
                             end,
                         receive no_reply -> stopping
-                        after 0 -> Parent ! {Ref, self(), Res}
+                        after 0 -> Parent ! {Ref, self(), {Status, Res, Node}}
                         end
                     end
                 )
@@ -236,8 +237,8 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 
 %% @doc If an `admissable` message is set for the request, check if the response
 %% adheres to it. Else, return `true'.
-admissible_response(_Response, undefined, _Opts) -> true;
-admissible_response(Response, IsAdmissible, Opts) ->
+admissible_response(_Response, undefined, _NodeOpts, _Opts) -> true;
+admissible_response(Response, IsAdmissible, NOpts, Opts) ->
     Req =
         IsAdmissible#{
             <<"path">> =>
@@ -248,7 +249,7 @@ admissible_response(Response, IsAdmissible, Opts) ->
                     Opts
                 ),
             <<"body">> => Response,
-            <<"http-reference">> => hb_opts:get(http_reference, undefined, Opts)
+            <<"http-reference">> => hb_opts:get(http_reference, undefined, NOpts)
         },
     ?event(debug_admissible, {admissible_response, {request, Req}, {opts, Opts}}),
     try hb_ao:resolve(Req, Opts#{ hashpath => ignore }) of
@@ -287,13 +288,13 @@ parallel_responses(AdmissibleRes, AllRes, Procs, _, _, Ref, 0, true, _Admissible
     {AdmissibleRes, AllRes};
 parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message}, Ref, Awaiting, StopAfter, Admissible, Statuses, Opts) ->
     receive
-        {Ref, Pid, {Status, NewRes}} ->
+        {Ref, Pid, {Status, NewRes, Node}} ->
             WorkersWithoutPid = lists:delete(Pid, Procs),
             {RefilledWorkers, NewQueue} =
                 start_workers(1, Ref, Queue, Method, Path, Message, Opts),
             NewProcs = RefilledWorkers ++ WorkersWithoutPid,
             NewAllRes = [{Status, NewRes} | AllRes],
-            case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
+            case is_admissible(Status, NewRes, Admissible, Statuses, Node, Opts) of
                 true ->
                     parallel_responses(
                         [{Status, NewRes} | AdmissibleRes],

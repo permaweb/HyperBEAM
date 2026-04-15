@@ -77,7 +77,7 @@ read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
         maps:merge(
             #{
                 <<"method">> => <<"GET">>,
-                <<"path">> => <<"/~cache@1.0/read">>,
+                <<"path">> => <<"~cache@1.0/read">>,
                 <<"target">> => Key,
                 <<"multirequest-responses">> => 1,
                 <<"multirequest-stop-after">> => true,
@@ -105,7 +105,8 @@ read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
                     [
                         #{
                             <<"template">> => <<"/~cache@1.0/read">>,
-                            <<"nodes">> => Nodes
+                            <<"nodes">> => Nodes,
+                            <<"parallel">> => true
                         }
                     ]
             }
@@ -282,8 +283,14 @@ multinode_env() ->
             <<"store-module">> => hb_store_remote_node,
             <<"max-retries">> => 0,
             <<"nodes">> => [
-                #{ <<"prefix">> => Node1, <<"http-reference">> => <<"node1">> }, 
-                #{ <<"prefix">> => Node2, <<"http-reference">> => <<"node2">> }
+                #{ 
+                    <<"prefix">> => Node1, 
+                    <<"opts">> => #{ <<"http-reference">> => <<"node1">> }
+                }, 
+                #{
+                    <<"prefix">> => Node2, 
+                    <<"opts">> => #{ <<"http-reference">> => <<"node2">> }
+                }
             ],
             <<"parallel">> => 1
         },
