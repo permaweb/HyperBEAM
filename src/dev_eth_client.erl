@@ -69,14 +69,11 @@ call(Base, Req, Opts) ->
                 <<"raw">> => Result,
                 <<"block">> => ResolvedBlock,
                 <<"block-number">> => BlockNumber
-            },
-            <<"status">> => 200
+            }
         }}
     else
-        {error, Reason} -> {error, #{
-            <<"body">> => #{ <<"error">> => Reason },
-            <<"status">> => 400
-        }}
+        {error, Msg} -> {error, Msg};
+        Reason -> {error, Reason}
     end.
 
 %% @doc Generic JSON-RPC passthrough — any `eth_*' method.
@@ -91,15 +88,11 @@ rpc(Base, Req, Opts) ->
         ),
         ?event({eth_rpc, {method, Method}, {params, Params}}),
         {ok, Result} ?= do_rpc(RpcConf, Method, Params, Opts),
-        {ok, #{
-            <<"body">> => #{ <<"data">> => format_result(Result) },
-            <<"status">> => 200
-        }}
+        ?event(fuck, {result, Result}),
+        {ok, #{ <<"body">> => format_result(Result)} }
     else
-        {error, Reason} -> {error, #{
-            <<"body">> => #{ <<"error">> => Reason },
-            <<"status">> => 400
-        }}
+        {error, Msg} -> {error, Msg};
+        Reason -> {error, Reason}
     end.
 
 %% @doc Fetch Ethereum contract event logs.
@@ -128,7 +121,8 @@ get_data(Base, Req, Opts) ->
             Decoded, FromBlock, ToBlock, CurrentBlock, Contract
         )}
     else
-        {error, Reason} -> {error, Reason}
+        {error, Msg} -> {error, Msg};
+        Reason -> {error, Reason}
     end.
 
 %%% Parameter parsing
@@ -220,6 +214,7 @@ send_rpc(
             <<>> -> BaseRequest;
             _ -> BaseRequest#{ ApiKeyHeader => ApiKey }
         end,
+    ?event(fuck, {req, Request}),
     hb_ao:resolve(Request, <<"call">>, Opts).
 
 parse_rpc_response(RelayResponse, Opts) when is_map(RelayResponse) ->
@@ -389,8 +384,7 @@ build_response(Events, FromBlock, ToBlock, CurrentBlock, Contract) ->
             <<"latest-block">> => CurrentBlock,
             <<"latest-block-number">> => hex_to_int(CurrentBlock),
             <<"contract">> => Contract
-        },
-        <<"status">> => 200
+        }
     }.
 
 %%% ABI encoding
@@ -633,13 +627,11 @@ rpc_block_number_test() ->
     },
     {ok, Resp} = rpc(#{}, Req, #{}),
     Result = hb_maps:get(<<"data">>, hb_maps:get(<<"body">>, Resp)),
-    ?assertMatch(<<"0x", _/binary>>, Result),
-    ?assertEqual(200, hb_maps:get(<<"status">>, Resp)).
+    ?assertMatch(<<"0x", _/binary>>, Result).
 
 rpc_missing_method_test() ->
     Req = #{ <<"rpc-url">> => ?RPC_URL },
-    {error, Resp} = rpc(#{}, Req, #{}),
-    ?assertEqual(400, hb_maps:get(<<"status">>, Resp)).
+    {error, _} = rpc(#{}, Req, #{}).
 
 call_total_supply_test() ->
     Req = #{
@@ -672,8 +664,7 @@ call_missing_to_test() ->
         <<"rpc-url">> => ?RPC_URL,
         <<"function">> => <<"totalSupply()">>
     },
-    {error, Resp} = call(#{}, Req, #{}),
-    ?assertEqual(400, hb_maps:get(<<"status">>, Resp)).
+    {error, _} = call(#{}, Req, #{}).
 
 call_base_fallback_test() ->
     Base = #{
@@ -694,6 +685,5 @@ get_data_latest_test() ->
     },
     {ok, Resp} = get_data(#{}, Req, #{}),
     Body = hb_maps:get(<<"body">>, Resp),
-    ?assertEqual(200, hb_maps:get(<<"status">>, Resp)),
     ?assert(is_integer(hb_maps:get(<<"latest-block-number">>, Body))),
     ?assertEqual(?STETH, hb_maps:get(<<"contract">>, Body)).
