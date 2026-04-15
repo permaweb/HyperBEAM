@@ -253,15 +253,11 @@ json_to_message(Resp, Opts) when is_map(Resp) ->
                             )
                     ]
                 ),
-            <<"patches">> =>
+            <<"patches">> => 
                 lists:map(
-                    fun(Patch) ->
-                        NormPatch =
-                            hb_util:lower_case_keys(
-                                hb_ao:normalize_keys(Patch, Opts),
-                                Opts
-                            ),
-                        tags_to_map(NormPatch, Opts) end,
+                    fun(Patch) -> 
+                        convert_unset_values(tags_to_map(Patch, Opts)) 
+                    end, 
                     Patches
                 ),
             <<"data">> => Data
@@ -416,9 +412,20 @@ preprocess_results(Msg, Opts) ->
             NormMsg,
             Opts
         ),
-    Res = hb_maps:merge(FilteredMsg, Tags, Opts),
-    ?event({preprocessed_results, Res}),
-    Res.
+    convert_unset_values(
+        hb_maps:merge(
+            hb_maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {hb_ao:normalize_key(Key), Value}
+                    end,
+                    hb_maps:to_list(FilteredMsg, Opts)
+                )
+            ),
+            Tags,
+            Opts
+        )
+    ).
 
 %% @doc Convert a message with tags into a map of their key-value pairs.
 tags_to_map(Msg, Opts) ->
@@ -435,6 +442,21 @@ tags_to_map(Msg, Opts) ->
     Res = hb_maps:from_list(TagList),
     ?event({tags_to_map, {input, Msg}, {result, Res}}),
     Res.
+
+%% @doc Recursively convert <<"__ao-unset__">> binary values to the `unset'
+%% atom, so that dev_message:set/3 will remove those keys during patch
+%% application. This bridges the gap between Lua's nil (which removes keys
+%% from tables entirely) and HyperBEAM's unset atom (which signals removal).
+convert_unset_values(Map) when is_map(Map) ->
+    maps:map(
+        fun(_Key, <<"__ao-unset__">>) -> unset;
+           (_Key, Value) when is_map(Value) -> convert_unset_values(Value);
+           (_Key, Value) -> Value
+        end,
+        Map
+    );
+convert_unset_values(Other) ->
+    Other.
 
 %% @doc Post-process messages in the outbox to add the correct `from-process'
 %% and `from-image' tags.
