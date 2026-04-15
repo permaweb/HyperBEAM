@@ -578,18 +578,21 @@ now(RawBase, Req, Opts) ->
     ProcessID = dev_process_lib:process_id(Base, #{}, Opts),
     case hb_opts:get(process_now_from_cache, false, Opts) of
         false ->
-            {ok, CurrentSlot} =
-                hb_ao:resolve(
-                    Base,
-                    #{ <<"path">> => <<"slot/current">> },
-                    Opts
-                ),
-            ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
-            hb_ao:resolve(
+            case hb_ao:resolve(
                 Base,
-                #{ <<"path">> => <<"compute">>, <<"slot">> => CurrentSlot },
+                #{ <<"path">> => <<"slot/current">> },
                 Opts
-            );
+            ) of
+                {ok, CurrentSlot} ->
+                    ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
+                    hb_ao:resolve(
+                        Base,
+                        #{ <<"path">> => <<"compute">>, <<"slot">> => CurrentSlot },
+                        Opts
+                    );
+                {error, _} = Error ->
+                    Error
+            end;
         CacheParam ->
             % We are serving the latest known state from the cache, rather
             % than computing it.
