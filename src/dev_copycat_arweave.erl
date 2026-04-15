@@ -17,7 +17,7 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     case parse_range(Request, Opts) of
-        {error, unavailable} -> 
+        {error, unavailable} ->
             {error, unavailable};
         {ok, {From, To}} ->
             case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
