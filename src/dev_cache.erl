@@ -18,7 +18,7 @@ expected_response(Base, Req, Opts) ->
         true ?= check_response_matches_expected(Response, Expected, Opts),
         dev_hook:on(
             [<<"~cache@1.0">>, <<"admissible-response">>],
-            Response,
+            #{ <<"body">> => admissible_response_body(Base, Opts) },
             Opts
         ),
         {ok, true}
@@ -83,6 +83,23 @@ check_response_matches_expected(Response, Expected, Opts) ->
                 orelse invalid_commitment,
         true
     end.
+
+%% @doc Build the body for the `admissible-response' hook. Optionally signs it  
+%% when `commit_hook_response' is set, so downstream handlers can verify the    
+%% node attested to admissibility.
+admissible_response_body(Base, Opts) ->      
+    Ref = hb_maps:get(<<"http-reference">>, Base, <<>>, Opts),              
+    Body = #{                                                                   
+        <<"reference">> => Ref,                                                
+        <<"status-class">> => <<"success">>,                                    
+        <<"event">> => <<"is_admissible">>                                      
+    },                                                                          
+    case hb_opts:get(commit_hook_response, false, Opts) of
+        true ->                                                                 
+            hb_message:commit(Body, Opts#{ priv_wallet => hb:wallet() });       
+        _ ->                                                                    
+            Body
+    end.   
 
 %% @doc Read data from the cache.
 %% Retrieves data corresponding to a key from a local store.

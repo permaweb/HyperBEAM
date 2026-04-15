@@ -95,10 +95,15 @@ read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
             error -> #{}
         end,
     ?event({remote_read, {request, HTTPReq}, {hooks, MaybeHooks}}),
+    MaybeCommitHookRes = 
+        case maps:find(<<"commit-hook-response">>, StoreOpts) of
+            {ok, true} -> MaybeHooks#{ commit_hook_response => true };
+            _ -> MaybeHooks
+        end,
     HTTPRes =
         hb_http:request(
             HTTPReq,
-            MaybeHooks#{
+            MaybeCommitHookRes#{
                 cache_control => [<<"no-cache">>, <<"no-store">>],
                 routes =>
                     [
@@ -291,7 +296,7 @@ multinode_env() ->
                     <<"opts">> => #{ <<"http-reference">> => <<"node2">> }
                 }
             ],
-            <<"parallel">> => 1
+            <<"parallel">> => true
         },
     #{
         ids_single => [ID1, ID2],
