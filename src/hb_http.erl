@@ -529,6 +529,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ?event(http_server_short,
         {sent,
             {status, Status},
+            {ip, {string, real_ip(Req, Opts)}},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
