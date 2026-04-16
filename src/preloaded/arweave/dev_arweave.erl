@@ -882,28 +882,43 @@ pending(Base, Request, Opts) ->
                     % Retreive a bare TX header by its TXID
                     request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
                 {ok, RawOffset} ->
-                    Offset = hb_util:int(RawOffset),
-                    % Download an unconfirmed chunk by its offset
-                    request(
-                        <<"GET">>,
-                        <<
-                            "/unconfirmed_chunk/",
-                            TXID/binary,
-                            "/",
-                            (hb_util:bin(Offset))/binary
-                        >>,
-                        Opts#{
-                            <<"exclude-data">> =>
-                                hb_util:bool(
-                                    find_key(
-                                        <<"exclude-data">>,
-                                        Base,
-                                        Request,
-                                        Opts
-                                    )
-                                )
-                        }
-                    )
+                    try hb_util:int(RawOffset) of
+                        Offset when Offset < 0 ->
+                            {error, #{
+                                <<"status">> => 400,
+                                <<"content-type">> => <<"application/json">>,
+                                <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
+                            }};
+                        Offset ->
+                            % Download an unconfirmed chunk by its offset
+                            request(
+                                <<"GET">>,
+                                <<
+                                    "/unconfirmed_chunk/",
+                                    TXID/binary,
+                                    "/",
+                                    (hb_util:bin(Offset))/binary
+                                >>,
+                                Opts#{
+                                    <<"exclude-data">> =>
+                                        hb_util:bool(
+                                            find_key(
+                                                <<"exclude-data">>,
+                                                Base,
+                                                Request,
+                                                Opts
+                                            )
+                                        )
+                                }
+                            )
+                    catch
+                        _:_ ->
+                            {error, #{
+                                <<"status">> => 400,
+                                <<"content-type">> => <<"application/json">>,
+                                <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
+                            }}
+                    end
             end
     end.
 
@@ -1072,7 +1087,7 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             {tx, TXHeader}
         }
     ),
-    {ok, Data} =
+    DataRes =
         case (TXHeader#tx.data_size == 0) orelse hb_opts:get(exclude_data, false, Opts) of
             true -> {ok, <<>>};
             false ->
@@ -1087,15 +1102,30 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
                         )
                 end
         end,
-    {
-        ok,
-        hb_message:convert(
-            TXHeader#tx{ data = Data },
-            <<"structured@1.0">>,
-            <<"tx@1.0">>,
-            Opts
-        )
-    }.
+    case DataRes of
+        {ok, Data} ->
+            {
+                ok,
+                hb_message:convert(
+                    TXHeader#tx{ data = Data },
+                    <<"structured@1.0">>,
+                    <<"tx@1.0">>,
+                    Opts
+                )
+            };
+        {error, not_found} ->
+            {
+                ok,
+                hb_message:convert(
+                    TXHeader#tx{ data = ?DEFAULT_DATA },
+                    <<"structured@1.0">>,
+                    <<"tx@1.0">>,
+                    Opts
+                )
+            };
+        Error ->
+            Error
+    end.
 
 event_request(Path, Method, Status, Extra) ->
     BaseList = [{request, {explicit, Path}}, {method, Method}, {status, Status}],
@@ -1269,6 +1299,52 @@ best_response_non_map_error_round_trips_test_parallel() ->
         {error, FailedConnect},
         to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
     ).
+
+tx_raw_fetch_error_round_trips_test() ->
+    {ok, MockNode, MockHandle} = hb_mock_server:start([
+        {"/raw/:id", tx_raw, {500, <<"boom">>}}
+    ]),
+    ClientOpts = post_tx_json_client_opts(),
+    HeaderBody = post_tx_json_payload(ClientOpts),
+    TXID = maps:get(<<"id">>, hb_json:decode(HeaderBody)),
+    Opts =
+        ClientOpts#{
+            routes => [
+                #{
+                    <<"template">> =>
+                        #{
+                            <<"path">> => <<"^/arweave/raw">>,
+                            <<"method">> => <<"GET">>
+                        },
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"match">> => <<"^/arweave">>,
+                                <<"with">> => MockNode,
+                                <<"opts">> => #{ http_client => httpc }
+                            }
+                        ],
+                    <<"parallel">> => 1,
+                    <<"responses">> => 1,
+                    <<"stop-after">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+    try
+        ?assertMatch(
+            {error, _},
+            to_message(
+                <<"/tx/", TXID/binary>>,
+                <<"GET">>,
+                {ok, #{ <<"body">> => HeaderBody }},
+                [],
+                Opts
+            )
+        )
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
 
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
     {ok, MockNode1, MockHandle1} = hb_mock_server:start([
@@ -1795,6 +1871,26 @@ get_bad_tx_test_parallel() ->
     Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).
+
+pending_invalid_offset_returns_invalid_offset_test() ->
+    {error, Error} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"pending">>,
+                <<"pending">> => <<"cat">>,
+                <<"offset">> => <<"dog">>
+            },
+            #{}
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 400,
+            <<"content-type">> := <<"application/json">>,
+            <<"body">> := <<"{\"error\":\"invalid_offset\"}">>
+        },
+        Error
+    ).
 
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.
