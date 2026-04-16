@@ -155,6 +155,7 @@ httpc_req(Args, Opts) ->
                             <<"status-class">> => get_status_class(Status),
                             <<"duration">> => EndTime - StartTime
                         },
+                        response_to_map({ok, Status, RespHeaders, RespBody}),
                         Opts
                     ),
                     {ok, Status, RespHeaders, RespBody};
@@ -217,6 +218,7 @@ hackney_req(Args, Opts) ->
                     <<"status-class">> => get_status_class(Response),
                     <<"duration">> => EndTime - StartTime
                 },
+                response_to_map(Response),
                 Opts
             ),
             record_response_status(Method, Response, Path),
@@ -249,6 +251,7 @@ gun_req(Args, Opts) ->
 			<<"status-class">> => get_status_class(Response),
 			<<"duration">> => EndTime - StartTime
 		},
+		response_to_map(Response),
 		Opts
 	),
 	Response.
@@ -261,44 +264,70 @@ init_hackney_pool() ->
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
 
-%% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
-%% node message key. We invoke the given message with the `body' set to a signed
-%% version of the details. This allows node operators to configure their machine
-%% to record duration statistics into customized data stores, computations, or
-%% processes etc. Additionally, we include the `http_reference' value, if set in
-%% the given `opts'.
-%% 
-%% We use `hb_ao:get' rather than `hb_opts:get', as settings configured
-%% by the `~router@1.0' route `opts' key are unable to generate atoms.
-maybe_invoke_monitor(Details, Opts) ->
-    case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
-        not_found -> ok;
-        Monitor ->
-            % We have a monitor message. Place the `details' into the body, set
-            % the `method' to "POST", add the `http_reference' (if applicable)
-            % and sign the request. We use the node message's wallet as the
-            % source of the key.
-            MaybeWithReference =
-                case hb_ao:get(<<"http_reference">>, Opts, Opts) of
-                    not_found -> Details;
-                    Ref -> Details#{ <<"reference">> => Ref }
+%% @doc Record the duration of the request in an async process. We write the
+%% data to prometheus if the application is enabled, as well as firing the
+%% `http-client/response' hook if configured.
+record_duration(Details, Response, Opts) ->
+    spawn(
+        fun() ->
+            % First, write to prometheus if it is enabled. Prometheus works
+            % only with strings as lists, so we encode the data before granting
+            % it.
+            GetFormat =
+                fun
+                    (<<"request-category">>) ->
+                        path_to_category(maps:get(<<"request-path">>, Details));
+                    (Key) ->
+                        hb_util:list(maps:get(Key, Details))
                 end,
-            Req =
-                Monitor#{
+            Labels = lists:map(
+                GetFormat,
+                [
+                    <<"request-method">>,
+                    <<"status-class">>,
+                    <<"request-category">>
+                ]
+            ),
+            hb_prometheus:observe(
+                maps:get(<<"duration">>, Details),
+                http_client_duration_seconds,
+                Labels
+            ),
+            HookReq =
+                #{
                     <<"body">> =>
                         hb_message:commit(
-                            MaybeWithReference#{
-                                <<"method">> => <<"POST">>
-                            },
+                            maybe_add_reference(Details, Opts),
                             Opts
-                        )
+                        ),
+                    <<"priv">> => #{<<"response">> => Response}
                 },
-            % Use the singleton parse to generate the message sequence to 
-            % execute.
-            ReqMsgs = hb_singleton:from(Req, Opts),
-            Res = hb_ao:resolve_many(ReqMsgs, Opts),
-            ?event(debug_http_monitor, {resolved_monitor, Res})
+            dev_hook:on(<<"http-client/response">>, HookReq, Opts)
+        end
+    ).
+
+%% @doc Attach the `http_reference' from Opts to the details map, if present.
+maybe_add_reference(Details, Opts) ->
+    case hb_opts:get(http_reference, not_found, Opts) of
+        not_found -> Details;
+        Ref -> Details#{ <<"reference">> => Ref }
     end.
+
+%% @doc Convert a raw HTTP response tuple into a HB map of lowercased
+%% header keys and a `<<"body">>' field, suitable for passing into
+%% `dev_codec_httpsig:from/3'.
+response_to_map({ok, _Status, Headers, Body}) ->
+    HeaderMap =
+        maps:from_list(
+            [
+                {string:lowercase(hb_util:bin(K)), hb_util:bin(V)}
+            ||
+                {K, V} <- Headers
+            ]
+        ),
+    HeaderMap#{<<"body">> => Body};
+response_to_map(_) ->
+    #{}.    
 
 %%% ==================================================================
 %%% gen_server callbacks.
@@ -614,40 +643,6 @@ init_prometheus() ->
 	]),
     ?event(started),
     ok.
-
-%% @doc Record the duration of the request in an async process. We write the 
-%% data to prometheus if the application is enabled, as well as invoking the
-%% `http_monitor' if appropriate.
-record_duration(Details, Opts) ->
-    spawn(
-        fun() ->
-            % Prometheus works only with strings as lists, so we encode the 
-            % data before granting it.
-            GetFormat =
-                fun
-                    (<<"request-category">>) ->
-                        path_to_category(maps:get(<<"request-path">>, Details));
-                    (Key) ->
-                        hb_util:list(maps:get(Key, Details))
-                end,
-            Labels = lists:map(
-                GetFormat,
-                [
-                    <<"request-method">>,
-                    <<"status-class">>,
-                    <<"request-category">>
-                ]),
-            hb_prometheus:observe(
-                maps:get(<<"duration">>, Details),
-                http_client_duration_seconds,
-                Labels
-            ),
-            maybe_invoke_monitor(
-                Details#{ <<"path">> => <<"duration">> },
-                Opts
-            )
-        end
-    ).
 
 record_response_status(Method, Response) ->
     record_response_status(Method, Response, undefined).

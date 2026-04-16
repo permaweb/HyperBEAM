@@ -92,7 +92,7 @@ find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
-    case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
+    case hb_util:deep_get(HookName, hb_opts:get(on, #{}, Opts), [], Opts) of
         Handler when is_map(Handler) -> 
             case hb_util:is_ordered_list(Handler, Opts) of
                 true ->
@@ -169,7 +169,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 <<"method">> =>
                     hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
-        CommitReqBin = 
+        CommitReqBin =
             hb_util:bin(
                 hb_util:deep_get(
                     <<"hook/commit-request">>,
@@ -317,3 +317,25 @@ halt_on_error_test() ->
     Opts = #{ on => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).
+
+%% @doc Test that nested hook names (slash-separated) resolve correctly
+nested_hook_name_test() ->
+    Handler = #{
+        <<"device">> => #{
+            nested_key =>
+                fun(_, Req, _) ->
+                    {ok, Req#{ <<"nested_executed">> => true }}
+                end
+        },
+        <<"path">> => <<"nested-key">>
+    },
+    Req = #{ <<"test">> => <<"value">> },
+    Opts = #{
+        on => #{
+            <<"http-client">> => #{
+                <<"response">> => Handler
+            }
+        }
+    },
+    {ok, Result} = on(<<"http-client/response">>, Req, Opts),
+    ?assertEqual(true, maps:get(<<"nested_executed">>, Result)).

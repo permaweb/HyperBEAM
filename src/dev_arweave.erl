@@ -8,9 +8,11 @@
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
+-export([is_tx_admissible_hook/3]).
 %%% Helper functions
 -export([get_chunk/2, bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
+-include("include/hb_arweave_nodes.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
@@ -127,22 +129,76 @@ get_tx(Base, Request, Opts) ->
     case find_key(<<"tx">>, Base, Request, Opts) of
         not_found -> {error, not_found};
         TXID ->
-            request(
-                <<"GET">>,
-                <<"/tx/", TXID/binary>>,
-                Opts#{
-                    exclude_data =>
-                        hb_util:bool(
-                            find_key(
-                                <<"exclude-data">>,
-                                Base,
-                                Request,
-                                Opts
-                            )
-                        )
-                }
-            )
+            TxOpts = Opts#{
+                exclude_data =>
+                    hb_util:bool(
+                        find_key(<<"exclude-data">>, Base, Request, Opts)
+                    )
+            },
+            case request(<<"GET">>, <<"/tx/", TXID/binary>>, TxOpts) of
+                {ok, Msg} ->
+                    Admissible = #{
+                        <<"device">> => <<"arweave@2.9">>,
+                        <<"path">> => <<"is-tx-admissible">>,
+                        <<"tx">> => TXID
+                    },
+                    case is_tx_admissible(Admissible, Msg, TxOpts) of
+                        true ->
+                            case dev_hook:on(
+                                <<"tx-admissible">>,
+                                #{ <<"body">> => Msg },
+                                TxOpts
+                            ) of
+                                {ok, #{ <<"body">> := ResultMsg }} ->
+                                    {ok, ResultMsg};
+                                {error, Reason} -> {error, Reason};
+                                {failure, Reason} -> {error, Reason}
+                            end;
+                        false -> {error, not_admissible}
+                    end;
+                Error -> Error
+            end
     end.
+
+%% @doc Check whether a response to a `GET /tx/ID' request is valid.
+%% Verifies that the requested TXID exists as a commitment ID in the
+%% response message, and that all commitments are cryptographically valid.
+is_tx_admissible(Base, Request, Opts) ->
+    maybe
+        {ok, TXID} ?= hb_maps:find(<<"tx">>, Base, Opts),
+        CommIDs = maps:keys(maps:get(<<"commitments">>, Request, #{})),
+        true ?=
+            lists:member(TXID, CommIDs) andalso
+            hb_message:verify(Request, all, Opts)
+    else
+        _ -> false
+    end.
+
+%% @doc Hook adapter for the `http-client/response' chain. Decodes the raw
+%% upstream response via `dev_codec_httpsig:from/3' and runs
+%% `is_tx_admissible/3' against the result.
+is_tx_admissible_hook(_Base, HookReq, Opts) ->
+    Body = hb_maps:get(<<"body">>, HookReq, #{}, Opts),
+    Path = hb_maps:get(<<"request-path">>, Body, <<>>, Opts),
+    Priv = hb_maps:get(<<"priv">>, HookReq, #{}, Opts),
+    Response = hb_maps:get(<<"response">>, Priv, #{}, Opts),
+    maybe
+        {ok, TXID} ?= extract_txid_from_path(Path),
+        {ok, Decoded} ?= dev_codec_httpsig:from(Response, #{}, Opts),
+        true ?= is_tx_admissible(#{<<"tx">> => TXID}, Decoded, Opts),
+        {ok, HookReq}
+    else
+        error -> {ok, HookReq};
+        false -> {error, not_admissible};
+        _ -> {error, decode_failed}
+    end.
+
+extract_txid_from_path(<<"/", TXID:43/binary>>) ->
+    {ok, TXID};
+extract_txid_from_path(<<"/", TXID:43/binary, "/", _/binary>>) ->
+    {ok, TXID};
+extract_txid_from_path(_) ->
+    error.
 
 %% @doc A router for range requests by method. Both `HEAD` and `GET` requests
 %% are supported.
@@ -2157,3 +2213,201 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
     ok.
+
+is_admissible_routed_test() ->
+    AliceWallet = ar_wallet:new(),
+    BobWallet = ar_wallet:new(),
+    AliceNode = hb_http_server:start_node(#{ priv_wallet => AliceWallet }),
+    BobNode = hb_http_server:start_node(#{ priv_wallet => BobWallet }),
+    AliceNodeOpts = hb_http_server:get_opts(#{
+        http_server => hb_util:human_id(ar_wallet:to_address(AliceWallet))
+    }),
+    BobNodeOpts = hb_http_server:get_opts(#{
+        http_server => hb_util:human_id(ar_wallet:to_address(BobWallet))
+    }),
+    AliceMsg = 
+        hb_message:commit(#{ 
+            <<"a">> => 1 }, 
+            AliceNodeOpts, 
+            <<"ans104@1.0">>
+        ),
+    {ok, AliceMsgRawID} = hb_cache:write(AliceMsg, AliceNodeOpts),
+    AliceMsgID = hb_util:human_id(AliceMsgRawID),
+    BobMsg = 
+        hb_message:commit(#{ 
+            <<"b">> => 1 }, 
+            BobNodeOpts, 
+            <<"ans104@1.0">>
+        ),
+    {ok, BobMsgRawID} = hb_cache:write(BobMsg, BobNodeOpts),
+    BobMsgID = hb_util:human_id(BobMsgRawID),
+    %% Start RoutingNode with routes to both AliceNode and BobNode.
+    RoutingNode = hb_http_server:start_node(#{
+        priv_wallet => ar_wallet:new(),
+        routes => [
+            #{
+                <<"template">> => <<"^/arweave/tx">>,
+                <<"strategy">> => <<"Random">>,
+                <<"choose">> => 2,
+                <<"parallel">> => true,
+                <<"nodes">> =>
+                    [
+                        #{
+                            <<"match">> => <<"/arweave/tx/">>,
+                            <<"with">> => AliceNode
+                        },
+                        #{
+                            <<"match">> => <<"/arweave/tx/">>,
+                            <<"with">> => BobNode
+                        }
+                    ]
+            }
+        ]
+    }),
+    %% Fetch Alice's and Bob's messages via RoutingNode with admissibility check.
+    {ok, AliceRes} =
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", AliceMsgID/binary>>, #{}),
+    ?assertMatch(#{ <<"a">> := 1 }, AliceRes),
+    {ok, BobRes} =
+        hb_http:get(RoutingNode, <<"~arweave@2.9/tx=", BobMsgID/binary>>, #{}),
+    ?assertMatch(#{ <<"b">> := 1 }, BobRes),
+    ok.
+
+is_admissible_hook_routed_test_() ->
+    {timeout, 60, fun() ->
+        application:ensure_all_started(hb),
+        TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        PerfProcess = <<"/perf-router~node-process@1.0">>,
+        SchedulePath = <<PerfProcess/binary, "/schedule">>,
+        RoutesPath = <<PerfProcess/binary, "/now/routes">>,
+        NodeWallet = ar_wallet:new(),
+        NodeAddr = hb_util:human_id(NodeWallet),
+        Opts = #{
+            store => hb_test_utils:test_store(),
+            priv_wallet => NodeWallet,
+            on => #{
+                <<"http-client">> => #{
+                    <<"response">> => [
+                        #{
+                            <<"device">> => <<"relay@1.0">>,
+                            <<"path">> => <<"call">>,
+                            <<"method">> => <<"POST">>,
+                            <<"relay-path">> => SchedulePath,
+                            <<"hook/result">> => <<"ignore">>
+                        }
+                    ]
+                }
+            },
+            router_opts => #{ <<"provider">> => #{ <<"path">> => RoutesPath } },
+            node_processes => #{
+                <<"perf-router">> => #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"execution-device">> => <<"router-perf@1.0">>,
+                    <<"scheduler-device">> => <<"scheduler@1.0">>,
+                    <<"performance-period">> => 2,
+                    <<"initial-performance">> => 1000
+                }
+            },
+            routes => [
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES,
+                    <<"parallel">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+        Node = hb_http_server:start_node(Opts),
+        %% Register gateways with the perf-router process.
+        RouteConfig = #{
+            <<"template">> => <<"^/arweave">>,
+            <<"parallel">> => true,
+            <<"strategy">> => <<"Random">>,
+            <<"choose">> => 10,
+            <<"admissible-status">> => 200
+        },
+        lists:foreach(
+            fun(GatewayNode) ->
+                Body = 
+                    hb_message:commit(
+                        #{
+                            <<"action">> => <<"register">>,
+                            <<"route">> => maps:merge(GatewayNode, RouteConfig)
+                        },
+                        Opts
+                    ),
+                {ok, _} = 
+                    hb_http:post(
+                        Node,
+                        #{
+                            <<"path">> => SchedulePath,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => Body
+                        },
+                        Opts
+                    )
+            end, 
+            ?ARWEAVE_BOOTSTRAP_DATA_NODES
+        ),
+        %% Trigger compute to process register messages.
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Verify initial performance.
+        PerfPath = <<PerfProcess/binary, "/now/routes/1/nodes/1/performance">>,
+        {ok, InitPerf} = hb_http:get(Node, PerfPath, Opts),
+        ?assertEqual(1000.0, dev_router_perf:to_float(InitPerf)),
+        %% Fetch TX through the full stack.
+        {ok, Res} = 
+            hb_http:get(
+                Node,
+                <<"~arweave@2.9/tx=", TXID/binary, "&exclude-data=true">>,
+                Opts
+            ),
+        ?assertMatch(#{ <<"reward">> := <<"482143296">> }, Res),
+        ?assert(hb_message:verify(Res, all, #{})),
+        ?assertNot(lists:member(NodeAddr, hb_message:signers(Res, #{}))),
+        %% Wait for async monitor duration posts, then recompute.
+        timer:sleep(1000),
+        {ok, _} = hb_http:get(Node, RoutesPath, Opts),
+        %% Verify performance score changed from initial value.
+        {ok, UpdatedPerf} = hb_http:get(Node, PerfPath, Opts),
+        ?assertNotEqual(1000.0, dev_router_perf:to_float(UpdatedPerf)),
+        ok
+    end}.
+
+is_admissible_real_gateway_test_() ->
+    {timeout, 30, fun() ->
+        application:ensure_all_started(hb),
+        TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        Node = hb_http_server:start_node(#{
+            priv_wallet => ar_wallet:new(),
+            routes => [
+                #{
+                    <<"template">> => <<"^/arweave/tx">>,
+                    <<"strategy">> => <<"Random">>,
+                    <<"choose">> => 10,
+                    <<"parallel">> => true,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES
+                },
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"nodes">> => ?ARWEAVE_BOOTSTRAP_CHAIN_NODES,
+                    <<"parallel">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        }),
+        {ok, Res} = hb_http:get(
+            Node,
+            <<"~arweave@2.9/tx=", TXID/binary, "&exclude-data=true">>,
+            #{}
+        ),
+        ?assertMatch(#{ <<"reward">> := <<"482143296">> }, Res),
+        ?assertMatch(
+            #{ <<"anchor">> :=
+                <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>
+            },
+            Res
+        ),
+        ?assertMatch(#{ <<"content-type">> := <<"application/json">> }, Res),
+        ok
+    end}.
