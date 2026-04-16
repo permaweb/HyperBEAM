@@ -875,7 +875,13 @@ tx_anchor(_Base, _Request, Opts) ->
 %% nodes, or a specific unconfirmed transaction header by its TXID.
 pending(Base, Request, Opts) ->
     case find_key(<<"pending">>, Base, Request, Opts) of
-        not_found -> request(<<"GET">>, <<"/tx/pending">>, Opts);
+        not_found ->
+            case hb_opts:get(arweave_static_pending_txids, not_found, Opts) of
+                TXIDs when is_list(TXIDs) ->
+                    {ok, TXIDs};
+                _ ->
+                    request(<<"GET">>, <<"/tx/pending">>, Opts)
+            end;
         TXID ->
             case hb_maps:find(<<"offset">>, Request, Opts) of
                 error ->
