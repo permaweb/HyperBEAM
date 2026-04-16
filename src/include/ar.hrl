@@ -133,6 +133,11 @@
 -define(BUNDLE_KEYS, [
     <<"bundle-format">>, <<"bundle-version">>, <<"bundle-map">>]).
 
+%% Non-UTF-8 bytes for testing tag-handling resilience. Byte 0xC0 starts a
+%% 2-byte UTF-8 sequence but 0x18 is not a valid continuation byte.
+-define(BAD_UTF8_BYTES,
+    <<192,24,0,7,16,17,253,15,3,144,16,254,239,151,34,250,159,74,4,0>>).
+
 %% The threshold was determined on the mainnet at the 2.5 fork block. The chunks
 %% submitted after the threshold must adhere to stricter validation rules.
 %% This offset is about half way through partition 8

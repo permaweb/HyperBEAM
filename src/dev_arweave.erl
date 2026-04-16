@@ -340,9 +340,14 @@ parse_range_params(Msg, Opts) ->
     end.
 
 %% @doc Case-insensitively find a key in a list and return its value.
+%% Tolerates non-UTF-8 tag names: if lowercasing fails, the raw bytes
+%% are used for comparison (which won't match any ASCII key).
 list_find(_Key, [], Default) -> Default;
 list_find(Key, [{XKey, Value} | Rest], Default) ->
-    NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(XKey)),
+    NormalizedKey =
+        try hb_util:to_lower(hb_ao:normalize_key(XKey))
+        catch error:{badarg, _} -> XKey
+        end,
     if NormalizedKey =:= Key -> Value;
     true -> list_find(Key, Rest, Default)
     end.
@@ -2242,3 +2247,17 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
     ok.
+
+list_find_handles_nonutf8_junk_test() ->
+    Tags = [
+        {?BAD_UTF8_BYTES, <<"junk">>},
+        {<<"content-type">>, <<"application/json">>}
+    ],
+    ?assertEqual(
+        <<"application/json">>,
+        list_find(<<"content-type">>, Tags, <<"default">>)
+    ),
+    ?assertEqual(
+        <<"default">>,
+        list_find(<<"missing">>, Tags, <<"default">>)
+    ).
