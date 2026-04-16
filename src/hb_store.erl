@@ -76,9 +76,9 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, path, add_path, join],
-    <<"write">> => [write, make_link, make_group, reset, path, add_path, join],
-    <<"admin">> => [start, stop, reset]
+    <<"read">> => [read, resolve, list, type, path, add_path, join, scope],
+    <<"write">> => [write, make_link, make_group, reset, path, add_path, join, scope],
+    <<"admin">> => [start, stop, reset, scope]
 }).
 
 %%% Store named terms registry functions.
@@ -432,7 +432,7 @@ test_stores() ->
         (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
-        (hb_test_utils:test_store(hb_store_ets))#{
+        (hb_test_utils:test_store(hb_store_volatile))#{
             <<"benchmark-scale">> => 0.01
         }
     ] ++ rocks_stores().
@@ -1049,3 +1049,12 @@ make_link_access_test() ->
     ?event(testing, {read_linked_value, ReadResult}),
     ?assertEqual({ok, TestValue}, ReadResult),
     ?assertEqual(ok, LinkResult).
+
+%% Prevent stores with access property to return local scope if they are defined as remote.
+get_store_scope_access_test() ->
+    ReadStore = #{<<"store-module">> => hb_store_remote_node, <<"access">> => [<<"read">>]},
+    ?assertEqual(remote, get_store_scope(ReadStore)),
+    WriteStore = #{<<"store-module">> => hb_store_remote_node, <<"access">> => [<<"write">>]},
+    ?assertEqual(remote, get_store_scope(WriteStore)),
+    AdminStore = #{<<"store-module">> => hb_store_remote_node, <<"access">> => [<<"admin">>]},
+    ?assertEqual(remote, get_store_scope(AdminStore)).

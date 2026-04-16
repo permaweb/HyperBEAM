@@ -16,6 +16,8 @@
 -export([start_node/0, start_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
+%% Define the max size we can return in 500 error details field.
+-define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
 
 %% @doc Starts the HTTP server. Optionally accepts an `Opts' message, which
 %% is used as the source for server configuration settings, as well as the
@@ -36,6 +38,7 @@ start() ->
             hb_opts:default_message_with_env(),
             Loaded
         ),
+    hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
@@ -77,6 +80,8 @@ start(Opts) ->
     ]),
     hb:init(),
     BaseOpts = set_default_opts(Opts),
+    ok = hb_process_sampler:ensure_started(BaseOpts),
+    ok = hb_system_monitor:ensure_started(BaseOpts),
     {ok, Listener, _Port} = new_server(BaseOpts),
     {ok, Listener}.
 
@@ -124,7 +129,7 @@ print_greeter(Config, PrivWallet) ->
                     io_lib:format(
                         "http://~s:~p",
                         [
-                            hb_opts:get(host, <<"localhost">>, Config),
+                            hb_opts:get(node_host, <<"localhost">>, Config),
                             hb_opts:get(port, 8734, Config)
                         ]
                     )
@@ -196,7 +201,7 @@ new_server(RawNodeMsg) ->
                 % Attempt to start the prometheus application, if possible.
                 try
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
-                    prometheus_registry:register_collectors([hb_metrics_collector, prometheus_ranch_collector]),
+                    prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
                         metrics_callback =>
                             fun prometheus_cowboy2_instrumenter:observe/1,
@@ -364,7 +369,7 @@ cors_reply(Req, _ServerID) ->
         <<"access-control-allow-methods">> =>
             <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>
     }, Req),
-    ?event(http_debug, {cors_reply, {req, Req}, {req2, Req2}}),
+    ?event(debug_http, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
 
 %% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 
@@ -378,74 +383,55 @@ handle_request(RawReq, Body, ServerID) ->
     Req = RawReq#{ start_time => StartTime },
     NodeMsg = get_opts(#{ http_server => ServerID }),
     put(server_id, ServerID),
-    case {cowboy_req:path(RawReq), cowboy_req:qs(RawReq)} of
-        {<<"/">>, <<>>} ->
-            % If the request is for the root path, serve a redirect to the default 
-            % request of the node.
-            Req2 = cowboy_req:reply(
-                302,
-                #{
-                    <<"location">> =>
-                        hb_opts:get(
-                            default_request,
-                            <<"/~hyperbuddy@1.0/index">>,
-                            NodeMsg
-                        )
-                },
-                RawReq
-            ),
-            {ok, Req2, no_state};
-        _ ->
-            % The request is of normal AO-Core form, so we parse it and invoke
-            % the meta@1.0 device to handle it.
-            ?event(http,
-                {
-                    http_inbound,
-                    {cowboy_req, {explicit, Req}, {body, {string, Body}}}
-                }
-            ),
-            % Parse the HTTP request into HyerBEAM's message format.
-            try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
-                ReqSingleton ->
-                    try
-                        CommitmentCodec =
-                            hb_http:accept_to_codec(ReqSingleton, NodeMsg),
-                        ?event(http,
-                            {parsed_singleton,
-                                {req_singleton, ReqSingleton},
-                                {accept_codec, CommitmentCodec}},
-                            #{}
-                        ),
-                        % Invoke the meta@1.0 device to handle the request.
-                        {ok, Res} =
-                            dev_meta:handle(
-                                NodeMsg#{
-                                    commitment_device => CommitmentCodec
-                                },
-                                ReqSingleton
-                            ),
-                        hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
-                    catch
-                        Type:Details:Stacktrace ->
-                            handle_error(
-                                Req,
-                                ReqSingleton,
-                                Type,
-                                Details,
-                                Stacktrace,
-                                NodeMsg
-                            )
-                    end
-            catch ParseError:ParseDetails:ParseStacktrace ->
-                handle_error(
-                    Req,
-                    #{},
-                    ParseError,
-                    ParseDetails,
-                    ParseStacktrace,
-                    NodeMsg
-                )
+    % The request is of normal AO-Core form, so we parse it and invoke
+    % the meta@1.0 device to handle it.
+    ?event(http,
+        {
+            http_inbound,
+            {cowboy_req, {explicit, Req}, {body, {string, Body}}}
+        }
+    ),
+    % Parse the HTTP request into HyerBEAM's message format.
+    try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
+        ReqSingleton ->
+            try
+                CommitmentCodec =
+                    hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+                ?event(http,
+                    {parsed_singleton,
+                        {req_singleton, ReqSingleton},
+                        {accept_codec, CommitmentCodec}},
+                    #{}
+                ),
+                % Invoke the meta@1.0 device to handle the request.
+                {ok, Res} =
+                    dev_meta:handle(
+                        NodeMsg#{
+                            commitment_device => CommitmentCodec
+                        },
+                        ReqSingleton
+                    ),
+                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+            catch
+                Type:Details:Stacktrace ->
+                    handle_error(
+                        Req,
+                        ReqSingleton,
+                        Type,
+                        Details,
+                        Stacktrace,
+                        NodeMsg
+                    )
             end
+    catch ParseError:ParseDetails:ParseStacktrace ->
+        handle_error(
+            Req,
+            #{},
+            ParseError,
+            ParseDetails,
+            ParseStacktrace,
+            NodeMsg
+        )
     end.
 
 %% @doc Return a 500 error response to the client.
@@ -463,6 +449,8 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     ?event(
         http_error,
         {returning_500_error,
+            {method, cowboy_req:method(Req)},
+            {path, cowboy_req:path(Req)},
             {string,
                 hb_format:indent_lines(
                     <<"\n", ErrorBin/binary, "\n">>,
@@ -472,11 +460,12 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         },
         NodeMsg
     ),
+    ErrorDetailsMaxSize = hb_opts:get(error_details_max_size, ?DEFAULT_ERROR_DETAILS_MAX_SIZE, NodeMsg),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =
         ErrorMsg#{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
-            <<"details">> => hb_util:bin(hb_format:remove_noise(DetailsStr))
+            <<"details">> => hb_format:truncate(hb_util:bin(hb_format:remove_noise(DetailsStr)), ErrorDetailsMaxSize)
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 
@@ -588,6 +577,8 @@ start_node(Opts) ->
     hb:init(),
     hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
+    ok = hb_process_sampler:ensure_started(ServerOpts),
+    ok = hb_system_monitor:ensure_started(ServerOpts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (hb_util:bin(Port))/binary, "/">>.
 

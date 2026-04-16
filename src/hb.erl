@@ -91,12 +91,13 @@
 -export([no_prod/3]).
 -export([read/1, read/2, debug_wait/4]).
 %%% Node wallet and address management:
--export([address/0, wallet/0, wallet/1]).
+-export([address/0, address/1, wallet/0, wallet/1]).
 -include("include/hb.hrl").
 
 %% @doc Initialize system-wide settings for the hyperbeam node.
 init() ->
     hb_name:start(),
+    hb_event:setup_logger(),
     ?event({setting_debug_stack_depth, hb_opts:get(debug_stack_depth)}),
     Old = erlang:system_flag(backtrace_depth, hb_opts:get(debug_stack_depth)),
     ?event({old_system_stack_depth, Old}),

@@ -23,6 +23,16 @@ test_codecs() ->
         #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
+        #{
+            <<"device">> => <<"ans104@1.0">>,
+            <<"type">> => ?EDDSA_SIGN_TYPE,
+            <<"with-opts">> => ed25519
+        },
+        #{
+            <<"device">> => <<"ans104@1.0">>,
+            <<"type">> => ?ETHEREUM_SIGN_TYPE,
+            <<"with-opts">> => ethereum
+        },
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
@@ -40,7 +50,17 @@ suite_test_opts() ->
             parallel => true,
             desc => <<"Default opts">>,
             opts => test_opts(normal)
-        }
+        },
+        #{
+            name => ed25519,
+            desc => <<"Ed25519 opts">>,
+            opts => test_opts(ed25519)
+        },
+        #{
+            name => ecdsa,
+            desc => <<"Secp256k1 (Ethereum) opts">>,
+            opts => test_opts(ethereum)
+         }
     ].
 suite_test_opts(OptsName) ->
     [ O || O = #{ name := OName } <- suite_test_opts(), OName == OptsName ].
@@ -49,7 +69,17 @@ test_opts(normal) ->
     #{
         store => hb_test_utils:test_store(),
         priv_wallet => hb:wallet()
-    }.
+    };
+test_opts(ed25519) ->
+    #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => ar_wallet:new({eddsa, ed25519})
+    };
+test_opts(ethereum) ->
+    #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => ar_wallet:new(ethereum)
+     }.
  
 test_suite() ->
     [
@@ -171,31 +201,43 @@ test_suite() ->
 suite_test_() ->
     hb_test_utils:suite_with_opts(
         codec_test_suite(
-            test_codecs(),
-            normal
+            test_codecs()
         ),
-        suite_test_opts(normal)
+        suite_test_opts()
     ).
 
 %% @doc Run the test suite for a set of codecs, using the given options type.
 %% Unlike normal `hb_test_utils:suite_with_opts/2' users, this suite generator
 %% creates a new options message for each individual test, such that stores 
 %% are completely isolated from each other.
-codec_test_suite(Codecs, OptsType) ->
+codec_test_suite(Codecs) ->
     lists:flatmap(
-        fun(CodecName) ->
-            lists:map(fun({Desc, Test}) ->
-                TestName =
-                    binary_to_list(
-                        << (suite_name(CodecName))/binary, ": ", Desc/binary >>
-                    ),
-                TestSpecificOpts = test_opts(OptsType),
-                {
-                    Desc,
-                    TestName,
-                    fun(_SuiteOpts) -> Test(CodecName, TestSpecificOpts) end
-                }
-            end, test_suite())
+        fun(CodecSpec) ->
+            lists:filtermap(
+                fun({Desc, Test}) ->
+                    TestName =
+                        binary_to_list(
+                            << (suite_name(CodecSpec))/binary, ": ", Desc/binary >>
+                        ),
+                    OptsType = 
+                        case is_map(CodecSpec) of 
+                            true -> maps:get(<<"with-opts">>, CodecSpec, normal);
+                            false -> normal
+                        end,
+                    TestSpecificOpts = test_opts(OptsType),
+                    {
+                        true,
+                        {
+                            Desc,
+                            TestName,
+                            fun(_SuiteOpts) ->
+                                Test(CodecSpec, TestSpecificOpts)
+                            end
+                        }
+                    }
+                end,
+                test_suite()
+            )
         end,
         Codecs
     ).
@@ -209,6 +251,14 @@ suite_name(CodecSpec) when is_map(CodecSpec) ->
         true -> << CodecName/binary, " (bundle)">>
     end.
 
+%% @doc Determine if the given codec setup is relevant, given the `OptsType'
+%% specified.
+is_relevant_opts(#{ <<"with-opts">> := RelevantOpts }, OptsType) ->
+    lists:member(OptsType, RelevantOpts);
+is_relevant_opts(_Codec, _OptsType) -> true.
+
+%% @doc Determine if a CodecSpec (either binary, map, or list thereof) matches
+%% a given codec device name binary.
 is_device_codec(Devices, Codec) when is_list(Devices) ->
     lists:any(fun(Device) -> is_device_codec(Device, Codec) end, Devices);
 is_device_codec(Device, Codec) when Device == Codec ->
@@ -1455,7 +1505,7 @@ sign_links_test(Codec, Opts) ->
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     SignatureType = 
         case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
-            true -> <<"rsa-pss-sha256">>;
+            true -> ?RSA_SIGN_TYPE;
             false -> <<"hmac-sha256">>
         end,
     Msg = #{
@@ -1649,3 +1699,52 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     ?assert(hb_message:verify(Decoded, all, Opts));
 bundled_ordering_test(_Codec, _Opts) ->
     skip.
+
+rsa_wallet_not_match_message_ed25519_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?RSA_KEY_TYPE)},
+    SignatureType = ?EDDSA_SIGN_TYPE,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?EDDSA_SIGN_TYPE},
+                 {wallet_type, {rsa,65537}}},
+        hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        )).
+
+ed25519_wallet_not_match_message_rsa_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?EDDSA_KEY_TYPE)},
+    SignatureType = ?RSA_SIGN_TYPE,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?RSA_SIGN_TYPE},
+                 {wallet_type, {eddsa,ed25519}}},
+        hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        )).
+
+ethereum_wallet_not_match_message_rsa_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
+    SignatureType = ?RSA_SIGN_TYPE,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assertThrow({wrong_wallet_to_sign,
+                 {request_type, ?RSA_SIGN_TYPE},
+                 {wallet_type, ethereum}},
+        hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        )).
+
+ethereum_wallet_match_message_ethereum_type_test() ->
+    Opts = #{priv_wallet => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
+    SignatureType = <<"ethereum">>,
+    Msg = #{<<"a">> => <<"b">>},
+    ?assert(is_map(hb_message:commit(
+            Msg,
+            Opts,
+            #{<<"commitment-device">> => <<"ans104@1.0">>, <<"type">> => SignatureType}
+        ))).

@@ -14,6 +14,7 @@
 -define(DEFAULT_ANCHOR, <<>>).
 -define(DEFAULT_TARGET, <<>>).
 -define(DEFAULT_DATA_ROOT, <<>>).
+-define(DEFAULT_DATA_SIZE, 0).
 -define(DEFAULT_QUANTITY, 0).
 -define(DEFAULT_REWARD, 0).
 
@@ -54,7 +55,7 @@
     data = ?DEFAULT_DATA,
     manifest = undefined,
     %% Size in bytes of the transaction data.
-    data_size = 0,
+    data_size = ?DEFAULT_DATA_SIZE,
     %% Deprecated. Not used, not gossiped.
     data_tree = [],
     %% The Merkle root of the Merkle tree of data chunks.
@@ -92,15 +93,34 @@
 -define(HASH_ALG, sha256).
 
 -define(RSA_SIGN_ALG, rsa).
+-define(RSA_SIGN_TYPE, <<"rsa-pss-sha256">>).
 -define(RSA_PRIV_KEY_SZ, 4096).
 -define(RSA_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
 
 -define(ECDSA_SIGN_ALG, ecdsa).
+-define(ECDSA_SIGN_TYPE, <<"ecdsa-secp256k1-sha256">>).
 -define(ECDSA_TYPE_BYTE, <<2>>).
+-define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
 
 -define(EDDSA_SIGN_ALG, eddsa).
+-define(EDDSA_SIGN_TYPE, <<"ed25519-sha512">>).
 -define(EDDSA_TYPE_BYTE, <<3>>).
--define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
+-define(EDDSA_KEY_TYPE, {?EDDSA_SIGN_ALG, ed25519}).
+
+-define(SOLANA_SIGN_ALG, solana).
+-define(SOLANA_SIGN_TYPE, <<"solana">>).
+-define(SOLANA_TYPE_BYTE, <<4>>).
+-define(SOLANA_KEY_TYPE, solana).
+
+-define(ETHEREUM_SIGN_ALG, ethereum).
+-define(ETHEREUM_SIGN_TYPE, <<"ethereum">>).
+-define(ETHEREUM_TYPE_BYTE, <<3>>).
+-define(ETHEREUM_KEY_TYPE, ethereum).
+
+-define(TYPED_ETHEREUM_SIGN_ALG, typed_ethereum).
+-define(TYPED_ETHEREUM_SIGN_TYPE, <<"typed_ethereum">>).
+-define(TYPED_ETHEREUM_TYPE_BYTE, <<7>>).
+-define(TYPED_ETHEREUM_KEY_TYPE, typed_ethereum).
 
 %% The default key type used by transactions that do not specify a signature type.
 -define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
@@ -112,3 +132,8 @@
 
 -define(BUNDLE_KEYS, [
     <<"bundle-format">>, <<"bundle-version">>, <<"bundle-map">>]).
+
+%% The threshold was determined on the mainnet at the 2.5 fork block. The chunks
+%% submitted after the threshold must adhere to stricter validation rules.
+%% This offset is about half way through partition 8
+-define(STRICT_DATA_SPLIT_THRESHOLD, 30_607_159_107_830).

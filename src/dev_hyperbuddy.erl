@@ -1,16 +1,20 @@
 %%% @doc A device that renders a REPL-like interface for AO-Core via HTML.
 -module(dev_hyperbuddy).
--export([info/0, format/3, return_file/2, return_error/2]).
+-export([info/1, format/3, return_file/2, return_error/2]).
 -export([metrics/3, events/3]).
 -export([throw/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Export an explicit list of files via http.
-info() ->
+%% @doc Export an explicit list of files via http. Filenames added to the 
+%% `hyperbuddy_serve' key of the node message will be served as static files.
+%% Each filename must point to a path relative to the HyperBEAM instance's
+%% build subdirectory as follows: `priv/html/hyperbuddy@1.0'.
+info(Opts) ->
+    ServedRoutes = hb_maps:get(hyperbuddy_serve, Opts, #{}, Opts),
     #{
         default => fun serve/4,
-        routes => #{
+        serve => ServedRoutes#{
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
             <<"bundle.js">> => <<"bundle.js">>,
@@ -141,20 +145,18 @@ throw(_Msg, _Req, Opts) ->
     end.
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly
-%% listed in the `routes' field of the `info/0' return value.
+%% listed in the `routes' field of the `info/1' return value.
 serve(<<"keys">>, M1, _M2, Opts) -> dev_message:keys(M1, Opts);
 serve(<<"set">>, M1, M2, Opts) -> dev_message:set(M1, M2, Opts);
 serve(Key, _, _, Opts) ->
     ?event({hyperbuddy_serving, Key}),
-    Routes = hb_maps:get(routes, info(), no_routes, Opts),
-    case hb_maps:get(Key, Routes, undefined, Opts) of
-        undefined -> {error, not_found};
-        Filename -> return_file(Filename)
+    ServeRoutes = hb_maps:get(serve, info(Opts), #{}, Opts),
+    case hb_maps:find(Key, ServeRoutes, Opts) of
+        {ok, Filename} -> return_file(<<"hyperbuddy@1.0">>, Filename, #{});
+        error -> {error, not_found}
     end.
 
 %% @doc Read a file from disk and serve it as a static HTML page.
-return_file(Name) ->
-    return_file(<<"hyperbuddy@1.0">>, Name, #{}).
 return_file(Device, Name) ->
     return_file(Device, Name, #{}).
 return_file(Device, Name, Template) ->
@@ -173,7 +175,9 @@ return_file(Device, Name, Template) ->
                         <<".css">> -> <<"text/css">>;
                         <<".png">> -> <<"image/png">>;
                         <<".ico">> -> <<"image/x-icon">>;
-                        <<".ttf">> -> <<"font/ttf">>
+                        <<".ttf">> -> <<"font/ttf">>;
+                        <<".json">> -> <<"application/json">>;
+                        _ -> <<"text/plain">>
                     end
                 }
             };
@@ -197,6 +201,7 @@ apply_template(Body, Template) when is_map(Template) ->
 apply_template(Body, []) ->
     Body;
 apply_template(Body, [{Key, Value} | Rest]) ->
+    ?event(debug_apply_template, {key, Key, value, Value}),
     apply_template(
         re:replace(
             Body,
@@ -222,3 +227,31 @@ return_templated_file_test() ->
         binary:match(Body, <<"This is an error message.">>),
         nomatch
     ).
+
+return_custom_json_test() ->
+    Base = hb_util:bin(code:priv_dir(hb)),
+    Filename = <<Base/binary, "/html/hyperbuddy@1.0/test.json">>,
+    ok = file:write_file(Filename, <<"{\"status\":\"ok\"}">>),
+    try
+        ?assertMatch(
+            {ok,
+                #{
+                    <<"body">> := JSONBin,
+                    <<"content-type">> := <<"application/json">>
+                }
+            } when byte_size(JSONBin) > 0,
+            hb_ao:resolve(
+                #{
+                    <<"device">> => <<"hyperbuddy@1.0">>
+                },
+                <<"custom.json">>,
+                #{
+                    hyperbuddy_serve => #{
+                        <<"custom.json">> => <<"test.json">>
+                    }
+                }
+            )
+        )
+    after
+        file:delete(Filename)
+    end.

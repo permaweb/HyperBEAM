@@ -18,7 +18,7 @@ format(TX, Indent, Opts) when is_list(TX); is_map(TX) ->
 format(TX, Indent, Opts) when is_record(TX, tx) ->
     MustVerify = hb_opts:get(debug_ids, true, Opts),
     Valid =
-        if MustVerify -> verify(TX);
+        if MustVerify -> verify(dev_arweave_common:normalize(TX));
         true -> true
         end,
     UnsignedID =
@@ -63,9 +63,12 @@ format(TX, Indent, Opts) when is_record(TX, tx) ->
         true ->
             format_line("Signer: ~s",
                 [hb_util:safe_encode(ar_bundles:signer(TX))], 
-                Indent + 1),
+                Indent + 1) ++
             format_line("Signature: ~s", 
-                [hb_format:binary(TX#tx.signature)],
+                [hb_format:binary(TX#tx.signature, Opts)],
+                Indent + 1) ++
+            format_line("Signature Type: ~p",
+                [TX#tx.signature_type],
                 Indent + 1);
         false -> []
     end ++
@@ -125,6 +128,7 @@ format_fields(TX, Indent) ->
     format_anchor(TX, Indent) ++
     format_quantity(TX, Indent) ++
     format_reward(TX, Indent) ++
+    format_data_size(TX, Indent) ++
     format_data_root(TX, Indent).
 
 format_format(TX, Indent) ->
@@ -151,6 +155,9 @@ format_quantity(TX, Indent) ->
 
 format_reward(TX, Indent) ->
     format_line("Reward: ~p", [TX#tx.reward], Indent + 1).
+
+format_data_size(TX, Indent) ->
+    format_line("Data Size: ~p", [TX#tx.data_size], Indent + 1).
 
 format_data_root(TX, Indent) ->
     format_line("Data Root: ~s", [

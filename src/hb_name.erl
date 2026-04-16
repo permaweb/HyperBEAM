@@ -5,6 +5,7 @@
 %%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
+-export([singleton/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
@@ -57,6 +58,45 @@ unregister(Name) ->
     start(),
     ets:delete(?NAME_TABLE, Name),
     ok.
+
+%% @doc Atomic singleton lookup/spawn+register operation.
+%% 
+%% Multiple callers may simultanoeously invoke this function, but the PID of
+%% only one surviving surivor will be registered and returned to all callers.
+%% If the given function crashes on spawn, then the operation will retry the
+%% operation until they successfully spawn and register a process -- which will
+%% promptly fail. The result is that the intended semantics are still preserved:
+%% Calling `singleton' will always return the PID of a process that owns that name
+%% at the time of return.
+singleton(Name, Fun) ->
+    case lookup(Name) of
+        Registered when is_pid(Registered) -> Registered;
+        undefined -> singleton_spawn(Name, Fun)
+    end.
+
+%% @doc Perform the actual atomic spawn+register operation.
+singleton_spawn(Name, Fun) ->
+    start(),
+    Parent = self(),
+    ReadyRef = make_ref(),
+    PID =
+        spawn(
+            fun() ->
+                Spawned = self(),
+                case catch ?MODULE:register(Name, Spawned) of
+                    ok ->
+                        Parent ! {spawned, ReadyRef, Spawned},
+                        Fun();
+                    _ ->
+                        Parent ! {spawn_failed, ReadyRef},
+                        ok
+                end
+            end
+        ),
+    receive
+        {spawned, ReadyRef, PID} -> PID;
+        {spawn_failed, ReadyRef} -> singleton(Name, Fun)
+    end.
 
 %%% @doc Lookup a name -> PID.
 lookup(Name) when is_atom(Name) ->
@@ -117,6 +157,14 @@ atom_test() ->
 
 term_test() ->
     basic_test({term, os:timestamp()}).
+
+singleton_returns_spawned_pid_test() ->
+    Name = {singleton, os:timestamp()},
+    Pid = singleton(Name, fun() -> receive stop -> ok end end),
+    ?assertEqual(Pid, lookup(Name)),
+    ?assertNotEqual(self(), Pid),
+    Pid ! stop,
+    hb_name:unregister(Name).
 
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},

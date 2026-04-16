@@ -30,7 +30,7 @@
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
--define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(DEFAULT_SIZE, 2 * 1024 * 1024 * 1024 * 1024). % 2TiB default database size
 -define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
                                                 % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
@@ -49,6 +49,7 @@
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }) ->
+    init_prometheus(),
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = ensure_dir(DataDirPath),
@@ -65,6 +66,10 @@ start(Opts = #{ <<"name">> := DataDir }) ->
             no_mem_init,
             no_sync
         ] ++
+        case maps:get(<<"read-ahead">>, Opts, true) of
+            true -> [];
+            false -> [no_readahead]
+        end ++
         case maps:get(<<"read-only">>, Opts, false) of
             true -> [no_lock];
             false -> []
@@ -184,14 +189,18 @@ write(Opts, Path, Value) ->
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
-read(Opts, Path) ->
+read(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Path) of
-        {ok, Value} -> 
+    StartTime = erlang:monotonic_time(),
+    ReadRes = read_with_links(Opts, Path),
+    case ReadRes of
+        {ok, Value} ->
+            sample_metrics(Name, StartTime, hit),
             {ok, Value};
         not_found ->
+            sample_metrics(Name, StartTime, miss),
             try
-                PathParts = binary:split(Path, <<"/">>, [global]),
+                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
                 case resolve_path_links(Opts, PathParts) of
                     {ok, ResolvedPathParts} ->
                         ResolvedPathBin = to_path(ResolvedPathParts),
@@ -206,7 +215,7 @@ read(Opts, Path) ->
                             resolve_path_links_failed, 
                             {class, Class},
                             {reason, Reason},
-                            {stacktrace, Stacktrace},
+                            {stacktrace, {trace, Stacktrace}},
                             {path, Path}
                         }
                     ),
@@ -240,12 +249,26 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %% 
 %% Returns {ok, Value} or not_found.
-read_direct(Opts, Path) ->
+read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;  % Normalize error format
-        not_found -> not_found  % Handle both old and new format
+        not_found -> not_found; % Handle both old and new format
+        {error, transaction_error, Message} = Err -> 
+            ?event(lmdb_store, 
+                {transaction_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {message, Message}}),
+            Err;
+        {error, database_error, ErrorMessage} = Err ->
+            ?event(lmdb_store, 
+                {database_error, 
+                    {path, Path}, 
+                    {db_name, Name},
+                    {msg, ErrorMessage}}),
+            Err
     end.
 
 %% @doc Read a value directly from the database with link resolution.
@@ -588,6 +611,32 @@ reset(Opts) ->
             ensure_dir(DataDir),
             ok
     end.
+
+%% @doc Sample roughly 1/1024 reads using the start timestamp and scale the
+%% hit counter by the same factor to preserve an approximate total.
+sample_metrics(_Name, StartTime, _Type) when (StartTime band 1023) =/= 0 ->
+    ok;
+sample_metrics(Name, StartTime, Type) ->
+    ReadTime = erlang:monotonic_time() - StartTime,
+    hb_prometheus:observe(ReadTime, hb_store_lmdb_duration_seconds, [read, Name]),
+    case Type of
+        hit -> hb_prometheus:inc(counter, hb_store_lmdb_hit, [Name], 1024);
+        miss -> ok
+    end.
+
+init_prometheus() ->
+    hb_prometheus:declare(histogram, [
+        {name, hb_store_lmdb_duration_seconds},
+        {labels, [function, store_name]},
+        {buckets, [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 20]},
+        {help, "Duration of lmdb operations in microseconds"}
+    ]),
+    hb_prometheus:declare(counter, [
+        {name, hb_store_lmdb_hit},
+        {labels, [name]},
+        {help, "LMDB name requested"}
+    ]),
+    ok.
 
 %% @doc Test suite demonstrating basic store operations.
 %%
@@ -958,29 +1007,29 @@ isolated_type_debug_test() ->
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,
     OtherKeyPath = <<MessageID/binary, "/other-test-key">>,
-    ?event(isolated_debug, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
+    ?event(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
     make_group(StoreOpts, CommitmentsPath),
     make_group(StoreOpts, OtherKeyPath),
     % 3. Add some actual data within those groups
     write(StoreOpts, <<CommitmentsPath/binary, "/sig1">>, <<"signature_data_1">>),
     write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
     % 4. Test type detection on the nested paths
-    ?event(isolated_debug, {testing_main_message_type}),
+    ?event(debug_isolated, {testing_main_message_type}),
     MainType = type(StoreOpts, MessageID),
-    ?event(isolated_debug, {main_message_type, MainType}),
-    ?event(isolated_debug, {testing_commitments_type}),
+    ?event(debug_isolated, {main_message_type, MainType}),
+    ?event(debug_isolated, {testing_commitments_type}),
     CommitmentsType = type(StoreOpts, CommitmentsPath),
-    ?event(isolated_debug, {commitments_type, CommitmentsType}),
-    ?event(isolated_debug, {testing_other_key_type}),
+    ?event(debug_isolated, {commitments_type, CommitmentsType}),
+    ?event(debug_isolated, {testing_other_key_type}),
     OtherKeyType = type(StoreOpts, OtherKeyPath),
-    ?event(isolated_debug, {other_key_type, OtherKeyType}),
+    ?event(debug_isolated, {other_key_type, OtherKeyType}),
     % 5. Test what happens when reading these nested paths
-    ?event(isolated_debug, {reading_commitments_directly}),
+    ?event(debug_isolated, {reading_commitments_directly}),
     CommitmentsResult = read(StoreOpts, CommitmentsPath),
-    ?event(isolated_debug, {commitments_read_result, CommitmentsResult}),
-    ?event(isolated_debug, {reading_other_key_directly}),
+    ?event(debug_isolated, {commitments_read_result, CommitmentsResult}),
+    ?event(debug_isolated, {reading_other_key_directly}),
     OtherKeyResult = read(StoreOpts, OtherKeyPath),
-    ?event(isolated_debug, {other_key_read_result, OtherKeyResult}),
+    ?event(debug_isolated, {other_key_read_result, OtherKeyResult}),
     stop(StoreOpts).
 
 %% @doc Test that list function resolves links correctly
