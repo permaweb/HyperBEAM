@@ -156,7 +156,12 @@ aos2_to_assignment(A, RawOpts) ->
     {ok, Message} =
         case hb_maps:get(<<"message">>, Node, undefined, Opts) of
             null ->
-                MessageID = hb_maps:get(<<"message">>, Assignment, undefined, Opts),
+                RawMessageID = hb_maps:get(<<"message">>, Assignment, undefined, Opts),
+                MessageID = 
+                    case RawMessageID of
+                        <<Prefix:43/binary, _/binary>> -> Prefix;
+                        Other -> Other
+                    end,
                 ?event(error, {scheduler_did_not_provide_message, MessageID}),
                 case hb_cache:read(MessageID, Opts) of
                     {ok, Msg} -> {ok, Msg};
