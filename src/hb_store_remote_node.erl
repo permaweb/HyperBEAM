@@ -77,8 +77,7 @@ read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
         maps:merge(
             #{
                 <<"method">> => <<"GET">>,
-                <<"path">> => <<"/~cache@1.0/read">>,
-                <<"target">> => Key,
+                <<"path">> => <<"/~cache@1.0/read?target=", Key/binary>>,
                 <<"multirequest-responses">> => 1,
                 <<"multirequest-stop-after">> => true,
                 <<"multirequest-admissible">> => #{
