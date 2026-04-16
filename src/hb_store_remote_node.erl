@@ -472,3 +472,29 @@ multiread_admissible_response_hook_test() ->
             Opts#{ store => LogStore }
         )
     ).
+
+arweave_dot_net_as_remote_node_test() ->
+    TestIDs =
+        [
+            <<"93Ui7nOLDNVCVMLeFkVeeOCVkm5Jy-kf6FNatW3q2TI">>,
+            <<"VuhnX2G8qVAb6kwHOiCQKl2c-42uoMKSIpHgKc0Pnzg">>
+        ],
+    Opts =
+        #{
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_remote_node,
+                        <<"name">> => <<"cache-arweave">>,
+                        <<"node">> => <<"https://arweave.net">>
+                    }
+                ]
+        },
+    % Recent bundled AO messages -- no `signature` tag collision.
+    lists:foreach(
+        fun(ID) ->
+            {ok, M} = hb_cache:read(ID, Opts),
+            ?assert(hb_message:verify(M, all, Opts))
+        end,
+        TestIDs
+    ).
