@@ -15,6 +15,46 @@ expected_response(Base, Req, Opts) ->
     maybe
         {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
+        true ?= check_response_matches_expected(Response, Expected, Opts),
+        dev_hook:on(
+            [<<"~cache@1.0">>, <<"admissible-response">>],
+            Response,
+            Opts
+        ),
+        {ok, true}
+    else Reason ->
+        ?event(debug_admissible, {expected_response_error, Reason}),
+        {ok, false}
+    end.
+
+%% @doc Verify that a response from a remote cache matches the expected ID.
+%% There are three cases:
+%% 1. The response is a raw binary (e.g., a direct content-addressed read
+%%    of a data blob written with `hb_cache:write/2'): the binary's SHA-256
+%%    hash must match `Expected'.
+%% 2. The response is a structured message with commitments, and `Expected'
+%%    is a commitment ID (the common case for data items): `Expected' must
+%%    be among the commitment IDs and the corresponding commitment must
+%%    verify.
+%% 3. The response is a structured message but `Expected' is a path rather
+%%    than a commitment ID (e.g. `~scheduler@1.0/assignments/<ID>/<SLOT>'):
+%%    we verify all committer-attributed commitments on the response.
+check_response_matches_expected(Response, Expected, _Opts) when is_binary(Response) ->
+    % Accept either a bare ID or a `data/<ID>' path (the convention used by
+    % `hb_cache:write/2' for content-addressed binary blobs). In both cases,
+    % the blob's SHA-256 hash must match the expected ID.
+    BinID =
+        case binary:split(Expected, <<"/">>) of
+            [<<"data">>, ID] -> ID;
+            _ -> Expected
+        end,
+    case ?IS_ID(BinID)
+        andalso hb_util:human_id(hb_crypto:sha256(Response)) =:= BinID of
+        true -> true;
+        false -> binary_hash_mismatch
+    end;
+check_response_matches_expected(Response, Expected, Opts) ->
+    maybe
         {ok, Commitments} ?= hb_maps:find(<<"commitments">>, Response, Opts),
         CommIDs = maps:keys(Commitments),
         ?event(debug_admissible,
@@ -29,21 +69,19 @@ expected_response(Base, Req, Opts) ->
             orelse lists:member(Expected, CommIDs))
             orelse expected_id_not_found,
         {ok, OnlyCommitted} = hb_message:with_only_committed(Response, Opts),
+        % For ID-based reads, verify the specific commitment that claims to be
+        % the requested ID. For non-ID reads (path-based reads), the `Expected'
+        % value is not itself a commitment ID, so we instead verify all
+        % committer-attributed commitments on the response.
+        VerifyReq =
+            case ?IS_ID(Expected) of
+                true -> #{ <<"commitment-ids">> => [Expected] };
+                false -> #{ <<"committers">> => <<"all">> }
+            end,
         true ?=
-            hb_message:verify(
-                OnlyCommitted,
-                #{ <<"commitment-ids">> => [Expected] },
-                Opts
-            ) orelse invalid_commitment,
-        dev_hook:on(
-            [<<"~cache@1.0">>, <<"admissible-response">>],
-            Response,
-            Opts
-        ),
-        {ok, true}
-    else Reason ->
-        ?event(debug_admissible, {expected_response_error, Reason}),
-        {ok, false}
+            hb_message:verify(OnlyCommitted, VerifyReq, Opts)
+                orelse invalid_commitment,
+        true
     end.
 
 %% @doc Read data from the cache.
