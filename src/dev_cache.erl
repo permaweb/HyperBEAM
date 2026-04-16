@@ -24,7 +24,10 @@ expected_response(Base, Req, Opts) ->
                 {commitments, CommIDs}
             }
         ),
-        true ?= lists:member(Expected, CommIDs) orelse expected_id_not_found,
+        true ?=
+            (not ?IS_ID(Expected)
+            orelse lists:member(Expected, CommIDs))
+            orelse expected_id_not_found,
         {ok, OnlyCommitted} = hb_message:with_only_committed(Response, Opts),
         true ?=
             hb_message:verify(
