@@ -1007,3 +1007,40 @@ test_verify(KeyType) ->
             #{ hashpath => ignore }
         )
     ).
+
+set_nested_link_test() ->
+    Opts = #{ store => [hb_test_utils:test_store(hb_store_lmdb)] },
+
+    Base = #{
+        <<"balances">> => #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"aa">> => <<"100">>,
+            <<"bb">> => <<"200">>,
+            <<"cc">> => <<"300">>
+        },
+        <<"other-key">> => <<"other-value">>
+    },
+    {ok, Path} = hb_cache:write(Base, Opts),
+    {ok, LinkifiedBase} = hb_cache:read(Path, Opts),
+    Req = #{
+        <<"other-key">> => <<"new-value">>,
+        <<"balances">> => #{
+            <<"ab">> => <<"150">>
+        }
+    },
+    {ok, Result} = set(LinkifiedBase, Req, Opts),
+    Expected =
+    #{
+        <<"other-key">> => <<"new-value">>,
+        <<"balances">> => #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"a">> => #{
+                <<"a">> => <<"100">>,
+                <<"b">> => <<"150">>
+            },
+            <<"bb">> => <<"200">>,
+            <<"cc">> => <<"300">>
+        }
+    },
+    Matches = hb_message:match(Expected, Result, strict, Opts),
+    ?assert(Matches).

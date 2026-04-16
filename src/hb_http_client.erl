@@ -602,6 +602,16 @@ init_prometheus() ->
 		{name, http_client_uploaded_bytes_total},
 		{help, "The total amount of bytes posted via HTTP, per remote endpoint"}
 	]),
+	hb_prometheus:declare(histogram, [
+		{name, arweave_chunk_load_requested_bytes},
+		{buckets, [
+			262144, 1048576, 10485760, 104857600,
+			524288000, 1073741824
+		]},
+		{help,
+			"Bytes requested per generate_offsets call"
+			" in dev_arweave chunk loading"}
+	]),
     ?event(started),
     ok.
 

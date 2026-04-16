@@ -85,7 +85,11 @@ request(HookMsg, HookReq, Opts) ->
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
-        {ok, Name} ?= name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
+        {ok, Name} ?=
+            name_from_host(
+                Host,
+                hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts)
+            ),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
             maybe_append_named_message(

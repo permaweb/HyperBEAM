@@ -529,6 +529,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ?event(http_server_short,
         {sent,
             {status, Status},
+            {ip, {string, real_ip(Req, Opts)}},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
@@ -1097,6 +1098,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     end,
     Host = cowboy_req:host(Req),
     WithDevice#{<<"host">> => Host}.
+
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
 real_ip(Req = #{ headers := RawHeaders }, Opts) ->
