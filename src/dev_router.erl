@@ -736,7 +736,48 @@ preprocess(Base, RawReq, Opts) ->
                             }]
                     }}
             end;
-        {ok, _Method, Node, _Path, _MsgWithoutMeta, _ReqOpts} ->
+        {ok, _Method, RawPeers, _Path, _MsgWithoutMeta, _ReqOpts} ->
+            ?event(debug_preprocess, {raw_peers, RawPeers}),
+            Peer =
+                if is_map(RawPeers) ->
+                    Nodes =
+                        hb_maps:get(
+                            <<"nodes">>,
+                            RawPeers,
+                            [hb_maps:get(<<"node">>, RawPeers, <<>>, Opts)],
+                            Opts
+                        ),
+                    NewNodes =
+                        lists:map(
+                            fun(P) ->
+                                URI =
+                                    uri_string:parse(
+                                        hb_maps:get(
+                                            <<"uri">>,
+                                            P,
+                                            <<>>,
+                                            Opts
+                                        )
+                                    ),
+                                P#{
+                                    <<"uri">> =>
+                                        hb_util:bin(
+                                            uri_string:recompose(
+                                                URI#{
+                                                    path => <<"user-path">>
+                                                }
+                                            )
+                                        )
+                                }
+                                
+                            end,
+                            Nodes
+                        ),
+                    RawPeers#{
+                        <<"nodes">> => NewNodes
+                    };
+                true -> RawPeers
+            end,
             ?event(debug_preprocess, {matched_route, {explicit, Res}}),
             CommitRequest =
                 hb_util:atom(
@@ -803,7 +844,7 @@ preprocess(Base, RawReq, Opts) ->
                                 <<"device">> => <<"relay@1.0">>,
                                 <<"relay-device">> => <<"apply@1.0">>,
                                 <<"method">> => <<"POST">>,
-                                <<"peer">> => Node
+                                <<"peer">> => Peer
                             },
                             #{
                                 <<"path">> => <<"call">>,

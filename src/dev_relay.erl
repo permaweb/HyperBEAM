@@ -134,6 +134,8 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
+    RequestMethod =
+        hb_maps:get(<<"method">>, TargetMod5, RelayMethod, Opts),
     Client =
         case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
             not_found -> hb_opts:get(relay_http_client, Opts);
@@ -142,19 +144,29 @@ call(M1, RawM2, Opts) ->
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ http_client => Client, http_only_result => false },
-    Res = case RelayPeer of
-        not_found ->
-            hb_http:request(TargetMod5, HTTPOpts);
-        _ ->
-            ?event(debug_relay, {relaying_to_peer, RelayPeer}),
-            hb_http:request(
-                RelayMethod,
-                RelayPeer,
-                RelayPath,
-                TargetMod5,
-                HTTPOpts
-            )
-    end,
+    Res =
+        case RelayPeer of
+            not_found ->
+                hb_http:request(TargetMod5, HTTPOpts);
+            Peer when is_map(Peer) ->
+                Prepared = prepare_relay_peer(Peer, Opts),
+                hb_http:request(
+                    RequestMethod,
+                    Prepared,
+                    RelayPath,
+                    TargetMod5,
+                    HTTPOpts
+                );
+            Peer ->
+                ?event(debug_relay, {relaying_to_peer, Peer}),
+                hb_http:request(
+                    RequestMethod,
+                    Peer,
+                    RelayPath,
+                    TargetMod5,
+                    HTTPOpts
+                )
+        end,
     case Res of
         {ok, R} ->
             {ok, hb_maps:without([<<"set-cookie">>], R)};
@@ -184,6 +196,50 @@ request(_Base, Req, Opts) ->
                 ]
         }
     }.
+
+prepare_relay_peer(Peer, Opts) ->
+    case hb_ao:get(<<"nodes">>, Peer, not_found, Opts) of
+        Nodes when is_list(Nodes) ->
+            Peer#{ <<"nodes">> => prepare_relay_nodes(Nodes, Opts) };
+        _ ->
+            Peer
+    end.
+
+prepare_relay_nodes(Nodes, Opts) ->
+    [
+        prepare_relay_node(Node, Opts)
+    ||
+        Node <- hb_util:message_to_ordered_list(Nodes, Opts)
+    ].
+
+prepare_relay_node(Node, Opts) ->
+    NormalizedOpts =
+        case hb_maps:get(<<"opts">>, Node, #{}, Opts) of
+            Map when is_map(Map) -> hb_opts:mimic_default_types(Map, new_atoms, Opts);
+            _ -> #{}
+        end,
+    Node#{
+        <<"opts">> => apply_node_timeout(Node, NormalizedOpts, Opts)
+    }.
+
+apply_node_timeout(Node, NodeOpts, Opts) ->
+    Timeout =
+        case hb_ao:get(<<"http-timeout">>, Node, not_found, Opts) of
+            not_found ->
+                hb_maps:get(<<"http-timeout">>, NodeOpts, not_found, Opts);
+            TimeoutValue ->
+                TimeoutValue
+        end,
+    case Timeout of
+        not_found ->
+            NodeOpts;
+        _ ->
+            TimeoutMs = hb_util:int(Timeout),
+            NodeOpts#{
+                http_request_send_timeout => TimeoutMs,
+                http_connect_timeout => TimeoutMs
+            }
+    end.
 
 
 %%% Tests
@@ -304,3 +360,66 @@ commit_request_test() ->
         ),
     ?event({res, Res}),
     ?assertEqual(<<"value">>, Res).
+
+relay_failover_test() ->
+    application:ensure_all_started([hb]),
+    PeerWallet = ar_wallet:new(),
+    RelayWallet = ar_wallet:new(),
+    Peer = hb_http_server:start_node(#{ priv_wallet => PeerWallet }),
+    Node =
+        hb_http_server:start_node(NodeOpts = #{
+            relay_allow_commit_request => true,
+            priv_wallet => RelayWallet,
+            routes =>
+                [
+                    #{
+                        <<"template">> => <<"/~meta@1.0/info.*">>,
+                        <<"nodes">> => [
+                            #{
+                                % Remote peer used to exercise timeout-driven
+                                % failover. When Google one day runs HB, we can
+                                % lower this again.
+                                <<"prefix">> => <<"http://google.com/">>,
+                                <<"http-timeout">> => 10000
+                            },
+                            #{
+                                <<"prefix">> => <<"http://doesnotroute.invalid/">>,
+                                <<"http-timeout">> => 2000
+                            },
+                            #{
+                                % Local peer that should eventually succeed.
+                                <<"prefix">> => Peer,
+                                <<"http-timeout">> => 5000
+                            }
+                        ]
+                    }
+                ],
+            on => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"router@1.0">>,
+                        <<"path">> => <<"preprocess">>,
+                        <<"commit-request">> => true
+                    }
+                }
+        }),
+    % Validate that the server can forward requests through the `hb_http:get` API.
+    {ok, DirectRecvdAddr} =
+        hb_http:request(
+            #{ <<"path">> => <<"~meta@1.0/info/address">> },
+            NodeOpts
+        ),
+    ?assertEqual(hb_util:human_id(PeerWallet), DirectRecvdAddr),
+    % Validate that the relay device is able to forward requests to the peer.
+    {ok, RelayRecvdAddr} =
+        hb_http:get(
+            Node,
+            <<"~relay@1.0/call?relay-path=~meta@1.0/info/address">>,
+            #{}
+        ),
+    ?assertEqual(hb_util:human_id(PeerWallet), RelayRecvdAddr),
+    ?hr(),
+    timer:sleep(100),
+    % Validate that the server forwards requests from clients to the peer.
+    {ok, ClientRecvdAddr} = hb_http:get(Node, <<"~meta@1.0/info/address">>, #{}),
+    ?assertEqual(hb_util:human_id(PeerWallet), ClientRecvdAddr).

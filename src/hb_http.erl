@@ -69,6 +69,13 @@ request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is
     % `multirequest' functionality, rather than a single request.
     hb_http_multi:request(Config, Method, Path, Message, Opts);
 request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
+    ExplicitMethod =
+        hb_maps:get(
+            <<"method">>,
+            Message,
+            not_found,
+            Opts
+        ),
     % The request has a set of additional options, so we apply them to the
     % request.
     MergedOpts =
@@ -85,7 +92,12 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
             Message#{ <<"path">> => URI, <<"method">> => Method },
             MergedOpts
         ),
-    request(NewMethod, Node, NewPath, NewMsg, NewOpts);
+    FinalMethod =
+        case ExplicitMethod of
+            not_found -> NewMethod;
+            _ -> Method
+        end,
+    request(FinalMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
@@ -104,7 +116,15 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
+    Res = hb_http_client:request(Req, Opts),
+    process_response(Method, Peer, Path, Req, StartTime, Res, Opts).
+
+%% @doc Process a raw response from the HTTP client.
+process_response(
+        Method, Peer, Path, Req, StartTime,
+        {_ErlStatus, Status, Headers, Body},
+        Opts
+    ) ->
     % Process the response.
     EndTime = os:system_time(millisecond),
     ?event(http_outbound,
@@ -213,7 +233,10 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                 Body,
                 Opts
             )
-    end.
+    end;
+process_response(_, _, _, _, _, {error, Reason}, _Opts) ->
+    ?event(http, {http_request_failed, {reason, Reason}}),
+    {error, {http_request_failed, Reason}}.
 
 %% @doc Convert a HTTP status code to a status atom.
 response_status_to_atom(Status) ->
