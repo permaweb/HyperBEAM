@@ -661,38 +661,42 @@ ensure_loaded(Base, Req, Opts) ->
                 Opts
             ),
             case LoadRes of
-                {ok, MaybeLoadedSlot, MaybeLoadedSnapshotMsg} ->
+                {ok, MaybeLoadedSlot, SnapshotMsg} ->
                     % Restore the devices in the executor stack with the
                     % loaded state. This allows the devices to load any
                     % necessary 'shadow' state (state not represented in
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    LoadedSnapshotMsg =
-                        hb_cache:ensure_all_loaded(
-                            MaybeLoadedSnapshotMsg,
+                    Process = 
+                        hb_maps:get(
+                            <<"process">>,
+                            SnapshotMsg,
+                            undefined,
                             Opts
                         ),
-                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
                             #{ <<"type">> => <<"hmac-sha256">>},
                             Process,
-                            Opts),
+                            Opts
+                        ),
                     #{ <<"commitments">> := SignCommits } =
                         hb_message:with_commitments(ProcID, Process, Opts),
-                    UpdateProcess = hb_maps:put(
-                        <<"commitments">>,
-                        hb_maps:merge(HmacCommits, SignCommits),
-                        Process,
-                        Opts
-                    ),
-                    LoadedSnapshotReq =
-                        LoadedSnapshotMsg#{
+                    UpdateProcess =
+                        hb_maps:put(
+                            <<"commitments">>,
+                            hb_maps:merge(HmacCommits, SignCommits),
+                            Process,
+                            Opts
+                        ),
+                    SnapshotReq =
+                        SnapshotMsg#{
                             <<"process">> => UpdateProcess,
                             <<"initialized">> => <<"true">>
                         },
-                    LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
+                    LoadedSlot =
+                        hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
                     ?event(compute,
                         {found_state_checkpoint,
                             {proc_id, ProcID},
@@ -703,11 +707,12 @@ ensure_loaded(Base, Req, Opts) ->
                     {ok, Normalized} =
                         dev_process_lib:run_as(
                             <<"execution">>,
-                            LoadedSnapshotReq,
+                            SnapshotReq,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
-                    NormalizedWithoutSnapshot = without_snapshot(Normalized, Opts),
+                    NormalizedWithoutSnapshot =
+                        without_snapshot(Normalized, Opts),
                     ?event(snapshot,
                         {loaded_state_checkpoint_result,
                             {proc_id, ProcID},
