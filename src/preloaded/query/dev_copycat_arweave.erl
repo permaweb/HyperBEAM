@@ -1707,21 +1707,26 @@ write_mempool_offsets(TXID, TX, Opts) ->
     Store = hb_store_arweave:store_from_opts(Opts),
     ok = hb_store_arweave:write_offset(
         Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
-    write_mempool_children(Store, TXID, TX, Opts),
+    case load_mempool_data(TXID, TX, Opts) of
+        {ok, Data} ->
+            write_mempool_children(Store, TXID, TX, Data, Opts);
+        _ ->
+            ok
+    end,
     ok.
 
-write_mempool_children(Store, TXID, TX, Opts) ->
+write_mempool_children(Store, TXID, TX, Data, Opts) ->
     case is_bundle_tx(TX, Opts) of
         true ->
-            try ar_bundles:decode_bundle_header(TX#tx.data) of
+            try ar_bundles:decode_bundle_header(Data) of
                 {ItemsBin, BundleIndex} ->
-                    HeaderSize = byte_size(TX#tx.data) - byte_size(ItemsBin),
+                    HeaderSize = byte_size(Data) - byte_size(ItemsBin),
                     write_mempool_items(Store, TXID, BundleIndex, HeaderSize);
                 _ -> ok
             catch _:_ -> ok
             end;
         false ->
-            case standalone_item_id(TX) of
+            case standalone_item_id(Data) of
                 {ok, ItemID} ->
                     Ref = #{ <<"relative">> => TXID, <<"offset">> => 0 },
                     hb_store_arweave:write_offset(
@@ -1738,7 +1743,23 @@ write_mempool_items(Store, TXID, [{ItemID, Size} | Rest], Offset) ->
         Store, hb_util:encode(ItemID), <<"ans104@1.0">>, Ref, Size),
     write_mempool_items(Store, TXID, Rest, Offset + Size).
 
-standalone_item_id(#tx{ data = Data }) when is_binary(Data), Data =/= <<>> ->
+load_mempool_data(_TXID, #tx{ data_size = 0 }, _Opts) ->
+    {ok, <<>>};
+load_mempool_data(TXID, #tx{ data_size = Size }, Opts) when Size > 0 ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => #{
+                <<"relative">> => TXID,
+                <<"offset">> => 0
+            },
+            <<"length">> => Size
+        },
+        Opts
+    ).
+
+standalone_item_id(Data) when is_binary(Data), Data =/= <<>> ->
     try
         Item = ar_bundles:deserialize(Data),
         case ar_bundles:verify_item(Item) of
