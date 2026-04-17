@@ -97,6 +97,49 @@ Recompute the CID from `body` with the commitment's declared codec + hash-alg, t
 
 `application/vnd.ipld.raw` for `codec = raw`, `application/vnd.ipld.dag-cbor` for `codec = dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
 
+### `to` / `from` — dag-cbor serialization
+
+`~ipfs@1.0` is a full codec in the `hb_message:convert/3,4` pipeline:
+
+```erlang
+%% Encode a message as dag-cbor bytes:
+CborBytes = hb_message:convert(Msg, <<"ipfs@1.0">>, Opts).
+
+%% Decode dag-cbor bytes back into a HyperBEAM message:
+Msg = hb_message:convert(CborBytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts).
+```
+
+The pipeline is `TABM <-> ~structured@1.0 (native types) <-> IPLD intermediate <-> dag-cbor bytes`. Encoding is deterministic per [the dag-cbor spec](https://ipld.io/specs/codecs/dag-cbor/spec/): shortest-form integers, canonical length-first map ordering, 64-bit floats only, definite-length containers. Non-canonical inputs on the decode side are rejected with a specific reason:
+
+| Decode rejection | Reason atom |
+| --- | --- |
+| Indefinite-length item | `indefinite_length_forbidden` |
+| Half / single float | `half_float_forbidden`, `single_float_forbidden` |
+| NaN / Infinity | `nan_or_infinity_forbidden` |
+| Non-UTF-8 text string | `invalid_utf8` |
+| Non-string map key | `non_string_map_key` |
+| Out-of-order or duplicate map keys | `non_canonical_map_order` |
+| Unsupported tag | `{unsupported_tag, N}` |
+| Non-canonical integer encoding | `non_canonical_integer` |
+
+Commitments and the `priv` sub-map are stripped before encoding — dag-cbor blocks carry content, not signatures. Atoms outside `{null, true, false}` cannot be represented in IPLD and are rejected with `{error, {dag_cbor_encode, {unsupported_atom, _}}}`.
+
+### Composing `commit` with `to`
+
+The natural end-to-end pipeline for "publish a HyperBEAM message over IPFS" is:
+
+```erlang
+Bytes = hb_message:convert(Msg, <<"ipfs@1.0">>, Opts),
+Carrier = #{ <<"body">> => Bytes },
+Committed = hb_message:commit(Carrier, Opts,
+                 #{ <<"commitment-device">> => <<"ipfs@1.0">>,
+                    <<"type">>              => <<"unsigned">>,
+                    <<"codec">>             => <<"dag-cbor">> }),
+{ok, _} = hb_cache:write(Committed, Opts).
+```
+
+The CID produced by `commit` over the dag-cbor bytes matches exactly what `ipfs dag put --store-codec dag-cbor` would produce on the same logical message. `hb_cache:read(CID, Opts)` then returns the committed message from the local cache; if the CID is not local, the optional `hb_store_ipfs_gateway` backend fetches it from a configured HTTP gateway and verifies the bytes against the CID before admitting them.
+
 ## End-to-end example
 
 ```erlang
@@ -118,22 +161,26 @@ Committed = hb_message:commit(Msg, Opts,
     hb_cache:ensure_loaded(maps:get(<<"body">>, Recovered), Opts).
 ```
 
-## What's next (phase 2)
+## What's next
 
-A pure-Erlang dag-cbor encoder/decoder (`dev_codec_ipfs_cbor`) and proper `to/3` / `from/3` routed through [`~structured@1.0`](../resources/source-code/dev_codec_structured.md), so that a HyperBEAM message with native types and links round-trips bit-for-bit against the IPLD codec-fixtures. Phase 1 treats the `dag-cbor` codec as an opaque blob for hashing only; phase 2 makes it a full peer of [`~json@1.0`](json-at-1-0.md).
+A link-aware mapping through `hb_link`, so that IPLD CID links (dag-cbor tag 42) integrate with HyperBEAM's lazy-loaded link primitive and nested messages can be addressed as first-class IPLD sub-blocks. For now, CID links decode to plain CID strings and arbitrary Erlang atoms throw on encode.
 
 ## Non-goals
 
 - CIDv0 (legacy base58 dag-pb CIDs, `Qm…`).
 - `dag-pb`, UnixFS, file chunking.
+- `dag-json` (trivial to add on top of the existing encoder; out of scope for v1).
 - Hash algorithms other than `sha2-256`.
-- Multibases other than base32-lower (decode accepts `B`/`f` defensively).
+- Multibases other than base32-lower on encode (decode accepts `B`/`f` defensively).
+- Bytes / text distinction from `structured@1.0`: both flatten to plain binaries.
+- IPLD-native links: tag-42 decodes to a plain CID string; it does not wire into `hb_link` or `hb_cache` lazy resolution.
 - IPNS, bitswap, pubsub, libp2p.
 - IPLD Schemas, Selectors, or path resolution into sub-blocks.
 
 ## Related source
 
-- [`dev_codec_ipfs.erl`](../resources/source-code/dev_codec_ipfs.md) — device entry points.
+- [`dev_codec_ipfs.erl`](../resources/source-code/dev_codec_ipfs.md) — device entry points (`commit`, `verify`, `to`, `from`, `content_type`, `info`).
 - [`dev_codec_ipfs_cid.erl`](../resources/source-code/dev_codec_ipfs_cid.md) — varint, multihash, multibase, CIDv1.
+- [`dev_codec_ipfs_cbor.erl`](../resources/source-code/dev_codec_ipfs_cbor.md) — deterministic dag-cbor encoder/decoder.
 - [`hb_store_ipfs_gateway.erl`](../resources/source-code/hb_store_ipfs_gateway.md) — read-only gateway store.
-- [`dev_codec_ipfs_test.erl`](../resources/source-code/dev_codec_ipfs_test.md) — integration tests including the cache-linkage proof.
+- [`dev_codec_ipfs_test.erl`](../resources/source-code/dev_codec_ipfs_test.md) — integration tests including the cache-linkage proof and the full `to`/`from` roundtrip.
