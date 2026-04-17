@@ -40,11 +40,7 @@ type_from_tags(Item) ->
     Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
     Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
     MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
-    LowerFormat =
-        try hb_util:to_lower(Format)
-        catch error:{badarg, _} -> Format
-        end,
-    case {LowerFormat, Version, MapTXID} of
+    case {hb_util:to_lower(Format), hb_util:to_lower(Version), MapTXID} of
         {<<"binary">>, <<"2.0.0">>, <<>>} ->
             list;
         {<<"binary">>, <<"2.0.0">>, _} ->
@@ -57,9 +53,7 @@ type_from_tags(Item) ->
 tagfind(Key, Tags, Default) ->
     LowerCaseKey = hb_util:to_lower(Key),
     Found = lists:search(fun({TagName, _}) ->
-        try hb_util:to_lower(TagName) == LowerCaseKey
-        catch error:{badarg, _} -> false
-        end
+        hb_util:to_lower(TagName) == LowerCaseKey
     end, Tags),
     case Found of
         {value, {_TagName, Value}} -> Value;
@@ -199,21 +193,14 @@ maybe_add_bundle_tags(BundleType, TX) ->
             ManifestID = ar_bundles:id(TX#tx.manifest, unsigned),
             ?BUNDLE_TAGS ++ [{<<"bundle-map">>, hb_util:encode(ManifestID)}]
     end,
-    ExistingTagNames = [safe_to_lower(TagName) || {TagName, _} <- TX#tx.tags],
+    ExistingTagNames = [hb_util:to_lower(TagName) || {TagName, _} <- TX#tx.tags],
     FilteredBundleTags = lists:filter(
         fun({TagName, _}) ->
-            not lists:member(safe_to_lower(TagName), ExistingTagNames)
+            not lists:member(hb_util:to_lower(TagName), ExistingTagNames)
         end,
         BundleTags
     ),
     TX#tx{tags = FilteredBundleTags ++ TX#tx.tags }.
-
-%% @doc Best-effort lowercase: returns the original bytes unchanged if the
-%% input is not valid UTF-8 (which makes `string:lowercase/1` raise badarg).
-safe_to_lower(Bin) ->
-    try hb_util:to_lower(Bin)
-    catch error:{badarg, _} -> Bin
-    end.
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
 normalize_data_size(Item = #tx{data = Bin})
@@ -263,47 +250,6 @@ log_conversion(Topic, X) ->
 %%%===================================================================
 %%% Tests.
 %%%===================================================================
-
-tagfind_handles_nonutf8_name_test() ->
-    Tags = [
-        {?BAD_UTF8_BYTES, <<"junk">>},
-        {<<"bundle-format">>, <<"binary">>}
-    ],
-    ?assertEqual(
-        <<"binary">>,
-        tagfind(<<"bundle-format">>, Tags, <<>>)
-    ),
-    ?assertEqual(
-        <<"default">>,
-        tagfind(<<"not-present">>, Tags, <<"default">>)
-    ).
-
-type_from_tags_nonutf8_value_returns_binary_test() ->
-    TX = #tx{
-        format = ans104,
-        tags = [{<<"bundle-format">>, ?BAD_UTF8_BYTES}]
-    },
-    ?assertEqual(binary, type(TX)).
-
-maybe_add_bundle_tags_handles_nonutf8_binary_test() ->
-    TX = #tx{
-        tags = [
-            {?BAD_UTF8_BYTES, <<"junk">>},
-            {<<"content-type">>, <<"application/json">>}
-        ]
-    },
-    Result = maybe_add_bundle_tags(list, TX),
-    ?assert(
-        lists:member(
-            {<<"bundle-format">>, <<"binary">>},
-            Result#tx.tags)
-    ),
-    ?assertEqual(
-        ?BUNDLE_TAGS ++ [
-            {?BAD_UTF8_BYTES, <<"junk">>},
-            {<<"content-type">>, <<"application/json">>}
-        ],
-        Result#tx.tags).
 
 tagfind_test() ->
     Default = <<"default">>,
