@@ -71,7 +71,7 @@ decode_bytes(Bin) ->
                     {?HASH_SHA2_256, DigestLen} when DigestLen =:= ?SHA2_256_LEN ->
                         {ok, #{
                             <<"version">>  => 1,
-                            <<"codec">>    => codec_name(CodecCode),
+                            <<"multicodec">>    => codec_name(CodecCode),
                             <<"hash-alg">> => <<"sha2-256">>,
                             <<"digest">>   => Digest
                         }};
@@ -189,7 +189,7 @@ empty_dag_cbor_cid_test() ->
 roundtrip_decode_raw_test() ->
     CID = encode(<<"raw">>, sha2_256, <<"hello world">>),
     {ok, Parts} = decode(CID),
-    ?assertEqual(<<"raw">>, maps:get(<<"codec">>, Parts)),
+    ?assertEqual(<<"raw">>, maps:get(<<"multicodec">>, Parts)),
     ?assertEqual(<<"sha2-256">>, maps:get(<<"hash-alg">>, Parts)),
     ?assertEqual(1, maps:get(<<"version">>, Parts)),
     ?assertEqual(32, byte_size(maps:get(<<"digest">>, Parts))),
@@ -201,7 +201,7 @@ roundtrip_decode_raw_test() ->
 roundtrip_decode_dag_cbor_test() ->
     CID = encode(<<"dag-cbor">>, sha2_256, <<"body bytes">>),
     {ok, Parts} = decode(CID),
-    ?assertEqual(<<"dag-cbor">>, maps:get(<<"codec">>, Parts)),
+    ?assertEqual(<<"dag-cbor">>, maps:get(<<"multicodec">>, Parts)),
     ?assertEqual(<<"sha2-256">>, maps:get(<<"hash-alg">>, Parts)).
 
 bad_multibase_prefix_test() ->

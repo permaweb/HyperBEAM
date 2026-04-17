@@ -4,17 +4,20 @@
 
 The `~ipfs@1.0` device is an **optional, user-loadable** commitment device that lets a HyperBEAM node address messages by their [IPFS CIDv1](https://github.com/multiformats/cid). It computes a CID over a message's `body` and attaches it as an [unsigned commitment](../resources/unsigned-commitments.md) — a cryptographic commitment that has no `committer`, only a content-addressed identity.
 
-The elegance comes from HyperBEAM's existing machinery, not from any new plumbing: `hb_cache:write/2` already links every commitment ID to the uncommitted root ID of the message it belongs to. Once an `~ipfs@1.0` commitment is attached, `hb_cache:read(CID, Opts)` finds the message — so a standard `GET /<CID>` request resolves without any routing, path, or kernel change.
+The elegance comes from HyperBEAM's existing machinery, not from any new plumbing: `hb_cache:write/2` already links every commitment ID to the uncommitted root ID of the message it belongs to. Once an `~ipfs@1.0` commitment is attached, `hb_cache:read(CID, Opts)` finds the message — so content-addressed retrieval works via the standard `~lookup@1.0` device with no routing, path, or kernel changes.
 
-This device covers the outer edges of the IPFS / IPLD spec intentionally: `sha2-256` multihashes, base32-lowercase multibase, and the `raw` (multicodec `0x55`) and `dag-cbor` (multicodec `0x71`) codecs. See the phase-2 notes below for what's coming next, and the **Non-goals** section for what this device will never do.
+The commitment is expressed as an HTTPSig HMAC-shaped item on the wire (`alg="ipfs@1.0/unsigned"`, `keyid="constant:ipfs"`, `signature` = base64url of the sha2-256 digest). This is **IPFS over HTTP Message Signatures**: a remote node decoding the response round-trips the commitment back to `commitment-device: ipfs@1.0` form without bespoke wire support.
+
+This device covers the outer edges of the IPFS / IPLD spec intentionally: `sha2-256` multihashes, base32-lowercase multibase, and the `raw` (multicodec `0x55`) and `dag-cbor` (multicodec `0x71`) codecs.
 
 `~ipfs@1.0` is **not** in `preloaded_devices` by default. A node operator opts in; see **Enabling** below.
 
 ## When to use it
 
-- Serving content to IPFS clients (`GET /<bafk…>` returns the `body` bytes that hash to the CID).
-- Exchanging content-addressed payloads with other IPFS-aware peers.
-- Acting as a caching mirror of public IPFS data via the companion `hb_store_ipfs_gateway` store backend.
+- Serving content to IPFS clients via `GET /~lookup@1.0/read&target=<CID>`.
+- Preloading a list of CIDs into a HyperBEAM node's cache by looping HEAD/GET lookups (the response's write-through pins locally).
+- Pulling IPFS content into the Arweave / AO ecosystem: fetch a CID, apply an ANS-104 signed commitment using the node's wallet, POST it to a bundler.
+- Acting as a verifying caching mirror of public IPFS data via the companion `hb_store_ipfs_gateway` store backend.
 
 If your content only needs to be addressed within HyperBEAM's own ID space, use [`~httpsig@1.0`](httpsig-at-1-0.md) or [`~ans104@1.0`](ans104-at-1-0.md) instead — they give you signed commitments with a committer.
 
@@ -67,27 +70,31 @@ Compute a CIDv1 over `Msg`'s `body` and add it as an unsigned commitment. The co
         <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">> => #{
             <<"commitment-device">> => <<"ipfs@1.0">>,
             <<"type">>              => <<"unsigned">>,
-            <<"codec">>             => <<"raw">>,
+            <<"multicodec">>        => <<"raw">>,
             <<"hash-alg">>          => <<"sha2-256">>,
-            <<"committed">>         => [<<"body">>]
+            <<"committed">>         => [<<"body">>],
+            <<"signature">>         => <<"uU0nuZNNPgilLlLX2n2r-sSE7-N6U4DukIj3rOLvzek">>,
+            <<"keyid">>             => <<"constant:ipfs">>
         }
     }
 }
 ```
 
+The `signature` field holds the raw sha2-256 digest of the body (base64url), and the `keyid` is the universal constant `constant:ipfs`. Structurally this is an HTTPSig HMAC item — anyone can reverify without a secret — which lets the commitment ride over HTTP Message Signatures without any additional wire machinery.
+
 **Supported `Req` fields**
 
 | Field | Default | Values |
 | --- | --- | --- |
-| `type` | (none — required) | `unsigned`, `unsigned-sha256` |
-| `codec` | `raw` | `raw` (0x55), `dag-cbor` (0x71) |
+| `type` | `unsigned` | `unsigned`, `unsigned-sha256` |
+| `multicodec` | `raw` | `raw` (0x55), `dag-cbor` (0x71) |
 | `hash-alg` | `sha2-256` | `sha2-256` |
 
-Anything else — `signed`, a wallet, a second hash function — returns `{error, {unsupported_type, _}}` or `{error, {unsupported_codec, _}}`. IPFS does not have signed CIDs.
+`signed` and other non-unsigned types delegate to `~httpsig@1.0` (the codec behaves as a `dev_codec_json`-style codec for those paths). Unknown multicodecs return `{error, {unsupported_multicodec, _}}`; unknown hash algs return `{error, {unsupported_hash_alg, _}}`. IPFS does not have signed CIDs in the usual sense, but messages can carry both an IPFS commitment and an ANS-104 / HTTPSig signed commitment simultaneously.
 
 ### `verify` — check a CID
 
-Recompute the CID from `body` with the commitment's declared codec + hash-alg, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
+Recompute the CID from `body` with the commitment's declared multicodec + hash-alg, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
 
 ### `committed` — list covered keys
 
@@ -95,7 +102,7 @@ Recompute the CID from `body` with the commitment's declared codec + hash-alg, t
 
 ### `content_type` — MIME
 
-`application/vnd.ipld.raw` for `codec = raw`, `application/vnd.ipld.dag-cbor` for `codec = dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
+`application/vnd.ipld.raw` for `multicodec = raw`, `application/vnd.ipld.dag-cbor` for `multicodec = dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
 
 ### `to` / `from` — dag-cbor serialization
 
@@ -122,7 +129,7 @@ The pipeline is `TABM <-> ~structured@1.0 (native types) <-> IPLD intermediate <
 | Unsupported tag | `{unsupported_tag, N}` |
 | Non-canonical integer encoding | `non_canonical_integer` |
 
-Commitments and the `priv` sub-map are stripped before encoding — dag-cbor blocks carry content, not signatures. Atoms outside `{null, true, false}` cannot be represented in IPLD and are rejected with `{error, {dag_cbor_encode, {unsupported_atom, _}}}`.
+The `priv` sub-map is stripped before encoding. Commitments pass through the codec boundary unchanged, matching every other HyperBEAM codec (json, flat, ans104). Atoms outside `{null, true, false}` cannot be represented in IPLD and are rejected with `{error, {dag_cbor_encode, {unsupported_atom, _}}}`.
 
 ### Composing `commit` with `to`
 
@@ -134,13 +141,48 @@ Carrier = #{ <<"body">> => Bytes },
 Committed = hb_message:commit(Carrier, Opts,
                  #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                     <<"type">>              => <<"unsigned">>,
-                    <<"codec">>             => <<"dag-cbor">> }),
+                    <<"multicodec">>             => <<"dag-cbor">> }),
 {ok, _} = hb_cache:write(Committed, Opts).
 ```
 
 The CID produced by `commit` over the dag-cbor bytes matches exactly what `ipfs dag put --store-codec dag-cbor` would produce on the same logical message. `hb_cache:read(CID, Opts)` then returns the committed message from the local cache; if the CID is not local, the optional `hb_store_ipfs_gateway` backend fetches it from a configured HTTP gateway and verifies the bytes against the CID before admitting them.
 
-## End-to-end example
+## HTTP recipes
+
+With a node configured as above, a user drives the three production flows entirely through standard AO-Core paths — no kernel edits, no custom route handlers.
+
+### 1. Serve a CID
+
+```bash
+curl 'http://localhost:8734/~lookup@1.0/read&target=bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e'
+# => hello world
+```
+
+The node resolves the CID through its store chain. On first hit, the `hb_store_ipfs_gateway` backend fetches from a configured HTTP gateway, verifies `sha256(body)` matches the CID's digest, wraps the body in a message with an `~ipfs@1.0` commitment, and writes it through the cache. On subsequent hits, the body is served from the local store.
+
+### 2. Preload (en-masse pin)
+
+Loop over your CIDs:
+
+```bash
+for CID in bafkreif… bafkreig… bafyreib… ; do
+  curl -sI "http://localhost:8734/~lookup@1.0/read&target=$CID" > /dev/null
+done
+```
+
+Each successful lookup pins the CID to the local store via the HTTP request-response write-through path.
+
+### 3. Push IPFS content to Arweave
+
+Chain a server-side ANS-104 commit onto the lookup. The node's `priv_wallet` does the signing:
+
+```bash
+curl 'http://localhost:8734/~lookup@1.0/read&target=<CID>/commit&type=signed&commitment-device=ans104@1.0'
+```
+
+The response carries the IPFS body plus an `ans104@1.0/rsa-pss-sha256` signed commitment in the `signature-input` header. That's a bundler-ready message: follow up with a `POST` to `/~arweave@2.9/tx` (or `/~bundler@1.0/tx`) with that signed message as the body, and the node will push it to Arweave, provided its wallet is topped up and `bundler_ans104` is configured.
+
+## Programmatic end-to-end example (Erlang)
 
 ```erlang
 %% 1. Stamp a blob with its CID.
@@ -150,8 +192,7 @@ Committed = hb_message:commit(Msg, Opts,
                    <<"type">> => <<"unsigned">> }),
 %% 2. Write it. Cache auto-links the CID to the uncommitted ID.
 {ok, _UncommittedID} = hb_cache:write(Committed, Opts),
-%% 3. Read by CID. Works because of the link established in step 2 —
-%%    nothing special, no new path, no routing change.
+%% 3. Read by CID. Works because of the link established in step 2.
 {ok, Recovered} =
     hb_cache:read(
         <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>,

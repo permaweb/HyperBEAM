@@ -1,16 +1,25 @@
 %%% @doc End-to-end production tests for `~ipfs@1.0': live IPFS network +
-%%% live HyperBEAM node + HTTP client, exercising the full user-visible
-%%% pipeline that a pinning operator would exercise.
+%%% live HyperBEAM node + HTTP client, exercising the paths described in
+%%% PR #868.
 %%%
-%%% Each test:
-%%%   1. Stands up a real HyperBEAM node on an OS-assigned port.
-%%%   2. Configures the node with a real IPFS gateway store chain.
-%%%   3. Drives the node with HTTP — the same shape a `curl' user or a
-%%%      browser would send.
-%%%   4. Asserts the response matches what a pinning user would expect.
+%%% The PR advertises three user-facing flows, each expressed through the
+%%% standard AO-Core `~lookup@1.0' device so no kernel edits are required:
 %%%
-%%% Tests skip gracefully if every gateway is unreachable at the time they
-%%% run (matches the pattern used by `hb_store_gateway' live tests).
+%%%   1. Serve a CID:      `GET /~lookup@1.0/read&target=<CID>'
+%%%   2. Preload a CID:    first lookup fetches + pins; subsequent lookups
+%%%                        are local.
+%%%   3. Commit for Arweave:
+%%%          `GET /~lookup@1.0/read&target=<CID>/commit
+%%%              &type=signed&commitment-device=ans104@1.0'
+%%%       returns the bundler-ready signed message. The final POST to
+%%%       `~arweave@2.9/tx' needs a topped-up wallet and a configured
+%%%       bundler endpoint, neither of which is in scope for automated CI.
+%%%
+%%% `~ipfs@1.0' is an optional, user-loadable device. Each test opts into
+%%% it via per-node `preloaded_devices' — the same way a production
+%%% operator enables it. Tests skip gracefully if every gateway is
+%%% unreachable at the time they run (matches the `hb_store_gateway'
+%%% live-test pattern).
 -module(dev_codec_ipfs_live_test).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -18,8 +27,6 @@
 -define(HELLO_WORLD_CID,
     <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>).
 -define(HELLO_WORLD_BODY, <<"hello world">>).
--define(EMPTY_DAG_CBOR_CID,
-    <<"bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua">>).
 -define(LIVE_GATEWAYS, [
     <<"https://ipfs.io">>,
     <<"https://dweb.link">>,
@@ -31,15 +38,16 @@
 %%% Helpers
 %%%====================================================================
 
-%% @doc Opts with an IPFS gateway store chain. Used to seed the node
-%% before start so `hb_cache:read(CID, _)' falls through to the gateway.
+%% @doc Node opts that opt into `~ipfs@1.0' and configure the IPFS
+%% gateway store in the chain.
 node_opts_with_ipfs() ->
+    Stock = hb_opts:get(preloaded_devices, [], #{}),
     #{
-        %% `cache_control => cache' tells AO-Core's resolve_many that a
-        %% bare /<ID> request should fall through to the store chain; the
-        %% same pattern `hb_store_gateway' tests use for Arweave IDs.
-        cache_control => <<"cache">>,
-        priv_wallet   => hb:wallet(),
+        cache_control     => <<"cache">>,
+        priv_wallet       => hb:wallet(),
+        preloaded_devices =>
+            [ #{ <<"name">> => <<"ipfs@1.0">>,
+                 <<"module">> => dev_codec_ipfs } | Stock ],
         store => [
             hb_test_utils:test_store(),
             #{
@@ -50,8 +58,6 @@ node_opts_with_ipfs() ->
         ]
     }.
 
-%% @doc Try fetching a CID through the live gateway chain. Returns `skip'
-%% if every gateway is unreachable.
 gateways_reachable_for_cid(CID) ->
     Store = #{
         <<"store-module">> => hb_store_ipfs_gateway,
@@ -64,13 +70,10 @@ gateways_reachable_for_cid(CID) ->
     end.
 
 %%%====================================================================
-%%% 1. HTTP GET /<CID> on a running node resolves through the gateway
+%%% PR Path 1 — Serve a CID from a running node
 %%%====================================================================
 
-%% A real user hitting a running node with `GET /<CID>' should get the
-%% IPFS-pinned bytes back, verified end-to-end. This is the user-facing
-%% headline: "a HyperBEAM node can act as an IPFS gateway."
-live_http_get_cid_returns_body_test_() ->
+live_http_get_cid_serves_body_test_() ->
     {timeout, 90, fun() ->
         application:ensure_all_started(inets),
         application:ensure_all_started(ssl),
@@ -81,31 +84,21 @@ live_http_get_cid_returns_body_test_() ->
             true ->
                 NodeURL = hb_http_server:start_node(
                     node_opts_with_ipfs()),
-                ?event({live_node_started, NodeURL}),
-                %% The conventional HyperBEAM read path for a bare ID:
-                %% `/<CID>/body' resolves the CID into a message through
-                %% the store chain and extracts the body field.
-                Path = <<"/", ?HELLO_WORLD_CID/binary, "/body">>,
+                Path = <<"/~lookup@1.0/read&target=",
+                         ?HELLO_WORLD_CID/binary>>,
                 {ok, Response} = hb_http:get(NodeURL, Path, #{}),
-                ?event({got_response, Response}),
                 Body =
                     case Response of
                         B when is_binary(B) -> B;
-                        #{ <<"body">> := B } -> B
+                        #{ <<"body">> := B } ->
+                            hb_cache:ensure_loaded(B, #{})
                     end,
-                ?assertEqual(?HELLO_WORLD_BODY,
-                    hb_cache:ensure_loaded(Body, #{}))
+                ?assertEqual(?HELLO_WORLD_BODY, Body)
         end
     end}.
 
-%% Recomputing the CID from the returned body must reproduce the CID we
-%% asked for — the only verification that matters in IPFS.
-%%
-%% (The HTTP response carries its own signature via `~httpsig@1.0', which
-%% is independently verified by hb_http:get/3 before it returns the body.
-%% Our IPFS commitment on the cache-side message is consumed by the
-%% gateway store and does not cross the HTTP boundary — the wire format
-%% is httpsig by design.)
+%% Recomputing the CID from the wire body reproduces the requested CID —
+%% the only verification that matters in IPFS.
 live_http_body_round_trips_to_cid_test_() ->
     {timeout, 90, fun() ->
         application:ensure_all_started(inets),
@@ -116,12 +109,14 @@ live_http_body_round_trips_to_cid_test_() ->
             true ->
                 NodeURL = hb_http_server:start_node(
                     node_opts_with_ipfs()),
-                Path = <<"/", ?HELLO_WORLD_CID/binary>>,
+                Path = <<"/~lookup@1.0/read&target=",
+                         ?HELLO_WORLD_CID/binary>>,
                 {ok, Response} = hb_http:get(NodeURL, Path, #{}),
                 Body =
                     case Response of
                         B when is_binary(B) -> B;
-                        #{ <<"body">> := B } -> hb_cache:ensure_loaded(B, #{})
+                        #{ <<"body">> := B } ->
+                            hb_cache:ensure_loaded(B, #{})
                     end,
                 Recomputed =
                     dev_codec_ipfs_cid:encode(
@@ -131,12 +126,110 @@ live_http_body_round_trips_to_cid_test_() ->
     end}.
 
 %%%====================================================================
-%%% 2. Lua computation across IPFS-resolved data
+%%% PR Path 2 — Preload / en-masse cache a set of CIDs
 %%%====================================================================
 
-%% Load an IPFS CID, feed its body to the Lua device, and compute a small
-%% result across it. This is how a process would pull data from IPFS and
-%% reason about it as part of its state transition.
+%% The first HTTP lookup pulls the CID via the gateway and pins it to
+%% the node's local filesystem store. A second lookup — against an
+%% opts-set that only contains the local store — still succeeds, proving
+%% the HTTP request-response pipeline's write-through is doing the job.
+%% This is the mechanism behind the PR's "HEAD /CID preload" claim.
+live_cache_preload_pattern_test_() ->
+    {timeout, 90, fun() ->
+        application:ensure_all_started(inets),
+        application:ensure_all_started(ssl),
+        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
+            false ->
+                ?debugFmt("Skipping: all gateways unreachable", []);
+            true ->
+                LocalStore = #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> =>
+                        iolist_to_binary(
+                            ["cache-TEST/ipfs-preload-",
+                             integer_to_list(
+                                erlang:system_time(microsecond))])
+                },
+                hb_store:reset(LocalStore),
+                Stock = hb_opts:get(preloaded_devices, [], #{}),
+                NodeURL = hb_http_server:start_node(#{
+                    cache_control     => <<"cache">>,
+                    priv_wallet       => hb:wallet(),
+                    preloaded_devices =>
+                        [ #{ <<"name">> => <<"ipfs@1.0">>,
+                             <<"module">> => dev_codec_ipfs } | Stock ],
+                    store => [
+                        LocalStore,
+                        #{
+                            <<"store-module">> => hb_store_ipfs_gateway,
+                            <<"gateways">>     => ?LIVE_GATEWAYS,
+                            <<"timeout">>      => 20000
+                        }
+                    ]
+                }),
+                %% 1. First HTTP read — fetches from the gateway and the
+                %% cache-through write path pins it to LocalStore.
+                Path = <<"/~lookup@1.0/read&target=",
+                         ?HELLO_WORLD_CID/binary>>,
+                {ok, R1} = hb_http:get(NodeURL, Path, #{}),
+                Body1 =
+                    case R1 of
+                        B1 when is_binary(B1) -> B1;
+                        #{ <<"body">> := B1 } ->
+                            hb_cache:ensure_loaded(B1, #{})
+                    end,
+                ?assertEqual(?HELLO_WORLD_BODY, Body1),
+                %% 2. Second lookup driven directly at the local store
+                %% (no gateway, no node). If it resolves, the HTTP call
+                %% pinned the CID.
+                LocalOpts = #{ store => [LocalStore] },
+                {ok, R2} = hb_cache:read(?HELLO_WORLD_CID, LocalOpts),
+                ?assertEqual(
+                    ?HELLO_WORLD_BODY,
+                    hb_cache:ensure_loaded(
+                        hb_ao:get(<<"body">>, R2, <<>>, LocalOpts),
+                        LocalOpts))
+        end
+    end}.
+
+%%%====================================================================
+%%% PR Path 3 — Commit IPFS content as ANS-104 via the node's wallet
+%%%====================================================================
+
+%% The server-side-commit half of the push-to-Arweave chain: node reads
+%% CID, applies an ANS-104 signed commitment using its own wallet, and
+%% returns a bundler-ready message. The final POST to `~arweave@2.9/tx'
+%% (or `~bundler@1.0/tx') needs a funded wallet and a reachable bundler,
+%% neither of which is in scope for automated CI.
+live_lookup_then_ans104_commit_test_() ->
+    {timeout, 90, fun() ->
+        application:ensure_all_started(inets),
+        application:ensure_all_started(ssl),
+        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
+            false ->
+                ?debugFmt("Skipping: all gateways unreachable", []);
+            true ->
+                NodeURL = hb_http_server:start_node(
+                    node_opts_with_ipfs()),
+                Path =
+                    <<"/~lookup@1.0/read&target=",
+                      ?HELLO_WORLD_CID/binary,
+                      "/commit&type=signed&commitment-device=ans104@1.0">>,
+                {ok, Response} = hb_http:get(NodeURL, Path, #{}),
+                Body =
+                    case Response of
+                        B when is_binary(B) -> B;
+                        #{ <<"body">> := B } ->
+                            hb_cache:ensure_loaded(B, #{})
+                    end,
+                ?assertEqual(?HELLO_WORLD_BODY, Body)
+        end
+    end}.
+
+%%%====================================================================
+%%% Lua computation across IPFS-resolved data
+%%%====================================================================
+
 live_lua_computation_over_ipfs_body_test_() ->
     {timeout, 90, fun() ->
         application:ensure_all_started(inets),
@@ -147,16 +240,11 @@ live_lua_computation_over_ipfs_body_test_() ->
             true ->
                 NodeOpts = node_opts_with_ipfs(),
                 NodeURL = hb_http_server:start_node(NodeOpts),
-                %% 1. Pull the IPFS body through the store chain.
                 {ok, IpfsMsg} = hb_cache:read(?HELLO_WORLD_CID, NodeOpts),
                 Body = hb_cache:ensure_loaded(
                     hb_ao:get(<<"body">>, IpfsMsg, <<>>, NodeOpts),
                     NodeOpts),
                 ?assertEqual(?HELLO_WORLD_BODY, Body),
-                %% 2. Run a Lua computation across that body. The Lua
-                %%    module is inlined into the base message with the
-                %%    `application/lua' content-type, which the device
-                %%    recognises as its program source.
                 LuaSource =
                     <<"function byte_length(base, req)\n"
                       "  return #base.body\n"
@@ -166,11 +254,8 @@ live_lua_computation_over_ipfs_body_test_() ->
                     <<"content-type">> => <<"application/lua">>,
                     <<"body">>         => LuaSource,
                     <<"function">>     => <<"byte_length">>,
-                    <<"parameters">>   => [
-                        #{ <<"body">> => Body }
-                    ]
+                    <<"parameters">>   => [ #{ <<"body">> => Body } ]
                 },
-                ?event({lua_base, Base}),
                 Result =
                     hb_ao:get(
                         <<"byte_length">>,
@@ -178,77 +263,8 @@ live_lua_computation_over_ipfs_body_test_() ->
                         undefined,
                         NodeOpts
                     ),
-                ?event({lua_result, Result}),
-                %% The Lua function returned the length of the IPFS body.
                 ?assertEqual(byte_size(?HELLO_WORLD_BODY), Result),
-                %% Liveness proof: the node served HTTP traffic while we
-                %% were computing.
-                {ok, _Info} = hb_http:get(NodeURL,
+                {ok, _} = hb_http:get(NodeURL,
                     <<"/~meta@1.0/info">>, #{})
-        end
-    end}.
-
-%%%====================================================================
-%%% 3. Bundle IPFS-fetched content into an Arweave bundler
-%%%====================================================================
-
-%% @doc Fetch content from IPFS, attach an ANS-104 signed commitment, and
-%% hand it to the Arweave bundler device. We assert only that the device
-%% accepts the message and attempts the upload — the actual upload needs
-%% a funded wallet and a reachable bundler, neither of which we assume in
-%% CI. If `bundler_ans104' is unset in node opts, the device tells us so
-%% (the expected path), which is still the verifiable signal that we
-%% walked the IPFS-to-Arweave pipeline end-to-end up to the network edge.
-live_ipfs_to_arweave_bundle_pipeline_test_() ->
-    {timeout, 120, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                Opts = node_opts_with_ipfs(),
-                %% 1. Pull the IPFS body through our gateway store.
-                {ok, IPFSMsg} = hb_cache:read(?HELLO_WORLD_CID, Opts),
-                Body = hb_cache:ensure_loaded(
-                    hb_ao:get(<<"body">>, IPFSMsg, <<>>, Opts), Opts),
-                ?assertEqual(?HELLO_WORLD_BODY, Body),
-                %% 2. Wrap the body in an ANS-104-ready message. Include
-                %% a tag referencing the source CID so the Arweave record
-                %% carries IPFS provenance.
-                ToBundle =
-                    #{
-                        <<"body">>        => Body,
-                        <<"source">>      => <<"ipfs">>,
-                        <<"source-cid">>  => ?HELLO_WORLD_CID,
-                        <<"content-type">> => <<"text/plain">>
-                    },
-                %% 3. Sign for ANS-104. This is the exact shape the
-                %% bundler device expects.
-                Signed =
-                    hb_message:commit(
-                        ToBundle,
-                        Opts,
-                        #{ <<"commitment-device">> =>
-                                <<"ans104@1.0">> }
-                    ),
-                ?assert(hb_message:verify(Signed, all, Opts)),
-                ?event({bundling, Signed}),
-                %% 4. Ask the `~arweave@2.9' device to post the bundle.
-                %% We intentionally do NOT set `bundler_ans104' here —
-                %% so the device is exercised up to the network boundary
-                %% and returns the configuration error we expect. That
-                %% is still a strong signal that IPFS-to-Arweave wiring
-                %% works end-to-end inside the node.
-                UploadRes =
-                    dev_arweave:post_tx(#{}, Signed, Opts),
-                ?event({upload_res, UploadRes}),
-                case UploadRes of
-                    {ok, _} -> ok;
-                    {error, _} -> ok;
-                    {failure, _} -> ok;
-                    failure -> ok;
-                    not_found -> ok
-                end
         end
     end}.

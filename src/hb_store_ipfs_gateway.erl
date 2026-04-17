@@ -137,16 +137,22 @@ try_gateways([Gateway|Rest], CID, Parts, Timeout, Opts) ->
 %% `hb_message:verify/2,3' — without trusting this store to have done the
 %% check. The `codec' in the commitment mirrors the CID's multicodec so a
 %% round-trip through the cache preserves identity.
-with_commitment(CID, #{ <<"codec">> := Codec }, Body) ->
+with_commitment(CID, #{ <<"multicodec">> := Codec, <<"digest">> := Digest }, Body) ->
+    %% Mirror `dev_codec_ipfs:commit/3': populate `signature' with the raw
+    %% digest (base64url) and `keyid' with the universal `constant:ipfs',
+    %% so the commitment round-trips over the HTTPSig wire format as an
+    %% HMAC-shaped item. See `dev_codec_ipfs' for the rationale.
     #{
         <<"body">>        => Body,
         <<"commitments">> => #{
             CID => #{
                 <<"commitment-device">> => <<"ipfs@1.0">>,
                 <<"type">>              => <<"unsigned">>,
-                <<"codec">>             => Codec,
+                <<"multicodec">>             => Codec,
                 <<"hash-alg">>          => <<"sha2-256">>,
-                <<"committed">>         => [<<"body">>]
+                <<"committed">>         => [<<"body">>],
+                <<"signature">>         => hb_util:encode(Digest),
+                <<"keyid">>             => <<"constant:ipfs">>
             }
         }
     }.
@@ -265,7 +271,7 @@ live_gateway_fetches_known_cid_test_() ->
                 ?assertEqual(<<"ipfs@1.0">>,
                     maps:get(<<"commitment-device">>, Commitment)),
                 ?assertEqual(<<"raw">>,
-                    maps:get(<<"codec">>, Commitment));
+                    maps:get(<<"multicodec">>, Commitment));
             not_found ->
                 ?debugFmt("Skipping: all live gateways missed CID ~s",
                     [?HELLO_WORLD_CID]),
