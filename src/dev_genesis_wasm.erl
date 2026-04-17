@@ -135,6 +135,8 @@ do_compute(State, Req, Opts) ->
                         <<"slot">> =>
                             hb_maps:get(<<"slot">>, Req, -1, Opts),
                         <<"skip">> => true,
+                        <<"original-assignment-id">> => 
+                            hb_message:id(Req, signed, Opts),
                         <<"body">> => 
                             hb_message:commit(
                                 #{
