@@ -23,10 +23,27 @@
 ]).
 
 %% @doc Generate a `signature' and `signature-input' key pair from a commitment
-%% map.
+%% map. Commitments without a `signature' field (e.g. content-addressed
+%% commitments like `~ipfs@1.0' CIDs, or `ans104@1.0' unsigned-sha256) are
+%% not signatures per RFC-9421; they ride along in the message body's
+%% `commitments' field and are skipped here.
 commitments_to_siginfo(_Msg, Comms, _Opts) when ?IS_EMPTY_MESSAGE(Comms) ->
     #{};
 commitments_to_siginfo(Msg, Comms, Opts) ->
+    Signable =
+        maps:filter(
+            fun(_CommID, Commitment) ->
+                maps:is_key(<<"signature">>, Commitment)
+            end,
+            Comms
+        ),
+    case map_size(Signable) of
+        0 -> #{};
+        _ ->
+            commitments_to_siginfo_for_signable(Msg, Signable, Opts)
+    end.
+
+commitments_to_siginfo_for_signable(Msg, Comms, Opts) ->
     % Generate a SF item for each commitment's signature and signature-input.
     {Sigs, SigInputs} =
         maps:fold(
