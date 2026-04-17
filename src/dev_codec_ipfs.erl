@@ -1,10 +1,21 @@
 %%% @doc `~ipfs@1.0' — a commitment device whose IDs are IPFS CIDv1s over a
-%%% message's `body'.
+%%% message's `body', and (in phase 2) a codec that serializes HyperBEAM
+%%% messages to deterministic dag-cbor and back.
 %%%
 %%% Phase 1 surface: `commit/3' (type `unsigned' only), `verify/3',
-%%% `content_type/1', and `info/1'. No `to/3' or `from/3' yet — the
-%%% `<<"body">>' blob is treated as opaque bytes for hashing. Phase 2 adds a
-%%% full dag-cbor `to'/`from' pair, routed through `~structured@1.0'.
+%%% `content_type/1', and `info/1'. The `<<"body">>' blob is treated as
+%%% opaque bytes for hashing.
+%%%
+%%% Phase 2 adds `to/3' and `from/3'. These route through `~structured@1.0'
+%%% exactly like `dev_codec_json' — no changes to the structured codec, the
+%%% cache, or the kernel. The pipeline is:
+%%%
+%%%   TABM <-> structured@1.0 (native types) <-> IPLD intermediate <-> dag-cbor bytes
+%%%
+%%% Atoms other than `null', `true', `false' are not representable in IPLD
+%%% and cause `to/3' to throw — that matches the spec. Commitments are
+%%% stripped before encoding (IPFS blocks are content; signatures are carried
+%%% out-of-band by the HyperBEAM `commitments' machinery).
 %%%
 %%% How this fits AO-Core: a commitment whose ID is a CID gives the cache
 %%% everything it already needs to serve the message under that CID. When a
@@ -21,6 +32,7 @@
 %%% `hb_opts:preloaded_devices/0' by default.
 -module(dev_codec_ipfs).
 -export([info/1, commit/3, verify/3, content_type/1]).
+-export([to/3, from/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -34,11 +46,11 @@
 %%%====================================================================
 
 %% @doc Restrict what AO-Core will resolve against this module. We are a
-%% commitment device, not a general key resolver. `committed/3' is handled
-%% by `dev_message' from the `<<"committed">>' field of each commitment, so
-%% we do not export it here.
+%% commitment device and a codec, not a general key resolver. `committed/3'
+%% is handled by `dev_message' from the `<<"committed">>' field of each
+%% commitment, so we do not export it here.
 info(_) ->
-    #{ exports => [commit, verify, content_type] }.
+    #{ exports => [commit, verify, content_type, to, from] }.
 
 %% @doc Report the appropriate IPLD MIME type for a given codec.
 content_type(#{ <<"codec">> := <<"dag-cbor">> }) ->
@@ -131,6 +143,126 @@ verify(Base, Req, Opts) ->
                 {ipfs_verify_unsupported, {codec, Codec}, {hash_alg, HashAlg}}),
             {ok, false}
     end.
+
+%%%====================================================================
+%%% to/3 — TABM -> dag-cbor bytes (phase 2)
+%%%====================================================================
+
+%% @doc Serialize a HyperBEAM TABM message to deterministic dag-cbor bytes.
+%% Routes through `~structured@1.0' to recover native types from the TABM,
+%% then walks the rich message into the IPLD intermediate form and hands it
+%% to the dag-cbor encoder. Commitments are stripped before encoding — they
+%% do not belong in the content-addressed bytes.
+to(Bin, _Req, _Opts) when is_binary(Bin) ->
+    {ok, Bin};
+to(Msg, _Req, Opts) when is_map(Msg) ->
+    try
+        %% Step 1: TABM -> structured form with native types.
+        Structured =
+            hb_message:convert(
+                hb_private:reset(Msg),
+                <<"structured@1.0">>,
+                tabm,
+                Opts
+            ),
+        %% Step 2: resolve all links. Dag-cbor encodes self-contained content
+        %% — partial messages carrying `link'-ref placeholders would not
+        %% roundtrip through the IPLD data model. An IPLD-link-aware mapping
+        %% through `hb_link' is a future phase.
+        Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
+        %% Step 3: strip non-content fields. The CID is over the block
+        %% content, not over HyperBEAM's signature envelope.
+        Clean = hb_maps:without([<<"commitments">>, <<"priv">>], Loaded, Opts),
+        %% Step 4: walk into the IPLD intermediate form, then encode.
+        Ipld = structured_to_ipld(Clean),
+        {ok, dev_codec_ipfs_cbor:encode(Ipld)}
+    catch
+        throw:{dag_cbor_encode, Reason} ->
+            ?event(warning, {ipfs_to_failed, Reason}),
+            {error, {dag_cbor_encode, Reason}}
+    end.
+
+%% @doc Walk a structured (rich-typed) HyperBEAM value into the IPLD
+%% intermediate form understood by `dev_codec_ipfs_cbor:encode/1'.
+%%
+%% Mappings:
+%%   - `null' / `true' / `false'      -> kept as IPLD native.
+%%   - integer / float / binary       -> passed through as-is.
+%%   - list                           -> list, recursively converted.
+%%   - map                            -> map, with binary keys; values
+%%                                       recursively converted.
+%%   - other atoms                    -> throw; dag-cbor has no atom type.
+%%
+%% Any value the walker cannot map raises an error the caller surfaces as
+%% `{error, {dag_cbor_encode, _}}'.
+structured_to_ipld(null)  -> null;
+structured_to_ipld(true)  -> true;
+structured_to_ipld(false) -> false;
+structured_to_ipld(A) when is_atom(A) ->
+    throw({dag_cbor_encode, {unsupported_atom, A}});
+structured_to_ipld(N) when is_integer(N); is_float(N) -> N;
+structured_to_ipld(B) when is_binary(B) -> B;
+structured_to_ipld(L) when is_list(L) ->
+    [ structured_to_ipld(V) || V <- L ];
+structured_to_ipld(M) when is_map(M) ->
+    maps:from_list(
+        [ {assert_binary_key(K), structured_to_ipld(V)}
+            || {K, V} <- maps:to_list(M) ]
+    );
+structured_to_ipld(Other) ->
+    throw({dag_cbor_encode, {unsupported_value, Other}}).
+
+assert_binary_key(K) when is_binary(K) -> K;
+assert_binary_key(K) ->
+    throw({dag_cbor_encode, {non_binary_map_key, K}}).
+
+%%%====================================================================
+%%% from/3 — dag-cbor bytes -> TABM (phase 2)
+%%%====================================================================
+
+%% @doc Parse dag-cbor bytes into a TABM message. Decodes to the IPLD
+%% intermediate form, normalizes into a rich structured message, then hands
+%% to `~structured@1.0' to produce the TABM.
+from(Map, _Req, _Opts) when is_map(Map) ->
+    %% Passthrough for already-decoded messages, same discipline as json/flat.
+    {ok, Map};
+from(Bin, Req, Opts) when is_binary(Bin) ->
+    case dev_codec_ipfs_cbor:decode(Bin) of
+        {ok, Ipld} ->
+            Structured = ipld_to_structured(Ipld),
+            case Structured of
+                S when is_map(S) ->
+                    dev_codec_structured:from(S, Req, Opts);
+                Other ->
+                    {ok, Other}
+            end;
+        {error, Reason} ->
+            ?event(warning, {ipfs_from_failed, Reason}),
+            {error, {dag_cbor_decode, Reason}}
+    end.
+
+%% @doc Walk the IPLD intermediate form into a HyperBEAM structured form
+%% (the rich, native-typed representation that `dev_codec_structured:from/3'
+%% consumes).
+%%
+%% Decisions made for phase 2 minimum:
+%%   - `{bytes, B}' and plain binary both flatten to a binary. HyperBEAM
+%%     messages rarely need the bytes/text distinction, and re-inferring it
+%%     via `ao-types' is out of scope for the first cut.
+%%   - `{link, CID}' flattens to the CID string. This is lossy against
+%%     IPLD's link semantics, but keeps v1 simple; a link-aware mapping
+%%     through `hb_link' is the natural phase 3 step.
+ipld_to_structured(null)  -> null;
+ipld_to_structured(true)  -> true;
+ipld_to_structured(false) -> false;
+ipld_to_structured(N) when is_integer(N); is_float(N) -> N;
+ipld_to_structured(B) when is_binary(B) -> B;
+ipld_to_structured({bytes, B})            -> B;
+ipld_to_structured({link, CID})           -> CID;
+ipld_to_structured(L) when is_list(L) ->
+    [ ipld_to_structured(V) || V <- L ];
+ipld_to_structured(M) when is_map(M) ->
+    maps:map(fun(_K, V) -> ipld_to_structured(V) end, M).
 
 %%%====================================================================
 %%% Tests
