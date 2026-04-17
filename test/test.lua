@@ -161,3 +161,18 @@ function inc(base, req, opts)
     base.count = base.count + 1
     return base
 end
+
+function ao_unset_reference_bug(base, req, opts)
+    local Routes = { ["wallet1"] = "__ao-unset__" }
+    local shared = { routes = Routes }
+    Routes["wallet1"] = nil
+
+    local targeted = { routes = {["wallet1"] = "__ao-unset__"} }
+
+    local outbox = {
+        shared = shared.routes,
+        targeted = targeted.routes
+    }
+
+    return outbox
+end
