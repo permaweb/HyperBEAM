@@ -32,7 +32,7 @@
 -define(DEFAULT_PRINT_OPTS,
     [
         error, http_error, cron_error, hook_error, warning,
-        http_server_short,
+        http_server_short, http_client_short,
         compute_short, push_short, copycat_short, bundler_short
     ]
 ).
