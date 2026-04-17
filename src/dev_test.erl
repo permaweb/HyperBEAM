@@ -1,5 +1,5 @@
 -module(dev_test).
--export([info/3]).
+-export([info/3, cookbook/0]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3]).
 -export([index/3, postprocess/3, load/3]).
@@ -12,6 +12,30 @@
 %%% NOTE: This device is labelled `test-device/1.0' to avoid conflicts with
 %%% other testing functionality -- care should equally be taken to avoid
 %%% using the `test' key in other settings.
+
+-type base_message() ::
+    #{
+        device => binary(),
+        already_seen => [integer()],
+        name => binary(),
+        random_key => binary(),
+        return => map(),
+        results => #{
+            assignment_slot => integer()
+        },
+        state => term()
+    }.
+
+-type request_message() ::
+    #{
+        path => binary(),
+        slot => integer(),
+        args => [number()],
+        body => map(),
+        duration => integer(),
+        return => map(),
+        test_id => binary()
+    }.
 
 
 %% @doc Exports a default_handler function that can be used to test the
@@ -26,8 +50,34 @@ info(_) ->
 		}
 	}.
 
+%% @doc Return example paths for the test device.
+cookbook() ->
+    [
+        #{
+            <<"title">> => <<"Describe the device">>,
+            <<"path">> => <<"info">>,
+            <<"body">> => <<"Return a simple, explicit device description.">>
+        },
+        #{
+            <<"title">> => <<"Initialize state">>,
+            <<"path">> => <<"init">>,
+            <<"body">> => <<"Seed the test state with an empty already-seen list.">>
+        },
+        #{
+            <<"title">> => <<"Run compute">>,
+            <<"path">> => <<"compute?slot=1">>,
+            <<"body">> => <<"Append a slot number to the running state.">>
+        },
+        #{
+            <<"title">> => <<"Render an index page">>,
+            <<"path">> => <<"index">>,
+            <<"body">> => <<"Return a small HTML view for the current message.">>
+        }
+    ].
+
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
+-spec info(base_message(), request_message(), map()) -> {ok, map()}.
 info(_Base, _Req, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Test device for testing the AO-Core framework">>,
@@ -43,10 +93,11 @@ info(_Base, _Req, _Opts) ->
 			<<"response">> => <<"Response function">>,
 			<<"update_state">> => <<"Update state function">>
 		}
-	},
-	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+		},
+		{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Example index handler.
+-spec index(base_message(), request_message(), map()) -> {ok, map()}.
 index(Msg, _Req, Opts) ->
     Name = hb_ao:get(<<"name">>, Msg, <<"turtles">>, Opts),
     {ok,
@@ -57,15 +108,18 @@ index(Msg, _Req, Opts) ->
     }.
 
 %% @doc Return a message with the device set to this module.
+-spec load(base_message(), request_message(), map()) -> {ok, base_message()}.
 load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
+-spec test_func(term()) -> {ok, binary()}.
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
+-spec compute(base_message(), request_message(), map()) -> {ok, base_message()}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -84,12 +138,14 @@ compute(Base, Req, Opts) ->
     }.
 
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
+-spec init(base_message(), request_message(), map()) -> {ok, base_message()}.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
 %% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
+-spec restore(base_message(), request_message(), map()) -> {ok, map()} | {error, binary()}.
 restore(Msg, _Req, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
@@ -109,6 +165,7 @@ restore(Msg, _Req, Opts) ->
 
 %% @doc Example implementation of an `imported' function for a WASM
 %% executor.
+-spec mul(base_message(), request_message()) -> {ok, map()}.
 mul(Base, Req) ->
     ?event(mul_called),
     State = hb_ao:get(<<"state">>, Base, #{ hashpath => ignore }),
@@ -117,17 +174,20 @@ mul(Base, Req) ->
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
 %% @doc Do nothing when asked to snapshot.
+-spec snapshot(base_message(), request_message(), map()) -> {ok, map()}.
 snapshot(Base, Req, _Opts) ->
     ?event({snapshot_called, {base, Base}, {req, Req}}),
     {ok, #{}}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.
+-spec postprocess(map(), map(), map()) -> {ok, map()}.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
     {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
+-spec update_state(map(), request_message(), map()) -> {ok, pid()} | {error, binary()}.
 update_state(_Msg, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -144,6 +204,7 @@ update_state(_Msg, Req, _Opts) ->
     end.
 
 %% @doc Find a test worker's PID and send it an increment message.
+-spec increment_counter(map(), request_message(), map()) -> {ok, pid()} | {error, binary()}.
 increment_counter(_Base, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -163,6 +224,7 @@ increment_counter(_Base, Req, _Opts) ->
 
 %% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
 %% appropriate form in order to be used as a hook.
+-spec delay(base_message(), request_message(), map()) -> {ok, map()}.
 delay(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
@@ -192,6 +254,7 @@ delay(Base, Req, Opts) ->
 %% 
 %% Caution: This function is not safe to use in production, as it may cause
 %% state inconsistencies.
+-spec mangle(map(), request_message(), map()) -> {ok, map()} | {error, binary()}.
 mangle(Base, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};

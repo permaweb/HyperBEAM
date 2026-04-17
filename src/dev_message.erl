@@ -6,7 +6,7 @@
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
 %%% Base AO-Core reserved keys:
--export([info/0, keys/1, keys/2]).
+-export([info/0, info/3, cookbook/0, cookbook/3, types/3, keys/1, keys/2]).
 -export([set/3, set_path/3, remove/3, get/3, get/4]).
 %%% Commitment-specific keys:
 -export([id/1, id/2, id/3]).
@@ -17,6 +17,25 @@
 -include("include/hb.hrl").
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
 -define(DEFAULT_ATT_DEVICE, <<"httpsig@1.0">>).
+
+-type ao_message() :: map().
+-type request_message() ::
+    #{
+        method => binary(),
+        format => binary() | [binary()],
+        truncate_keys => non_neg_integer() | infinity
+    }.
+-type cookbook_entry() :: #{ title => binary(), path => binary(), body => binary() }.
+-type device_description() ::
+    #{
+        name => binary(),
+        module => binary(),
+        module_doc => binary(),
+        cookbook => [map()],
+        keys => [map()],
+        types => map(),
+        metadata => map()
+    }.
 
 %% The list of keys that are exported by this device.
 -define(DEVICE_KEYS, [
@@ -30,11 +49,69 @@
     <<"verify">>
 ]).
 
+-spec info() -> map().
+
 %% @doc Return the info for the identity device.
 info() ->
     #{
         default => fun dev_message:get/4
     }.
+
+-spec info(ao_message(), request_message(), ao_message()) ->
+    {ok, device_description()} | {error, term()}.
+
+%% @doc Describe the current message/device in a transport-friendly format.
+info(Base, _Req, Opts) ->
+    hb_introspect:describe(Base, Opts).
+
+-spec cookbook() -> [cookbook_entry()].
+
+%% @doc Return runnable examples for the current message/device.
+cookbook() ->
+    [
+        #{
+            <<"title">> => <<"List public keys">>,
+            <<"path">> => <<"keys">>,
+            <<"body">> => <<"Enumerate the visible keys on the current message.">>
+        },
+        #{
+            <<"title">> => <<"Resolve message metadata">>,
+            <<"path">> => <<"info">>,
+            <<"body">> => <<"Describe the current message's AO-Core device surface.">>
+        },
+        #{
+            <<"title">> => <<"Show static types">>,
+            <<"path">> => <<"types">>,
+            <<"body">> => <<"Extract the Dialyzer-backed schema for the current device.">>
+        },
+        #{
+            <<"title">> => <<"Read message ID">>,
+            <<"path">> => <<"id">>,
+            <<"body">> => <<"Return the message ID implied by the current commitments.">>
+        },
+        #{
+            <<"title">> => <<"List committers">>,
+            <<"path">> => <<"committers">>,
+            <<"body">> => <<"Return the visible committers on the current message.">>
+        }
+    ].
+
+-spec cookbook(ao_message(), request_message(), ao_message()) ->
+    {ok, [map()]} | {error, term()}.
+
+%% @doc Return cookbook examples for the current message/device.
+cookbook(Base, _Req, Opts) ->
+    case hb_introspect:describe(Base, Opts) of
+        {ok, #{ <<"cookbook">> := Entries }} -> {ok, Entries};
+        Error -> Error
+    end.
+
+-spec types(ao_message(), request_message(), ao_message()) ->
+    {ok, map()} | {error, term()}.
+
+%% @doc Return the extracted type information for the current message/device.
+types(Base, _Req, Opts) ->
+    hb_types:extract(hb_ao_device:message_to_device(Base, Opts), Opts).
 
 %% @doc Generate an index page for a message, in the event that the `body' and
 %% `content-type' of a message returned to the client are both empty. We do this

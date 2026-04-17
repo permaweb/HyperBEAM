@@ -7,12 +7,29 @@
 %%% resolver. Additionally, a post-processor can be set, which is executed after
 %%% the AO-Core resolver has returned a result.
 -module(dev_meta).
--export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
+-export([info/1, info/3, cookbook/0, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Include the auto-generated build info header file.
 -include_lib("../_build/hb_buildinfo.hrl").
+
+-type ao_message() :: map().
+-type meta_request() ::
+    #{
+        method => binary()
+    }.
+-type cookbook_entry() :: #{ title => binary(), path => binary(), body => binary() }.
+-type build_info() ::
+    #{
+        node => binary(),
+        version => binary(),
+        source => binary(),
+        source_short => binary(),
+        build_time => integer()
+    }.
+
+-spec info(ao_message()) -> map().
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
 %% The naming of this method carefully avoids a clash with the exported `info/3'
@@ -24,6 +41,25 @@
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
 info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
+
+-spec cookbook() -> [cookbook_entry()].
+
+%% @doc Return example paths for the meta device.
+cookbook() ->
+    [
+        #{
+            <<"title">> => <<"Inspect node state">>,
+            <<"path">> => <<"info">>,
+            <<"body">> => <<"Return the current node message, minus private keys.">>
+        },
+        #{
+            <<"title">> => <<"Show build information">>,
+            <<"path">> => <<"build">>,
+            <<"body">> => <<"Emit the HyperBEAM version, source hash, and build time.">>
+        }
+    ].
+
+-spec is_operator(ao_message(), ao_message()) -> boolean().
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
@@ -42,8 +78,12 @@ is_operator(Request, NodeMsg) ->
         case Operator of
             unclaimed -> unclaimed;
             NativeAddress -> hb_util:human_id(NativeAddress)
-        end,
+            end,
     EncOperator == unclaimed orelse lists:member(EncOperator, RequestSigners).
+
+-spec build(ao_message(), ao_message(), ao_message()) ->
+    {ok, build_info()}.
+
 %% @doc Emits the version number and commit hash of the HyperBEAM node source,
 %% if available.
 %% 
@@ -62,6 +102,8 @@ build(_, _, _NodeMsg) ->
             <<"build-time">> => ?HB_BUILD_TIME
         }
     }.
+
+-spec handle(ao_message(), ao_message()) -> ao_message().
 
 %% @doc Normalize and route messages downstream based on their path. Messages
 %% with a `Meta' key are routed to the `handle_meta/2' function, while all
@@ -108,6 +150,7 @@ handle_initialize([], _NodeMsg) ->
 %% @doc Get/set the node message. If the request is a `POST', we check that the
 %% request is signed by the owner of the node. If not, we return the node message
 %% as-is, aside all keys that are private (according to `hb_private').
+-spec info(ao_message(), meta_request(), ao_message()) -> ao_message().
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"POST">> ->
