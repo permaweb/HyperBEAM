@@ -84,7 +84,10 @@ verify_message(Req, Opts) ->
     case hb_message:with_only_committed(Req, Opts) of
         {ok, Item} ->
             case hb_message:commitment(
-                #{ <<"commitment-device">> => <<"ans104@1.0">> },
+                #{ 
+                    <<"commitment-device">> => <<"ans104@1.0">>,
+                    <<"committer">> => '_'
+                },
                 Item,
                 Opts
             ) of
@@ -101,36 +104,27 @@ verify_message(Req, Opts) ->
                     ),
                     {error, multiple_ans104_commitments};
                 {ok, _, _} ->
-                    case hb_message:signers(Item, Opts) of
-                        [] ->
+                    case hb_message:verify(Item, all, Opts) of
+                        true -> {ok, Item};
+                        false ->
                             ?event(
                                 bundler_short,
-                                {verify_failed, {reason, unsigned_item}}
+                                {verify_failed,
+                                    {id,
+                                        {string,
+                                            hb_message:id(
+                                                Item,
+                                                signed,
+                                                Opts
+                                            )
+                                        }
+                                    },
+                                    {reason,
+                                        signature_verification_failed}
+                                },
+                                Opts
                             ),
-                            {error, unsigned_item};
-                        _ ->
-                            case hb_message:verify(Item, all, Opts) of
-                                true -> {ok, Item};
-                                false ->
-                                    ?event(
-                                        bundler_short,
-                                        {verify_failed,
-                                            {id,
-                                                {string,
-                                                    hb_message:id(
-                                                        Item,
-                                                        signed,
-                                                        Opts
-                                                    )
-                                                }
-                                            },
-                                            {reason,
-                                                signature_verification_failed}
-                                        },
-                                        Opts
-                                    ),
-                                    {error, signature_verification_failed}
-                            end
+                            {error, signature_verification_failed}
                     end
             end;
         {error, Reason} ->
@@ -651,23 +645,29 @@ unsigned_dataitem_test() ->
             debug_print => false
         }),
         TestData = [
-            #tx{
-                data = <<"testdata">>,
-                tags = [{<<"Tag1">>, <<"Value1">>}]
+            {
+                #tx{
+                    data = <<"testdata">>,
+                    tags = [{<<"Tag1">>, <<"Value1">>}]
+                },
+                <<"no-ans104-commitment">>
             },
-            #tx{
-                data = <<"testdata">>,
-                tags = [{<<"tag1">>, <<"value1">>}]
+            {
+                #tx{
+                    data = <<"testdata">>,
+                    tags = [{<<"tag1">>, <<"value1">>}]
+                },
+                <<"no-ans104-commitment">>
             }
         ],
         lists:foreach(
-            fun(Item) ->
+            fun({Item, ExpectedDetails}) ->
                 Response = post_data_item(Node, Item, ClientOpts),
                 ?assertMatch(
                     {error, #{
                         <<"status">> := 400,
                         <<"error">> := <<"invalid-item">>,
-                        <<"details">> := <<"no-ans104-commitment">>
+                        <<"details">> := ExpectedDetails
                     }},
                     Response
                 )
@@ -678,6 +678,88 @@ unsigned_dataitem_test() ->
         %% Always cleanup, even if test fails
         stop_test_servers(ServerHandle)
     end.
+
+verify_message_test() ->
+    VerifyOpts = #{ priv_wallet => ar_wallet:new() },
+    SignedItem = ar_bundles:sign_item(
+        #tx{
+            data = <<"testdata">>,
+            tags = [{<<"tag1">>, <<"value1">>}]
+        },
+        ar_wallet:new()
+    ),
+    SignedMsg = hb_message:convert(
+        SignedItem,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        VerifyOpts
+    ),
+    ?assertMatch({ok, _}, verify_message(SignedMsg, VerifyOpts)),
+    {ok, CommitmentID, Commitment} = hb_message:commitment(
+        #{ <<"commitment-device">> => <<"ans104@1.0">> },
+        SignedMsg,
+        VerifyOpts
+    ),
+    MultipleAns104Msg =
+        SignedMsg#{
+            <<"commitments">> => maps:put(
+                <<CommitmentID/binary, "-duplicate">>,
+                Commitment,
+                maps:get(<<"commitments">>, SignedMsg)
+            )
+        },
+    ?assertEqual(
+        {error, multiple_ans104_commitments},
+        verify_message(MultipleAns104Msg, VerifyOpts)
+    ),
+    UnsignedItem =
+        dev_arweave_common:normalize(#tx{
+            data = <<"testdata">>,
+            tags = [
+                {<<"ao-data-key">>, <<"body">>},
+                {<<"Tag1">>, <<"Value1">>}
+            ]
+        }),
+    {ok, UnsignedMsg} = dev_codec_ans104:from(UnsignedItem, #{}, #{}),
+    ?assertEqual([], hb_message:signers(UnsignedMsg, #{})),
+    ?assertEqual(
+        {error, no_ans104_commitment},
+        verify_message(UnsignedMsg, VerifyOpts)
+    ),
+    TamperedMsg = hb_message:convert(
+        SignedItem#tx{data = <<"tampereddata">>},
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        VerifyOpts
+    ),
+    ?assertEqual(
+        {error, signature_verification_failed},
+        verify_message(TamperedMsg, VerifyOpts)
+    ),
+    NoAns104Msg = hb_message:commit(
+        #{
+            <<"body">> => <<"httpsig-body">>,
+            <<"test-tag">> => <<"verify-message-no-ans104">>
+        },
+        VerifyOpts,
+        <<"httpsig@1.0">>
+    ),
+    ?assertEqual(
+        {error, no_ans104_commitment},
+        verify_message(NoAns104Msg, VerifyOpts)
+    ),
+    MalformedCommitmentsMsg = #{
+        <<"body">> => <<"malformed">>,
+        <<"commitments">> => #{
+            <<"bad">> => #{
+                <<"commitment-device">> => <<"ans104@1.0">>
+            }
+        }
+    },
+    ?assertMatch(
+        {error, {could_not_normalize, _, _, _, _}},
+        verify_message(MalformedCommitmentsMsg, VerifyOpts)
+    ).
 
 unsupported_payload_types_test() ->
     Anchor = rand:bytes(32),
