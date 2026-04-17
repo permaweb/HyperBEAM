@@ -704,3 +704,26 @@ return_custom_json_test() ->
     after
         file:delete(Filename)
     end.
+
+page_data_test() ->
+    {ok,
+        #{
+            <<"content-type">> := <<"application/json; charset=utf-8">>,
+            <<"body">> := Body
+        }
+    } =
+        page_data(
+            #{},
+            #{ <<"target">> => <<"/~meta@1.0/build">> },
+            #{}
+        ),
+    Decoded = hb_json:decode(Body),
+    ?assertMatch(
+        #{
+            <<"name">> := <<"meta@1.0">>,
+            <<"module">> := <<"dev_meta">>,
+            <<"cookbook">> := [_ | _],
+            <<"keys">> := [_ | _]
+        },
+        Decoded
+    ).

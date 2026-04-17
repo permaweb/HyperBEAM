@@ -483,3 +483,9 @@ format_map_type_test() ->
                 }
         },
     ?assertEqual(<<"#{slot := integer()}">>, format(Type)).
+
+extract_loaded_module_test() ->
+    ?assertMatch(
+        {ok, #{ <<"module">> := <<"dev_meta">>, <<"keys">> := #{}, <<"types">> := #{} }},
+        extract(dev_meta, #{})
+    ).
