@@ -44,6 +44,7 @@
 -define(DEFAULT_NAME_RESOLVERS,
     [
         #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"device">> => <<"offset-name@1.0">> },
         #{ <<"device">> => <<"b32-name@1.0">> },
         <<
             "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
@@ -207,6 +208,7 @@ default_message() ->
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
             #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
             #{<<"name">> => <<"name@1.0">>, <<"module">> => dev_name},
+            #{<<"name">> => <<"offset-name@1.0">>, <<"module">> => dev_offset_name},
             #{<<"name">> => <<"node-process@1.0">>, <<"module">> => dev_node_process},
             #{<<"name">> => <<"p4@1.0">>, <<"module">> => dev_p4},
             #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
