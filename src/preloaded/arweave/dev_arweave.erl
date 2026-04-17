@@ -523,26 +523,32 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
         ),
     GETFun =
         fun(XOffset) ->
-            pending(
-                #{},
-                #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
-                Opts
+            decode_relative_chunk(
+                pending(
+                    #{},
+                    #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
+                    Opts
+                )
             )
         end,
     case fetch_and_collect(Offsets, GETFun, Opts) of
         {ok, ChunkInfos} ->
-            Concatenated =
-                hb_util:bin(
-                    lists:map(
-                        fun(JSONStruct) ->
-                            hb_util:decode(maps:get(<<"chunk">>, JSONStruct))
-                        end,
-                        ChunkInfos
-                    )
-                ),
-            {ok, Concatenated};
+            assemble_relative_chunks(ChunkInfos, Offset);
         Error -> Error
     end.
+
+assemble_relative_chunks(ChunkInfos, Offset) ->
+    assemble_chunks(ChunkInfos, Offset + 1).
+
+decode_relative_chunk({ok, JSON}) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    ChunkEnd = ar_merkle:extract_note(
+        hb_util:decode(maps:get(<<"data_path">>, JSON))
+    ),
+    ChunkStart = ChunkEnd - byte_size(Chunk) + 1,
+    {ok, {ChunkStart, ChunkEnd, Chunk}};
+decode_relative_chunk({error, _} = Err) ->
+    Err.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
 %% of each gap until the entire range [Offset, EndOffset] is covered.
@@ -2106,6 +2112,16 @@ extract_chunk_params_default_length_test_parallel() ->
         {ok, 123, 1, undefined},
         extract_chunk_params(#{ <<"offset">> => 123 }, #{})
     ).
+
+assemble_relative_chunks_zero_offset_test_parallel() ->
+    {ok, [Chunk]} =
+        assemble_relative_chunks([{1, 5, <<"abcde">>}], 0),
+    ?assertEqual(<<"abcde">>, hb_util:bin(Chunk)).
+
+assemble_relative_chunks_nonzero_offset_test_parallel() ->
+    {ok, [Chunk]} =
+        assemble_relative_chunks([{1, 5, <<"abcde">>}], 2),
+    ?assertEqual(<<"cde">>, hb_util:bin(Chunk)).
 
 get_pre_split_small_chunks_test_parallel() ->
     TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
