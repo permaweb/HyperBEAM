@@ -92,7 +92,7 @@ find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
-    case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
+    case hb_util:deep_get(HookName, hb_opts:get(on, #{}, Opts), [], Opts) of
         Handler when is_map(Handler) -> 
             case hb_util:is_ordered_list(Handler, Opts) of
                 true ->
@@ -164,10 +164,8 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % committed before execution.
         BaseReq =
             Req#{
-                <<"path">> =>
-                    hb_maps:get(<<"path">>, Handler, HookName, Opts),
-                <<"method">> =>
-                    hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
+                <<"path">> => hb_maps:get(<<"path">>, Handler, HookName, Opts),
+                <<"method">> => hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
         CommitReqBin = 
             hb_util:bin(

@@ -28,6 +28,9 @@ scope(_StoreOpts) ->
 %% @returns The resolved key.
 resolve(#{ <<"node">> := Node }, Key) ->
     ?event({remote_resolve, {node, Node}, {key, Key}}),
+    Key;
+resolve(#{ <<"nodes">> := Nodes }, Key) ->
+    ?event({remote_resolve, {nodes, Nodes}, {key, Key}}),
     Key.
 
 %% @doc Determine the type of value at a given key.
@@ -37,8 +40,8 @@ resolve(#{ <<"node">> := Node }, Key) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key whose value type is determined.
 %% @returns simple if found, or not_found otherwise.
-type(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event({remote_type, {node, Node}, {key, Key}}),
+type(Opts, Key) when is_map_key(<<"node">>, Opts); is_map_key(<<"nodes">>, Opts) ->
+    ?event({remote_type, {opts, Opts}, {key, Key}}),
     case read(Opts, Key) of
         not_found -> not_found;
         _ -> simple
@@ -55,25 +58,75 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 read(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
     not_found;
 read(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
-    HTTPRes =
-        hb_http:get(
-            Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
-            Opts
+    OptsWithoutNode = maps:remove(<<"node">>, Opts),
+    read(OptsWithoutNode#{ <<"nodes">> => [#{ <<"prefix">> => Node }] }, Key);
+read(StoreOpts = #{ <<"nodes">> := Nodes }, Key) ->
+    MultirequestDirectives =
+        maps:filter(
+            fun(<<"multirequest-", _/binary>>, _) -> true; (_, _) -> false end,
+            StoreOpts
         ),
-    case HTTPRes of
-        {ok, Res} ->
-            % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
-            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(Opts, Msg, [Key]),
-            {ok, Msg};
-        {error, _Err} ->
-            ?event(store_remote_node, {read_not_found, {key, Key}}),
-            not_found
-    end;
-read(_, _) -> not_found.
+    ?event(
+        {read,
+            {nodes, Nodes},
+            {key, Key},
+            {multirequest_directives, MultirequestDirectives}
+        }
+    ),
+    HTTPReq =
+        maps:merge(
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/~cache@1.0/read?target=", Key/binary>>,
+                <<"multirequest-responses">> => 1,
+                <<"multirequest-stop-after">> => true,
+                <<"multirequest-admissible">> => #{
+                    <<"device">> => <<"cache@1.0">>,
+                    <<"path">> => <<"expected-response">>,
+                    <<"expected">> => Key
+                }
+            },
+            MultirequestDirectives
+        ),
+    % TODO: When `opts` key normalization lands, we should re-work this.
+    MaybeHooks =
+        case maps:find(<<"on">>, StoreOpts) of
+            {ok, Hooks} -> #{ on => Hooks };
+            error -> #{}
+        end,
+    ?event({remote_read, {request, HTTPReq}, {hooks, MaybeHooks}}),
+    HTTPRes =
+        hb_http:request(
+            HTTPReq,
+            MaybeHooks#{
+                cache_control => [<<"no-cache">>, <<"no-store">>],
+                routes =>
+                    [
+                        #{
+                            <<"template">> => <<"/~cache@1.0/read">>,
+                            <<"nodes">> => Nodes
+                        }
+                    ]
+            }
+        ),
+    handle_read_response(Key, HTTPRes, StoreOpts).
+
+%% @doc Handle a read response from the remote node, filtering the raw response
+%% and invoking a possible local cache write operation.
+handle_read_response(Key, {ok, Res}, StoreOpts) ->
+    {ok, Msg} = hb_message:with_only_committed(Res, StoreOpts),
+    ?event(
+        debug_admissible,
+        {remote_read, {only_committed, Msg}, {raw_response, Res}}
+    ),
+    maybe_cache(StoreOpts, Msg, [Key]),
+    {ok, Msg};
+handle_read_response(Key, UnexpectedRes, _StoreOpts) ->
+    ?event(
+        debug_admissible,
+        {read_failed, {key, Key}, {unexpected_response, UnexpectedRes}}
+    ),
+    not_found.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -203,6 +256,45 @@ make_group(_StoreOpts, _Path) -> not_found.
 %%% Tests
 %%%--------------------------------------------------------------------
 
+multinode_env() ->
+    Node1Store = [hb_test_utils:test_store()],                                                            
+    Node2Store = [hb_test_utils:test_store()],
+    Wallet1 = ar_wallet:new(),
+    Wallet2 = ar_wallet:new(),
+    Opts1 = #{ priv_wallet => Wallet1, store => Node1Store },
+    Opts2 = #{ priv_wallet => Wallet2, store => Node2Store },
+    Msg1 = hb_message:commit(#{ <<"key1">> => <<"message1">>, <<"num1">> => 1 }, Opts1),
+    Msg2 = hb_message:commit(#{ <<"key2">> => <<"message2">> }, Opts2),
+    BothMsg =
+        hb_message:commit(
+            #{ <<"key-both">> => <<"value-both">> },
+            Opts1
+        ),
+    {ok, ID1} = hb_cache:write(Msg1, Opts1),
+    {ok, ID2} = hb_cache:write(Msg2, Opts2),
+    {ok, IDBoth} = hb_cache:write(BothMsg, Opts1),
+    {ok, IDBoth} = hb_cache:write(BothMsg, Opts2),
+    Node1 = hb_http_server:start_node(Opts1),
+    Node2 = hb_http_server:start_node(Opts2),
+    RemoteStore =
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"max-retries">> => 0,
+            <<"nodes">> => [
+                #{ <<"prefix">> => Node1, <<"http-reference">> => <<"node1">> }, 
+                #{ <<"prefix">> => Node2, <<"http-reference">> => <<"node2">> }
+            ],
+            <<"parallel">> => 1
+        },
+    #{
+        ids_single => [ID1, ID2],
+        id_both => [IDBoth],
+        nodes => [Node1, Node2],
+        stores => [Node1Store, Node2Store],
+        opts => [Opts1, Opts2],
+        remote_store => RemoteStore
+    }.
+
 %% @doc Test that we can create a store, write a random message to it, then
 %% start a remote node with that store, and read the message from it.
 read_test() ->
@@ -240,15 +332,169 @@ read_only_ids_test() ->
 			<<"message">>, 
 			#{ store => LocalStore }
 		),
-    Node =
-        hb_http_server:start_node(
-            #{
-                store => LocalStore
+    Node = hb_http_server:start_node(#{ store => LocalStore }),
+    RemoteStore =
+		#{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => Node,
+            <<"only-ids">> => true
+        },
+    ?assertEqual(not_found, hb_cache:read(ID, #{ store => [RemoteStore] })).
+
+multiread_test() ->
+    #{ ids_single := [ID1, ID2], remote_store := RemoteStore } = multinode_env(),
+    ?assertMatch(
+        {ok, #{ <<"key1">> := <<"message1">>}},
+        hb_cache:read(ID1, #{ store => RemoteStore })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := <<"message2">>}},
+        hb_cache:read(ID2, #{ store => RemoteStore })
+    ).
+
+corrupted_id_test() ->
+    #{
+        ids_single := [ID1|_],
+        stores := [Store1|_],
+        remote_store := RemoteStore
+    } = multinode_env(),
+    % Start by reading the message back and checking that it is accessible
+    % (and valid) to start with.
+    ?assertMatch(
+        {ok, #{ <<"key1">> :=  _ }},
+        hb_cache:read(ID1, #{ store => RemoteStore })
+    ),
+    {ok, Msg} = hb_cache:read(ID1, #{ store => Store1 }),
+    % Corrupt the value of `key1`, but keep the commitments. These commitments
+    % will now be invalid. A local store will return this invalid value, but
+    % a remote store will not.
+    hb_cache:write(Msg#{ <<"key1">> => <<"corrupt-value">> }, #{ store => Store1 }),
+    {ok, ReadCorruptMsg} = hb_cache:read(ID1, #{ store => Store1 }),
+    ?assertMatch(
+        #{ <<"key1">> := <<"corrupt-value">> },
+        hb_cache:ensure_all_loaded(ReadCorruptMsg, #{ store => Store1 })
+    ),
+    ?assertMatch(not_found, hb_cache:read(ID1, #{ store => RemoteStore })).
+
+multiread_corrupted_id_test() ->
+    #{
+        id_both := IDBoth,
+        stores := [Store1, Store2],
+        remote_store := RemoteStore
+    } = multinode_env(),
+    % Force an invalid link on one node to the nessage stored in both nodes.
+    FakeID = hb_util:human_id(<<0:256>>),
+    ok = hb_store:make_link(Store1, IDBoth, FakeID),
+    % Check we can read the message back from the store locally. This would be
+    % a local node store integrity failure if it were to happen in the wild, but
+    % our security model assumes that the local store is trustworthy for local
+    % computation.
+    {ok, RetrievedMsg} = hb_cache:read(FakeID, #{ store => Store1 }),
+    ?assertMatch(
+        #{ <<"key-both">> := <<"value-both">> },
+        hb_cache:ensure_all_loaded(RetrievedMsg)
+    ),
+    % Ensure that we _cannot_ read the message back from the remote node. This
+    % should fail despite the remote peer returning a valid message (with the 
+    % wrong message) because the `multirequest-admissible' directive will fail.
+    ?assertMatch(
+        not_found,
+        hb_cache:read(FakeID, #{ store => RemoteStore })
+    ).
+
+multiread_swapped_id_test() ->
+    #{
+        ids_single := [ID1, ID2],
+        nodes := [Node1, Node2],
+        stores := [Store1, Store2],
+        remote_store := RemoteStore
+    } = multinode_env(),
+    % Link ID2 to ID1 on the first node and store. The first node will
+    % return ID2 but with the wrong message. It should fail and trigger a
+    % call to the second node, which should return it correctly.
+    ok = hb_store:make_link(Store1, ID1, ID2),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := _ }},
+        hb_cache:read(ID2, #{ store => Store2 })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key1">> := _ }},
+        hb_cache:read(ID2, #{ store => Store1 })
+    ),
+    % Verify that a remote store with only the corrupt node will not return ID2,
+    % but a store with both the corrupt and correct nodes will.
+    ?assertMatch(
+        not_found,
+        hb_cache:read(
+            ID2,
+            #{ store => RemoteStore#{ <<"nodes">> => [#{ <<"prefix">> => Node1 }] } }
+        )
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := _ }},
+        hb_cache:read(ID2, #{ store => Store2 })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"key2">> := _ }},
+        hb_cache:read(ID2, #{ store => RemoteStore })
+    ).
+
+multiread_admissible_response_hook_test() ->
+    #{
+        ids_single := [ID1|_],
+        remote_store := BaseRemoteStore
+    } = multinode_env(),
+    % Ensure that we can execute a hook on valid read responses.
+    LogStore = [hb_test_utils:test_store()],
+    RemoteStore =
+        BaseRemoteStore#{
+            <<"on">> => #{
+                <<"~cache@1.0">> =>
+                    #{
+                        <<"admissible-response">> => #{
+                            <<"device">> => <<"test-device@1.0">>,
+                            <<"store">> => LogStore,
+                            <<"path">> => <<"log-request">>
+                        }
+                    }
             }
-        ),
-    RemoteStore = [
-		#{ <<"store-module">> => hb_store_remote_node,
-           <<"node">> => Node,
-           <<"only-ids">> => true }
-	],
-    ?assertEqual(not_found, hb_cache:read(ID, #{ store => RemoteStore })).
+        },
+    Opts = #{ store => RemoteStore },
+    ?assertMatch(
+        {ok, #{ <<"key1">> :=  _ }},
+        hb_cache:read(ID1, #{ store => RemoteStore })
+    ),
+    ?assertMatch(
+        {ok, Logs} when is_map(Logs) andalso map_size(Logs) > 1,
+        hb_ao:resolve(
+            #{ <<"device">> => <<"test-device@1.0">> },
+            <<"logs">>,
+            Opts#{ store => LogStore }
+        )
+    ).
+
+arweave_dot_net_as_remote_node_test() ->
+    TestIDs =
+        [
+            <<"93Ui7nOLDNVCVMLeFkVeeOCVkm5Jy-kf6FNatW3q2TI">>,
+            <<"VuhnX2G8qVAb6kwHOiCQKl2c-42uoMKSIpHgKc0Pnzg">>
+        ],
+    Opts =
+        #{
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_remote_node,
+                        <<"name">> => <<"cache-arweave">>,
+                        <<"node">> => <<"https://arweave.net">>
+                    }
+                ]
+        },
+    % Recent bundled AO messages -- no `signature` tag collision.
+    lists:foreach(
+        fun(ID) ->
+            {ok, M} = hb_cache:read(ID, Opts),
+            ?assert(hb_message:verify(M, all, Opts))
+        end,
+        TestIDs
+    ).

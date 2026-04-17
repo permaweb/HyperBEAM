@@ -2,6 +2,7 @@
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3]).
+-export([log_request/3, logs/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -207,6 +208,57 @@ mangle(Base, _Req, Opts) ->
                         Base#{ FirstKey => <<"mangled-", MangleReference/binary>> }
                     }
             end
+    end.
+
+%%% Logged messages functionality
+
+-define(LOG_PREFIX, "~test-device@1.0").
+
+%% @doc Determines the store to use for logging requests.
+determine_log_store(Base, _Req, Opts) ->
+    hb_maps:get(
+        <<"store">>,
+        Base,
+        hb_opts:get(store, no_viable_store, Opts),
+        Opts
+    ).
+
+%% @doc Write a pseudo-path to the store linking the received message to the
+%% millisecond timestamp that the key was invoked.
+log_request(Base, Req, Opts) ->
+    Timestamp = hb_util:bin(erlang:system_time(millisecond)),
+    Store = determine_log_store(Base, Req, Opts),
+    {ok, ReqID} = hb_cache:write(Req, Opts#{ store => Store }),
+    hb_store:make_link(
+        Store,
+        ReqID,
+        <<?LOG_PREFIX, "/request-", Timestamp/binary>>
+    ),
+    {ok, ReqID}.
+
+%% @doc Return all logs of requests to the device.
+logs(Base, Req, Opts) ->
+    Store = determine_log_store(Base, Req, Opts),
+    LogOpts = Opts#{ store => Store },
+    case hb_store:list(Store, <<?LOG_PREFIX>>) of
+        {ok, LogKeys} ->
+            Logs =
+                maps:from_list(
+                    lists:map(
+                        fun(K = <<"request-", TimeBin/binary>>) ->
+                            {ok, Request} =
+                                hb_cache:read(
+                                    <<"~test-device@1.0/", K/binary>>,
+                                    LogOpts
+                                ),
+                            {hb_util:int(TimeBin), Request}
+                        end,
+                        LogKeys
+                    )
+                ),
+            {ok, Logs};
+        _ ->
+            {error, <<"No logs found.">>}
     end.
 
 %%% Tests

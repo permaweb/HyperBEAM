@@ -237,19 +237,26 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 %% @doc If an `admissable` message is set for the request, check if the response
 %% adheres to it. Else, return `true'.
 admissible_response(_Response, undefined, _Opts) -> true;
-admissible_response(Response, Msg, Opts) ->
-    Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
-    Req = Response#{ <<"path">> => Path },
-    Base = hb_message:without_unless_signed([<<"path">>], Msg, Opts),
-    ?event(debug_multi,
-        {executing_admissible_message, {message, Base}, {req, Req}}
-    ),
-    try hb_ao:resolve(Base, Req, Opts) of
+admissible_response(Response, IsAdmissible, Opts) ->
+    Req =
+        IsAdmissible#{
+            <<"path">> =>
+                hb_maps:get(
+                    <<"path">>,
+                    IsAdmissible,
+                    <<"is-admissible">>,
+                    Opts
+                ),
+            <<"body">> => Response,
+            <<"http-reference">> => hb_opts:get(http_reference, undefined, Opts)
+        },
+    ?event(debug_admissible, {admissible_response, {request, Req}, {opts, Opts}}),
+    try hb_ao:resolve(Req, Opts#{ hashpath => ignore }) of
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
-            ?event(debug_multi, {admissible_result, {result, Res}}),
+            ?event(debug_admissible, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
         {error, Reason} ->
-            ?event(debug_multi, {admissible_error, {reason, Reason}}),
+            ?event(debug_admissible, {admissible_error, {reason, Reason}}),
             false
     catch 
         Class:Reason:Stacktrace ->
@@ -257,7 +264,7 @@ admissible_response(Response, Msg, Opts) ->
                 {admissible_response, 
                     {class, Class}, 
                     {reason, Reason}, 
-                    {stacktrace, Stacktrace}
+                    {stacktrace, {trace, Stacktrace}}
                 }
             ),
             false
