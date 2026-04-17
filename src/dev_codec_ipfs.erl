@@ -106,8 +106,13 @@ commit(Msg, #{ <<"type">> := Type } = Req, Opts)
         {_, _} ->
             {error, {unsupported_hash_alg, HashAlg}}
     end;
-commit(_Msg, #{ <<"type">> := Type }, _Opts) ->
-    {error, {unsupported_type, Type}}.
+commit(Msg, Req, Opts) ->
+    %% Any other commit type — signed, rsa-pss, hmac, etc. — is outside the
+    %% IPFS CID envelope. We delegate to `~httpsig@1.0' the same way
+    %% `dev_codec_flat', `dev_codec_json', and other codec-only devices do.
+    %% Users who want a pure IPFS CID commitment specify `type: unsigned';
+    %% everything else gets a proper cryptographic commitment attached.
+    dev_codec_httpsig:commit(Msg, Req, Opts).
 
 %%%====================================================================
 %%% verify/3
@@ -122,6 +127,16 @@ commit(_Msg, #{ <<"type">> := Type }, _Opts) ->
 %% valid iff that CID is a key in `Base''s commitments map — which it must
 %% be, exactly when the body has not been tampered with.
 verify(Base, Req, Opts) ->
+    case hb_maps:get(<<"type">>, Req, <<"unsigned">>, Opts) of
+        T when T =:= <<"unsigned">>; T =:= <<"unsigned-sha256">> ->
+            verify_unsigned(Base, Req, Opts);
+        _Other ->
+            %% Non-unsigned commitments on an IPFS-device message are
+            %% httpsig-shaped (see `commit/3'). Delegate.
+            dev_codec_httpsig:verify(Base, Req, Opts)
+    end.
+
+verify_unsigned(Base, Req, Opts) ->
     Codec = hb_maps:get(<<"codec">>, Req, ?DEFAULT_CODEC, Opts),
     HashAlg = hb_maps:get(<<"hash-alg">>, Req, ?DEFAULT_HASH_ALG, Opts),
     Body = hb_maps:get(<<"body">>, Base, <<>>, Opts),
@@ -154,7 +169,16 @@ verify(Base, Req, Opts) ->
 %% to the dag-cbor encoder. Commitments are stripped before encoding — they
 %% do not belong in the content-addressed bytes.
 to(Bin, _Req, _Opts) when is_binary(Bin) ->
-    {ok, Bin};
+    %% Encode a bare binary as a dag-cbor text string (or byte string if not
+    %% UTF-8). Passing it through untouched would leave us unable to
+    %% `from/3' the result — the roundtrip contract the codec test vectors
+    %% rely on.
+    try
+        {ok, dev_codec_ipfs_cbor:encode(Bin)}
+    catch
+        throw:{dag_cbor_encode, {invalid_utf8, _}} ->
+            {ok, dev_codec_ipfs_cbor:encode({bytes, Bin})}
+    end;
 to(Msg, _Req, Opts) when is_map(Msg) ->
     try
         %% Step 1: TABM -> structured form with native types.
@@ -170,9 +194,13 @@ to(Msg, _Req, Opts) when is_map(Msg) ->
         %% roundtrip through the IPLD data model. An IPLD-link-aware mapping
         %% through `hb_link' is a future phase.
         Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
-        %% Step 3: strip non-content fields. The CID is over the block
-        %% content, not over HyperBEAM's signature envelope.
-        Clean = hb_maps:without([<<"commitments">>, <<"priv">>], Loaded, Opts),
+        %% Step 3: strip only `priv' — it is per-session state and must
+        %% never cross the codec boundary. Commitments *do* cross so that
+        %% `from(to(X)) = X' over the full HyperBEAM message; peer codecs
+        %% (json, flat, ans104) all behave this way. A pure IPFS consumer
+        %% sees `commitments' as just another map field — completely valid
+        %% IPLD, and no harm done.
+        Clean = hb_maps:without([<<"priv">>], Loaded, Opts),
         %% Step 4: walk into the IPLD intermediate form, then encode.
         Ipld = structured_to_ipld(Clean),
         {ok, dev_codec_ipfs_cbor:encode(Ipld)}
@@ -325,10 +353,19 @@ commit_preserves_existing_commitments_test() ->
     ?assert(maps:is_key(<<"other">>, Commitments)),
     ?assertEqual(2, maps:size(Commitments)).
 
-commit_rejects_signed_test() ->
+%% Non-unsigned commit types delegate to `~httpsig@1.0', matching the
+%% composition pattern used by `dev_codec_flat', `dev_codec_json', and
+%% other codec-only devices. A user who wants a pure IPFS CID passes
+%% `type: unsigned'; everything else gets a proper signed commitment.
+commit_signed_delegates_to_httpsig_test() ->
     Msg = #{ <<"body">> => <<"x">> },
-    ?assertMatch({error, {unsupported_type, _}},
-        commit(Msg, #{ <<"type">> => <<"signed">> }, #{})).
+    Wallet = ar_wallet:new(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, Signed} = commit(Msg, #{ <<"type">> => <<"signed">> }, Opts),
+    Commitments = maps:get(<<"commitments">>, Signed),
+    [{_CID, Commitment}|_] = maps:to_list(Commitments),
+    ?assertEqual(<<"httpsig@1.0">>,
+        maps:get(<<"commitment-device">>, Commitment)).
 
 commit_rejects_unknown_codec_test() ->
     Msg = #{ <<"body">> => <<"x">> },

@@ -345,9 +345,11 @@ local_end_to_end_encode_commit_cache_decode_test() ->
         ),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
-%% A committed message can still be encoded — the commitments are stripped
-%% from the content bytes, preserving IPFS's "block is pure content" model.
-commit_then_encode_strips_commitments_test() ->
+%% A committed message, when encoded and decoded via the codec, preserves
+%% its commitments — matching the behaviour of every other HyperBEAM codec
+%% (json, flat, ans104). A pure IPFS consumer sees the commitments field
+%% as just another map; a HyperBEAM consumer round-trips fully.
+commit_then_encode_preserves_commitments_test() ->
     Opts = opts(),
     Msg = #{ <<"body">> => <<"hello world">>, <<"kind">> => <<"greeting">> },
     Committed =
@@ -358,8 +360,18 @@ commit_then_encode_strips_commitments_test() ->
         ),
     ?assert(maps:is_key(<<"commitments">>, Committed)),
     Bytes = hb_message:convert(Committed, <<"ipfs@1.0">>, Opts),
-    {ok, Decoded} = dev_codec_ipfs_cbor:decode(Bytes),
-    ?assertNot(maps:is_key(<<"commitments">>, Decoded)).
+    {ok, DecodedIpld} = dev_codec_ipfs_cbor:decode(Bytes),
+    ?assert(maps:is_key(<<"commitments">>, DecodedIpld)),
+    %% Full roundtrip back through the codec restores the exact committed
+    %% message.
+    Decoded =
+        hb_message:convert(
+            Bytes,
+            <<"structured@1.0">>,
+            <<"ipfs@1.0">>,
+            Opts
+        ),
+    ?assert(hb_message:match(Committed, Decoded, strict, Opts)).
 
 %% @doc Two different codecs of the same body must give two distinct CIDs
 %% that both resolve. A `raw' CID and a `dag-cbor' CID on the same bytes
