@@ -937,6 +937,10 @@ get_status_class({error, {stream_error, {closed, {error, closed}}}}) ->
     <<"stream-closed">>;
 get_status_class({error, {stream_error, closing}}) ->
     <<"stream-closing">>;
+get_status_class({error, no_connection_available}) ->
+    <<"pool-exhausted">>;
+get_status_class({error, pool_not_found}) ->
+    <<"pool-not-found">>;
 get_status_class({error, {down, noproc}}) ->
     <<"noproc">>;
 get_status_class({error, {stream_error, {closed, normal}}}) ->

@@ -60,6 +60,22 @@ collect_mf(_Registry, Callback) ->
         )
     ),
 
+    {GunUp, GunDegraded} = gun_pool_stats(),
+    Callback(
+        create_gauge(
+            gun_pool_up_connections,
+            "Live connections across all gun pools",
+            GunUp
+        )
+    ),
+    Callback(
+        create_gauge(
+            gun_pool_degraded_connections,
+            "Gun pools with at least one down connection",
+            GunDegraded
+        )
+    ),
+
     ok.
 collect_metrics(system_load, SystemLoad) ->
     %% Return the gauge metric with no labels
@@ -76,6 +92,10 @@ collect_metrics(hackney_pool_in_use, Value) ->
 collect_metrics(hackney_pool_free, Value) ->
     prometheus_model_helpers:gauge_metrics([{[], Value}]);
 collect_metrics(hackney_pool_queue, Value) ->
+    prometheus_model_helpers:gauge_metrics([{[], Value}]);
+collect_metrics(gun_pool_up_connections, Value) ->
+    prometheus_model_helpers:gauge_metrics([{[], Value}]);
+collect_metrics(gun_pool_degraded_connections, Value) ->
     prometheus_model_helpers:gauge_metrics([{[], Value}]).
 
 %%====================================================================
@@ -115,6 +135,30 @@ hackney_pool_stats() ->
              proplists:get_value(queue_count, Stats, 0)}
     catch _:_ -> {0, 0, 0}
     end.
+
+%% @doc Read gun pool connection counts at scrape time.
+gun_pool_stats() ->
+    lists:foldl(
+        fun({operational, Info}, {Up, Deg}) ->
+                UpConns = maps:fold(
+                    fun(_, {up, _, _}, Acc) -> Acc + 1; (_, _, Acc) -> Acc end,
+                    0,
+                    maps:get(conns, Info, #{})
+                ),
+                {Up + UpConns, Deg};
+           ({degraded, Info}, {Up, Deg}) ->
+                UpConns = maps:fold(
+                    fun(_, {up, _, _}, Acc) -> Acc + 1; (_, _, Acc) -> Acc end,
+                    0,
+                    maps:get(conns, Info, #{})
+                ),
+                {Up + UpConns, Deg + 1};
+           (_, Acc) ->
+                Acc
+        end,
+        {0, 0},
+        gun_pool:info()
+    ).
 
 create_gauge(Name, Help, Data) ->
     prometheus_model_helpers:create_mf(Name, Help, gauge, ?MODULE, Data).
