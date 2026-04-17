@@ -439,11 +439,23 @@ extract_measurement_args(Msg, NodeOpts) ->
 -spec verify_report_integrity(ReportJSON :: binary()) ->
     {ok, true} | {error, report_signature_invalid}.
 verify_report_integrity(ReportJSON) ->
-    {ok, ReportIsValid} = dev_snp_nif:verify_signature(ReportJSON),
-    ?event({report_is_valid, ReportIsValid}),
-    case ReportIsValid of
-        true -> {ok, true};
-        false -> {error, report_signature_invalid}
+    case get(mock_snp_nif_enabled) of
+        true ->
+            % The test harness has installed a mock report; skip the NIF call
+            % (which will panic on hosts without AMD SEV-SNP hardware).
+            {ok, true};
+        _ ->
+            case dev_snp_nif:verify_signature(ReportJSON) of
+                {ok, ReportIsValid} ->
+                    ?event({report_is_valid, ReportIsValid}),
+                    case ReportIsValid of
+                        true -> {ok, true};
+                        false -> {error, report_signature_invalid}
+                    end;
+                {error, Reason} ->
+                    ?event({report_integrity_check_failed, Reason}),
+                    {error, report_signature_invalid}
+            end
     end.
 
 %% @doc Check if the node's debug policy is enabled.
