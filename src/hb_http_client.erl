@@ -11,6 +11,9 @@
 -export([start_link/1, init/1]).
 -export([handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 -export([init_prometheus/0]).
+-ifdef(TEST).
+-export([pool_scope/3]).
+-endif.
 
 -record(state, {
 	opts = #{}
@@ -59,7 +62,11 @@ request(Args, RemainingRetries, Opts) ->
 
 do_request(Args, Opts) ->
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
-        gun -> gun_req(Args, Opts);
+        gun ->
+            case hb_opts:get(http_client_gun_use_pool, false, Opts) of
+                true -> gun_pool_req_impl(Args, Opts);
+                false -> gun_req(Args, Opts)
+            end;
         httpc -> httpc_req(Args, Opts);
         hackney -> hackney_req(Args, Opts)
     end.
@@ -253,6 +260,166 @@ gun_req(Args, Opts) ->
 	),
 	Response.
 
+gun_pool_req_impl(Args, Opts) ->
+    case parse_peer(maps:get(peer, Args), Opts) of
+        {error, _} = Err ->
+            Err;
+        {ok, {Host, Port}} ->
+            Transport =
+                case Port of
+                    443 -> tls;
+                    _ -> tcp
+                end,
+            Authority =
+                iolist_to_binary(
+                    gun_http:host_header(Transport, Host, Port)
+                ),
+            HeaderMap = hb_maps:get(headers, Args, #{}, Opts),
+            case has_host_override(HeaderMap, Authority, Opts) of
+                true ->
+                    %% gun_pool looks up the pool by the Host header, so a
+                    %% caller-supplied override cannot be served from our
+                    %% pool. Fall back to an un-pooled gun_req; note that
+                    %% this bypasses the pool's outbound-connection cap.
+                    ?event(warning,
+                        {gun_pool_host_override_bypass, {authority, Authority}}),
+                    gun_req(Args, Opts);
+                false ->
+                    do_pool_request(
+                        Host, Port, Transport, Authority,
+                        HeaderMap, Args, Opts
+                    )
+            end
+    end.
+
+do_pool_request(Host, Port, Transport, Authority, HeaderMap, Args, Opts) ->
+    #{path := Path, method := Method} = Args,
+    DefaultProto =
+        case hb_features:http3() of
+            true -> http3;
+            false -> http2
+        end,
+    Proto = hb_opts:get(protocol, DefaultProto, Opts),
+    Scope = pool_scope(Proto, Transport, Opts),
+    {_, _, PoolSize, KeepAlive, ConnectTimeout} = Scope,
+    BaseConnOpts = #{
+        http_opts => #{keepalive => KeepAlive},
+        retry => 0,
+        connect_timeout => ConnectTimeout
+    },
+    ConnOpts =
+        case Proto of
+            http3 -> BaseConnOpts#{protocols => [http3], transport => quic};
+            http2 -> BaseConnOpts#{protocols => [http2]};
+            http1 -> BaseConnOpts#{protocols => [http]}
+        end,
+    PoolOpts = #{
+        size => PoolSize,
+        scope => Scope,
+        transport => Transport,
+        conn_opts => ConnOpts
+    },
+    StartTime = os:system_time(native),
+    Response =
+        case ensure_pool(Host, Port, PoolOpts, Scope, Authority) of
+            {ok, Scope, Authority} ->
+                issue_pool_request(
+                    Method, Path, Authority, HeaderMap, Scope, Args, Opts
+                );
+            {error, _} = Err2 ->
+                Err2
+        end,
+    record_duration(
+        #{
+            <<"request-method">> => method_to_bin(Method),
+            <<"request-path">> => hb_util:bin(Path),
+            <<"status-class">> => get_status_class(Response),
+            <<"duration">> => os:system_time(native) - StartTime
+        },
+        Opts
+    ),
+    Response.
+
+issue_pool_request(Method, Path, Authority, HeaderMap, Scope, Args, Opts) ->
+    Headers = build_pool_headers(HeaderMap, Authority, Opts),
+    Body = hb_maps:get(body, Args, <<>>, Opts),
+    ReqOpts = #{
+        scope => Scope,
+        checkout_call_timeout =>
+            hb_opts:get(http_client_gun_checkout_timeout, 5000, Opts),
+        checkout_retry => [100, 250, 500]
+    },
+    case gun_pool:request(Method, Path, Headers, Body, ReqOpts) of
+        {async, {ConnPid, StreamRef}} ->
+            Timer =
+                inet:start_timer(
+                    hb_opts:get(
+                        http_client_send_timeout,
+                        no_request_send_timeout,
+                        Opts
+                    )
+                ),
+            ResponseArgs = #{
+                pid => ConnPid,
+                stream_ref => StreamRef,
+                timer => Timer,
+                limit => hb_maps:get(limit, Args, infinity, Opts),
+                counter => 0,
+                acc => [],
+                start => os:system_time(microsecond),
+                is_peer_request =>
+                    hb_maps:get(is_peer_request, Args, true, Opts)
+            },
+            R = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
+            record_response_status(Method, R, Path),
+            inet:stop_timer(Timer),
+            R;
+        {error, Reason, _} ->
+            {error, Reason};
+        {error, _} = E ->
+            E
+    end.
+
+%% @doc Flatten a request's header map into a proplist, ensuring a `host'
+%% header is present and any `cookie' value (single binary or list) is
+%% expanded to one header tuple per line.
+build_pool_headers(HeaderMap, Authority, Opts) ->
+    WithoutCookie = hb_maps:to_list(
+        hb_maps:without([<<"cookie">>], HeaderMap, Opts), Opts),
+    CookieLines =
+        case hb_maps:get(<<"cookie">>, HeaderMap, [], Opts) of
+            Bin when is_binary(Bin) -> [Bin];
+            List -> List
+        end,
+    Cookies = [{<<"cookie">>, CL} || CL <- CookieLines],
+    case lists:keymember(<<"host">>, 1, WithoutCookie) of
+        true -> WithoutCookie ++ Cookies;
+        false -> [{<<"host">>, Authority} | WithoutCookie] ++ Cookies
+    end.
+
+%% @doc Ensure the Gun pool for the given authority exists. Returns
+%% {ok, Scope, Authority} without waiting for connections to come up —
+%% `gun_pool:request/5' uses `checkout_retry' to absorb cold-start latency
+%% and transient degradation, matching hackney's on-demand connect UX.
+%% Checks Gun's own registry first so we never call start_pool for an
+%% existing pool (which would fail at ets:insert_new inside gun_pool:init).
+ensure_pool(Host, Port, PoolOpts, Scope, Authority) ->
+    case gun_pool:info(Authority, Scope) of
+        {operational, _} ->
+            {ok, Scope, Authority};
+        {degraded, _} ->
+            {ok, Scope, Authority};
+        undefined ->
+            case gun_pool:start_pool(Host, Port, PoolOpts) of
+                {ok, _PoolPid} ->
+                    {ok, Scope, Authority};
+                {error, {already_started, _PoolPid}} ->
+                    {ok, Scope, Authority};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+    end.
+
 %% @doc Start the hackney connection pool with default settings.
 %% Overridden at runtime by setup_conn/1 once node config is available.
 init_hackney_pool() ->
@@ -347,10 +514,6 @@ handle_info({gun_error, PID, Reason}, State) ->
 
 handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams}, State) ->
 	?event(warning, {gun_connection_down, {pid, PID}, {protocol, Protocol}, {reason, Reason}}),
-	{noreply, State};
-
-handle_info({'DOWN', _Ref, process, PID, Reason}, State) ->
-	?event(warning, {gun_process_down, {pid, PID}, {reason, Reason}}),
 	{noreply, State};
 
 handle_info(Message, State) ->
@@ -484,6 +647,22 @@ do_gun_request(PID, Args, Opts) ->
 	record_response_status(Method, Response, Path),
 	inet:stop_timer(Timer),
 	Response.
+
+pool_scope(Proto, Transport, Opts) ->
+    {Proto, Transport,
+     hb_opts:get(http_client_gun_pool_size, 4, Opts),
+     hb_opts:get(http_client_keepalive, ?DEFAULT_KEEPALIVE_TIMEOUT, Opts),
+     hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts)}.
+
+has_host_override(HeaderMap, Authority, Opts) ->
+    case hb_maps:get(<<"host">>, HeaderMap, Authority, Opts) of
+        Authority ->
+            false;
+        ExplicitHost when is_binary(ExplicitHost) ->
+            true;
+        ExplicitHost ->
+            iolist_to_binary(ExplicitHost) =/= Authority
+    end.
 
 await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
@@ -649,8 +828,6 @@ record_duration(Details, Opts) ->
         end
     ).
 
-record_response_status(Method, Response) ->
-    record_response_status(Method, Response, undefined).
 record_response_status(Method, Response, Path) ->
 	hb_prometheus:inc(
         counter, 
