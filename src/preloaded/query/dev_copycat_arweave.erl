@@ -1718,12 +1718,10 @@ write_mempool_offsets(TXID, TX, Opts) ->
 write_mempool_children(Store, TXID, TX, Data, Opts) ->
     case is_bundle_tx(TX, Opts) of
         true ->
-            try ar_bundles:decode_bundle_header(Data) of
-                {ItemsBin, BundleIndex} ->
-                    HeaderSize = byte_size(Data) - byte_size(ItemsBin),
+            case load_mempool_bundle_index(TXID, Data, Opts) of
+                {ok, HeaderSize, BundleIndex} ->
                     write_mempool_items(Store, TXID, BundleIndex, HeaderSize);
                 _ -> ok
-            catch _:_ -> ok
             end;
         false ->
             case standalone_item_id(Data) of
@@ -1758,6 +1756,62 @@ load_mempool_data(TXID, #tx{ data_size = Size }, Opts) when Size > 0 ->
         },
         Opts
     ).
+
+load_mempool_bundle_index(_TXID, Data, _Opts) when is_binary(Data), Data =/= <<>> ->
+    try ar_bundles:decode_bundle_header(Data) of
+        {ItemsBin, BundleIndex} ->
+            {ok, byte_size(Data) - byte_size(ItemsBin), BundleIndex};
+        invalid_bundle_header ->
+            {error, invalid_bundle_header}
+    catch _:_ ->
+        {error, invalid_bundle_header}
+    end;
+load_mempool_bundle_index(TXID, <<>>, Opts) ->
+    try
+        {ok, FirstChunk} =
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"chunk">>,
+                    <<"offset">> => #{
+                        <<"relative">> => TXID,
+                        <<"offset">> => 0
+                    }
+                },
+                Opts
+            ),
+        case ar_bundles:bundle_header_size(FirstChunk) of
+            invalid_bundle_header ->
+                {error, invalid_bundle_header};
+            HeaderSize when HeaderSize =< byte_size(FirstChunk) ->
+                {_ItemsBin, BundleIndex} =
+                    ar_bundles:decode_bundle_header(
+                        binary:part(FirstChunk, 0, HeaderSize)
+                    ),
+                {ok, HeaderSize, BundleIndex};
+            HeaderSize ->
+                RemainingSize = HeaderSize - byte_size(FirstChunk),
+                {ok, RemainingChunk} =
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{
+                            <<"path">> => <<"chunk">>,
+                            <<"offset">> => #{
+                                <<"relative">> => TXID,
+                                <<"offset">> => byte_size(FirstChunk)
+                            },
+                            <<"length">> => RemainingSize
+                        },
+                        Opts
+                    ),
+                HeaderBin = <<FirstChunk/binary, RemainingChunk/binary>>,
+                {_ItemsBin, BundleIndex} =
+                    ar_bundles:decode_bundle_header(HeaderBin),
+                {ok, HeaderSize, BundleIndex}
+        end
+    catch _:_ ->
+        {error, invalid_bundle_header}
+    end.
 
 standalone_item_id(Data) when is_binary(Data), Data =/= <<>> ->
     try
