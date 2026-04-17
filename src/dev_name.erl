@@ -5,6 +5,8 @@
 %%% first resolver that matches.
 -module(dev_name).
 -export([info/1, request/3]).
+%%% Public helpers.
+-export([test_arns_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -34,19 +36,27 @@ resolve(Key, _, Req, Opts) ->
                 false ->
                     {ok, Resolved};
                 true ->
-                    hb_cache:read(Resolved, Opts)
+                    maybe_load_resolved(Resolved, Opts)
             end;
-        not_found ->
-            not_found
+        not_found -> not_found
     end.
+
+%% @doc Load a resolved name target if it is a cache reference, otherwise
+%% return the resolved value directly.
+maybe_load_resolved(Resolved, Opts) when ?IS_ID(Resolved) ->
+    hb_cache:read(Resolved, Opts);
+maybe_load_resolved(Resolved, Opts) when ?IS_LINK(Resolved) ->
+    {ok, hb_cache:ensure_loaded(Resolved, Opts)};
+maybe_load_resolved(Resolved, _Opts) ->
+    {ok, Resolved}.
 
 %% @doc Find the first resolver that matches the key and return its value.
 match_resolver(_Key, [], _Opts) -> 
     not_found;
 match_resolver(Key, [Resolver | Resolvers], Opts) ->
-    case execute_resolver(Key, Resolver, Opts) of
+    case catch execute_resolver(Key, Resolver, Opts) of
         {ok, Value} ->
-            ?event({resolver_found, {key, Key}, {value, Value}}),
+            ?event({resolver_found, {key, Key}, {value, {string, Value}}}),
             {ok, Value};
         _ ->
             match_resolver(Key, Resolvers, Opts)
@@ -71,55 +81,104 @@ execute_resolver(Key, Resolver, Opts) when is_map(Resolver) ->
 %% @doc Implements an `on/request' compatible hook that resolves names given in
 %% the `host` key to their corresponding ID and prepends it to the execution path.
 request(HookMsg, HookReq, Opts) ->
-    ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}, {opts, Opts}}),
+    ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}}),
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
-        {ok, Name} ?= name_from_host(Host, hb_opts:get(host, no_host, Opts)),
-        {ok, ResolvedMsg} ?= resolve(Name, HookMsg, #{}, Opts),
-        {ok, [OldBase|Rest]} ?= hb_maps:find(<<"body">>, HookReq, Opts),
-        ModReq = [overlay_loaded(OldBase, ResolvedMsg, Opts)|Rest],
+        {ok, Name} ?=
+            name_from_host(
+                Host,
+                hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts)
+            ),
+        {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
+        ModReq =
+            maybe_append_named_message(
+                ResolvedMsg,
+                hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
+                Opts
+            ),
         ?event(
             {request_with_prepended_path,
                 {name, Name},
                 {full_host, Host},
                 {resolved_msg, ResolvedMsg},
-                {to_execute, ModReq},
-                {res, hb_ao:resolve_many(ModReq, Opts)}
+                {to_execute, ModReq}
             }
         ),
         {ok, #{ <<"body">> => ModReq }}
     else
-        Reason ->
-            ?event({request_hook_skip, {reason, Reason}, {hook_req, HookReq}}),
-            {ok, HookReq}
+        {skip, Reason} ->
+            ?event({name_resolution_skipped, {reason, Reason}}),
+            {ok, HookReq};
+        Other ->
+            case maps:get(<<"body">>, HookReq, []) of 
+                [] ->
+                    ?event({request_hook_404, root_path}),
+                    % If no path is provided, we should return 404 if we could
+                    % not resolve the name component.
+                    {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
+                _ ->
+                    ?event({request_hook_skip, {cause, Other}, {hook_req, HookReq}}),
+                    {ok, HookReq}
+            end
     end.
+
+%% @doc After finding a hit for a named message, we should ensure that it is the
+%% base message for the evaluation. If it is already present in the request,
+%% however, we should not add it twice. Instead, we must add the version that
+%% is loaded (if applicable).
+%% 
+%% Eg:
+%%      base32IDA.hyperbeam/ -> [IDA]
+%%      base32IDA.hyperbeam/base64urlIDA/xyz -> [IDA, xyz]
+%%      base32IDA.hyperbeam/base64urlIDB/xyz -> [IDA, IDB, xyz]
+maybe_append_named_message(ResolvedMsg, [], _Opts) -> [ResolvedMsg];
+maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
+    case permissive_id(OldBase, Opts) == permissive_id(ResolvedMsg, Opts) of
+        true when is_map(OldBase) or is_list(OldBase) -> OldReq;
+        true -> [ResolvedMsg|ReqMsgsRest];
+        false ->
+            case is_map(OldBase) andalso hb_maps:get(<<"path">>, OldBase, not_found, Opts) of
+                not_found ->
+                    ?event(
+                        {skipping_old_base,
+                            {old_base, OldBase},
+                            {resolved_msg, ResolvedMsg}
+                        }
+                    ),
+                    [ResolvedMsg|ReqMsgsRest];
+                _ -> [ResolvedMsg, OldBase|ReqMsgsRest]
+            end
+    end.
+
+%% @doc Takes a message or resolution request (`as` or `resolve`) -- whether in
+%% the form of an ID, link, or loaded map -- and returns its ID.
+permissive_id(ID, _Opts) when ?IS_ID(ID) -> ID;
+permissive_id({link, ID, _LinkOpts}, _Opts) -> ID;
+permissive_id({as, _Device, Msg}, Opts) -> permissive_id(Msg, Opts);
+permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
 
 %% @doc Takes a request-given host and the host value in the node message and
 %% returns only the name component of the host, if it is present. If no name is
 %% present, an empty binary is returned.
 name_from_host(Host, no_host) ->
-    case hd(binary:split(Host, <<".">>)) of
-        <<>> -> {error, <<"No name found in `Host`.">>};
-        Name -> {ok, Name}
+    % Handle the case where no host key is present in the node message. This 
+    % logic is also used when parsing of the host key from the node message
+    % fails, or the node message host is not found in the client provided value
+    % (node claims to be `x.com`, but the user request is for `abc.y.com`).
+    case binary:split(Host, <<".">>, [global, trim_all]) of
+        [_Host] -> {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
+        [Name|_] -> {ok, Name}
     end;
 name_from_host(ReqHost, RawNodeHost) ->
-    NodeHost = uri_string:parse(RawNodeHost),
-    ?event({node_host, NodeHost}),
-    WithoutNodeHost =
-        binary:replace(
-            ReqHost,
-            maps:get(host, uri_string:parse(RawNodeHost)),
-            <<>>
-        ),
-    name_from_host(WithoutNodeHost, no_host).
-
-%% @doc Merge the base message with the resolved message, ensuring that `~` as
-%% device specifiers are preserved.
-overlay_loaded({as, DevID, Base}, Resolved, Opts) ->
-    {as, DevID, hb_maps:merge(Base, Resolved, Opts)};
-overlay_loaded(Base, Resolved, Opts) ->
-    hb_maps:merge(Base, Resolved, Opts).
+    case uri_string:parse(RawNodeHost) of
+        #{ host := NodeHostName } ->
+            case binary:split(ReqHost, <<".", NodeHostName/binary>>) of
+                [Subdomain, <<>>] -> {ok, Subdomain};
+                _ -> name_from_host(ReqHost, no_host)
+            end;
+        _ -> name_from_host(ReqHost, no_host)
+    end.
 
 %%% Tests.
 
@@ -228,10 +287,9 @@ load_and_execute_test() ->
 
 %% @doc Return an `Opts` for an environment with the default ARNS name export
 %% and a temporary store for the test.
-arns_opts() ->
+test_arns_opts() ->
     JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
-    hb_http_server:start_node(#{}),
     TempStore = hb_test_utils:test_store(),
     #{
         store =>
@@ -252,13 +310,13 @@ arns_opts() ->
 
 %% @doc Names from JSON test.
 arns_json_snapshot_test() ->
-    Opts = arns_opts(),
+    Opts = test_arns_opts(),
     ?assertMatch(
-        {ok, <<"application/pdf">>},
+        {ok, <<"text/html">>},
         hb_ao:resolve_many(
             [
                 #{ <<"device">> => <<"name@1.0">> },
-                #{ <<"path">> => <<"draft-17_whitepaper">> },
+                #{ <<"path">> => <<"001_permabytes">>, <<"load">> => true },
                 <<"content-type">>
             ],
             Opts
@@ -266,15 +324,49 @@ arns_json_snapshot_test() ->
     ).
 
 arns_host_resolution_test() ->
-    Opts = arns_opts(),
+    Opts = test_arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
-        {ok, <<"application/pdf">>},
+        {ok, <<"text/html">>},
         hb_http:get(
             Node,
             #{
                 <<"path">> => <<"content-type">>,
-                <<"host">> => <<"draft-17_whitepaper">>
+                <<"host">> => <<"001_permabytes.localhost">>
+            },
+            Opts
+        )
+    ).
+
+arns_host_resolution_with_node_host_test() ->
+    Opts = (test_arns_opts())#{ node_host => <<"http://localhost">>, port => 0 },
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, <<"text/html">>},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"content-type">>,
+                <<"host">> => <<"001_permabytes.localhost">>
+            },
+            Opts
+        )
+    ).
+
+localhost_root_request_skips_name_resolution_test() ->
+    Opts = (test_arns_opts())#{ port => 0 },
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok,
+            #{
+                <<"status">> := 307,
+                <<"location">> := <<"/~hyperbuddy@1.0/index">>
+            }},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => <<"localhost">>
             },
             Opts
         )

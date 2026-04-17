@@ -106,16 +106,20 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
+    SignatureType = dev_arweave_common:deserialize_sig_type(
+        maps:get(<<"type">>, Commitment)
+    ),
     ?event({commitment_owner, Owner}),
     ?event({commitment_signature, Signature}),
+    ?event({commitment_signature_type, SignatureType}),
     ?event({commitment_tags, Tags}),
     TX = #tx{
         owner = Owner,
         signature = Signature,
+        signature_type = SignatureType,
         tags = Tags
     },
     FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
-
 
 %% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
 %% recreating the original order of the tags.

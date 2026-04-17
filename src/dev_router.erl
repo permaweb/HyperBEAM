@@ -406,7 +406,11 @@ match(Base, Req, Opts) ->
             {req, Req}
         }
     ),
-    TargetPath = hb_util:find_target_path(Req, Opts),
+    TargetPath =
+        case hb_util:find_target_path(Req, Opts) of
+            no_path -> no_path;
+            {_TargetKey, Path} -> Path
+        end,
     Match =
         match_routes(
             Req#{ <<"path">> => TargetPath },
@@ -446,9 +450,10 @@ match_routes(#{ <<"path">> := Explicit = <<"https://", _/binary>> }, _, _, _) ->
     #{ <<"node">> => Explicit, <<"reference">> => <<"explicit">> };
 match_routes(_, _, [], _) -> no_matches;
 match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
-    XM = hb_ao:get(XKey, Routes, Opts),
+    NormRoutes = hb_ao:normalize_keys(Routes, Opts),
+    XM = hb_maps:get(hb_ao:normalize_key(XKey), NormRoutes, not_found, Opts),
     Template =
-        hb_ao:get(
+        hb_maps:get(
             <<"template">>,
             XM,
             #{},
@@ -615,18 +620,27 @@ choose_count(RawChoose, Nodes) ->
     min(NormalizedChoose, length(Nodes)).
 
 normalize_strategy(RawStrategy) ->
-    case hb_util:to_lower(hb_util:bin(RawStrategy)) of
-        <<"all">> -> <<"All">>;
-        <<"random">> -> <<"Random">>;
-        <<"by-base">> -> <<"By-Base">>;
-        <<"by_base">> -> <<"By-Base">>;
-        <<"by-weight">> -> <<"By-Weight">>;
-        <<"by_weight">> -> <<"By-Weight">>;
-        <<"nearest">> -> <<"Nearest">>;
-        <<"nearest-integer">> -> <<"Nearest-Integer">>;
-        <<"nearest_integer">> -> <<"Nearest-Integer">>;
-        _ -> <<"All">>
+    Lower = hb_util:to_lower(hb_util:bin(RawStrategy)),
+    case Lower of
+        <<"shuffled-", Rest/binary>> ->
+            <<"Shuffled-", (normalize_strategy_base(Rest))/binary>>;
+        <<"shuffled_", Rest/binary>> ->
+            <<"Shuffled-", (normalize_strategy_base(Rest))/binary>>;
+        _ ->
+            normalize_strategy_base(Lower)
     end.
+
+normalize_strategy_base(<<"all">>) -> <<"All">>;
+normalize_strategy_base(<<"random">>) -> <<"Random">>;
+normalize_strategy_base(<<"by-base">>) -> <<"By-Base">>;
+normalize_strategy_base(<<"by_base">>) -> <<"By-Base">>;
+normalize_strategy_base(<<"by-weight">>) -> <<"By-Weight">>;
+normalize_strategy_base(<<"by_weight">>) -> <<"By-Weight">>;
+normalize_strategy_base(<<"nearest">>) -> <<"Nearest">>;
+normalize_strategy_base(<<"nearest-integer">>) -> <<"Nearest-Integer">>;
+normalize_strategy_base(<<"nearest_integer">>) -> <<"Nearest-Integer">>;
+normalize_strategy_base(<<"range">>) -> <<"Range">>;
+normalize_strategy_base(_) -> <<"All">>.
 
 route_integer(Int, _Opts) when is_integer(Int) ->
     Int;
@@ -2008,8 +2022,9 @@ route_multirequest_parallel_limit() ->
     ?assertEqual([1, 2, 3], WorkerBodies),
     % With 3 peers of 300ms each: `parallel = 2` should complete in about two
     % waves (~600ms), not one (~300ms) or fully serial (~900ms).
-    ?assert(Duration >= 450),
-    ?assert(Duration < 850).
+    ?event({duration, Duration}),
+    ?assert(Duration >= 600),
+    ?assert(Duration < 900).
 
 %% @doc Test that a full production-style route configuration (matching a
 %% typical config.json) resolves every request type correctly: single-node

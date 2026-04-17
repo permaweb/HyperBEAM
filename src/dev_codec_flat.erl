@@ -88,7 +88,7 @@ serialize(Map, Opts) when is_map(Map) ->
                         Acc,
                         hb_path:to_binary(Key),
                         <<": ">>,
-                        hb_maps:get(Key, Flattened, Opts), <<"\n">>
+                        hb_maps:get(Key, Flattened, not_found, Opts), <<"\n">>
                     ]
                 end,
                 <<>>,

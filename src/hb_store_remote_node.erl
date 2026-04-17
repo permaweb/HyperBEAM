@@ -4,7 +4,7 @@
 %%% been written to the remote node. In that case, the node would probably want
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
--export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
+-export([scope/1, type/2, read/2, write/3, make_link/3, make_group/2, resolve/2]).
 %%% Public utilities.
 -export([maybe_cache/2, maybe_cache/3, read_local_cache/2]).
 -include("include/hb.hrl").
@@ -52,6 +52,8 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
 %% @returns {ok, Msg} on success or not_found if the key is missing.
+read(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
+    not_found;
 read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
     HTTPRes =
@@ -70,7 +72,8 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
-    end.
+    end;
+read(_, _) -> not_found.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -124,10 +127,8 @@ maybe_cache(StoreOpts, Data, Links) ->
 read_local_cache(StoreOpts, ID) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
-        false ->
-            not_found;
-        Store ->
-            hb_cache:read(ID, #{store => Store})
+        false -> not_found;
+        Store -> hb_cache:read(ID, #{ store => Store })
     end.
 
 %% @doc Write a key to the remote node.
@@ -140,6 +141,8 @@ read_local_cache(StoreOpts, ID) ->
 %% @param Key The key to write.
 %% @param Value The value to store.
 %% @returns {ok, Path} on success or {error, Reason} on failure.
+write(#{ <<"read-only">> := true }, _Key, _Value) ->
+    not_found;
 write(Opts = #{ <<"node">> := Node }, Key, Value) ->
     ?event({write, {node, Node}, {key, Key}, {value, Value}}),
     WriteMsg = #{
@@ -167,6 +170,8 @@ write(Opts = #{ <<"node">> := Node }, Key, Value) ->
 %% Constructs an HTTP POST link request. If a wallet is provided,
 %% the message is signed. Returns {ok, Path} on HTTP 200, or
 %% {error, Reason} on failure.
+make_link(#{ <<"read-only">> := true }, _Source, _Destination) ->
+    not_found;
 make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
     ?event({make_remote_link, {node, Node}, {source, Source},
                                   {destination, Destination}}),
@@ -190,6 +195,9 @@ make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
             ?event(store_remote_node, {make_link_error, {error, Err}}),
             {error, Err}
     end.
+
+%% @doc Remote store `make_group/2' is a no-op.
+make_group(_StoreOpts, _Path) -> not_found.
 
 %%%--------------------------------------------------------------------
 %%% Tests
@@ -223,3 +231,24 @@ read_test() ->
 	],
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
     ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)).
+
+read_only_ids_test() ->
+    LocalStore = hb_test_utils:test_store(),
+    hb_store:reset(LocalStore),
+    {ok, ID} =
+        hb_cache:write(
+			<<"message">>, 
+			#{ store => LocalStore }
+		),
+    Node =
+        hb_http_server:start_node(
+            #{
+                store => LocalStore
+            }
+        ),
+    RemoteStore = [
+		#{ <<"store-module">> => hb_store_remote_node,
+           <<"node">> => Node,
+           <<"only-ids">> => true }
+	],
+    ?assertEqual(not_found, hb_cache:read(ID, #{ store => RemoteStore })).

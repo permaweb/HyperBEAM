@@ -4,7 +4,9 @@
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
 -export([serialize/1, deserialize/1, serialize_bundle/3]).
+-export([deserialize_header/1, deserialize_item_wrapper/1]).
 -export([data_item_signature_data/1]).
+-export([bundle_header_size/1, decode_bundle_header/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -87,7 +89,12 @@ new_item(Target, Anchor, Tags, Data) ->
 %% @doc Sign a data item.
 sign_item(_, undefined) -> throw(wallet_not_found);
 sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
-    Item = (dev_arweave_common:normalize(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
+    Item =
+        (dev_arweave_common:normalize(RawItem))#tx{
+            format = ans104,
+            owner = Owner,
+            signature_type = KeyType
+        },
     % Generate the signature from the data item's data segment in 'signed'-ready mode.
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item)),
     dev_arweave_common:reset_ids(Item#tx{signature = Sig}).
@@ -97,6 +104,10 @@ verify_item(DataItem) ->
     ValidID = verify_data_item_id(DataItem),
     ValidSignature = verify_data_item_signature(DataItem),
     ValidTags = verify_data_item_tags(DataItem),
+    ?event(debug, {verify_item,
+        {id, ValidID},
+        {signature, ValidSignature},
+        {tags, ValidTags}}),
     ValidID andalso ValidSignature andalso ValidTags.
 
 %%%===================================================================
@@ -129,7 +140,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
+        hb_util:check_size(TX#tx.owner, [0, 32, 33, 42, 65, byte_size(?DEFAULT_OWNER)]),
         {invalid_field, owner, TX#tx.owner}
     ),
     hb_util:ok_or_throw(TX,
@@ -137,7 +148,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, target, TX#tx.target}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
+        hb_util:check_size(TX#tx.signature, [0, 64, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
     hb_util:ok_or_throw(TX,
@@ -184,14 +195,19 @@ data_item_signature_data(RawItem) ->
     ar_deep_hash:hash([
         utf8_encoded("dataitem"),
         utf8_encoded("1"),
-        %% Only SignatureType 1 is supported for now (RSA 4096)
-        utf8_encoded("1"),
+        utf8_encoded(get_signature_type(Item#tx.signature_type)),
         <<(Item#tx.owner)/binary>>,
         <<(Item#tx.target)/binary>>,
         <<(Item#tx.anchor)/binary>>,
         encode_tags(Item#tx.tags),
         <<(Item#tx.data)/binary>>
     ]).
+
+get_signature_type({rsa, 65537}) -> "1";
+get_signature_type({eddsa, ed25519}) -> "2";
+get_signature_type(ethereum) -> "3";
+get_signature_type(solana) -> "4";
+get_signature_type(typed_ethereum) -> "7".
 
 %% @doc Verify the data item's ID matches the signature.
 verify_data_item_id(DataItem) ->
@@ -316,8 +332,15 @@ to_serialized_pair(Item, false, Signed) ->
 %% little-endian format which is why we encode to `<<1, 0>>'.
 encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
-encode_signature_type(_) ->
-    unsupported_tx_format.
+encode_signature_type({eddsa, ed25519}) ->
+    <<2, 0>>;
+encode_signature_type(ethereum) ->
+    <<3, 0>>;
+encode_signature_type(solana) ->
+    <<4, 0>>;
+encode_signature_type(SigType) ->
+    ?event(warning, {error_encoding_signature_type, {sig_type, SigType}}),
+    {unsupported_tx_format, SigType}.
 
 %% @doc Encode an optional field (target, anchor) with a presence byte.
 encode_optional_field(<<>>) ->
@@ -402,13 +425,30 @@ deserialize(Item) when is_record(Item, tx) ->
 deserialize(Binary) ->
     deserialize_item(Binary).
 
+%% @doc Deserialize an item and unbundle it if it is a bundle, returning a #tx
+%% with possibly deeply nested items in the #tx.data field.
 deserialize_item(Binary) ->
+    maybe_unbundle(deserialize_item_wrapper(Binary)).
+
+%% @doc Deserialize only the _wrapper_ of an item, leaving the data unprocessed
+%% in the case that it is a bundle. It may be unbundled by calling `maybe_unbundle/1'
+%% at any later point.
+deserialize_item_wrapper(Binary) ->
+    {ok, _HeaderSize, Header} = deserialize_header(Binary),
+    dev_arweave_common:reset_ids(Header).
+
+%% @doc Deserialize the header of an item, returning a #tx record with the 
+%% remaining unprocessed data in the #tx.data field.
+deserialize_header(Binary) ->
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
-    {Tags, Data} = decode_tags(Rest3),
-    maybe_unbundle(
-        dev_arweave_common:reset_ids(#tx{
+    {Tags, RemainingData} = decode_tags(Rest3),
+    HeaderSize = byte_size(Binary) - byte_size(RemainingData),
+    {
+        ok,
+        HeaderSize,
+        #tx{
             format = ans104,
             signature_type = SignatureType,
             signature = Signature,
@@ -416,10 +456,10 @@ deserialize_item(Binary) ->
             target = Target,
             anchor = Anchor,
             tags = Tags,
-            data = Data,
-            data_size = byte_size(Data)
-        })
-    ).
+            data = RemainingData,
+            data_size = byte_size(RemainingData)
+        }
+    }.
 
 maybe_unbundle(Item) ->
     case dev_arweave_common:type(Item) of
@@ -430,14 +470,14 @@ maybe_unbundle(Item) ->
 
 unbundle_list(Item) ->
     case unbundle(Item#tx.data) of
-        detached -> Item#tx{data = detached};
+        ?DEFAULT_DATA -> Item#tx{data = ?DEFAULT_DATA};
         Items -> Item#tx{data = hb_util:list_to_numbered_message(Items)}
     end.
 
 unbundle_map(Item) ->
     MapTXID = dev_arweave_common:tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
     case unbundle(Item#tx.data) of
-        detached -> Item#tx{data = detached};
+        ?DEFAULT_DATA -> Item#tx{data = ?DEFAULT_DATA};
         Items ->
             MapItem = find_single_layer(hb_util:decode(MapTXID), Items),
             Map = hb_json:decode(MapItem#tx.data),
@@ -469,7 +509,7 @@ find_single_layer(UnsignedID, Items) ->
 unbundle(<<Count:256/little-integer, Content/binary>>) ->
     {ItemsBin, Items} = decode_bundle_header(Count, Content),
     decode_bundle_items(Items, ItemsBin);
-unbundle(<<>>) -> detached.
+unbundle(?DEFAULT_DATA) -> ?DEFAULT_DATA.
 
 decode_bundle_items([], <<>>) ->
     [];
@@ -487,22 +527,49 @@ decode_bundle_items([{_ID, Size} | RestItems], ItemsBin) ->
             )
     ].
 
+bundle_header_size(<<Count:256/little-integer, _/binary>>) ->
+    % Eeach item in the bundle header index consumes 64 bytes
+    32 + (Count * 64);
+bundle_header_size(_) ->
+    invalid_bundle_header.
+
+decode_bundle_header(<<Count:256/little-integer, Content/binary>>) ->
+    decode_bundle_header(Count, Content);
+decode_bundle_header(<<>>) ->
+    {<<>>, []};
+decode_bundle_header(_) ->
+    invalid_bundle_header.
+
 decode_bundle_header(Count, Bin) -> decode_bundle_header(Count, Bin, []).
 decode_bundle_header(0, ItemsBin, Header) ->
     {ItemsBin, lists:reverse(Header)};
-decode_bundle_header(Count, <<Size:256/little-integer, ID:32/binary, Rest/binary>>, Header) ->
-    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]).
+decode_bundle_header(
+    Count,
+    <<Size:256/little-integer, ID:32/binary, Rest/binary>>,
+    Header
+) ->
+    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]);
+decode_bundle_header(_, _, _) ->
+    invalid_bundle_header.
 
 %% @doc Decode the signature from a binary format. Only RSA 4096 is currently supported.
 %% Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
 %% little-endian format which is why we match on `<<1, 0>>'.
 decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) ->
     {{rsa, 65537}, Signature, Owner, Rest};
+decode_signature(<<2, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
+    {{eddsa, ed25519}, Signature, Owner, Rest};
+decode_signature(<<3, 0, Signature:65/binary, Owner:65/binary, Rest/binary>>) ->
+    {ethereum, Signature, Owner, Rest};
+decode_signature(<<4, 0, Signature:64/binary, Owner:32/binary, Rest/binary>>) ->
+    {solana, Signature, Owner, Rest};
+decode_signature(<<7, 0, Signature:65/binary, Owner:42/binary, Rest/binary>>) ->
+    {typed_ethereum, Signature, Owner, Rest};
 decode_signature(Other) ->
-    ?event({error_decoding_signature,
-        {sig_type, {explicit, binary:part(Other, 0, 2)}},
-        {binary, Other}}),
-    unsupported_tx_format.
+    SigType = binary:part(Other, 0, 2),
+    ?event(warning, {error_decoding_signature,
+        {sig_type, {explicit, SigType}}}),
+    {unsupported_tx_format, SigType}.
 
 %% @doc Decode tags from a binary format using Apache Avro.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
@@ -643,6 +710,44 @@ with_zero_length_tag_test() ->
     Deserialized = deserialize(Serialized),
     ?assertEqual(Item, Deserialized).
 
+bundle_header_size_test() ->
+    ?assertEqual(672, bundle_header_size(<<10:256/little, 1234/little>>)),
+    ?assertEqual(32, bundle_header_size(<<0:256/little>>)),
+    ?assertEqual(invalid_bundle_header, bundle_header_size(<<>>)),
+    ?assertEqual(invalid_bundle_header, bundle_header_size(<<0>>)).
+
+decode_bundle_header_test() ->
+    ?assertEqual({<<>>, []}, decode_bundle_header(<<>>)),
+    Tail = <<"tail">>,
+    ?assertEqual(
+        {Tail, []},
+        decode_bundle_header(<<0:256/little, Tail/binary>>)
+    ),
+    ID1 = crypto:strong_rand_bytes(32),
+    Items1 = <<"abcde">>,
+    ?assertEqual(
+        {Items1, [{ID1, 5}]},
+        decode_bundle_header(<<1:256/little, 5:256/little, ID1:32/binary, Items1/binary>>)
+    ),
+    ID2 = crypto:strong_rand_bytes(32),
+    ID3 = crypto:strong_rand_bytes(32),
+    Items2 = <<"payload">>,
+    ?assertEqual(
+        {Items2, [{ID2, 4}, {ID3, 2}]},
+        decode_bundle_header(
+            <<
+                2:256/little,
+                4:256/little, ID2:32/binary,
+                2:256/little, ID3:32/binary,
+                Items2/binary
+            >>
+        )
+    ),
+    ?assertEqual(
+        {<<>>, [{ID1, 6}]},
+        decode_bundle_header(<<1:256/little, 6:256/little, ID1:32/binary>>)
+    ).
+
 unsigned_data_item_id_test() ->
     Item1 = deserialize(
         serialize(
@@ -748,6 +853,32 @@ bundle_map_test() ->
     BundleItem = deserialize(Bundle),
     ?assertEqual(Item1#tx.data, (maps:get(<<"key1">>, BundleItem#tx.data))#tx.data),
     ?assert(verify_item(BundleItem)).
+
+eddsa_cases_test() ->
+    Key = ar_wallet:new(?EDDSA_KEY_TYPE),
+    %% Owner and SignatureType defined during signing process.
+    Item1 = sign_item(#tx{
+        format = ans104,
+        target = crypto:strong_rand_bytes(32),
+        anchor = crypto:strong_rand_bytes(32),
+        tags = [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
+        data = <<"item1_data">>
+    }, Key),
+    Bundle = serialize(dev_arweave_common:normalize(Item1)),
+    BundleItem = deserialize(Bundle),
+    %% Sign a valid transaction and verify it
+    ?assert(verify_item(BundleItem)),
+    %% Missing Anchor should fail
+    ?assertNot(verify_item(BundleItem#tx{anchor = <<>>})),
+    %% Missing Tags should fail
+    ?assertNot(verify_item(BundleItem#tx{tags = []})),
+    %% Missing Owner should fail
+    ?assertNot(verify_item(BundleItem#tx{owner = crypto:strong_rand_bytes(32)})),
+    %% Missing Target should fail
+    ?assertNot(verify_item(BundleItem#tx{target = <<>>})),
+    %% Missing Data should fail
+    ?assertNot(verify_item(BundleItem#tx{data = <<>>})),
+    ok.
 
 extremely_large_bundle_test() ->
     W = ar_wallet:new(),
@@ -992,3 +1123,41 @@ generate_and_write_map_bundle_test_disabled() ->
     ?assert(verify_item(Deserialized)),
     ok = file:write_file(
         <<"test/arbundles.js/ans104-map-bundle-erlang.bundle">>, Serialized).
+
+deserialize_ed25519_transaction_test() ->
+    % ans104-item-ed25519.bin is dataitem 1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs
+    {ok, Serialized} = file:read_file(<<"test/arbundles.js/ans104-item-ed25519.bin">>),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual([{<<"Content-Type">>,<<"image/png">>}], Deserialized#tx.tags),
+    ?assertEqual(<<"ZbExyvGrJKOJTJcHMtKzoOZVCQBkjZ+5">>, Deserialized#tx.anchor),
+    ?assertEqual(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>,
+        hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assert(verify_item(Deserialized)).
+
+deserialize_solana_transaction_test() ->
+    % ans104-item-ed25519.bin is dataitem hXKqH_9rkYZ7LwvVps81uKNZd_i36WZjlp4Wnc5BkiE
+    {ok, Serialized} = file:read_file(<<"test/arbundles.js/ans104-item-solana.bin">>),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual([], Deserialized#tx.tags),
+    ?assertEqual(<<"e/GCI2gwfkcyXG6Q3n3CVuA0zT4EmSSf">>, Deserialized#tx.anchor),
+    ?assertEqual(<<"GGuACHp2FbtB4wwT5TmPCU6W5FGa3wB1vqno4gsKsxHz">>,
+        hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assert(verify_item(Deserialized)).
+
+deserialize_ethereum_transaction_test() ->
+    % ans104-item-ethereum.bin is dataitem te5MPrOxPqXrVygIQgzp4ZgImLN8CW-qPaI_olhlWyx
+    {ok, Serialized} = file:read_file(<<"test/arbundles.js/ans104-item-ethereum.bin">>),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual(ethereum, Deserialized#tx.signature_type),
+    ExpectedTags = [
+        {<<"Content-Type">>, <<"application/json">>},
+        {<<"App-Name">>, <<"Rodeo">>},
+        {<<"Token-Contract">>, <<"0xB6e822C6D5E0dEC983d76F28E56616057f88380f">>},
+        {<<"Token-Id">>, <<"328">>},
+        {<<"Chain-Id">>, <<"8453">>}
+    ],
+    ?assertEqual(ExpectedTags, Deserialized#tx.tags),
+    ?assertEqual(<<"zZHoADuo74sWmhEF0V-D4sxa4rj3rUR5_r7tSpWSmtY">>, hb_util:encode(Deserialized#tx.anchor)),
+    ?assertEqual(<<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
+        hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
+    ?assert(verify_item(Deserialized)).

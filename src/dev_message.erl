@@ -109,7 +109,7 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(ids, regenerating_id),
+            ?event(debug_id, regenerating_id),
             calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
@@ -124,7 +124,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(ids, returning_existing_ids),
+            ?event(debug_id, returning_existing_ids),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
@@ -635,7 +635,7 @@ set(Base, NewValuesMsg, Opts) ->
         ),
     % Base message with keys-to-unset removed
     BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
-    ?event(message_set,
+    ?event(debug_message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
             {keys_to_unset, UnsetKeys},
@@ -976,9 +976,18 @@ set_ignore_undefined_test() ->
 	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
 		hb_private:reset(hb_util:ok(set(Base, Req, #{ hashpath => ignore })))).
 
-verify_test() ->
+verify_test_() ->
+	{foreach, fun () -> ok end, fun (_) -> ok end, [
+		{"RSA", fun () -> test_verify(?RSA_KEY_TYPE) end},
+		{"EDDSA", fun () -> test_verify(?EDDSA_KEY_TYPE) end},
+        {"Solana", fun () -> test_verify(?SOLANA_KEY_TYPE) end},
+        {"Ethereum", fun () -> test_verify(?ETHEREUM_KEY_TYPE) end}
+	]}.
+
+test_verify(KeyType) ->
     Unsigned = #{ <<"a">> => <<"b">> },
-    Signed = hb_message:commit(Unsigned, #{ priv_wallet => hb:wallet() }),
+    Wallet = ar_wallet:new(KeyType),
+    Signed = hb_message:commit(Unsigned, #{ priv_wallet => Wallet }),
     ?event({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
     ?event({bad_signed, BadSigned}),
@@ -1020,7 +1029,7 @@ set_nested_link_test() ->
         }
     },
     {ok, Result} = set(LinkifiedBase, Req, Opts),
-    Expected =  
+    Expected =
     #{
         <<"other-key">> => <<"new-value">>,
         <<"balances">> => #{

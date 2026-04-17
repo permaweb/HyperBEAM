@@ -475,7 +475,8 @@ verifiability_test() ->
     ?assert(hb_message:verify(Structured)).
 
 %% @doc Reading an unsupported signature type transaction should fail
-failure_to_process_message_test() ->
+%% TODO: Enable when we find a TX that we don't support
+failure_to_process_message_test_disabled() ->
     hb_http_server:start_node(#{}),
     ?assertEqual(failure,
         hb_cache:read(

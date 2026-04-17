@@ -224,6 +224,18 @@ handle_resolve(Req, Msgs, NodeMsg) ->
     ),
     LoadedMsgs = hb_cache:ensure_all_loaded(Msgs, NodeMsg),
     case resolve_hook(<<"request">>, Req, LoadedMsgs, NodeMsg) of
+        {ok, []} ->
+            {ok,
+                #{
+                    <<"status">> => 307,
+                    <<"body">> => <<"Redirecting to default request.">>,
+                    <<"location">> => hb_opts:get(
+                        default_request,
+                        <<"/~hyperbuddy@1.0/index">>,
+                        NodeMsg
+                    )
+                }
+            };
         {ok, PreProcessedMsg} ->
             ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
@@ -316,6 +328,8 @@ embed_status({ErlStatus, Res}, NodeMsg) ->
 %% 1. The status code from the message.
 %% 2. The HTTP representation of the status code.
 %% 3. The default status code.
+status_code({error, {no_viable_responses, _AllResponses}}, NodeMsg) ->
+    status_code(no_viable_responses, NodeMsg);
 status_code({ErlStatus, Msg}, NodeMsg) ->
     case message_to_status(Msg, NodeMsg) of
         default -> status_code(ErlStatus, NodeMsg);
@@ -326,6 +340,7 @@ status_code(error, _NodeMsg) -> 400;
 status_code(created, _NodeMsg) -> 201;
 status_code(not_found, _NodeMsg) -> 404;
 status_code(client_error, _NodeMsg) -> 400;
+status_code(no_viable_responses, _NodeMsg) -> 400;
 status_code(failure, _NodeMsg) -> 500;
 status_code(unavailable, _NodeMsg) -> 503;
 status_code(unauthorized, _NodeMsg) -> 401;

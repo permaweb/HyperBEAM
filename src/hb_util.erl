@@ -1,6 +1,6 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
--export([int/1, float/1, atom/1, bin/1, list/1, map/1]).
+-export([int/1, float/1, atom/1, bin/1, list/1, map/1, bool/1, bool_int/1]).
 -export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
@@ -20,13 +20,14 @@
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
--export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
+-export([count/2, mean/1, stddev/1, variance/1, weighted_random/1, shuffle/1]).
 -export([unique/1]).
 -export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
 -export([unquote/1, split_escaped_single/2]).
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_keys/2]).
+-export([base58_encode/1]).
 -include("include/hb.hrl").
 
 
@@ -82,6 +83,24 @@ bin(Value) when is_list(Value) ->
     list_to_binary(Value);
 bin(Value) when is_binary(Value) ->
     Value.
+
+%% @doc Coerce a value to a boolean.
+bool(Value) ->
+    case Value of
+        true -> true;
+        false -> false;
+        <<"true">> -> true;
+        <<"false">> -> false;
+        <<"1">> -> true;
+        <<"0">> -> false;
+        1 -> true;
+        0 -> false;
+        _ -> false
+    end.
+
+%% @doc Coerce a boolean to 1 or 0.
+bool_int(true) -> 1;
+bool_int(false) -> 0.
 
 %% @doc Coerce a value to a string list.
 list(Value) when is_binary(Value) ->
@@ -223,6 +242,8 @@ native_id(Wallet = {_Priv, _Pub}) ->
 %% is returned as is.
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
+    Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
@@ -242,12 +263,12 @@ add_commas(List) -> List.
 
 %% @doc Encode a binary to URL safe base64 binary string.
 encode(Bin) ->
-    b64fast:encode(Bin).
+    b64rs:encode(Bin).
 
 %% @doc Try to decode a URL safe base64 into a binary or throw an error when
 %% invalid.
 decode(Input) ->
-    b64fast:decode(Input).
+    b64rs:decode(Input).
 
 %% @doc Safely encode a binary to URL safe base64.
 safe_encode(Bin) when is_binary(Bin) ->
@@ -341,23 +362,45 @@ find_target_path(Msg, Opts) ->
     case hb_ao:get(<<"route-path">>, Msg, not_found, Opts) of
         not_found ->
             ?event({find_target_path, {msg, Msg}, not_found}),
-            hb_ao:get(<<"path">>, Msg, no_path, Opts);
-        RoutePath -> RoutePath
+            case hb_ao:get(<<"path">>, Msg, no_path, Opts) of
+                no_path -> no_path;
+                Path -> {<<"path">>, Path}
+            end;
+        RoutePath ->
+            {<<"route-path">>, RoutePath}
     end.
 
 %% @doc Check if a message matches a given template.
 %% Templates can be either:
-%% - A map: Uses structural matching against the message
+%% - A map: Optional path regex match, then structural matching for remaining keys
 %% - A binary regex: Matches against the message's target path
 %% Returns true/false for map templates, or regex match result for binary templates.
-template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
-    case hb_message:match(Template, ToMatch, primary) of
-        {mismatch, value, _Key, _Val1, _Val2} -> false;
-        Match -> Match
+template_matches(ToMatch, Template, Opts) when is_map(Template) ->
+    case find_target_path(Template, Opts) of
+        no_path ->
+            template_message_match(ToMatch, Template, Opts);
+        {TargetKey, Regex} ->
+            template_regex_match(ToMatch, hb_ao:normalize_key(Regex), Opts) andalso
+                template_message_match(
+                    ToMatch,
+                    hb_maps:remove(TargetKey, Template, Opts),
+                    Opts
+                )
     end;
 template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
-    MsgPath = find_target_path(ToMatch, Opts),
-    hb_path:regex_matches(MsgPath, Regex).
+    template_regex_match(ToMatch, Regex, Opts).
+
+template_regex_match(ToMatch, Regex, Opts) ->
+    case find_target_path(ToMatch, Opts) of
+        no_path -> false;
+        {_TargetKey, MsgPath} -> hb_path:regex_matches(MsgPath, Regex)
+    end.
+
+template_message_match(ToMatch, TemplateWithoutPath, Opts) ->
+    case hb_message:match(TemplateWithoutPath, ToMatch, primary, Opts) of
+        {mismatch, value, _Key, _Val1, _Val2} -> false;
+        Match -> Match
+    end.
 
 %% @doc Label a list of elements with a number.
 number(List) ->
@@ -781,3 +824,19 @@ lower_case_keys(Map, Opts) ->
         Map,
         Opts
     ).
+
+%% @doc Base58 encode.
+base58_encode(<<0, Rest/binary>>) ->
+    Encoded = base58_encode(Rest),
+    <<$1, Encoded/binary>>;
+base58_encode(Bin) when is_binary(Bin) ->
+    base58_encode_int(binary:decode_unsigned(Bin)).
+
+base58_encode_int(0) ->
+    <<>>;
+base58_encode_int(N) ->
+    Alphabet = <<"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz">>,
+    Rem = N rem 58,
+    Char = binary:at(Alphabet, Rem),
+    Rest = base58_encode_int(N div 58),
+    <<Rest/binary, Char>>.

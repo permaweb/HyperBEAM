@@ -2,13 +2,19 @@
 -module(ar_tx).
 
 -export([sign/2, verify/1, verify_tx_id/2]).
--export([id/1, id/2, get_owner_address/1, data_root/1]).
+-export([id/1, id/2, get_owner_address/1, data_root/1, data_root/2]).
 -export([generate_signature_data_segment/1, generate_chunk_id/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
--export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
+-export([generate_chunk_tree/1, generate_chunk_tree/2]).
+-export([chunk_binary/2, chunk_binary/3, chunking_mode/1]).
+-export([chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
+-export([get_weave_size_increase/2]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%% Minimum chunk size targeted by the arweave-js chuking algorithm.
+-define(MIN_CHUNK_SIZE, (32 * 1024)).
 
 %%%===================================================================
 %%% Public interface.
@@ -42,7 +48,6 @@ sign_v1(TX, PrivKey, PubKey = {_, Owner}) ->
 %% 
 %% Checks that are missing:
 %% - format 2 unsupported pre-2.0
-%% - valid ECDSA signature post-2.9
 %% - verify_denomination
 %% - is_tx_fee_sufficient
 %% - tx_field_size_limit_v1/v2
@@ -54,7 +59,7 @@ verify(TX) ->
     From = ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type),
     Checks = [
         {"tx_format_not_supported", TX#tx.format == 1 orelse TX#tx.format == 2},
-        {"invalid_signature_type", {?RSA_SIGN_ALG, 65537} == TX#tx.signature_type},
+        {"tx_signature_type_not_supported", verify_signature_type(TX)},
         {"quantity_negative", TX#tx.quantity >= 0},
         {"same_owner_as_target", (From =/= TX#tx.target)},
         {"tx_id_not_valid", verify_hash(TX)},
@@ -88,7 +93,10 @@ get_owner_address(#tx{ owner_address = OwnerAddress }) ->
     OwnerAddress.
 
 data_root(Bin) ->
-    Chunks = chunk_binary(?DATA_CHUNK_SIZE, Bin),
+    data_root(arweavejs, Bin).
+
+data_root(Mode, Bin) ->
+    Chunks = chunk_binary(Mode, ?DATA_CHUNK_SIZE, Bin),
     SizeTaggedChunks = chunks_to_size_tagged_chunks(Chunks),
     SizeTaggedChunkIDs = sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
     {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
@@ -97,6 +105,28 @@ data_root(Bin) ->
 %%%===================================================================
 %%% Private functions.
 %%%===================================================================
+
+%% @doc Verify the transaction's signature type is supported for the given format.
+%% Format 1 transactions only support RSA with 65537.
+%% Format 2 transactions support RSA with 65537 and ECDSA with secp256k1.
+verify_signature_type(#tx{ format = 1 } = TX) ->
+	case TX#tx.signature_type of
+		{?RSA_SIGN_ALG, 65537} ->
+			true;
+		_ ->
+			false
+	end;
+verify_signature_type(#tx{ format = 2 } = TX) ->
+	case TX#tx.signature_type of
+		{?RSA_SIGN_ALG, 65537} ->
+			true;
+		{?ECDSA_SIGN_ALG, secp256k1} ->
+			true;
+		_ ->
+			false
+	end;
+verify_signature_type(_) ->
+	false.
 
 %% @doc Verify the transaction's signature.
 verify_signature(TX = #tx{ signature_type = SigType }) ->
@@ -109,7 +139,12 @@ verify_signature(TX = #tx{ signature_type = SigType }) ->
 
 %% @doc Generate the data segment to be signed for a given TX.
 generate_signature_data_segment(#tx{ format = 2 } = TX) ->
-    signature_data_segment_v2(TX);
+    case TX#tx.signature_type of
+        {?ECDSA_SIGN_ALG, secp256k1} ->
+            signature_data_segment_v2_no_public_key(TX);
+        {?RSA_SIGN_ALG, 65537} ->
+            signature_data_segment_v2(TX)
+    end;
 generate_signature_data_segment(#tx{ format = 1 } = TX) ->
     signature_data_segment_v1(TX);
 generate_signature_data_segment(_) ->
@@ -120,6 +155,28 @@ signature_data_segment_v2(TX) ->
     List = [
         << (integer_to_binary(TX#tx.format))/binary >>,
         << (TX#tx.owner)/binary >>,
+        << (TX#tx.target)/binary >>,
+        << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
+        << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
+        << (TX#tx.anchor)/binary >>,
+        tags_to_list(TX#tx.tags),
+        << (integer_to_binary(TX#tx.data_size))/binary >>,
+        << (TX#tx.data_root)/binary >>
+    ],
+    List2 =
+        case TX#tx.denomination > 0 of
+            true ->
+                [<< (integer_to_binary(TX#tx.denomination))/binary >> | List];
+            false ->
+                List
+        end,
+    ar_deep_hash:hash(List2).
+
+%% @doc Generate the data segment to be signed for a given v2 TX with ECDSA.
+%% ECDSA signatures do not include the owner public key in the signature data segment.
+signature_data_segment_v2_no_public_key(TX) ->
+    List = [
+        << (integer_to_binary(TX#tx.format))/binary >>,
         << (TX#tx.target)/binary >>,
         << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
         << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
@@ -206,13 +263,13 @@ verify_hash(#tx{ id = ID } = TX) ->
     ID == dev_arweave_common:generate_id(TX, signed).
 
 %% @doc On Arweave we don't have data on format=2 transactions, and so
-%% traditionally just verify the transcation based on data_rot and data_size.
+%% traditionally just verify the transaction based on data_root and data_size.
 %% However in HyperBEAM we will often populate the data field. Adding this
 %% check to verify that `data_root`, `data_size`, and `data` are consistent.
 verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
     true;
-verify_v2_data(#tx{ 
-        format = 2, data_root = DataRoot, 
+verify_v2_data(#tx{
+        format = 2, data_root = DataRoot,
         data_size = DataSize, data = Data }) ->
     (DataSize == byte_size(Data)) andalso (DataRoot == data_root(Data));
 verify_v2_data(_) ->
@@ -262,13 +319,11 @@ json_struct_to_tx(TXStruct) ->
     Owner = hb_util:decode(hb_util:find_value(<<"owner">>, TXStruct)),
     Sig = hb_util:decode(hb_util:find_value(<<"signature">>, TXStruct)),
     SigType = set_sig_type_from_pub_key(Owner),
-    %% Only RSA supported for now
-    ?RSA_KEY_TYPE = SigType,
     TX = #tx{
         format = Format,
         id = TXID,
         anchor = hb_util:decode(hb_util:find_value(<<"last_tx">>, TXStruct)),
-        owner = hb_util:decode(hb_util:find_value(<<"owner">>, TXStruct)),
+        owner = Owner,
         tags = [{hb_util:decode(Name), hb_util:decode(Value)}
                 %% Only the elements matching this pattern are included in the list.
                 || #{<<"name">> := Name, <<"value">> := Value} <- Tags],
@@ -286,11 +341,22 @@ json_struct_to_tx(TXStruct) ->
             end,
         denomination = Denomination
     },
-    TX#tx{ owner_address = get_owner_address(TX) }.
+    %% For ECDSA transactions, recover the owner from the signature
+    case SigType of
+        ?ECDSA_KEY_TYPE ->
+            DataSegment = generate_signature_data_segment(TX),
+            Owner2 = ar_wallet:recover_key(DataSegment, Sig, SigType),
+            TX#tx{ owner = Owner2, owner_address = ar_wallet:to_address(Owner2, SigType) };
+        ?RSA_KEY_TYPE ->
+            TX#tx{ owner_address = get_owner_address(TX) }
+    end.
 
+%% @doc Determine signature type from owner and signature.
+%% For ECDSA transactions, the owner is empty in JSON (recovered from signature).
 set_sig_type_from_pub_key(Owner) ->
     case Owner of
         <<>> ->
+            %% Empty owner means ECDSA (public key is recovered from signature)
             ?ECDSA_KEY_TYPE;
         _ ->
             ?RSA_KEY_TYPE
@@ -308,13 +374,10 @@ tx_to_json_struct(
         data = Data,
         reward = Reward,
         signature = Sig,
-        signature_type = SigType,
         data_size = DataSize,
         data_root = DataRoot,
         denomination = Denomination
     }) ->
-    %% Only RSA supported for now
-    ?RSA_KEY_TYPE = SigType,
     Fields = [
         {<<"format">>,
             case Format of
@@ -359,10 +422,11 @@ tx_to_json_struct(
 %% Used to compute the Merkle roots of v1 transactions' data and to compute
 %% Merkle proofs for v2 transactions when their data is uploaded without proofs.
 generate_chunk_tree(TX) ->
+    Mode = chunking_mode(TX#tx.format),
     generate_chunk_tree(TX,
         sized_chunks_to_sized_chunk_ids(
             chunks_to_size_tagged_chunks(
-                chunk_binary(?DATA_CHUNK_SIZE, TX#tx.data)
+                chunk_binary(Mode, ?DATA_CHUNK_SIZE, TX#tx.data)
             )
         )
     ).
@@ -378,11 +442,43 @@ generate_chunk_id(Chunk) ->
 %% @doc Split the binary into chunks. Used for computing the Merkle roots of
 %% v1 transactions' data and computing Merkle proofs for v2 transactions' when
 %% their data is uploaded without proofs.
-chunk_binary(ChunkSize, Bin) when byte_size(Bin) < ChunkSize ->
-    [Bin];
 chunk_binary(ChunkSize, Bin) ->
+    chunk_binary(arweavejs, ChunkSize, Bin).
+
+chunking_mode(1) ->
+    legacy;
+chunking_mode(2) ->
+    arweavejs;
+chunking_mode(_) ->
+    legacy.
+
+%% @doc Split the binary into chunks using the requested mode.
+%% legacy: fixed-size chunking with a smaller final chunk.
+%% arweavejs: size-balanced chunking where the last two chunks may be small.
+%%            This is the chunking logic used by the arweave-js library.
+%%            Adapted from: https://github.com/ArweaveTeam/arweave-js/blob/39d8ef2799a2c555e6f9b0cc6adabd7cbc411bc8/src/common/lib/merkle.ts#L43
+chunk_binary(legacy, ChunkSize, Bin) when byte_size(Bin) < ChunkSize ->
+    [Bin];
+chunk_binary(legacy, ChunkSize, Bin) ->
     <<ChunkBin:ChunkSize/binary, Rest/binary>> = Bin,
-    [ChunkBin | chunk_binary(ChunkSize, Rest)].
+    [ChunkBin | chunk_binary(legacy, ChunkSize, Rest)];
+chunk_binary(arweavejs, ChunkSize, Bin) ->
+    chunk_binary_arweavejs(arweavejs, ChunkSize, Bin, []).
+
+chunk_binary_arweavejs(arweavejs, ChunkSize, Bin, Acc)
+        when byte_size(Bin) >= ChunkSize ->
+    BinSize = byte_size(Bin),
+    NextChunkSize = BinSize - ChunkSize,
+    ChunkSize2 =
+        case NextChunkSize > 0 andalso NextChunkSize < ?MIN_CHUNK_SIZE of
+            true -> 
+                (BinSize + 1) div 2;
+            false -> ChunkSize
+        end,
+    <<Chunk:ChunkSize2/binary, Rest/binary>> = Bin,
+    chunk_binary_arweavejs(arweavejs, ChunkSize, Rest, [Chunk | Acc]);
+chunk_binary_arweavejs(arweavejs, _ChunkSize, Bin, Acc) ->
+    lists:reverse([Bin | Acc]).
 
 %% @doc Assign a byte offset to every chunk in the list.
 chunks_to_size_tagged_chunks(Chunks) ->
@@ -405,6 +501,22 @@ chunks_to_size_tagged_chunks(Chunks) ->
 sized_chunks_to_sized_chunk_ids(SizedChunks) ->
     [{generate_chunk_id(Chunk), Size} || {Chunk, Size} <- SizedChunks].
 
+%% @doc Return the number of bytes the weave is increased by when the given transaction
+%% is included.
+get_weave_size_increase(#tx{ data_size = DataSize }, Height) ->
+	get_weave_size_increase(DataSize, Height);
+
+get_weave_size_increase(0, _Height) ->
+	0;
+get_weave_size_increase(DataSize, Height) ->
+	case Height >= ar_fork:height_2_5() of
+		true ->
+			%% The smallest multiple of ?DATA_CHUNK_SIZE larger than or equal to data_size.
+			ar_poa:get_padded_offset(DataSize, 0);
+		false ->
+			DataSize
+	end.
+
 %%%===================================================================
 %%% Tests.
 %%%===================================================================
@@ -419,6 +531,31 @@ new(Data, Reward) ->
         reward = Reward,
         data_size = byte_size(Data)
     }.
+
+chunk_binary_legacy_test() ->
+    ChunkSize = 10,
+    Data = binary:copy(<<"a">>, 25),
+    ChunksLegacy = chunk_binary(legacy, ChunkSize, Data),
+    ?assertEqual([10, 10, 5], [byte_size(Chunk) || Chunk <- ChunksLegacy]),
+    ?assertEqual(ChunksLegacy, chunk_binary(legacy, ChunkSize, Data)).
+
+chunk_binary_arweavejs_balanced_test() ->
+    ChunkSize = ?DATA_CHUNK_SIZE,
+    MinChunkSize = ?MIN_CHUNK_SIZE,
+    DataSize = ChunkSize + MinChunkSize - 1,
+    Data = binary:copy(<<"b">>, DataSize),
+    Chunks = chunk_binary(arweavejs, ChunkSize, Data),
+    ExpectedFirst = (DataSize + 1) div 2,
+    ExpectedSecond = DataSize - ExpectedFirst,
+    ?assertEqual([ExpectedFirst, ExpectedSecond], [byte_size(Chunk) || Chunk <- Chunks]).
+
+chunk_binary_arweavejs_standard_test() ->
+    ChunkSize = ?DATA_CHUNK_SIZE,
+    MinChunkSize = ?MIN_CHUNK_SIZE,
+    DataSize = ChunkSize + MinChunkSize,
+    Data = binary:copy(<<"c">>, DataSize),
+    Chunks = chunk_binary(arweavejs, ChunkSize, Data),
+    ?assertEqual([ChunkSize, MinChunkSize], [byte_size(Chunk) || Chunk <- Chunks]).
 
 sign_tx_test_() ->
     {timeout, 30, fun test_sign_tx/0}.
@@ -681,8 +818,7 @@ json_struct_to_tx_failure_test() ->
         {"data_root_invalid_b64", BaseStruct#{ <<"data_root">> => InvalidB64 }, badarg},
         {"tag_name_invalid_b64", BaseStruct#{ <<"tags">> => BadTagName }, badarg},
         {"tag_value_invalid_b64", BaseStruct#{ <<"tags">> => BadTagValue }, badarg},
-        {"target_invalid_b64", BaseStruct#{ <<"target">> => InvalidB64 }, badarg},
-        {"invalid_signature_type", BaseStruct#{ <<"owner">> => <<>> }, {badmatch, {ecdsa,secp256k1}}}
+        {"target_invalid_b64", BaseStruct#{ <<"target">> => InvalidB64 }, badarg}
         ],
 
     lists:foreach(
@@ -819,8 +955,7 @@ tx_to_json_struct_failure_test() ->
         {"denomination_not_integer_when_positive", BaseTX#tx{denomination = <<"5">>}, badarg},
         {"tag_name_not_binary",  BaseTX#tx{tags = [{not_binary, <<"val">>}]}, badarg},
         {"tag_value_not_binary", BaseTX#tx{tags = [{<<"key">>, not_binary}]}, badarg},
-        {"tags_not_list", BaseTX#tx{tags = #{}}, {case_clause, #{}}},
-        {"invalid_signature_type", BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {badmatch, {ecdsa,secp256k1}}}
+        {"tags_not_list", BaseTX#tx{tags = #{}}, {case_clause, #{}}}
     ],
 
     lists:foreach(

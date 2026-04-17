@@ -10,15 +10,19 @@
 -module(hb_format).
 %%% Public API.
 -export([term/1, term/2, term/3]).
+-export([format_debug/5]).
 -export([print/1, print/3, print/4, print/5, eunit_print/2]).
 -export([message/1, message/2, message/3]).
 -export([binary/2, error/2, trace/1, trace_short/0, trace_short/1]).
 -export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
 -export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
+-export([truncate/2]).
 %%% Public Utility Functions.
 -export([escape_format/1, short_id/1, trace_to_list/1]).
 -export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
+-export([process_from_trace/1]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%% Characters that are considered noise and should be removed from strings
 %%% with the `remove_noise_[leading|trailing]' functions.
@@ -29,15 +33,16 @@
 print(X) ->
     print(X, <<>>, #{}).
 print(X, Info, Opts) ->
-    io:format(
-        standard_error,
-        "=== HB DEBUG ===~s==>~n~s~n",
-        [Info, term(X, Opts, 0)]
-    ),
+    io:format(standard_error, "~s~n", [render_debug(X, Info, Opts)]),
     X.
 print(X, Mod, Func, LineNum) ->
     print(X, debug_trace(Mod, Func, LineNum, #{}), #{}).
 print(X, Mod, Func, LineNum, Opts) ->
+    io:format(standard_error, "~s~n", [format_debug(X, Mod, Func, LineNum, Opts)]),
+    X.
+
+%% @doc Format a debug message without writing it, preserving the standard layout.
+format_debug(X, Mod, Func, LineNum, Opts) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
     TSDiff = case Last of undefined -> 0; _ -> Now - Last end,
@@ -61,7 +66,16 @@ print(X, Mod, Func, LineNum, Opts) ->
                 ]
             )
         ),
-    print(X, Info, Opts).
+    render_debug(X, Info, Opts).
+
+%% @doc Render a debug message using the standard HyperBEAM layout.
+render_debug(X, Info, Opts) ->
+    hb_util:bin(
+        io_lib:format(
+            "=== HB DEBUG ===~s==>~n~s",
+            [Info, term(X, Opts, 0)]
+        )
+    ).
 
 %% @doc Retreive the server ID of the calling process, if known.
 server_id() ->
@@ -344,6 +358,16 @@ do_to_lines(In =[RawElem | Rest]) ->
         false -> Elem ++ ", " ++ do_to_lines(Rest)
     end.
 
+%% @doc Truncate binary (if larger than) to a max size.
+truncate(Bin, MaxSize) when is_binary(Bin) ->
+    BinLen = byte_size(Bin),
+    BinEnd = case BinLen > MaxSize of 
+        true -> <<"...">>;
+        false -> <<>>
+    end,
+    TruncatedBin = binary:part(Bin, 0, min(BinLen, MaxSize)),
+    <<TruncatedBin/binary, BinEnd/binary>>.
+
 %% @doc Remove any leading or trailing noise from a string.
 remove_noise(Str) ->
     remove_leading_noise(remove_trailing_noise(Str)).
@@ -401,9 +425,9 @@ escape_format(Else) -> Else.
 
 %% @doc Format an error message as a string.
 error(ErrorMsg, Opts) ->
-    Type = hb_ao:get(<<"type">>, ErrorMsg, <<"">>, Opts),
-    Details = hb_ao:get(<<"details">>, ErrorMsg, <<"">>, Opts),
-    Stacktrace = hb_ao:get(<<"stacktrace">>, ErrorMsg, <<"">>, Opts),
+    Type = hb_maps:get(<<"type">>, ErrorMsg, <<"[No type]">>, Opts),
+    Details = hb_maps:get(<<"details">>, ErrorMsg, <<"[No details]">>, Opts),
+    Stacktrace = hb_maps:get(<<"stacktrace">>, ErrorMsg, <<"[No trace]">>, Opts),
     hb_util:bin(
         [
             <<"Termination type: '">>, Type,
@@ -594,6 +618,63 @@ trace_short() -> trace_short(get_trace(erlang)).
 trace_short(Type) when is_atom(Type) -> trace_short(get_trace(Type));
 trace_short(Trace) when is_list(Trace) ->
     lists:join(" / ", lists:reverse(trace_to_list(Trace))).
+
+process_from_trace([]) ->
+    <<"unknown">>;
+process_from_trace(Trace) ->
+    % Prefer the outermost non-glue MFA (walk from trace bottom /
+    % process entry). That matches a caller above pmap/proc_lib glue and
+    % stays stable when the innermost slot is generic (e.g. timer:sleep) while
+    % a user job remains deeper in the chain.
+    case process_from_trace(lists:reverse(Trace), false) of
+        none ->
+            <<"unknown">>;
+        Found ->
+            Found
+    end.
+
+%% @doc First non-glue TraceElement scanning `Trace` from its head.
+process_from_trace([], _) ->
+    none;
+process_from_trace([TraceElement | Rest], Spawner) ->
+    case {trace_element_is_glue(TraceElement), Spawner} of
+        {true, _} ->
+            % Flag whether or not this is an anonymous process spawned
+            % by hb_pmap.
+            NextSpawner = case TraceElement of
+                {hb_pmap, _, _, _} ->
+                    hb_pmap;
+                _ ->
+                    Spawner
+            end,
+            process_from_trace(Rest, NextSpawner);
+        {false, false} ->
+            hb_util:bin(trace_element(TraceElement));
+        {false, Spawner} ->
+            <<
+                (hb_util:bin(Spawner))/binary,
+                "->",
+                (hb_util:bin(trace_element(TraceElement)))/binary
+            >>
+        end.
+
+trace_element_is_glue({proc_lib, init_p_do_apply, _, _}) ->
+    true;
+trace_element_is_glue({hb_pmap, F, _, _}) ->
+    is_erlang_generated_fun_name(F);
+trace_element_is_glue(_) ->
+    false.
+
+%% @doc True for compiler-generated fun atoms like `'-foo/1-fun-0-'`.
+is_erlang_generated_fun_name(Func) when is_atom(Func) ->
+    case atom_to_binary(Func, utf8) of
+        <<"-", Rest/binary>> ->
+            binary:match(Rest, <<"-fun-">>) =/= nomatch;
+        _ ->
+            false
+    end;
+is_erlang_generated_fun_name(_) ->
+    false.
 
 %% @doc Format a trace element in form `mod:line' or `mod:func' for Erlang
 %% traces, or their raw form for others.
@@ -958,7 +1039,7 @@ format_key(true, Committed, Key, ToPrint, Opts) ->
     case lists:member(NormKey = hb_ao:normalize_key(Key, Opts), Committed) of
         true when ToPrint == undefined -> <<"* ", NormKey/binary>>;
         true -> <<"* ", ToPrint/binary>>;
-        false -> format_key(false, Committed, Key, undefined, Opts)
+        false -> format_key(false, Committed, Key, ToPrint, Opts)
     end.
 
 %% @doc Return a formatted list of short IDs, given a raw list of IDs.
@@ -1010,3 +1091,17 @@ max_keys(Opts) ->
         infinity -> infinity;
         Term -> hb_util:int(Term)
     end.
+
+%%% Tests
+
+truncate_no_truncation_test() ->
+    ?assertEqual(<<"hello">>, truncate(<<"hello">>, 10)).
+
+truncate_exact_size_test() ->
+    ?assertEqual(<<"hello">>, truncate(<<"hello">>, 5)).
+
+truncate_with_truncation_test() ->
+    ?assertEqual(<<"he...">>, truncate(<<"hello">>, 2)).
+
+truncate_empty_test() ->
+    ?assertEqual(<<>>, truncate(<<>>, 5)).

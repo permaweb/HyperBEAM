@@ -31,21 +31,25 @@ deserialize(TX, Req, Opts) when is_record(TX, tx) ->
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
-    commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
-commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    commit(Msg, Req#{ <<"type">> => ?RSA_SIGN_TYPE }, Opts);
+commit(Msg, Req = #{ <<"type">> := Type }, Opts)
+        when Type =:= ?RSA_SIGN_TYPE
+        orelse Type =:= ?EDDSA_SIGN_TYPE
+        orelse Type =:= ?ETHEREUM_SIGN_TYPE ->
     % Convert the given message to an ANS-104 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-    Signed = ar_bundles:sign_item(TX, Wallet),
-    SignedStructured =
-        hb_message:convert(
-            Signed,
-            <<"structured@1.0">>,
-            <<"ans104@1.0">>,
-            Opts
-        ),
-    {ok, SignedStructured};
+    case {hb_opts:get(priv_wallet, no_viable_wallet, Opts), Type} of
+        {{{?RSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?RSA_SIGN_TYPE} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{?EDDSA_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?EDDSA_SIGN_TYPE} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{?ETHEREUM_KEY_TYPE, _Priv, _Pub}, _} = Wallet, ?ETHEREUM_SIGN_TYPE} ->
+            sign_tx(TX, Wallet, Opts);
+        {{{WalletType, _, _}, _}, _Type} ->
+            ?event(warning, {wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}}),
+            throw({wrong_wallet_to_sign, {request_type, Type}, {wallet_type, WalletType}})
+    end;
 commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104, then back.
     % This forces the message to be normalized and the unsigned ID to be
@@ -59,6 +63,17 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
             Opts
         )
     }.
+
+sign_tx(TX, Wallet, Opts) ->
+    Signed = ar_bundles:sign_item(TX, Wallet),
+    SignedStructured =
+        hb_message:convert(
+            Signed,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+    {ok, SignedStructured}.
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
@@ -107,7 +122,8 @@ do_from(RawTX, Req, Opts) ->
     % Add the commitments to the message if the TX has a signature.
     FieldCommitments = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
-        TX, <<"ans104@1.0">>, FieldCommitments, Tags, Base, Keys, Opts),
+        ?BASE_FIELDS, TX, <<"ans104@1.0">>, FieldCommitments,
+        Tags, Base, Keys, Opts),
     ?event({from, {parsed_message, WithCommitments}}),
     {ok, WithCommitments}.
 
@@ -458,6 +474,48 @@ field_and_tag_ordering_test() ->
         UnsignedTABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),
     ?assert(hb_message:verify(SignedTABM)).
 
+fields_as_tags_test() ->
+    AnchorTag = crypto:strong_rand_bytes(32),
+    TargetTag = crypto:strong_rand_bytes(32),
+    AnchorField = crypto:strong_rand_bytes(32),
+    TargetField = crypto:strong_rand_bytes(32),
+    TX = #tx{        
+        tags = [
+            {<<"anchor">>, hb_util:encode(AnchorTag)},
+            {<<"target">>, hb_util:encode(TargetTag)}
+        ],
+        anchor = AnchorField,
+        target = TargetField
+    },
+    SignedTX = ar_bundles:sign_item(TX, hb:wallet()),
+    ?event({signed_tx, SignedTX}),
+    ?assert(ar_bundles:verify_item(SignedTX)),
+    TABM = hb_util:ok(from(SignedTX, #{}, #{})),
+    ?event({tabm, TABM}),
+    ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
+    ?event({converted_tx, ConvertedTX}),
+    ?assert(ar_bundles:verify_item(ConvertedTX)),
+    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
+
+data_tag_with_data_test() ->
+    Data = <<"myrealdata">>,
+    TX = #tx{
+        tags = [
+            {<<"data">>, <<"tagdata">>}
+        ],
+        data = Data,
+        data_size = byte_size(Data)
+    },
+    SignedTX = ar_bundles:sign_item(TX, hb:wallet()),
+    ?event(debug_test, {signed_tx, SignedTX}),
+    ?assert(ar_bundles:verify_item(SignedTX)),
+    TABM = hb_util:ok(from(SignedTX, #{}, #{})),
+    ?event(debug_test, {tabm, TABM}),
+    ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
+    ?event(debug_test, {converted_tx, ConvertedTX}),
+    ?assert(ar_bundles:verify_item(ConvertedTX)),
+    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
+
 unsigned_lowercase_bundle_map_tags_test() ->
     UnsignedTABM = #{
         <<"a1">> => <<"value1">>,
@@ -766,9 +824,9 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?event(debug_test, {committed, Label, {explicit, Committed}}),
     ?assert(hb_message:verify(Committed, all, Opts), Label),
     {ok, _, CommittedCommitment} = hb_message:commitment(
-        #{ <<"type">> => <<"rsa-pss-sha256">> }, Committed, Opts),
+        #{ <<"type">> => ?RSA_SIGN_TYPE }, Committed, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
+        [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, not_found, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
@@ -789,9 +847,9 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
     {ok, _, DecodedCommitment} = hb_message:commitment(
-        #{ <<"type">> => <<"rsa-pss-sha256">> }, Decoded, Opts),
+        #{ <<"type">> => ?RSA_SIGN_TYPE }, Decoded, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
+        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, not_found, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, DecodedCommitment, false, Opts)),

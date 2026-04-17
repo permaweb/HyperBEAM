@@ -18,15 +18,22 @@
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
+-include("include/hb_opts.hrl").
+-include("include/hb_arweave_nodes.hrl").
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error, cron_error]).
+-define(DEFAULT_PRINT_OPTS,
+    [
+        error, http_error, cron_error, hook_error
+    ]
+).
 -else.
 -define(DEFAULT_PRINT_OPTS,
     [
-        error, http_error, cron_error,
-        http_short, compute_short, push_short, copycat_short
+        error, http_error, cron_error, hook_error, warning,
+        http_server_short, http_client_short,
+        compute_short, push_short, copycat_short, bundler_short
     ]
 ).
 -endif.
@@ -36,6 +43,8 @@
 -ifndef(TEST).
 -define(DEFAULT_NAME_RESOLVERS,
     [
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"device">> => <<"b32-name@1.0">> },
         <<
             "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
                 "~json@1.0/deserialize&target=data"
@@ -56,6 +65,8 @@
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
 }).
+-define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
+-define(DEFAULT_HTTP_OPTS, #{http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2}).
 -define(ENV_KEYS,
     #{
         priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
@@ -70,6 +81,15 @@
                 fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
+        debug_log =>
+            {
+                "HB_LOG",
+                fun topic_list_to_atoms/1,
+                {preparsed, false}
+            },
+        log_dir => {"HB_LOG_DIR", fun hb_util:bin/1, "logs"},
+        log_max_files => {"HB_LOG_MAX_FILES", fun hb_util:int/1, "5"},
+        log_max_bytes => {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
         lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
         default_index =>
@@ -128,8 +148,8 @@ default_message() ->
         hb_config_location => <<"config.flat">>,
         initialized => true,
         %% What HTTP client should the node use?
-        %% Options: gun, httpc
-        http_client => gun,
+        %% Options: gun, httpc, hackney
+        http_client => ?DEFAULT_HTTP_CLIENT,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation,
@@ -140,7 +160,7 @@ default_message() ->
         %% Options: aggressive, lazy
         compute_mode => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
-        gateway => <<"https://arweave.net">>,
+        gateway => ?DEFAULT_GATEWAY,
         bundler_ans104 => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
         priv_key_location => <<"hyperbeam-key.json">>,
@@ -151,10 +171,11 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
-            #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
+            #{<<"name">> => <<"arweave@2.9">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
+            #{<<"name">> => <<"b32-name@1.0">>, <<"module">> => dev_b32_name},
             #{<<"name">> => <<"blacklist@1.0">>, <<"module">> => dev_blacklist},
             #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
@@ -226,11 +247,13 @@ default_message() ->
         trusted_device_signers => [],
         %% What should the node do if a client error occurs?
         client_error_strategy => throw,
-        %% HTTP request options
-        http_connect_timeout => 5000,
-        http_keepalive => 120000,
-        http_request_send_timeout => 300_000,
+        %% HTTP client request options
+        http_client_connect_timeout => 5000,
+        http_client_keepalive => 120000,
+        http_client_send_timeout => 300_000,
         port => 8734,
+        process_sampler => true,
+        process_sampler_interval => 15000,
         wasm_allow_aot => false,
         %% Options for the relay device
         relay_http_client => httpc,
@@ -244,21 +267,26 @@ default_message() ->
         node_history => [],
         debug_stack_depth => 40,
         debug_print => false,
+        debug_log => false,
+        log_dir => <<"logs">>,
+        log_max_files => 5,
+        log_max_bytes => 52428800,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
         debug_print_truncate => 30,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_print_verify => false,
         debug_print_metadata => true,
-        debug_print_gen_id => true,
+        debug_print_gen_id => false,
         debug_print_committers => true,
         debug_print_comm_device => true,
         debug_print_comm_type => true,
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_show_priv => if_present,
-        debug_resolve_links => true,
+        debug_resolve_links => false,
         debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
@@ -292,170 +320,79 @@ default_message() ->
                     [
                         #{
                             <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         },
                         #{
-                            <<"prefix">> => <<"https://arweave.net">>,
-                            <<"opts">> => #{ http_client => gun, protocol => http2 }
+                            <<"prefix">> => ?DEFAULT_GATEWAY,
+                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                         }
                     ]
             },
-            %% Chunk requests: route to the nearest data nodes by
-            %% partition midpoint (byte offset). Tries 4 at a time,
-            %% ordered by proximity, until one returns 200.
+            %% chunk requests: route to the nearest data nodes by
+            %% partition midpoint (byte offset).
             #{
-                <<"template">> => <<"^/arweave/chunk">>,
-                <<"nodes">> =>
-                    [
-                        %% Partitions 0-15
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 28_800_000_000_000,
-                            <<"with">> => <<"http://data-1.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 28_800_000_000_000,
-                            <<"with">> => <<"http://data-13.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 16-31
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 86_400_000_000_000,
-                            <<"with">> => <<"http://data-2.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 86_400_000_000_000,
-                            <<"with">> => <<"http://data-3.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 86_400_000_000_000,
-                            <<"with">> => <<"http://data-14.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 86_400_000_000_000,
-                            <<"with">> => <<"http://data-15.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 32-47
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 144_000_000_000_000,
-                            <<"with">> => <<"http://data-4.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 144_000_000_000_000,
-                            <<"with">> => <<"http://data-5.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 144_000_000_000_000,
-                            <<"with">> => <<"http://data-16.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 144_000_000_000_000,
-                            <<"with">> => <<"http://data-17.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 48-63
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 201_600_000_000_000,
-                            <<"with">> => <<"http://data-6.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 201_600_000_000_000,
-                            <<"with">> => <<"http://data-7.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 48-107 (tip nodes)
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 280_800_000_000_000,
-                            <<"with">> => <<"http://tip-1.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 280_800_000_000_000,
-                            <<"with">> => <<"http://tip-2.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 280_800_000_000_000,
-                            <<"with">> => <<"http://tip-3.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 280_800_000_000_000,
-                            <<"with">> => <<"http://tip-4.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 280_800_000_000_000,
-                            <<"with">> => <<"http://tip-5.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 64-126
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 343_800_000_000_000,
-                            <<"with">> => <<"http://data-8.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        %% Partitions 75-138
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 385_200_000_000_000,
-                            <<"with">> => <<"http://data-9.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 385_200_000_000_000,
-                            <<"with">> => <<"http://data-10.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 385_200_000_000_000,
-                            <<"with">> => <<"http://data-11.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"center">> => 385_200_000_000_000,
-                            <<"with">> => <<"http://data-12.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc }
-                        }
-                    ],
-                <<"strategy">> => <<"Nearest-Integer">>,
-                <<"choose">> => 22,
-                <<"parallel">> => 4,
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/chunk">>,
+                        <<"method">> => <<"GET">>
+                    },
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"strategy">> => <<"Shuffled-Range">>,
+                <<"choose">> =>
+                    length(
+                        ?ARWEAVE_BOOTSTRAP_DATA_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                    ),
+                <<"parallel">> => 1,
                 <<"responses">> => 1,
                 <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/unconfirmed_chunk">>,
+                        <<"method">> => <<"GET">>
+                    },
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"choose">> => length(?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"parallel">> => 1,
+                <<"responses">> => 1,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/chunk">>,
+                        <<"method">> => <<"POST">>
+                    },
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_DATA_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"strategy">> => <<"Shuffled-Range">>,
+                <<"choose">> =>
+                    length(
+                        ?ARWEAVE_BOOTSTRAP_DATA_NODES
+                            ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES
+                    ),
+                <<"parallel">> => 5,
+                <<"responses">> => 3, %% keep going until we get 3x 200s
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => 
+                    #{
+                        <<"path">> => <<"^/arweave/tx">>,
+                        <<"method">> => <<"POST">>
+                    },
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES ++ ?ARWEAVE_BOOTSTRAP_TIP_NODES),
+                <<"parallel">> => true,
+                <<"responses">> => 3,
+                <<"stop-after">> => false,
                 <<"admissible-status">> => 200
             },
             % Raw data requests via arweave.net gateway.
@@ -464,29 +401,17 @@ default_message() ->
                 <<"node">> =>
                     #{
                         <<"match">> => <<"^/arweave">>,
-                        <<"with">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"with">> => ?DEFAULT_GATEWAY,
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             },
-            %% General Arweave requests: race both chain nodes, take
+            %% General Arweave requests: race all chain nodes, take
             %% the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
-                <<"nodes">> =>
-                    [
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"http://chain-1.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                        },
-                        #{
-                            <<"match">> => <<"^/arweave">>,
-                            <<"with">> => <<"http://chain-2.arweave.xyz:1984">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
-                        }
-                    ],
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
                 <<"parallel">> => true,
-                <<"stop-after">> => 1,
+                <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
             %% Raw data requests via arweave.net gateway. TODO: Update later.
@@ -494,8 +419,8 @@ default_message() ->
                 <<"template">> => <<"/raw">>,
                 <<"node">> =>
                     #{
-                        <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"prefix">> => ?DEFAULT_GATEWAY,
+                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
                     }
             }
         ],
@@ -505,6 +430,12 @@ default_message() ->
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
+                },
+                #{
+                    <<"store-module">> => hb_store_arweave,
+                    <<"name">> => <<"cache-arweave">>,
+                    <<"index-store">> => [?DEFAULT_PRIMARY_STORE],
+                    <<"arweave-node">> => ?DEFAULT_GATEWAY
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
@@ -536,6 +467,8 @@ default_message() ->
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
         ans104_trust_gql => true,
+        % Number of chunks to fetch in parallel when loading a TX or dataitem.
+        arweave_chunk_fetch_concurrency => 5,
         http_extra_opts =>
             #{
                 force_message => true,
@@ -570,6 +503,12 @@ default_message() ->
                     },
                     #{
                         <<"device">> => <<"name@1.0">>
+                    },
+                    #{
+                        <<"device">> => <<"manifest@1.0">>
+                    },
+                    #{
+                        <<"device">> => <<"blacklist@1.0">>
                     }
                 ]
         },
@@ -960,6 +899,17 @@ ensure_node_history(Opts, RequiredOpts) ->
             {error, validation_failed}
     end.
 
+%% @doc Util to add opts to nodes.
+add_opts(Items) ->
+    add_opts(Items, ?DEFAULT_HTTP_OPTS).
+add_opts(Items, Opts) ->
+    lists:map(
+        fun (Item) when is_map(Item) -> 
+            Item#{<<"opts">> => Opts}
+        end, 
+        Items
+    ).
+
 %%% Tests
 
 -ifdef(TEST).
@@ -969,7 +919,11 @@ global_get_test() ->
     ?assertEqual(debug, ?MODULE:get(mode)),
     ?assertEqual(debug, ?MODULE:get(mode, production)),
     ?assertEqual(undefined, ?MODULE:get(unset_global_key)),
-    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)).
+    ?assertEqual(1234, ?MODULE:get(unset_global_key, 1234)),
+    ?assertEqual(false, ?MODULE:get(debug_log)),
+    ?assertEqual(<<"logs">>, ?MODULE:get(log_dir)),
+    ?assertEqual(5, ?MODULE:get(log_max_files)),
+    ?assertEqual(52428800, ?MODULE:get(log_max_bytes)).
 
 local_get_test() ->
     Local = #{ only => local },
@@ -997,14 +951,14 @@ global_preference_test() ->
 load_flat_test() ->
     % File contents:
     % port: 1234
-    % host: https://ao.computer
+    % node_host: https://ao.computer
     % await-inprogress: false
     {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
     ?assertEqual(1234, hb_maps:get(port, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
 
@@ -1014,7 +968,7 @@ load_json_test() ->
     ?assertEqual(1234, hb_maps:get(port, Conf)),
     ?assertEqual(9001, hb_maps:get(example, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
     % Ensure that a store with `ao-types' is loaded correctly.

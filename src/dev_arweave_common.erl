@@ -4,6 +4,7 @@
 -export([is_signed/1, type/1, tagfind/3, find_key/3]).
 -export([reset_ids/1, generate_id/2, normalize/1, serialize_data/1]).
 -export([convert_bundle_list_to_map/1, convert_bundle_map_to_list/1]).
+-export([serialize_sig_type/1, deserialize_sig_type/1]).
 -export([log_conversion/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -12,7 +13,30 @@
 is_signed(TX) ->
     TX#tx.signature =/= ?DEFAULT_SIG.
 
+type(Item = #tx{ format = ans104 }) ->
+    % Always trust tags for ans104 items.
+    type_from_tags(Item);
+type(Item = #tx{ data = Data }) 
+        when not is_binary(Data) orelse Data =:= ?DEFAULT_DATA ->
+    % Trust tags for L1 TX without binary data
+    type_from_tags(Item);
 type(Item) ->
+    % If an L1 TX has bundle tags but does not have a valid bundle header,
+    % treat it as a binary. We have to do this since it may still be a valid
+    % L1 TX even if the tags are sneaky.
+    Result = case type_from_tags(Item) of
+        binary ->
+            binary;
+        BundleType when is_binary(Item#tx.data) ->
+            case ar_bundles:decode_bundle_header(Item#tx.data) of
+                invalid_bundle_header ->
+                    binary;
+                {_Count, _Header} ->
+                    BundleType
+            end
+    end,
+    Result.
+type_from_tags(Item) ->
     Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
     Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
     MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
@@ -179,7 +203,8 @@ maybe_add_bundle_tags(BundleType, TX) ->
     TX#tx{tags = FilteredBundleTags ++ TX#tx.tags }.
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
-normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
+normalize_data_size(Item = #tx{data = Bin})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
 
@@ -189,12 +214,145 @@ reset_owner_address(TX) ->
     TX#tx{owner_address = ar_tx:get_owner_address(TX)}.
 
 
+normalize_data_root(Item = #tx{data = Bin, format = 1})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
+    Item#tx{data_root = ar_tx:data_root(legacy, Bin)};
 normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
-    Item#tx{data_root = ar_tx:data_root(Bin)};
+    Item#tx{data_root = ar_tx:data_root(arweavejs, Bin)};
 normalize_data_root(Item) -> Item.
+
+serialize_sig_type({rsa, 65537}) -> ?RSA_SIGN_TYPE;
+serialize_sig_type({ecdsa, secp256k1}) -> ?ECDSA_SIGN_TYPE;
+serialize_sig_type(?EDDSA_KEY_TYPE) -> ?EDDSA_SIGN_TYPE;
+serialize_sig_type(?SOLANA_KEY_TYPE) -> ?SOLANA_SIGN_TYPE;
+serialize_sig_type(?ETHEREUM_KEY_TYPE) -> ?ETHEREUM_SIGN_TYPE;
+serialize_sig_type(?TYPED_ETHEREUM_KEY_TYPE) -> ?TYPED_ETHEREUM_SIGN_TYPE;
+serialize_sig_type(Type) ->
+    ?event(error, {signature_type, {type, Type}}),
+    throw({invalid_signature_type, Type}).
+
+deserialize_sig_type(?RSA_SIGN_TYPE) -> {rsa, 65537};
+deserialize_sig_type(?ECDSA_SIGN_TYPE) -> {ecdsa, secp256k1};
+deserialize_sig_type(?EDDSA_SIGN_TYPE) -> ?EDDSA_KEY_TYPE;
+deserialize_sig_type(?SOLANA_SIGN_TYPE) -> ?SOLANA_KEY_TYPE;
+deserialize_sig_type(?ETHEREUM_SIGN_TYPE) -> ?ETHEREUM_KEY_TYPE;
+deserialize_sig_type(?TYPED_ETHEREUM_SIGN_TYPE) -> ?TYPED_ETHEREUM_KEY_TYPE;
+deserialize_sig_type(<<"unsigned-sha256">>) -> {rsa, 65537};
+deserialize_sig_type(Type) ->
+    ?event(error, {signature_type, {type, Type}}),
+    throw({invalid_signature_type, Type}).
 
 %% @doc Turn off debug_print_verify when logging within the to/from functions
 %% to avoid infinite recursion.
 log_conversion(Topic, X) ->
     ?event(Topic, X, #{debug_print_verify => false}).
+%%%===================================================================
+%%% Tests.
+%%%===================================================================
+
+tagfind_test() ->
+    Default = <<"default">>,
+    ?assertEqual(
+        <<"v1">>,
+        tagfind(<<"Foo">>, [{<<"fOo">>, <<"v1">>}], Default)
+    ),
+    ?assertEqual(
+        Default,
+        tagfind(<<"Missing">>, [{<<"foo">>, <<"v">>}], Default)
+    ).
+
+
+type_test() ->
+    % Basic type from tags
+    assert_type(binary, []),
+    assert_type(binary, [{<<"tag">>, <<"value">>}]),
+    assert_type(list, [
+        {<<"bundle-format">>, <<"binary">>},
+        {<<"tag">>, <<"value">>},
+        {<<"bundle-version">>, <<"2.0.0">>}]),
+    assert_type(map, [
+        {<<"bundle-format">>, <<"binary">>},
+        {<<"tag">>, <<"value">>},
+        {<<"bundle-version">>, <<"2.0.0">>},
+        {<<"bundle-map">>, <<"JmtD0fwFqJTK4P_XexVqBQdnDc0-C7FFIOge6GEOJE8">>}]),
+    % L1 TX with bundle tags, but data is not a valid bundle.
+    ?assertEqual(binary,
+        type(#tx{
+            format = 1,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = <<"not a bundle">>
+        })),
+    ?assertEqual(binary,
+        type(#tx{
+            format = 2,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = <<"not a bundle">>
+        })),
+    ?assertEqual(binary,
+        type(#tx{
+            format = 1,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = <<1:256/little, <<"not a bundle">>/binary>>
+        })),
+    ?assertEqual(binary,
+        type(#tx{
+            format = 2,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = <<1:256/little, <<"not a bundle">>/binary>>
+        })),
+    % L1 TX with bundle tags, and non-binary data
+    ?assertEqual(list,
+        type(#tx{
+            format = 1,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = []
+        })),
+    ?assertEqual(list,
+        type(#tx{
+            format = 2,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>}],
+            data = []
+        })),
+    ?assertEqual(map,
+        type(#tx{
+            format = 1,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>},
+                {<<"bundle-map">>, <<"JmtD0fwFqJTK4P_XexVqBQdnDc0-C7FFIOge6GEOJE8">>}],
+            data = #{
+                <<"1">> => <<"value1">>,
+                <<"2">> => <<"value2">>
+            }
+        })),
+    ?assertEqual(map,
+        type(#tx{
+            format = 2,
+            tags = [
+                {<<"bundle-format">>, <<"binary">>},
+                {<<"bundle-version">>, <<"2.0.0">>},
+                {<<"bundle-map">>, <<"JmtD0fwFqJTK4P_XexVqBQdnDc0-C7FFIOge6GEOJE8">>}],
+            data = #{
+                <<"1">> => <<"value1">>,
+                <<"2">> => <<"value2">>
+            }
+        })),
+    ok.
+
+assert_type(ExpectedType, Tags) ->
+    ?assertEqual(ExpectedType, type(#tx{format = 1, tags = Tags})),
+    ?assertEqual(ExpectedType, type(#tx{format = 2, tags = Tags})),
+    ?assertEqual(ExpectedType, type(#tx{format = ans104, tags = Tags})).

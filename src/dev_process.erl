@@ -461,7 +461,7 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
             false -> Res;
             true ->
                 ?event(
-                    compute_debug,
+                    debug_compute,
                     {snapshotting, {proc_id, ProcID}, {slot, Slot}},
                     Opts
                 ),

@@ -1,7 +1,7 @@
 %%% @doc Library functions for decoding ANS-104-style data items to TABM form.
 -module(dev_codec_ans104_from).
 -export([fields/3, tags/2, data/4, committed/6, base/5]).
--export([with_commitments/7]).
+-export([with_commitments/8]).
 -include("include/hb.hrl").
 
 %% @doc Return a TABM message containing the fields of the given decoded
@@ -112,12 +112,18 @@ data_keys(Data, Opts) ->
 
 %% @doc Return the list of the keys from the tags TABM. Filter all metadata
 %% tags: `ao-data-key', `ao-types', `bundle-format', `bundle-version'.
+%% We also filter `data` as we don't preserve the a data *field* via
+%% `field-data` in the commitment. That means if we promote a `data` tag to
+%% a key on the TABM, it will be interpreted as the message's actual data.
+%% Instead if a user has provided a `data` tag, we'll preserve it in
+%% `original-tags` but will strip it from the top-level message keys.
 tag_keys(Item, _Opts) ->
     MetaTags = [
         <<"bundle-format">>,
         <<"bundle-version">>,
         <<"bundle-map">>,
-        <<"ao-data-key">>
+        <<"ao-data-key">>,
+        <<"data">>
     ],
     lists:filtermap(
         fun({Tag, _}) ->
@@ -158,24 +164,26 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
 
 %% @doc Return a message with the appropriate commitments added to it.
 with_commitments(
-        Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts) ->
+        BaseFields, Item, Device, FieldCommitments,
+        Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
-            case normal_tags(Item#tx.tags) of
+            case normal_tags(BaseFields, Item#tx.tags) of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(
-                        Item, Device, FieldCommitments, Tags, Base, 
+                        BaseFields, Item, Device, FieldCommitments, Tags, Base, 
                         CommittedKeys, Opts)
             end;
         _ -> with_signed_commitment(
-            Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts)
+                BaseFields, Item, Device, FieldCommitments, Tags, Base,
+                CommittedKeys, Opts)
     end.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.
 with_unsigned_commitment(
-        Item, Device, CommittedFields, Tags, 
+        BaseFields, Item, Device, CommittedFields, Tags, 
         UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
     UncommittedMessage#{
@@ -189,7 +197,8 @@ with_unsigned_commitment(
                             <<"committed">> => CommittedKeys,
                             <<"type">> => <<"unsigned-sha256">>,
                             <<"bundle">> => bundle_commitment_key(Tags, Opts),
-                            <<"original-tags">> => original_tags(Item, Opts)
+                            <<"original-tags">> => original_tags(
+                                BaseFields, Item, Opts)
                         },
                         Opts
                     ),
@@ -201,9 +210,9 @@ with_unsigned_commitment(
 %% @doc Returns a commitments message for an item, containing a signed
 %% commitment.
 with_signed_commitment(
-        Item, Device, FieldCommitments, Tags, 
+        BaseFields, Item, Device, FieldCommitments, Tags, 
         UncommittedMessage, CommittedKeys, Opts) ->
-    Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
+    Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner, Item#tx.signature_type)),
     ID = hb_util:human_id(Item#tx.id),
     ExtraCommitments = hb_maps:merge(
         FieldCommitments,
@@ -221,9 +230,10 @@ with_signed_commitment(
                     <<"signature">> => hb_util:encode(Item#tx.signature),
                     <<"keyid">> =>
                         <<"publickey:", (hb_util:encode(Item#tx.owner))/binary>>,
-                    <<"type">> => <<"rsa-pss-sha256">>,
+                    <<"type">> => dev_arweave_common:serialize_sig_type(Item#tx.signature_type),
                     <<"bundle">> => bundle_commitment_key(Tags, Opts),
-                    <<"original-tags">> => original_tags(Item, Opts)
+                    <<"original-tags">> => original_tags(
+                        BaseFields, Item, Opts)
                 },
                 Opts
             ),
@@ -240,18 +250,20 @@ bundle_commitment_key(Tags, Opts) ->
     hb_util:bin(hb_maps:is_key(<<"bundle-format">>, Tags, Opts)).
 
 %% @doc Check whether a list of key-value pairs contains only normalized keys.
-normal_tags(Tags) ->
+normal_tags(BaseFields, Tags) ->
+    ReservedFields = [<<"data">> | BaseFields],
     lists:all(
         fun({Key, _}) ->
-            hb_util:to_lower(hb_ao:normalize_key(Key)) =:= Key
+            hb_util:to_lower(hb_ao:normalize_key(Key)) =:= Key andalso
+            not lists:member(Key, ReservedFields)
         end,
         Tags
     ).
 
 %% @doc Return the original tags of an item if it is applicable. Otherwise,
 %% return `undefined'.
-original_tags(Item, _Opts) ->
-    case normal_tags(Item#tx.tags) of
+original_tags(BaseFields, Item, _Opts) ->
+    case normal_tags(BaseFields, Item#tx.tags) of
         true -> unset;
         false -> encoded_tags_to_map(Item#tx.tags)
     end.

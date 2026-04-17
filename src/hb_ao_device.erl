@@ -249,8 +249,9 @@ maybe_normalize_device_key(Key, Mode) ->
 %% a tuple of the form {error, Reason} is returned.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(ID, _Opts) when is_atom(ID) ->
-    try ID:module_info(), {ok, ID}
-    catch _:_ -> {error, not_loadable}
+    case code:ensure_loaded(ID) of
+        {module, ID} -> {ok, ID};
+        {error, _} -> {error, not_loadable}
     end;
 load(ID, Opts) when ?IS_ID(ID) ->
     ?event(device_load, {requested_load, {id, ID}}, Opts),
@@ -439,11 +440,11 @@ do_is_direct_key_access(error, Key, Opts) ->
 do_is_direct_key_access(<<"message@1.0">>, Key, _Opts) ->
     not lists:member(Key, ?MESSAGE_KEYS);
 do_is_direct_key_access(Dev, NormKey, Opts) ->
-    ?event(read_cached, {calculating_info, {device, Dev}}),
+    ?event(debug_read_cached, {calculating_info, {device, Dev}}),
     case info(#{ <<"device">> => Dev}, Opts) of
         Info = #{ exports := Exports }
             when not is_map_key(handler, Info) andalso not is_map_key(default, Info) ->
-            ?event(read_cached,
+            ?event(debug_read_cached,
                 {exports,
                     {device, Dev},
                     {key, NormKey},

@@ -694,7 +694,7 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
                 fun(Key) -> lists:member(Key, Keys1) end,
                 Keys1
             ),
-    ?event(match,
+    ?event(debug_match,
         {match,
             {keys1, Keys1},
             {keys2, Keys2},
@@ -709,7 +709,7 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
             lists:all(
                 fun(<<"commitments">>) -> true;
                 (Key) ->
-                    ?event(match, {matching_key, Key}),
+                    ?event(debug_match, {matching_key, Key}),
                     Val1 =
                         hb_ao:normalize_keys(
                             hb_maps:get(Key, NormMap1, not_found, Opts),
