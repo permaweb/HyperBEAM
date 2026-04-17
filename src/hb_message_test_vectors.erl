@@ -37,7 +37,8 @@ test_codecs() ->
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
         <<"tx@1.0">>,
-        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+        <<"ipfs@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -501,6 +502,9 @@ binary_to_binary_test(Codec, Opts) ->
     ?assertEqual(Bin, Decoded).
 
 %% @doc Structured field parsing tests.
+structured_field_atom_parsing_test(<<"ipfs@1.0">>, _Opts) -> skip;
+structured_field_atom_parsing_test(#{ <<"device">> := <<"ipfs@1.0">> }, _Opts) ->
+    skip;
 structured_field_atom_parsing_test(Codec, Opts) ->
     Msg = #{ highly_unusual_http_header => highly_unusual_value },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
@@ -1367,6 +1371,8 @@ large_body_committed_keys_test(Codec, Opts) ->
             skip
     end.
 
+sign_node_message_test(<<"ipfs@1.0">>, _Opts) -> skip;
+sign_node_message_test(#{ <<"device">> := <<"ipfs@1.0">> }, _Opts) -> skip;
 sign_node_message_test(Codec, Opts) ->
     Msg = hb_message:commit(hb_opts:default_message_with_env(), Opts, Codec),
     ?event({committed, Msg}),
@@ -1433,6 +1439,9 @@ recursive_nested_list_test(Codec, Opts) ->
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"ipfs@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"ipfs@1.0">> }, _Opts) ->
+    skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
     skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
@@ -1543,6 +1552,8 @@ bundled_and_unbundled_ids_differ_test(_Codec, _Opts) ->
 
 id_of_linked_message_test(#{ <<"bundle">> := true }, _Opts) ->
     skip;
+id_of_linked_message_test(<<"ipfs@1.0">>, _Opts) -> skip;
+id_of_linked_message_test(#{ <<"device">> := <<"ipfs@1.0">> }, _Opts) -> skip;
 id_of_linked_message_test(Codec, Opts) ->
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,

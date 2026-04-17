@@ -192,6 +192,7 @@ default_message() ->
             #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
             #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
             #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
+            #{<<"name">> => <<"ipfs@1.0">>, <<"module">> => dev_codec_ipfs},
             #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
             #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
