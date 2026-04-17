@@ -523,6 +523,80 @@ empty_map_cid_matches_canonical_test() ->
         CID
     ).
 
+%%% Additional dag-cbor-spec vectors. Each `{Value, Bytes}' pair is an IPLD
+%%% value and its canonical deterministic encoding per the DAG-CBOR spec.
+%%% These cover the data-model paths not hit by the scalar/int tests above.
+
+spec_vectors_test() ->
+    Cases = [
+        %% Mixed nulls and bools array (5 elements).
+        {[null, true, false, null, true],
+         <<16#85, 16#f6, 16#f5, 16#f4, 16#f6, 16#f5>>},
+        %% Empty text string.
+        {<<>>, <<16#60>>},
+        %% Empty byte string.
+        {{bytes, <<>>}, <<16#40>>},
+        %% String with length 23 (1-byte header: 0x77).
+        {<<"abcdefghijklmnopqrstuvw">>,
+         <<16#77, "abcdefghijklmnopqrstuvw">>},
+        %% String with length 24 (2-byte header: 0x78 0x18).
+        {<<"abcdefghijklmnopqrstuvwx">>,
+         <<16#78, 16#18, "abcdefghijklmnopqrstuvwx">>},
+        %% Nested list: [[1,2],[3]].
+        {[[1, 2], [3]],
+         <<16#82, 16#82, 16#01, 16#02, 16#81, 16#03>>},
+        %% Map containing a list value.
+        {#{ <<"xs">> => [1, 2, 3] },
+         <<16#a1, 16#62, "xs", 16#83, 16#01, 16#02, 16#03>>},
+        %% Deeply nested map: {"a":{"b":{"c":1}}}.
+        {#{ <<"a">> => #{ <<"b">> => #{ <<"c">> => 1 } } },
+         <<16#a1, 16#61, "a", 16#a1, 16#61, "b", 16#a1, 16#61, "c", 16#01>>}
+    ],
+    lists:foreach(
+        fun({Value, Expected}) ->
+            ?assertEqual(Expected, encode(Value)),
+            ?assertEqual({ok, Value}, decode(Expected))
+        end,
+        Cases
+    ).
+
+%% Stress: a map with many keys at assorted lengths forces the canonical
+%% length-first ordering to kick in, and confirms the encoded output is
+%% stable even when the source map enumerates keys in a different order.
+stress_map_ordering_test() ->
+    Keys = [<<"a">>, <<"b">>, <<"c">>, <<"aa">>, <<"ab">>, <<"abc">>,
+            <<"abcd">>, <<"z">>, <<"zz">>],
+    Pairs = lists:zip(Keys, lists:seq(1, length(Keys))),
+    M1 = maps:from_list(Pairs),
+    M2 = maps:from_list(lists:reverse(Pairs)),
+    Bytes1 = encode(M1),
+    Bytes2 = encode(M2),
+    ?assertEqual(Bytes1, Bytes2),
+    %% Decode must produce the same map.
+    ?assertEqual({ok, M1}, decode(Bytes1)).
+
+%% 64-bit integer boundaries. Critical for int64 correctness.
+int_boundary_test() ->
+    Cases = [
+        %% Max 8-bit (255) and 8-bit + 1 (256) already covered.
+        %% Max 16-bit (65535) and 16-bit + 1 (65536) already covered.
+        %% Max 32-bit and its + 1 (exercises 64-bit encoder).
+        4294967296,
+        %% Max positive int64.
+        16#7fffffffffffffff,
+        %% Max negative int64.
+        -16#8000000000000000,
+        %% A mid-range negative.
+        -1234567890
+    ],
+    lists:foreach(
+        fun(N) ->
+            Encoded = encode(N),
+            ?assertEqual({ok, N}, decode(Encoded))
+        end,
+        Cases
+    ).
+
 %% A more structurally interesting map: the simplest non-trivial dag-cbor
 %% object. The bytes are exact; we cross-check the CID against the output
 %% of `ipfs dag put --input-codec dag-json --store-codec dag-cbor` on
