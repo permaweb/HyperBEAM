@@ -151,7 +151,7 @@ aos2_to_assignment(A, RawOpts) ->
             aos2_normalize_data(AssignmentData),
             Opts
         ),
-        ?event({result_assignment, Assignment}),
+    ?event({result_assignment, Assignment}),
     NormalizedAssignment = aos2_normalize_types(Assignment),
     {ok, Message} =
         case hb_maps:get(<<"message">>, Node, undefined, Opts) of
