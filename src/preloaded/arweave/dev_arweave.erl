@@ -239,16 +239,19 @@ head_raw_tx(TXID, Offset, Length, Opts) ->
 %% @doc ANS-104 headers are stored as part of the global Arweave data tree, so
 %% so to read the data associated with their IDs, we must first read the header
 %% chunk, deserialize it, and offset our data read from its starting offset.
-head_raw_ans104(TXID, Offset, Length, _Opts) when not is_integer(Offset) ->
-    {ok, #{
-        <<"raw-id">> => TXID,
-        <<"offset">> => Offset,
-        <<"data-offset">> => Offset,
-        <<"content-type">> => <<"application/octet-stream">>,
-        <<"header-length">> => 0,
-        <<"content-length">> => Length,
-        <<"accept-ranges">> => <<"bytes">>
-    }};
+head_raw_ans104(TXID, Offset, Length, Opts) when not is_integer(Offset) ->
+    HeaderReq =
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset,
+            <<"length">> => min(Length, ?DATA_CHUNK_SIZE)
+        },
+    case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
+        {ok, HeaderChunk} ->
+            do_head_raw_ans104(TXID, Offset, Length, HeaderChunk, Opts);
+        {error, Error} ->
+            {error, Error}
+    end;
 head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
     ?event(debug_raw, {head_raw_ans104, {txid, TXID}, {arweave_offset, ArweaveOffset}, {length, Length}}),
     HeaderReq =
@@ -275,7 +278,7 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
                 #{
                     <<"raw-id">> => TXID,
                     <<"offset">> => ArweaveOffset,
-                    <<"data-offset">> => ArweaveOffset + HeaderSize,
+                    <<"data-offset">> => add_ans104_offset(ArweaveOffset, HeaderSize),
                     <<"content-type">> => ContentType,
                     <<"header-length">> => HeaderSize,
                     <<"content-length">> => Length - HeaderSize,
@@ -297,6 +300,14 @@ deserialize_ans104_header(Data) ->
                 }
             }
     end.
+
+add_ans104_offset(Offset, HeaderSize) when is_integer(Offset) ->
+    Offset + HeaderSize;
+add_ans104_offset(#{ <<"relative">> := ParentID, <<"offset">> := Offset }, HeaderSize) ->
+    #{
+        <<"relative">> => ParentID,
+        <<"offset">> => Offset + HeaderSize
+    }.
 
 %% @doc Get raw transaction *data* and `content-type` of an Arweave message.
 %% Does not deserialize the message, nor return signature information. Included

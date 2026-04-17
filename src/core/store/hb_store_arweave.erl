@@ -199,14 +199,14 @@ root_offset(GlobalOffset, _Store) when is_integer(GlobalOffset) -> GlobalOffset;
 root_offset(Offset, Store) -> root_offset(Offset, 0, Store).
 root_offset(#{ <<"relative">> := P, <<"offset">> := Off }, Acc, Store) ->
     case read_offset(Store, P) of
-        {ok, Next = #{ <<"relative">> := _, <<"offset">> := _ }} ->
+        {ok, #{ <<"offset">> := Next = #{ <<"relative">> := _, <<"offset">> := _ } }} ->
             % We have another relative offset. Continue.
             root_offset(Next, Acc + Off, Store);
-        {ok, relative} ->
+        {ok, #{ <<"offset">> := relative }} ->
             % We have reached an unconfirmed TX as the root of the relative offset
             % chain, so we return an offset against that.
             #{ <<"relative">> => P, <<"offset">> => Acc + Off };
-        {ok, GlobalOffset} when is_integer(GlobalOffset) ->
+        {ok, #{ <<"offset">> := GlobalOffset }} when is_integer(GlobalOffset) ->
             % We have reached a confirmed TX as the root of the relative offset
             % chain, so we return a global offset.
             GlobalOffset + Acc + Off;
@@ -458,3 +458,16 @@ load_item_deserialize_throws_test() ->
     Size = 4096,
     ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size),
     ?assertMatch({error, _}, read(Opts, FakeID, #{})).
+
+root_offset_confirmed_parent_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{ <<"index-store">> => Store },
+    ParentID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    ok = write_offset(Opts, ParentID, <<"tx@1.0">>, 12345, 99),
+    ?assertEqual(
+        12352,
+        root_offset(
+            #{ <<"relative">> => ParentID, <<"offset">> => 7 },
+            Opts
+        )
+    ).
