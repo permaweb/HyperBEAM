@@ -249,6 +249,69 @@ unsupported_atom_rejected_test() ->
     {error, {dag_cbor_encode, {unsupported_atom, something}}} =
         dev_codec_ipfs:to(Msg, #{}, Opts).
 
+%% End-to-end IPFS interop: Node A encodes a message and commits its CID;
+%% Node B (separate empty store) asks for the CID, a gateway returns the
+%% bytes Node A produced, and Node B's store chain verifies and admits them.
+%% This exercises the full production path: codec + commit + gateway + cache.
+end_to_end_publish_and_fetch_across_nodes_test() ->
+    application:ensure_all_started(inets),
+    Opts = opts(),
+
+    %% Node A: encode a rich message as dag-cbor and compute its CID.
+    Msg = #{
+        <<"kind">>   => <<"greeting">>,
+        <<"from">>   => <<"alice">>,
+        <<"to">>     => <<"bob">>,
+        <<"count">>  => 3,
+        <<"active">> => true
+    },
+    CborBytes = hb_message:convert(Msg, <<"ipfs@1.0">>, Opts),
+    Carrier = #{ <<"body">> => CborBytes },
+    Committed =
+        hb_message:commit(
+            Carrier, Opts,
+            #{ <<"commitment-device">> => <<"ipfs@1.0">>,
+               <<"type">>              => <<"unsigned">>,
+               <<"codec">>             => <<"dag-cbor">> }
+        ),
+    [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
+
+    %% Stand up a stub gateway that serves just these bytes for this CID.
+    {ok, GatewayURL, Handle} = hb_mock_server:start([
+        {<<"/ipfs/", CID/binary>>, ipfs, {200, CborBytes}}
+    ]),
+    try
+        %% Node B: separate, empty local store + gateway fallback.
+        NodeBOpts = opts(#{
+            store => [
+                hb_test_utils:test_store(),
+                #{
+                    <<"store-module">> => hb_store_ipfs_gateway,
+                    <<"gateways">>     => [GatewayURL]
+                }
+            ]
+        }),
+
+        %% Fetch the CID on Node B. Comes back via the gateway, verified.
+        {ok, Fetched} = hb_cache:read(CID, NodeBOpts),
+        FetchedBytes = hb_cache:ensure_loaded(
+            maps:get(<<"body">>, Fetched), NodeBOpts),
+        ?assertEqual(CborBytes, FetchedBytes),
+
+        %% Decode the bytes back into a HyperBEAM message and confirm it
+        %% matches what Node A started from.
+        DecodedMsg =
+            hb_message:convert(
+                FetchedBytes,
+                <<"structured@1.0">>,
+                <<"ipfs@1.0">>,
+                NodeBOpts
+            ),
+        ?assert(hb_message:match(Msg, DecodedMsg, strict, NodeBOpts))
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
 %% A committed message can still be encoded — the commitments are stripped
 %% from the content bytes, preserving IPFS's "block is pure content" model.
 commit_then_encode_strips_commitments_test() ->
