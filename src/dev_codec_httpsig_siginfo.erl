@@ -45,11 +45,17 @@ commitments_to_siginfo(Msg, Comms, Opts) ->
 
 commitments_to_siginfo_for_signable(Msg, Comms, Opts) ->
     % Generate a SF item for each commitment's signature and signature-input.
+    % The commitment's map key (`CommID') is threaded through so that
+    % `commitment_to_sf_siginfo/4' can emit an `id' parameter whenever the
+    % decoder-side derivation rule (`id(Sig)' — see `sf_siginfo_to_commitment/5')
+    % would not reproduce it on the other side. Commitment devices whose
+    % identity is `h(Sig)' (HMAC, RSA-PSS, etc.) never pay this cost;
+    % content-addressed devices (e.g. `~ipfs@1.0') do.
     {Sigs, SigInputs} =
         maps:fold(
-            fun(_CommID, Commitment, {Sigs, SigInputs}) ->
+            fun(CommID, Commitment, {Sigs, SigInputs}) ->
                 {ok, SigNameRaw, SFSig, SFSigInput} =
-                    commitment_to_sf_siginfo(Msg, Commitment, Opts),
+                    commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts),
                 SigName = <<"comm-", SigNameRaw/binary>>,
                 {
                     Sigs#{ SigName => SFSig },
@@ -68,12 +74,13 @@ commitments_to_siginfo_for_signable(Msg, Comms, Opts) ->
 
 %% @doc Generate a `signature' and `signature-input' key pair from a given
 %% commitment.
-commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
+commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts) ->
     % Generate the `alg' key from the commitment.
     Alg = commitment_to_alg(Commitment, Opts),
     % Find the public key from the commitment, which we will use as the
-    % `keyid' in the `signature-input' keys.
-    KeyID = maps:get(<<"keyid">>, Commitment, <<>>),
+    % `keyid' in the `signature-input' keys. Absent in the commitment =>
+    % absent on the wire (permitted by RFC 9421 §1.4.2.3).
+    KeyID = maps:get(<<"keyid">>, Commitment, undefined),
     % Extract the signature from the commitment.
     Signature = hb_util:decode(maps:get(<<"signature">>, Commitment)),
     % Extract the keys present in the commitment.
@@ -87,12 +94,33 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
     Expires = maps:get(<<"expires">>, Commitment, undefined),
     % Generate the name of the signature.
     SigName = hb_util:to_lower(hb_util:human_id(crypto:hash(sha256, Signature))),
-    % Generate the signature input and signature structured-fields. These can 
+    % Decide whether we need to transport the commitment's map key.
+    % `sf_siginfo_to_commitment/5' derives the decoded commitment's ID from
+    % `Sig' alone (either `human_id(Sig)' for 32-byte sigs or
+    % `human_id(sha256(Sig))' otherwise). Commitments whose map key matches
+    % that derivation (HMAC, RSA-PSS, and any `<device>@<ver>/<type>' family
+    % that keys on `h(Sig)') need no extra work. Content-addressed devices
+    % like `~ipfs@1.0' — whose key is a CID, not a function of `Sig' — emit
+    % an `id' parameter so the receiver reconstructs the commitment under
+    % the sender's intended key.
+    DerivedID = derived_commitment_id(Signature),
+    IDParam =
+        case CommID of
+            undefined -> [];
+            DerivedID -> [];
+            _         -> [{<<"id">>, {string, CommID}}]
+        end,
+    % Generate the signature input and signature structured-fields. These can
     % then be placed into a dictionary with other commitments and transformed
     % into their binary representations.
     SFSig = {item, {binary, Signature}, []},
     AdditionalParams = get_additional_params(Commitment),
-    Params = 
+    KeyIDItem =
+        case KeyID of
+            undefined -> undefined;
+            _         -> {string, KeyID}
+        end,
+    Params =
         lists:filter(
             fun({_Key, undefined}) ->
                 false;
@@ -101,12 +129,12 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
             end,
             [
                 {<<"alg">>, {string, Alg}},
-                {<<"keyid">>, {string, KeyID}},
+                {<<"keyid">>, KeyIDItem},
                 {<<"tag">>, {string, Tag}},
                 {<<"created">>, Created},
                 {<<"expires">>, Expires},
                 {<<"nonce">>, {string, Nonce}}
-            ] ++ AdditionalParams
+            ] ++ IDParam ++ AdditionalParams
         ),
     SFSigInput =
         {list,
@@ -130,11 +158,23 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
     ),
     {ok, SigName, SFSig, SFSigInput}.
 
+%% @doc Derive the commitment map key that `sf_siginfo_to_commitment/5' will
+%% assign when an explicit `id' parameter is absent. 32-byte signatures
+%% (HMAC-SHA256 output, or a raw sha-256 digest used as a signature by a
+%% content-addressed device) are used directly as the ID; longer signatures
+%% are rehashed.
+derived_commitment_id(Signature) ->
+    if byte_size(Signature) == 32 ->
+        hb_util:human_id(Signature);
+    true ->
+        hb_util:human_id(crypto:hash(sha256, Signature))
+    end.
+
 get_additional_params(Commitment) ->
     AdditionalParams =
         sets:to_list(
             sets:subtract(
-                sets:from_list(maps:keys(Commitment)), 
+                sets:from_list(maps:keys(Commitment)),
                 sets:from_list(
                     [
                         <<"alg">>,
@@ -146,6 +186,7 @@ get_additional_params(Commitment) ->
                         <<"committed">>,
                         <<"signature">>,
                         <<"type">>,
+                        <<"id">>,
                         <<"commitment-device">>,
                         <<"committer">>
                     ]
@@ -269,9 +310,12 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     % 1. Decode the `keyid` (typically a public key) to its raw byte form.
     % 2. Decode the `signature` to its raw byte form.
     % 3. Filter undefined keys.
-    % 4. Generate the ID for the commitment from the signature. We use a SHA2-256
-    %    hash of the signature, unless the signature is 32 bytes, in which case we
-    %    use the signature directly as the ID.
+    % 4. Generate the ID for the commitment. If the encoder transported an
+    %    explicit `id' parameter (set by content-addressed devices like
+    %    `~ipfs@1.0' whose map key is not a function of `Sig'), honour it
+    %    and strip the field from the commitment body. Otherwise fall back
+    %    to the default derivation: use the signature directly for 32-byte
+    %    sigs, else hash the signature.
     % 5. If the `keyid' is a public key (determined by length >= 32 bytes), set
     %    the `committer' to its hash.
     Commitment3 =
@@ -279,19 +323,26 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
             <<"signature">> => hb_util:encode(Sig),
             <<"committed">> => CommittedKeys
         },
-    KeyID = maps:get(<<"keyid">>, Commitment3, <<>>),
+    {ID, Commitment4} =
+        case maps:take(<<"id">>, Commitment3) of
+            {ExplicitID, Stripped} ->
+                {ExplicitID, Stripped};
+            error ->
+                DerivedID =
+                    if byte_size(Sig) == 32 -> hb_util:human_id(Sig);
+                    true -> hb_util:human_id(crypto:hash(sha256, Sig))
+                    end,
+                {DerivedID, Commitment3}
+        end,
+    KeyID = maps:get(<<"keyid">>, Commitment4, <<>>),
     Commitment5 =
         case dev_codec_httpsig_keyid:keyid_to_committer(KeyID) of
             undefined ->
-                Commitment3;
+                Commitment4;
             Committer ->
-                Commitment3#{
+                Commitment4#{
                     <<"committer">> => Committer
                 }
-        end,
-    ID =
-        if byte_size(Sig) == 32 -> hb_util:human_id(Sig);
-        true -> hb_util:human_id(crypto:hash(sha256, Sig))
         end,
     % Return the commitment and calculated ID.
     {ok, ID, Commitment5}.

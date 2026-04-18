@@ -107,21 +107,27 @@ commit(Msg, #{ <<"type">> := Type }, Opts)
     Body = hb_maps:get(<<"body">>, Msg, <<>>, Opts),
     {ok, Multicodec} = type_to_multicodec(Type),
     CID = dev_codec_ipfs_cid:encode(Multicodec, sha2_256, Body),
-    %% An IPFS content-addressed commitment is structurally an HTTPSig
-    %% HMAC-style item: the `signature' is purely a function of the
-    %% content, and the `keyid' is a universal constant (anyone can
-    %% recompute without a secret). This lets the commitment ride over
-    %% the wire through `dev_codec_httpsig_siginfo' as a first-class
-    %% signature-input line, and remote nodes recover it to its
-    %% `commitment-device = ipfs@1.0' form on decode.
+    %% The `signature' field carries the raw sha-256 digest of the body
+    %% (base64url). That's what an IPFS CID commits to by construction —
+    %% there is no separate cryptographic signing step, and no key is
+    %% needed to reverify (a receiver just recomputes from `body'). We do
+    %% not set `keyid': RFC 9421 §1.4.2.3 permits its absence ("other
+    %% means" of key-material retrieval, where here "other means" is "no
+    %% retrieval at all"). The httpsig encoder drops absent `keyid' from
+    %% the wire.
+    %%
+    %% The `signature' field also keeps the commitment on the httpsig
+    %% wire (it is otherwise filtered out by `commitments_to_siginfo').
+    %% Combined with the `id=' parameter that `dev_codec_httpsig_siginfo'
+    %% emits when the map key differs from `h(Sig)', this lets remote
+    %% nodes decode an IPFS commitment back under its CID key.
     Signature = hb_util:encode(crypto:hash(sha256, Body)),
     Commitment =
         #{
             <<"commitment-device">> => ?DEVICE_NAME,
             <<"type">>              => Type,
             <<"committed">>         => ?COMMITTED_KEYS,
-            <<"signature">>         => Signature,
-            <<"keyid">>             => <<"constant:ipfs">>
+            <<"signature">>         => Signature
         },
     Existing = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     ?event(ipfs,
@@ -362,7 +368,14 @@ commit_unsigned_raw_attaches_cid_test() ->
     ?assertEqual(?DEVICE_NAME, maps:get(<<"commitment-device">>, Commitment)),
     ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"type">>, Commitment)),
     ?assertEqual([<<"body">>], maps:get(<<"committed">>, Commitment)),
-    ?assertEqual(<<"constant:ipfs">>, maps:get(<<"keyid">>, Commitment)),
+    %% The commitment carries a signature (= raw digest) so it stays on
+    %% the httpsig wire via `dev_codec_httpsig_siginfo''s signature
+    %% filter. It deliberately does NOT carry a `keyid' — there is no
+    %% key to look up for a content-addressed commitment — nor any
+    %% `committer', `hash-alg', or `multicodec' fields (the multihash
+    %% and multicodec are both encoded in `type').
+    ?assertMatch(#{<<"signature">> := _}, Commitment),
+    ?assertNot(maps:is_key(<<"keyid">>, Commitment)),
     ?assertNot(maps:is_key(<<"committer">>, Commitment)),
     ?assertNot(maps:is_key(<<"hash-alg">>, Commitment)),
     ?assertNot(maps:is_key(<<"multicodec">>, Commitment)).

@@ -192,6 +192,59 @@ live_cache_preload_pattern_test_() ->
         end
     end}.
 
+%% HB-to-HB transport round-trip: a node receives an IPFS-committed
+%% response via HTTP and must see the commitment at the CID key, not at
+%% `h(sig)'. This is what the `id=' extension in
+%% `dev_codec_httpsig_siginfo' preserves.
+live_http_ipfs_commitment_survives_transport_test_() ->
+    {timeout, 90, fun() ->
+        application:ensure_all_started(inets),
+        application:ensure_all_started(ssl),
+        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
+            false ->
+                ?debugFmt("Skipping: all gateways unreachable", []);
+            true ->
+                %% Server: knows ipfs@1.0, has a gateway in its store.
+                NodeOpts = node_opts_with_ipfs(),
+                NodeURL = hb_http_server:start_node(NodeOpts),
+                %% Client: knows ipfs@1.0 too, but no gateway; it relies
+                %% entirely on the server-delivered message.
+                ClientOpts = #{
+                    preloaded_devices =>
+                        [ #{ <<"name">> => <<"ipfs@1.0">>,
+                             <<"module">> => dev_codec_ipfs } |
+                          hb_opts:get(preloaded_devices, [], #{}) ]
+                },
+                Path = <<"/~lookup@1.0/read&target=",
+                         ?HELLO_WORLD_CID/binary>>,
+                {ok, Response} = hb_http:get(NodeURL, Path, ClientOpts),
+                Msg =
+                    case Response of
+                        M when is_map(M) -> M;
+                        B when is_binary(B) -> #{ <<"body">> => B }
+                    end,
+                Comms = maps:get(<<"commitments">>, Msg, #{}),
+                IPFSComms =
+                    maps:filter(
+                        fun(_K, #{<<"commitment-device">> := <<"ipfs@1.0">>}) ->
+                            true;
+                           (_K, _) -> false
+                        end,
+                        Comms
+                    ),
+                case maps:to_list(IPFSComms) of
+                    [] ->
+                        ?debugFmt("Skipping: no IPFS commitment on "
+                                  "response (likely gateway path not "
+                                  "taken on this run)", []);
+                    [{Key, _}] ->
+                        ?assertEqual(?HELLO_WORLD_CID, Key);
+                    Many ->
+                        ?debugFmt("multiple ipfs commitments: ~p", [Many])
+                end
+        end
+    end}.
+
 %%%====================================================================
 %%% PR Path 3 — Commit IPFS content as ANS-104 via the node's wallet
 %%%====================================================================

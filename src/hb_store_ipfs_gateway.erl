@@ -143,10 +143,11 @@ try_gateways([Gateway|Rest], CID, Parts, Timeout, Opts) ->
 with_commitment(CID,
                 #{ <<"hash-alg">> := HashAlg, <<"digest">> := Digest },
                 Body) ->
-    %% Mirror `dev_codec_ipfs:commit/3': populate `signature' with the raw
-    %% digest (base64url) and `keyid' with the universal `constant:ipfs',
-    %% so the commitment rides the HTTPSig wire as an HMAC-shaped item.
-    %% See `dev_codec_ipfs' for the rationale.
+    %% Mirror `dev_codec_ipfs:commit/3'. `signature' keeps the commitment
+    %% on the httpsig wire (see `dev_codec_httpsig_siginfo's filter);
+    %% combined with the `id=' extension emitted when `h(Sig)' ≠ CID, the
+    %% receiver recovers the commitment at the CID key. No `keyid' —
+    %% content-addressed commitments need no key material.
     #{
         <<"body">>        => Body,
         <<"commitments">> => #{
@@ -154,8 +155,7 @@ with_commitment(CID,
                 <<"commitment-device">> => <<"ipfs@1.0">>,
                 <<"type">>              => HashAlg,
                 <<"committed">>         => [<<"body">>],
-                <<"signature">>         => hb_util:encode(Digest),
-                <<"keyid">>             => <<"constant:ipfs">>
+                <<"signature">>         => hb_util:encode(Digest)
             }
         }
     }.
