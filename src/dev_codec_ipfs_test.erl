@@ -228,12 +228,12 @@ cid_matches_dag_cbor_of_message_test() ->
             Opts,
             #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                <<"type">>              => <<"unsigned">>,
-               <<"multicodec">>             => <<"dag-cbor">> }
+               <<"hash-alg">>          => <<"sha2-256-dag-cbor">> }
         ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     %% Sanity: the CID is a dag-cbor + sha2-256 CIDv1 over the bytes.
     {ok, Parts} = dev_codec_ipfs_cid:decode(CID),
-    ?assertEqual(<<"dag-cbor">>, maps:get(<<"multicodec">>, Parts)),
+    ?assertEqual(<<"sha2-256-dag-cbor">>, maps:get(<<"hash-alg">>, Parts)),
     ?assertEqual(crypto:hash(sha256, Bytes), maps:get(<<"digest">>, Parts)),
     %% The CID is also what a library like js-dag-cbor would produce on the
     %% same logical message, since our encoding is the deterministic subset
@@ -327,7 +327,7 @@ local_end_to_end_encode_commit_cache_decode_test() ->
             Carrier, Opts,
             #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                <<"type">>              => <<"unsigned">>,
-               <<"multicodec">>             => <<"dag-cbor">> }
+               <<"hash-alg">>          => <<"sha2-256-dag-cbor">> }
         ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     {ok, _} = hb_cache:write(Committed, Opts),
@@ -385,14 +385,14 @@ raw_and_dag_cbor_cids_coexist_test() ->
             Msg, Opts,
             #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                <<"type">>              => <<"unsigned">>,
-               <<"multicodec">>             => <<"raw">> }
+               <<"hash-alg">>          => <<"sha2-256-raw">> }
         ),
     M2 =
         hb_message:commit(
             M1, Opts,
             #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                <<"type">>              => <<"unsigned">>,
-               <<"multicodec">>             => <<"dag-cbor">> }
+               <<"hash-alg">>          => <<"sha2-256-dag-cbor">> }
         ),
     Commitments = maps:get(<<"commitments">>, M2),
     ?assertEqual(2, maps:size(Commitments)),

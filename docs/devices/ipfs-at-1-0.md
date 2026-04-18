@@ -70,8 +70,7 @@ Compute a CIDv1 over `Msg`'s `body` and add it as an unsigned commitment. The co
         <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">> => #{
             <<"commitment-device">> => <<"ipfs@1.0">>,
             <<"type">>              => <<"unsigned">>,
-            <<"multicodec">>        => <<"raw">>,
-            <<"hash-alg">>          => <<"sha2-256">>,
+            <<"hash-alg">>          => <<"sha2-256-raw">>,
             <<"committed">>         => [<<"body">>],
             <<"signature">>         => <<"uU0nuZNNPgilLlLX2n2r-sSE7-N6U4DukIj3rOLvzek">>,
             <<"keyid">>             => <<"constant:ipfs">>
@@ -80,6 +79,8 @@ Compute a CIDv1 over `Msg`'s `body` and add it as an unsigned commitment. The co
 }
 ```
 
+`hash-alg` is a single coordinate that encodes both the multihash function and the CID's multicodec — the way IPFS tooling names a CID's construction. `sha2-256-raw` produces `bafk…` CIDs; `sha2-256-dag-cbor` produces `bafy…` CIDs.
+
 The `signature` field holds the raw sha2-256 digest of the body (base64url), and the `keyid` is the universal constant `constant:ipfs`. Structurally this is an HTTPSig HMAC item — anyone can reverify without a secret — which lets the commitment ride over HTTP Message Signatures without any additional wire machinery.
 
 **Supported `Req` fields**
@@ -87,14 +88,13 @@ The `signature` field holds the raw sha2-256 digest of the body (base64url), and
 | Field | Default | Values |
 | --- | --- | --- |
 | `type` | `unsigned` | `unsigned`, `unsigned-sha256` |
-| `multicodec` | `raw` | `raw` (0x55), `dag-cbor` (0x71) |
-| `hash-alg` | `sha2-256` | `sha2-256` |
+| `hash-alg` | `sha2-256-raw` | `sha2-256-raw`, `sha2-256-dag-cbor` |
 
-`signed` and other non-unsigned types delegate to `~httpsig@1.0` (the codec behaves as a `dev_codec_json`-style codec for those paths). Unknown multicodecs return `{error, {unsupported_multicodec, _}}`; unknown hash algs return `{error, {unsupported_hash_alg, _}}`. IPFS does not have signed CIDs in the usual sense, but messages can carry both an IPFS commitment and an ANS-104 / HTTPSig signed commitment simultaneously.
+`signed` and other non-unsigned types delegate to `~httpsig@1.0` (the codec behaves as a `dev_codec_json`-style codec for those paths). Unknown hash-algs return `{error, {unsupported_hash_alg, _}}`. IPFS does not have signed CIDs in the usual sense, but messages can carry both an IPFS commitment and an ANS-104 / HTTPSig signed commitment simultaneously.
 
 ### `verify` — check a CID
 
-Recompute the CID from `body` with the commitment's declared multicodec + hash-alg, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
+Recompute the CID from `body` with the commitment's declared `hash-alg`, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
 
 ### `committed` — list covered keys
 
@@ -102,7 +102,7 @@ Recompute the CID from `body` with the commitment's declared multicodec + hash-a
 
 ### `content_type` — MIME
 
-`application/vnd.ipld.raw` for `multicodec = raw`, `application/vnd.ipld.dag-cbor` for `multicodec = dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
+`application/vnd.ipld.raw` for `hash-alg = sha2-256-raw`, `application/vnd.ipld.dag-cbor` for `hash-alg = sha2-256-dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
 
 ### `to` / `from` — dag-cbor serialization
 
@@ -141,7 +141,7 @@ Carrier = #{ <<"body">> => Bytes },
 Committed = hb_message:commit(Carrier, Opts,
                  #{ <<"commitment-device">> => <<"ipfs@1.0">>,
                     <<"type">>              => <<"unsigned">>,
-                    <<"multicodec">>             => <<"dag-cbor">> }),
+                    <<"hash-alg">>          => <<"sha2-256-dag-cbor">> }),
 {ok, _} = hb_cache:write(Committed, Opts).
 ```
 

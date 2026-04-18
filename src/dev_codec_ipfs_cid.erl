@@ -69,10 +69,14 @@ decode_bytes(Bin) ->
                 {DigestLen, Digest} = varint_decode(Rest3),
                 case {HashCode, byte_size(Digest)} of
                     {?HASH_SHA2_256, DigestLen} when DigestLen =:= ?SHA2_256_LEN ->
+                        %% Combine the multihash function and the
+                        %% multicodec into a single `hash-alg' string, the
+                        %% way IPFS tooling names a CID's construction.
+                        Multicodec = codec_name(CodecCode),
+                        HashAlg = <<"sha2-256-", Multicodec/binary>>,
                         {ok, #{
                             <<"version">>  => 1,
-                            <<"multicodec">>    => codec_name(CodecCode),
-                            <<"hash-alg">> => <<"sha2-256">>,
+                            <<"hash-alg">> => HashAlg,
                             <<"digest">>   => Digest
                         }};
                     {_, L} when L =/= DigestLen ->
@@ -189,8 +193,7 @@ empty_dag_cbor_cid_test() ->
 roundtrip_decode_raw_test() ->
     CID = encode(<<"raw">>, sha2_256, <<"hello world">>),
     {ok, Parts} = decode(CID),
-    ?assertEqual(<<"raw">>, maps:get(<<"multicodec">>, Parts)),
-    ?assertEqual(<<"sha2-256">>, maps:get(<<"hash-alg">>, Parts)),
+    ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"hash-alg">>, Parts)),
     ?assertEqual(1, maps:get(<<"version">>, Parts)),
     ?assertEqual(32, byte_size(maps:get(<<"digest">>, Parts))),
     ?assertEqual(
@@ -201,8 +204,7 @@ roundtrip_decode_raw_test() ->
 roundtrip_decode_dag_cbor_test() ->
     CID = encode(<<"dag-cbor">>, sha2_256, <<"body bytes">>),
     {ok, Parts} = decode(CID),
-    ?assertEqual(<<"dag-cbor">>, maps:get(<<"multicodec">>, Parts)),
-    ?assertEqual(<<"sha2-256">>, maps:get(<<"hash-alg">>, Parts)).
+    ?assertEqual(<<"sha2-256-dag-cbor">>, maps:get(<<"hash-alg">>, Parts)).
 
 bad_multibase_prefix_test() ->
     ?assertMatch({error, {unsupported_multibase, _}},

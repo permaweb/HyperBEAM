@@ -616,5 +616,5 @@ simple_map_bytes_and_cid_test() ->
     %% Decoding the CID back out recovers the same sha2-256 digest as the
     %% block bytes we just produced.
     {ok, Parts} = dev_codec_ipfs_cid:decode(CID),
-    ?assertEqual(<<"dag-cbor">>, maps:get(<<"multicodec">>, Parts)),
+    ?assertEqual(<<"sha2-256-dag-cbor">>, maps:get(<<"hash-alg">>, Parts)),
     ?assertEqual(crypto:hash(sha256, Encoded), maps:get(<<"digest">>, Parts)).
