@@ -245,6 +245,138 @@ live_http_ipfs_commitment_survives_transport_test_() ->
         end
     end}.
 
+%% Two in-process HyperBEAM nodes in one test:
+%%
+%%   Node A — "source" — has `hb_store_ipfs_gateway' in its chain, so it
+%%     can reach the real IPFS network and mint CID-keyed commitments.
+%%   Node B — "downstream" — has ONLY a local filesystem store, no IPFS
+%%     gateway. Can serve a CID only if the message is already cached
+%%     under the CID in its local store.
+%%
+%% The test shows: (1) B alone cannot serve the CID; (2) a client
+%% fetches the message from A over HTTP, receiving the commitment keyed
+%% by the CID (thanks to the `id=' extension on the signature-input
+%% line); (3) the client writes the message into B's local store via
+%% the standard `hb_cache:write/2'; (4) B thereafter serves the CID via
+%% `~lookup@1.0/read' entirely from its local cache — no gateway
+%% involved, no knowledge of upstream A.
+%%
+%% This is the "relay / mirror" topology: one node with upstream reach,
+%% many nodes without, each able to cache and re-serve what passes
+%% through them.
+live_hb_to_hb_transfer_and_relay_test_() ->
+    {timeout, 120, fun() ->
+        application:ensure_all_started(inets),
+        application:ensure_all_started(ssl),
+        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
+            false ->
+                ?debugFmt("Skipping: all gateways unreachable", []);
+            true ->
+                %% Two-node setup: each node needs its own wallet
+                %% (`hb_http_server:start_node/1' derives the listener's
+                %% server_id from `priv_wallet''s address; reusing one
+                %% wallet collapses both nodes onto the same listener).
+                %% Explicit high ports — matches `dev_router''s
+                %% `dynamic_router_pricing' two-node pattern.
+                PortA = 18760,
+                PortB = 18761,
+                Stock = hb_opts:get(preloaded_devices, [], #{}),
+
+                %% Node A: has the IPFS gateway upstream.
+                NodeAOpts0 = node_opts_with_ipfs(),
+                NodeAURL = hb_http_server:start_node(
+                    NodeAOpts0#{
+                        port        => PortA,
+                        priv_wallet => ar_wallet:new()
+                    }),
+
+                %% Node B: isolated filesystem store. No IPFS gateway.
+                NodeBLocal = #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> =>
+                        iolist_to_binary(
+                            ["cache-TEST/ipfs-hb-b-",
+                             integer_to_list(
+                                 erlang:system_time(microsecond))])
+                },
+                hb_store:reset(NodeBLocal),
+                NodeBOpts = #{
+                    port              => PortB,
+                    cache_control     => <<"cache">>,
+                    priv_wallet       => ar_wallet:new(),
+                    preloaded_devices =>
+                        [ #{ <<"name">> => <<"ipfs@1.0">>,
+                             <<"module">> => dev_codec_ipfs } | Stock ],
+                    store             => [NodeBLocal]
+                },
+                NodeBURL = hb_http_server:start_node(NodeBOpts),
+
+                Path = <<"/~lookup@1.0/read&target=",
+                         ?HELLO_WORLD_CID/binary>>,
+
+                %% (1) Node B alone cannot serve the CID.
+                BeforeTransfer = hb_http:get(NodeBURL, Path, #{}),
+                ?assertNotMatch({ok, <<"hello world">>}, BeforeTransfer),
+                ?assertNotMatch({ok, #{ <<"body">> := <<"hello world">> }},
+                    BeforeTransfer),
+
+                %% (2) Client fetches from Node A. The response's
+                %% signature-input line carries `alg="ipfs@1.0/sha2-256-raw";
+                %% id="<CID>"'; `sf_siginfo_to_commitment' honours the `id='
+                %% and reconstructs the commitment at the CID map key.
+                {ok, MsgFromA} = hb_http:get(NodeAURL, Path, #{}),
+                ?assert(is_map(MsgFromA)),
+                CommsFromA = maps:get(<<"commitments">>, MsgFromA, #{}),
+                IPFSOnA =
+                    maps:filter(
+                        fun(_, #{ <<"commitment-device">> :=
+                                      <<"ipfs@1.0">> }) -> true;
+                           (_, _) -> false
+                        end,
+                        CommsFromA),
+                case maps:to_list(IPFSOnA) of
+                    [] ->
+                        ?debugFmt("Skipping: A's response carried no "
+                                  "ipfs commitment (gateway path not "
+                                  "taken on this run)", []);
+                    [{CIDAtA, _Comm}] ->
+                        ?assertEqual(?HELLO_WORLD_CID, CIDAtA),
+
+                        %% (3) Persist what A gave us into B's store.
+                        %% The commitment's CID key becomes an AltID in
+                        %% B's cache, linked to the uncommitted root ID.
+                        {ok, _UID} =
+                            hb_cache:write(MsgFromA, NodeBOpts),
+
+                        %% (4) Node B now serves the same CID via its
+                        %% local cache, no gateway, no upstream.
+                        {ok, ViaB} = hb_http:get(NodeBURL, Path, #{}),
+                        BodyViaB =
+                            case ViaB of
+                                Bin when is_binary(Bin) -> Bin;
+                                #{ <<"body">> := Bin } ->
+                                    hb_cache:ensure_loaded(Bin, #{})
+                            end,
+                        ?assertEqual(?HELLO_WORLD_BODY, BodyViaB),
+
+                        %% (5) Direct store inspection: B's local store
+                        %% has the message at the CID key.
+                        LocalOnly = #{ store => [NodeBLocal] },
+                        {ok, MsgOnB} =
+                            hb_cache:read(?HELLO_WORLD_CID, LocalOnly),
+                        ?assertEqual(
+                            ?HELLO_WORLD_BODY,
+                            hb_cache:ensure_loaded(
+                                maps:get(<<"body">>, MsgOnB),
+                                LocalOnly)),
+                        %% And the commitment survived under the CID key
+                        %% in B's local store.
+                        CommsOnB = maps:get(<<"commitments">>, MsgOnB, #{}),
+                        ?assert(maps:is_key(?HELLO_WORLD_CID, CommsOnB))
+                end
+        end
+    end}.
+
 %%%====================================================================
 %%% PR Path 3 — Commit IPFS content as ANS-104 via the node's wallet
 %%%====================================================================
