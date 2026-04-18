@@ -239,7 +239,7 @@ live_gateway_fetches_known_cid_test_() ->
         end
     end}.
 
-%% The commitment attached by the gateway store must verify via the
+%% @doc The commitment attached by the gateway store must verify via the
 %% standard `hb_message:verify/2,3' machinery.
 live_gateway_attached_commitment_verifies_test_() ->
     {timeout, 60, fun() ->
@@ -256,8 +256,8 @@ live_gateway_attached_commitment_verifies_test_() ->
         end
     end}.
 
-%% A CID missing from the local store must fall through to the gateway
-%% chain and return via the standard `hb_cache:read/2' path.
+%% @doc A CID missing from the local store must fall through to the
+%% gateway chain and return via the standard `hb_cache:read/2' path.
 live_hb_cache_reads_from_gateway_test_() ->
     {timeout, 60, fun() ->
         ensure_inets(),
@@ -272,8 +272,8 @@ live_hb_cache_reads_from_gateway_test_() ->
         end
     end}.
 
-%% A fake CIDv1 with random digest must not resolve anywhere — the digest
-%% gate refuses any body a gateway might return for this path.
+%% @doc A fake CIDv1 with random digest must not resolve anywhere — the
+%% digest gate refuses any body a gateway might return for this path.
 live_gateway_rejects_unpinned_cid_test_() ->
     {timeout, 60, fun() ->
         ensure_inets(),

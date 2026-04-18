@@ -138,7 +138,7 @@ varint_decode(_, _, _) ->
 
 %%% Tests
 
-%% IPFS canonical ground truth: `ipfs add --raw-leaves -Q <"hello world"'
+%% @doc IPFS canonical ground truth: `ipfs add --raw-leaves -Q <"hello world"'
 %% returns this CID. The only immovable cross-check for our varint /
 %% multihash / multibase / CIDv1 glue.
 hello_world_raw_cid_test() ->

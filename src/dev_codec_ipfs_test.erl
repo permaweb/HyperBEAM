@@ -99,8 +99,8 @@ to_dag_cbor_simple_test() ->
         #{ <<"hello">> => <<"world">> }, <<"ipfs@1.0">>, opts()),
     ?assertEqual(<<16#a1, 16#65, "hello", 16#65, "world">>, Bytes).
 
-%% Roundtripping a typed message through dag-cbor preserves rich types:
-%% integers, floats, booleans, null, lists, nested maps.
+%% @doc Roundtripping a typed message through dag-cbor preserves rich
+%% types: integers, floats, booleans, null, lists, nested maps.
 roundtrip_typed_message_test() ->
     Opts = opts(),
     Msg = #{
@@ -117,8 +117,8 @@ roundtrip_typed_message_test() ->
         Bytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
-%% Encoding is deterministic: two differently-ordered source maps produce
-%% the same bytes, and re-encoding is stable.
+%% @doc Encoding is deterministic: two differently-ordered source maps
+%% produce the same bytes, and re-encoding is stable.
 encoding_is_deterministic_test() ->
     Opts = opts(),
     B1 = hb_message:convert(
@@ -132,8 +132,8 @@ encoding_is_deterministic_test() ->
         #{ <<"a">> => 1, <<"bb">> => 2, <<"ccc">> => 3 },
         <<"ipfs@1.0">>, Opts)).
 
-%% Committing the dag-cbor bytes of a message yields a CIDv1 identical to
-%% the one `ipfs dag put --input-codec dag-cbor' would produce.
+%% @doc Committing the dag-cbor bytes of a message yields a CIDv1
+%% identical to the one `ipfs dag put --input-codec dag-cbor' would produce.
 cid_matches_dag_cbor_of_message_test() ->
     Opts = opts(),
     Bytes = hb_message:convert(
@@ -147,15 +147,15 @@ cid_matches_dag_cbor_of_message_test() ->
     ?assertEqual(crypto:hash(sha256, Bytes), maps:get(<<"digest">>, Parts)),
     ?assertMatch(<<"bafyrei", _:52/binary>>, CID).
 
-%% Atoms outside `null/true/false' have no dag-cbor representation.
+%% @doc Atoms outside `null/true/false' have no dag-cbor representation.
 unsupported_atom_rejected_test() ->
     ?assertMatch(
         {error, {dag_cbor_encode, {unsupported_atom, something}}},
         dev_codec_ipfs:to(#{ <<"kind">> => something }, #{}, opts())).
 
-%% End-to-end against real IPFS: fetch a known pinned dag-cbor CID, verify
-%% the attached commitment, decode through `from/3'. Skipped if all live
-%% gateways are unreachable.
+%% @doc End-to-end against real IPFS: fetch a known pinned dag-cbor CID,
+%% verify the attached commitment, decode through `from/3'. Skipped if all
+%% live gateways are unreachable.
 live_end_to_end_fetch_and_decode_dag_cbor_test_() ->
     {timeout, 60, fun() ->
         application:ensure_all_started(inets),
@@ -193,9 +193,9 @@ live_end_to_end_fetch_and_decode_dag_cbor_test_() ->
         end
     end}.
 
-%% Local end-to-end (no network): encode a rich message, commit its CID,
-%% write, read back by CID, decode. Exercises the whole codec + commit +
-%% cache path with no mocks.
+%% @doc Local end-to-end (no network): encode a rich message, commit its
+%% CID, write, read back by CID, decode. Exercises the whole codec + commit
+%% + cache path with no mocks.
 local_end_to_end_encode_commit_cache_decode_test() ->
     Opts = opts(),
     Msg = #{
@@ -221,8 +221,9 @@ local_end_to_end_encode_commit_cache_decode_test() ->
             FetchedBytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
         strict, Opts)).
 
-%% A committed message roundtrips through the codec with its commitments
-%% intact — matching `dev_codec_json' / `dev_codec_flat' / `dev_codec_ans104'.
+%% @doc A committed message roundtrips through the codec with its
+%% commitments intact — matching `dev_codec_json' / `dev_codec_flat' /
+%% `dev_codec_ans104'.
 commit_then_encode_preserves_commitments_test() ->
     Opts = opts(),
     Committed = ipfs_commit(
@@ -236,8 +237,8 @@ commit_then_encode_preserves_commitments_test() ->
             Bytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
         strict, Opts)).
 
-%% Two different codecs of the same body give two distinct CIDs that both
-%% resolve to the same cached message.
+%% @doc Two different codecs of the same body give two distinct CIDs that
+%% both resolve to the same cached message.
 raw_and_dag_cbor_cids_coexist_test() ->
     Opts = opts(),
     Body = <<16#a0>>,

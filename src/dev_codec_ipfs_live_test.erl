@@ -75,8 +75,8 @@ live_http_get_cid_serves_body_test_() ->
         ?assertEqual(?HELLO_WORLD_BODY, response_body(R))
     end) end}.
 
-%% Recomputing the CID from the wire body must reproduce the requested
-%% CID — the only verification that matters in IPFS.
+%% @doc Recomputing the CID from the wire body must reproduce the
+%% requested CID — the only verification that matters in IPFS.
 live_http_body_round_trips_to_cid_test_() ->
     {timeout, 90, fun() -> with_live_gateways(fun() ->
         NodeURL = hb_http_server:start_node(node_opts()),
@@ -88,7 +88,7 @@ live_http_body_round_trips_to_cid_test_() ->
 
 %%% PR Path 2 — Preload / en-masse cache a set of CIDs
 
-%% First lookup pulls the CID through the gateway and pins it to the
+%% @doc First lookup pulls the CID through the gateway and pins it to the
 %% node's primary store; a second direct probe of the primary succeeds.
 live_cache_preload_pattern_test_() ->
     {timeout, 90, fun() -> with_live_gateways(fun() ->
@@ -116,9 +116,9 @@ live_cache_preload_pattern_test_() ->
                 hb_ao:get(<<"body">>, R2, <<>>, LocalOpts), LocalOpts))
     end) end}.
 
-%% Transport: an IPFS commitment must arrive on the client side under its
-%% CID map key, not under `h(Sig)'. This is what the `id=' extension in
-%% `dev_codec_httpsig_siginfo' preserves.
+%% @doc Transport: an IPFS commitment must arrive on the client side
+%% under its CID map key, not under `h(Sig)'. This is what the `id='
+%% extension in `dev_codec_httpsig_siginfo' preserves.
 live_http_ipfs_commitment_survives_transport_test_() ->
     {timeout, 90, fun() -> with_live_gateways(fun() ->
         NodeURL = hb_http_server:start_node(node_opts()),
@@ -142,8 +142,8 @@ live_http_ipfs_commitment_survives_transport_test_() ->
         end
     end) end}.
 
-%% Two in-process nodes, wired so a client request on Node B transparently
-%% pulls through Node A:
+%% @doc Two in-process nodes, wired so a client request on Node B
+%% transparently pulls through Node A:
 %%
 %%   Node A — upstream — has ONLY `hb_store_ipfs_gateway'. Every read
 %%     passes through to the real IPFS network.

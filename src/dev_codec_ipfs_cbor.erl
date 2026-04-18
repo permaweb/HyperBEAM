@@ -140,8 +140,8 @@ dec_one(<<MT:3, AI:5, Rest/binary>>) ->
     {N, Rest1} = read_arg(AI, Rest),
     dec_value(MT, N, Rest1).
 
-%% Read the argument for an informational length/value AI. Used by all major
-%% types except 7 (simple/float).
+%% @doc Read the argument for an informational length/value AI. Used by all
+%% major types except 7 (simple/float).
 read_arg(AI, Rest) when AI < 24 ->
     {AI, Rest};
 read_arg(24, <<N:8, Rest/binary>>) ->
@@ -162,9 +162,9 @@ read_arg(30, _) -> throw({dag_cbor_decode, reserved_additional_info});
 read_arg(31, _) -> throw({dag_cbor_decode, indefinite_length_forbidden});
 read_arg(_,  _) -> throw({dag_cbor_decode, unexpected_end}).
 
-%% Reject non-canonical integer encodings. For length arg AI that is 24, the
-%% value N must be >= 24; for 25, >= 256; for 26, >= 65536; for 27, >=
-%% 4294967296. Otherwise the encoder chose a wastefully long form.
+%% @doc Reject non-canonical integer encodings. For length arg AI 24 the
+%% value N must be >= 24; for 25, >= 256; for 26, >= 65536; for 27,
+%% >= 4294967296. Otherwise the encoder chose a wastefully long form.
 reject_non_canonical_int(24, N) when N < 24 ->
     throw({dag_cbor_decode, non_canonical_integer});
 reject_non_canonical_int(25, N) when N < 16#100 ->
@@ -204,7 +204,7 @@ dec_value(6, Tag, Rest) ->
         _  -> throw({dag_cbor_decode, {unsupported_tag, Tag}})
     end.
 
-%% Simple values and floats live in major type 7. AI selects the subtype.
+%% @doc Simple values and floats live in major type 7. AI selects the subtype.
 dec_simple_or_float(20, Rest) -> {false, Rest};
 dec_simple_or_float(21, Rest) -> {true,  Rest};
 dec_simple_or_float(22, Rest) -> {null,  Rest};
@@ -233,7 +233,7 @@ dec_n(N, Rest, Acc) ->
     {V, Rest1} = dec_one(Rest),
     dec_n(N - 1, Rest1, [V | Acc]).
 
-%% Decode map pairs; verify keys are text strings in strictly ascending
+%% @doc Decode map pairs; verify keys are text strings in strictly ascending
 %% dag-cbor order (length-first, then bytewise) with no duplicates.
 dec_pairs(0, Rest, Acc, _Prev) ->
     {lists:reverse(Acc), Rest};
@@ -379,7 +379,7 @@ map_encoding_canonical_test() ->
     ?assertEqual(<<16#a0>>, encode(#{})),
     ?assertEqual({ok, #{}}, decode(<<16#a0>>)).
 
-%% Length-first ordering beats alphabetical: {"aa":1,"z":2} encodes z first.
+%% @doc Length-first ordering beats alphabetical: {"aa":1,"z":2} encodes z first.
 map_length_first_ordering_test() ->
     Input = #{ <<"aa">> => 1, <<"z">> => 2 },
     Encoded = encode(Input),
@@ -462,9 +462,9 @@ shortest_form_integers_encoded_test() ->
     %% 23 must use single byte (major 0, info 23) — 0x17, not 0x18 0x17.
     ?assertEqual(<<16#17>>, encode(23)).
 
-%% End-to-end validation: an encoded empty dag-cbor map, CID-hashed, must
-%% match the well-known empty-map dag-cbor CID. This closes the loop with
-%% the phase-1 CID machinery.
+%% @doc End-to-end validation: an encoded empty dag-cbor map, CID-hashed,
+%% must match the well-known empty-map dag-cbor CID. This closes the loop
+%% with the phase-1 CID machinery.
 empty_map_cid_matches_canonical_test() ->
     Encoded = encode(#{}),
     ?assertEqual(<<16#a0>>, Encoded),
@@ -511,9 +511,10 @@ spec_vectors_test() ->
         Cases
     ).
 
-%% Stress: a map with many keys at assorted lengths forces the canonical
-%% length-first ordering to kick in, and confirms the encoded output is
-%% stable even when the source map enumerates keys in a different order.
+%% @doc Stress: a map with many keys at assorted lengths forces the
+%% canonical length-first ordering to kick in, and confirms the encoded
+%% output is stable even when the source map enumerates keys in a
+%% different order.
 stress_map_ordering_test() ->
     Keys = [<<"a">>, <<"b">>, <<"c">>, <<"aa">>, <<"ab">>, <<"abc">>,
             <<"abcd">>, <<"z">>, <<"zz">>],
@@ -526,7 +527,7 @@ stress_map_ordering_test() ->
     %% Decode must produce the same map.
     ?assertEqual({ok, M1}, decode(Bytes1)).
 
-%% 64-bit integer boundaries. Critical for int64 correctness.
+%% @doc 64-bit integer boundaries. Critical for int64 correctness.
 int_boundary_test() ->
     Cases = [
         %% Max 8-bit (255) and 8-bit + 1 (256) already covered.
@@ -548,10 +549,10 @@ int_boundary_test() ->
         Cases
     ).
 
-%% A more structurally interesting map: the simplest non-trivial dag-cbor
-%% object. The bytes are exact; we cross-check the CID against the output
-%% of `ipfs dag put --input-codec dag-json --store-codec dag-cbor` on
-%% `{"hello":"world"}`.
+%% @doc A more structurally interesting map: the simplest non-trivial
+%% dag-cbor object. The bytes are exact; we cross-check the CID against the
+%% output of `ipfs dag put --input-codec dag-json --store-codec dag-cbor'
+%% on `{"hello":"world"}'.
 simple_map_bytes_and_cid_test() ->
     Encoded = encode(#{ <<"hello">> => <<"world">> }),
     %% a1 65 68 65 6c 6c 6f 65 77 6f 72 6c 64
