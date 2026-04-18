@@ -69,8 +69,7 @@ Compute a CIDv1 over `Msg`'s `body` and add it as an unsigned commitment. The co
     <<"commitments">> => #{
         <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">> => #{
             <<"commitment-device">> => <<"ipfs@1.0">>,
-            <<"type">>              => <<"unsigned">>,
-            <<"hash-alg">>          => <<"sha2-256-raw">>,
+            <<"type">>              => <<"sha2-256-raw">>,
             <<"committed">>         => [<<"body">>],
             <<"signature">>         => <<"uU0nuZNNPgilLlLX2n2r-sSE7-N6U4DukIj3rOLvzek">>,
             <<"keyid">>             => <<"constant:ipfs">>
@@ -79,22 +78,22 @@ Compute a CIDv1 over `Msg`'s `body` and add it as an unsigned commitment. The co
 }
 ```
 
-`hash-alg` is a single coordinate that encodes both the multihash function and the CID's multicodec — the way IPFS tooling names a CID's construction. `sha2-256-raw` produces `bafk…` CIDs; `sha2-256-dag-cbor` produces `bafy…` CIDs.
+The commitment's `type` names the CID's construction — the multihash function and the CID's multicodec in one string, matching IPFS tooling. `sha2-256-raw` produces `bafk…` CIDs; `sha2-256-dag-cbor` produces `bafy…` CIDs. The `type` flows onto the wire as the `alg` parameter of the signature-input line (`alg="ipfs@1.0/sha2-256-raw"`), exactly the same way `dev_codec_ans104` surfaces `unsigned-sha256` and `dev_codec_httpsig` surfaces `hmac-sha256`.
 
-The `signature` field holds the raw sha2-256 digest of the body (base64url), and the `keyid` is the universal constant `constant:ipfs`. Structurally this is an HTTPSig HMAC item — anyone can reverify without a secret — which lets the commitment ride over HTTP Message Signatures without any additional wire machinery.
+The `signature` field holds the raw sha2-256 digest of the body (base64url), and the `keyid` is the universal constant `constant:ipfs`. Structurally this is an HTTPSig HMAC item — anyone can reverify without a secret — which lets the commitment ride over HTTP Message Signatures without any custom metadata parameters.
 
 **Supported `Req` fields**
 
 | Field | Default | Values |
 | --- | --- | --- |
-| `type` | `unsigned` | `unsigned`, `unsigned-sha256` |
-| `hash-alg` | `sha2-256-raw` | `sha2-256-raw`, `sha2-256-dag-cbor` |
+| `type` | `unsigned` | `unsigned` (caller convenience) or a native type directly |
+| `hash-alg` | `sha2-256-raw` | `sha2-256-raw`, `sha2-256-dag-cbor` — only meaningful when `type=unsigned` |
 
-`signed` and other non-unsigned types delegate to `~httpsig@1.0` (the codec behaves as a `dev_codec_json`-style codec for those paths). Unknown hash-algs return `{error, {unsupported_hash_alg, _}}`. IPFS does not have signed CIDs in the usual sense, but messages can carry both an IPFS commitment and an ANS-104 / HTTPSig signed commitment simultaneously.
+`type=unsigned` is the caller-facing knob; it is translated into the native type named by `hash-alg` (or the default `sha2-256-raw`). Callers who already know the native type (`sha2-256-raw` / `sha2-256-dag-cbor`) may pass it directly. `signed` and other non-unsigned types delegate to `~httpsig@1.0` — the codec composes like `dev_codec_flat` / `dev_codec_json` for those paths. Unknown types return `{error, {unsupported_type, _}}`. Messages can carry both an IPFS commitment and an ANS-104 / HTTPSig signed commitment simultaneously.
 
 ### `verify` — check a CID
 
-Recompute the CID from `body` with the commitment's declared `hash-alg`, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
+Recompute the CID from `body` under the commitment's declared `type`, then confirm it is a key in the message's `commitments` map. Tampering with the body produces a different CID, which is not present — verification returns `{ok, false}`. Called implicitly by `hb_message:verify/2,3`.
 
 ### `committed` — list covered keys
 
@@ -102,7 +101,7 @@ Recompute the CID from `body` with the commitment's declared `hash-alg`, then co
 
 ### `content_type` — MIME
 
-`application/vnd.ipld.raw` for `hash-alg = sha2-256-raw`, `application/vnd.ipld.dag-cbor` for `hash-alg = sha2-256-dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
+`application/vnd.ipld.raw` for `type = sha2-256-raw`, `application/vnd.ipld.dag-cbor` for `type = sha2-256-dag-cbor`. Falls back to `application/vnd.ipld.raw` when unspecified.
 
 ### `to` / `from` — dag-cbor serialization
 

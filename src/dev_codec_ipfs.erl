@@ -37,11 +37,18 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE_NAME, <<"ipfs@1.0">>).
-%% `hash-alg' is a single coordinate encoding both the multihash function
-%% and the CID's multicodec, matching the way IPFS tooling names a CID's
-%% construction. `sha2-256-raw' (default) yields `bafk...' CIDs;
-%% `sha2-256-dag-cbor' yields `bafy...' CIDs.
--define(DEFAULT_HASH_ALG, <<"sha2-256-raw">>).
+%% The `type' of an IPFS commitment is the single coordinate that names
+%% the CID's construction — both the multihash function and the CID's
+%% multicodec in one string, matching IPFS tooling conventions:
+%%
+%%   sha2-256-raw      — `bafk...' CIDs
+%%   sha2-256-dag-cbor — `bafy...' CIDs
+%%
+%% These slot directly into the wire `alg' as `ipfs@1.0/<type>' through
+%% `dev_codec_httpsig_siginfo:commitment_to_alg/2', which is why we keep
+%% the hash-alg inside the commitment's `type' field rather than a
+%% separate (non-IANA-registered) metadata parameter.
+-define(DEFAULT_TYPE, <<"sha2-256-raw">>).
 -define(COMMITTED_KEYS, [<<"body">>]).
 
 %%%====================================================================
@@ -55,10 +62,11 @@
 info(_) ->
     #{ exports => [commit, verify, content_type, to, from] }.
 
-%% @doc Report the appropriate IPLD MIME type for a given `hash-alg'.
-content_type(#{ <<"hash-alg">> := <<"sha2-256-dag-cbor">> }) ->
+%% @doc Report the appropriate IPLD MIME type for a given commitment
+%% `type'. Matches the native-type names stored by `commit/3'.
+content_type(#{ <<"type">> := <<"sha2-256-dag-cbor">> }) ->
     {ok, <<"application/vnd.ipld.dag-cbor">>};
-content_type(#{ <<"hash-alg">> := <<"sha2-256-raw">> }) ->
+content_type(#{ <<"type">> := <<"sha2-256-raw">> }) ->
     {ok, <<"application/vnd.ipld.raw">>};
 content_type(_) ->
     {ok, <<"application/vnd.ipld.raw">>}.
@@ -70,56 +78,67 @@ content_type(_) ->
 %% @doc Compute a CIDv1 over the `body' of `Msg' and attach it as an
 %% unsigned commitment.
 %%
-%% The only `Req' knob is `<<"hash-alg">>', a single string that encodes
-%% both the multihash function and the CID's multicodec, exactly as IPFS
-%% tooling names a CID's construction:
+%% The caller-facing API mirrors `dev_codec_ans104' and `dev_codec_httpsig':
+%% the generic `type: unsigned' is translated into the codec's native type
+%% string, which is what ends up in the commitment and on the wire alg.
+%% IPFS's native types are:
 %%
-%%   <<"sha2-256-raw">>      — default. Produces `bafk...' CIDs.
-%%   <<"sha2-256-dag-cbor">> — for dag-cbor blocks. Produces `bafy...' CIDs.
+%%   <<"sha2-256-raw">>      — default. Produces `bafk...' CIDs (multicodec 0x55).
+%%   <<"sha2-256-dag-cbor">> — for dag-cbor blocks. Produces `bafy...' CIDs (0x71).
 %%
-%% `type = unsigned' is the only supported type. Anything else delegates
-%% to `~httpsig@1.0' (the same composition pattern as `dev_codec_flat' /
-%% `dev_codec_json'): a message can carry an IPFS CID commitment AND a
-%% standard signed commitment simultaneously without either interfering.
-commit(Msg, #{ <<"type">> := Type } = Req, Opts)
-        when Type =:= <<"unsigned">>;
-             Type =:= <<"unsigned-sha256">> ->
-    HashAlg = hb_maps:get(<<"hash-alg">>, Req, ?DEFAULT_HASH_ALG, Opts),
+%% An optional `hash-alg' request knob lets the caller pick between them
+%% when passing `type: unsigned'; otherwise the raw form is the default.
+%% Non-unsigned types delegate to `~httpsig@1.0' — the same composition
+%% pattern as `dev_codec_flat' / `dev_codec_json'.
+
+%% Generic caller knob: translate to the native type name.
+commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
+    Native = hb_maps:get(<<"hash-alg">>, Req, ?DEFAULT_TYPE, Opts),
+    Req1 = hb_maps:without([<<"hash-alg">>], Req, Opts),
+    commit(Msg, Req1#{ <<"type">> => Native }, Opts);
+
+%% Native types: do the real work. Storing the hash-alg in `type' (rather
+%% than a separate custom metadata parameter) means the wire alg reads as
+%% `ipfs@1.0/sha2-256-raw' — an extension of the HyperBEAM `<device>/<type>'
+%% alg convention that requires no custom RFC 9421 metadata parameters.
+commit(Msg, #{ <<"type">> := Type }, Opts)
+        when Type =:= <<"sha2-256-raw">>;
+             Type =:= <<"sha2-256-dag-cbor">> ->
     Body = hb_maps:get(<<"body">>, Msg, <<>>, Opts),
-    case hash_alg_to_multicodec(HashAlg) of
-        {ok, Multicodec} ->
-            CID = dev_codec_ipfs_cid:encode(Multicodec, sha2_256, Body),
-            %% An IPFS content-addressed commitment is structurally an
-            %% HTTPSig HMAC-style item: the tag (`signature') is purely a
-            %% function of the content, and the `keyid' is a universal
-            %% constant (anyone can recompute without a secret). This lets
-            %% the commitment ride over the wire through
-            %% `dev_codec_httpsig_siginfo' as a first-class signature-input
-            %% line, and remote nodes recover it back to its
-            %% `commitment-device = ipfs@1.0' form on decode — IPFS-over-
-            %% HTTPSig, with no kernel changes.
-            Signature = hb_util:encode(crypto:hash(sha256, Body)),
-            Commitment =
-                #{
-                    <<"commitment-device">> => ?DEVICE_NAME,
-                    <<"type">>              => <<"unsigned">>,
-                    <<"hash-alg">>          => HashAlg,
-                    <<"committed">>         => ?COMMITTED_KEYS,
-                    <<"signature">>         => Signature,
-                    <<"keyid">>             => <<"constant:ipfs">>
-                },
-            Existing = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-            ?event(ipfs,
-                {commit,
-                    {cid, CID},
-                    {hash_alg, HashAlg},
-                    {body_size, byte_size(Body)}
-                }
-            ),
-            {ok, Msg#{ <<"commitments">> => Existing#{ CID => Commitment } }};
-        error ->
-            {error, {unsupported_hash_alg, HashAlg}}
-    end;
+    {ok, Multicodec} = type_to_multicodec(Type),
+    CID = dev_codec_ipfs_cid:encode(Multicodec, sha2_256, Body),
+    %% An IPFS content-addressed commitment is structurally an HTTPSig
+    %% HMAC-style item: the `signature' is purely a function of the
+    %% content, and the `keyid' is a universal constant (anyone can
+    %% recompute without a secret). This lets the commitment ride over
+    %% the wire through `dev_codec_httpsig_siginfo' as a first-class
+    %% signature-input line, and remote nodes recover it to its
+    %% `commitment-device = ipfs@1.0' form on decode.
+    Signature = hb_util:encode(crypto:hash(sha256, Body)),
+    Commitment =
+        #{
+            <<"commitment-device">> => ?DEVICE_NAME,
+            <<"type">>              => Type,
+            <<"committed">>         => ?COMMITTED_KEYS,
+            <<"signature">>         => Signature,
+            <<"keyid">>             => <<"constant:ipfs">>
+        },
+    Existing = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    ?event(ipfs,
+        {commit,
+            {cid, CID},
+            {type, Type},
+            {body_size, byte_size(Body)}
+        }
+    ),
+    {ok, Msg#{ <<"commitments">> => Existing#{ CID => Commitment } }};
+
+%% Caller asked for an unsigned commit with an unrecognised hash-alg.
+commit(_Msg, #{ <<"type">> := Type }, _Opts)
+        when Type =:= <<"sha2-256-dag-json">>;
+             Type =:= <<"sha2-256-dag-pb">> ->
+    {error, {unsupported_type, Type}};
+
 commit(Msg, Req, Opts) ->
     %% Any other commit type — signed, rsa-pss, hmac, etc. — is outside the
     %% IPFS CID envelope. We delegate to `~httpsig@1.0' the same way
@@ -128,56 +147,46 @@ commit(Msg, Req, Opts) ->
     %% everything else gets a proper cryptographic commitment attached.
     dev_codec_httpsig:commit(Msg, Req, Opts).
 
-%% @doc Resolve a `hash-alg' string to the underlying CID multicodec name.
-%% Returns `error' for unknown / unsupported combinations.
-hash_alg_to_multicodec(<<"sha2-256-raw">>)      -> {ok, <<"raw">>};
-hash_alg_to_multicodec(<<"sha2-256-dag-cbor">>) -> {ok, <<"dag-cbor">>};
-hash_alg_to_multicodec(_)                       -> error.
+%% @doc Resolve a native `type' to the underlying CID multicodec name.
+type_to_multicodec(<<"sha2-256-raw">>)      -> {ok, <<"raw">>};
+type_to_multicodec(<<"sha2-256-dag-cbor">>) -> {ok, <<"dag-cbor">>};
+type_to_multicodec(_)                       -> error.
 
 %%%====================================================================
 %%% verify/3
 %%%====================================================================
 
-%% @doc Verify an `~ipfs@1.0' commitment. `Req' carries the merged fields of
-%% the commitment being verified (codec, hash-alg, etc.); `Base' is the full
-%% message including its `commitments' map.
+%% @doc Verify an `~ipfs@1.0' commitment. `Req' carries the merged fields
+%% of the commitment being verified; `Base' is the full message including
+%% its `commitments' map.
 %%
-%% The verification is the commitment function run in reverse: recompute the
-%% CID from the body using the declared codec + hash-alg. The commitment is
-%% valid iff that CID is a key in `Base''s commitments map — which it must
-%% be, exactly when the body has not been tampered with.
+%% The verification is the commitment function in reverse: recompute the
+%% CID from `body' using the commitment's declared native `type'. The
+%% commitment is valid iff that CID is a key in `Base''s commitments map
+%% — exactly when the body has not been tampered with.
+verify(Base, #{ <<"type">> := Type } = _Req, Opts)
+        when Type =:= <<"sha2-256-raw">>;
+             Type =:= <<"sha2-256-dag-cbor">> ->
+    verify_native(Base, Type, Opts);
 verify(Base, Req, Opts) ->
-    case hb_maps:get(<<"type">>, Req, <<"unsigned">>, Opts) of
-        T when T =:= <<"unsigned">>; T =:= <<"unsigned-sha256">> ->
-            verify_unsigned(Base, Req, Opts);
-        _Other ->
-            %% Non-unsigned commitments on an IPFS-device message are
-            %% httpsig-shaped (see `commit/3'). Delegate.
-            dev_codec_httpsig:verify(Base, Req, Opts)
-    end.
+    %% Non-native commitments on an IPFS-device message are
+    %% httpsig-shaped (see `commit/3'). Delegate.
+    dev_codec_httpsig:verify(Base, Req, Opts).
 
-verify_unsigned(Base, Req, Opts) ->
-    HashAlg = hb_maps:get(<<"hash-alg">>, Req, ?DEFAULT_HASH_ALG, Opts),
+verify_native(Base, Type, Opts) ->
     Body = hb_maps:get(<<"body">>, Base, <<>>, Opts),
     Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
-    case hash_alg_to_multicodec(HashAlg) of
-        {ok, Multicodec} ->
-            ExpectedCID =
-                dev_codec_ipfs_cid:encode(Multicodec, sha2_256, Body),
-            Res = hb_maps:is_key(ExpectedCID, Commitments, Opts),
-            ?event(ipfs,
-                {verify,
-                    {hash_alg, HashAlg},
-                    {expected_cid, ExpectedCID},
-                    {result, Res}
-                }
-            ),
-            {ok, Res};
-        error ->
-            ?event(warning,
-                {ipfs_verify_unsupported_hash_alg, HashAlg}),
-            {ok, false}
-    end.
+    {ok, Multicodec} = type_to_multicodec(Type),
+    ExpectedCID = dev_codec_ipfs_cid:encode(Multicodec, sha2_256, Body),
+    Res = hb_maps:is_key(ExpectedCID, Commitments, Opts),
+    ?event(ipfs,
+        {verify,
+            {type, Type},
+            {expected_cid, ExpectedCID},
+            {result, Res}
+        }
+    ),
+    {ok, Res}.
 
 %%%====================================================================
 %%% to/3 — TABM -> dag-cbor bytes (phase 2)
@@ -320,13 +329,13 @@ ipld_to_structured(M) when is_map(M) ->
 content_type_raw_test() ->
     ?assertEqual(
         {ok, <<"application/vnd.ipld.raw">>},
-        content_type(#{ <<"hash-alg">> => <<"sha2-256-raw">> })
+        content_type(#{ <<"type">> => <<"sha2-256-raw">> })
     ).
 
 content_type_dag_cbor_test() ->
     ?assertEqual(
         {ok, <<"application/vnd.ipld.dag-cbor">>},
-        content_type(#{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> })
+        content_type(#{ <<"type">> => <<"sha2-256-dag-cbor">> })
     ).
 
 content_type_default_test() ->
@@ -335,6 +344,10 @@ content_type_default_test() ->
         content_type(#{})
     ).
 
+%% The caller passes the generic `type: unsigned'; `commit/3' translates
+%% into the codec's native type name (`sha2-256-raw') — same translation
+%% pattern as `dev_codec_ans104' (unsigned -> unsigned-sha256) and
+%% `dev_codec_httpsig' (unsigned -> hmac-sha256).
 commit_unsigned_raw_attaches_cid_test() ->
     Msg = #{ <<"body">> => <<"hello world">> },
     Req = #{ <<"type">> => <<"unsigned">> },
@@ -347,9 +360,11 @@ commit_unsigned_raw_attaches_cid_test() ->
     ),
     Commitment = maps:get(CID, Commitments),
     ?assertEqual(?DEVICE_NAME, maps:get(<<"commitment-device">>, Commitment)),
-    ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"hash-alg">>, Commitment)),
+    ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"type">>, Commitment)),
     ?assertEqual([<<"body">>], maps:get(<<"committed">>, Commitment)),
+    ?assertEqual(<<"constant:ipfs">>, maps:get(<<"keyid">>, Commitment)),
     ?assertNot(maps:is_key(<<"committer">>, Commitment)),
+    ?assertNot(maps:is_key(<<"hash-alg">>, Commitment)),
     ?assertNot(maps:is_key(<<"multicodec">>, Commitment)).
 
 commit_unsigned_dag_cbor_test() ->
@@ -361,6 +376,18 @@ commit_unsigned_dag_cbor_test() ->
     [CID] = maps:keys(Commitments),
     ?assertEqual(
         <<"bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua">>,
+        CID
+    ),
+    Commitment = maps:get(CID, Commitments),
+    ?assertEqual(<<"sha2-256-dag-cbor">>, maps:get(<<"type">>, Commitment)).
+
+%% Callers that already know the native type can pass it directly.
+commit_native_type_test() ->
+    Msg = #{ <<"body">> => <<"hello world">> },
+    {ok, Committed} = commit(Msg, #{ <<"type">> => <<"sha2-256-raw">> }, #{}),
+    [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
+    ?assertEqual(
+        <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>,
         CID
     ).
 
@@ -392,7 +419,7 @@ commit_rejects_unknown_hash_alg_test() ->
     Msg = #{ <<"body">> => <<"x">> },
     Req = #{ <<"type">> => <<"unsigned">>,
              <<"hash-alg">> => <<"sha2-256-dag-pb">> },
-    ?assertMatch({error, {unsupported_hash_alg, <<"sha2-256-dag-pb">>}},
+    ?assertMatch({error, {unsupported_type, <<"sha2-256-dag-pb">>}},
         commit(Msg, Req, #{})).
 
 verify_ok_for_intact_body_test() ->
@@ -418,5 +445,5 @@ verify_fails_when_hash_alg_mismatches_test() ->
     {ok, Committed} = commit(Msg, #{ <<"type">> => <<"unsigned">> }, #{}),
     Commitments = maps:get(<<"commitments">>, Committed),
     [{_CID, Commitment}] = maps:to_list(Commitments),
-    DagCborReq = Commitment#{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> },
+    DagCborReq = Commitment#{ <<"type">> => <<"sha2-256-dag-cbor">> },
     ?assertEqual({ok, false}, verify(Committed, DagCborReq, #{})).

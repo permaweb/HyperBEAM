@@ -135,22 +135,24 @@ try_gateways([Gateway|Rest], CID, Parts, Timeout, Opts) ->
 %% @doc Wrap verified bytes in a message whose `~ipfs@1.0' unsigned
 %% commitment keyed by the CID makes it independently verifiable via
 %% `hb_message:verify/2,3' — without trusting this store to have done the
-%% check. The `hash-alg' encodes both the multihash function and the
-%% CID's multicodec (e.g. `sha2-256-raw' for `bafk...' CIDs,
-%% `sha2-256-dag-cbor' for `bafy...' CIDs), so a round-trip through the
-%% cache preserves identity exactly.
-with_commitment(CID, #{ <<"hash-alg">> := HashAlg, <<"digest">> := Digest }, Body) ->
+%% check. The commitment's `type' field is the native hash-alg name
+%% (`sha2-256-raw' for `bafk...' CIDs, `sha2-256-dag-cbor' for `bafy...'
+%% CIDs). It flows onto the wire as `alg="ipfs@1.0/<type>"' through
+%% `dev_codec_httpsig_siginfo:commitment_to_alg/2' — no custom RFC 9421
+%% metadata parameters required.
+with_commitment(CID,
+                #{ <<"hash-alg">> := HashAlg, <<"digest">> := Digest },
+                Body) ->
     %% Mirror `dev_codec_ipfs:commit/3': populate `signature' with the raw
     %% digest (base64url) and `keyid' with the universal `constant:ipfs',
-    %% so the commitment round-trips over the HTTPSig wire format as an
-    %% HMAC-shaped item. See `dev_codec_ipfs' for the rationale.
+    %% so the commitment rides the HTTPSig wire as an HMAC-shaped item.
+    %% See `dev_codec_ipfs' for the rationale.
     #{
         <<"body">>        => Body,
         <<"commitments">> => #{
             CID => #{
                 <<"commitment-device">> => <<"ipfs@1.0">>,
-                <<"type">>              => <<"unsigned">>,
-                <<"hash-alg">>          => HashAlg,
+                <<"type">>              => HashAlg,
                 <<"committed">>         => [<<"body">>],
                 <<"signature">>         => hb_util:encode(Digest),
                 <<"keyid">>             => <<"constant:ipfs">>
@@ -280,7 +282,7 @@ live_gateway_fetches_known_cid_test_() ->
                 ?assertEqual(<<"ipfs@1.0">>,
                     maps:get(<<"commitment-device">>, Commitment)),
                 ?assertEqual(<<"sha2-256-raw">>,
-                    maps:get(<<"hash-alg">>, Commitment));
+                    maps:get(<<"type">>, Commitment));
             not_found ->
                 ?debugFmt("Skipping: all live gateways missed CID ~s",
                     [?HELLO_WORLD_CID]),
