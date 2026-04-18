@@ -1,12 +1,10 @@
 use rustler::{Binary, Encoder, Env, NifResult, Term};
 use rustler::types::atom::{self, ok};
-use serde_json::Value;
-use serde::Deserialize;
-use sev::certs::snp::{ecdsa::Signature, Chain, Verifiable};
-use sev::firmware::host::TcbVersion;
-use sev::firmware::guest::{AttestationReport, GuestPolicy, PlatformInfo};
+use sev::certs::snp::{Chain, Verifiable};
+use sev::firmware::guest::AttestationReport;
 use crate::helpers::{request_cert_chain, request_vcek};
 use crate::logging::log_message;
+use serde::Deserialize;
 
 /// Verifies whether the measurement in the attestation report matches the expected measurement.
 ///
@@ -27,15 +25,15 @@ fn verify_measurement<'a>(
 ) -> NifResult<Term<'a>> {
     //log_message("INFO", file!(), line!(), "Starting measurement verification...");
 
-    // Define a struct for deserializing the attestation report.
+    // Define a struct for extracting the measurement field.
     #[derive(Debug, Deserialize)]
-    struct AttestationReport {
+    struct AttestationReportMeasurement {
         measurement: Vec<u8>,
         // Additional fields can be added here if needed.
     }
 
     // Step 1: Deserialize the JSON report.
-    let report: AttestationReport = match serde_json::from_slice(_report.as_slice()) {
+    let report: AttestationReportMeasurement = match serde_json::from_slice(_report.as_slice()) {
         Ok(parsed_report) => {
             //log_message(
             //    "INFO",
@@ -95,191 +93,36 @@ fn verify_measurement<'a>(
 /// A tuple with:
 /// - `ok` atom and a success message if the signature is valid.
 /// - `error` atom and an error message if the signature verification fails.
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyIo")]
 fn verify_signature<'a>(
     env: Env<'a>,
     report: Binary<'a>,
 ) ->  NifResult<Term<'a>>  {
-    // log_message("INFO", file!(), line!(), "Verifying signature...");
-
-    // Step 1: Parse the report JSON into a serde Value object.
-    let json_data = match serde_json::from_slice::<Value>(report.as_slice()) {
+    // Step 1: Parse the report JSON into an SEV attestation report structure.
+    let attestation_report: AttestationReport = match serde_json::from_slice(report.as_slice()) {
         Ok(data) => data,
         Err(err) => {
-            return Ok((
-                rustler::types::atom::error(),
-                format!("Failed to parse JSON: {}", err),
-            )
-                .encode(env));
+            return Ok((atom::error(), format!("Invalid report JSON: {}", err)).encode(env));
         }
     };
 
-    // Step 2: Map JSON fields to the AttestationReport struct.
-    // Each field is individually parsed to ensure type safety.
-    let attestation_report = AttestationReport {
-        version: json_data["version"].as_u64().unwrap_or(0) as u32,
-        guest_svn: json_data["guest_svn"].as_u64().unwrap_or(0) as u32,
-        policy: GuestPolicy(json_data["policy"].as_u64().unwrap_or(0)),
-        family_id: json_data["family_id"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 16]),
-        image_id: json_data["image_id"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 16]),
-        vmpl: json_data["vmpl"].as_u64().unwrap_or(0) as u32,
-        sig_algo: json_data["sig_algo"].as_u64().unwrap_or(0) as u32,
-        current_tcb: TcbVersion {
-            bootloader: json_data["current_tcb"]["bootloader"].as_u64().unwrap_or(0) as u8,
-            tee: json_data["current_tcb"]["tee"].as_u64().unwrap_or(0) as u8,
-            snp: json_data["current_tcb"]["snp"].as_u64().unwrap_or(0) as u8,
-            microcode: json_data["current_tcb"]["microcode"].as_u64().unwrap_or(0) as u8,
-            _reserved: [0; 4],
-        },
-        plat_info: PlatformInfo(json_data["plat_info"].as_u64().unwrap_or(0)),
-        _author_key_en: json_data["_author_key_en"].as_u64().unwrap_or(0) as u32,
-        _reserved_0: json_data["_reserved_0"].as_u64().unwrap_or(0) as u32,
-        report_data: json_data["report_data"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 64]),
-        measurement: json_data["measurement"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 48]),
-        host_data: json_data["host_data"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 32]),
-        id_key_digest: json_data["id_key_digest"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 48]),
-        author_key_digest: json_data["author_key_digest"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 48]),
-        report_id: json_data["report_id"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 32]),
-        report_id_ma: json_data["report_id_ma"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 32]),
-        reported_tcb: TcbVersion {
-            bootloader: json_data["reported_tcb"]["bootloader"]
-                .as_u64()
-                .unwrap_or(0) as u8,
-            tee: json_data["reported_tcb"]["tee"].as_u64().unwrap_or(0) as u8,
-            snp: json_data["reported_tcb"]["snp"].as_u64().unwrap_or(0) as u8,
-            microcode: json_data["reported_tcb"]["microcode"].as_u64().unwrap_or(0) as u8,
-            _reserved: [0; 4],
-        },
-        _reserved_1: [0; 24],
-        chip_id: json_data["chip_id"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|v| v.as_u64().unwrap_or(0) as u8)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap_or([0; 64]),
-        committed_tcb: TcbVersion {
-            bootloader: json_data["committed_tcb"]["bootloader"]
-                .as_u64()
-                .unwrap_or(0) as u8,
-            tee: json_data["committed_tcb"]["tee"].as_u64().unwrap_or(0) as u8,
-            snp: json_data["committed_tcb"]["snp"].as_u64().unwrap_or(0) as u8,
-            microcode: json_data["committed_tcb"]["microcode"]
-                .as_u64()
-                .unwrap_or(0) as u8,
-            _reserved: [0; 4],
-        },
-        current_build: json_data["current_build"].as_u64().unwrap_or(0) as u8,
-        current_minor: json_data["current_minor"].as_u64().unwrap_or(0) as u8,
-        current_major: json_data["current_major"].as_u64().unwrap_or(0) as u8,
-        _reserved_2: json_data["_reserved_2"].as_u64().unwrap_or(0) as u8,
-        committed_build: json_data["committed_build"].as_u64().unwrap_or(0) as u8,
-        committed_minor: json_data["committed_minor"].as_u64().unwrap_or(0) as u8,
-        committed_major: json_data["committed_major"].as_u64().unwrap_or(0) as u8,
-        _reserved_3: json_data["_reserved_3"].as_u64().unwrap_or(0) as u8,
-        launch_tcb: TcbVersion {
-            bootloader: json_data["launch_tcb"]["bootloader"].as_u64().unwrap_or(0) as u8,
-            tee: json_data["launch_tcb"]["tee"].as_u64().unwrap_or(0) as u8,
-            snp: json_data["launch_tcb"]["snp"].as_u64().unwrap_or(0) as u8,
-            microcode: json_data["launch_tcb"]["microcode"].as_u64().unwrap_or(0) as u8,
-            _reserved: [0; 4],
-        },
-        _reserved_4: [0; 168],
-        signature: Signature {
-            r: json_data["signature"]["r"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|v| v.as_u64().unwrap_or(0) as u8)
-                .collect::<Vec<u8>>()
-                .try_into()
-                .unwrap_or([0; 72]),
-            s: json_data["signature"]["s"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|v| v.as_u64().unwrap_or(0) as u8)
-                .collect::<Vec<u8>>()
-                .try_into()
-                .unwrap_or([0; 72]),
-            _reserved: [0; 368],
-        },
-    };
-
     // Step 3: Extract the chip ID and TCB version.
-    let chip_id_array: [u8; 64] = attestation_report
-        .chip_id
-        .try_into()
-        .expect("chip_id must be 64 bytes");
-    let tcb_version = attestation_report.current_tcb;
+    let reported_tcb_version = attestation_report.reported_tcb;
+    let chip_id = attestation_report.chip_id;
 
     // Step 4: Request the certificate chain and VCEK.
-    let ca = request_cert_chain("Milan").unwrap();
-    let vcek = request_vcek(chip_id_array, tcb_version).unwrap();
+    let ca = match request_cert_chain("Milan") {
+        Ok(chain) => chain,
+        Err(e) => {
+            return Ok((atom::error(), format!("Failed to fetch certificate chain: {}", e)).encode(env));
+        }
+    };
+    let vcek = match request_vcek(chip_id, reported_tcb_version) {
+        Ok(cert) => cert,
+        Err(e) => {
+            return Ok((atom::error(), format!("Failed to fetch VCEK certificate: {}", e)).encode(env));
+        }
+    };
 
     // Step 5: Verify the certificate chain.
     if let Err(e) = ca.verify() {

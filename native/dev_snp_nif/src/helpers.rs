@@ -1,7 +1,21 @@
 use sev::certs::snp::{ca, Certificate};
 use sev::firmware::host::TcbVersion;
-use crate::logging::log_message;
-use reqwest::blocking::get; 
+use reqwest::blocking::Client;
+use std::time::Duration;
+
+const REQUEST_TIMEOUT_SECONDS: u64 = 10;
+const KDS_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT_SECONDS);
+
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let response = Client::builder()
+        .timeout(KDS_TIMEOUT)
+        .build()?
+        .get(url)
+        .send()?
+        .error_for_status()?;
+
+    Ok(response.bytes()?.to_vec())
+}
 
 /// Base URL for AMD's Key Distribution Service (KDS).
 const KDS_CERT_SITE: &str = "https://kdsintf.amd.com";
@@ -25,7 +39,6 @@ const KDS_CERT_CHAIN: &str = "cert_chain";
 /// ```erlang
 /// {ok, CertChain} = dev_snp_nif:request_cert_chain("Milan").
 pub fn request_cert_chain(sev_prod_name: &str) -> Result<ca::Chain, Box<dyn std::error::Error>> {
-// Blocking version of reqwest
     let url = format!("{KDS_CERT_SITE}{KDS_VCEK}/{sev_prod_name}/{KDS_CERT_CHAIN}");
     // log_message(
     //     "INFO",
@@ -35,8 +48,7 @@ pub fn request_cert_chain(sev_prod_name: &str) -> Result<ca::Chain, Box<dyn std:
     // );
 
     // Perform the blocking GET request
-    let response = get(&url)?;
-    let body = response.bytes()?;
+    let body = fetch_bytes(&url)?;
 
     // Parse the response as a PEM-encoded certificate chain
     let chain = openssl::x509::X509::stack_from_pem(&body)?;
@@ -79,8 +91,6 @@ pub fn request_vcek(
     chip_id: [u8; 64],
     reported_tcb: TcbVersion,
 ) -> Result<Certificate, Box<dyn std::error::Error>> {
-    use reqwest::blocking::get; // Blocking version of reqwest
-
     let hw_id = chip_id
         .iter()
         .map(|byte| format!("{:02x}", byte))
@@ -99,8 +109,7 @@ pub fn request_vcek(
     // );
 
     // Perform the blocking GET request
-    let response = get(&url)?;
-    let rsp_bytes = response.bytes()?;
+    let rsp_bytes = fetch_bytes(&url)?;
 
     // Parse the VCEK response as a DER-encoded certificate
     let vcek_cert = Certificate::from_der(&rsp_bytes)?;

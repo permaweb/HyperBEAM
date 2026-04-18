@@ -158,18 +158,16 @@ generate(_M1, _M2, Opts) ->
             end,
         ?event(snp_local_hashes, {explicit, ValidLocalHashes}),
         % Generate the hardware attestation report
-        {ok, ReportJSON} ?= case get(mock_snp_nif_enabled) of
-            true ->
-                % Return mocked response for testing
-                MockResponse = get(mock_snp_nif_response),
-                {ok, MockResponse};
-            _ ->
-                % Call actual NIF function
-                dev_snp_nif:generate_attestation_report(
-                    ReportData, 
-                    ?REPORT_DATA_VERSION
-                )
-        end,
+        {ok, ReportJSON} ?=
+            snp_nif(
+                generate_attestation_report,
+                fun() ->
+                    dev_snp_nif:generate_attestation_report(
+                        ReportData,
+                        ?REPORT_DATA_VERSION
+                    )
+                end
+            ),
         ?event({snp_report_json, ReportJSON}),
         ?event({snp_report_generated, {nonce, ReportData}, {report, ReportJSON}}),
         % Package the complete report message
@@ -381,25 +379,37 @@ verify_trusted_software(M1, Msg, NodeOpts) ->
 %% @returns `{ok, true}' if the measurement is valid, or 
 %% `{error, measurement_invalid}' on failure
 -spec verify_measurement(Msg :: map(), ReportJSON :: binary(), 
-    NodeOpts :: map()) -> {ok, true} | {error, measurement_invalid}.
+    NodeOpts :: map()) -> {ok, true} | {error, term()}.
 verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Args = extract_measurement_args(Msg, NodeOpts),
     ?event({args, { explicit, Args}}),
-    {ok, Expected} = dev_snp_nif:compute_launch_digest(Args),
-    ExpectedBin = list_to_binary(Expected),
-    ?event({expected_measurement, {explicit, Expected}}),
-    Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
-    ?event({measurement, {explicit,Measurement}}),
-    {Status, MeasurementIsValid} =
-        dev_snp_nif:verify_measurement(
-            ReportJSON,
-            ExpectedBin
-        ),
-    ?event({status, Status}),
-    ?event({measurement_is_valid, MeasurementIsValid}),
-    case MeasurementIsValid of
-        true -> {ok, true};
-        false -> {error, measurement_invalid}
+    case snp_nif(
+        compute_launch_digest,
+        fun() -> dev_snp_nif:compute_launch_digest(Args) end
+    ) of
+        {ok, Expected} ->
+            ExpectedBin = list_to_binary(Expected),
+            ?event({expected_measurement, {explicit, Expected}}),
+            Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
+            ?event({measurement, {explicit,Measurement}}),
+            case snp_nif(
+                verify_measurement,
+                fun() -> dev_snp_nif:verify_measurement(ReportJSON, ExpectedBin) end
+            ) of
+                {ok, MeasurementIsValid} ->
+                    ?event({status, ok}),
+                    ?event({measurement_is_valid, MeasurementIsValid}),
+                    case MeasurementIsValid of
+                        true -> {ok, true};
+                        false -> {error, measurement_invalid}
+                    end;
+                {error, Reason} ->
+                    ?event({status, {error, Reason}}),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            ?event({status, {error, Reason}}),
+            {error, Reason}
     end.
 
 %% @doc Extract measurement arguments from the SNP message.
@@ -437,13 +447,21 @@ extract_measurement_args(Msg, NodeOpts) ->
 %% @returns `{ok, true}' if the report signature is valid, or
 %% `{error, report_signature_invalid}' on failure
 -spec verify_report_integrity(ReportJSON :: binary()) ->
-    {ok, true} | {error, report_signature_invalid}.
+    {ok, true} | {error, term()}.
 verify_report_integrity(ReportJSON) ->
-    {ok, ReportIsValid} = dev_snp_nif:verify_signature(ReportJSON),
-    ?event({report_is_valid, ReportIsValid}),
-    case ReportIsValid of
-        true -> {ok, true};
-        false -> {error, report_signature_invalid}
+    case snp_nif(
+        verify_signature,
+        fun() -> dev_snp_nif:verify_signature(ReportJSON) end
+    ) of
+        {ok, ReportIsValid} ->
+            ?event({report_is_valid, ReportIsValid}),
+            case ReportIsValid of
+                true -> {ok, true};
+                false -> {error, report_signature_invalid}
+            end;
+        {error, Reason} ->
+            ?event({report_is_valid, {error, Reason}}),
+            {error, Reason}
     end.
 
 %% @doc Check if the node's debug policy is enabled.
@@ -725,7 +743,10 @@ generate_success_test() ->
     % Load test report data from file
     TestReportJSON = load_test_report_data(),
     % Mock the NIF function to return test data
-    ok = mock_snp_nif(TestReportJSON),
+    ok = mock_snp_nif(#{
+        generate_attestation_report => {ok, TestReportJSON},
+        verify_signature => {ok, true}
+    }),
     try
         % Call generate function
         {ok, Result} = generate(#{}, #{}, TestOpts),
@@ -910,17 +931,21 @@ verify_mock_generate_wrong_config() ->
 
 %% @doc Mock the SNP NIF function to return test data.
 %%
-%% This function sets up a simple mock for dev_snp_nif:generate_attestation_report
-%% to return predefined test data instead of calling actual hardware.
-%% Uses process dictionary for simple mocking without external dependencies.
+%% This function sets up a simple process-dictionary mock for SNP NIF call sites.
+%% A binary argument preserves backwards compatibility for generation-only tests.
 %%
 %% @param TestReportJSON The test report data to return
 %% @returns ok if mocking is successful
--spec mock_snp_nif(ReportJSON :: binary()) -> ok.
+-spec mock_snp_nif(ReportJSON :: binary() | map()) -> ok.
 mock_snp_nif(TestReportJSON) ->
-    % Use process dictionary for simple mocking
-    put(mock_snp_nif_response, TestReportJSON),
-    put(mock_snp_nif_enabled, true),
+    MockCalls =
+        case TestReportJSON of
+            ReportJSON when is_binary(ReportJSON) ->
+                #{ generate_attestation_report => {ok, ReportJSON} };
+            Calls when is_map(Calls) ->
+                Calls
+        end,
+    put(mock_snp_nif_calls, MockCalls),
     ok.
 
 %% @doc Clean up SNP NIF mocking.
@@ -930,7 +955,17 @@ mock_snp_nif(TestReportJSON) ->
 %% @returns ok
 -spec unmock_snp_nif() -> ok.
 unmock_snp_nif() ->
-    % Clean up process dictionary mock
-    erase(mock_snp_nif_response),
-    erase(mock_snp_nif_enabled),
+    erase(mock_snp_nif_calls),
     ok.
+
+-spec snp_nif(Call :: atom(), Fun :: fun(() -> Result)) -> Result.
+snp_nif(Call, Fun) ->
+    case get(mock_snp_nif_calls) of
+        MockCalls when is_map(MockCalls) ->
+            case maps:find(Call, MockCalls) of
+                {ok, Result} -> Result;
+                error -> Fun()
+            end;
+        _ ->
+            Fun()
+    end.
