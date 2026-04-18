@@ -277,8 +277,12 @@ live_hb_cache_reads_from_gateway_test_() ->
 live_gateway_rejects_unpinned_cid_test_() ->
     {timeout, 60, fun() ->
         ensure_inets(),
-        UnpinnedCID = dev_codec_ipfs_cid:encode(
-            <<"raw">>, sha2_256, crypto:strong_rand_bytes(64)),
+        UnpinnedCID =
+            dev_codec_ipfs_cid:encode(
+                <<"raw">>,
+                sha2_256,
+                crypto:strong_rand_bytes(64)
+            ),
         Store = (live_store())#{ <<"timeout">> => 10000 },
         ?assertEqual(not_found, read(Store, UnpinnedCID))
     end}.

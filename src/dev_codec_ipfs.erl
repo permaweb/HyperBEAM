@@ -92,7 +92,11 @@ to(Msg, _Req, Opts) when is_map(Msg) ->
     try
         Structured =
             hb_message:convert(
-                hb_private:reset(Msg), <<"structured@1.0">>, tabm, Opts),
+                hb_private:reset(Msg),
+                <<"structured@1.0">>,
+                tabm,
+                Opts
+            ),
         Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
         Clean = hb_maps:without([<<"priv">>], Loaded, Opts),
         {ok, dev_codec_ipfs_cbor:encode(structured_to_ipld(Clean))}
@@ -114,7 +118,12 @@ structured_to_ipld(L) when is_list(L) ->
     [ structured_to_ipld(V) || V <- L ];
 structured_to_ipld(M) when is_map(M) ->
     maps:from_list(
-        [ {assert_binary_key(K), structured_to_ipld(V)} || {K, V} <- maps:to_list(M) ]);
+        [
+            {assert_binary_key(K), structured_to_ipld(V)}
+        ||
+            {K, V} <- maps:to_list(M)
+        ]
+    );
 structured_to_ipld(V) ->
     throw({dag_cbor_encode, {unsupported_value, V}}).
 
@@ -156,11 +165,16 @@ ipld_to_structured(M) when is_map(M) ->
 
 commit_unsigned_raw_attaches_cid_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<"hello world">> },
-               #{ <<"type">> => <<"unsigned">> }, #{}),
+        commit(
+            #{ <<"body">> => <<"hello world">> },
+            #{ <<"type">> => <<"unsigned">> },
+            #{}
+        ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     ?assertEqual(
-        <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>, CID),
+        <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>,
+        CID
+    ),
     Commitment = maps:get(CID, maps:get(<<"commitments">>, Committed)),
     ?assertEqual(?DEVICE_NAME, maps:get(<<"commitment-device">>, Commitment)),
     ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"type">>, Commitment)),
@@ -177,20 +191,32 @@ commit_unsigned_raw_attaches_cid_test() ->
 
 commit_unsigned_dag_cbor_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<16#a0>> },
-               #{ <<"type">>     => <<"unsigned">>,
-                  <<"hash-alg">> => <<"sha2-256-dag-cbor">> }, #{}),
+        commit(
+            #{ <<"body">> => <<16#a0>> },
+            #{
+                <<"type">>     => <<"unsigned">>,
+                <<"hash-alg">> => <<"sha2-256-dag-cbor">>
+            },
+            #{}
+        ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     ?assertEqual(
-        <<"bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua">>, CID).
+        <<"bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua">>,
+        CID
+    ).
 
 commit_native_type_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<"hello world">> },
-               #{ <<"type">> => <<"sha2-256-raw">> }, #{}),
+        commit(
+            #{ <<"body">> => <<"hello world">> },
+            #{ <<"type">> => <<"sha2-256-raw">> },
+            #{}
+        ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     ?assertEqual(
-        <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>, CID).
+        <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>,
+        CID
+    ).
 
 commit_preserves_existing_commitments_test() ->
     Msg = #{
@@ -202,37 +228,59 @@ commit_preserves_existing_commitments_test() ->
 
 commit_signed_delegates_to_httpsig_test() ->
     {ok, Signed} =
-        commit(#{ <<"body">> => <<"x">> }, #{ <<"type">> => <<"signed">> },
-               #{ priv_wallet => ar_wallet:new() }),
+        commit(
+            #{ <<"body">> => <<"x">> },
+            #{ <<"type">> => <<"signed">> },
+            #{ priv_wallet => ar_wallet:new() }
+        ),
     [{_CID, C}|_] = maps:to_list(maps:get(<<"commitments">>, Signed)),
     ?assertEqual(<<"httpsig@1.0">>, maps:get(<<"commitment-device">>, C)).
 
 commit_rejects_unsupported_ipfs_type_test() ->
     ?assertMatch(
         {error, {unsupported_type, <<"sha2-256-dag-pb">>}},
-        commit(#{ <<"body">> => <<"x">> },
-               #{ <<"type">>     => <<"unsigned">>,
-                  <<"hash-alg">> => <<"sha2-256-dag-pb">> }, #{})).
+        commit(
+            #{ <<"body">> => <<"x">> },
+            #{
+                <<"type">>     => <<"unsigned">>,
+                <<"hash-alg">> => <<"sha2-256-dag-pb">>
+            },
+            #{}
+        )
+    ).
 
 verify_ok_for_intact_body_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<"hello world">> },
-               #{ <<"type">> => <<"unsigned">> }, #{}),
+        commit(
+            #{ <<"body">> => <<"hello world">> },
+            #{ <<"type">> => <<"unsigned">> },
+            #{}
+        ),
     [{_CID, C}] = maps:to_list(maps:get(<<"commitments">>, Committed)),
     ?assertEqual({ok, true}, verify(Committed, C, #{})).
 
 verify_fails_for_tampered_body_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<"hello world">> },
-               #{ <<"type">> => <<"unsigned">> }, #{}),
+        commit(
+            #{ <<"body">> => <<"hello world">> },
+            #{ <<"type">> => <<"unsigned">> },
+            #{}
+        ),
     [{_CID, C}] = maps:to_list(maps:get(<<"commitments">>, Committed)),
-    ?assertEqual({ok, false},
-        verify(Committed#{ <<"body">> => <<"hello earth">> }, C, #{})).
+    ?assertEqual(
+        {ok, false},
+        verify(Committed#{ <<"body">> => <<"hello earth">> }, C, #{})
+    ).
 
 verify_fails_when_hash_alg_mismatches_test() ->
     {ok, Committed} =
-        commit(#{ <<"body">> => <<"hello world">> },
-               #{ <<"type">> => <<"unsigned">> }, #{}),
+        commit(
+            #{ <<"body">> => <<"hello world">> },
+            #{ <<"type">> => <<"unsigned">> },
+            #{}
+        ),
     [{_CID, C}] = maps:to_list(maps:get(<<"commitments">>, Committed)),
-    ?assertEqual({ok, false},
-        verify(Committed, C#{ <<"type">> => <<"sha2-256-dag-cbor">> }, #{})).
+    ?assertEqual(
+        {ok, false},
+        verify(Committed, C#{ <<"type">> => <<"sha2-256-dag-cbor">> }, #{})
+    ).

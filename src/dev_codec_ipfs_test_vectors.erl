@@ -103,28 +103,44 @@ hb_message_commit_dispatches_to_us_test() ->
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
     Commitments = maps:get(<<"commitments">>, Committed),
     ?assert(maps:is_key(?HELLO_WORLD_CID, Commitments)),
-    ?assertEqual(<<"ipfs@1.0">>,
-        maps:get(<<"commitment-device">>,
-                 maps:get(?HELLO_WORLD_CID, Commitments))).
+    ?assertEqual(
+        <<"ipfs@1.0">>,
+        maps:get(
+            <<"commitment-device">>,
+            maps:get(?HELLO_WORLD_CID, Commitments)
+        )
+    ).
 
 hb_message_verify_dispatches_to_us_test() ->
     Opts = opts(),
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
-    ?assert(hb_message:verify(
-        Committed, #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] }, Opts)).
+    ?assert(
+        hb_message:verify(
+            Committed,
+            #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] },
+            Opts
+        )
+    ).
 
 verify_rejects_tampered_body_via_hb_message_test() ->
     Opts = opts(),
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
     Tampered = Committed#{ <<"body">> => <<"hello earth">> },
-    ?assertNot(hb_message:verify(
-        Tampered, #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] }, Opts)).
+    ?assertNot(
+        hb_message:verify(
+            Tampered,
+            #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] },
+            Opts
+        )
+    ).
 
 committed_returns_body_key_test() ->
     Opts = opts(),
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
-    ?assertEqual([<<"body">>],
-        hb_message:committed(Committed, [?HELLO_WORLD_CID], Opts)).
+    ?assertEqual(
+        [<<"body">>],
+        hb_message:committed(Committed, [?HELLO_WORLD_CID], Opts)
+    ).
 
 %%% 2. Cache linkage — the load-bearing claim of phase 1
 
@@ -136,10 +152,16 @@ cache_links_cid_to_uncommitted_id_test() ->
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
     {ok, _} = hb_cache:write(Committed, Opts),
     {ok, Recovered} = hb_cache:read(?HELLO_WORLD_CID, Opts),
-    ?assertEqual(?HELLO_WORLD,
-        hb_cache:ensure_loaded(maps:get(<<"body">>, Recovered), Opts)),
-    ?assert(maps:is_key(?HELLO_WORLD_CID,
-        maps:get(<<"commitments">>, Recovered, #{}))).
+    ?assertEqual(
+        ?HELLO_WORLD,
+        hb_cache:ensure_loaded(maps:get(<<"body">>, Recovered), Opts)
+    ),
+    ?assert(
+        maps:is_key(
+            ?HELLO_WORLD_CID,
+            maps:get(<<"commitments">>, Recovered, #{})
+        )
+    ).
 
 %% @doc Multiple commitment devices on one message do not conflict: the
 %% CID still resolves through the cache.
@@ -148,14 +170,20 @@ multiple_commitment_devices_coexist_test() ->
     Committed = ipfs_commit(#{ <<"body">> => ?HELLO_WORLD }, Opts),
     {ok, _} = hb_cache:write(Committed, Opts),
     {ok, ViaCID} = hb_cache:read(?HELLO_WORLD_CID, Opts),
-    ?assertEqual(?HELLO_WORLD,
-        hb_cache:ensure_loaded(maps:get(<<"body">>, ViaCID), Opts)).
+    ?assertEqual(
+        ?HELLO_WORLD,
+        hb_cache:ensure_loaded(maps:get(<<"body">>, ViaCID), Opts)
+    ).
 
 %%% 3. to/3 and from/3 through hb_message:convert
 
 to_dag_cbor_simple_test() ->
-    Bytes = hb_message:convert(
-        #{ <<"hello">> => <<"world">> }, <<"ipfs@1.0">>, opts()),
+    Bytes =
+        hb_message:convert(
+            #{ <<"hello">> => <<"world">> },
+            <<"ipfs@1.0">>,
+            opts()
+        ),
     ?assertEqual(<<16#a1, 16#65, "hello", 16#65, "world">>, Bytes).
 
 %% @doc Roundtripping a typed message through dag-cbor preserves rich
@@ -172,34 +200,44 @@ roundtrip_typed_message_test() ->
         <<"nested">> => #{ <<"k">> => <<"v">>, <<"n">> => -42 }
     },
     Bytes = hb_message:convert(Msg, <<"ipfs@1.0">>, Opts),
-    Decoded = hb_message:convert(
-        Bytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
+    Decoded =
+        hb_message:convert(
+            Bytes,
+            <<"structured@1.0">>,
+            <<"ipfs@1.0">>,
+            Opts
+        ),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Encoding is deterministic: two differently-ordered source maps
 %% produce the same bytes, and re-encoding is stable.
 encoding_is_deterministic_test() ->
     Opts = opts(),
-    B1 = hb_message:convert(
-        #{ <<"a">> => 1, <<"bb">> => 2, <<"ccc">> => 3 },
-        <<"ipfs@1.0">>, Opts),
-    B2 = hb_message:convert(
-        #{ <<"ccc">> => 3, <<"a">> => 1, <<"bb">> => 2 },
-        <<"ipfs@1.0">>, Opts),
-    ?assertEqual(B1, B2),
-    ?assertEqual(B1, hb_message:convert(
-        #{ <<"a">> => 1, <<"bb">> => 2, <<"ccc">> => 3 },
-        <<"ipfs@1.0">>, Opts)).
+    Encode =
+        fun(M) ->
+            hb_message:convert(M, <<"ipfs@1.0">>, Opts)
+        end,
+    M1 = #{ <<"a">> => 1, <<"bb">> => 2, <<"ccc">> => 3 },
+    M2 = #{ <<"ccc">> => 3, <<"a">> => 1, <<"bb">> => 2 },
+    ?assertEqual(Encode(M1), Encode(M2)),
+    ?assertEqual(Encode(M1), Encode(M1)).
 
 %% @doc Committing the dag-cbor bytes of a message yields a CIDv1
 %% identical to the one `ipfs dag put --input-codec dag-cbor' would produce.
 cid_matches_dag_cbor_of_message_test() ->
     Opts = opts(),
-    Bytes = hb_message:convert(
-        #{ <<"hello">> => <<"world">> }, <<"ipfs@1.0">>, Opts),
-    Committed = ipfs_commit(
-        #{ <<"body">> => Bytes }, Opts,
-        #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }),
+    Bytes =
+        hb_message:convert(
+            #{ <<"hello">> => <<"world">> },
+            <<"ipfs@1.0">>,
+            Opts
+        ),
+    Committed =
+        ipfs_commit(
+            #{ <<"body">> => Bytes },
+            Opts,
+            #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }
+        ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     {ok, Parts} = dev_codec_ipfs_cid:decode(CID),
     ?assertEqual(<<"sha2-256-dag-cbor">>, maps:get(<<"hash-alg">>, Parts)),
@@ -210,7 +248,8 @@ cid_matches_dag_cbor_of_message_test() ->
 unsupported_atom_rejected_test() ->
     ?assertMatch(
         {error, {dag_cbor_encode, {unsupported_atom, something}}},
-        dev_codec_ipfs:to(#{ <<"kind">> => something }, #{}, opts())).
+        dev_codec_ipfs:to(#{ <<"kind">> => something }, #{}, opts())
+    ).
 
 %% @doc Local end-to-end (no network): encode a rich message, commit its
 %% CID, write, read back by CID, decode. Exercises the whole codec +
@@ -225,52 +264,83 @@ local_end_to_end_encode_commit_cache_decode_test() ->
         <<"active">> => true
     },
     Bytes = hb_message:convert(Msg, <<"ipfs@1.0">>, Opts),
-    Committed = ipfs_commit(
-        #{ <<"body">> => Bytes }, Opts,
-        #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }),
+    Committed =
+        ipfs_commit(
+            #{ <<"body">> => Bytes },
+            Opts,
+            #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }
+        ),
     [CID] = maps:keys(maps:get(<<"commitments">>, Committed)),
     {ok, _} = hb_cache:write(Committed, Opts),
     {ok, Fetched} = hb_cache:read(CID, Opts),
     FetchedBytes =
         hb_cache:ensure_loaded(maps:get(<<"body">>, Fetched), Opts),
     ?assertEqual(Bytes, FetchedBytes),
-    ?assert(hb_message:match(
-        Msg,
-        hb_message:convert(
-            FetchedBytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
-        strict, Opts)).
+    ?assert(
+        hb_message:match(
+            Msg,
+            hb_message:convert(
+                FetchedBytes,
+                <<"structured@1.0">>,
+                <<"ipfs@1.0">>,
+                Opts
+            ),
+            strict,
+            Opts
+        )
+    ).
 
 %% @doc A committed message roundtrips through the codec with its
 %% commitments intact — matching `dev_codec_json' / `dev_codec_flat' /
 %% `dev_codec_ans104'.
 commit_then_encode_preserves_commitments_test() ->
     Opts = opts(),
-    Committed = ipfs_commit(
-        #{ <<"body">> => ?HELLO_WORLD, <<"kind">> => <<"greeting">> }, Opts),
+    Committed =
+        ipfs_commit(
+            #{ <<"body">> => ?HELLO_WORLD, <<"kind">> => <<"greeting">> },
+            Opts
+        ),
     Bytes = hb_message:convert(Committed, <<"ipfs@1.0">>, Opts),
     {ok, Ipld} = dev_codec_ipfs_cbor:decode(Bytes),
     ?assert(maps:is_key(<<"commitments">>, Ipld)),
-    ?assert(hb_message:match(
-        Committed,
-        hb_message:convert(
-            Bytes, <<"structured@1.0">>, <<"ipfs@1.0">>, Opts),
-        strict, Opts)).
+    ?assert(
+        hb_message:match(
+            Committed,
+            hb_message:convert(
+                Bytes,
+                <<"structured@1.0">>,
+                <<"ipfs@1.0">>,
+                Opts
+            ),
+            strict,
+            Opts
+        )
+    ).
 
 %% @doc Two different codecs of the same body give two distinct CIDs that
 %% both resolve to the same cached message.
 raw_and_dag_cbor_cids_coexist_test() ->
     Opts = opts(),
     Body = <<16#a0>>,
-    M1 = ipfs_commit(
-        #{ <<"body">> => Body }, Opts,
-        #{ <<"hash-alg">> => <<"sha2-256-raw">> }),
-    M2 = ipfs_commit(
-        M1, Opts, #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }),
+    M1 =
+        ipfs_commit(
+            #{ <<"body">> => Body },
+            Opts,
+            #{ <<"hash-alg">> => <<"sha2-256-raw">> }
+        ),
+    M2 =
+        ipfs_commit(
+            M1,
+            Opts,
+            #{ <<"hash-alg">> => <<"sha2-256-dag-cbor">> }
+        ),
     ?assertEqual(2, maps:size(maps:get(<<"commitments">>, M2))),
     {ok, _} = hb_cache:write(M2, Opts),
     {ok, ViaDagCbor} = hb_cache:read(?EMPTY_MAP_CID, Opts),
-    ?assertEqual(Body,
-        hb_cache:ensure_loaded(maps:get(<<"body">>, ViaDagCbor), Opts)).
+    ?assertEqual(
+        Body,
+        hb_cache:ensure_loaded(maps:get(<<"body">>, ViaDagCbor), Opts)
+    ).
 
 %%% 4. Live — real gateways, real HyperBEAM nodes
 
@@ -280,27 +350,40 @@ live_end_to_end_fetch_and_decode_dag_cbor_test_() ->
     {timeout, 60, fun() ->
         application:ensure_all_started(inets),
         application:ensure_all_started(ssl),
-        NodeOpts = opts(#{
-            store =>
-                [hb_test_utils:test_store(), gateway_store()]
-        }),
+        NodeOpts =
+            opts(#{
+                store =>
+                    [hb_test_utils:test_store(), gateway_store()]
+            }),
         case hb_cache:read(?EMPTY_MAP_CID, NodeOpts) of
             {ok, Fetched} ->
                 Bytes =
                     hb_cache:ensure_loaded(
-                        maps:get(<<"body">>, Fetched), NodeOpts),
+                        maps:get(<<"body">>, Fetched),
+                        NodeOpts
+                    ),
                 ?assertEqual(<<16#a0>>, Bytes),
-                ?assert(hb_message:verify(
-                    Fetched,
-                    #{ <<"commitment-ids">> => [?EMPTY_MAP_CID] },
-                    NodeOpts)),
-                ?assertEqual(#{},
+                ?assert(
+                    hb_message:verify(
+                        Fetched,
+                        #{ <<"commitment-ids">> => [?EMPTY_MAP_CID] },
+                        NodeOpts
+                    )
+                ),
+                ?assertEqual(
+                    #{},
                     hb_message:convert(
-                        Bytes, <<"structured@1.0">>, <<"ipfs@1.0">>,
-                        NodeOpts));
+                        Bytes,
+                        <<"structured@1.0">>,
+                        <<"ipfs@1.0">>,
+                        NodeOpts
+                    )
+                );
             _ ->
-                ?debugFmt("Skipping: all gateways missed ~s",
-                    [?EMPTY_MAP_CID])
+                ?debugFmt(
+                    "Skipping: all gateways missed ~s",
+                    [?EMPTY_MAP_CID]
+                )
         end
     end}.
 
@@ -318,9 +401,14 @@ live_http_body_round_trips_to_cid_test_() ->
     {timeout, 90, fun() -> with_live_gateways(fun() ->
         NodeURL = hb_http_server:start_node(node_opts()),
         {ok, R} = hb_http:get(NodeURL, ?LOOKUP_PATH, #{}),
-        ?assertEqual(?HELLO_WORLD_CID,
+        ?assertEqual(
+            ?HELLO_WORLD_CID,
             dev_codec_ipfs_cid:encode(
-                <<"raw">>, sha2_256, response_body(R)))
+                <<"raw">>,
+                sha2_256,
+                response_body(R)
+            )
+        )
     end) end}.
 
 %% @doc First lookup pulls the CID through the gateway and pins it to the
@@ -331,8 +419,11 @@ live_cache_preload_pattern_test_() ->
             <<"store-module">> => hb_store_fs,
             <<"name">> =>
                 iolist_to_binary(
-                    ["cache-TEST/ipfs-preload-",
-                     integer_to_list(erlang:system_time(microsecond))])
+                    [
+                        "cache-TEST/ipfs-preload-",
+                        integer_to_list(erlang:system_time(microsecond))
+                    ]
+                )
         },
         hb_store:reset(LocalStore),
         Stock = hb_opts:get(preloaded_devices, [], #{}),
@@ -346,9 +437,13 @@ live_cache_preload_pattern_test_() ->
         ?assertEqual(?HELLO_WORLD, response_body(R1)),
         LocalOpts = #{ store => [LocalStore] },
         {ok, R2} = hb_cache:read(?HELLO_WORLD_CID, LocalOpts),
-        ?assertEqual(?HELLO_WORLD,
+        ?assertEqual(
+            ?HELLO_WORLD,
             hb_cache:ensure_loaded(
-                hb_ao:get(<<"body">>, R2, <<>>, LocalOpts), LocalOpts))
+                hb_ao:get(<<"body">>, R2, <<>>, LocalOpts),
+                LocalOpts
+            )
+        )
     end) end}.
 
 %% @doc Transport: an IPFS commitment must arrive on the client side
@@ -427,11 +522,19 @@ live_hb_to_hb_remote_store_relay_test_() ->
         %% (2) B's primary now holds the message keyed by the CID.
         LocalOnly = #{ store => [NodeBPrimary] },
         {ok, MsgOnB} = hb_cache:read(?HELLO_WORLD_CID, LocalOnly),
-        ?assertEqual(?HELLO_WORLD,
+        ?assertEqual(
+            ?HELLO_WORLD,
             hb_cache:ensure_loaded(
-                maps:get(<<"body">>, MsgOnB), LocalOnly)),
-        ?assert(maps:is_key(?HELLO_WORLD_CID,
-            maps:get(<<"commitments">>, MsgOnB, #{}))),
+                maps:get(<<"body">>, MsgOnB),
+                LocalOnly
+            )
+        ),
+        ?assert(
+            maps:is_key(
+                ?HELLO_WORLD_CID,
+                maps:get(<<"commitments">>, MsgOnB, #{})
+            )
+        ),
         %% (3) Kill Node A; (4) B must still serve from primary.
         ok = cowboy:stop_listener(NodeAServerID),
         {ok, R2} = hb_http:get(NodeBURL, ?LOOKUP_PATH, #{}),
@@ -457,8 +560,11 @@ live_lua_computation_over_ipfs_body_test_() ->
         NodeOpts = node_opts(),
         NodeURL = hb_http_server:start_node(NodeOpts),
         {ok, IpfsMsg} = hb_cache:read(?HELLO_WORLD_CID, NodeOpts),
-        Body = hb_cache:ensure_loaded(
-            hb_ao:get(<<"body">>, IpfsMsg, <<>>, NodeOpts), NodeOpts),
+        Body =
+            hb_cache:ensure_loaded(
+                hb_ao:get(<<"body">>, IpfsMsg, <<>>, NodeOpts),
+                NodeOpts
+            ),
         ?assertEqual(?HELLO_WORLD, Body),
         Base = #{
             <<"device">>       => <<"lua@5.3a">>,
@@ -470,8 +576,10 @@ live_lua_computation_over_ipfs_body_test_() ->
             <<"function">>     => <<"byte_length">>,
             <<"parameters">>   => [ #{ <<"body">> => Body } ]
         },
-        ?assertEqual(byte_size(?HELLO_WORLD),
-            hb_ao:get(<<"byte_length">>, Base, undefined, NodeOpts)),
+        ?assertEqual(
+            byte_size(?HELLO_WORLD),
+            hb_ao:get(<<"byte_length">>, Base, undefined, NodeOpts)
+        ),
         {ok, _} = hb_http:get(NodeURL, <<"/~meta@1.0/info">>, #{})
     end) end}.
 
@@ -485,7 +593,8 @@ live_lua_computation_over_ipfs_body_test_() ->
 suite_test_() ->
     hb_test_utils:suite_with_opts(
         hb_message_test_vectors:codec_test_suite([<<"ipfs@1.0">>]),
-        vector_opts()).
+        vector_opts()
+    ).
 
 vector_opts() ->
     [#{
