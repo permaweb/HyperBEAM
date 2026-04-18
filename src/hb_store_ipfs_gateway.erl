@@ -1,45 +1,24 @@
-%%% @doc A read-only store backend that fetches IPFS CIDs from a configured
-%%% set of HTTP gateways. This is how a HyperBEAM node becomes able to serve
-%%% *external* IPFS content — content it did not itself commit locally.
+%%% @doc Read-only store backend that fetches IPFS CIDs from a configured
+%%% set of HTTP gateways, verifies the body hashes to the requested CID,
+%%% and attaches an `~ipfs@1.0' unsigned commitment so the message remains
+%%% independently verifiable via `hb_message:verify/2,3'. The CID is the
+%%% authority, not the HTTPS certificate.
 %%%
-%%% Crucially, this module does NOT trust the gateways. Every fetched body
-%%% goes through TWO layers of verification before it is handed up the
-%%% chain:
-%%%
-%%%   1. Direct digest check: sha256(body) is compared to the CID's
-%%%      multihash digest. A mismatched gateway response is treated as
-%%%      `not_found' and the next gateway is tried.
-%%%
-%%%   2. Commitment attachment: an `~ipfs@1.0' unsigned commitment keyed by
-%%%      the CID is attached to the returned message. This lets any
-%%%      downstream consumer re-verify independently via
-%%%      `hb_message:verify/2,3' — and the commitment is what `hb_cache'
-%%%      uses to link the CID to the message's uncommitted ID if the
-%%%      caller chooses to persist it locally.
-%%%
-%%% The CID is the authority, not the HTTPS certificate.
-%%%
-%%% Shape of a config entry:
+%%% Config entry:
 %%% ```
 %%%   #{
 %%%       <<"store-module">> => hb_store_ipfs_gateway,
-%%%       <<"gateways">>     => [<<"https://ipfs.io">>, <<"https://dweb.link">>],
-%%%       <<"timeout">>      => 15000  %% ms, optional, default 15_000
+%%%       <<"gateways">>     => [<<"https://ipfs.io">>, ...],
+%%%       <<"timeout">>      => 15000
 %%%   }
 %%% '''
-%%% Put this after your local stores so it acts as a read-through fallback.
-%%% No `write/3' is exposed: this is a consumer-only view of IPFS.
-%%%
-%%% Keys that do not parse as CIDv1 are ignored quickly and return `not_found'
-%%% so that this module can live safely in a chain alongside Arweave-addressed
-%%% stores without stepping on their toes.
+%%% Place after local stores for read-through semantics. Non-CIDv1 keys are
+%%% ignored so the module is safe alongside Arweave-addressed stores.
 -module(hb_store_ipfs_gateway).
 -export([scope/1, type/2, read/2, resolve/2, list/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% Gateways known to serve public IPFS content at time of writing. Users
-%% should override for production via the `<<"gateways">>' store-config key.
 -define(DEFAULT_GATEWAYS, [
     <<"https://ipfs.io">>,
     <<"https://dweb.link">>,
@@ -47,22 +26,20 @@
 ]).
 -define(DEFAULT_TIMEOUT_MS, 15000).
 
-%% @doc Gateway scope is always remote; prefer local stores in the chain.
+%% @doc Always remote — prefer local stores in the chain.
 scope(_) -> remote.
 
-%% @doc Keys are returned as-is. We never alias CIDs to anything else.
+%% @doc CIDs are never aliased.
 resolve(_, Key) -> Key.
 
-%% @doc A CID resolves to a single-binary `body' — IPFS has no composite
-%% structure at this edge of the spec.
+%% @doc IPFS at this edge of the spec has no composite structure.
 type(_, Key) ->
     case cid_of_key(Key) of
         {ok, _, _} -> simple;
-        error -> not_found
+        error      -> not_found
     end.
 
-%% @doc `list/2' on a CID returns the keys of the one-field message we wrap
-%% the body in — conforming to the general store contract.
+%% @doc Return the keys of the wrapping message for a fetched CID.
 list(StoreOpts, Key) ->
     case read(StoreOpts, Key) of
         {ok, Message} when is_map(Message) ->
@@ -70,31 +47,27 @@ list(StoreOpts, Key) ->
         Other -> Other
     end.
 
-%% @doc Fetch the CID from one of the configured gateways. Tries each in
-%% order. Returns `not_found' if every gateway misses; `failure' only if
-%% something systemic broke. A digest mismatch is a miss, not a failure —
-%% that is how we stop malicious gateways from poisoning the cache.
+%% @doc Fetch the CID from one of the configured gateways, in order. A
+%% digest mismatch is treated as a miss (the gateway lied) and the next
+%% gateway is tried. Returns `not_found' if every gateway misses.
 read(StoreOpts, Key) ->
     case cid_of_key(Key) of
         error ->
             ?event(ipfs_gateway, {ignoring_non_cid, Key}),
             not_found;
         {ok, CID, Parts} ->
-            Gateways = hb_maps:get(<<"gateways">>, StoreOpts,
-                ?DEFAULT_GATEWAYS, StoreOpts),
-            Timeout = hb_maps:get(<<"timeout">>, StoreOpts,
-                ?DEFAULT_TIMEOUT_MS, StoreOpts),
-            try_gateways(Gateways, CID, Parts, Timeout, StoreOpts)
+            Gateways =
+                hb_maps:get(<<"gateways">>, StoreOpts,
+                            ?DEFAULT_GATEWAYS, StoreOpts),
+            Timeout =
+                hb_maps:get(<<"timeout">>, StoreOpts,
+                            ?DEFAULT_TIMEOUT_MS, StoreOpts),
+            try_gateways(Gateways, CID, Parts, Timeout)
     end.
 
-%%%====================================================================
-%%% Internals
-%%%====================================================================
-
-%% @doc Parse a store key into a CID (binary) and its pre-decoded parts.
-%% Accepts: a 59-ish-char CIDv1 binary, or a `[CID]' single-element path
-%% list. Longer paths are rejected in phase 1 — we have no UnixFS/IPLD path
-%% resolver yet, and silently returning the root would be misleading.
+%% @doc Parse a key into a CID and its pre-decoded parts. Accepts a bare
+%% CIDv1 binary or a single-element path list; longer paths are rejected
+%% (no UnixFS/IPLD path resolver yet).
 cid_of_key(Key) when is_binary(Key) ->
     try_parse_cid(Key);
 cid_of_key([Single]) ->
@@ -105,49 +78,41 @@ cid_of_key(_) ->
 try_parse_cid(CID) when is_binary(CID) ->
     case dev_codec_ipfs_cid:decode(CID) of
         {ok, Parts} -> {ok, CID, Parts};
-        {error, _} -> error
+        {error, _}  -> error
     end;
 try_parse_cid(_) ->
     error.
 
-try_gateways([], CID, _Parts, _Timeout, _Opts) ->
+try_gateways([], CID, _Parts, _Timeout) ->
     ?event(ipfs_gateway, {all_gateways_missed, {cid, CID}}),
     not_found;
-try_gateways([Gateway|Rest], CID, Parts, Timeout, Opts) ->
-    case fetch_and_verify(Gateway, CID, Parts, Timeout, Opts) of
+try_gateways([Gateway|Rest], CID, Parts, Timeout) ->
+    case fetch_and_verify(Gateway, CID, Parts, Timeout) of
         {ok, Body} ->
-            ?event(ipfs_gateway, {fetched, {cid, CID}, {gateway, Gateway},
-                {bytes, byte_size(Body)}}),
+            ?event(ipfs_gateway,
+                {fetched, {cid, CID}, {gateway, Gateway},
+                 {bytes, byte_size(Body)}}),
             {ok, with_commitment(CID, Parts, Body)};
         digest_mismatch ->
-            %% Try the next gateway — this one lied.
-            ?event(warning, {ipfs_gateway_digest_mismatch,
-                {cid, CID}, {gateway, Gateway}}),
-            try_gateways(Rest, CID, Parts, Timeout, Opts);
-        not_found ->
-            try_gateways(Rest, CID, Parts, Timeout, Opts);
-        {error, Reason} ->
-            ?event(ipfs_gateway, {gateway_error,
-                {cid, CID}, {gateway, Gateway}, {reason, Reason}}),
-            try_gateways(Rest, CID, Parts, Timeout, Opts)
+            ?event(warning,
+                {ipfs_gateway_digest_mismatch,
+                 {cid, CID}, {gateway, Gateway}}),
+            try_gateways(Rest, CID, Parts, Timeout);
+        Other ->
+            ?event(ipfs_gateway,
+                {gateway_miss, {cid, CID},
+                 {gateway, Gateway}, {reason, Other}}),
+            try_gateways(Rest, CID, Parts, Timeout)
     end.
 
 %% @doc Wrap verified bytes in a message whose `~ipfs@1.0' unsigned
-%% commitment keyed by the CID makes it independently verifiable via
-%% `hb_message:verify/2,3' — without trusting this store to have done the
-%% check. The commitment's `type' field is the native hash-alg name
-%% (`sha2-256-raw' for `bafk...' CIDs, `sha2-256-dag-cbor' for `bafy...'
-%% CIDs). It flows onto the wire as `alg="ipfs@1.0/<type>"' through
-%% `dev_codec_httpsig_siginfo:commitment_to_alg/2' — no custom RFC 9421
-%% metadata parameters required.
+%% commitment is keyed by the CID, so any downstream consumer can
+%% re-verify independently. Mirrors `dev_codec_ipfs:commit/3' — signature =
+%% raw digest (keeps the commitment on the httpsig wire), no keyid (no
+%% key material needed for content-addressed commitments).
 with_commitment(CID,
                 #{ <<"hash-alg">> := HashAlg, <<"digest">> := Digest },
                 Body) ->
-    %% Mirror `dev_codec_ipfs:commit/3'. `signature' keeps the commitment
-    %% on the httpsig wire (see `dev_codec_httpsig_siginfo's filter);
-    %% combined with the `id=' extension emitted when `h(Sig)' ≠ CID, the
-    %% receiver recovers the commitment at the CID key. No `keyid' —
-    %% content-addressed commitments need no key material.
     #{
         <<"body">>        => Body,
         <<"commitments">> => #{
@@ -160,21 +125,20 @@ with_commitment(CID,
         }
     }.
 
-%% @doc Single-gateway fetch. Uses OTP's `httpc' — no new dependency — and
-%% verifies the body hash against the requested CID before returning.
-fetch_and_verify(Gateway, CID, Parts, Timeout, _Opts) ->
+%% @doc Fetch a single gateway; verify the body against the CID digest
+%% before returning. Uses OTP `httpc' — no new dependency.
+fetch_and_verify(Gateway, CID, Parts, Timeout) ->
     URL = binary_to_list(<<Gateway/binary, "/ipfs/", CID/binary>>),
     Headers = [
         {"accept", "application/vnd.ipld.raw, application/octet-stream"},
         {"user-agent", "hyperbeam-ipfs/1.0"}
     ],
-    Request = {URL, Headers},
     HTTPOpts = [{timeout, Timeout}, {connect_timeout, Timeout}],
     Opts = [{body_format, binary}, {full_result, true}],
-    case httpc:request(get, Request, HTTPOpts, Opts) of
-        {ok, {{_, 200, _}, _RespHeaders, Body}} when is_binary(Body) ->
+    case httpc:request(get, {URL, Headers}, HTTPOpts, Opts) of
+        {ok, {{_, 200, _}, _, Body}} when is_binary(Body) ->
             case verify_digest(Parts, Body) of
-                true -> {ok, Body};
+                true  -> {ok, Body};
                 false -> digest_mismatch
             end;
         {ok, {{_, 404, _}, _, _}} -> not_found;
@@ -182,71 +146,15 @@ fetch_and_verify(Gateway, CID, Parts, Timeout, _Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
-%% @doc Compare a gateway-returned body against the digest embedded in the
-%% CID. All `sha2-256-*' hash-algs share the same underlying digest
-%% function, so a single clause handles them all.
+%% @doc Compare a fetched body against the digest embedded in the CID.
+%% All `sha2-256-*' hash-algs share the same underlying digest function.
 verify_digest(#{ <<"hash-alg">> := <<"sha2-256-", _/binary>>,
                  <<"digest">>   := Expected }, Body) ->
     Expected =:= crypto:hash(sha256, Body);
 verify_digest(_, _) ->
     false.
 
-%%%====================================================================
-%%% Tests
-%%%====================================================================
-%%% See `hb_store_ipfs_gateway_test' for end-to-end stubs using cowboy.
-
-cid_of_key_test() ->
-    CID = <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>,
-    ?assertMatch({ok, CID, #{}}, cid_of_key(CID)),
-    ?assertMatch({ok, CID, #{}}, cid_of_key([CID])),
-    ?assertEqual(error, cid_of_key(<<"not-a-cid">>)),
-    %% Arweave-style IDs (43-char base64url) must NOT be claimed by us.
-    ?assertEqual(error,
-        cid_of_key(<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>)),
-    %% Multi-part paths are out of scope in phase 1.
-    ?assertEqual(error, cid_of_key([CID, <<"sub">>])).
-
-verify_digest_accepts_correct_body_test() ->
-    Body = <<"hello world">>,
-    Parts = #{
-        <<"hash-alg">> => <<"sha2-256-raw">>,
-        <<"digest">>   => crypto:hash(sha256, Body)
-    },
-    ?assert(verify_digest(Parts, Body)).
-
-verify_digest_rejects_tampered_body_test() ->
-    Parts = #{
-        <<"hash-alg">> => <<"sha2-256-raw">>,
-        <<"digest">>   => crypto:hash(sha256, <<"hello world">>)
-    },
-    ?assertNot(verify_digest(Parts, <<"hello earth">>)).
-
-verify_digest_accepts_dag_cbor_hash_alg_test() ->
-    Body = <<16#a0>>,
-    Parts = #{
-        <<"hash-alg">> => <<"sha2-256-dag-cbor">>,
-        <<"digest">>   => crypto:hash(sha256, Body)
-    },
-    ?assert(verify_digest(Parts, Body)).
-
-scope_is_remote_test() ->
-    ?assertEqual(remote, scope(#{})).
-
-read_ignores_non_cid_test() ->
-    ?assertEqual(not_found,
-        read(#{}, <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>)).
-
-%%% Live-service tests. HyperBEAM's test suite hits the real network for
-%%% its store/gateway backends (see `hb_store_gateway' tests against the
-%%% public Arweave gateways); we do the same for IPFS. The CID used here
-%%% is the canonical `raw("hello world")' CIDv1 that multiple public
-%%% gateways serve:
-%%%
-%%%     bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e
-%%%
-%%% Each test lists several gateways so a single flaky endpoint cannot
-%%% flake the whole suite.
+%%% Tests. See `dev_codec_ipfs_live_test' for broader end-to-end coverage.
 
 -define(HELLO_WORLD_CID,
     <<"bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e">>).
@@ -258,134 +166,119 @@ read_ignores_non_cid_test() ->
     <<"https://4everland.io">>
 ]).
 
-live_gateway_fetches_known_cid_test_() ->
-    {timeout, 60, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        Store = #{
-            <<"store-module">> => hb_store_ipfs_gateway,
-            <<"gateways">>     => ?LIVE_GATEWAYS,
-            <<"timeout">>      => 20000
-        },
-        %% Either all live gateways served the body intact and we got the
-        %% wrapped message, or every gateway was unreachable — in which
-        %% case the test is skipped instead of flaking CI.
-        case read(Store, ?HELLO_WORLD_CID) of
-            {ok, Msg} ->
-                ?assertEqual(
-                    ?HELLO_WORLD_BODY,
-                    maps:get(<<"body">>, Msg)
-                ),
-                Commitments = maps:get(<<"commitments">>, Msg),
-                ?assert(maps:is_key(?HELLO_WORLD_CID, Commitments)),
-                Commitment = maps:get(?HELLO_WORLD_CID, Commitments),
-                ?assertEqual(<<"ipfs@1.0">>,
-                    maps:get(<<"commitment-device">>, Commitment)),
-                ?assertEqual(<<"sha2-256-raw">>,
-                    maps:get(<<"type">>, Commitment));
-            not_found ->
-                ?debugFmt("Skipping: all live gateways missed CID ~s",
-                    [?HELLO_WORLD_CID]),
-                ok
-        end
-    end}.
+live_store() ->
+    #{
+        <<"store-module">> => hb_store_ipfs_gateway,
+        <<"gateways">>     => ?LIVE_GATEWAYS,
+        <<"timeout">>      => 20000
+    }.
 
-%% The commitment attached by the gateway store must verify via the
-%% standard `hb_message:verify/2,3' machinery, using the same `~ipfs@1.0'
-%% device whose `verify/3' is the canonical check. If this test passes,
-%% callers can treat gateway-fetched messages like any other committed
-%% HyperBEAM message.
-live_gateway_attached_commitment_verifies_test_() ->
-    {timeout, 60, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        Store = #{
-            <<"store-module">> => hb_store_ipfs_gateway,
-            <<"gateways">>     => ?LIVE_GATEWAYS,
-            <<"timeout">>      => 20000
-        },
-        case read(Store, ?HELLO_WORLD_CID) of
-            {ok, Msg} ->
-                %% Stock preloaded_devices plus ipfs@1.0, exactly what a
-                %% user would configure in their node.
-                Opts = #{
-                    preloaded_devices =>
-                        [ #{ <<"name">> => <<"ipfs@1.0">>,
-                             <<"module">> => dev_codec_ipfs } |
-                          hb_opts:get(preloaded_devices, [], #{}) ]
-                },
-                ?assertEqual(
-                    true,
-                    hb_message:verify(
-                        Msg,
-                        #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] },
-                        Opts
-                    )
-                );
-            not_found ->
-                ?debugFmt("Skipping: all live gateways missed CID",
-                    [])
-        end
-    end}.
+ensure_inets() ->
+    application:ensure_all_started(inets),
+    application:ensure_all_started(ssl).
 
-%% A CID missing from the local store falls through to the real gateway
-%% chain and comes back via the normal `hb_cache:read/2' path. This is the
-%% production pipeline exercised end-to-end against the public IPFS
-%% network.
-live_hb_cache_reads_from_gateway_test_() ->
-    {timeout, 60, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        Opts = #{
-            store => [
-                hb_test_utils:test_store(),
-                #{
-                    <<"store-module">> => hb_store_ipfs_gateway,
-                    <<"gateways">>     => ?LIVE_GATEWAYS,
-                    <<"timeout">>      => 20000
-                }
-            ]
-        },
-        case hb_cache:read(?HELLO_WORLD_CID, Opts) of
-            {ok, Msg} ->
-                ?assertEqual(
-                    ?HELLO_WORLD_BODY,
-                    hb_cache:ensure_loaded(
-                        maps:get(<<"body">>, Msg), Opts)
-                );
-            not_found ->
-                ?debugFmt("Skipping: all live gateways missed CID", [])
-        end
-    end}.
+cid_of_key_test() ->
+    CID = ?HELLO_WORLD_CID,
+    ?assertMatch({ok, CID, #{}}, cid_of_key(CID)),
+    ?assertMatch({ok, CID, #{}}, cid_of_key([CID])),
+    ?assertEqual(error, cid_of_key(<<"not-a-cid">>)),
+    %% Arweave IDs (43-char base64url) are not claimed here.
+    ?assertEqual(error,
+        cid_of_key(<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>)),
+    %% Multi-part paths are out of scope.
+    ?assertEqual(error, cid_of_key([CID, <<"sub">>])).
 
-%% A gateway that misreads the prefix (e.g. the subpath `/ipfs/` served by
-%% a non-IPFS host) may still return 200 with an unrelated body. The store
-%% must refuse such a response by comparing sha256(body) against the CID's
-%% multihash digest. This test exercises that path by asking a real host
-%% for a nonsense CID — we expect `not_found' and no wrapped body.
-live_gateway_rejects_unpinned_cid_test_() ->
-    {timeout, 60, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        %% A well-formed CIDv1 with a random digest. Vanishingly unlikely
-        %% to be pinned anywhere; serves as a negative test.
-        UnpinnedCID =
-            dev_codec_ipfs_cid:encode(
-                <<"raw">>, sha2_256,
-                crypto:strong_rand_bytes(64)
-            ),
-        Store = #{
-            <<"store-module">> => hb_store_ipfs_gateway,
-            <<"gateways">>     => ?LIVE_GATEWAYS,
-            <<"timeout">>      => 10000
-        },
-        ?assertEqual(not_found, read(Store, UnpinnedCID))
-    end}.
+verify_digest_accepts_correct_body_test() ->
+    Body = <<"hello world">>,
+    ?assert(verify_digest(#{
+        <<"hash-alg">> => <<"sha2-256-raw">>,
+        <<"digest">>   => crypto:hash(sha256, Body) }, Body)).
 
-%% Defense in depth: even if somehow a gateway did lie (and we can't rely
-%% on any real gateway to do so on demand), the `verify_digest/2' function
-%% that every response flows through is tested directly.
+verify_digest_rejects_tampered_body_test() ->
+    ?assertNot(verify_digest(#{
+        <<"hash-alg">> => <<"sha2-256-raw">>,
+        <<"digest">>   => crypto:hash(sha256, <<"hello world">>)
+    }, <<"hello earth">>)).
+
+verify_digest_accepts_dag_cbor_hash_alg_test() ->
+    Body = <<16#a0>>,
+    ?assert(verify_digest(#{
+        <<"hash-alg">> => <<"sha2-256-dag-cbor">>,
+        <<"digest">>   => crypto:hash(sha256, Body) }, Body)).
+
+scope_is_remote_test() ->
+    ?assertEqual(remote, scope(#{})).
+
+read_ignores_non_cid_test() ->
+    ?assertEqual(not_found,
+        read(#{}, <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>)).
+
 digest_gate_rejects_tampered_body_test() ->
     {ok, Parts} = dev_codec_ipfs_cid:decode(?HELLO_WORLD_CID),
     ?assert(verify_digest(Parts, ?HELLO_WORLD_BODY)),
     ?assertNot(verify_digest(Parts, <<"hello earth">>)).
+
+%%% Live-service tests. The canonical `hello world' CID is pinned on every
+%%% public gateway; listing several avoids flaking on one being down.
+
+live_gateway_fetches_known_cid_test_() ->
+    {timeout, 60, fun() ->
+        ensure_inets(),
+        case read(live_store(), ?HELLO_WORLD_CID) of
+            {ok, Msg} ->
+                ?assertEqual(?HELLO_WORLD_BODY, maps:get(<<"body">>, Msg)),
+                Comms = maps:get(<<"commitments">>, Msg),
+                ?assert(maps:is_key(?HELLO_WORLD_CID, Comms)),
+                C = maps:get(?HELLO_WORLD_CID, Comms),
+                ?assertEqual(<<"ipfs@1.0">>,
+                    maps:get(<<"commitment-device">>, C)),
+                ?assertEqual(<<"sha2-256-raw">>, maps:get(<<"type">>, C));
+            not_found ->
+                ?debugFmt("Skipping: all gateways missed ~s",
+                    [?HELLO_WORLD_CID])
+        end
+    end}.
+
+%% The commitment attached by the gateway store must verify via the
+%% standard `hb_message:verify/2,3' machinery.
+live_gateway_attached_commitment_verifies_test_() ->
+    {timeout, 60, fun() ->
+        ensure_inets(),
+        case read(live_store(), ?HELLO_WORLD_CID) of
+            {ok, Msg} ->
+                ?assert(hb_message:verify(
+                    Msg,
+                    #{ <<"commitment-ids">> => [?HELLO_WORLD_CID] },
+                    #{}));
+            not_found ->
+                ?debugFmt("Skipping: all gateways missed ~s",
+                    [?HELLO_WORLD_CID])
+        end
+    end}.
+
+%% A CID missing from the local store must fall through to the gateway
+%% chain and return via the standard `hb_cache:read/2' path.
+live_hb_cache_reads_from_gateway_test_() ->
+    {timeout, 60, fun() ->
+        ensure_inets(),
+        Opts = #{ store => [hb_test_utils:test_store(), live_store()] },
+        case hb_cache:read(?HELLO_WORLD_CID, Opts) of
+            {ok, Msg} ->
+                ?assertEqual(?HELLO_WORLD_BODY,
+                    hb_cache:ensure_loaded(
+                        maps:get(<<"body">>, Msg), Opts));
+            not_found ->
+                ?debugFmt("Skipping: all gateways missed CID", [])
+        end
+    end}.
+
+%% A fake CIDv1 with random digest must not resolve anywhere — the digest
+%% gate refuses any body a gateway might return for this path.
+live_gateway_rejects_unpinned_cid_test_() ->
+    {timeout, 60, fun() ->
+        ensure_inets(),
+        UnpinnedCID = dev_codec_ipfs_cid:encode(
+            <<"raw">>, sha2_256, crypto:strong_rand_bytes(64)),
+        Store = (live_store())#{ <<"timeout">> => 10000 },
+        ?assertEqual(not_found, read(Store, UnpinnedCID))
+    end}.

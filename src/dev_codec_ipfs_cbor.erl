@@ -1,48 +1,33 @@
-%%% @doc Pure-Erlang deterministic DAG-CBOR encoder and decoder.
+%%% @doc Pure-Erlang deterministic DAG-CBOR encoder and decoder. Implements
+%%% the dag-cbor subset of RFC 8949: definite-length containers only; 64-bit
+%%% floats only, no NaN/Infinity; shortest-form integers in int64 range;
+%%% text-string keys sorted length-first then bytewise; only tag 42 (IPLD
+%%% link); valid UTF-8 text; simple values 20/21/22 only. Spec:
+%%% https://ipld.io/specs/codecs/dag-cbor/spec/
 %%%
-%%% DAG-CBOR is a strict subset of CBOR (RFC 8949). This module implements
-%%% the subset, and rejects inputs that violate it:
-%%%   - Only definite-length containers.
-%%%   - Only 64-bit floats (IEEE 754 binary64); NaN and Infinity rejected.
-%%%   - Integers fit in a signed 64-bit range, shortest-form encoding.
-%%%   - Map keys are text strings, sorted length-first then bytewise.
-%%%   - Only tag 42 (IPLD Link) is permitted; no other tags.
-%%%   - Text strings must be valid UTF-8.
-%%%   - Only simple values 20 (false), 21 (true), 22 (null).
+%%% IPLD data model <-> Erlang intermediate form used here:
 %%%
-%%% The spec: https://ipld.io/specs/codecs/dag-cbor/spec/
+%%%     null | false | true   <-> atoms
+%%%     integer | float       <-> Erlang number
+%%%     text string           <-> UTF-8 binary
+%%%     byte string           <-> `{bytes, Binary}'
+%%%     array                 <-> list
+%%%     map                   <-> map with binary keys
+%%%     link (CID)            <-> `{link, CIDString}'
 %%%
-%%% IPLD data model <-> Erlang intermediate form:
-%%%   - null           -> atom `null'
-%%%   - false / true   -> atoms `false' / `true'
-%%%   - integer        -> Erlang integer
-%%%   - float          -> Erlang float
-%%%   - text string    -> binary (UTF-8)
-%%%   - byte string    -> `{bytes, Binary}' tuple (to disambiguate from text)
-%%%   - array          -> list
-%%%   - map            -> map with binary keys
-%%%   - link (CID)     -> `{link, CIDBinary}' tuple where CIDBinary is the
-%%%                       multibase-encoded string form (e.g. `<<"bafy...">>').
-%%%
-%%% This module does no work with HyperBEAM's `~structured@1.0' or TABM. Its
-%%% job is the bytes-to-IPLD frontier; the device-level glue in
-%%% `dev_codec_ipfs' bridges the IPLD intermediate form into HyperBEAM's
-%%% message model.
+%%% The module does not touch `~structured@1.0' or TABM; `dev_codec_ipfs'
+%%% bridges this IPLD form into HyperBEAM messages.
 -module(dev_codec_ipfs_cbor).
 -export([encode/1, decode/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% Integer range bounds per dag-cbor.
+%% Integer range bounds per dag-cbor (int64).
 -define(INT64_MAX,  16#7fffffffffffffff).
 -define(INT64_MIN, -16#8000000000000000).
 
-%%%====================================================================
-%%% Encoder
-%%%====================================================================
-
-%% @doc Encode an IPLD value to dag-cbor bytes. Throws `{dag_cbor_encode,
-%% Reason}' on invalid input.
+%% @doc Encode an IPLD value to dag-cbor bytes. Throws
+%% `{dag_cbor_encode, Reason}' on invalid input.
 encode(V) ->
     try iolist_to_binary(enc(V))
     catch throw:{dag_cbor_encode, _} = E -> throw(E);
@@ -60,16 +45,13 @@ enc(N) when is_integer(N), N < 0, N >= ?INT64_MIN ->
 enc(N) when is_integer(N) ->
     throw({dag_cbor_encode, {integer_out_of_range, N}});
 enc(F) when is_float(F) ->
-    %% Reject NaN. Erlang binary-match of `:64/float' would itself refuse a
-    %% NaN on the decode side, and arithmetic rarely yields a NaN float in
-    %% Erlang, but we still assert to be safe.
+    %% NaN: `F == F' is false. Infinity: `F == F + 1.0' and non-zero.
+    %% Both are forbidden in dag-cbor; every finite double encodes as 0xfb
+    %% + 8 big-endian IEEE-754 bytes.
     case F == F of
         false -> throw({dag_cbor_encode, nan_forbidden});
         true ->
-            %% Infinity detection: Erlang has no built-in, but an infinity
-            %% value would satisfy F > ?INT64_MAX AND F + 1 == F. That is
-            %% always false for finite doubles. This gate is defensive.
-            case (F == F + 1.0) andalso (F =/= 0.0) of
+            case (F == F + 1.0) andalso (F =/= +0.0) andalso (F =/= -0.0) of
                 true -> throw({dag_cbor_encode, infinity_forbidden});
                 false -> <<16#fb, F:64/float>>
             end
@@ -97,23 +79,20 @@ enc(M) when is_map(M) ->
     case lists:all(fun({K, _}) -> is_binary(K) end, Pairs) of
         false -> throw({dag_cbor_encode, non_string_map_key});
         true ->
-            Sorted = lists:sort(fun key_lt/2, Pairs),
+            Sorted = lists:sort(fun pair_key_lt/2, Pairs),
             [enc_header(5, length(Sorted)),
              [ [enc(K), enc(V)] || {K, V} <- Sorted ]]
     end;
 enc(Other) ->
     throw({dag_cbor_encode, {unsupported_type, Other}}).
 
-%% @doc Dag-CBOR length-first key ordering. Since all keys are strings, we
-%% compare by their byte content directly, not by their encoded form — which
-%% is equivalent because the encoded-length prefix is a monotonic function of
-%% the string byte length for the range of string lengths we emit.
-key_lt({K1, _}, {K2, _}) ->
-    L1 = byte_size(K1),
-    L2 = byte_size(K2),
-    if L1 < L2 -> true;
-       L1 > L2 -> false;
-       true    -> K1 =< K2
+%% @doc Dag-CBOR length-first, then bytewise key ordering.
+pair_key_lt({K1, _}, {K2, _}) -> key_lt(K1, K2).
+key_lt(A, B) ->
+    case {byte_size(A), byte_size(B)} of
+        {LA, LB} when LA < LB -> true;
+        {LA, LB} when LA > LB -> false;
+        _                     -> A =< B
     end.
 
 %% @doc Major type header with shortest-form length/argument.
@@ -134,14 +113,10 @@ is_valid_utf8(B) ->
         _ -> false
     end.
 
-%%%====================================================================
-%%% Decoder
-%%%====================================================================
-
-%% @doc Decode a dag-cbor binary into an IPLD intermediate value. Returns
-%% `{ok, Value}' or `{error, Reason}'. Strictly validates: rejects
-%% indefinite-length items, non-64-bit floats, NaN/Infinity, non-canonical
-%% integer forms, unsupported tags, non-UTF-8 strings.
+%% @doc Decode a dag-cbor binary into an IPLD value. Strictly validates:
+%% rejects indefinite-length items, non-64-bit floats, NaN/Infinity,
+%% non-canonical integers, unsupported tags, non-UTF-8 strings, and
+%% non-canonical map ordering.
 decode(Bin) when is_binary(Bin) ->
     try
         {Value, Rest} = dec_one(Bin),
@@ -151,7 +126,7 @@ decode(Bin) when is_binary(Bin) ->
         end
     catch
         throw:{dag_cbor_decode, Reason} -> {error, Reason};
-        error:_ = E -> {error, {malformed, E}}
+        error:E -> {error, {malformed, E}}
     end.
 
 dec_one(<<>>) ->
@@ -219,8 +194,7 @@ dec_value(3, L, Rest) ->
         _ -> throw({dag_cbor_decode, {truncated_text, L}})
     end;
 dec_value(4, L, Rest) ->
-    {Xs, Rest1} = dec_n(L, Rest, []),
-    {Xs, Rest1};
+    dec_n(L, Rest, []);
 dec_value(5, L, Rest) ->
     {Pairs, Rest1} = dec_pairs(L, Rest, [], <<>>),
     {maps:from_list(Pairs), Rest1};
@@ -259,36 +233,17 @@ dec_n(N, Rest, Acc) ->
     {V, Rest1} = dec_one(Rest),
     dec_n(N - 1, Rest1, [V | Acc]).
 
-%% Decode map pairs and, while decoding, verify keys are:
-%%   1. text strings (major type 3),
-%%   2. strictly ascending in the dag-cbor length-first / bytewise order,
-%%      with no duplicates.
+%% Decode map pairs; verify keys are text strings in strictly ascending
+%% dag-cbor order (length-first, then bytewise) with no duplicates.
 dec_pairs(0, Rest, Acc, _Prev) ->
     {lists:reverse(Acc), Rest};
 dec_pairs(N, Rest, Acc, Prev) ->
     {K, Rest1} = dec_one(Rest),
-    case is_binary(K) of
-        false -> throw({dag_cbor_decode, non_string_map_key});
-        true -> ok
-    end,
-    case Acc of
-        [] -> ok;
-        _ ->
-            case key_strictly_less(Prev, K) of
-                true  -> ok;
-                false -> throw({dag_cbor_decode, non_canonical_map_order})
-            end
-    end,
+    is_binary(K) orelse throw({dag_cbor_decode, non_string_map_key}),
+    (Acc =:= [] orelse (key_lt(Prev, K) andalso Prev =/= K))
+        orelse throw({dag_cbor_decode, non_canonical_map_order}),
     {V, Rest2} = dec_one(Rest1),
     dec_pairs(N - 1, Rest2, [{K, V} | Acc], K).
-
-key_strictly_less(A, B) ->
-    LA = byte_size(A),
-    LB = byte_size(B),
-    if LA < LB -> true;
-       LA > LB -> false;
-       true    -> A < B
-    end.
 
 dec_link(Rest) ->
     case dec_one(Rest) of
@@ -301,11 +256,7 @@ dec_link(Rest) ->
             throw({dag_cbor_decode, cid_link_expects_byte_string})
     end.
 
-%%%====================================================================
-%%% Tests
-%%%====================================================================
-
-%%% Unit-level known-answer tests (RFC 8949 Appendix A / dag-cbor spec).
+%%% Tests — unit known-answer vectors and compound roundtrips.
 
 scalars_roundtrip_test() ->
     ?assertEqual(<<16#f6>>, encode(null)),

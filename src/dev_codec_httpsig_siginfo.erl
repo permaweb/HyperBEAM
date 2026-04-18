@@ -22,35 +22,24 @@
     % <<"status">> % Some libraries do not support it
 ]).
 
-%% @doc Generate a `signature' and `signature-input' key pair from a commitment
-%% map. Commitments without a `signature' field (e.g. content-addressed
-%% commitments like `~ipfs@1.0' CIDs, or `ans104@1.0' unsigned-sha256) are
-%% not signatures per RFC-9421; they ride along in the message body's
-%% `commitments' field and are skipped here.
+%% @doc Generate a `signature' and `signature-input' key pair from a
+%% commitment map. Commitments without a `signature' field are not
+%% signatures per RFC 9421 and are skipped — they ride on the message body.
 commitments_to_siginfo(_Msg, Comms, _Opts) when ?IS_EMPTY_MESSAGE(Comms) ->
     #{};
 commitments_to_siginfo(Msg, Comms, Opts) ->
     Signable =
         maps:filter(
-            fun(_CommID, Commitment) ->
-                maps:is_key(<<"signature">>, Commitment)
-            end,
-            Comms
-        ),
+            fun(_CommID, C) -> maps:is_key(<<"signature">>, C) end, Comms),
     case map_size(Signable) of
         0 -> #{};
-        _ ->
-            commitments_to_siginfo_for_signable(Msg, Signable, Opts)
+        _ -> commitments_to_siginfo_for_signable(Msg, Signable, Opts)
     end.
 
 commitments_to_siginfo_for_signable(Msg, Comms, Opts) ->
-    % Generate a SF item for each commitment's signature and signature-input.
-    % The commitment's map key (`CommID') is threaded through so that
-    % `commitment_to_sf_siginfo/4' can emit an `id' parameter whenever the
-    % decoder-side derivation rule (`id(Sig)' — see `sf_siginfo_to_commitment/5')
-    % would not reproduce it on the other side. Commitment devices whose
-    % identity is `h(Sig)' (HMAC, RSA-PSS, etc.) never pay this cost;
-    % content-addressed devices (e.g. `~ipfs@1.0') do.
+    % Emit a SF item per commitment. `CommID' is threaded through so
+    % `commitment_to_sf_siginfo/4' can add an `id' parameter whenever the
+    % decoder-side derivation would not reproduce the sender's map key.
     {Sigs, SigInputs} =
         maps:fold(
             fun(CommID, Commitment, {Sigs, SigInputs}) ->
@@ -94,15 +83,10 @@ commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts) ->
     Expires = maps:get(<<"expires">>, Commitment, undefined),
     % Generate the name of the signature.
     SigName = hb_util:to_lower(hb_util:human_id(crypto:hash(sha256, Signature))),
-    % Decide whether we need to transport the commitment's map key.
-    % `sf_siginfo_to_commitment/5' derives the decoded commitment's ID from
-    % `Sig' alone (either `human_id(Sig)' for 32-byte sigs or
-    % `human_id(sha256(Sig))' otherwise). Commitments whose map key matches
-    % that derivation (HMAC, RSA-PSS, and any `<device>@<ver>/<type>' family
-    % that keys on `h(Sig)') need no extra work. Content-addressed devices
-    % like `~ipfs@1.0' — whose key is a CID, not a function of `Sig' — emit
-    % an `id' parameter so the receiver reconstructs the commitment under
-    % the sender's intended key.
+    % If the decoder's derivation would not reproduce the sender's map key,
+    % transport it explicitly as an `id' parameter. Content-addressed devices
+    % (e.g. `~ipfs@1.0') key on a CID that is not a function of `Sig'; HMAC,
+    % RSA-PSS, and other `h(Sig)'-keyed devices never pay this cost.
     DerivedID = derived_commitment_id(Signature),
     IDParam =
         case CommID of
@@ -158,17 +142,13 @@ commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts) ->
     ),
     {ok, SigName, SFSig, SFSigInput}.
 
-%% @doc Derive the commitment map key that `sf_siginfo_to_commitment/5' will
-%% assign when an explicit `id' parameter is absent. 32-byte signatures
-%% (HMAC-SHA256 output, or a raw sha-256 digest used as a signature by a
-%% content-addressed device) are used directly as the ID; longer signatures
-%% are rehashed.
-derived_commitment_id(Signature) ->
-    if byte_size(Signature) == 32 ->
-        hb_util:human_id(Signature);
-    true ->
-        hb_util:human_id(crypto:hash(sha256, Signature))
-    end.
+%% @doc Default commitment ID derivation used on both encode and decode
+%% when no explicit `id' parameter is present. 32-byte sigs are used
+%% directly; longer sigs are rehashed with sha-256.
+derived_commitment_id(Sig) when byte_size(Sig) == 32 ->
+    hb_util:human_id(Sig);
+derived_commitment_id(Sig) ->
+    hb_util:human_id(crypto:hash(sha256, Sig)).
 
 get_additional_params(Commitment) ->
     AdditionalParams =
@@ -306,18 +286,12 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
             {item, {string, Key}, []} <- SigInput
         ],
     CommittedKeys = from_siginfo_keys(Msg, BodyKeys, RawCommittedKeys),
-    % Merge and cleanup the output.
-    % 1. Decode the `keyid` (typically a public key) to its raw byte form.
-    % 2. Decode the `signature` to its raw byte form.
-    % 3. Filter undefined keys.
-    % 4. Generate the ID for the commitment. If the encoder transported an
-    %    explicit `id' parameter (set by content-addressed devices like
-    %    `~ipfs@1.0' whose map key is not a function of `Sig'), honour it
-    %    and strip the field from the commitment body. Otherwise fall back
-    %    to the default derivation: use the signature directly for 32-byte
-    %    sigs, else hash the signature.
-    % 5. If the `keyid' is a public key (determined by length >= 32 bytes), set
-    %    the `committer' to its hash.
+    % Merge and cleanup the output:
+    % 1. Decode `keyid' and `signature' to raw bytes.
+    % 2. Filter undefined keys.
+    % 3. Use the transported `id' parameter when present (content-addressed
+    %    devices), otherwise fall back to `derived_commitment_id/1'.
+    % 4. If the `keyid' resolves to a public key, set the `committer'.
     Commitment3 =
         Commitment2#{
             <<"signature">> => hb_util:encode(Sig),
@@ -325,14 +299,8 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
         },
     {ID, Commitment4} =
         case maps:take(<<"id">>, Commitment3) of
-            {ExplicitID, Stripped} ->
-                {ExplicitID, Stripped};
-            error ->
-                DerivedID =
-                    if byte_size(Sig) == 32 -> hb_util:human_id(Sig);
-                    true -> hb_util:human_id(crypto:hash(sha256, Sig))
-                    end,
-                {DerivedID, Commitment3}
+            {ExplicitID, Stripped} -> {ExplicitID, Stripped};
+            error                  -> {derived_commitment_id(Sig), Commitment3}
         end,
     KeyID = maps:get(<<"keyid">>, Commitment4, <<>>),
     Commitment5 =

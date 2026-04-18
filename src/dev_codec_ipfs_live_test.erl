@@ -1,25 +1,15 @@
-%%% @doc End-to-end production tests for `~ipfs@1.0': live IPFS network +
-%%% live HyperBEAM node + HTTP client, exercising the paths described in
-%%% PR #868.
+%%% @doc End-to-end tests for `~ipfs@1.0' against live IPFS gateways and
+%%% real HyperBEAM nodes, exercising the user-facing flows advertised in
+%%% PR #868:
 %%%
-%%% The PR advertises three user-facing flows, each expressed through the
-%%% standard AO-Core `~lookup@1.0' device so no kernel edits are required:
+%%%   1. `GET /~lookup@1.0/read&target=<CID>' serves the body.
+%%%   2. First lookup fetches and pins; subsequent lookups resolve locally.
+%%%   3. `GET /~lookup@1.0/read&target=<CID>/commit&type=signed...' returns
+%%%      a bundler-ready ANS-104 signed message.
 %%%
-%%%   1. Serve a CID:      `GET /~lookup@1.0/read&target=<CID>'
-%%%   2. Preload a CID:    first lookup fetches + pins; subsequent lookups
-%%%                        are local.
-%%%   3. Commit for Arweave:
-%%%          `GET /~lookup@1.0/read&target=<CID>/commit
-%%%              &type=signed&commitment-device=ans104@1.0'
-%%%       returns the bundler-ready signed message. The final POST to
-%%%       `~arweave@2.9/tx' needs a topped-up wallet and a configured
-%%%       bundler endpoint, neither of which is in scope for automated CI.
-%%%
-%%% `~ipfs@1.0' is an optional, user-loadable device. Each test opts into
-%%% it via per-node `preloaded_devices' — the same way a production
-%%% operator enables it. Tests skip gracefully if every gateway is
-%%% unreachable at the time they run (matches the `hb_store_gateway'
-%%% live-test pattern).
+%%% Each test opts into the device via per-node `preloaded_devices' — the
+%%% same way a production operator would enable it. Tests skip gracefully
+%%% when all configured gateways are unreachable.
 -module(dev_codec_ipfs_live_test).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -33,424 +23,221 @@
     <<"https://nftstorage.link">>,
     <<"https://4everland.io">>
 ]).
+-define(LOOKUP_PATH,
+    <<"/~lookup@1.0/read&target=", ?HELLO_WORLD_CID/binary>>).
 
-%%%====================================================================
 %%% Helpers
-%%%====================================================================
 
-%% @doc Node opts that opt into `~ipfs@1.0' and configure the IPFS
-%% gateway store in the chain.
-node_opts_with_ipfs() ->
+gateway_store() ->
+    #{
+        <<"store-module">> => hb_store_ipfs_gateway,
+        <<"gateways">>     => ?LIVE_GATEWAYS,
+        <<"timeout">>      => 20000
+    }.
+
+ipfs_device() ->
+    #{ <<"name">> => <<"ipfs@1.0">>, <<"module">> => dev_codec_ipfs }.
+
+%% @doc Base node opts with `~ipfs@1.0' loaded and a gateway-backed store
+%% behind a volatile primary.
+node_opts() ->
     Stock = hb_opts:get(preloaded_devices, [], #{}),
     #{
         cache_control     => <<"cache">>,
         priv_wallet       => hb:wallet(),
-        preloaded_devices =>
-            [ #{ <<"name">> => <<"ipfs@1.0">>,
-                 <<"module">> => dev_codec_ipfs } | Stock ],
-        store => [
-            hb_test_utils:test_store(),
-            #{
-                <<"store-module">> => hb_store_ipfs_gateway,
-                <<"gateways">>     => ?LIVE_GATEWAYS,
-                <<"timeout">>      => 20000
-            }
-        ]
+        preloaded_devices => [ipfs_device() | Stock],
+        store             => [hb_test_utils:test_store(), gateway_store()]
     }.
 
-gateways_reachable_for_cid(CID) ->
-    Store = #{
-        <<"store-module">> => hb_store_ipfs_gateway,
-        <<"gateways">>     => ?LIVE_GATEWAYS,
-        <<"timeout">>      => 20000
-    },
-    case hb_store_ipfs_gateway:read(Store, CID) of
-        {ok, _} -> true;
-        _       -> false
+%% @doc Run `Fun' if the canonical `hello world' CID is live-reachable;
+%% otherwise `?debugFmt' a skip note. Every live test routes through this.
+with_live_gateways(Fun) ->
+    application:ensure_all_started(inets),
+    application:ensure_all_started(ssl),
+    case hb_store_ipfs_gateway:read(gateway_store(), ?HELLO_WORLD_CID) of
+        {ok, _} -> Fun();
+        _ ->
+            ?debugFmt("Skipping: all gateways unreachable for ~s",
+                [?HELLO_WORLD_CID])
     end.
 
-%%%====================================================================
+%% @doc Extract the body from an `hb_http:get' response — sometimes a
+%% bare binary, sometimes a map whose `body' may itself be a link.
+response_body(R) when is_binary(R) -> R;
+response_body(#{ <<"body">> := B }) -> hb_cache:ensure_loaded(B, #{}).
+
 %%% PR Path 1 — Serve a CID from a running node
-%%%====================================================================
 
 live_http_get_cid_serves_body_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable for ~s",
-                    [?HELLO_WORLD_CID]);
-            true ->
-                NodeURL = hb_http_server:start_node(
-                    node_opts_with_ipfs()),
-                Path = <<"/~lookup@1.0/read&target=",
-                         ?HELLO_WORLD_CID/binary>>,
-                {ok, Response} = hb_http:get(NodeURL, Path, #{}),
-                Body =
-                    case Response of
-                        B when is_binary(B) -> B;
-                        #{ <<"body">> := B } ->
-                            hb_cache:ensure_loaded(B, #{})
-                    end,
-                ?assertEqual(?HELLO_WORLD_BODY, Body)
-        end
-    end}.
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        NodeURL = hb_http_server:start_node(node_opts()),
+        {ok, R} = hb_http:get(NodeURL, ?LOOKUP_PATH, #{}),
+        ?assertEqual(?HELLO_WORLD_BODY, response_body(R))
+    end) end}.
 
-%% Recomputing the CID from the wire body reproduces the requested CID —
-%% the only verification that matters in IPFS.
+%% Recomputing the CID from the wire body must reproduce the requested
+%% CID — the only verification that matters in IPFS.
 live_http_body_round_trips_to_cid_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                NodeURL = hb_http_server:start_node(
-                    node_opts_with_ipfs()),
-                Path = <<"/~lookup@1.0/read&target=",
-                         ?HELLO_WORLD_CID/binary>>,
-                {ok, Response} = hb_http:get(NodeURL, Path, #{}),
-                Body =
-                    case Response of
-                        B when is_binary(B) -> B;
-                        #{ <<"body">> := B } ->
-                            hb_cache:ensure_loaded(B, #{})
-                    end,
-                Recomputed =
-                    dev_codec_ipfs_cid:encode(
-                        <<"raw">>, sha2_256, Body),
-                ?assertEqual(?HELLO_WORLD_CID, Recomputed)
-        end
-    end}.
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        NodeURL = hb_http_server:start_node(node_opts()),
+        {ok, R} = hb_http:get(NodeURL, ?LOOKUP_PATH, #{}),
+        ?assertEqual(?HELLO_WORLD_CID,
+            dev_codec_ipfs_cid:encode(
+                <<"raw">>, sha2_256, response_body(R)))
+    end) end}.
 
-%%%====================================================================
 %%% PR Path 2 — Preload / en-masse cache a set of CIDs
-%%%====================================================================
 
-%% The first HTTP lookup pulls the CID via the gateway and pins it to
-%% the node's local filesystem store. A second lookup — against an
-%% opts-set that only contains the local store — still succeeds, proving
-%% the HTTP request-response pipeline's write-through is doing the job.
-%% This is the mechanism behind the PR's "HEAD /CID preload" claim.
+%% First lookup pulls the CID through the gateway and pins it to the
+%% node's primary store; a second direct probe of the primary succeeds.
 live_cache_preload_pattern_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                LocalStore = #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> =>
-                        iolist_to_binary(
-                            ["cache-TEST/ipfs-preload-",
-                             integer_to_list(
-                                erlang:system_time(microsecond))])
-                },
-                hb_store:reset(LocalStore),
-                Stock = hb_opts:get(preloaded_devices, [], #{}),
-                NodeURL = hb_http_server:start_node(#{
-                    cache_control     => <<"cache">>,
-                    priv_wallet       => hb:wallet(),
-                    preloaded_devices =>
-                        [ #{ <<"name">> => <<"ipfs@1.0">>,
-                             <<"module">> => dev_codec_ipfs } | Stock ],
-                    store => [
-                        LocalStore,
-                        #{
-                            <<"store-module">> => hb_store_ipfs_gateway,
-                            <<"gateways">>     => ?LIVE_GATEWAYS,
-                            <<"timeout">>      => 20000
-                        }
-                    ]
-                }),
-                %% 1. First HTTP read — fetches from the gateway and the
-                %% cache-through write path pins it to LocalStore.
-                Path = <<"/~lookup@1.0/read&target=",
-                         ?HELLO_WORLD_CID/binary>>,
-                {ok, R1} = hb_http:get(NodeURL, Path, #{}),
-                Body1 =
-                    case R1 of
-                        B1 when is_binary(B1) -> B1;
-                        #{ <<"body">> := B1 } ->
-                            hb_cache:ensure_loaded(B1, #{})
-                    end,
-                ?assertEqual(?HELLO_WORLD_BODY, Body1),
-                %% 2. Second lookup driven directly at the local store
-                %% (no gateway, no node). If it resolves, the HTTP call
-                %% pinned the CID.
-                LocalOpts = #{ store => [LocalStore] },
-                {ok, R2} = hb_cache:read(?HELLO_WORLD_CID, LocalOpts),
-                ?assertEqual(
-                    ?HELLO_WORLD_BODY,
-                    hb_cache:ensure_loaded(
-                        hb_ao:get(<<"body">>, R2, <<>>, LocalOpts),
-                        LocalOpts))
-        end
-    end}.
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        LocalStore = #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> =>
+                iolist_to_binary(
+                    ["cache-TEST/ipfs-preload-",
+                     integer_to_list(erlang:system_time(microsecond))])
+        },
+        hb_store:reset(LocalStore),
+        Stock = hb_opts:get(preloaded_devices, [], #{}),
+        NodeURL = hb_http_server:start_node(#{
+            cache_control     => <<"cache">>,
+            priv_wallet       => hb:wallet(),
+            preloaded_devices => [ipfs_device() | Stock],
+            store             => [LocalStore, gateway_store()]
+        }),
+        {ok, R1} = hb_http:get(NodeURL, ?LOOKUP_PATH, #{}),
+        ?assertEqual(?HELLO_WORLD_BODY, response_body(R1)),
+        LocalOpts = #{ store => [LocalStore] },
+        {ok, R2} = hb_cache:read(?HELLO_WORLD_CID, LocalOpts),
+        ?assertEqual(?HELLO_WORLD_BODY,
+            hb_cache:ensure_loaded(
+                hb_ao:get(<<"body">>, R2, <<>>, LocalOpts), LocalOpts))
+    end) end}.
 
-%% HB-to-HB transport round-trip: a node receives an IPFS-committed
-%% response via HTTP and must see the commitment at the CID key, not at
-%% `h(sig)'. This is what the `id=' extension in
+%% Transport: an IPFS commitment must arrive on the client side under its
+%% CID map key, not under `h(Sig)'. This is what the `id=' extension in
 %% `dev_codec_httpsig_siginfo' preserves.
 live_http_ipfs_commitment_survives_transport_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                %% Server: knows ipfs@1.0, has a gateway in its store.
-                NodeOpts = node_opts_with_ipfs(),
-                NodeURL = hb_http_server:start_node(NodeOpts),
-                %% Client: knows ipfs@1.0 too, but no gateway; it relies
-                %% entirely on the server-delivered message.
-                ClientOpts = #{
-                    preloaded_devices =>
-                        [ #{ <<"name">> => <<"ipfs@1.0">>,
-                             <<"module">> => dev_codec_ipfs } |
-                          hb_opts:get(preloaded_devices, [], #{}) ]
-                },
-                Path = <<"/~lookup@1.0/read&target=",
-                         ?HELLO_WORLD_CID/binary>>,
-                {ok, Response} = hb_http:get(NodeURL, Path, ClientOpts),
-                Msg =
-                    case Response of
-                        M when is_map(M) -> M;
-                        B when is_binary(B) -> #{ <<"body">> => B }
-                    end,
-                Comms = maps:get(<<"commitments">>, Msg, #{}),
-                IPFSComms =
-                    maps:filter(
-                        fun(_K, #{<<"commitment-device">> := <<"ipfs@1.0">>}) ->
-                            true;
-                           (_K, _) -> false
-                        end,
-                        Comms
-                    ),
-                case maps:to_list(IPFSComms) of
-                    [] ->
-                        ?debugFmt("Skipping: no IPFS commitment on "
-                                  "response (likely gateway path not "
-                                  "taken on this run)", []);
-                    [{Key, _}] ->
-                        ?assertEqual(?HELLO_WORLD_CID, Key);
-                    Many ->
-                        ?debugFmt("multiple ipfs commitments: ~p", [Many])
-                end
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        NodeURL = hb_http_server:start_node(node_opts()),
+        ClientOpts = #{ preloaded_devices =>
+            [ipfs_device() | hb_opts:get(preloaded_devices, [], #{})] },
+        {ok, R} = hb_http:get(NodeURL, ?LOOKUP_PATH, ClientOpts),
+        Msg =
+            case R of
+                M when is_map(M)    -> M;
+                B when is_binary(B) -> #{ <<"body">> => B }
+            end,
+        IpfsComms = maps:filter(
+            fun(_K, #{<<"commitment-device">> := <<"ipfs@1.0">>}) -> true;
+               (_K, _) -> false end,
+            maps:get(<<"commitments">>, Msg, #{})),
+        case maps:to_list(IpfsComms) of
+            []         -> ?debugFmt(
+                "Skipping: no IPFS commitment on response", []);
+            [{CID, _}] -> ?assertEqual(?HELLO_WORLD_CID, CID);
+            Many       -> ?debugFmt("multiple ipfs commitments: ~p", [Many])
         end
-    end}.
+    end) end}.
 
-%% Two in-process HyperBEAM nodes in one test, wired so that a client
-%% request on Node B transparently pulls content through Node A:
+%% Two in-process nodes, wired so a client request on Node B transparently
+%% pulls through Node A:
 %%
-%%   Node A  — "upstream" — has ONLY `hb_store_ipfs_gateway' in its
-%%     store chain. It has no persistent local cache of its own; every
-%%     request routes out to the real IPFS network.
+%%   Node A — upstream — has ONLY `hb_store_ipfs_gateway'. Every read
+%%     passes through to the real IPFS network.
+%%   Node B — downstream — has a primary fs store plus
+%%     `hb_store_remote_node' pointed at Node A with `local-store' set to
+%%     the primary. B's cache misses fall through to A; A's responses
+%%     write through into B's primary on return.
 %%
-%%   Node B  — "downstream" — has a primary filesystem store
-%%     (`hb_test_utils:test_store/0' — freshly isolated per eunit) and,
-%%     behind it, `hb_store_remote_node' pointing at Node A with its
-%%     `local-store' set to the same primary. That means: a cache miss
-%%     on B falls through to A, and A's response is written through to
-%%     B's primary on the way back.
-%%
-%% Flow:
-%%
-%%   (1) Client: `GET NodeB/~lookup@1.0/read&target=<CID>'.
-%%   (2) B's primary misses.
-%%   (3) B's `hb_store_remote_node' calls
-%%       `NodeA/~cache@1.0/read&target=<CID>'.
-%%   (4) A's `dev_cache:read' calls `hb_cache:read(<CID>, AOpts)'.
-%%       A's store chain is just the IPFS gateway; the gateway fetches
-%%       from the real IPFS network, verifies the digest, returns an
-%%       IPFS-committed message.
-%%   (5) A's HTTP response carries the commitment on its signature-input
-%%       line with `id="<CID>"'; B's `hb_http:get' / siginfo decode
-%%       reconstructs the commitment at the CID map key.
-%%   (6) `hb_store_remote_node:maybe_cache' writes the message through
-%%       to B's primary. The CID is picked up as an AltID by
-%%       `hb_cache:write/3' and linked to the uncommitted root ID.
-%%   (7) B returns the body to the client.
-%%
-%% Then we kill A's HTTP listener and ask B again for the same CID.
-%% B's primary now has the data, so the request is served locally with
-%% no upstream traffic.
+%% After the first query pins the body to B's primary, Node A is killed.
+%% The next query on B must still succeed — served entirely from B's cache.
 live_hb_to_hb_remote_store_relay_test_() ->
-    {timeout, 120, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                %% Each node needs its own wallet — the HB server_id is
-                %% derived from `priv_wallet''s address
-                %% (`hb_http_server:new_server/1:175'), so shared
-                %% wallets collapse two nodes onto one listener.
-                PortA = 18770,
-                PortB = 18771,
-                Stock = hb_opts:get(preloaded_devices, [], #{}),
-                IPFSDev = #{ <<"name">> => <<"ipfs@1.0">>,
-                             <<"module">> => dev_codec_ipfs },
+    {timeout, 120, fun() -> with_live_gateways(fun() ->
+        %% Two distinct wallets — the HB server_id is derived from
+        %% `priv_wallet''s address, so shared wallets collapse two nodes
+        %% onto one listener.
+        Stock = hb_opts:get(preloaded_devices, [], #{}),
+        NodeAWallet = ar_wallet:new(),
+        NodeAServerID =
+            hb_util:human_id(ar_wallet:to_address(NodeAWallet)),
+        NodeAURL = hb_http_server:start_node(#{
+            port              => 18770,
+            priv_wallet       => NodeAWallet,
+            cache_control     => <<"cache">>,
+            preloaded_devices => [ipfs_device() | Stock],
+            store             => [gateway_store()]
+        }),
+        NodeBPrimary = hb_test_utils:test_store(),
+        NodeBURL = hb_http_server:start_node(#{
+            port              => 18771,
+            priv_wallet       => ar_wallet:new(),
+            cache_control     => <<"cache">>,
+            preloaded_devices => [ipfs_device() | Stock],
+            store => [
+                NodeBPrimary,
+                #{
+                    <<"store-module">> => hb_store_remote_node,
+                    <<"node">>         => NodeAURL,
+                    <<"local-store">>  => [NodeBPrimary]
+                }
+            ]
+        }),
+        %% (1) First query: B->A->real IPFS, cached on B's primary on return.
+        {ok, R1} = hb_http:get(NodeBURL, ?LOOKUP_PATH, #{}),
+        ?assertEqual(?HELLO_WORLD_BODY, response_body(R1)),
+        %% (2) B's primary now holds the message keyed by the CID.
+        LocalOnly = #{ store => [NodeBPrimary] },
+        {ok, MsgOnB} = hb_cache:read(?HELLO_WORLD_CID, LocalOnly),
+        ?assertEqual(?HELLO_WORLD_BODY,
+            hb_cache:ensure_loaded(
+                maps:get(<<"body">>, MsgOnB), LocalOnly)),
+        ?assert(maps:is_key(?HELLO_WORLD_CID,
+            maps:get(<<"commitments">>, MsgOnB, #{}))),
+        %% (3) Kill Node A; (4) B must still serve from primary.
+        ok = cowboy:stop_listener(NodeAServerID),
+        {ok, R2} = hb_http:get(NodeBURL, ?LOOKUP_PATH, #{}),
+        ?assertEqual(?HELLO_WORLD_BODY, response_body(R2))
+    end) end}.
 
-                %% Node A: nothing but the IPFS gateway. No primary
-                %% store — every read passes through to real IPFS.
-                NodeAWallet = ar_wallet:new(),
-                NodeAServerID =
-                    hb_util:human_id(
-                        ar_wallet:to_address(NodeAWallet)),
-                NodeAURL = hb_http_server:start_node(#{
-                    port              => PortA,
-                    priv_wallet       => NodeAWallet,
-                    cache_control     => <<"cache">>,
-                    preloaded_devices => [IPFSDev | Stock],
-                    store => [
-                        #{
-                            <<"store-module">> => hb_store_ipfs_gateway,
-                            <<"gateways">>     => ?LIVE_GATEWAYS,
-                            <<"timeout">>      => 20000
-                        }
-                    ]
-                }),
-
-                %% Node B: primary fs store, with `hb_store_remote_node'
-                %% pointed at A as fallback. `local-store' on the remote
-                %% config makes A's responses write through to the
-                %% primary.
-                NodeBPrimary = hb_test_utils:test_store(),
-                NodeBURL = hb_http_server:start_node(#{
-                    port              => PortB,
-                    priv_wallet       => ar_wallet:new(),
-                    cache_control     => <<"cache">>,
-                    preloaded_devices => [IPFSDev | Stock],
-                    store => [
-                        NodeBPrimary,
-                        #{
-                            <<"store-module">> => hb_store_remote_node,
-                            <<"node">>         => NodeAURL,
-                            <<"local-store">>  => [NodeBPrimary]
-                        }
-                    ]
-                }),
-
-                Path = <<"/~lookup@1.0/read&target=",
-                         ?HELLO_WORLD_CID/binary>>,
-
-                %% (1) Query B. Pulls through A, which pulls from real
-                %% IPFS. Write-through caches it on B's primary on the
-                %% return path. Then B serves the body to the client.
-                {ok, R1} = hb_http:get(NodeBURL, Path, #{}),
-                Body1 = response_body(R1),
-                ?assertEqual(?HELLO_WORLD_BODY, Body1),
-
-                %% (2) Direct probe of B's primary: the CID is now there,
-                %% keyed by the CID in the commitments map.
-                LocalOnly = #{ store => [NodeBPrimary] },
-                {ok, MsgOnB0} =
-                    hb_cache:read(?HELLO_WORLD_CID, LocalOnly),
-                ?assertEqual(?HELLO_WORLD_BODY,
-                    hb_cache:ensure_loaded(
-                        maps:get(<<"body">>, MsgOnB0), LocalOnly)),
-                CommsOnB0 = maps:get(<<"commitments">>, MsgOnB0, #{}),
-                ?assert(maps:is_key(?HELLO_WORLD_CID, CommsOnB0)),
-
-                %% (3) Kill Node A's HTTP listener. ranch / cowboy use
-                %% the server_id as the listener ref.
-                ok = cowboy:stop_listener(NodeAServerID),
-
-                %% (4) Ask B again. A is gone; B must serve from primary.
-                {ok, R2} = hb_http:get(NodeBURL, Path, #{}),
-                Body2 = response_body(R2),
-                ?assertEqual(?HELLO_WORLD_BODY, Body2)
-        end
-    end}.
-
-%% @doc Extract the response body binary from `hb_http:get''s return
-%% shape — sometimes a bare binary (simple body pass-through), sometimes
-%% a full message map with a `body' field that may itself be a link.
-response_body(R) when is_binary(R) ->
-    R;
-response_body(#{ <<"body">> := B }) ->
-    hb_cache:ensure_loaded(B, #{}).
-
-%%%====================================================================
 %%% PR Path 3 — Commit IPFS content as ANS-104 via the node's wallet
-%%%====================================================================
 
-%% The server-side-commit half of the push-to-Arweave chain: node reads
-%% CID, applies an ANS-104 signed commitment using its own wallet, and
-%% returns a bundler-ready message. The final POST to `~arweave@2.9/tx'
-%% (or `~bundler@1.0/tx') needs a funded wallet and a reachable bundler,
-%% neither of which is in scope for automated CI.
+%% The server-side half of the push-to-Arweave chain: node reads the CID
+%% and re-commits as ANS-104 signed. The final POST to `~arweave@2.9/tx'
+%% requires a funded wallet and a reachable bundler, neither in scope for
+%% automated CI.
 live_lookup_then_ans104_commit_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                NodeURL = hb_http_server:start_node(
-                    node_opts_with_ipfs()),
-                Path =
-                    <<"/~lookup@1.0/read&target=",
-                      ?HELLO_WORLD_CID/binary,
-                      "/commit&type=signed&commitment-device=ans104@1.0">>,
-                {ok, Response} = hb_http:get(NodeURL, Path, #{}),
-                Body =
-                    case Response of
-                        B when is_binary(B) -> B;
-                        #{ <<"body">> := B } ->
-                            hb_cache:ensure_loaded(B, #{})
-                    end,
-                ?assertEqual(?HELLO_WORLD_BODY, Body)
-        end
-    end}.
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        NodeURL = hb_http_server:start_node(node_opts()),
+        Path = <<?LOOKUP_PATH/binary,
+                 "/commit&type=signed&commitment-device=ans104@1.0">>,
+        {ok, R} = hb_http:get(NodeURL, Path, #{}),
+        ?assertEqual(?HELLO_WORLD_BODY, response_body(R))
+    end) end}.
 
-%%%====================================================================
 %%% Lua computation across IPFS-resolved data
-%%%====================================================================
 
 live_lua_computation_over_ipfs_body_test_() ->
-    {timeout, 90, fun() ->
-        application:ensure_all_started(inets),
-        application:ensure_all_started(ssl),
-        case gateways_reachable_for_cid(?HELLO_WORLD_CID) of
-            false ->
-                ?debugFmt("Skipping: all gateways unreachable", []);
-            true ->
-                NodeOpts = node_opts_with_ipfs(),
-                NodeURL = hb_http_server:start_node(NodeOpts),
-                {ok, IpfsMsg} = hb_cache:read(?HELLO_WORLD_CID, NodeOpts),
-                Body = hb_cache:ensure_loaded(
-                    hb_ao:get(<<"body">>, IpfsMsg, <<>>, NodeOpts),
-                    NodeOpts),
-                ?assertEqual(?HELLO_WORLD_BODY, Body),
-                LuaSource =
-                    <<"function byte_length(base, req)\n"
-                      "  return #base.body\n"
-                      "end\n">>,
-                Base = #{
-                    <<"device">>       => <<"lua@5.3a">>,
-                    <<"content-type">> => <<"application/lua">>,
-                    <<"body">>         => LuaSource,
-                    <<"function">>     => <<"byte_length">>,
-                    <<"parameters">>   => [ #{ <<"body">> => Body } ]
-                },
-                Result =
-                    hb_ao:get(
-                        <<"byte_length">>,
-                        Base,
-                        undefined,
-                        NodeOpts
-                    ),
-                ?assertEqual(byte_size(?HELLO_WORLD_BODY), Result),
-                {ok, _} = hb_http:get(NodeURL,
-                    <<"/~meta@1.0/info">>, #{})
-        end
-    end}.
+    {timeout, 90, fun() -> with_live_gateways(fun() ->
+        NodeOpts = node_opts(),
+        NodeURL = hb_http_server:start_node(NodeOpts),
+        {ok, IpfsMsg} = hb_cache:read(?HELLO_WORLD_CID, NodeOpts),
+        Body = hb_cache:ensure_loaded(
+            hb_ao:get(<<"body">>, IpfsMsg, <<>>, NodeOpts), NodeOpts),
+        ?assertEqual(?HELLO_WORLD_BODY, Body),
+        Base = #{
+            <<"device">>       => <<"lua@5.3a">>,
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">>         =>
+                <<"function byte_length(base, req)\n"
+                  "  return #base.body\n"
+                  "end\n">>,
+            <<"function">>     => <<"byte_length">>,
+            <<"parameters">>   => [ #{ <<"body">> => Body } ]
+        },
+        ?assertEqual(byte_size(?HELLO_WORLD_BODY),
+            hb_ao:get(<<"byte_length">>, Base, undefined, NodeOpts)),
+        {ok, _} = hb_http:get(NodeURL, <<"/~meta@1.0/info">>, #{})
+    end) end}.
