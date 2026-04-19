@@ -28,6 +28,61 @@
 -export([test_process/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+%% Test cases exported so `all_tests_test_/0' can run them in parallel via
+%% `fun ?MODULE:name/0'.
+-export([
+    status_tc/0,
+    register_new_process_tc/0,
+    schedule_message_and_get_slot_tc/0,
+    redirect_to_hint_tc/0,
+    redirect_from_graphql_tc_/0,
+    get_local_schedule_tc/0,
+    http_get_schedule_redirect_tc_/0,
+    http_post_schedule_tc_/0,
+    http_get_schedule_tc_/0,
+    http_get_legacy_schedule_tc_/0,
+    http_get_legacy_slot_tc_/0,
+    http_get_legacy_schedule_slot_range_tc_/0,
+    http_get_legacy_schedule_as_aos2_tc_/0,
+    http_get_json_schedule_tc_/0,
+    benchmark_suite_tc_/0
+]).
+-endif.
+
+%% @doc Run most tests in parallel. The benchmark suite picks a random
+%% port and seeds rand globally, so run it by itself after the parallel
+%% batch to avoid port contention and seed corruption.
+all_tests_test_() ->
+    ParallelSafe = [
+        status_tc,
+        register_new_process_tc,
+        schedule_message_and_get_slot_tc,
+        redirect_to_hint_tc,
+        redirect_from_graphql_tc_,
+        get_local_schedule_tc,
+        http_get_schedule_redirect_tc_,
+        http_post_schedule_tc_,
+        http_get_schedule_tc_,
+        http_get_legacy_schedule_tc_,
+        http_get_legacy_slot_tc_,
+        http_get_legacy_schedule_slot_range_tc_,
+        http_get_legacy_schedule_as_aos2_tc_,
+        http_get_json_schedule_tc_
+    ],
+    {inorder,
+        [
+            {inparallel,
+                [
+                    {atom_to_list(F), fun ?MODULE:F/0}
+                ||
+                    F <- ParallelSafe
+                ]
+            },
+            {"benchmark_suite_tc_", fun ?MODULE:benchmark_suite_tc_/0}
+        ]
+    }.
 %%% The maximum number of assignments that we will query/return at a time.
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 %%% The timeout for a lookahead worker.
@@ -1443,7 +1498,7 @@ test_process(Address) ->
         <<"test-random-seed">> => rand:uniform(1337)
     }.
 
-status_test() ->
+status_tc() ->
     start(),
     ?assertMatch(
         #{<<"processes">> := Processes,
@@ -1452,7 +1507,7 @@ status_test() ->
         hb_ao:get(status, test_process())
     ).
 
-register_new_process_test() ->
+register_new_process_tc() ->
     start(),
     Opts = #{ priv_wallet => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
@@ -1478,7 +1533,7 @@ register_new_process_test() ->
         )
     ).
 
-schedule_message_and_get_slot_test() ->
+schedule_message_and_get_slot_tc() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1503,7 +1558,7 @@ schedule_message_and_get_slot_test() ->
             when CurrentSlot > 0,
         hb_ao:resolve(Base, Res, #{})).
 
-redirect_to_hint_test() ->
+redirect_to_hint_tc() ->
     start(),
     RandAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
     TestLoc = <<"http://test.computer">>,
@@ -1529,7 +1584,7 @@ redirect_to_hint_test() ->
         )
     ).
 
-redirect_from_graphql_test_() ->
+redirect_from_graphql_tc_() ->
     {timeout, 60, fun redirect_from_graphql/0}.
 redirect_from_graphql() ->
     start(),
@@ -1564,7 +1619,7 @@ redirect_from_graphql() ->
         )
     ).
 
-get_local_schedule_test() ->
+get_local_schedule_tc() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1603,16 +1658,16 @@ http_init() -> http_init(#{}).
 http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
-	ExtendedOpts = Opts#{
-		priv_wallet => Wallet,
-		store => [
-			#{
-                <<"store-module">> => hb_store_volatile,
-                <<"name">> => <<"cache-TEST/volatile">>
-            },
-			#{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
-		]
-	},
+    %% Each test gets its own volatile store instance (via a unique name)
+    %% layered over a gateway store, so parallel HTTP scheduler tests do
+    %% not share `hb_store_volatile' ETS state.
+    ExtendedOpts = Opts#{
+        priv_wallet => Wallet,
+        store => [
+            hb_test_utils:test_store(hb_store_volatile, <<"scheduler-http">>),
+            #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
+        ]
+    },
     Node = hb_http_server:start_node(ExtendedOpts),
     {Node, ExtendedOpts}.
 
@@ -1660,7 +1715,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"accept">> => Format
     }, #{ priv_wallet => Wallet }), #{}).
 
-http_get_schedule_redirect_test_() ->
+http_get_schedule_redirect_tc_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
     Opts =
@@ -1678,7 +1733,7 @@ http_get_schedule_redirect() ->
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, Opts),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
 
-http_post_schedule_test_() ->
+http_post_schedule_tc_() ->
     {timeout, 60, fun http_post_schedule/0}.
 http_post_schedule() ->
     start(),
@@ -1700,7 +1755,7 @@ http_post_schedule() ->
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
     ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
 
-http_get_schedule_test_() ->
+http_get_schedule_tc_() ->
 	{timeout, 20, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1744,7 +1799,7 @@ http_get_schedule_test_() ->
 			end}.
     
 
-http_get_legacy_schedule_test_() ->
+http_get_legacy_schedule_tc_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1754,7 +1809,7 @@ http_get_legacy_schedule_test_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
 	    end}.
 
-http_get_legacy_slot_test_() ->
+http_get_legacy_slot_tc_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1762,7 +1817,7 @@ http_get_legacy_slot_test_() ->
         ?assertMatch({ok, #{ <<"current">> := Slot }} when Slot > 0, Res)
     end}.
 
-http_get_legacy_schedule_slot_range_test_() ->
+http_get_legacy_schedule_slot_range_tc_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1774,7 +1829,7 @@ http_get_legacy_schedule_slot_range_test_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
 	    end}.
 
-http_get_legacy_schedule_as_aos2_test_() ->
+http_get_legacy_schedule_as_aos2_tc_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1824,7 +1879,7 @@ http_post_legacy_schedule_test_disabled() ->
         )
     end}.
 
-http_get_json_schedule_test_() ->
+http_get_json_schedule_tc_() ->
 	{timeout, 60, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1933,7 +1988,7 @@ many_clients(Opts) ->
     ?event(bench, {res, Res}),
     ?assert(Iterations > 10).
 
-benchmark_suite_test_() ->
+benchmark_suite_tc_() ->
 	{timeout, 10, fun() -> 
 		rand:seed(exsplus, erlang:timestamp()),
 		Port = 30000 + rand:uniform(10000),
