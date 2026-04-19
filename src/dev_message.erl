@@ -108,9 +108,27 @@ id(RawBase, Req, NodeOpts) ->
     ),
     case hb_maps:keys(Commitments) of
         [] ->
-            % If there are no commitments, we must (re)calculate the ID.
-            ?event(debug_id, regenerating_id),
-            calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
+            % The relevant-commitments filter returned nothing. Before falling
+            % back to a full regeneration, check whether the base message
+            % already carries an unsigned commitment from _any_ device (the
+            % `with_relevant_commitments/3' filter only matches unsigned
+            % commitments from the default device). If so, return its ID.
+            case hb_message:commitment(
+                    #{ <<"type">> => <<"unsigned">> },
+                    Base,
+                    IDOpts
+                ) of
+                {ok, UnsignedID, _} ->
+                    ?event(debug_id, {returning_existing_unsigned_id, UnsignedID}),
+                    {ok, UnsignedID};
+                _ ->
+                    ?event(debug_id, regenerating_id),
+                    calculate_id(
+                        hb_maps:without([<<"commitments">>], Base),
+                        Req,
+                        IDOpts
+                    )
+            end;
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
             % by module arithmetic of each of the IDs. The effect of this is that:
@@ -1006,6 +1024,39 @@ test_verify(KeyType) ->
             #{ <<"path">> => <<"verify">>, <<"body">> => Signed },
             #{ hashpath => ignore }
         )
+    ).
+
+%% @doc When a message already carries an unsigned commitment, calling
+%% `id/3' must return that commitment's ID rather than regenerating the ID.
+%% Covers commitments from non-default devices (such as ans104) which the
+%% `with_relevant_commitments/3' default-device filter would otherwise skip.
+existing_unsigned_id_not_regenerated_test() ->
+    Opts = #{ hashpath => ignore },
+    FakeID = <<"D2QxaPEf6FSZpm0lgMNuVvHjf_hFbHK3C4ASxGHhX9Y">>,
+    Base =
+        #{
+            <<"a">> => 1,
+            <<"b">> => 2,
+            <<"commitments">> => #{
+                FakeID => #{
+                    <<"commitment-device">> => <<"ans104@1.0">>,
+                    <<"type">> => <<"unsigned">>
+                }
+            }
+        },
+    % Default request: expect the existing unsigned ID rather than a recalc.
+    ?assertEqual({ok, FakeID}, id(Base, #{}, Opts)),
+    % `committers: all' on a message without committers must also return the
+    % existing unsigned ID, not regenerate it.
+    ?assertEqual(
+        {ok, FakeID},
+        id(Base, #{ <<"committers">> => <<"all">> }, Opts)
+    ),
+    % With no commitments at all, the fallback must still calculate a fresh
+    % ID (the regression guard).
+    ?assertMatch(
+        {ok, _},
+        id(#{ <<"a">> => 1, <<"b">> => 2 }, #{}, Opts)
     ).
 
 set_nested_link_test() ->
