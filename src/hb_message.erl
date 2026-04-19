@@ -517,13 +517,23 @@ verify(Msg, Spec, Opts) ->
 paranoid_verify(Msg, Opts) ->
     paranoid_verify(default, Msg, Opts).
 paranoid_verify(Topic, Msg, Opts) ->
-    ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+    % Check the `paranoid_verify' flag before any other work: in the default,
+    % disabled configuration (`false' or `[]') we short-circuit to `true'
+    % without emitting an event or walking a topic list. This path fires
+    % twice per `hb_ao:resolve/3', so the event/`lists:member' overhead is
+    % noticeable on the hot path.
     case hb_opts:get(paranoid_verify, false, Opts) of
-        true -> do_paranoid_verify(Topic, Msg, Opts);
+        false -> true;
+        [] -> true;
+        true ->
+            ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+            do_paranoid_verify(Topic, Msg, Opts);
         Topics ->
             case lists:member(Topic, Topics) of
                 false -> true;
-                true -> do_paranoid_verify(Topic, Msg, Opts)
+                true ->
+                    ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+                    do_paranoid_verify(Topic, Msg, Opts)
             end
     end.
 
