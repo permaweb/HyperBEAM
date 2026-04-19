@@ -250,14 +250,25 @@ term_to_path_parts(Link, Opts) when ?IS_LINK(Link) ->
 term_to_path_parts([], _Opts) -> undefined;
 term_to_path_parts(<<>>, _Opts) -> undefined;
 term_to_path_parts(<<"/">>, _Opts) -> [];
-term_to_path_parts(Binary, Opts) when is_binary(Binary) ->
-    case binary:match(Binary, <<"/">>) of
-        nomatch -> [Binary];
-        _ ->
-            term_to_path_parts(
-                binary:split(Binary, <<"/">>, [global, trim_all]),
-                Opts
-            )
+term_to_path_parts(Binary, _Opts) when is_binary(Binary) ->
+    % Split once and memoise the result in the process dictionary when the
+    % input is short. AO-Core paths (e.g. `<<"device">>', `<<"a/b/c">>')
+    % recur constantly inside a single `hb_ao:resolve' process; the size
+    % cap bounds cache growth and excludes hashpaths/IDs, whose binaries
+    % are largely unique per call.
+    case erlang:get({?MODULE, parts, Binary}) of
+        undefined ->
+            Parts =
+                case binary:split(Binary, <<"/">>, [global, trim_all]) of
+                    [] -> undefined;
+                    Split -> Split
+                end,
+            case is_list(Parts) andalso byte_size(Binary) =< 64 of
+                true -> erlang:put({?MODULE, parts, Binary}, Parts);
+                false -> ok
+            end,
+            Parts;
+        Cached -> Cached
     end;
 term_to_path_parts(Path = [ASCII | _], _Opts) when is_integer(ASCII) ->
     [hb_ao:normalize_key(Path)];
