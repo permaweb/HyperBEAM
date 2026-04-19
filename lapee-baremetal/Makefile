@@ -23,6 +23,7 @@
 #   make hb-all            initramfs + boot + verify, one envelope
 #   make hb-acceptance     three-envelope positive battery
 #   make hb-tamper-test    seven-way verifier completeness probe
+#   make hb-interpret-demo end-to-end demo of ~tpm-interpret@1.0
 
 LAPEE_ROOT := $(shell pwd)
 export LAPEE_ROOT
