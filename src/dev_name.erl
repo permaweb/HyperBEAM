@@ -10,6 +10,21 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-ifdef(TEST).
+%% Test cases exported so `all_tests_test_/0' can run them in parallel.
+-export([
+    no_resolvers_tc/0,
+    single_resolver_tc/0,
+    message_lookup_tc/0,
+    multiple_resolvers_tc/0,
+    load_and_execute_tc/0,
+    arns_json_snapshot_tc/0,
+    arns_host_resolution_tc/0,
+    arns_host_resolution_with_node_host_tc/0,
+    localhost_root_request_skips_name_resolution_tc/0
+]).
+-endif.
+
 %%% Core functionality.
 
 %% @doc Configure the `default' key to proxy to the `resolver/4' function.
@@ -182,7 +197,28 @@ name_from_host(ReqHost, RawNodeHost) ->
 
 %%% Tests.
 
-no_resolvers_test() ->
+%% @doc Run every test in this module in parallel. Each case uses its own
+%% opts/store, so no shared state exists to race on.
+all_tests_test_() ->
+    {inparallel,
+        [
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                no_resolvers_tc,
+                single_resolver_tc,
+                message_lookup_tc,
+                multiple_resolvers_tc,
+                load_and_execute_tc,
+                arns_json_snapshot_tc,
+                arns_host_resolution_tc,
+                arns_host_resolution_with_node_host_tc,
+                localhost_root_request_skips_name_resolution_tc
+            ]
+        ]
+    }.
+
+no_resolvers_tc() ->
     ?assertEqual(
         not_found,
         resolve(<<"hello">>, #{}, #{}, #{ only => local })
@@ -206,7 +242,7 @@ device_resolver(Msg) ->
         }
     }.
 
-single_resolver_test() ->
+single_resolver_tc() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -222,7 +258,7 @@ single_resolver_test() ->
     ).
 
 %% @doc Lookup a name in a message and return it.
-message_lookup_test() ->
+message_lookup_tc() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -239,7 +275,7 @@ message_lookup_test() ->
         )
     ).
 
-multiple_resolvers_test() ->
+multiple_resolvers_tc() ->
     ?assertEqual(
         {ok, <<"bigger-world">>},
         resolve(
@@ -260,7 +296,7 @@ multiple_resolvers_test() ->
     ).
 
 %% @doc Test that we can resolve messages from a name loaded with the device.
-load_and_execute_test() ->
+load_and_execute_tc() ->
     TestKey = <<"test-key", (hb_util:bin(erlang:system_time(millisecond)))/binary>>,
     {ok, ID} = hb_cache:write(
         #{
@@ -309,7 +345,7 @@ test_arns_opts() ->
     }.
 
 %% @doc Names from JSON test.
-arns_json_snapshot_test() ->
+arns_json_snapshot_tc() ->
     Opts = test_arns_opts(),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -323,7 +359,7 @@ arns_json_snapshot_test() ->
         )
     ).
 
-arns_host_resolution_test() ->
+arns_host_resolution_tc() ->
     Opts = test_arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -338,7 +374,7 @@ arns_host_resolution_test() ->
         )
     ).
 
-arns_host_resolution_with_node_host_test() ->
+arns_host_resolution_with_node_host_tc() ->
     Opts = (test_arns_opts())#{ node_host => <<"http://localhost">>, port => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -353,7 +389,7 @@ arns_host_resolution_with_node_host_test() ->
         )
     ).
 
-localhost_root_request_skips_name_resolution_test() ->
+localhost_root_request_skips_name_resolution_tc() ->
     Opts = (test_arns_opts())#{ port => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(

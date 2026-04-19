@@ -7,6 +7,19 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-ifdef(TEST).
+%% Test cases exported so `all_tests_test_/0' can reference them as
+%% `fun ?MODULE:name/0' in the parallel generator below.
+-export([
+    resolve_tc/0,
+    manifest_default_fallback_tc/0,
+    manifest_404_error_tc/0,
+    manifest_inner_redirect_tc/0,
+    access_key_path_in_manifest_tc/0,
+    manifest_should_fallback_on_not_found_path_tc/0
+]).
+-endif.
+
 %% @doc Use the `route/4' function as the handler for all requests, aside 
 %% from `keys' and `set', which are handled by the default resolver.
 info() ->
@@ -203,7 +216,27 @@ linkify(Manifest, _Opts) ->
 
 %%% Tests
 
-resolve_test() ->
+%% @doc All tests run in parallel. Each test sets up its own store (and, when
+%% needed, its own node via `hb_http_server:start_node/1'), so they are safe
+%% to run concurrently. Parallelising cuts the module's wall time from ~29s
+%% serial to roughly the length of the slowest test.
+all_tests_test_() ->
+    {inparallel,
+        [
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                resolve_tc,
+                manifest_default_fallback_tc,
+                manifest_404_error_tc,
+                manifest_inner_redirect_tc,
+                access_key_path_in_manifest_tc,
+                manifest_should_fallback_on_not_found_path_tc
+            ]
+        ]
+    }.
+
+resolve_tc() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         on => #{
@@ -263,7 +296,7 @@ resolve_test() ->
         hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
 
-manifest_default_fallback_test() ->
+manifest_default_fallback_tc() ->
     Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
@@ -274,7 +307,7 @@ manifest_default_fallback_test() ->
     ),
     ok.
 
-manifest_404_error_test() ->
+manifest_404_error_tc() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         manifest_404 => error
@@ -346,7 +379,7 @@ manifest_download_via_raw_endpoint_test_ignore() ->
     ).
 
 %% @doc Accessing `/TXID` of a manifest transaction should access the index key.
-manifest_inner_redirect_test() ->
+manifest_inner_redirect_tc() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
@@ -360,7 +393,7 @@ manifest_inner_redirect_test() ->
     ).
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
-access_key_path_in_manifest_test() ->
+access_key_path_in_manifest_tc() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -374,7 +407,7 @@ access_key_path_in_manifest_test() ->
 
 %% This works with `not_found.js` but doesn't follow the logic if under a 
 %% folder structure, like `assets/not_found.js .
-manifest_should_fallback_on_not_found_path_test() ->
+manifest_should_fallback_on_not_found_path_tc() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(

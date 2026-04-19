@@ -26,11 +26,9 @@ test_store(Mod, Tag) ->
         <<
             "cache-TEST/run-",
             Tag/binary, "-",
-            (integer_to_binary(erlang:system_time(millisecond)))/binary
+            (integer_to_binary(erlang:system_time(microsecond)))/binary, "-",
+            (hb_util:encode(crypto:strong_rand_bytes(6)))/binary
         >>,
-    % Wait a tiny interval to ensure that any further tests will get their own
-    % directory.
-    timer:sleep(1),
     filelib:ensure_dir(binary_to_list(TestDir)),
     #{ <<"store-module">> => Mod, <<"name">> => TestDir }.
 
@@ -41,48 +39,79 @@ test_store(Mod, Tag) ->
 %% Each element may also contain a `skip' key with a list of test names to skip.
 %% They can also contain a `desc' key with a description of the options.
 suite_with_opts(Suite, OptsList) ->
-    lists:filtermap(
-        fun(OptSpec = #{ name := _Name, opts := Opts, desc := ODesc}) ->
-            Store = hb_opts:get(store, hb_opts:get(store), Opts),
-            Skip = hb_maps:get(skip, OptSpec, [], Opts),
-            case satisfies_requirements(OptSpec) of
-                true ->
-                    Each = 
-                        {foreach,
-                            fun() ->
-                                ?event({starting, Store}),
-                                % Create and set a random server ID for the test
-                                % process.
-                                hb_http_server:set_proc_server_id(
-                                    hb_util:human_id(crypto:strong_rand_bytes(32))
-                                ),
-                                hb_store:reset(Store),
-                                hb_store:start(Store)
-                            end,
-                            fun(_) ->
-                                hb_store:reset(Store),
-                                ok
-                            end,
+    {inparallel,
+        lists:filtermap(
+            fun(OptSpec = #{ name := _Name, opts := Opts, desc := ODesc}) ->
+                Skip = hb_maps:get(skip, OptSpec, [], Opts),
+                case satisfies_requirements(OptSpec) of
+                    true ->
+                        Tests =
                             [
-                                {
-                                    hb_util:list(ODesc)
-                                        ++ ": "
-                                        ++ hb_util:list(TestDesc),
-                                    fun() -> Test(Opts) end}
+                                {TestDesc, Test}
                             ||
-                                {TestAtom, TestDesc, Test} <- Suite, 
+                                {TestAtom, TestDesc, Test} <- Suite,
                                     not lists:member(TestAtom, Skip)
-                            ]
-                        },
-                    case maps:get(parallel, OptSpec, true) of
-                        true -> {true, {inparallel, Each}};
-                        false -> {true, Each}
-                    end;
-                false -> false
-            end
-        end,
-        OptsList
-    ).
+                            ],
+                        % Each test gets its own fresh store so that parallel
+                        % tests do not race on a shared store's reset/write
+                        % operations. We use `foreach' with a setup that returns
+                        % the per-test Opts (with its own store) and a cleanup
+                        % that resets that store. Each test's generator takes
+                        % the fresh Opts as its argument.
+                        Each =
+                            {foreach,
+                                fun() ->
+                                    FreshStore = fresh_store(Opts),
+                                    FreshOpts = Opts#{ store => FreshStore },
+                                    hb_http_server:set_proc_server_id(
+                                        hb_util:human_id(
+                                            crypto:strong_rand_bytes(32)
+                                        )
+                                    ),
+                                    hb_store:start(FreshStore),
+                                    FreshOpts
+                                end,
+                                fun(FreshOpts) ->
+                                    FreshStore = maps:get(store, FreshOpts),
+                                    hb_store:reset(FreshStore),
+                                    ok
+                                end,
+                                [
+                                    fun(FreshOpts) ->
+                                        {
+                                            hb_util:list(ODesc)
+                                                ++ ": "
+                                                ++ hb_util:list(TestDesc),
+                                            fun() -> Test(FreshOpts) end
+                                        }
+                                    end
+                                ||
+                                    {TestDesc, Test} <- Tests
+                                ]
+                            },
+                        case maps:get(parallel, OptSpec, true) of
+                            true -> {true, {inparallel, Each}};
+                            false -> {true, Each}
+                        end;
+                    false -> false
+                end
+            end,
+            OptsList
+        )
+    }.
+
+%% @doc Derive a fresh store for a single test based on the options' store
+%% template. For `hb_store_volatile' stores (the default test store), each
+%% test gets its own ETS-backed instance with a unique name so there is no
+%% shared state between tests in the same OptSpec.
+fresh_store(Opts) ->
+    case hb_opts:get(store, undefined, Opts) of
+        #{ <<"store-module">> := Mod } when is_atom(Mod) ->
+            Tag = hb_util:encode(crypto:strong_rand_bytes(6)),
+            test_store(Mod, Tag);
+        _ ->
+            test_store(?DEFAULT_STORE_MODULE)
+    end.
 
 %% @doc Determine if the environment satisfies the given test requirements.
 %% Requirements is a list of atoms, each corresponding to a module that must

@@ -5,6 +5,20 @@
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-ifdef(TEST).
+-export([
+    basic_tc/0,
+    query_tc/0,
+    tag_value_tc/0,
+    owners_filter_tc/0,
+    recipients_filter_tc/0,
+    ids_filter_tc/0,
+    all_filter_tc/0,
+    combined_filters_tc/0,
+    fetch_scheduler_location_tc/0
+]).
+-endif.
+
 -define(SUPPORTED_FILTERS,
     [
         <<"query">>, 
@@ -267,6 +281,28 @@ default_query(Parts) ->
         " } pageInfo { hasNextPage } } }">>}.
 
 %%% Tests
+
+%% @doc All tests run in parallel. Each `run_test_node/0' call creates an
+%% isolated store and HTTP server, so there is no shared state to race on.
+all_tests_test_() ->
+    {inparallel,
+        [
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                basic_tc,
+                query_tc,
+                tag_value_tc,
+                owners_filter_tc,
+                recipients_filter_tc,
+                ids_filter_tc,
+                all_filter_tc,
+                combined_filters_tc,
+                fetch_scheduler_location_tc
+            ]
+        ]
+    }.
+
 %% @doc Run node for testing
 run_test_node() ->
     Store = hb_test_utils:test_store(),
@@ -274,7 +310,7 @@ run_test_node() ->
     Node = hb_http_server:start_node(Opts),
     {Node ,Opts}. 
 %% @doc Basic test to test copycat device
-basic_test() ->
+basic_tc() ->
     {Node, _Opts} = run_test_node(),
     {ok, Res} =
         hb_http:get(
@@ -287,7 +323,7 @@ basic_test() ->
     ?event({basic_test_result, Res}),
     ok.
 
-query_test() ->
+query_tc() ->
     Base = #{
         <<"query">> => #{
             <<"tags">> => #{
@@ -318,7 +354,7 @@ query_test() ->
     ok.
 
 %% @doc Test tag/value pair format
-tag_value_test() ->
+tag_value_tc() ->
     Base = #{<<"tag">> => <<"type">>, <<"value">> => <<"process">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({tag_value_test, {query, Query}}),
@@ -331,7 +367,7 @@ tag_value_test() ->
     ok.
 
 %% @doc Test owners filter with single value
-owners_filter_test() ->
+owners_filter_tc() ->
     Base = #{<<"owners">> => <<"addr123">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({owners_filter_test, {query, Query}}),
@@ -344,7 +380,7 @@ owners_filter_test() ->
     ok.
 
 %% @doc Test recipients filter with array values
-recipients_filter_test() ->
+recipients_filter_tc() ->
     Base = #{<<"recipients">> => [<<"rec1">>, <<"rec2">>]},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({recipients_filter_test, {query, Query}}),
@@ -357,7 +393,7 @@ recipients_filter_test() ->
     ok.
 
 %% @doc Test ids filter
-ids_filter_test() ->
+ids_filter_tc() ->
     Base = #{<<"ids">> => [<<"id1">>, <<"id2">>, <<"id3">>]},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({ids_filter_test, {query, Query}}),
@@ -370,7 +406,7 @@ ids_filter_test() ->
     ok.
 
 %% @doc Test all filter type
-all_filter_test() ->
+all_filter_tc() ->
     Base = #{<<"all">> => <<"true">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({all_filter_test, {query, Query}}),
@@ -383,7 +419,7 @@ all_filter_test() ->
     ok.
 
 %% @doc Test combined multiple filters in one query
-combined_filters_test() ->
+combined_filters_tc() ->
     Base = #{
         <<"query">> => #{
             <<"tags">> => #{
@@ -428,7 +464,7 @@ combined_filters_test() ->
     ok.
 
 %% @doc Real world test with actual indexing
-fetch_scheduler_location_test() ->
+fetch_scheduler_location_tc() ->
     {Node, _Opts} = run_test_node(),
     Res =
         hb_http:get(
