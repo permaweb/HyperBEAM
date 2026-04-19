@@ -118,7 +118,7 @@ real-all: builders fetch-debian-kernel nif-linux initramfs boot-real verify
 #   - `on.start' hook extends PCR 15 with `hb_message:id(node_msg)'
 #   - HB HTTP server answers `/~tpm2@2.0a/attestation' with the full envelope
 
-.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test
+.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test hb-interpret-demo
 
 hb-release:
 	./scripts/build-hb-release.sh
@@ -167,6 +167,12 @@ hb-acceptance:
 # each at the expected check. Completeness pair to hb-acceptance.
 hb-tamper-test:
 	./scripts/hb-tamper-test.sh
+
+# hb-interpret-demo: end-to-end demo of ~tpm-interpret@1.0, feeding
+# a saved envelope to /~tpm-interpret@1.0/verify over HTTP and
+# pretty-printing the rich per-section interpretation.
+hb-interpret-demo:
+	./scripts/hb-interpret-demo.sh
 
 # ----- Buildroot path -----
 #
