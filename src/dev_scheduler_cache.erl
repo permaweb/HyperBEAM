@@ -236,17 +236,27 @@ concurrent_read_write_test() ->
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Parent = self(),
     ?event(testing, {concurrent_test_proc_id, ProcID}),
-    spawn_link(fun() ->
-        lists:foreach(fun(Slot) ->
-            Assignment = #{
+    MkAssignment =
+        fun(Slot) ->
+            #{
                 <<"variant">> => <<"ao.N.1">>,
                 <<"process">> => ProcID,
                 <<"slot">> => Slot,
-                <<"hash-chain">> => <<"race-test-", (integer_to_binary(Slot))/binary>>
-            },
-            write(Assignment, Opts),
+                <<"hash-chain">> =>
+                    <<"race-test-", (integer_to_binary(Slot))/binary>>
+            }
+        end,
+    %% Pre-write slot 1 synchronously so readers always have at least
+    %% one assignment available; otherwise under heavy CPU contention the
+    %% 10 reader processes can blast through their 100 reads before the
+    %% writer's first `write/2' lands, causing `TotalSuccessfulReads > 0'
+    %% to fail spuriously.
+    write(MkAssignment(1), Opts),
+    spawn_link(fun() ->
+        lists:foreach(fun(Slot) ->
+            write(MkAssignment(Slot), Opts),
             timer:sleep(1)
-        end, lists:seq(1, 100)),
+        end, lists:seq(2, 100)),
         ?event(testing, {writer_completed}),
         Parent ! writer_done
     end),
