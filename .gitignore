@@ -32,6 +32,10 @@ native/hb_beamr/*.o
 native/hb_beamr/*.d
 
 priv/*
+# Keep the static ~tpm-interpret@1.0 database checked in. Everything
+# else under priv/ is a build artefact (NIFs, HTML bundles).
+!priv/tpm-interpret/
+!priv/tpm-interpret/**
 .DS_STORE
 cache-*
 

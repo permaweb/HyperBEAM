@@ -1,0 +1,175 @@
+{
+    "schema_version": 1,
+    "description": "TCG-assigned TPM manufacturer IDs. Key is the 4-byte ASCII id expressed as 8 hex chars (the form that appears in the EK cert's tpmManufacturer attribute, with the 'id:' prefix stripped). Values match the TCG Vendor ID Registry (https://trustedcomputinggroup.org/resource/vendor-id-registry) as of 2024-09 plus a handful of firmware-TPM / virtual-TPM IDs commonly seen in the wild.",
+    "source": "TCG Vendor ID Registry, plus /drivers/char/tpm/tpm-chip.c in the Linux kernel tree.",
+    "vendors": {
+        "414D4400": {
+            "id": "id:414D4400",
+            "name": "AMD",
+            "kind": "fTPM_cpu",
+            "notes": "fTPM inside AMD PSP firmware. Weaker than a discrete TPM: compromise of the PSP compromises the TPM. Known CVEs: CVE-2021-26355 (fTPM arbitrary code exec)."
+        },
+        "414E5400": {
+            "id": "id:414E5400",
+            "name": "Ant Group",
+            "kind": "unknown",
+            "notes": "TCG vendor code ANT; used by a handful of Chinese server boards."
+        },
+        "41544D4C": {
+            "id": "id:41544D4C",
+            "name": "Atmel",
+            "kind": "discrete",
+            "notes": "Acquired by Microchip Technology. AT97SC3204 series."
+        },
+        "4252434D": {
+            "id": "id:4252434D",
+            "name": "Broadcom",
+            "kind": "discrete",
+            "notes": "BCM0102 series."
+        },
+        "4353434F": {
+            "id": "id:4353434F",
+            "name": "Cisco",
+            "kind": "server_platform",
+            "notes": "Shipped as part of Cisco UCS platforms."
+        },
+        "464C5953": {
+            "id": "id:464C5953",
+            "name": "Flyslice Technologies",
+            "kind": "discrete",
+            "notes": "FlySlice/FLYS."
+        },
+        "474F4F47": {
+            "id": "id:474F4F47",
+            "name": "Google",
+            "kind": "server_platform",
+            "notes": "Titan/OpenTitan on Google server platforms."
+        },
+        "48495349": {
+            "id": "id:48495349",
+            "name": "HiSilicon",
+            "kind": "cpu_ip",
+            "notes": "TPM IP for HiSilicon Kunpeng series."
+        },
+        "48505100": {
+            "id": "id:48505100",
+            "name": "HPE",
+            "kind": "server_platform",
+            "notes": "HPE / HP TPMs on ProLiant / EliteBook platforms."
+        },
+        "49424D00": {
+            "id": "id:49424D00",
+            "name": "IBM",
+            "kind": "server_platform",
+            "notes": "IBM SW TPM and System z hardware TPM."
+        },
+        "49465800": {
+            "id": "id:49465800",
+            "name": "Infineon",
+            "kind": "discrete",
+            "notes": "Infineon SLB 9665 / SLB 9670 / SLB 9672. The most common discrete TPM in consumer laptops (Lenovo ThinkPad, Dell Latitude, HP EliteBook). Root CA: OptigaRsaRootCA (URL in vendor docs)."
+        },
+        "494E5443": {
+            "id": "id:494E5443",
+            "name": "Intel",
+            "kind": "fTPM_cpu",
+            "notes": "Intel Platform Trust Technology (PTT) — fTPM implemented inside the CSME. Weaker than discrete: compromise of CSME compromises the TPM. Known-bad: CVE-2019-0090."
+        },
+        "494E5458": {
+            "id": "id:494E5458",
+            "name": "IBM SW TPM",
+            "kind": "software",
+            "notes": "TCG TPM 2.0 software reference implementation."
+        },
+        "4C454E00": {
+            "id": "id:4C454E00",
+            "name": "Lenovo",
+            "kind": "server_platform",
+            "notes": "Server platform TPM branding (ThinkSystem)."
+        },
+        "4D534654": {
+            "id": "id:4D534654",
+            "name": "Microsoft",
+            "kind": "software",
+            "notes": "Microsoft-reserved vendor code."
+        },
+        "4E534D20": {
+            "id": "id:4E534D20",
+            "name": "National Semiconductor",
+            "kind": "discrete",
+            "notes": "Legacy TPM 1.2 line; largely discontinued."
+        },
+        "4E545A00": {
+            "id": "id:4E545A00",
+            "name": "Nationz Technologies",
+            "kind": "discrete",
+            "notes": "Chinese TPM vendor; common on Nationz-branded Chinese boards."
+        },
+        "4E544300": {
+            "id": "id:4E544300",
+            "name": "Nuvoton Technology",
+            "kind": "discrete",
+            "notes": "NPCT650/750 series. Common on Lenovo, ASUS, MSI consumer boards and some enterprise laptops. Ships its own root CA; widely deployed."
+        },
+        "51434F4D": {
+            "id": "id:51434F4D",
+            "name": "Qualcomm",
+            "kind": "fTPM_cpu",
+            "notes": "Qualcomm QSEE fTPM; Snapdragon platforms."
+        },
+        "524F4343": {
+            "id": "id:524F4343",
+            "name": "Fuzhou Rockchip",
+            "kind": "fTPM_cpu",
+            "notes": "Rockchip RK3399 and similar SoCs."
+        },
+        "534D4643": {
+            "id": "id:534D4643",
+            "name": "SMF Creative Technology",
+            "kind": "discrete",
+            "notes": "Less common; found on some embedded Chinese boards."
+        },
+        "534D4E4E": {
+            "id": "id:534D4E4E",
+            "name": "Samsung",
+            "kind": "fTPM_cpu",
+            "notes": "Samsung TrustZone-backed fTPM on some Exynos platforms."
+        },
+        "534D5343": {
+            "id": "id:534D5343",
+            "name": "SMSC",
+            "kind": "discrete",
+            "notes": "Legacy; acquired by Microchip."
+        },
+        "534E5300": {
+            "id": "id:534E5300",
+            "name": "Sinosun",
+            "kind": "discrete",
+            "notes": "Chinese discrete TPM vendor."
+        },
+        "53544D20": {
+            "id": "id:53544D20",
+            "name": "STMicroelectronics",
+            "kind": "discrete",
+            "notes": "ST33TPHF2E series. Common on Dell / Framework / HP laptops. Publishes root CA on www.st.com."
+        },
+        "54584E00": {
+            "id": "id:54584E00",
+            "name": "Texas Instruments",
+            "kind": "discrete",
+            "notes": "Mostly legacy; TPM 1.2 era."
+        },
+        "57454300": {
+            "id": "id:57454300",
+            "name": "Winbond",
+            "kind": "discrete",
+            "notes": "Acquired by Nuvoton; older WPCT301 series."
+        },
+        "unknown": {
+            "id": "id:00000000",
+            "name": "Unknown",
+            "kind": "unknown",
+            "notes": "The tpmManufacturer attribute on the EK cert did not match any TCG-assigned vendor ID in our database. This could mean a new vendor ID has been registered since this release was cut, or the cert is synthetic / from a virtual TPM that does not populate the attribute."
+        }
+    }
+}

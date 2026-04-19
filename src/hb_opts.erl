@@ -222,6 +222,8 @@ default_message() ->
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
             #{<<"name">> => <<"tpm2@2.0a">>, <<"module">> => dev_tpm2},
+            #{<<"name">> => <<"tpm-interpret@1.0">>,
+              <<"module">> => dev_tpm_interpret},
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},

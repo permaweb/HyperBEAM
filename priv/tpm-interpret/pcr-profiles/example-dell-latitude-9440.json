@@ -1,0 +1,18 @@
+{
+    "name": "EXAMPLE — Dell Latitude 9440 (BIOS 1.14.0)",
+    "match_pcrs": {
+        "0": "0000000000000000000000000000000000000000000000000000000000000000",
+        "7": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "attributes": {
+        "platform_vendor": "Dell",
+        "platform_model":  "Latitude 9440",
+        "firmware_vendor": "Dell",
+        "firmware_version": "1.14.0",
+        "secure_boot_enabled": true,
+        "secure_boot_authorities": ["Microsoft UEFI CA", "Dell"],
+        "tpm_vendor": "STMicroelectronics ST33TPHF2E",
+        "trust_tier": "example_only"
+    },
+    "notes": "Shape example. Replace match_pcrs with real values. See README.md."
+}

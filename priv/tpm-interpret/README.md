@@ -1,0 +1,58 @@
+# `~tpm-interpret@1.0` database
+
+Static JSON database consumed by `src/hb_db_tpm.erl` at node startup.
+Ships inside the HyperBEAM release; load-once, read-many.
+
+Layout:
+
+| file | content |
+|---|---|
+| `manufacturers.json` | TCG-assigned TPM vendor IDs → `{name, kind, notes}`. Key is the 4-byte ASCII id expressed as 8 hex chars (`"49465800"` = Infineon). Covers every public TCG vendor registration (about 27 entries). |
+| `pcr-profiles/*.json` | Known PCR 0/1/7/4/11 values for specific firmware + Secure Boot configurations. Each file is one profile. |
+| `uki-measurements/*.json` | Known UKI-style PCR 11/12/13 values for canonical kernel images. |
+| `root-cas/*.pem` | Per-vendor EK root CA bundle. Used by the verifier to chain the EK cert. Ship actual vendor PEMs here (out-of-band sourced from the TPM vendor). The files are not checked in upstream because their redistribution licenses vary; a deploy repopulates `root-cas/` from its own trust bundle. |
+
+## PCR-profile schema
+
+```json
+{
+    "name": "short human label",
+    "match_pcrs": {
+        "0": "hex-expected-pcr0",
+        "1": "hex-expected-pcr1",
+        "7": "hex-expected-pcr7"
+    },
+    "attributes": {
+        "platform_vendor": "Lenovo",
+        "platform_model":  "ThinkPad X1 Carbon Gen 11",
+        "firmware_vendor": "Lenovo",
+        "firmware_version": "N50HT36W (1.20)",
+        "secure_boot_enabled": true,
+        "secure_boot_authorities": ["Microsoft UEFI CA", "Lenovo"],
+        "measured_on": "2024-08-15",
+        "contributed_by": "optional-verifier-identity"
+    },
+    "notes": "Free-form — caveats, known CVEs, etc."
+}
+```
+
+`match_pcrs` need not cover every PCR; a profile matches when *all*
+keys it lists match the quoted values. So one profile can pin just
+PCR 0 + PCR 7 and leave PCR 1 free for kernel-command-line variance.
+
+## Contributing new profiles
+
+1. Boot the target hardware into a trusted state.
+2. `cat /sys/class/tpm/tpm0/pcr-sha256/0` etc. (or run
+   `~tpm2@2.0a/pcr-read` from a local HB).
+3. Fill in the JSON and drop it in `pcr-profiles/`.
+4. The matcher picks the first entry that matches all listed PCRs,
+   so order of file inclusion doesn't matter for correctness — but
+   include enough PCRs that your profile is distinctive.
+
+## Current coverage
+
+This is a deliberately-small seed. Rolling out to 90% coverage of
+likely LapEE hardware is a data problem not a code problem: every
+time a new laptop is onboarded, dropping a new JSON here is all
+that's needed. The framework loads them all at startup.

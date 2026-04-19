@@ -1,0 +1,16 @@
+{
+    "name": "EXAMPLE — Framework Laptop 13 (AMD Ryzen 7040, InsydeH2O firmware)",
+    "match_pcrs": {
+        "0": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "attributes": {
+        "platform_vendor": "Framework",
+        "platform_model":  "Laptop 13 AMD Ryzen 7040",
+        "firmware_vendor": "Insyde H2O",
+        "secure_boot_enabled": true,
+        "secure_boot_authorities": ["Microsoft UEFI CA"],
+        "tpm_vendor": "AMD fTPM",
+        "trust_tier": "example_only"
+    },
+    "notes": "Shape example. AMD fTPM trust is softer than discrete TPM — see SECURITY.md §2 item 3."
+}
