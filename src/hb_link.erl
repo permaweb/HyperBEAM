@@ -80,6 +80,17 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         end,
                         ?event(debug_linkify, {generated_link, {key, Key}, {id, ID}}),
                         {<<NormKey/binary, "+link">>, ID};
+                    ({Key, {link, ID, LinkOpts = #{ <<"lazy">> := true }}})
+                            when ?IS_ID(ID) andalso
+                                    not is_map_key(<<"type">>, LinkOpts) ->
+                        % The link is lazy, but its target is a top-level ID
+                        % rather than a subkey path -- which means the ID points
+                        % to another message in the cache. We only need to
+                        % linkify the key; the underlying message can stay
+                        % un-loaded until something actually reads it.
+                        NormKey = hb_util:bin(Key),
+                        ?event(debug_linkify, {lazy_link_to_message, Key, ID}),
+                        {<< NormKey/binary, "+link">>, ID};
                     ({Key, V}) when ?IS_LINK(V) ->
                         % The link is not a submap. We load it such that it is
                         % local in-memory. This clause is used when we are
@@ -216,3 +227,37 @@ offload_list_test() ->
     Req = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
     Res = hb_cache:ensure_all_loaded(Req, Opts),
     ?assertEqual(Msg, Res).
+
+%% @doc Normalising a map whose value is a lazy link to another message must
+%% not trigger a read of the underlying message -- only the cheap lazy-to-ID
+%% step is required at this stage.
+lazy_link_to_message_is_not_loaded_test() ->
+    Opts = #{},
+    Inner = #{<<"hello">> => <<"world">>, <<"nested">> => <<"value">>},
+    {ok, InnerID} = hb_cache:write(Inner, Opts),
+    OuterBase = #{<<"top">> => {link, InnerID, #{ <<"lazy">> => true }}},
+    % Count `hb_cache:read' calls on the normalising process only.
+    Self = self(),
+    Tracer = spawn_link(fun() -> trace_count_loop(Self, 0) end),
+    erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    erlang:trace_pattern({hb_cache, read, '_'}, true, [local]),
+    try
+        Norm = normalize(OuterBase, offload, Opts),
+        % The normalised form must expose the link as a '+link' key pointing
+        % at the underlying message ID, rather than an inlined copy of the
+        % submessage.
+        ?assertEqual(#{ <<"top+link">> => InnerID }, Norm)
+    after
+        erlang:trace(self(), false, [call]),
+        Tracer ! {get, self()}
+    end,
+    Count = receive {count, C} -> C after 1000 -> -1 end,
+    Tracer ! stop,
+    ?assertEqual(0, Count).
+
+trace_count_loop(Traced, N) ->
+    receive
+        {trace, Traced, call, _} -> trace_count_loop(Traced, N + 1);
+        {get, From} -> From ! {count, N}, trace_count_loop(Traced, N);
+        stop -> ok
+    end.
