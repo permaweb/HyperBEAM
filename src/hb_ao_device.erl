@@ -51,9 +51,43 @@ truncate_args(Fun, Args) ->
 %%
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
 %% indicates that the key should be added to the start of the call's arguments.
+%%
+%% The result is memoised in the process dictionary, keyed by
+%% `{m2f_cache, Module, Key}', for module-backed devices whose `info' map is
+%% independent of the Base message. A cached entry stores the module's `md5'
+%% fingerprint alongside the result; on hit we verify the fingerprint against
+%% the currently-loaded module, so any `erlang:load_module/2' naturally
+%% invalidates stale entries. Inline-map devices and devices that export
+%% `info/1' or `info/2' (which may return a base-dependent info map) are not
+%% cached.
 message_to_fun(Msg, Key, Opts) ->
-    % Get the device module from the message.
-	Dev = message_to_device(Msg, Opts),
+    Dev = message_to_device(Msg, Opts),
+    case memoisable(Dev) of
+        false -> do_message_to_fun(Msg, Dev, Key, Opts);
+        true ->
+            CacheKey = {m2f_cache, Dev, Key},
+            MD5 = erlang:get_module_info(Dev, md5),
+            case erlang:get(CacheKey) of
+                {MD5, Result} -> Result;
+                _ ->
+                    Result = do_message_to_fun(Msg, Dev, Key, Opts),
+                    erlang:put(CacheKey, {MD5, Result}),
+                    Result
+            end
+    end.
+
+%% @doc A device is safely memoisable only if it is a module whose info map
+%% cannot depend on the Base message. Inline-map devices are per-request and
+%% `info/1'/`info/2' exporters (e.g. `dev_stack', `dev_lua') may return an
+%% info map that varies with the Base.
+memoisable(Dev) when is_atom(Dev) ->
+    not (erlang:function_exported(Dev, info, 2)
+        orelse erlang:function_exported(Dev, info, 1));
+memoisable(_Dev) -> false.
+
+%% @doc The uncached body of `message_to_fun/3'. Takes the already-resolved
+%% device module so we do not repeat the `message_to_device' lookup.
+do_message_to_fun(Msg, Dev, Key, Opts) ->
     Info = info(Dev, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
