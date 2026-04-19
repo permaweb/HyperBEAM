@@ -1,0 +1,9 @@
+# LapEE enforced node-message configuration.
+# Shipped with the guest image; layered LAST in HB_CONFIG so these keys
+# override any user-supplied config. The only load-bearing entry is the
+# start hook which extends PCR 15 with the id of the running node message.
+on/start/device: tpm2@2.0a
+on/start/path: extend
+on/start/method: POST
+on/start/target: body
+on/start/hook/result: ignore
