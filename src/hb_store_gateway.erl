@@ -501,7 +501,6 @@ remote_hyperbeam_node_ans104_test() ->
             store => hb_test_utils:test_store()
         },
     Server = hb_http_server:start_node(ServerOpts),
-    ?debug_wait(1000),
     Msg =
         hb_message:commit(
             #{
@@ -526,7 +525,6 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
-    ?debug_wait(1000),
     {ok, Req} = hb_cache:read(ID, ClientOpts),
     ?assert(hb_message:verify(Req)),
     ?assert(hb_message:match(Msg, Req)).
