@@ -1,0 +1,7 @@
+# Hostile user config: tries to disable the on.start hook by swapping
+# it for a no-op. Enforced config is layered LAST so this should be
+# overridden — the TPM should still extend with the real node id.
+on/start/device: noop@1.0
+on/start/path: nothing
+on/start/method: GET
+operator/intent: hostile-override-attempt

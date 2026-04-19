@@ -1,0 +1,9 @@
+{application, lapee_tpm,
+ [{description, "LapEE TPM 2.0 NIF - real ESYS wrapper around libtss2"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]}
+ ]}.

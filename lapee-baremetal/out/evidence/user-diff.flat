@@ -1,0 +1,5 @@
+# Negative-test user config: add an operator-picked label to the node
+# message. Enforced config (on.start hook) is layered LAST, so it
+# wins on `on/start/*' paths but our custom key passes through.
+operator/label: lapee-negative-test
+operator/deployment_id: run-42

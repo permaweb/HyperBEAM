@@ -1,0 +1,171 @@
+#!/bin/sh
+# LapEE guest init — PID 1 for HyperBEAM-as-userspace.
+#
+# Responsibilities:
+#   1. Mount the essentials.
+#   2. Parse /proc/cmdline for a user config snippet (optional,
+#      LAPEE_USER_CONFIG=<file:path>).
+#   3. Assemble HB_CONFIG as a comma-separated list: the user config
+#      (if any) first, the enforced config LAST so it always wins.
+#   4. exec the HyperBEAM release in foreground mode.
+#
+# This script is deliberately tiny — all key generation, PCR extension,
+# and attestation logic lives in dev_tpm2 via the on.start hook.
+set -eu
+
+mount -t proc  -o nosuid,noexec,nodev  proc  /proc
+mount -t sysfs -o nosuid,noexec,nodev  sysfs /sys
+mount -t devtmpfs -o nosuid            devtmpfs /dev
+mount -t tmpfs -o nosuid,nodev         tmpfs /tmp
+mount -t tmpfs -o nosuid,nodev         tmpfs /run
+mkdir -p /dev/pts
+mount -t devpts -o nosuid,noexec devpts /dev/pts
+mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
+
+echo
+echo "==============================================="
+echo "LapEE — kernel $(uname -r), HyperBEAM as PID 2"
+echo "==============================================="
+
+# Bring up loopback and whichever Ethernet-ish interface QEMU/Linux
+# enumerated for the virtio-net-pci device. Debian's kernel uses
+# systemd-style predictable naming (enpXsY / ensN), not eth0, so we
+# walk /sys/class/net/ and pick the first interface whose name is
+# neither `lo' nor a virtual device.
+ip link set lo up 2>/dev/null || true
+for iface in /sys/class/net/*; do
+    name=$(basename "$iface")
+    case "$name" in
+        lo|bonding_masters) continue ;;
+    esac
+    # Skip anything that is not a real NIC (no `device' symlink).
+    [ -e "$iface/device" ] || continue
+    echo "[init] net: bringing up $name"
+    ip link set "$name" up 2>/dev/null || true
+    # Slirp's default guest network is 10.0.2.0/24 with gateway
+    # 10.0.2.2. DHCP would also work, but we hard-code to avoid
+    # pulling udhcpc / dhclient into the initramfs.
+    ip addr add 10.0.2.15/24 dev "$name" 2>/dev/null || true
+    ip route add default via 10.0.2.2 dev "$name" 2>/dev/null || true
+    GUEST_IFACE=$name
+    break
+done
+: "${GUEST_IFACE:=<none-found>}"
+echo "[init] net: primary interface = $GUEST_IFACE"
+
+# Default config files (shipped with image).
+ENFORCED_CFG=/etc/lapee/lapee-enforced.flat
+USER_CFG_DEFAULT=/etc/lapee/user.flat
+
+# Optional user config via kernel cmdline: `lapee.userconfig=<path>' or
+# `lapee.user_b64=<base64_of_flat_file_contents>'.
+USER_CFG_CMDLINE=$(sed -n 's/.*lapee\.userconfig=\([^ ]*\).*/\1/p' /proc/cmdline)
+USER_B64=$(sed -n 's/.*lapee\.user_b64=\([^ ]*\).*/\1/p' /proc/cmdline)
+
+USER_CFG=""
+if [ -n "$USER_B64" ]; then
+    mkdir -p /run/lapee
+    echo "$USER_B64" | base64 -d > /run/lapee/user-cmdline.flat
+    USER_CFG=/run/lapee/user-cmdline.flat
+elif [ -n "$USER_CFG_CMDLINE" ] && [ -f "$USER_CFG_CMDLINE" ]; then
+    USER_CFG=$USER_CFG_CMDLINE
+elif [ -f "$USER_CFG_DEFAULT" ]; then
+    USER_CFG=$USER_CFG_DEFAULT
+fi
+
+# Build HB_CONFIG; enforced LAST so its keys win.
+if [ -n "$USER_CFG" ]; then
+    HB_CONFIG="$USER_CFG,$ENFORCED_CFG"
+    echo "[init] user config: $USER_CFG"
+else
+    HB_CONFIG="$ENFORCED_CFG"
+fi
+echo "[init] HB_CONFIG = $HB_CONFIG"
+export HB_CONFIG
+
+# TPM access.
+export LAPEE_TPM_TCTI=${LAPEE_TPM_TCTI:-device:/dev/tpm0}
+
+# Diagnostic: when LAPEE_HB_VERBOSE=1 is in /proc/cmdline, turn on HB
+# startup tracing so we can see where HB hangs during boot. The setting
+# is opt-in because the output is very noisy.
+if grep -q 'LAPEE_HB_VERBOSE=1' /proc/cmdline 2>/dev/null; then
+    export HB_PRINT="http,boot,start,hook,debug_router_info"
+    echo "[init] HB_PRINT = $HB_PRINT (verbose boot diagnostics)"
+fi
+
+# Force HB into `debug' mode so it doesn't try to reach Arweave gateways
+# on startup (the guest's user-mode networking can't reach the outside
+# world in a useful way for attestation demos).
+export HB_MODE=${HB_MODE:-debug}
+
+# Ensure /etc/lapee dirs + a test CA exist. dev_tpm2 issues an EK cert
+# signed by this CA; the host verifier needs the matching public root
+# to check the chain, so we emit it on the serial console with
+# LAPEE-CA-BEGIN/END markers.
+mkdir -p /etc/lapee /run/lapee
+if [ ! -f /etc/lapee/tpm-ca.crt ]; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -subj '/CN=LapEE Test TPM Vendor Root CA' \
+        -keyout /etc/lapee/tpm-ca.key -out /etc/lapee/tpm-ca.crt >/dev/null 2>&1 || true
+fi
+if [ -f /etc/lapee/tpm-ca.crt ]; then
+    echo "---LAPEE-CA-BEGIN---"
+    cat /etc/lapee/tpm-ca.crt
+    echo "---LAPEE-CA-END---"
+fi
+
+# Quick boot-state report (helps debugging).
+echo "[init] /sys/class/tpm:"
+ls /sys/class/tpm/ 2>&1 | head -3
+if [ -f /sys/class/tpm/tpm0/tpm_version_major ]; then
+    echo "[init] TPM v$(cat /sys/class/tpm/tpm0/tpm_version_major)"
+fi
+
+# Diagnostic: when LAPEE_HB_DIAG=1 is in /proc/cmdline, listen on port
+# 8734 with busybox nc and dump the first request to console. The host
+# test harness fires `curl http://127.0.0.1:${HOST_HTTP_PORT}/diag-probe'
+# at us during this window. If the nc listener reports the bytes,
+# slirp hostfwd is wired correctly and the blocker is in HB's cowboy
+# stack; if nc stays silent, slirp isn't delivering and we need a
+# non-slirp transport.
+if grep -q 'LAPEE_HB_DIAG=1' /proc/cmdline 2>/dev/null; then
+    set +e  # stay alive through any subcommand failure
+    echo "--- LAPEE-DIAG-BEGIN ---"
+    echo "[diag] address state:"
+    ip addr show eth0 2>&1 | head -6
+    echo "[diag] routes:"
+    ip route 2>&1 | head -6
+    echo "[diag] listening on 0.0.0.0:8734 via busybox nc (up to 30s)..."
+    # busybox nc: `-l -p PORT` listens; without -w the server reads
+    # until the client closes or timeout. We run it under `timeout'
+    # so we don't hang the diag window forever.
+    timeout 30 nc -l -p 8734 2>&1 | sed 's/^/[diag-recv] /' &
+    NCPID=$!
+    # Keep the DIAG window open long enough for the host probe.
+    sleep 15
+    # Tell the host "ready" explicitly on the console so the host
+    # harness doesn't have to race on the nc message.
+    echo "[diag] nc listener is live — window closes in 15s more"
+    sleep 20
+    # Reap the listener if still around.
+    kill $NCPID 2>/dev/null
+    wait $NCPID 2>/dev/null
+    echo "[diag] nc window closed."
+    echo "[diag] outbound reachability (slirp default gw 10.0.2.2):"
+    # busybox nc without -z: try connecting to a well-known port on
+    # the host; failure is fine, we only want log lines.
+    echo "" | timeout 3 nc -w 3 10.0.2.2 80 2>&1 | head -3 \
+        | sed 's/^/[diag-out-80] /'
+    echo "--- LAPEE-DIAG-END ---"
+    echo "[diag] holding init — kill qemu from the host when done"
+    # busybox `sleep infinity' keeps PID 1 alive so the kernel does not
+    # panic. We intentionally do not exec a shell: the serial stdin is
+    # closed (qemu backgrounded), so the shell would read EOF and exit.
+    while :; do sleep 3600; done
+fi
+
+cd /usr/lib/hyperbeam
+echo "[init] exec hyperbeam"
+echo "-----------------------------------------------"
+exec /usr/lib/hyperbeam/bin/hb foreground

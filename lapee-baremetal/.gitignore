@@ -1,0 +1,31 @@
+# Big binaries; regenerate via make
+work/
+build-alpine/
+build-hyperbeam/
+buildroot/
+build-m1/
+out/attestation.json
+out/*.crt
+out/*.csr*
+out/*.key
+out/*.pem
+out/*.srl
+out/node-address.txt
+reference-demo/out/
+# hb-acceptance.sh / hb-tamper-test.sh write their per-run outputs
+# here. Recomputed on each run, not a source.
+out/acceptance/
+# The Buildroot post-build overlay scaffold pulls a full HB release
+# into itself (~100+ MB) when exercised. Do not track the outputs.
+hyperbeam-overlay/usr/lib/
+*.aux
+*.log
+*.out
+*.pyc
+__pycache__/
+
+# Keep attestation evidence for acceptance tests
+!out/evidence/
+!out/evidence/*.json
+!out/evidence/*.crt
+!out/evidence/*.flat

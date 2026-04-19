@@ -1,0 +1,47 @@
+# lapee_m1_defconfig — minimal bootable LapEE image.
+#
+# Uses Bootlin's pre-built x86_64 musl toolchain (downloaded, ~60 MB) so we
+# avoid the 60-90 min host-GCC build under Rosetta on Apple Silicon. All
+# kernel config knobs required by the LapEE brief go in linux-m1-fragment.config
+# and are merged on top of Buildroot's x86_64 kernel defconfig.
+#
+# Acceptance: under QEMU the image boots through the LAPEE PID-1 (lapee-init),
+# which execs /bin/sh if HyperBEAM isn't present. /sys/class/tpm/tpm0 exists.
+
+# Architecture
+BR2_x86_64=y
+BR2_x86_core2=y
+
+# Toolchain — use Bootlin's pre-built x86_64 musl toolchain to avoid building
+# gcc from source under Rosetta amd64 (first-build 60+ min savings).
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_X86_64_MUSL_STABLE=y
+
+# Init — lapee-init is PID 1 (installed at /sbin/init), falls back to /bin/sh.
+BR2_INIT_NONE=y
+
+# Kernel — Buildroot's latest-supported LTS (6.6.x) with our M1 fragment
+# merged onto x86_64_defconfig.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_LATEST_VERSION=y
+BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_LAPEE_PATH)/board/lapee/linux-m1-fragment.config"
+BR2_LINUX_KERNEL_BZIMAGE=y
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+
+# Filesystem — initramfs (cpio + gz) for QEMU -initrd.
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_GZIP=y
+
+# Runtime userspace.
+BR2_PACKAGE_BUSYBOX=y
+BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+
+# LapEE packages — just the PID-1 wrapper for M1.
+BR2_PACKAGE_LAPEE_INIT=y
+
+# Build hygiene.
+BR2_REPRODUCIBLE=y
+BR2_ENABLE_DEBUG=n
+BR2_STRIP_strip=y

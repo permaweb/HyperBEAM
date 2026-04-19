@@ -1,0 +1,50 @@
+# LapEE Buildroot defconfig — minimal x86_64 measured-boot appliance.
+#
+# Produces: bzImage + initramfs embedding lapee-init as PID 1, with a
+# dm-verity-sealed rootfs image as a separate artifact.
+
+# Architecture
+BR2_x86_64=y
+BR2_x86_core2=y
+
+# Toolchain — Buildroot-built musl for minimalism.
+BR2_TOOLCHAIN_BUILDROOT=y
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+
+# Init: lapee-init, not sysvinit/systemd/busybox.
+BR2_INIT_NONE=y
+BR2_ROOTFS_SKELETON_CUSTOM=y
+BR2_ROOTFS_SKELETON_CUSTOM_PATH="$(BR2_EXTERNAL_LAPEE_PATH)/board/lapee/rootfs-skeleton"
+
+# Kernel
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.63"
+BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
+BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_LAPEE_PATH)/board/lapee/linux.config"
+BR2_LINUX_KERNEL_BZIMAGE=y
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+
+# Filesystem — initramfs embedded into kernel for UKI, plus separate squashfs for dm-verity root.
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_XZ=y
+BR2_TARGET_ROOTFS_CPIO_LINUX_INITRD=y
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
+
+# Target runtime essentials for HyperBEAM + TPM.
+BR2_PACKAGE_BUSYBOX=n
+BR2_PACKAGE_ERLANG=y
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_TPM2_TSS=y
+BR2_PACKAGE_TPM2_TOOLS=y
+
+# LapEE custom packages.
+BR2_PACKAGE_LAPEE_INIT=y
+BR2_PACKAGE_HYPERBEAM=y
+
+# Build hygiene.
+BR2_REPRODUCIBLE=y
+BR2_ENABLE_DEBUG=n
+BR2_STRIP_strip=y

@@ -1,0 +1,37 @@
+# HyperBEAM release builder for x86_64 Linux.
+#
+# Uses the official erlang:27-bookworm image (pre-built OTP 27 for amd64),
+# adds Rust for NIFs and CMake for hb_beamr/WAMR. Produces a relx release
+# in /out suitable for packaging into the LapEE Buildroot rootfs.
+#
+# Platform: linux/amd64 under Rosetta on Apple Silicon.
+FROM erlang:27
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        autoconf \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        g++ \
+        git \
+        libgmp-dev \
+        libssl-dev \
+        libtss2-dev \
+        m4 \
+        pkg-config \
+        python3 \
+        tpm2-tools \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust stable for dev_snp_nif and similar.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /src
+CMD ["/bin/bash"]
