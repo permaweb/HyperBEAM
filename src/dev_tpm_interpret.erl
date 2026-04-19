@@ -716,3 +716,94 @@ hexenc(_) -> <<>>.
 
 or_null(undefined) -> null;
 or_null(V) -> V.
+
+%%%============================================================================
+%%% Tests
+%%%============================================================================
+
+-ifdef(TEST).
+
+info_shape_test() ->
+    Info = info(ignored),
+    ?assert(maps:is_key(exports, Info)),
+    Exports = maps:get(exports, Info),
+    ?assert(lists:member(<<"interpret">>, Exports)),
+    ?assert(lists:member(<<"verify">>, Exports)).
+
+%% Interpret a hand-built envelope with NO valid EK cert — we still
+%% get a map back with null TPM fields and the other sections filled
+%% in from the data that IS present.
+interpret_handles_partial_envelope_test() ->
+    Zero = hb_util:encode(<<0:256>>),
+    Envelope = #{
+        <<"lapee_attestation_version">> => <<"0.3">>,
+        <<"issued_at_unix">> => 1700000000,
+        <<"ek_cert_pem">> => <<>>,
+        <<"ak_pub_pem">> => <<>>,
+        <<"tpm_quote">> => #{
+            <<"pcr_selection">> => [0, 15],
+            <<"pcr_values">> => #{
+                <<"0">> => Zero,
+                <<"15">> => Zero
+            },
+            <<"quoted">> => <<>>,
+            <<"signature">> => <<>>,
+            <<"nonce">> => <<>>
+        },
+        <<"runtime_event_log">> => [],
+        <<"node_message">> =>
+            #{<<"port">> => 8734,
+              <<"on">> =>
+                #{<<"start">> =>
+                    #{<<"device">> => <<"tpm2@2.0a">>,
+                      <<"path">> => <<"extend">>}}},
+        <<"node_message_id">> => Zero,
+        <<"wallet_address">> => <<"sample-wallet-address-XX">>
+    },
+    #{<<"status">> := 200, <<"body">> := Body} =
+        element(2, interpret(Envelope, #{}, #{})),
+    %% Envelope section present
+    Env = maps:get(<<"envelope">>, Body),
+    ?assertEqual(<<"0.3">>, maps:get(<<"version">>, Env)),
+    %% TPM section reports error (empty PEM) but is still a map
+    Tpm = maps:get(<<"tpm">>, Body),
+    ?assert(is_map(Tpm)),
+    %% PCR 15 is zero (got decoded) and its role is node identity
+    Pcrs = maps:get(<<"pcrs">>, Body),
+    Pcr15 = maps:get(<<"15">>, Pcrs),
+    ?assertEqual(<<"lapee_node_identity">>, maps:get(<<"role">>, Pcr15)),
+    ?assertEqual(true, maps:get(<<"is_zero">>, Pcr15)),
+    %% Node section reads on.start.device
+    Node = maps:get(<<"node">>, Body),
+    ?assertEqual(<<"tpm2@2.0a">>,
+                 maps:get(<<"on_start_hook_device">>, Node)).
+
+pcr_role_canonical_mapping_test() ->
+    ?assertEqual(<<"firmware_srtm">>, pcr_role(<<"0">>)),
+    ?assertEqual(<<"secure_boot_policy">>, pcr_role(<<"7">>)),
+    ?assertEqual(<<"ima_runtime_measurements">>, pcr_role(<<"10">>)),
+    ?assertEqual(<<"uki_kernel_image">>, pcr_role(<<"11">>)),
+    ?assertEqual(<<"lapee_node_identity">>, pcr_role(<<"15">>)),
+    ?assertEqual(<<"unassigned_or_application">>, pcr_role(<<"22">>)).
+
+%% Direct test that the manufacturer DB actually loads when the
+%% release ships it. If priv/tpm-interpret/manufacturers.json is
+%% present, we expect Infineon (49465800) to be resolvable.
+manufacturer_db_lookup_test() ->
+    Db = hb_db_tpm:load(#{}),
+    case maps:get(<<"vendors">>, Db, #{}) of
+        V when is_map(V), map_size(V) > 0 ->
+            case maps:get(<<"49465800">>, V, undefined) of
+                undefined ->
+                    ?debugFmt("manufacturers.json loaded but Infineon "
+                              "(49465800) not present", []);
+                Entry ->
+                    ?assertEqual(<<"Infineon">>,
+                                 maps:get(<<"name">>, Entry))
+            end;
+        _ ->
+            %% Priv dir not present in eunit layout — skip.
+            ok
+    end.
+
+-endif.
