@@ -30,6 +30,68 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+-ifdef(TEST).
+%% Test cases exported so `all_tests_test_/0' can run them in parallel via
+%% `fun ?MODULE:name/0'. Each case starts its own node(s) and uses a fresh
+%% store, so concurrent execution is safe.
+-export([
+    test_provider_tc/0,
+    dynamic_provider_tc/0,
+    local_process_provider_tc_/0,
+    local_dynamic_router_tc_/0,
+    dynamic_router_pricing_tc_/0,
+    dynamic_router_tc_/0,
+    dynamic_routing_by_performance_tc_/0,
+    weighted_random_strategy_tc/0,
+    shuffled_strategy_tc/0,
+    range_limited_route_filtering_tc/0,
+    strategy_suite_tc_/0,
+    by_base_determinism_tc/0,
+    route_template_message_matches_tc/0,
+    route_regex_matches_tc/0,
+    explicit_route_tc/0,
+    device_call_from_singleton_tc/0,
+    get_routes_tc/0,
+    add_route_tc/0,
+    request_hook_reroute_to_nearest_tc/0,
+    route_nearest_integer_preserves_opts_tc/0,
+    route_multirequest_parallel_limit_tc_/0,
+    full_route_config_tc/0
+]).
+-endif.
+
+all_tests_test_() ->
+    {inparallel,
+        [
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                test_provider_tc,
+                dynamic_provider_tc,
+                local_process_provider_tc_,
+                local_dynamic_router_tc_,
+                dynamic_router_pricing_tc_,
+                dynamic_router_tc_,
+                dynamic_routing_by_performance_tc_,
+                weighted_random_strategy_tc,
+                shuffled_strategy_tc,
+                range_limited_route_filtering_tc,
+                strategy_suite_tc_,
+                by_base_determinism_tc,
+                route_template_message_matches_tc,
+                route_regex_matches_tc,
+                explicit_route_tc,
+                device_call_from_singleton_tc,
+                get_routes_tc,
+                add_route_tc,
+                request_hook_reroute_to_nearest_tc,
+                route_nearest_integer_preserves_opts_tc,
+                route_multirequest_parallel_limit_tc_,
+                full_route_config_tc
+            ]
+        ]
+    }.
+
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
 info(_) -> 
@@ -831,7 +893,7 @@ preprocess(Base, RawReq, Opts) ->
 
 %%% Tests
 
-test_provider_test() ->
+test_provider_tc() ->
     Node =
         hb_http_server:start_node(Opts =
             #{
@@ -859,7 +921,7 @@ test_provider_test() ->
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, Opts)
     ).
 
-dynamic_provider_test() ->
+dynamic_provider_tc() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(#{
         router_opts => #{
@@ -880,7 +942,7 @@ dynamic_provider_test() ->
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, #{})
     ).
 
-local_process_provider_test_() ->
+local_process_provider_tc_() ->
     {timeout, 30, fun local_process_provider/0}.
 local_process_provider() ->
     {ok, Script} = file:read_file("test/test.lua"),
@@ -930,7 +992,7 @@ local_process_provider() ->
 %% @doc Example of a Lua module being used as the `<<"provider">>' for a
 %% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
-local_dynamic_router_test_() ->
+local_dynamic_router_tc_() ->
     {timeout, 60, fun local_dynamic_router/0}.
 local_dynamic_router() ->
     BenchRoutes = 50,
@@ -1054,7 +1116,7 @@ local_dynamic_router() ->
 %%   likelihood based on price and performance factors
 %% - Request preprocessing and routing happens correctly between nodes
 %% - Non-chargeable routes are properly handled via template patterns
-dynamic_router_pricing_test_() ->
+dynamic_router_pricing_tc_() ->
     {timeout, 30, fun dynamic_router_pricing/0}.
 dynamic_router_pricing() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
@@ -1213,7 +1275,7 @@ dynamic_router_pricing() ->
 %% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
 %% also include preprocessing support for routing
-dynamic_router_test_() ->
+dynamic_router_tc_() ->
     {timeout, 30, fun dynamic_router/0}.
 dynamic_router() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
@@ -1334,7 +1396,7 @@ dynamic_router() ->
 %% according to the real-time performance of nodes. This test utilizes the
 %% `dynamic-router' script to manage routes and recalculate weights based on the
 %% reported performance.
-dynamic_routing_by_performance_test_() ->
+dynamic_routing_by_performance_tc_() ->
     {timeout, 60, fun dynamic_routing_by_performance/0}.
 dynamic_routing_by_performance() ->
     % Setup test parameters
@@ -1493,7 +1555,7 @@ dynamic_routing_by_performance() ->
     ),
     ok.
 
-weighted_random_strategy_test() ->
+weighted_random_strategy_tc() ->
     Nodes =
         [
             #{ <<"host">> => <<"1">>, <<"weight">> => 1 },
@@ -1506,7 +1568,7 @@ weighted_random_strategy_test() ->
     ?assert(ProportionOfFirstHost < 0.05),
     ?assert(ProportionOfFirstHost >= 0.0001).
 
-shuffled_strategy_test() ->
+shuffled_strategy_tc() ->
     Opts = #{},
     Nodes =
         [
@@ -1545,7 +1607,7 @@ shuffled_strategy_test() ->
         )
     ).
         
-range_limited_route_filtering_test() ->
+range_limited_route_filtering_tc() ->
     Opts = #{},
     Nodes = [
         #{ <<"id">> => 0, <<"max">> => 20 },
@@ -1598,7 +1660,7 @@ range_limited_route_filtering_test() ->
         lists:seq(1, 10)
     ).
 
-strategy_suite_test_() ->
+strategy_suite_tc_() ->
     lists:map(
         fun(Strategy) ->
             {foreach,
@@ -1623,7 +1685,7 @@ strategy_suite_test_() ->
 
 %% @doc Ensure that `By-Base' always chooses the same node for the same
 %% hashpath.
-by_base_determinism_test() ->
+by_base_determinism_tc() ->
     FirstN = 5,
     Nodes = generate_nodes(5),
     HashPaths = generate_hashpaths(100),
@@ -1665,7 +1727,7 @@ unique_nodes(Simulation) ->
         Simulation
     ).
 
-route_template_message_matches_test() ->
+route_template_message_matches_tc() ->
     Routes = [
         #{
             <<"template">> => #{ <<"other-key">> => <<"other-value">> },
@@ -1698,7 +1760,7 @@ route_template_message_matches_test() ->
         )
     ).
 
-route_regex_matches_test() ->
+route_regex_matches_tc() ->
     Routes = [
         #{
             <<"template">> => <<"/.*/compute">>,
@@ -1722,7 +1784,7 @@ route_regex_matches_test() ->
         route(#{ <<"path">> => <<"/a/b/c/bad-key">> }, #{ routes => Routes })
     ).
 
-explicit_route_test() ->
+explicit_route_tc() ->
     Routes = [
         #{
             <<"template">> => <<"*">>,
@@ -1757,7 +1819,7 @@ explicit_route_test() ->
         )
     ).
 
-device_call_from_singleton_test() ->
+device_call_from_singleton_tc() ->
     % Try with a real-world example, taken from a GET request to the router.
     NodeOpts = #{ routes => Routes = [#{
         <<"template">> => <<"/some/path">>,
@@ -1772,7 +1834,7 @@ device_call_from_singleton_test() ->
     ).
     
 
-get_routes_test() ->
+get_routes_tc() ->
     Node = hb_http_server:start_node(
         #{
             force_signed => false,
@@ -1790,7 +1852,7 @@ get_routes_test() ->
     {ok, Recvd} = Res,
     ?assertMatch(<<"our_node">>, Recvd).
 
-add_route_test() ->
+add_route_tc() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
@@ -1828,7 +1890,7 @@ add_route_test() ->
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
 %% peers via `~relay@1.0', according to the node's routing table.
-request_hook_reroute_to_nearest_test() ->
+request_hook_reroute_to_nearest_tc() ->
     Peer1 = hb_http_server:start_node(#{ priv_wallet => W1 = ar_wallet:new() }),
     Peer2 = hb_http_server:start_node(#{ priv_wallet => W2 = ar_wallet:new() }),
     Address1 = hb_util:human_id(ar_wallet:to_address(W1)),
@@ -1886,7 +1948,7 @@ request_hook_reroute_to_nearest_test() ->
     ),
     ?assert(HasValidSigner).
 
-route_nearest_integer_preserves_opts_test() ->
+route_nearest_integer_preserves_opts_tc() ->
     Routes =
         [
             #{
@@ -1953,7 +2015,7 @@ route_nearest_integer_preserves_opts_test() ->
         SelectedURIs
     ).
 
-route_multirequest_parallel_limit_test_() ->
+route_multirequest_parallel_limit_tc_() ->
     {timeout, 30, fun route_multirequest_parallel_limit/0}.
 route_multirequest_parallel_limit() ->
     DelayMs = 300,
@@ -2030,7 +2092,7 @@ route_multirequest_parallel_limit() ->
 %% typical config.json) resolves every request type correctly: single-node
 %% prefix routes, multi-node All-strategy routes, Nearest-Integer chunk
 %% routes, match/with regex routes, and fallback routes.
-full_route_config_test() ->
+full_route_config_tc() ->
     Routes =
         [
             #{
