@@ -822,3 +822,68 @@ here; chat only gets called out on a genuinely-need-a-decision point.
 5. One PR-ready branch.
 6. Security analysis vs `~snp@1.0'.
 Then (7) new `~tpm-interpret@1.0' device.
+
+---
+
+## 2026-04-19 19:20 EDT — items 1–6 of the polish pass landed
+
+Branch `agent/lapee` off upstream `edge`. Six commits:
+
+```
+c0520af36 lapee-baremetal: add SECURITY.md — threat model + comparison to ~snp@1.0
+e4d9196a4 build-hb-release: seed src-edge from parent HB checkout on first run
+16a9218a8 lapee-baremetal: reference-implementation tree for the LapEE guest
+747b8a83c dev_tpm2: TPM 2.0 device + NIF for the LapEE attestation chain
+e7ec8b23e hb_opts: accept comma-separated HB_CONFIG with deep-merge precedence
+666132e5b Merge pull request #867 from permaweb/feat/pass-orig-id-to-genesis-wasm   <-- edge base
+```
+
+Replacing the previous two branches (`agent-/sharp-lichterman` for
+bare-metal + `agent/lapee-dev-tpm2` for the HB side); future work
+lands on this branch.
+
+### What changed in this pass
+
+| # | item | landed in |
+|---|---|---|
+| 1 | Drop `attestation-json'; `attestation' honours `accept: application/json@1.0' + `accept-bundle: true' for inline JSON (AO-Core content negotiation) | 747b8a83c |
+| 2 | Binary fields use base64url (`hb_util:encode/1'). Renamed: `node_message_id_hex'→`node_message_id', `nonce_hex'→`nonce', `quoted_b64'→`quoted', `signature_b64'→`signature', `pcr_values' values → base64url | 747b8a83c |
+| 3 | HB-side `verify/3' — Erlang port of the Python verifier, five structured checks. Proven to reject a byte-flipped signature envelope with `RSA-PSS(SHA256) verify of TPMS_ATTEST failed' while other checks still pass | 747b8a83c |
+| 4 | Hardening audit (`HARDENING.md'). Linux kernel fragment gains `FORTIFY_SOURCE', `HARDENED_USERCOPY', `INIT_ON_ALLOC/FREE_DEFAULT_ON', `SLAB_FREELIST_HARDENED/RANDOM', `IO_STRICT_DEVMEM', `MODULE_SIG_FORCE', `SECURITY_DMESG_RESTRICT', `IMA_APPRAISE', `INTEGRITY_TRUSTED_KEYRING'; `DEBUG_KERNEL' off. Initramfs slimmed (overlay `bin/priv/' removed, release `src/' dropped, hyperbuddy UI bundle pruned, `beam.smp' + `.so' NIFs stripped). 197 MB → 132 MB extracted, 82 MB → 60 MB gz. | 16a9218a8 |
+| 5 | One `agent/lapee' branch off edge, four logical commits plus the security note (6 total) | this branch |
+| 6 | `SECURITY.md' (∼290 lines) — threat model for `~tpm2@2.0a', same for `~snp@1.0', where each wins, where each loses, composition strategy, and a 10-row table of concrete weaknesses of *this* implementation with mitigations | c0520af36 |
+
+### HB-side verify — the real test
+
+Positive, via path chain:
+
+```
+curl -H 'accept: application/json@1.0' -H 'accept-bundle: true' \
+    http://localhost:18734/~tpm2@2.0a/attestation/verify~tpm2@2.0a
+  → body.verified: true, verdict: "accepted", 5/5 checks pass
+```
+
+Negative, via POST of a byte-flipped envelope:
+
+```
+body.verified: false, verdict: "rejected"
+  - true  | EK certificate chains to trusted TPM vendor root CA
+  - false | TPM2_Quote signature + pcrDigest + nonce all valid
+               -> RSA-PSS(SHA256) verify of TPMS_ATTEST failed
+  - true  | Runtime event log replay of PCR 15 matches quoted value
+  - true  | PCR 15 extension commits to node_message_id
+  - true  | Embedded node_message + id present and correct shape
+```
+
+So the HB-side verifier genuinely enforces each check, parallel to
+what `reference-demo/verifier/verifier_hb.py' does in Python.
+
+### Still running in the background
+
+- Buildroot hardened-kernel rebuild (sub-agent). Will produce an
+  updated `vmlinuz-lapee' with the extra `=y' flags above. Doesn't
+  block any test — the current kernel already passes the chain.
+
+### Next up
+
+Item 7 — `~tpm-interpret@1.0'.
