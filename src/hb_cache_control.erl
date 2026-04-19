@@ -241,23 +241,63 @@ maybe_set(Map1, Map2, Opts) ->
 %% cases, except where an `Opts' specifies that hashpaths should not be updated,
 %% which leads to the result not being cached (as it may be stored with an 
 %% incorrect hashpath).
-cache_source_to_cache_settings({opts, Opts}, _) ->
-    CCMap = specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)),
-    case hb_opts:get(hashpath, update, Opts) of
-        ignore -> CCMap#{ <<"store">> => false };
-        _ -> CCMap
+%%
+%% The first clause is a fast-path for the common case in which `Opts' does not
+%% override any of the keys that influence the resolved `cache_control' or
+%% `hashpath' values (`cache_control', `hashpath', `only', `prefer'). In that
+%% situation the result is a per-process constant -- both `hb_opts:get/3' calls
+%% resolve against the memoised `default_message/0' -- so we cache it in the
+%% process dictionary on first use.
+cache_source_to_cache_settings({opts, Opts}, _)
+        when not is_map_key(cache_control, Opts),
+             not is_map_key(hashpath, Opts),
+             not is_map_key(only, Opts),
+             not is_map_key(prefer, Opts) ->
+    case erlang:get(cc_default_opts_source) of
+        undefined ->
+            Res = compute_opts_source(#{}),
+            erlang:put(cc_default_opts_source, Res),
+            Res;
+        Cached -> Cached
     end;
+cache_source_to_cache_settings({opts, Opts}, _) ->
+    compute_opts_source(Opts);
 cache_source_to_cache_settings(Msg, Opts) ->
     case hb_maps:find(<<"cache-control">>, Msg, Opts) of
         {ok, CC} -> specifiers_to_cache_settings(CC);
         _ -> #{}
     end.
 
+%% @doc Resolve the `{opts, Opts}' source without the fast-path cache. Used
+%% when `Opts' overrides any of the keys that influence the result, and to
+%% build the memoised default on first use.
+compute_opts_source(Opts) ->
+    CCMap = specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)),
+    case hb_opts:get(hashpath, update, Opts) of
+        ignore -> CCMap#{ <<"store">> => false };
+        _ -> CCMap
+    end.
+
 %% @doc Convert a cache control list as received via HTTP headers into a 
 %% normalized map of simply whether we should store and/or lookup the result.
+%% The result is a pure function of the token list, so we memoise it in the
+%% process dictionary keyed on the raw list. The cache-control vocabulary is
+%% small (a handful of directives) so the cache stays bounded in practice.
 specifiers_to_cache_settings(CCSpecifier) when not is_list(CCSpecifier) ->
     specifiers_to_cache_settings([CCSpecifier]);
 specifiers_to_cache_settings(RawCCList) ->
+    case erlang:get({cc_spec, RawCCList}) of
+        undefined ->
+            Res = compute_specifiers_to_cache_settings(RawCCList),
+            erlang:put({cc_spec, RawCCList}, Res),
+            Res;
+        Cached -> Cached
+    end.
+
+%% @doc Compute the cache-settings map for a list of cache-control specifiers.
+%% Callers should go through `specifiers_to_cache_settings/1', which memoises
+%% the result.
+compute_specifiers_to_cache_settings(RawCCList) ->
     CCList = lists:map(fun hb_ao:normalize_key/1, RawCCList),
     #{
         <<"store">> =>
