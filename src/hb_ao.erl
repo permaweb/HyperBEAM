@@ -1170,6 +1170,12 @@ normalize_key(Key, _Opts) when is_list(Key) ->
     end.
 
 %% @doc Ensure that a message is processable by the AO-Core resolver: No lists.
+%% Fast path: when every key is already a binary, `normalize_key/2' would
+%% pass them through unchanged (values are never recursed here), so return
+%% the map as-is. This is the overwhelming majority case on the resolve hot
+%% path -- `resolve_stage(1, ...)' normalises both `Base' and `Req' on every
+%% resolution -- and skips the `hb_maps:to_list'/`from_list' round-trip and
+%% per-key dispatch.
 normalize_keys(Msg) -> normalize_keys(Msg, #{}).
 normalize_keys(Base, Opts) when is_list(Base) ->
     normalize_keys(
@@ -1182,6 +1188,22 @@ normalize_keys(Base, Opts) when is_list(Base) ->
 		Opts
 	);
 normalize_keys(Map, Opts) when is_map(Map) ->
+    case has_only_binary_keys(maps:next(maps:iterator(Map))) of
+        true -> Map;
+        false -> do_normalize_keys(Map, Opts)
+    end;
+normalize_keys(Other, _Opts) -> Other.
+
+%% @doc Walk a map iterator directly (avoiding the `maps:keys/1' list
+%% allocation that `lists:all/2' would require) and return `true' iff every
+%% key is a binary. Bails out on the first non-binary key.
+has_only_binary_keys(none) -> true;
+has_only_binary_keys({K, _V, Iter}) when is_binary(K) ->
+    has_only_binary_keys(maps:next(Iter));
+has_only_binary_keys({_K, _V, _Iter}) -> false.
+
+%% @doc The original full-walk body, used when a non-binary key is present.
+do_normalize_keys(Map, Opts) ->
     hb_maps:from_list(
         lists:map(
             fun({Key, Value}) when is_map(Value) ->
@@ -1191,8 +1213,7 @@ normalize_keys(Map, Opts) when is_map(Map) ->
             end,
             hb_maps:to_list(Map, Opts)
         )
-    );
-normalize_keys(Other, _Opts) -> Other.
+    ).
 
 %% @doc The execution options that are used internally by this module
 %% when calling itself.
