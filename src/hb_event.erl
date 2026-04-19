@@ -43,29 +43,45 @@ log(Topic, X, Mod, Func, Line) -> log(Topic, X, Mod, Func, Line, #{}).
 log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, Mod, Func, Line, Opts) ->
-    debug_print(Topic, X, Mod, Func, Line, Opts),
-    try increment(Topic, X, Opts) catch _:_ -> ok end,
-    % Return the logged value to the caller. This allows callers to insert 
-    % `?event(...)' macros into the flow of other executions, without having to
-    % break functional style.
-    X.
+    % Fast path: a single pdict get skips the `debug_print' function call
+    % AND the Prometheus increment for topics that have previously been
+    % observed to be silent. This keeps production-default events -- where no
+    % print/log subscription is configured -- down to a single pdict lookup.
+    case erlang:get({event_silent, Topic, Mod}) of
+        true -> X;
+        _ ->
+            debug_print(Topic, X, Mod, Func, Line, Opts),
+            try increment(Topic, X, Opts) catch _:_ -> ok end,
+            % Return the logged value to the caller. This allows callers to
+            % insert `?event(...)' macros into the flow of other executions,
+            % without having to break functional style.
+            X
+    end.
 
 debug_print(X, Mod, Func, Line) ->
     debug_print(X, Mod, Func, Line, #{}).
 debug_print(X, Mod, Func, Line, Opts) ->
     debug_print(debug_print, X, Mod, Func, Line, Opts).
 debug_print(Topic, X, Mod, Func, Line, Opts) ->
-    case should_print(print, Topic, Opts)
-        orelse should_print(print, Mod, Opts)
-    of
+    Print =
+        should_print(print, Topic, Opts)
+            orelse should_print(print, Mod, Opts),
+    Log =
+        should_print(log, Topic, Opts)
+            orelse should_print(log, Mod, Opts),
+    case Print of
         true -> print_event(Topic, X, Mod, Func, Line, Opts);
-        false -> X
+        false -> ok
     end,
-    case should_print(log, Topic, Opts)
-        orelse should_print(log, Mod, Opts)
-    of
+    case Log of
         true -> log_event(Topic, X, Mod, Func, Line, Opts);
         false -> ok
+    end,
+    % Memoise the fully-silenced case so subsequent events skip the whole
+    % `debug_print' call via the fast path in `log/6'.
+    case Print orelse Log of
+        true -> ok;
+        false -> erlang:put({event_silent, Topic, Mod}, true)
     end,
     X.
 -endif.
@@ -422,6 +438,24 @@ benchmark_event_test() ->
     hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
+
+%% @doc Benchmark `log/6' on a silenced topic -- the dominant production
+%% case, where no `debug_print' or `debug_log' subscription is configured.
+%% Tight loop avoids the iteration-harness overhead of the other benches.
+benchmark_silent_event_test() ->
+    N = 500_000,
+    _ = log(silent_topic, {evt}, test_mod, test_func, 0, #{}),
+    {Time, _} = timer:tc(fun() -> silent_event_loop(N) end),
+    hb_format:eunit_print(
+        "log/6 on silenced topic: ~.1f ns/call",
+        [(Time * 1000) / N]
+    ),
+    ?assert(N >= 1000),
+    ok.
+silent_event_loop(0) -> ok;
+silent_event_loop(N) ->
+    log(silent_topic, {evt}, test_mod, test_func, 0, #{}),
+    silent_event_loop(N - 1).
 
 %% @doc Benchmark the performance of looking up whether a topic and module
 %% should be printed.
