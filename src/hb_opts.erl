@@ -141,8 +141,24 @@ default_message_with_env() ->
         ?ENV_KEYS
     ).
 
-%% @doc The default configuration options of the hyperbeam node.
+%% @doc The default configuration options of the hyperbeam node. The result is
+%% memoised in the process dictionary on first call — every subsequent
+%% invocation in the same process returns the cached map without rebuilding
+%% it. The immutable portion of the node config is genuinely constant for the
+%% lifetime of a process, so this is safe; the `cached_os_env/2' helper
+%% applies the same pattern to environment-variable lookups below.
 default_message() ->
+    case erlang:get(default_message) of
+        undefined ->
+            Cached = raw_default_message(),
+            erlang:put(default_message, Cached),
+            Cached;
+        Cached -> Cached
+    end.
+
+%% @doc The raw (uncached) default message. Internal — callers should use
+%% `default_message/0' which memoises this value per-process.
+raw_default_message() ->
     #{
         %%%%%%%% Functional options %%%%%%%%
         hb_config_location => <<"config.flat">>,
