@@ -558,9 +558,35 @@ get(Key) -> ?MODULE:get(Key, undefined).
 get(Key, Default) -> ?MODULE:get(Key, Default, #{}).
 get(Key, Default, Opts) when is_binary(Key) ->
     try binary_to_existing_atom(Key, utf8) of
-        AtomKey -> do_get(AtomKey, Default, Opts)
+        AtomKey -> ?MODULE:get(AtomKey, Default, Opts)
     catch
         error:badarg -> do_get(Key, Default, Opts)
+    end;
+get(Key, Default, Opts)
+        when is_map(Opts),
+             not is_map_key(prefer, Opts),
+             not is_map_key(<<"only">>, Opts),
+             not is_map_key(<<"prefer">>, Opts) ->
+    %% Fast path for the overwhelmingly-common shapes: (a) no preference
+    %% set, (b) `only => local' (all real-world HTTP request handling).
+    %% The final clause falls through to do_get/3 for ENV_KEYS-backed keys
+    %% (HB_PARANOID, HB_PORT, etc.) so env-var parsing + caching still
+    %% happens; the `is_map_key' check is too fast (~7 ns) to move to a
+    %% guard, and ?ENV_KEYS contains fun references so it can't appear in
+    %% a guard anyway.
+    case Opts of
+        #{ only := global } -> do_get(Key, Default, Opts);
+        #{ Key   := Value } -> Value;
+        #{ only  := local } -> Default;
+        _ ->
+            case is_map_key(Key, ?ENV_KEYS) of
+                true -> do_get(Key, Default, Opts);
+                false ->
+                    case maps:get(Key, default_message(), '$hb_opts_not_found') of
+                        '$hb_opts_not_found' -> Default;
+                        V -> V
+                    end
+            end
     end;
 get(Key, Default, Opts) ->
     do_get(Key, Default, Opts).
