@@ -1789,7 +1789,6 @@ http_get_schedule_tc_() ->
 					lists:seq(1, 3)
 				),
 				?assertMatch({ok, #{ <<"current">> := 3 }}, http_get_slot(Node, PMsg)),
-			        ?debug_wait(100),
 				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3),
 				Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
 				?assertEqual(
