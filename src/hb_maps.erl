@@ -24,6 +24,7 @@
 -export([merge/2, merge/3, remove/2, remove/3]).
 -export([with/2, with/3, without/2, without/3, update_with/3, update_with/4]).
 -export([from_list/1, to_list/1, to_list/2]).
+-include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% HyperBEAM-specific functions
@@ -56,13 +57,21 @@ get(Key, Map, Default) ->
     get(Key, Map, Default, #{}).
 
 %% @doc Get a value from a map, resolving links as they are encountered in both
-%% the TABM encoded link format, as well as the structured type.
+%% the TABM encoded link format, as well as the structured type. When the map
+%% is a plain map and the looked-up value is not itself a link, we skip the
+%% `hb_cache:ensure_loaded' round-trip entirely -- this is the overwhelming
+%% majority case on the resolve hot path.
 -spec get(
     Key :: term(),
     Map :: map(),
     Default :: term(),
     Opts :: map()
 ) -> term().
+get(Key, Map, Default, Opts) when is_map(Map) ->
+    case maps:get(Key, Map, Default) of
+        V when not ?IS_LINK(V) -> V;
+        Link -> hb_cache:ensure_loaded(Link, Opts)
+    end;
 get(Key, Map, Default, Opts) ->
     hb_cache:ensure_loaded(
         maps:get(
@@ -78,6 +87,12 @@ find(Key, Map) ->
     find(Key, Map, #{}).
 
 -spec find(Key :: term(), Map :: map(), Opts :: map()) -> {ok, term()} | error.
+find(Key, Map, Opts) when is_map(Map) ->
+    case maps:find(Key, Map) of
+        {ok, V} when not ?IS_LINK(V) -> {ok, V};
+        error -> error;
+        Result -> hb_cache:ensure_loaded(Result, Opts)
+    end;
 find(Key, Map, Opts) ->
     hb_cache:ensure_loaded(maps:find(Key, hb_cache:ensure_loaded(Map, Opts)), Opts).
 
@@ -99,6 +114,8 @@ is_key(Key, Map) ->
     is_key(Key, Map, #{}).
 
 -spec is_key(Key :: term(), Map :: map(), Opts :: map()) -> boolean().
+is_key(Key, Map, _Opts) when is_map(Map) ->
+    maps:is_key(Key, Map);
 is_key(Key, Map, Opts) ->
     maps:is_key(Key, hb_cache:ensure_loaded(Map, Opts)).
 
@@ -107,6 +124,8 @@ keys(Map) ->
 	keys(Map, #{}).
 
 -spec keys(Map :: map(), Opts :: map()) -> [term()].
+keys(Map, _Opts) when is_map(Map) ->
+    maps:keys(Map);
 keys(Map, Opts) ->
     maps:keys(hb_cache:ensure_loaded(Map, Opts)).
 
