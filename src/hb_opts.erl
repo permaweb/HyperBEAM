@@ -221,6 +221,7 @@ default_message() ->
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
             #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
             #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
+            #{<<"name">> => <<"tpm2@2.0a">>, <<"module">> => dev_tpm2},
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
@@ -639,15 +640,78 @@ normalize_default(Default) -> Default.
 %% configuration system.
 config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
 
-%% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
+%% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the
 %% keys to those in the default message.
+%%
+%% Accepts a single path (binary or string) OR a comma-separated list of
+%% paths. When multiple paths are provided, each is loaded and the results
+%% are deep-merged with RIGHTMOST precedence — i.e. keys present in a
+%% later file override keys present in an earlier file. This lets the
+%% system layer an enforced, tamper-resistant config on top of a user-
+%% supplied one:
+%%
+%%     HB_CONFIG=user.json,enforced.json
+%%
+%% loads both and merges enforced.json on top, so the enforced values
+%% win. Missing files are tolerated — a later missing file leaves the
+%% earlier successfully-loaded config untouched.
 load(Path) -> load(Path, #{}).
 load(Path, Opts) ->
+    case split_paths(Path) of
+        [] -> {error, not_found};
+        [SinglePath] -> load_single(SinglePath, Opts);
+        Paths -> load_and_merge(Paths, Opts)
+    end.
+
+%% @doc Split a comma-separated path spec into a list of individual paths.
+%% Trims whitespace; drops empty entries.
+split_paths(Path) ->
+    Bin = hb_util:bin(Path),
+    Parts = binary:split(Bin, <<",">>, [global]),
+    lists:filtermap(
+        fun(P) ->
+            case string:trim(P) of
+                <<>> -> false;
+                Trimmed -> {true, Trimmed}
+            end
+        end,
+        Parts).
+
+load_single(Path, Opts) ->
     {ok, Device} = path_to_device(Path),
     case file:read_file(Path) of
         {ok, Bin} ->
             load_bin(Device, Bin, Opts);
         _ -> {error, not_found}
+    end.
+
+%% @doc Load each path in turn; deep-merge successes with rightmost
+%% precedence. A file that doesn't exist is silently skipped. If NO file
+%% succeeds, returns `{error, not_found}'. If at least one succeeds,
+%% returns `{ok, MergedMap}'.
+load_and_merge(Paths, Opts) ->
+    Loaded =
+        lists:filtermap(
+            fun(P) ->
+                case load_single(P, Opts) of
+                    {ok, Map} -> {true, {P, Map}};
+                    _ -> false
+                end
+            end, Paths),
+    case Loaded of
+        [] -> {error, not_found};
+        Successes ->
+            Maps = [M || {_, M} <- Successes],
+            Merged = lists:foldl(
+                fun(Next, Acc) -> hb_util:deep_merge(Acc, Next, Opts) end,
+                hd(Maps),
+                tl(Maps)),
+            ?event(boot,
+                {loaded_config_chain,
+                    {paths, [P || {P, _} <- Successes]},
+                    {path_count, length(Successes)}
+                }),
+            {ok, Merged}
     end.
 
 %% @doc Convert a path to a device from its file extension. If no extension is
@@ -1111,4 +1175,79 @@ ensure_node_history_test() ->
                 ]
         },
     ?assertEqual({error, invalid_values}, ensure_node_history(InvalidItems, RequiredOpts)).
+
+%%%-------------------------------------------------------------------
+%%% Tests for the comma-separated multi-path `load/1,2' enhancement
+%%% (layered configs with rightmost precedence).
+%%%-------------------------------------------------------------------
+
+split_paths_single_test() ->
+    ?assertEqual([<<"config.flat">>], split_paths(<<"config.flat">>)).
+
+split_paths_multi_test() ->
+    ?assertEqual(
+        [<<"a.flat">>, <<"b.flat">>, <<"c.flat">>],
+        split_paths(<<"a.flat,b.flat,c.flat">>)).
+
+split_paths_trims_whitespace_test() ->
+    ?assertEqual(
+        [<<"a.flat">>, <<"b.flat">>],
+        split_paths(<<"a.flat , b.flat">>)).
+
+split_paths_drops_empty_test() ->
+    ?assertEqual(
+        [<<"a.flat">>, <<"b.flat">>],
+        split_paths(<<",a.flat,,b.flat,">>)).
+
+load_multi_deep_merge_rightmost_wins_test() ->
+    %% Stage two .flat files; verify right-most key overrides earlier one.
+    %% Note: `port' and `mode' are known atom-keyed options, so flat@1.0's
+    %% mimic_default_types converts them to atoms.
+    Tmp = mktmp_for_test(),
+    PathA = filename:join(Tmp, "a.flat"),
+    PathB = filename:join(Tmp, "b.flat"),
+    ok = file:write_file(PathA, <<"port: 1000\nmode: production\n">>),
+    ok = file:write_file(PathB, <<"port: 9000\n">>),
+    Spec = iolist_to_binary([PathA, <<",">>, PathB]),
+    {ok, Merged} = load(Spec),
+    %% Rightmost wins: port comes from b.flat.
+    ?assertEqual(9000, get_either(port, Merged)),
+    %% Key only in a.flat survives.
+    ?assertEqual(production, get_either(mode, Merged)).
+
+load_multi_tolerates_missing_files_test() ->
+    Tmp = mktmp_for_test(),
+    PathA = filename:join(Tmp, "exists.flat"),
+    PathMissing = filename:join(Tmp, "absent.flat"),
+    ok = file:write_file(PathA, <<"port: 7777\n">>),
+    Spec = iolist_to_binary([PathMissing, <<",">>, PathA]),
+    {ok, Merged} = load(Spec),
+    ?assertEqual(7777, get_either(port, Merged)).
+
+%% Helper: a given key might have been preserved as either an atom or a
+%% binary in the loaded map, depending on `mimic_default_types' knowledge.
+get_either(Key, Map) when is_atom(Key) ->
+    case maps:find(Key, Map) of
+        {ok, V} -> V;
+        error -> maps:get(atom_to_binary(Key), Map)
+    end.
+
+load_all_missing_returns_error_test() ->
+    Tmp = mktmp_for_test(),
+    PathA = filename:join(Tmp, "missing1.flat"),
+    PathB = filename:join(Tmp, "missing2.flat"),
+    Spec = iolist_to_binary([PathA, <<",">>, PathB]),
+    ?assertEqual({error, not_found}, load(Spec)).
+
+mktmp_for_test() ->
+    Base =
+        case os:getenv("TMPDIR") of
+            false -> "/tmp";
+            V -> V
+        end,
+    Rand = integer_to_list(erlang:unique_integer([positive, monotonic])),
+    Dir = filename:join(Base, "hb_opts_test_" ++ Rand),
+    ok = filelib:ensure_path(Dir),
+    Dir.
+
 -endif.
