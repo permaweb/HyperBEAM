@@ -418,25 +418,46 @@ interpret_boot_chain(_E, Db, Pcrs) ->
         _ -> Base#{<<"match">> => Profile}
     end.
 
-match_pcr_profile(Pcrs, #{<<"pcr_profiles">> := Profiles})
-                                                when is_map(Profiles) ->
+match_pcr_profile(Pcrs, Db) ->
+    Profiles = case maps:get(<<"pcr_profiles">>, Db, #{}) of
+        M when is_map(M) -> M;
+        _ -> #{}
+    end,
     Candidates =
         [Entry ||
             {_Key, Entry} <- maps:to_list(Profiles),
             profile_matches(Entry, Pcrs)],
     case Candidates of
         [] -> undefined;
-        [E|_] -> E
-    end;
-match_pcr_profile(_, _) -> undefined.
+        [E|_] -> summarise_profile(E)
+    end.
 
-profile_matches(#{<<"pcrs">> := Expected}, Actual) when is_map(Expected) ->
-    lists:all(
-        fun({PcrKey, ExpHex}) ->
-            pcr_hex(PcrKey, Actual) == ExpHex
+%% Accept either `match_pcrs' (preferred) or `pcrs' (legacy).
+%% An empty match block doesn't match — callers who want a
+%% documentation-only profile to surface can look at the DB
+%% directly.
+profile_matches(Entry, Actual) when is_map(Entry) ->
+    Expected =
+        case maps:get(<<"match_pcrs">>, Entry, undefined) of
+            undefined -> maps:get(<<"pcrs">>, Entry, #{});
+            M -> M
         end,
-        maps:to_list(Expected));
+    case maps:size(Expected) of
+        0 -> false;
+        _ ->
+            lists:all(
+                fun({PcrKey, ExpHex}) ->
+                    pcr_hex(PcrKey, Actual) == ExpHex
+                end,
+                maps:to_list(Expected))
+    end;
 profile_matches(_, _) -> false.
+
+summarise_profile(#{<<"name">> := Name, <<"attributes">> := Attrs}) ->
+    #{<<"name">> => Name, <<"attributes">> => Attrs};
+summarise_profile(#{<<"name">> := Name}) ->
+    #{<<"name">> => Name};
+summarise_profile(Entry) -> Entry.
 
 pcr_hex(Key, Pcrs) ->
     case hb_maps:get(Key, Pcrs, undefined, #{}) of
