@@ -519,33 +519,32 @@ get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
     end.
 
 %% @doc Return a chunk or range of bytes relative to a specific, unconfirmed,
-%% transaction's data root.
+%% transaction's data root. Pending chunk lookups query the only chunk by
+%% `data_size` for single-chunk TXs, otherwise start at 256KiB and advance in
+%% 256KiB steps with a final cap at `data_size`.
 get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
-    hb_prometheus:observe(
-        Length,
-        arweave_chunk_load_requested_bytes,
-        []
-    ),
-    Offsets =
-        generate_offsets(
-            max(1, Offset + 1),
-            (Offset + Length),
-            ?DATA_CHUNK_SIZE
-        ),
-    GETFun =
-        fun(XOffset) ->
-            decode_relative_chunk(
-                pending(
-                    #{},
-                    #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
-                    Opts
-                )
-            )
-        end,
-    case fetch_and_collect(Offsets, GETFun, Opts) of
-        {ok, ChunkInfos} ->
-            assemble_relative_chunks(ChunkInfos, Offset);
-        Error -> Error
+    case pending_tx_data_size(RelativeTXID, Opts) of
+        {ok, DataSize} ->
+            hb_prometheus:observe(
+                Length,
+                arweave_chunk_load_requested_bytes,
+                []
+            ),
+            Offsets = pending_relative_chunk_offsets(Offset, Length, DataSize),
+            GETFun =
+                fun(XOffset) ->
+                    QueryRes = pending_chunk_query(RelativeTXID, XOffset, Opts),
+                    decode_relative_chunk(
+                        QueryRes
+                    )
+                end,
+            case fetch_and_collect(Offsets, GETFun, Opts) of
+                {ok, ChunkInfos} ->
+                    assemble_relative_chunks(ChunkInfos, Offset);
+                Error -> Error
+            end;
+        Error ->
+            Error
     end.
 
 assemble_relative_chunks(ChunkInfos, Offset) ->
@@ -617,6 +616,179 @@ generate_offsets(Current, End, _Step, Acc) when Current > End ->
     Offsets;
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
+
+pending_chunk_query(TXID, XOffset, Opts) ->
+    {RetryCount, RetryDelay} = pending_chunk_poll_config(Opts),
+    pending_chunk_query(
+        TXID,
+        XOffset,
+        Opts,
+        RetryCount,
+        RetryDelay,
+        RetryCount,
+        erlang:monotonic_time(millisecond)
+    ).
+
+pending_chunk_query(
+    TXID,
+    XOffset,
+    Opts,
+    RetryCount,
+    RetryDelay,
+    TotalRetries,
+    StartTimeMs
+) ->
+    Attempt = TotalRetries - RetryCount + 1,
+    case pending_chunk_request(TXID, XOffset, Opts) of
+        {error, not_found} when RetryCount > 0 ->
+            maybe_log_pending_chunk_retry(
+                Attempt,
+                TXID,
+                XOffset,
+                RetryDelay,
+                Opts
+            ),
+            timer:sleep(RetryDelay),
+            pending_chunk_query(
+                TXID,
+                XOffset,
+                Opts,
+                RetryCount - 1,
+                RetryDelay,
+                TotalRetries,
+                StartTimeMs
+            );
+        {ok, _} = Result when Attempt > 1 ->
+            pending_chunk_progress(
+                Opts,
+                {pending_chunk_recovered,
+                    {tx_id, {explicit, TXID}},
+                    {offset, XOffset},
+                    {attempt, Attempt},
+                    {
+                        elapsed_ms,
+                        erlang:monotonic_time(millisecond) - StartTimeMs
+                    }}
+            ),
+            Result;
+        {error, not_found} = Result when Attempt > 1 ->
+            pending_chunk_progress(
+                Opts,
+                {pending_chunk_gave_up,
+                    {tx_id, {explicit, TXID}},
+                    {offset, XOffset},
+                    {attempts, Attempt},
+                    {
+                        elapsed_ms,
+                        erlang:monotonic_time(millisecond) - StartTimeMs
+                    }}
+            ),
+            Result;
+        Result ->
+            Result
+    end.
+
+maybe_log_pending_chunk_retry(Attempt, TXID, XOffset, RetryDelay, Opts) ->
+    case Attempt =:= 1 orelse Attempt rem 10 =:= 0 of
+        true ->
+            pending_chunk_progress(
+                Opts,
+                {pending_chunk_retrying,
+                    {tx_id, {explicit, TXID}},
+                    {offset, XOffset},
+                    {attempt, Attempt},
+                    {retry_in_ms, RetryDelay}}
+            );
+        false ->
+            ok
+    end.
+
+pending_chunk_progress(Opts, Event) ->
+    case hb_opts:get(arweave_mempool_progress, false, Opts) of
+        true -> ?event(copycat_short, Event);
+        false -> ok
+    end.
+
+pending_chunk_request(TXID, XOffset, Opts) ->
+    request(
+        <<"GET">>,
+        <<
+            "/unconfirmed_chunk/",
+            TXID/binary,
+            "/",
+            (hb_util:bin(XOffset))/binary
+        >>,
+        Opts
+    ).
+
+pending_chunk_poll_config(Opts) ->
+    RawRetryCount = max(0, hb_opts:get(arweave_pending_chunk_poll_attempts, 0, Opts)),
+    RetryDelay = max(1, hb_opts:get(arweave_pending_chunk_poll_ms, 500, Opts)),
+    MinRetryWindowMs = max(
+        0,
+        hb_opts:get(arweave_pending_chunk_poll_min_ms, 20000, Opts)
+    ),
+    RetryCount =
+        case RawRetryCount of
+            0 -> 0;
+            _ -> max(RawRetryCount, ceil_div(MinRetryWindowMs, RetryDelay))
+        end,
+    {RetryCount, RetryDelay}.
+
+ceil_div(0, _Denominator) -> 0;
+ceil_div(Numerator, Denominator) ->
+    (Numerator + Denominator - 1) div Denominator.
+
+%% @doc Fetch the advertised data size for an unconfirmed transaction.
+pending_tx_data_size(TXID, Opts) ->
+    case pending(#{}, #{ <<"pending">> => TXID }, Opts#{ exclude_data => true }) of
+        {ok, JSON} ->
+            {ok, hb_util:int(maps:get(<<"data_size">>, JSON))};
+        Error ->
+            Error
+    end.
+
+%% @doc Return the pending chunk end offsets using 256KiB stepping with a final
+%% cap at `data_size`.
+pending_relative_chunk_offsets(_Offset, Length, _DataSize) when Length =< 0 ->
+    [];
+pending_relative_chunk_offsets(Offset, _Length, DataSize) when Offset >= DataSize ->
+    [];
+pending_relative_chunk_offsets(Offset, Length, DataSize) ->
+    RangeStart = max(1, Offset + 1),
+    RangeEnd = min(Offset + Length, DataSize),
+    ChunkEnds = pending_chunk_end_offsets(DataSize),
+    pending_relative_chunk_offsets(ChunkEnds, RangeStart, RangeEnd, 0, []).
+
+pending_relative_chunk_offsets(
+    [ChunkEnd | Rest], RangeStart, RangeEnd, PrevEnd, Acc
+) ->
+    ChunkStart = PrevEnd + 1,
+    NewAcc =
+        case chunk_overlaps_range(ChunkStart, ChunkEnd, RangeStart, RangeEnd) of
+            true -> [ChunkEnd | Acc];
+            false -> Acc
+        end,
+    pending_relative_chunk_offsets(Rest, RangeStart, RangeEnd, ChunkEnd, NewAcc);
+pending_relative_chunk_offsets([], _RangeStart, _RangeEnd, _PrevEnd, Acc) ->
+    lists:reverse(Acc).
+
+pending_chunk_end_offsets(DataSize) when DataSize =< ?DATA_CHUNK_SIZE ->
+    [DataSize];
+pending_chunk_end_offsets(DataSize) ->
+    pending_chunk_end_offsets(?DATA_CHUNK_SIZE, DataSize, []).
+
+pending_chunk_end_offsets(Current, DataSize, Acc) when Current < DataSize ->
+    pending_chunk_end_offsets(
+        Current + ?DATA_CHUNK_SIZE,
+        DataSize,
+        [Current | Acc]
+    );
+pending_chunk_end_offsets(_Current, DataSize, Acc) ->
+    lists:reverse([DataSize | Acc]).
+
+chunk_overlaps_range(ChunkStart, ChunkEnd, RangeStart, RangeEnd) ->
+    ChunkEnd >= RangeStart andalso ChunkStart =< RangeEnd.
 
 %% @doc Decode a chunk response into a {Start, End, Binary} tuple.
 %% Runs inside the pmap worker so raw JSON is GC'd per-worker.
@@ -900,48 +1072,27 @@ pending(Base, Request, Opts) ->
                     request(<<"GET">>, <<"/tx/pending">>, Opts)
             end;
         TXID ->
+            ExcludeData =
+                case find_key(<<"exclude-data">>, Base, Request, Opts) of
+                    not_found -> hb_opts:get(exclude_data, false, Opts);
+                    Value -> hb_util:bool(Value)
+                end,
             case hb_maps:find(<<"offset">>, Request, Opts) of
                 error ->
                     % Retreive a bare TX header by its TXID
-                    request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
-                {ok, RawOffset} ->
-                    try hb_util:int(RawOffset) of
-                        Offset when Offset < 0 ->
-                            {error, #{
-                                <<"status">> => 400,
-                                <<"content-type">> => <<"application/json">>,
+                    request(
+                        <<"GET">>,
+                        <<"/unconfirmed_tx/", TXID/binary>>,
+                        Opts#{
+                            exclude_data => ExcludeData
+                        }
+                    );
+                {ok, _RawOffset} ->
+                    {error, #{
+                        <<"status">> => 400,
+                        <<"content-type">> => <<"application/json">>,
                                 <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
-                            }};
-                        Offset ->
-                            % Download an unconfirmed chunk by its offset
-                            request(
-                                <<"GET">>,
-                                <<
-                                    "/unconfirmed_chunk/",
-                                    TXID/binary,
-                                    "/",
-                                    (hb_util:bin(Offset))/binary
-                                >>,
-                                Opts#{
-                                    <<"exclude-data">> =>
-                                        hb_util:bool(
-                                            find_key(
-                                                <<"exclude-data">>,
-                                                Base,
-                                                Request,
-                                                Opts
-                                            )
-                                        )
-                                }
-                            )
-                    catch
-                        _:_ ->
-                            {error, #{
-                                <<"status">> => 400,
-                                <<"content-type">> => <<"application/json">>,
-                                <<"body">> => <<"{\"error\":\"invalid_offset\"}">>
-                            }}
-                    end
+                    }}
             end
     end.
 
@@ -2133,6 +2284,25 @@ assemble_relative_chunks_nonzero_offset_test_parallel() ->
     {ok, [Chunk]} =
         assemble_relative_chunks([{1, 5, <<"abcde">>}], 2),
     ?assertEqual(<<"cde">>, hb_util:bin(Chunk)).
+
+pending_relative_chunk_offsets_single_chunk_test_parallel() ->
+    ?assertEqual([1234], pending_relative_chunk_offsets(0, 1, 1234)),
+    ?assertEqual([1234], pending_relative_chunk_offsets(0, 1234, 1234)).
+
+pending_relative_chunk_offsets_standard_multi_chunk_test_parallel() ->
+    DataSize = 315127,
+    ?assertEqual(
+        [?DATA_CHUNK_SIZE],
+        pending_relative_chunk_offsets(0, 1, DataSize)
+    ),
+    ?assertEqual(
+        [DataSize],
+        pending_relative_chunk_offsets(?DATA_CHUNK_SIZE, 1, DataSize)
+    ),
+    ?assertEqual(
+        [?DATA_CHUNK_SIZE, DataSize],
+        pending_relative_chunk_offsets(0, DataSize, DataSize)
+    ).
 
 get_pre_split_small_chunks_test_parallel() ->
     TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
