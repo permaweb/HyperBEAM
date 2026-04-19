@@ -44,19 +44,20 @@ log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, Mod, Func, Line, Opts) ->
     % Fast path: a single pdict get skips the `debug_print' function call
-    % AND the Prometheus increment for topics that have previously been
-    % observed to be silent. This keeps production-default events -- where no
-    % print/log subscription is configured -- down to a single pdict lookup.
+    % for topics that have previously been observed to be print/log-silent.
+    % `increment/3' ALWAYS runs -- Prometheus counters are independent of
+    % print/log subscription, and topics whose counters should be suppressed
+    % are handled by the `ignored'-topic clauses in `increment/4' (a cheap
+    % compile-time jump table match).
     case erlang:get({event_silent, Topic, Mod}) of
-        true -> X;
-        _ ->
-            debug_print(Topic, X, Mod, Func, Line, Opts),
-            try increment(Topic, X, Opts) catch _:_ -> ok end,
-            % Return the logged value to the caller. This allows callers to
-            % insert `?event(...)' macros into the flow of other executions,
-            % without having to break functional style.
-            X
-    end.
+        true -> ok;
+        _ -> debug_print(Topic, X, Mod, Func, Line, Opts)
+    end,
+    try increment(Topic, X, Opts) catch _:_ -> ok end,
+    % Return the logged value to the caller. This allows callers to insert
+    % `?event(...)' macros into the flow of other executions, without
+    % having to break functional style.
+    X.
 
 debug_print(X, Mod, Func, Line) ->
     debug_print(X, Mod, Func, Line, #{}).
