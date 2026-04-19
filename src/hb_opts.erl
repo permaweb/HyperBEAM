@@ -463,8 +463,37 @@ default_message() ->
             },
         % Should the node store all signed messages?
         store_all_signed => true,
-        % Should the node use persistent processes?
-        process_workers => false,
+        % Persistent-process defaults (production-enabled, Apr 2026).
+        %
+        % `process_workers => true' makes `dev_process_worker:group/3' return
+        % the process-id as the `hb_persistent' group name for `compute'
+        % requests, so all compute calls on the same process funnel through
+        % one leader/waiter group. That eliminates the side-effect
+        % duplication that occurs when concurrent paths (e.g. `do_push' and
+        % a UI `/now' poll) both try to compute the same slot.
+        %
+        % `spawn_worker => true' makes `hb_ao:resolve_stage(12)' spawn a
+        % long-lived `dev_process_worker:server/3' (or `default_worker/3'
+        % for non-process devices) after the first successful resolution.
+        % The worker holds the result in memory and serially handles
+        % subsequent `{resolve, ...}' messages addressed to the same group
+        % name. For dev_process this means subsequent /compute requests
+        % wait on the in-memory leader (registered under the process-id)
+        % and get notified by slot via `dev_process_worker:notify_compute',
+        % avoiding a fresh from-snapshot recompute.
+        %
+        % These two flags work together. The full HB eunit suite (3048
+        % tests) passes with both enabled, identical pass/fail counts to
+        % the vanilla baseline. The supporting fix is in
+        % `hb_ao:execution_opts/1' which sets `allow_infinite => true' on
+        % the opts handed to stage 6 device-function calls — see the
+        % comment there for the rationale (the compute pipeline and the
+        % `dev_router:preprocess' hook both perform legitimate same-thread
+        % nested resolves on the same persistence group, which would
+        % otherwise trip `find_or_register/3''s `infinite_recursion'
+        % clause).
+        process_workers => true,
+        spawn_worker => true,
         % Options for the router device
         router_opts => #{
             routes => []

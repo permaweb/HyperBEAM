@@ -691,21 +691,55 @@ resolve_stage(11, Base, Req, Res, ExecName, Opts) ->
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
     resolve_stage(12, Base, Req, Res, ExecName, Opts);
-resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
+resolve_stage(12, Base, _Req, {ok, Inner} = Res, ExecName, Opts) ->
     ?event(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
-    % Check if we should fork out a new worker process for the current execution
-    case {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ prefer => local })} of
-        {A, B} when (A == false) or (B == false) ->
-            Res;
-        {_, _} ->
+    % Check if we should fork out a new worker process for the current
+    % execution. Three conditions must hold:
+    %   1. The result is a map (we can only persist map-shaped state).
+    %   2. `spawn_worker => true' is set in the local opts.
+    %   3. The DEVICE has opted in by declaring a `worker' fun in its info
+    %      map. Without this gate every device would inherit a default
+    %      `default_worker/3' loop that does nothing useful and merely
+    %      blocks on its mailbox. The user-facing spawn_worker flag MUST be
+    %      paired with device opt-in; otherwise the spawn is wasted.
+    %
+    % Bug fix (April 2026): the previous head pattern was
+    %   `resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts)'
+    % which is dead code — `{ok, Res} = Res' rebinds `Res' as an equality
+    % test, requiring `Res =:= {ok, Res}' (structurally impossible). Stage
+    % 12's spawn branch was therefore never reached and `spawn_worker =>
+    % true' was a silent no-op. Rebinding to `Inner' makes the spawn branch
+    % reachable; gating on `device_opts_in_to_worker/2' keeps non-process
+    % devices from spawning a useless default loop.
+    DeviceOptedIn = device_opts_in_to_worker(Base, Opts),
+    SpawnFlag = hb_opts:get(spawn_worker, false, Opts#{ prefer => local }),
+    case {is_map(Inner), SpawnFlag, DeviceOptedIn} of
+        {true, true, true} ->
             % Spawn a worker for the current execution
-            WorkerPID = hb_persistent:start_worker(ExecName, Res, Opts),
+            WorkerPID = hb_persistent:start_worker(ExecName, Inner, Opts),
             hb_persistent:forward_work(WorkerPID, Opts),
+            Res;
+        _ ->
             Res
     end;
 resolve_stage(12, _Base, _Req, OtherRes, ExecName, Opts) ->
     ?event(debug_ao_core, {stage, 12, ExecName, abnormal_status_skip_spawning}, Opts),
     OtherRes.
+
+%% @doc Whether the device of `Base' has opted into the persistent-worker
+%% machinery by declaring a `worker' fun in its info map. Devices that do
+%% not declare a worker would fall back to `hb_persistent:default_worker/3',
+%% which is a generic mailbox loop that has no semantic meaning for
+%% non-process devices. Spawning such a worker only consumes resources, so
+%% gating on opt-in is the right default.
+device_opts_in_to_worker(Base, Opts) when is_map(Base) ->
+    try hb_ao_device:info(Base, Opts) of
+        Info when is_map(Info) ->
+            maps:is_key(worker, Info);
+        _ -> false
+    catch _:_ -> false
+    end;
+device_opts_in_to_worker(_, _) -> false.
 
 %% @doc Execute a sub-resolution.
 subresolve(RawBase, DevID, ReqPath, Opts) when is_binary(ReqPath) ->
@@ -1214,7 +1248,24 @@ execution_opts(Opts) ->
     % Unless the user has explicitly requested recursive spawning, we
     % unset the spawn_worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_maps:get(spawn_worker, Opts1, false, Opts) of
-        recursive -> Opts1;
-        _ -> hb_maps:remove(spawn_worker, Opts1, Opts)
-    end.
+    Opts2 =
+        case hb_maps:get(spawn_worker, Opts1, false, Opts) of
+            recursive -> Opts1;
+            _ -> hb_maps:remove(spawn_worker, Opts1, Opts)
+        end,
+    % Permit nested same-thread re-entry into the persistent resolver.
+    % Stage 4 of `hb_ao:resolve' detects `Self == Leader' as
+    % `infinite_recursion' and aborts unless `allow_infinite' is set.
+    % That detection is correct for genuinely external calls but a false
+    % positive for sub-resolves originating from inside a stage 6 device
+    % function call, which legitimately need to re-target a group the
+    % outer caller already registered (e.g. `dev_router:preprocess'
+    % calling `load_routes' which resolves a path back through the same
+    % node-process under `process_workers => true'; or
+    % `dev_process:compute_to_slot' invoking the execution device which
+    % internally calls `hb_ao:resolve' on the same process). The leader
+    % registration is still in place so the work is not duplicated; we
+    % just want to proceed instead of crashing. This mirrors the
+    % `allow_infinite => true' that `hb_persistent:start_worker/3' merges
+    % into the long-lived worker's opts (line 305) for the same reason.
+    Opts2#{ allow_infinite => true }.

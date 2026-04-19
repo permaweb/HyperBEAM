@@ -581,6 +581,11 @@ now(RawBase, Req, Opts) ->
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
+            % `compute/3' itself sets `allow_infinite => true' on its
+            % nested resolves so same-thread re-entry into the
+            % process-id group is permitted under `process_workers => true'.
+            % We pass `Opts' through unchanged here so external concurrent
+            % callers still funnel through `find_or_register/3' for dedup.
             hb_ao:resolve(
                 Base,
                 #{ <<"path">> => <<"compute">>, <<"slot">> => CurrentSlot },

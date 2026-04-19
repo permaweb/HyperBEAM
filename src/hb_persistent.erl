@@ -312,7 +312,27 @@ start_worker(GroupName, Msg, Opts) ->
     ),
     WorkerPID.
 
-%% @doc A server function for handling persistent executions. 
+%% @doc A server function for handling persistent executions.
+%%
+%% After each request is handled the worker decides whether to:
+%%   * Stay on the current `GroupName' with the current `Base' (default,
+%%     and the only mode that was reachable historically — see comment
+%%     below about the dead-code bug); or
+%%   * Advance to a new `GroupName' keyed by the resulting state map (only
+%%     when `static_worker => false' AND `advance_worker_group => true').
+%%
+%% Historical bug (April 2026): the previous version of this function had
+%%   `case Res of {ok, Res} -> ...'
+%% which is dead code: the inner `Res' rebinds the outer `Res' as an
+%% equality check, requiring `Res =:= {ok, Res}', which is structurally
+%% impossible. So the "advance to new group" branch was never reachable;
+%% workers always recursed on the same `GroupName' and `Base'. This was
+%% in fact the only sensible behavior given that the advance branch never
+%% unregistered the old group — so leaving it permanently disabled
+%% preserves existing behavior. The `advance_worker_group' opt is a new
+%% explicit knob: callers must opt in to get the original (broken-as-
+%% designed) advance behavior, and they must understand that requests to
+%% the old group name will queue forever in this worker's mailbox.
 default_worker(GroupName, Base, Opts) ->
     Timeout = hb_opts:get(worker_timeout, 10000, Opts),
     worker_event(GroupName, default_worker_waiting_for_req, Base, undefined, Opts),
@@ -332,28 +352,38 @@ default_worker(GroupName, Base, Opts) ->
                 ),
             send_response(Listener, GroupName, Req, Res),
             notify(GroupName, Req, Res, Opts),
-            case hb_opts:get(static_worker, false, Opts) of
-                true ->
-                    % Reregister for the existing group name.
-                    register_groupname(GroupName, Opts),
+            Static = hb_opts:get(static_worker, false, Opts),
+            Advance = hb_opts:get(advance_worker_group, false, Opts),
+            case {Static, Advance, Res} of
+                {true, _, _} ->
+                    %% Stay on the existing group with the existing base.
                     default_worker(GroupName, Base, Opts);
-                false ->
-                    % Register for the new (Base) group.
-                    case Res of
-                        {ok, Res} ->
-                            NewGroupName = group(Res, undefined, Opts),
-                            register_groupname(NewGroupName, Opts),
-                            default_worker(NewGroupName, Res, Opts);
-                        _ ->
-                            % If the result is not ok, we should either ignore
-                            % the error and stay on the existing group,
-                            % or throw it.
-                            case hb_opts:get(error_strategy, ignore, Opts) of
-                                ignore ->
-                                    register_groupname(GroupName, Opts),
-                                    default_worker(GroupName, Base, Opts);
-                                throw -> throw(Res)
-                            end
+                {false, true, {ok, NewBase}} when is_map(NewBase) ->
+                    %% Opt-in advance to a new group keyed by the result.
+                    NewGroupName = group(NewBase, undefined, Opts),
+                    case register_groupname(NewGroupName, Opts) of
+                        ok ->
+                            default_worker(NewGroupName, NewBase, Opts);
+                        error ->
+                            %% Another worker already owns the new group;
+                            %% stay on current group rather than orphan
+                            %% ourselves.
+                            ?event(worker,
+                                {advance_failed_other_worker_owns_group,
+                                    {wanted, NewGroupName},
+                                    {staying_on, GroupName}}),
+                            default_worker(GroupName, Base, Opts)
+                    end;
+                {false, _, {ok, _}} ->
+                    %% Default: stay on current group with current base.
+                    default_worker(GroupName, Base, Opts);
+                {false, _, _} ->
+                    %% Non-ok result: honor error_strategy.
+                    case hb_opts:get(error_strategy, ignore, Opts) of
+                        ignore ->
+                            default_worker(GroupName, Base, Opts);
+                        throw ->
+                            throw(Res)
                     end
             end
     after Timeout ->

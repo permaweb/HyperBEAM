@@ -68,14 +68,19 @@ server(GroupName, Base, Opts) ->
                 ),
             ?event(worker, {work_done, {group, GroupName}, {req, Req}, {res, Res}}),
             send_notification(Listener, GroupName, TargetSlot, Res),
-            server(
-                GroupName,
+            %% Bug fix (April 2026): the previous version had
+            %%   `case Res of {ok, Res} -> Res; _ -> Base end'
+            %% which is dead code (rebinding `Res' to `{ok, Res}' is
+            %% structurally impossible — see hb_persistent.erl
+            %% `default_worker/3' comment). The intent — advance to the
+            %% computed state map for the next iteration — is now
+            %% reachable.
+            NextBase =
                 case Res of
-                    {ok, Res} -> Res;
+                    {ok, Inner} when is_map(Inner) -> Inner;
                     _ -> Base
                 end,
-                Opts
-            );
+            server(GroupName, NextBase, Opts);
         stop ->
             ?event(worker, {stopping, {group, GroupName}, {base, Base}}),
             exit(normal)
