@@ -20,11 +20,29 @@ cd "$(dirname "$0")/.."
 LAPEE=$(pwd)
 
 SRC="$LAPEE/build-hyperbeam/src-edge"
+
+# If src-edge isn't populated yet, seed it from the HyperBEAM repo
+# that this `lapee-baremetal/' lives inside (the common case when
+# building from a clean checkout of the lapee branch). The bind mount
+# into the Rosetta builder is a COPY, not a symlink, so that `_build/'
+# artefacts don't pollute the parent tree.
 if [[ ! -f "$SRC/rebar.config" ]]; then
-    echo "missing HyperBEAM source at $SRC" >&2
-    echo "expected: rebar.config, src/, native/, ... checked out from the" >&2
-    echo "agent/lapee-dev-tpm2 branch (or a merge thereof)." >&2
-    exit 1
+    HB_ROOT="$LAPEE/.."
+    if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
+        echo "=== seeding $SRC from $HB_ROOT (first run) ==="
+        mkdir -p "$SRC"
+        rsync -a --delete \
+            --exclude='_build/' --exclude='.git/' \
+            --exclude='priv/' --exclude='logs/' --exclude='metrics/' \
+            --exclude='rebar3.crashdump' \
+            "$HB_ROOT/" "$SRC/"
+    else
+        echo "missing HyperBEAM source at $SRC, and parent ($HB_ROOT) does"   >&2
+        echo "not look like a HyperBEAM checkout either. Either populate"    >&2
+        echo "$SRC manually or run this script from inside a HyperBEAM repo" >&2
+        echo "where lapee-baremetal/ is a subdirectory."                     >&2
+        exit 1
+    fi
 fi
 
 # Kill any dangling build container.
