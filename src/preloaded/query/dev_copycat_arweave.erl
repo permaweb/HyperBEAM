@@ -1667,61 +1667,174 @@ get_index_store(Opts) ->
 index_mempool(_Request, Opts) ->
     case dev_arweave:pending(#{}, #{}, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
+            mempool_progress(
+                Opts,
+                {mempool_scan_started, {pending_count, length(TXIDs)}}
+            ),
             Results = parallel_map(TXIDs,
                 fun(TXID) -> index_mempool_tx(TXID, Opts) end, Opts),
-            Summary = lists:foldl(fun(R, Acc) ->
-                K = case R of
-                    ok -> indexed; existing -> existing;
-                    missing_data -> missing_data; _ -> failed
-                end,
-                Acc#{ K => maps:get(K, Acc) + 1 }
-            end, #{ indexed => 0, existing => 0,
-                    missing_data => 0, failed => 0 }, Results),
-            ?event(copycat_short, {mempool_scan_completed, Summary}),
+            Summary = lists:foldl(
+                fun mempool_accumulate_result/2,
+                mempool_empty_summary(),
+                Results
+            ),
+            mempool_progress(Opts, {mempool_scan_completed, Summary}),
             {ok, Summary};
         Error -> Error
     end.
 
-index_mempool_tx(TXID, Opts) ->
-    case is_tx_indexed(TXID, Opts) of
-        true -> existing;
-        false ->
-            case dev_arweave:pending(#{}, #{ <<"pending">> => TXID }, Opts) of
-                {ok, StructuredTX} ->
-                    TX = hb_message:convert(StructuredTX,
-                        <<"tx@1.0">>, <<"structured@1.0">>, Opts),
-                    case has_mempool_data(TX) of
-                        true -> write_mempool_offsets(TXID, TX, Opts);
-                        false -> missing_data
-                    end;
-                _ -> failed
-            end
+mempool_progress(Opts, Event) ->
+    case hb_opts:get(arweave_mempool_progress, false, Opts) of
+        true -> ?event(copycat_short, Event);
+        false -> ok
     end.
 
-has_mempool_data(#tx{ data_size = 0 }) -> true;
-has_mempool_data(#tx{ data = D, data_size = S })
-        when is_binary(D) -> byte_size(D) =:= S;
-has_mempool_data(_) -> false.
+mempool_empty_summary() ->
+    #{
+        indexed => 0,
+        existing => 0,
+        missing_data => 0,
+        failed => 0,
+        tx_offsets_written => 0,
+        bundle_txs => 0,
+        items_indexed => 0
+    }.
+
+mempool_accumulate_result(Result, Acc) ->
+    maps:fold(
+        fun(Key, Value, SummaryAcc) ->
+            SummaryAcc#{ Key => maps:get(Key, SummaryAcc) + Value }
+        end,
+        Acc,
+        mempool_result_summary(Result)
+    ).
+
+mempool_result_summary(existing) ->
+    (mempool_empty_summary())#{ existing => 1 };
+mempool_result_summary(indexed) ->
+    (mempool_empty_summary())#{ indexed => 1 };
+mempool_result_summary(missing_data) ->
+    (mempool_empty_summary())#{ missing_data => 1 };
+mempool_result_summary(ok) ->
+    (mempool_empty_summary())#{ indexed => 1 };
+mempool_result_summary(failed) ->
+    (mempool_empty_summary())#{ failed => 1 };
+mempool_result_summary(#{ status := Status } = Result) ->
+    Base = mempool_result_summary(Status),
+    lists:foldl(
+        fun(Key, SummaryAcc) ->
+            SummaryAcc#{
+                Key => maps:get(Key, SummaryAcc) + maps:get(Key, Result, 0)
+            }
+        end,
+        Base,
+        [tx_offsets_written, bundle_txs, items_indexed]
+    );
+mempool_result_summary(_) ->
+    (mempool_empty_summary())#{ failed => 1 }.
+
+index_mempool_tx(TXID, Opts) ->
+    mempool_progress(Opts, {mempool_tx_started, {tx_id, {explicit, TXID}}}),
+    Result =
+        case is_tx_indexed(TXID, Opts) of
+            true -> existing;
+            false ->
+                mempool_progress(
+                    Opts,
+                    {mempool_tx_header_fetch_started, {tx_id, {explicit, TXID}}}
+                ),
+                case dev_arweave:pending(
+                    #{},
+                    #{ <<"pending">> => TXID },
+                    Opts#{ exclude_data => true }
+                ) of
+                    {ok, StructuredTX} ->
+                        mempool_progress(
+                            Opts,
+                            {mempool_tx_header_fetch_finished,
+                                {tx_id, {explicit, TXID}}}
+                        ),
+                        TX = hb_message:convert(
+                            StructuredTX,
+                            <<"tx@1.0">>,
+                            <<"structured@1.0">>,
+                            Opts
+                        ),
+                        mempool_progress(
+                            Opts,
+                            {mempool_tx_convert_finished,
+                                {tx_id, {explicit, TXID}},
+                                {data_size, TX#tx.data_size},
+                                {bundle, is_bundle_tx(TX, Opts)}}
+                        ),
+                        write_mempool_offsets(TXID, TX, Opts);
+                    _ ->
+                        failed
+                end
+        end,
+    mempool_progress(
+        Opts,
+        {mempool_tx_finished,
+            {tx_id, {explicit, TXID}},
+            mempool_progress_result(Result)}
+    ),
+    Result.
+
+mempool_progress_result(existing) ->
+    {status, existing};
+mempool_progress_result(indexed) ->
+    {status, indexed};
+mempool_progress_result(missing_data) ->
+    {status, missing_data};
+mempool_progress_result(ok) ->
+    {status, indexed};
+mempool_progress_result(failed) ->
+    {status, failed};
+mempool_progress_result(#{ status := Status }) ->
+    {status, Status};
+mempool_progress_result(_) ->
+    {status, failed}.
 
 write_mempool_offsets(TXID, TX, Opts) ->
     Store = hb_store_arweave:store_from_opts(Opts),
-    ok = hb_store_arweave:write_offset(
-        Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
+    mempool_progress(
+        Opts,
+        {mempool_data_load_started,
+            {tx_id, {explicit, TXID}},
+            {length, TX#tx.data_size}}
+    ),
     case load_mempool_data(TXID, TX, Opts) of
         {ok, Data} ->
+            mempool_progress(
+                Opts,
+                {mempool_data_loaded,
+                    {tx_id, {explicit, TXID}},
+                    {loaded_bytes, byte_size(Data)}}
+            ),
+            ok = hb_store_arweave:write_offset(
+                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
             write_mempool_children(Store, TXID, TX, Data, Opts);
-        _ ->
-            ok
-    end,
-    ok.
+        _Error ->
+            #{ status => missing_data }
+    end.
 
 write_mempool_children(Store, TXID, TX, Data, Opts) ->
     case is_bundle_tx(TX, Opts) of
         true ->
             case load_mempool_bundle_index(TXID, Data, Opts) of
                 {ok, HeaderSize, BundleIndex} ->
-                    write_mempool_items(Store, TXID, BundleIndex, HeaderSize);
-                _ -> ok
+                    write_mempool_items(Store, TXID, BundleIndex, HeaderSize),
+                    #{
+                        status => indexed,
+                        tx_offsets_written => 1,
+                        bundle_txs => 1,
+                        items_indexed => length(BundleIndex)
+                    };
+                _Error ->
+                    #{
+                        status => failed,
+                        tx_offsets_written => 1
+                    }
             end;
         false ->
             case standalone_item_id(Data) of
@@ -1729,8 +1842,17 @@ write_mempool_children(Store, TXID, TX, Data, Opts) ->
                     Ref = #{ <<"relative">> => TXID, <<"offset">> => 0 },
                     hb_store_arweave:write_offset(
                         Store, ItemID, <<"ans104@1.0">>,
-                        Ref, TX#tx.data_size);
-                not_found -> ok
+                        Ref, TX#tx.data_size),
+                    #{
+                        status => indexed,
+                        tx_offsets_written => 1,
+                        items_indexed => 1
+                    };
+                not_found ->
+                    #{
+                        status => indexed,
+                        tx_offsets_written => 1
+                    }
             end
     end.
 
@@ -1813,7 +1935,11 @@ load_mempool_bundle_index(TXID, <<>>, Opts) ->
         {error, invalid_bundle_header}
     end.
 
-standalone_item_id(Data) when is_binary(Data), Data =/= <<>> ->
+standalone_item_id(<<SigType:2/binary, _/binary>> = Data)
+        when is_binary(Data), Data =/= <<>> ->
+    case lists:member(SigType, [<<1, 0>>, <<2, 0>>, <<3, 0>>, <<4, 0>>, <<7, 0>>]) of
+        false -> not_found;
+        true ->
     try
         Item = ar_bundles:deserialize(Data),
         case ar_bundles:verify_item(Item) of
@@ -1821,6 +1947,7 @@ standalone_item_id(Data) when is_binary(Data), Data =/= <<>> ->
             false -> not_found
         end
     catch _:_ -> not_found
+    end
     end;
 standalone_item_id(_) -> not_found.
 
