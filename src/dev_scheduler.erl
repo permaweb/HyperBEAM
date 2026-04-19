@@ -51,36 +51,31 @@
 ]).
 -endif.
 
-%% @doc Run most tests in parallel. The benchmark suite picks a random
-%% port and seeds rand globally, so run it by itself after the parallel
-%% batch to avoid port contention and seed corruption.
+%% @doc Run every test in this module in parallel. The benchmark suite
+%% lets the OS pick ports and uses per-test `hb_test_utils:test_store/1',
+%% so it carries no more shared state than any other test in the batch.
 all_tests_test_() ->
-    ParallelSafe = [
-        status_tc,
-        register_new_process_tc,
-        schedule_message_and_get_slot_tc,
-        redirect_to_hint_tc,
-        redirect_from_graphql_tc_,
-        get_local_schedule_tc,
-        http_get_schedule_redirect_tc_,
-        http_post_schedule_tc_,
-        http_get_schedule_tc_,
-        http_get_legacy_schedule_tc_,
-        http_get_legacy_slot_tc_,
-        http_get_legacy_schedule_slot_range_tc_,
-        http_get_legacy_schedule_as_aos2_tc_,
-        http_get_json_schedule_tc_
-    ],
-    {inorder,
+    {inparallel,
         [
-            {inparallel,
-                [
-                    {atom_to_list(F), fun ?MODULE:F/0}
-                ||
-                    F <- ParallelSafe
-                ]
-            },
-            {"benchmark_suite_tc_", fun ?MODULE:benchmark_suite_tc_/0}
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                status_tc,
+                register_new_process_tc,
+                schedule_message_and_get_slot_tc,
+                redirect_to_hint_tc,
+                redirect_from_graphql_tc_,
+                get_local_schedule_tc,
+                http_get_schedule_redirect_tc_,
+                http_post_schedule_tc_,
+                http_get_schedule_tc_,
+                http_get_legacy_schedule_tc_,
+                http_get_legacy_slot_tc_,
+                http_get_legacy_schedule_slot_range_tc_,
+                http_get_legacy_schedule_as_aos2_tc_,
+                http_get_json_schedule_tc_,
+                benchmark_suite_tc_
+            ]
         ]
     }.
 %%% The maximum number of assignments that we will query/return at a time.
@@ -1658,13 +1653,10 @@ http_init() -> http_init(#{}).
 http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
-    %% Each test gets its own volatile store instance (via a unique name)
-    %% layered over a gateway store, so parallel HTTP scheduler tests do
-    %% not share `hb_store_volatile' ETS state.
     ExtendedOpts = Opts#{
         priv_wallet => Wallet,
         store => [
-            hb_test_utils:test_store(hb_store_volatile, <<"scheduler-http">>),
+            hb_test_utils:test_store(),
             #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
         ]
     },
@@ -1988,31 +1980,23 @@ many_clients(Opts) ->
     ?assert(Iterations > 10).
 
 benchmark_suite_tc_() ->
-	{timeout, 10, fun() -> 
-		rand:seed(exsplus, erlang:timestamp()),
-		Port = 30000 + rand:uniform(10000),
-		Bench = [
-			{benchmark, "benchmark", fun single_resolution/1},
-			{multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
-		],
-		filelib:ensure_dir(
-			binary_to_list(Base = <<"cache-TEST/run-">>)
-		),
-		hb_test_utils:suite_with_opts(Bench, benchmark_suite(Port, Base))
-	end}.
+    {timeout, 10, fun() ->
+        Bench = [
+            {benchmark, "benchmark", fun single_resolution/1},
+            {multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
+        ],
+        hb_test_utils:suite_with_opts(Bench, benchmark_suite())
+    end}.
 
-benchmark_suite(Port, Base) ->
-    PortBin = integer_to_binary(Port),
+benchmark_suite() ->
     [
         #{
             name => fs,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-A">>
-                },
+                store => hb_test_utils:test_store(hb_store_fs),
                 scheduling_mode => local_confirmation,
-                port => Port
+                port => 0
             },
             desc => <<"FS store, local conf.">>
         },
@@ -2020,11 +2004,9 @@ benchmark_suite(Port, Base) ->
             name => fs_aggressive,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-B">>
-                },
+                store => hb_test_utils:test_store(hb_store_fs),
                 scheduling_mode => aggressive,
-                port => Port + 1
+                port => 0
             },
             desc => <<"FS store, aggressive conf.">>
         },
@@ -2032,11 +2014,9 @@ benchmark_suite(Port, Base) ->
             name => rocksdb,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-C">>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => local_confirmation,
-                port => Port + 2
+                port => 0
             },
             desc => <<"RocksDB store, local conf.">>
         },
@@ -2044,11 +2024,9 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_aggressive,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-D">>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => aggressive,
-                port => Port + 3
+                port => 0
             },
             desc => <<"RocksDB store, aggressive conf.">>
         },
@@ -2056,14 +2034,7 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_extreme_aggressive_h3,
             requires => [http3],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> =>
-                          <<
-                              Base/binary,
-                              "run-",
-                              (integer_to_binary(Port+4))/binary
-                          >>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => aggressive,
                 protocol => http3,
                 workers => 100
