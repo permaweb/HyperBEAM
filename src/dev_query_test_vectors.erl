@@ -4,6 +4,61 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-ifdef(TEST).
+%% Test cases exported so `all_tests_test_/0' can run them in parallel via
+%% `fun ?MODULE:name/0'. Each case calls `test_env_with_blocks/2' or
+%% `hb_http_server:start_node/1' with a fresh `hb_test_utils:test_store/0'
+%% so tests are isolated.
+-export([
+    simple_blocks_query_tc/0,
+    block_by_height_query_tc/0,
+    simple_ans104_query_tc/0,
+    transactions_query_tags_tc/0,
+    transactions_query_owners_tc/0,
+    transactions_query_recipients_tc/0,
+    transactions_query_ids_tc/0,
+    transactions_query_combined_tc/0,
+    transactions_query_sort_by_block_tc/0,
+    transactions_query_filter_by_block_tc/0,
+    transactions_query_filter_by_block_excludes_unknown_offsets_tc/0,
+    transactions_query_filter_by_block_can_ignore_ranges_tc/0,
+    transactions_query_ids_preserve_arweave_tx_id_tc/0,
+    transactions_query_cursor_by_offset_tc/0,
+    transaction_query_by_id_tc/0,
+    transaction_query_full_tc/0,
+    transaction_query_not_found_tc/0,
+    transaction_query_with_anchor_tc/0
+]).
+-endif.
+
+all_tests_test_() ->
+    {inparallel,
+        [
+            {atom_to_list(F), fun ?MODULE:F/0}
+        ||
+            F <- [
+                simple_blocks_query_tc,
+                block_by_height_query_tc,
+                simple_ans104_query_tc,
+                transactions_query_tags_tc,
+                transactions_query_owners_tc,
+                transactions_query_recipients_tc,
+                transactions_query_ids_tc,
+                transactions_query_combined_tc,
+                transactions_query_sort_by_block_tc,
+                transactions_query_filter_by_block_tc,
+                transactions_query_filter_by_block_excludes_unknown_offsets_tc,
+                transactions_query_filter_by_block_can_ignore_ranges_tc,
+                transactions_query_ids_preserve_arweave_tx_id_tc,
+                transactions_query_cursor_by_offset_tc,
+                transaction_query_by_id_tc,
+                transaction_query_full_tc,
+                transaction_query_not_found_tc,
+                transaction_query_with_anchor_tc
+            ]
+        ]
+    }.
+
 %%% Test helpers.
 
 write_test_message(Opts) ->
@@ -95,7 +150,7 @@ write_test_message_with_recipient(Recipient, Opts) ->
 
 %%% Tests
 
-simple_blocks_query_test() ->
+simple_blocks_query_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -141,7 +196,7 @@ simple_blocks_query_test() ->
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
     ).
 
-block_by_height_query_test() ->
+block_by_height_query_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -193,7 +248,7 @@ block_by_height_query_test() ->
         dev_query_graphql:test_query(Node, Query, #{}, Opts)
     ).
 
-simple_ans104_query_test() ->
+simple_ans104_query_tc() ->
     Opts =
         #{
             priv_wallet => Wallet = ar_wallet:new(),
@@ -260,7 +315,7 @@ simple_ans104_query_test() ->
     ).
 
 %% @doc Test transactions query with tags filter
-transactions_query_tags_test() ->
+transactions_query_tags_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -323,7 +378,7 @@ transactions_query_tags_test() ->
     ).
 
 %% @doc Test transactions query with owners filter
-transactions_query_owners_test() ->
+transactions_query_owners_tc() ->
     Opts =
         #{
             priv_wallet => Wallet = ar_wallet:new(),
@@ -385,7 +440,7 @@ transactions_query_owners_test() ->
     ).
 
 %% @doc Test transactions query with recipients filter
-transactions_query_recipients_test() ->
+transactions_query_recipients_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -450,7 +505,7 @@ transactions_query_recipients_test() ->
     ).
 
 %% @doc Test transactions query with ids filter
-transactions_query_ids_test() ->
+transactions_query_ids_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -512,7 +567,7 @@ transactions_query_ids_test() ->
     ).
 
 %% @doc Test transactions query with combined filters
-transactions_query_combined_test() ->
+transactions_query_combined_tc() ->
     Opts =
         #{
             priv_wallet => Wallet = ar_wallet:new(),
@@ -578,7 +633,7 @@ transactions_query_combined_test() ->
         Res
     ).
 
-transactions_query_sort_by_block_test() ->
+transactions_query_sort_by_block_tc() ->
     {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
     EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
     LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
@@ -621,7 +676,7 @@ transactions_query_sort_by_block_test() ->
     VerifyFun(<<"HEIGHT_ASC">>, EarlierID, LaterID),
     VerifyFun(<<"HEIGHT_DESC">>, LaterID, EarlierID).
 
-transactions_query_filter_by_block_test() ->
+transactions_query_filter_by_block_tc() ->
     {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
     EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
     LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
@@ -668,7 +723,7 @@ transactions_query_filter_by_block_test() ->
     VerifyFun(1892157, 1892158, [EarlierID], [LaterID]),
     VerifyFun(1892159, 1892160, [LaterID], [EarlierID]).
 
-transactions_query_filter_by_block_excludes_unknown_offsets_test() ->
+transactions_query_filter_by_block_excludes_unknown_offsets_tc() ->
     {ok, _Node, Opts} = test_env_with_blocks(1892159, 1892158),
     {ok, ID} =
         hb_cache:write(
@@ -701,7 +756,7 @@ transactions_query_filter_by_block_excludes_unknown_offsets_test() ->
         )
     ).
 
-transactions_query_filter_by_block_can_ignore_ranges_test() ->
+transactions_query_filter_by_block_can_ignore_ranges_tc() ->
     {ok, _Node, BaseOpts} = test_env_with_blocks(1892159, 1892158),
     Opts = BaseOpts#{ query_arweave_ignore_block_ranges => true },
     {ok, ID} =
@@ -736,7 +791,7 @@ transactions_query_filter_by_block_can_ignore_ranges_test() ->
         )
     ).
 
-transactions_query_ids_preserve_arweave_tx_id_test() ->
+transactions_query_ids_preserve_arweave_tx_id_tc() ->
     {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
@@ -767,7 +822,7 @@ transactions_query_ids_preserve_arweave_tx_id_test() ->
         )
     ).
 
-transactions_query_cursor_by_offset_test() ->
+transactions_query_cursor_by_offset_tc() ->
     {ok, Node, Opts} = test_env_with_blocks(1892159, 1892158),
     EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
     LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
@@ -878,7 +933,7 @@ transactions_query_cursor_by_offset_test() ->
     ).
 
 %% @doc Test single transaction query by ID
-transaction_query_by_id_test() ->
+transaction_query_by_id_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -928,7 +983,7 @@ transaction_query_by_id_test() ->
     ).
 
 %% @doc Test single transaction query with more fields  
-transaction_query_full_test() ->
+transaction_query_full_tc() ->
     Opts =
         #{
             priv_wallet => SenderKey = ar_wallet:new(),
@@ -1005,7 +1060,7 @@ transaction_query_full_test() ->
     ).
 
 %% @doc Test single transaction query with non-existent ID
-transaction_query_not_found_test() ->
+transaction_query_not_found_tc() ->
     Opts =
         #{
             priv_wallet => ar_wallet:new(),
@@ -1041,7 +1096,7 @@ transaction_query_not_found_test() ->
     ).
 
 %% @doc Test parsing, storing, and querying a transaction with an anchor.
-transaction_query_with_anchor_test() ->
+transaction_query_with_anchor_tc() ->
     Opts =
         #{
             priv_wallet => Wallet = ar_wallet:new(),
