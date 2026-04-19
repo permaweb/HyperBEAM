@@ -21,13 +21,7 @@ cd "$(dirname "$0")/.."
 
 PORT=${PORT:-18734}
 PEER=${PEER:-"http://127.0.0.1:${PORT}"}
-ENV=out/evidence/att-baseline.json
-
-if [[ ! -f "$ENV" ]]; then
-    echo "missing $ENV — run: make hb-boot (once) to populate" >&2
-    echo "                     or drop an envelope there manually" >&2
-    exit 1
-fi
+ENV=${ENV:-/tmp/lapee-interpret-demo-envelope.json}
 
 # Sanity: is HB actually up?
 if ! curl -fsS -m 5 "$PEER/~meta@1.0/info" -o /dev/null; then
@@ -35,6 +29,15 @@ if ! curl -fsS -m 5 "$PEER/~meta@1.0/info" -o /dev/null; then
     echo "  ./scripts/boot-hb.sh --keep-alive" >&2
     exit 1
 fi
+
+# Fetch a fresh envelope from the live guest so the shapes match
+# the HB version running right now (avoids stale hex vs base64url
+# schema drift).
+echo "=== fetching fresh attestation from $PEER ==="
+curl -fsS -m 180 \
+    -H 'accept: application/json@1.0' -H 'accept-bundle: true' \
+    "$PEER/~tpm2@2.0a/attestation" -o "$ENV" \
+    -w 'HTTP=%{http_code} SIZE=%{size_download}\n'
 
 echo "============================================================"
 echo "=== verify + interpret (baseline)"
@@ -119,9 +122,13 @@ echo "============================================================"
 echo "=== verify + interpret (TAMPERED — signature byte flipped)"
 echo "============================================================"
 python3 -c "
-import json, base64
-r = json.load(open('out/evidence/att-baseline.json'))
-env = r.get('body', r) if 'body' in r else r
+import json, base64, sys
+r = json.load(open('$ENV'))
+# Unwrap HB's {status,body,commitments} if needed.
+env = r.get('body', r) if 'lapee_attestation_version' not in r else r
+if 'lapee_attestation_version' not in env:
+    print('ERROR: fetched envelope has no lapee_attestation_version', file=sys.stderr)
+    sys.exit(2)
 sig = env['tpm_quote'].get('signature') or env['tpm_quote'].get('signature_b64')
 pad = '=' * (-len(sig) % 4)
 try:
