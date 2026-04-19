@@ -22,9 +22,9 @@
 
 -ifdef(TEST).
 %% Test cases exported so `all_tests_test_/0' can run them in parallel via
-%% `fun ?MODULE:name/0'. Each case receives a unique `bundler_server_name'
-%% in the `NodeOpts' returned from `start_mock_gateway/1', so concurrent
-%% tests no longer race on the legacy global `?SERVER_NAME' atom.
+%% `fun ?MODULE:name/0'. Each case builds its own wallet, and `server_name/1'
+%% derives the bundler server's registration name from the wallet address,
+%% so concurrent tests own independent bundler servers by construction.
 -export([
     bundle_count_tc/0,
     bundle_size_tc/0,
@@ -163,12 +163,19 @@ cache_item(Item, Opts) ->
 
 %%% Bundling server.
 
-%% @doc Look up the registration name for the bundler server. Defaults to
-%% the legacy global atom `?SERVER_NAME' so production code is unchanged;
-%% tests pass a unique `bundler_server_name' in `Opts' so each test gets
-%% its own server and concurrent tests do not race on the singleton.
+%% @doc Look up the registration name for the bundler server. Derived from
+%% the HTTP server's identity (which `hb_http_server:new_server/1' itself
+%% computes from `priv_wallet') so there is exactly one bundler per HTTP
+%% server on a BEAM node. Falls back to the legacy global `?SERVER_NAME'
+%% atom when no wallet is available (kept for production callers that
+%% stopped the server without a configured wallet).
 server_name(Opts) ->
-    hb_opts:get(bundler_server_name, ?SERVER_NAME, Opts).
+    case hb_opts:get(priv_wallet, undefined, Opts) of
+        undefined -> ?SERVER_NAME;
+        Wallet ->
+            {bundler_server,
+                hb_util:human_id(ar_wallet:to_address(Wallet))}
+    end.
 
 %% @doc Return the PID of the bundler server. If the server is not running,
 %% it is started and registered with the name returned by `server_name/1'.
@@ -569,12 +576,12 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 %%% Tests
 %%%===================================================================
 
-%% @doc Run most tests in this module in parallel: `start_mock_gateway/1'
-%% stamps a unique `bundler_server_name' into `NodeOpts', so each bundler
-%% server is isolated per test. A few tests assert tight wall-clock
-%% timing bounds (retry backoff, non-blocking dispatch timings), and
-%% those false-fail under the CPU contention of a parallel run. Those
-%% run after the parallel batch in an `inorder' group.
+%% @doc Run most tests in this module in parallel: each test's wallet is
+%% fresh, so `server_name/1' hands each test an independent bundler
+%% registration without any shared-name contention. A few tests assert
+%% tight wall-clock timing bounds (retry backoff, non-blocking dispatch
+%% timings), and those false-fail under the CPU contention of a parallel
+%% run. Those run after the parallel batch in an `inorder' group.
 all_tests_test_() ->
     ParallelSafe = [
         bundle_count_tc,
@@ -1637,10 +1644,6 @@ start_mock_gateway(Responses) ->
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     NodeOpts = #{
         gateway => MockServer,
-        %% Unique server name per test: each test gets its own bundler
-        %% server process and `hb_name:singleton/2' registration, so
-        %% parallel tests do not race on the default `?SERVER_NAME' atom.
-        bundler_server_name => {bundler_server, make_ref()},
         routes => [
             #{
                 <<"template">> => <<"/arweave">>,
