@@ -22,21 +22,11 @@
     % <<"status">> % Some libraries do not support it
 ]).
 
-%% @doc Generate a `signature' and `signature-input' key pair from a
-%% commitment map. Commitments without a `signature' field are not
-%% signatures per RFC 9421 and are skipped — they ride on the message body.
+%% @doc Generate a `signature' and `signature-input' key pair from a commitment
+%% map.
 commitments_to_siginfo(_Msg, Comms, _Opts) when ?IS_EMPTY_MESSAGE(Comms) ->
     #{};
 commitments_to_siginfo(Msg, Comms, Opts) ->
-    Signable =
-        maps:filter(
-            fun(_CommID, C) -> maps:is_key(<<"signature">>, C) end, Comms),
-    case map_size(Signable) of
-        0 -> #{};
-        _ -> commitments_to_siginfo_for_signable(Msg, Signable, Opts)
-    end.
-
-commitments_to_siginfo_for_signable(Msg, Comms, Opts) ->
     % Emit a SF item per commitment. `CommID' is threaded through so
     % `commitment_to_sf_siginfo/4' can add an `id' parameter whenever the
     % decoder-side derivation would not reproduce the sender's map key.
