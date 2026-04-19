@@ -3,7 +3,6 @@
 -module(dev_query_graphql).
 %%% AO-Core API:
 -export([handle/3]).
--export([register_controller/1]).
 %%% GraphQL Callbacks:
 -export([execute/4, input/2]).
 %%% Submodule helpers:
@@ -32,54 +31,35 @@
 schema() ->
     hb_util:ok(file:read_file("scripts/schema.gql")).
 
-%% @doc Ensure that the GraphQL schema and context are initialized. Can be
-%% called many times, including concurrently: only one caller runs `init/1'
-%% (the underlying `graphql' library rejects a second `load_schema' with
-%% `entry_already_exists_in_schema'). Losers of the registration race wait
-%% for the winner to finish `init/1', using `persistent_term' as the signal.
+%% @doc Ensure that the GraphQL schema and context are initialized. Safe to
+%% call many times, including concurrently. `hb_name:singleton/2' guarantees
+%% only one process runs `init/1' -- the `graphql' library rejects a second
+%% `load_schema' with `entry_already_exists_in_schema'. A `persistent_term'
+%% flag lets callers wait for init to finish: `singleton/2' returns as soon
+%% as the spawned process is registered, which is before `init/1' completes.
 ensure_started() -> ensure_started(#{}).
 ensure_started(Opts) ->
     case persistent_term:get({?MODULE, ready}, false) of
         true -> ok;
-        false -> start_or_await(Opts)
-    end.
-
-start_or_await(Opts) ->
-    Parent = self(),
-    Ref = make_ref(),
-    spawn(
-        fun() ->
-            Self = self(),
-            case ?MODULE:register_controller(Self) of
-                ok ->
+        false ->
+            hb_name:singleton(
+                graphql_controller,
+                fun() ->
                     init(Opts),
                     persistent_term:put({?MODULE, ready}, true),
-                    Parent ! {Ref, started},
-                    receive stop -> ok end;
-                error ->
-                    Parent ! {Ref, lost_race}
+                    receive stop -> ok end
+                end
+            ),
+            case hb_util:wait_until(
+                    fun() ->
+                        persistent_term:get({?MODULE, ready}, false)
+                    end,
+                    ?START_TIMEOUT
+                ) of
+                true -> ok;
+                false -> exit(graphql_start_timeout)
             end
-        end
-    ),
-    receive
-        {Ref, started} -> ok;
-        {Ref, lost_race} -> await_ready()
-    after ?START_TIMEOUT -> exit(graphql_start_timeout)
     end.
-
-await_ready() ->
-    case hb_util:wait_until(
-            fun() -> persistent_term:get({?MODULE, ready}, false) end,
-            ?START_TIMEOUT
-        ) of
-        true -> ok;
-        false -> exit(graphql_start_timeout)
-    end.
-
-%% @doc Atomically register the current process as the GraphQL controller.
-%% Exposed so `ensure_started/1' can invoke it in a spawned process.
-register_controller(Pid) ->
-    hb_name:register(graphql_controller, Pid).
 
 %% @doc Initialize the GraphQL schema and context. Should only be called once.
 init(_Opts) ->
