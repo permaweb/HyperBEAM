@@ -1,0 +1,318 @@
+Message [ undefined ] {
+  body => 
+    Message [ undefined ] {
+      1 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => AAAAAAAAAAAAAAAAAAAAAAAAAAA
+            }
+          event_data => U3BlYyBJRCBFdmVudDAzAAAAAAAAAgICBAAAAAQAFAALACAADAAwAA0AQAAA
+          event_type => EV_NO_ACTION
+          event_type_code => 3
+          parsed => 
+            Message [ undefined ] {
+              algorithms => List [4] {
+                  1 => 
+                    Message [ undefined ] {
+                      digest_size => 20
+                      hash_alg_id => 4
+                      hash_alg_name => sha1
+                    }
+                  2 => 
+                    Message [ undefined ] {
+                      digest_size => 32
+                      hash_alg_id => 11
+                      hash_alg_name => sha256
+                    }
+                  3 => 
+                    Message [ undefined ] {
+                      digest_size => 48
+                      hash_alg_id => 12
+                      hash_alg_name => sha384
+                    }
+                  4 => 
+                    Message [ undefined ] {
+                      digest_size => 64
+                      hash_alg_id => 13
+                      hash_alg_name => sha512
+                    }
+                }
+              spec_id => Event03
+            }
+          pcr => 0
+          seq => 1
+        }
+      10 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 1
+          seq => 10
+        }
+      11 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 2
+          seq => 11
+        }
+      12 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 3
+          seq => 12
+        }
+      13 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 4
+          seq => 13
+        }
+      14 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 5
+          seq => 14
+        }
+      15 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 6
+          seq => 15
+        }
+      16 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 7
+          seq => 16
+        }
+      2 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => _JUhYdEUhx0a-P4OiJyDvgmtBds
+              sha256 => YoRwO..zGWJ0
+              sha384 => t1vf_cbReNKLLshsjm_BKuZDal0JzoSI2Ft6FoXUf47OTv1iEY3HhF1WoiwM0aD1
+              sha512 => 4jDCNWb-AqmKEZBJCfE6zMfES-LXSRRSQLENjSf_yAIexjTc2ocE1gsi631owc145021aFFVTyXZERf3og1Pbw
+            }
+          event_data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
+          event_type => EV_EVENT_TAG
+          event_type_code => 6
+          parsed => #{}
+          pcr => 1
+          seq => 2
+        }
+      3 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => nb2HFjES5WcDeKvkUQSRJZph9BE
+              sha256 => zrG7E..DiGs8
+              sha384 => j28BukrJuadb_Tx2px37tOx6T9kS8cw22ybP4sL0bgBxT1yQ_ryTXNUcpjyA00T1
+              sha512 => _2Ud-lhBsiFTbuTYOdScfc7KwIst5lTDjSZpk4AIi3NiOnZRZ83psiRyTyW8xOJMGH1Qm9nABgTz28GOiXBvUA
+            }
+          event_data => U3RhcnQgT3B0aW9uIFJPTSBTY2Fu
+          event_type => EV_ACTION
+          event_type_code => 5
+          parsed => 
+            Message [ undefined ] {
+              action => Start Option ROM Scan
+            }
+          pcr => 2
+          seq => 3
+        }
+      4 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => TGbR5jZ3fKdmd2W_eVxs0bLb99M
+              sha256 => QsNfc..TF_vI
+              sha384 => JM-oer7KGzZ9hhmL9yyZfzo40GJrQxnmrnic-PdkwX6_ZFkseYD7ra4KyR3_AuBt
+              sha512 => IKWUzWXrf7ghdsOO8kv_O0MH30eZMuXk7lAct9DDZuMpMJzDTduuKjtZ-4MKuaMuqpJ3wad0S25Xp0W70oug5Q
+            }
+          event_data => BwAAA..j5nqU
+          event_type => EV_EVENT_TAG
+          event_type_code => 6
+          parsed => #{}
+          pcr => 2
+          seq => 4
+        }
+      5 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => zv859O2pKhXZbdVPIja0TGEptJ0
+              sha256 => SEJx-..iORIM
+              sha384 => SxuQJHmAVyr0zny5cSKzFgQrmKs-Wqf9P1_EIzODiRMGhbXcG6vj26tQr-AP8agc
+              sha512 => MUWBFPcs1HxP9gZjdPAajtEQMGT2oFz9JK8NasDF8fsTBWU7gnfHiwHyWSWuFO6YfXeSQ0t1l_PpiP-mUE4Mtw
+            }
+          event_data => BwAAA..MK1p0
+          event_type => EV_EVENT_TAG
+          event_type_code => 6
+          parsed => #{}
+          pcr => 2
+          seq => 5
+        }
+      6 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => fRU12Tqp6I76FQdvmjMPkrAtq8E
+              sha256 => R8vMI..1b_is
+              sha384 => fmr2o-C8ZXCel9rKAu5HTU5KOunkULJj9CkSy13fBFkfN44MShC8V4J4svt2Pm2S
+              sha512 => q-A-7mteoXqtq3zO4hYb_6bg-S0CEqiBAIPWK_KtOz0vmX3X00aW2VIszcl0SqpXB3AXzn3jqwBmVIenQwR_tQ
+            }
+          event_data => BwAAA..mVmZI
+          event_type => EV_EVENT_TAG
+          event_type_code => 6
+          parsed => #{}
+          pcr => 2
+          seq => 6
+        }
+      7 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 8C4sJk5Xv1NHJU9351SS7DBSZFE
+              sha256 => 6FZfS..Zssm0
+              sha384 => ej2xIXF_zgdJGz-30mk3E7t7-TM1QHDkFZxtSiPSwvIGncOml3S56_X0lpWx2epL
+              sha512 => X3XXYcIaGzPTKSQT-amkhztraVF8G5KLAHYFlMq2OzVu1NjvQRVuorGW7dPP8BIeYib5N9RCu6JNb-P97eCsCA
+            }
+          event_data => BwAAA..iLebQ
+          event_type => EV_EVENT_TAG
+          event_type_code => 6
+          parsed => #{}
+          pcr => 2
+          seq => 7
+        }
+      8 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => weJcP2sNx41XKWqihwym94LM-A8
+              sha256 => ehmlp..WN8Ss
+              sha384 => 1EMWxQhurQTTocwZpbO6wanqu99HyJ49Xxid6XQh0LRwLmT5hGawWcGljJXuaKaE
+              sha512 => geRDnSkrh87cS_j4Sigu5zkjBRzuP4J_A6m4aV7_jIMTYIthV2hhx7HY_GwJp-3cOUYIEa1_U2nzoCuMuI9qkw
+            }
+          event_data => Q2FsbGluZyBJTlQgMTlo
+          event_type => EV_ACTION
+          event_type_code => 5
+          parsed => 
+            Message [ undefined ] {
+              action => Calling INT 19h
+            }
+          pcr => 4
+          seq => 8
+        }
+      9 => 
+        Message [ undefined ] {
+          digests => 
+            Message [ undefined ] {
+              sha1 => 2b5lJKX1BH21hmgTrPMneJKnowo
+              sha256 => rZUTG..Z7_Q4
+              sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
+              sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
+            }
+          event_data => _____w
+          event_type => EV_SEPARATOR
+          event_type_code => 4
+          parsed => 
+            Message [ undefined ] {
+              separator => firmware_error
+            }
+          pcr => 0
+          seq => 9
+        }
+    }
+  status => 200
+}

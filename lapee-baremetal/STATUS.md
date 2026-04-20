@@ -1737,3 +1737,175 @@ f902a5632    out/evidence: refresh from clean post-revert re-validation
 Acceptance test at the top of this session is met: item 7 + rich
 TCG event log parsing + live QEMU run + evidence captured + no
 new work surfaced. Stopping overnight mode.
+
+## 2026-04-20 17:00 EDT — interpretation depth + evidence dashboard
+
+Two pieces of Sam's feedback landed in this follow-up pass:
+
+**1. "Make a flat HTML dashboard that you open in Chrome at the
+end of each run." — Sam couldn't see `out/evidence/` links
+because they're filesystem paths on my side; a single-file
+dashboard makes every artefact viewable without a web server.**
+
+**2. "I don't think we are seeing nearly enough detail … every
+single field that can be parsed from these bitpacked values,
+in an AO-Core message. Then we can take the attestation and
+run for example `.../secure-boot/field` to extract the value.
+The whole thing should be navigable through AO-Core after it
+is `interpret'ed."**
+
+### Deepening `/interpret' — every field is now navigable
+
+Before this pass, `interpret/pcrs.<N>` was just the raw quoted
+digest + a canonical role name. Now each PCR carries a full
+audit-trail + derived-fields submessage:
+
+    /interpret/pcrs/<N>/digest             # raw quoted value (audit)
+    /interpret/pcrs/<N>/role               # canonical TCG PCR role
+    /interpret/pcrs/<N>/role_notes         # what this PCR is for
+    /interpret/pcrs/<N>/is_zero            # shortcut
+    /interpret/pcrs/<N>/events/<seq>       # filtered event log
+    /interpret/pcrs/<N>/event_count
+    /interpret/pcrs/<N>/reconstruction/
+        /replayed_digest                   # SHA-256 fold of events
+        /matches_quoted                    # bool
+        /replayed_from_events              # int
+    /interpret/pcrs/<N>/derived/<field>    # named values
+
+The `derived/' submap pulls concrete named fields out of the
+events' `parsed.semantic'. Each PCR has an appropriate
+template — fields always present in the shape, populated when
+the evidence is there, sentinel `"unknown"' otherwise:
+
+    PCR 0 — crtm_version, hcrtm, post_codes, firmware_blobs,
+            spec_id, separator_seen, separator_kind
+    PCR 1 — cpu_microcode, uefi_boot_order, separator_seen
+    PCR 2/3 — option_rom_scanned, separator_seen
+    PCR 4 — boot_services_applications, boot_action_markers
+    PCR 5 — gpt_partition_tables
+    PCR 7 — secure_boot_enabled, pk/kek/db/dbx entry counts,
+            authorities, separator_seen
+    PCR 8/9 — grub_cmdline / grub_modules
+    PCR 10 — ima_active, ima_event_count, ima_files_measured
+             + note about IMA event log transport
+    PCR 11 — uki_measured, uki_image_hash, uki_kernel_version
+    PCR 12 — uki_cmdline, uki_initrd_hash
+    PCR 13 — uki_sysext_count
+    PCR 14 — mok_entry_count
+    PCR 15 — lapee_node_identity_committed
+
+**Live probe of the QEMU / SeaBIOS guest**:
+
+```
+PCR 0 event_count: 2  events: seq=1 (EV_NO_ACTION), seq=9 (EV_SEPARATOR)
+  derived.spec_id           = "Event03"
+  derived.separator_kind    = "firmware_error"
+  derived.separator_seen    = true
+  derived.crtm_version      = "unknown"  (no EV_S_CRTM_VERSION)
+  derived.hcrtm             = "unknown"  (no EV_EFI_HCRTM_EVENT)
+  derived.firmware_blobs    = []
+  derived.post_codes        = []
+
+PCR 7 event_count: 1  events: seq=16 (EV_SEPARATOR)
+  derived.secure_boot_enabled = "unknown"  (no EV_EFI_VARIABLE_DRIVER_CONFIG)
+  derived.pk_entry_count      = "unknown"
+  derived.kek_entry_count     = "unknown"
+  derived.db_entry_count      = "unknown"
+  derived.dbx_entry_count     = "unknown"
+  derived.authorities         = []
+  derived.separator_seen      = true
+```
+
+Every sentinel is honest — SeaBIOS doesn't emit those events,
+so we can't derive the values, so we say so. On real UEFI
+silicon the same code produces concrete bool / string / int
+per field.
+
+Regression test landed:
+`pcrs_derived_fields_populate_from_events_test' — builds a
+fixture with EV_S_CRTM_VERSION (PCR 0) + EV_EFI_VARIABLE_DRIVER_
+CONFIG SecureBoot=1 (PCR 7), runs the top-level interpret, and
+asserts `pcrs.0.derived.crtm_version = "TEST FW v1"' +
+`pcrs.7.derived.secure_boot_enabled = true'. Also asserts the
+reconstruction submessage shape is always present.
+
+### Evidence dashboard — `make hb-dashboard-open'
+
+`scripts/build-evidence-dashboard.py' walks every file under
+`out/evidence/' + `out/acceptance/' and produces a single
+self-contained `out/evidence/dashboard.html' (inline CSS,
+embedded data). Sections:
+
+  1. Verdict strip — one-line pass/fail per phase
+  2. Acceptance battery — 3 envelopes side-by-side with asserts
+  3. Tamper test — 7 rows, each mapped to its expected-reject check
+  4. Interpret /verify — 5-core + 1-informational checks, rich
+     interpretation (TPM identity, AK, quote meta, PCR roles,
+     boot/kernel/IMA/node)
+  5. Per-PCR events + derived — 7 cards, one per PCR, each
+     showing raw digest + event seqs + reconstruction match +
+     `derived/<field>' table with the path shown
+  6. /events full table — 16 records with seq/pcr/event_type/
+     decoded fields
+  7. /claim — flat policy surface with provenance counts
+  8. AO-Core trees — four `format~hyperbuddy@1.0&truncate-keys=
+     1000' renderings of the full attestation, interpret,
+     events, and claim trees. **Every line in these trees is a
+     live addressable path.** A verifier can navigate to any
+     node with
+     `GET /~tpm2@2.0a/attestation/interpret~tpm-interpret@1.0/pcrs/0/derived/spec_id'.
+  9. Raw files — 28 collapsed `<details>' blocks with every
+     artefact inline, JSON pretty-printed.
+
+Wired into the existing flow:
+
+  * `make hb-acceptance`, `make hb-tamper-test`, and
+    `make hb-interpret-demo' all regenerate the dashboard at
+    the end of each run (even on failure) so the operator
+    always has the latest view.
+  * `make hb-dashboard' builds the dashboard on demand.
+  * `make hb-dashboard-open' builds it AND opens it in Chrome
+    on macOS.
+  * `hb-interpret-demo.sh' + `hb-events-claim-demo.sh' now
+    also refresh the four `format~hyperbuddy@1.0' tree
+    snapshots used by the dashboard's AO-Core-trees section.
+
+### Additional commits this pass
+
+```
+052712be2    ~tpm-interpret@1.0: per-PCR events + derived fields,
+             AO-Core navigable (15/15 tests pass; new
+             pcrs_derived_fields_populate_from_events_test)
+```
+
+### Test coverage after this pass
+
+  dev_tpm_tcg         : 23/23 PASS
+  dev_tpm2            : 17/17 PASS  (incl. severity field in all checks)
+  dev_tpm_interpret   : 15/15 PASS  (incl. events_wire_encodes_nonutf8,
+                                     pcrs_derived_fields_populate)
+
+**55 eunit tests, 55 PASS.**
+
+### Commander's intent addressed (this pass)
+
+  - "every single field that can be parsed from these
+    bitpacked values, in an AO-Core message": done via
+    `pcrs/<N>/derived/*' with per-PCR templates. The shape is
+    always there; unknowns are honest `"unknown"' sentinels.
+  - ".../secure-boot/field should work end-to-end through
+    AO-Core": the interpret tree is a single nested map with
+    every leaf at a concrete path. The four hyperbuddy tree
+    snapshots embedded in the dashboard are the authoritative
+    proof of navigability — every line is a live AO-Core
+    address.
+  - "a flat HTML dashboard that you open in Chrome at the end
+    of each run": `make hb-dashboard-open'. Regenerates
+    automatically on `make hb-acceptance' / `hb-tamper-test' /
+    `hb-interpret-demo'.
+
+### Stopping overnight mode
+
+Both of Sam's follow-ups addressed. Evidence dashboard live,
+interpretation tree deepened with per-PCR derived fields,
+every acceptance test green on the rebuilt image.

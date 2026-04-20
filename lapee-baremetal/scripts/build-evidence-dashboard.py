@@ -82,11 +82,16 @@ def unwrap_body(m):
 
 
 def strip_commitments(m):
-    """HB injects `commitments' at every level. Drop it for human
-    rendering — the full raw JSON is still available at the bottom."""
+    """HB injects `commitments' (signature metadata) and `ao-types'
+    (type system annotations like `secure_boot_enabled="atom"') at
+    every level. Both are implementation details that clutter the
+    human-readable dashboard. The full raw JSON — with every internal
+    marker — is still available at the bottom of the dashboard under
+    Raw files."""
+    internal = {"commitments", "ao-types"}
     if isinstance(m, dict):
         return {k: strip_commitments(v) for k, v in m.items()
-                if k != "commitments"}
+                if k not in internal}
     if isinstance(m, list):
         return [strip_commitments(v) for v in m]
     return m

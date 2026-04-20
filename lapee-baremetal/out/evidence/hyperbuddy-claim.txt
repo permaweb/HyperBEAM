@@ -1,0 +1,46 @@
+Message [ undefined ] {
+  body => 
+    Message [ undefined ] {
+      boot_loader => 
+        Message [ undefined ] {
+          image_hash => unknown
+          image_hash_provenance => []
+        }
+      firmware => 
+        Message [ undefined ] {
+          crtm_version => unknown
+          crtm_version_provenance => []
+        }
+      kernel => 
+        Message [ undefined ] {
+          cmdline => unknown
+          cmdline_provenance => []
+          iommu_strict => unknown
+          uki_hash => AAAAA..AAAAA
+          uki_hash_provenance => [{<<"pcr">>,11}]
+        }
+      lockdown => 
+        Message [ undefined ] {
+          level => unknown
+          level_provenance => List [1] {
+              1 => derivation: uki_not_in_known_lockdown_level_list
+            }
+        }
+      secure_boot => 
+        Message [ undefined ] {
+          db_authorities => []
+          deployed_mode => unknown
+          enabled => unknown
+          enabled_provenance => []
+          setup_mode => unknown
+        }
+      tme => 
+        Message [ undefined ] {
+          enabled => unknown
+          enabled_provenance => List [1] {
+              1 => derivation: uki_hash_not_in_known_TME_checking_list
+            }
+        }
+    }
+  status => 200
+}

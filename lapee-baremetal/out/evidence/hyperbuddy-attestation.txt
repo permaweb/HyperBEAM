@@ -1,0 +1,1373 @@
+Message [ undefined ] {
+  body => 
+    Message [ undefined ] {
+      ak_pub_pem => "-----BEGIN PUBLIC KEY-----..." <451 bytes>
+      ek_cert_pem => "-----BEGIN CERTIFICATE-----..." <1,025 bytes>
+      issued_at_unix => 1776718440
+      lapee_attestation_version => 0.3
+      node_message => 
+        Message [ undefined ] {
+          access_remote_cache_for_client => false
+          address => NYNhb..HrlDg
+          ans104_trust_gql => true
+          arweave_chunk_fetch_concurrency => 5
+          await_inprogress => named
+          bundler_ans104 => https://up.arweave.net:443
+          cache_control => List [2] {
+              1 => no-cache
+              2 => no-store
+            }
+          cache_lookup_hueristics => false
+          cache_writers => List [1] {
+              1 => NYNhb..HrlDg
+            }
+          client_error_strategy => throw
+          commitment_device => httpsig@1.0
+          compute_mode => lazy
+          debug_log => false
+          debug_print => List [11] {
+              1 => error
+              2 => http_error
+              3 => cron_error
+              4 => hook_error
+              5 => warning
+              6 => http_server_short
+              7 => http_client_short
+              8 => compute_short
+              9 => push_short
+              10 => copycat_short
+              11 => bundler_short
+            }
+          debug_print_binary_max => 60
+          debug_print_comm_device => true
+          debug_print_comm_type => true
+          debug_print_committers => true
+          debug_print_fail_mode => long
+          debug_print_gen_id => false
+          debug_print_indent => 2
+          debug_print_map_line_threshold => 30
+          debug_print_metadata => true
+          debug_print_trace => short
+          debug_print_truncate => 30
+          debug_print_verify => false
+          debug_resolve_links => false
+          debug_show_priv => if_present
+          debug_stack_depth => 40
+          debug_trace_type => erlang
+          default_index => 
+            ~hyperbuddy@1.0 [ undefined ] { [Empty] }
+          force_signed => true
+          gateway => https://arweave.net
+          genesis_wasm_import_authorities => List [1] {
+              1 => WjnS-..YxkXk
+            }
+          hb_config_location => /etc/lapee/lapee-enforced.flat
+          http_client => hackney
+          http_client_connect_timeout => 5000
+          http_client_keepalive => 120000
+          http_client_send_timeout => 300000
+          http_extra_opts => 
+            Message [ undefined ] {
+              cache_control => [<<"always">>]
+              force_message => true
+            }
+          initialized => true
+          load_remote_devices => false
+          log_dir => logs
+          log_max_bytes => 52428800
+          log_max_files => 5
+          lua_scripts => scripts
+          lua_tests => []
+          manifest_404 => fallback
+          match_index => List [1] {
+              1 => 
+                Message [ undefined ] {
+                  name => cache-mainnet/lmdb
+                  store-module => hb_store_lmdb
+                }
+            }
+          mode => debug
+          name_resolvers => List [3] {
+              1 => 
+                ~arweave@2.9 [ undefined ] { [Empty] }
+              2 => 
+                ~b32-name@1.0 [ undefined ] { [Empty] }
+              3 => G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8~json@1.0/deserialize&target=data
+            }
+          node_history => []
+          on => 
+            Message [ undefined ] {
+              start => 
+                ~tpm2@2.0a/extend [ undefined ] {
+                  hook => 
+                    Message [ undefined ] {
+                      result => ignore
+                    }
+                  target => body
+                }
+            }
+          only => local
+          paranoid_verify => []
+          port => 8734
+          preloaded_devices => List [62] {
+              1 => 
+                Message [ undefined ] {
+                  module => dev_arweave
+                  name => arweave@2.9
+                }
+              2 => 
+                Message [ undefined ] {
+                  module => dev_apply
+                  name => apply@1.0
+                }
+              3 => 
+                Message [ undefined ] {
+                  module => dev_auth_hook
+                  name => auth-hook@1.0
+                }
+              4 => 
+                Message [ undefined ] {
+                  module => dev_codec_ans104
+                  name => ans104@1.0
+                }
+              5 => 
+                Message [ undefined ] {
+                  module => dev_b32_name
+                  name => b32-name@1.0
+                }
+              6 => 
+                Message [ undefined ] {
+                  module => dev_blacklist
+                  name => blacklist@1.0
+                }
+              7 => 
+                Message [ undefined ] {
+                  module => dev_bundler
+                  name => bundler@1.0
+                }
+              8 => 
+                Message [ undefined ] {
+                  module => dev_cu
+                  name => compute@1.0
+                }
+              9 => 
+                Message [ undefined ] {
+                  module => dev_cache
+                  name => cache@1.0
+                }
+              10 => 
+                Message [ undefined ] {
+                  module => dev_cacheviz
+                  name => cacheviz@1.0
+                }
+              11 => 
+                Message [ undefined ] {
+                  module => dev_codec_cookie
+                  name => cookie@1.0
+                }
+              12 => 
+                Message [ undefined ] {
+                  module => dev_cron
+                  name => cron@1.0
+                }
+              13 => 
+                Message [ undefined ] {
+                  module => dev_dedup
+                  name => dedup@1.0
+                }
+              14 => 
+                Message [ undefined ] {
+                  module => dev_delegated_compute
+                  name => delegated-compute@1.0
+                }
+              15 => 
+                Message [ undefined ] {
+                  module => dev_faff
+                  name => faff@1.0
+                }
+              16 => 
+                Message [ undefined ] {
+                  module => dev_codec_flat
+                  name => flat@1.0
+                }
+              17 => 
+                Message [ undefined ] {
+                  module => dev_genesis_wasm
+                  name => genesis-wasm@1.0
+                }
+              18 => 
+                Message [ undefined ] {
+                  module => dev_gzip
+                  name => gzip@1.0
+                }
+              19 => 
+                Message [ undefined ] {
+                  module => dev_green_zone
+                  name => greenzone@1.0
+                }
+              20 => 
+                Message [ undefined ] {
+                  module => dev_codec_httpsig
+                  name => httpsig@1.0
+                }
+              21 => 
+                Message [ undefined ] {
+                  module => dev_codec_http_auth
+                  name => http-auth@1.0
+                }
+              22 => 
+                Message [ undefined ] {
+                  module => dev_hook
+                  name => hook@1.0
+                }
+              23 => 
+                Message [ undefined ] {
+                  module => dev_hyperbuddy
+                  name => hyperbuddy@1.0
+                }
+              24 => 
+                Message [ undefined ] {
+                  module => dev_copycat
+                  name => copycat@1.0
+                }
+              25 => 
+                Message [ undefined ] {
+                  module => dev_codec_json
+                  name => json@1.0
+                }
+              26 => 
+                Message [ undefined ] {
+                  module => dev_json_iface
+                  name => json-iface@1.0
+                }
+              27 => 
+                Message [ undefined ] {
+                  module => dev_local_name
+                  name => local-name@1.0
+                }
+              28 => 
+                Message [ undefined ] {
+                  module => dev_location
+                  name => location@1.0
+                }
+              29 => 
+                Message [ undefined ] {
+                  module => dev_lookup
+                  name => lookup@1.0
+                }
+              30 => 
+                Message [ undefined ] {
+                  module => dev_lua
+                  name => lua@5.3a
+                }
+              31 => 
+                Message [ undefined ] {
+                  module => dev_manifest
+                  name => manifest@1.0
+                }
+              32 => 
+                Message [ undefined ] {
+                  module => dev_message
+                  name => message@1.0
+                }
+              33 => 
+                Message [ undefined ] {
+                  module => dev_meta
+                  name => meta@1.0
+                }
+              34 => 
+                Message [ undefined ] {
+                  module => dev_monitor
+                  name => monitor@1.0
+                }
+              35 => 
+                Message [ undefined ] {
+                  module => dev_multipass
+                  name => multipass@1.0
+                }
+              36 => 
+                Message [ undefined ] {
+                  module => dev_name
+                  name => name@1.0
+                }
+              37 => 
+                Message [ undefined ] {
+                  module => dev_node_process
+                  name => node-process@1.0
+                }
+              38 => 
+                Message [ undefined ] {
+                  module => dev_p4
+                  name => p4@1.0
+                }
+              39 => 
+                Message [ undefined ] {
+                  module => dev_patch
+                  name => patch@1.0
+                }
+              40 => 
+                Message [ undefined ] {
+                  module => dev_poda
+                  name => poda@1.0
+                }
+              41 => 
+                Message [ undefined ] {
+                  module => dev_process
+                  name => process@1.0
+                }
+              42 => 
+                Message [ undefined ] {
+                  module => dev_profile
+                  name => profile@1.0
+                }
+              43 => 
+                Message [ undefined ] {
+                  module => dev_push
+                  name => push@1.0
+                }
+              44 => 
+                Message [ undefined ] {
+                  module => dev_query
+                  name => query@1.0
+                }
+              45 => 
+                Message [ undefined ] {
+                  module => dev_rate_limit
+                  name => rate-limit@1.0
+                }
+              46 => 
+                Message [ undefined ] {
+                  module => dev_relay
+                  name => relay@1.0
+                }
+              47 => 
+                Message [ undefined ] {
+                  module => dev_router
+                  name => router@1.0
+                }
+              48 => 
+                Message [ undefined ] {
+                  module => dev_scheduler
+                  name => scheduler@1.0
+                }
+              49 => 
+                Message [ undefined ] {
+                  module => dev_simple_pay
+                  name => simple-pay@1.0
+                }
+              50 => 
+                Message [ undefined ] {
+                  module => dev_snp
+                  name => snp@1.0
+                }
+              51 => 
+                Message [ undefined ] {
+                  module => dev_tpm2
+                  name => tpm2@2.0a
+                }
+              52 => 
+                Message [ undefined ] {
+                  module => dev_tpm_interpret
+                  name => tpm-interpret@1.0
+                }
+              53 => 
+                Message [ undefined ] {
+                  module => dev_stack
+                  name => stack@1.0
+                }
+              54 => 
+                Message [ undefined ] {
+                  module => dev_codec_structured
+                  name => structured@1.0
+                }
+              55 => 
+                Message [ undefined ] {
+                  module => dev_test
+                  name => test-device@1.0
+                }
+              56 => 
+                Message [ undefined ] {
+                  module => dev_trie
+                  name => trie@1.0
+                }
+              57 => 
+                Message [ undefined ] {
+                  module => dev_codec_tx
+                  name => tx@1.0
+                }
+              58 => 
+                Message [ undefined ] {
+                  module => dev_volume
+                  name => volume@1.0
+                }
+              59 => 
+                Message [ undefined ] {
+                  module => dev_secret
+                  name => secret@1.0
+                }
+              60 => 
+                Message [ undefined ] {
+                  module => dev_wasi
+                  name => wasi@1.0
+                }
+              61 => 
+                Message [ undefined ] {
+                  module => dev_wasm
+                  name => wasm-64@1.0
+                }
+              62 => 
+                Message [ undefined ] {
+                  module => dev_whois
+                  name => whois@1.0
+                }
+            }
+          process_now_from_cache => false
+          process_sampler => true
+          process_sampler_interval => 15000
+          process_workers => false
+          profiling => true
+          relay_http_client => httpc
+          router_opts => #{routes => []}
+          routes => List [12] {
+              1 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      prefix => http://localhost:6363
+                    }
+                  template => /result/.*
+                }
+              2 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      prefix => http://localhost:6363
+                    }
+                  template => /snapshot/.*
+                }
+              3 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      prefix => http://localhost:6363
+                    }
+                  template => /dry-run.*
+                }
+              4 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      prefix => http://localhost:6363
+                    }
+                  template => /state.*
+                }
+              5 => 
+                Message [ undefined ] {
+                  nodes => List [3] {
+                      1 => 
+                        Message [ undefined ] {
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          prefix => https://ao-search-gateway.goldsky.com
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          prefix => https://arweave-search.goldsky.com
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          prefix => https://arweave.net
+                        }
+                    }
+                  template => /graphql
+                }
+              6 => 
+                Message [ undefined ] {
+                  admissible-status => 200
+                  choose => 19
+                  nodes => List [19] {
+                      1 => 
+                        Message [ undefined ] {
+                          center => 28800000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-1.arweave.xyz:1984
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          center => 28800000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-13.arweave.xyz:1984
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          center => 7200000000000
+                          match => ^/arweave
+                          max => 14400000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-2.arweave.xyz:1984
+                        }
+                      4 => 
+                        Message [ undefined ] {
+                          center => 21600000000000
+                          match => ^/arweave
+                          max => 28800000000000
+                          min => 14400000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-3.arweave.xyz:1984
+                        }
+                      5 => 
+                        Message [ undefined ] {
+                          center => 36000000000000
+                          match => ^/arweave
+                          max => 43200000000000
+                          min => 28800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-4.arweave.xyz:1984
+                        }
+                      6 => 
+                        Message [ undefined ] {
+                          center => 50400000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 43200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-5.arweave.xyz:1984
+                        }
+                      7 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-2.arweave.xyz:1984
+                        }
+                      8 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-3.arweave.xyz:1984
+                        }
+                      9 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-14.arweave.xyz:1984
+                        }
+                      10 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-15.arweave.xyz:1984
+                        }
+                      11 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-4.arweave.xyz:1984
+                        }
+                      12 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-5.arweave.xyz:1984
+                        }
+                      13 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-16.arweave.xyz:1984
+                        }
+                      14 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-17.arweave.xyz:1984
+                        }
+                      15 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-1.arweave.xyz:1984
+                        }
+                      16 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-2.arweave.xyz:1984
+                        }
+                      17 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-3.arweave.xyz:1984
+                        }
+                      18 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-4.arweave.xyz:1984
+                        }
+                      19 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-5.arweave.xyz:1984
+                        }
+                    }
+                  parallel => 1
+                  responses => 1
+                  stop-after => true
+                  strategy => Shuffled-Range
+                  template => 
+                    Message < Path: ^/arweave/chunk > [ undefined ] { [Empty] }
+                }
+              7 => 
+                Message [ undefined ] {
+                  admissible-status => 200
+                  choose => 5
+                  nodes => List [5] {
+                      1 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-1.arweave.xyz:1984
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-2.arweave.xyz:1984
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-3.arweave.xyz:1984
+                        }
+                      4 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-4.arweave.xyz:1984
+                        }
+                      5 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-5.arweave.xyz:1984
+                        }
+                    }
+                  parallel => 1
+                  responses => 1
+                  stop-after => true
+                  template => 
+                    Message < Path: ^/arweave/unconfirmed_chunk > [ undefined ] { [Empty] }
+                }
+              8 => 
+                Message [ undefined ] {
+                  admissible-status => 200
+                  choose => 19
+                  nodes => List [19] {
+                      1 => 
+                        Message [ undefined ] {
+                          center => 28800000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-1.arweave.xyz:1984
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          center => 28800000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-13.arweave.xyz:1984
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          center => 7200000000000
+                          match => ^/arweave
+                          max => 14400000000000
+                          min => 0
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-2.arweave.xyz:1984
+                        }
+                      4 => 
+                        Message [ undefined ] {
+                          center => 21600000000000
+                          match => ^/arweave
+                          max => 28800000000000
+                          min => 14400000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-3.arweave.xyz:1984
+                        }
+                      5 => 
+                        Message [ undefined ] {
+                          center => 36000000000000
+                          match => ^/arweave
+                          max => 43200000000000
+                          min => 28800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-4.arweave.xyz:1984
+                        }
+                      6 => 
+                        Message [ undefined ] {
+                          center => 50400000000000
+                          match => ^/arweave
+                          max => 57600000000000
+                          min => 43200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-5.arweave.xyz:1984
+                        }
+                      7 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-2.arweave.xyz:1984
+                        }
+                      8 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-3.arweave.xyz:1984
+                        }
+                      9 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-14.arweave.xyz:1984
+                        }
+                      10 => 
+                        Message [ undefined ] {
+                          center => 86400000000000
+                          match => ^/arweave
+                          max => 115200000000000
+                          min => 57600000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-15.arweave.xyz:1984
+                        }
+                      11 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-4.arweave.xyz:1984
+                        }
+                      12 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-5.arweave.xyz:1984
+                        }
+                      13 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-16.arweave.xyz:1984
+                        }
+                      14 => 
+                        Message [ undefined ] {
+                          center => 144000000000000
+                          match => ^/arweave
+                          max => 172800000000000
+                          min => 115200000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://data-17.arweave.xyz:1984
+                        }
+                      15 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-1.arweave.xyz:1984
+                        }
+                      16 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-2.arweave.xyz:1984
+                        }
+                      17 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-3.arweave.xyz:1984
+                        }
+                      18 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-4.arweave.xyz:1984
+                        }
+                      19 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-5.arweave.xyz:1984
+                        }
+                    }
+                  parallel => 5
+                  responses => 3
+                  stop-after => true
+                  strategy => Shuffled-Range
+                  template => 
+                    Message < Path: ^/arweave/chunk > [ undefined ] { [Empty] }
+                }
+              9 => 
+                Message [ undefined ] {
+                  admissible-status => 200
+                  nodes => List [8] {
+                      1 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-3.arweave.xyz:1984
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-1.arweave.xyz:1984
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-2.arweave.xyz:1984
+                        }
+                      4 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-1.arweave.xyz:1984
+                        }
+                      5 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-2.arweave.xyz:1984
+                        }
+                      6 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-3.arweave.xyz:1984
+                        }
+                      7 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-4.arweave.xyz:1984
+                        }
+                      8 => 
+                        Message [ undefined ] {
+                          center => 280800000000000
+                          match => ^/arweave
+                          max => 388800000000000
+                          min => 172800000000000
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://tip-5.arweave.xyz:1984
+                        }
+                    }
+                  parallel => true
+                  responses => 3
+                  stop-after => false
+                  template => 
+                    Message < Path: ^/arweave/tx > [ undefined ] { [Empty] }
+                }
+              10 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      match => ^/arweave
+                      opts => 
+                        Message [ undefined ] {
+                          http_client => hackney
+                          protocol => http2
+                        }
+                      with => https://arweave.net
+                    }
+                  template => ^/arweave/raw
+                }
+              11 => 
+                Message [ undefined ] {
+                  admissible-status => 200
+                  nodes => List [3] {
+                      1 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-3.arweave.xyz:1984
+                        }
+                      2 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-1.arweave.xyz:1984
+                        }
+                      3 => 
+                        Message [ undefined ] {
+                          match => ^/arweave
+                          opts => 
+                            Message [ undefined ] {
+                              http_client => hackney
+                              protocol => http2
+                            }
+                          with => http://chain-2.arweave.xyz:1984
+                        }
+                    }
+                  parallel => true
+                  stop-after => true
+                  template => ^/arweave
+                }
+              12 => 
+                Message [ undefined ] {
+                  node => 
+                    Message [ undefined ] {
+                      opts => 
+                        Message [ undefined ] {
+                          http_client => hackney
+                          protocol => http2
+                        }
+                      prefix => https://arweave.net
+                    }
+                  template => /raw
+                }
+            }
+          scheduler_default_commitment_spec => httpsig@1.0
+          scheduler_location_ttl => 604800000
+          scheduling_mode => local_confirmation
+          short_trace_len => 20
+          snp_enforced_keys => List [6] {
+              1 => firmware
+              2 => kernel
+              3 => initrd
+              4 => append
+              5 => vmm_type
+              6 => guest_features
+            }
+          stack_print_prefixes => ["hb","dev","ar","maps"]
+          store => List [5] {
+              1 => 
+                Message [ undefined ] {
+                  name => cache-mainnet/lmdb
+                  store-module => hb_store_lmdb
+                }
+              2 => 
+                Message [ undefined ] {
+                  name => cache-mainnet
+                  store-module => hb_store_fs
+                }
+              3 => 
+                Message [ undefined ] {
+                  arweave-node => https://arweave.net
+                  index-store => List [1] {
+                      1 => 
+                        Message [ undefined ] {
+                          name => cache-mainnet/lmdb
+                          store-module => hb_store_lmdb
+                        }
+                    }
+                  name => cache-arweave
+                  store-module => hb_store_arweave
+                }
+              4 => 
+                Message [ undefined ] {
+                  local-store => List [1] {
+                      1 => 
+                        Message [ undefined ] {
+                          name => cache-mainnet/lmdb
+                          store-module => hb_store_lmdb
+                        }
+                    }
+                  store-module => hb_store_gateway
+                  subindex => List [1] {
+                      1 => 
+                        Message [ undefined ] {
+                          name => Data-Protocol
+                          value => ao
+                        }
+                    }
+                }
+              5 => 
+                Message [ undefined ] {
+                  local-store => List [1] {
+                      1 => 
+                        Message [ undefined ] {
+                          name => cache-mainnet/lmdb
+                          store-module => hb_store_lmdb
+                        }
+                    }
+                  store-module => hb_store_gateway
+                }
+            }
+          store_all_signed => true
+          trusted => #{}
+          trusted_device_signers => []
+          wasm_allow_aot => false
+        }
+      node_message_id => 6ZtER..zez6g
+      runtime_event_log => List [1] {
+          1 => 
+            Message [ undefined ] {
+              description => hb_message:id(Subject, all) over 79-key message
+              digest => 6ZtER..zez6g
+              emitted_at_unix => 1776718348
+              event_type => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
+              pcr => 15
+              seq => 0
+              subject_is_message => true
+            }
+        }
+      tcg_event_log => "AAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC0AAABTcGVjIElEIEV2ZW50..." <4,162 bytes>
+      tpm_quote => 
+        Message [ undefined ] {
+          nonce => 8tbIV..gKrcg
+          pcr_selection => [0,1,7,10,11,14,15]
+          pcr_values => 
+            Message [ undefined ] {
+              0 => 4htwP..qP6pM
+              1 => StAAW..t9SF8
+              10 => n_Xbz..U0pro
+              11 => AAAAA..AAAAA
+              14 => AAAAA..AAAAA
+              15 => NqTQW..ewO0g
+              7 => 4htwP..qP6pM
+            }
+          quoted => "_1RDR4AYACIACwVu8zHJmWWtDnVQ4Rap74piS4oM7A9N3W_70HOqK0VyACDy..." <194 bytes>
+          signature => "TCLnUsJGx7KYR1Uf_8lKigU-WJx4HcDsEiXe8UsNq05syDdVdQupotxVHySb..." <342 bytes>
+        }
+      wallet_address => NYNhb..HrlDg
+    }
+  status => 200
+}
