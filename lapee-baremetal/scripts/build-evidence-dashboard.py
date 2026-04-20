@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +45,12 @@ EVIDENCE = ROOT / "out" / "evidence"
 ACCEPTANCE = ROOT / "out" / "acceptance"
 TAMPER = ACCEPTANCE / "tamper"
 DASHBOARD_PATH = EVIDENCE / "dashboard.html"
+# The interpret-device's static DB lives in the parent hb repo's
+# priv/ dir (copied into the release at build time). The dashboard
+# audits its size to render the Coverage section. No hard-coded
+# counts — everything is derived from what's actually on disk.
+PRIV = ROOT.parent / "priv" / "tpm-interpret"
+DEV_TPM_TCG_ERL = ROOT.parent / "src" / "dev_tpm_tcg.erl"
 
 
 # ---------- helpers ---------------------------------------------------
@@ -284,6 +291,175 @@ def load_raw_files() -> list[dict]:
             "text": text,
         })
     return out
+
+
+def load_coverage(interp_tree: dict | None) -> dict:
+    """Audit the priv/tpm-interpret/ DB that ships with the release.
+    All counts are derived from what's actually on disk — no hard-
+    coded numbers, so the dashboard stays honest as the DB grows.
+
+    Also reflects live per-PCR derived-field population from the
+    latest interpret run: for each PCR, how many of its template
+    fields have concrete values vs `"unknown"' sentinels."""
+    cov: dict = {}
+
+    # Vendors — manufacturers.json → {kind: count}.
+    mans = read_json(PRIV / "manufacturers.json") or {}
+    vendors = mans.get("vendors", {}) or {}
+    kinds: dict[str, int] = {}
+    for v in vendors.values():
+        k = v.get("kind", "unknown") if isinstance(v, dict) else "unknown"
+        kinds[k] = kinds.get(k, 0) + 1
+    cov["vendors"] = {
+        "total": len(vendors),
+        "by_kind": kinds,
+        "sample": sorted(
+            [v.get("name", "?")
+             for v in vendors.values() if isinstance(v, dict)])[:8],
+    }
+
+    # Firmware families — every *.json file under firmware-versions/.
+    fw_dir = PRIV / "firmware-versions"
+    fw_entries = []
+    if fw_dir.is_dir():
+        for fn in sorted(fw_dir.glob("*.json")):
+            d = read_json(fn) or {}
+            name = d.get("name") or fn.stem
+            vendor = d.get("vendor") or "-"
+            trust = d.get("trust-tier") or (
+                d.get("entries", [{}])[0].get("trust-tier", "")
+                if isinstance(d.get("entries"), list) else "")
+            platforms = d.get("platforms") or {}
+            n_platforms = (len(platforms)
+                           if isinstance(platforms, dict) else 0)
+            # Multi-entry families.
+            entries = d.get("entries") or []
+            if isinstance(entries, list) and entries:
+                for e in entries:
+                    fw_entries.append({
+                        "file": fn.name,
+                        "name": e.get("vendor", name),
+                        "vendor": e.get("vendor", vendor),
+                        "trust_tier": e.get("trust-tier", trust),
+                        "platforms": len(e.get("platforms") or [])
+                                     if isinstance(e.get("platforms"), list)
+                                     else 0,
+                    })
+            else:
+                fw_entries.append({
+                    "file": fn.name,
+                    "name": name,
+                    "vendor": vendor,
+                    "trust_tier": trust,
+                    "platforms": n_platforms,
+                })
+    cov["firmware_families"] = fw_entries
+
+    # PCR profiles — each file pins expected PCR 0 + 7 digests.
+    prof_dir = PRIV / "pcr-profiles"
+    profiles = []
+    if prof_dir.is_dir():
+        for fn in sorted(prof_dir.glob("*.json")):
+            d = read_json(fn) or {}
+            match_pcrs = d.get("match-pcrs") or d.get("pcrs") or {}
+            profiles.append({
+                "file": fn.name,
+                "name": d.get("name") or fn.stem,
+                "platform": (d.get("attributes") or {}).get(
+                    "platform-vendor", "-"),
+                "trust_tier": (d.get("attributes") or {}).get(
+                    "trust-tier", "-"),
+                "pcrs_matched": (
+                    len(match_pcrs) if isinstance(match_pcrs, dict) else 0),
+            })
+    cov["pcr_profiles"] = profiles
+
+    # Vendor root CAs — count *.pem files; 0 is the expected default
+    # (deployer-supplied; licensing varies per vendor).
+    ca_dir = PRIV / "root-cas"
+    cas = []
+    if ca_dir.is_dir():
+        cas = sorted([p.name for p in ca_dir.glob("*.pem")])
+    cov["root_cas"] = {"count": len(cas), "files": cas}
+
+    # UKI measurements DB.
+    uki_dir = PRIV / "uki-measurements"
+    ukis = []
+    if uki_dir.is_dir():
+        ukis = sorted([p.name for p in uki_dir.glob("*.json")])
+    cov["uki_measurements"] = {"count": len(ukis), "files": ukis}
+
+    # Event-type decoder coverage — grep do_decode/2 clauses in
+    # dev_tpm_tcg.erl against the 36 codes in event-types.json.
+    etypes = read_json(PRIV / "event-types.json") or {}
+    types = etypes.get("types") or {}
+    decoded_codes = set()
+    if DEV_TPM_TCG_ERL.is_file():
+        text = DEV_TPM_TCG_ERL.read_text()
+        for m in re.finditer(r"do_decode\(16#([0-9A-Fa-f]+),", text):
+            decoded_codes.add(int(m.group(1), 16))
+    type_rows = []
+    for code_str, info in types.items():
+        try:
+            code = int(code_str)
+        except Exception:
+            continue
+        type_rows.append({
+            "code": code,
+            "code_hex": f"0x{code:X}",
+            "name": info.get("name", "?"),
+            "decoded": code in decoded_codes,
+            "data_format": info.get("data_format", "-"),
+        })
+    type_rows.sort(key=lambda r: r["code"])
+    cov["event_types"] = {
+        "total": len(type_rows),
+        "decoded": sum(1 for r in type_rows if r["decoded"]),
+        "rows": type_rows,
+    }
+
+    # Per-PCR derived-field population from the live interpret tree.
+    # For each PCR, count concrete values vs `"unknown"' sentinels
+    # vs empty collections. This reflects the CURRENT attestation's
+    # evidence richness — so on QEMU / SeaBIOS most rows are sparse;
+    # on real UEFI hardware most rows are full.
+    pcr_derived = []
+    if interp_tree and isinstance(interp_tree.get("pcrs"), dict):
+        for k in sorted(
+                [x for x in interp_tree["pcrs"].keys() if str(x).isdigit()],
+                key=lambda x: int(x)):
+            p = interp_tree["pcrs"][k]
+            if not isinstance(p, dict):
+                continue
+            derived = (p.get("derived") or {})
+            concrete = 0
+            unknown = 0
+            empty = 0
+            total = 0
+            for dk, dv in derived.items():
+                if dk == "commitments":
+                    continue
+                total += 1
+                if dv == "unknown":
+                    unknown += 1
+                elif isinstance(dv, list) and not dv:
+                    empty += 1
+                elif isinstance(dv, (int, bool, str, bytes)) and dv == "":
+                    empty += 1
+                else:
+                    concrete += 1
+            pcr_derived.append({
+                "pcr": int(k),
+                "role": p.get("role", "-"),
+                "total": total,
+                "concrete": concrete,
+                "unknown": unknown,
+                "empty": empty,
+                "events": p.get("event-count", 0),
+            })
+    cov["pcr_derived"] = pcr_derived
+
+    return cov
 
 
 # ---------- renderers -------------------------------------------------
@@ -783,6 +959,247 @@ def render_pcr_breakdown(interp: dict | None) -> str:
     """
 
 
+def render_coverage(cov: dict) -> str:
+    """Render the priv/tpm-interpret/ DB audit + live per-PCR
+    derived-field population. All counts are data-driven — pulled
+    from the files that actually ship in the release, so the
+    dashboard never drifts from reality as the DB grows."""
+    if not cov:
+        return ""
+
+    # Top-line summary strip.
+    v = cov.get("vendors", {})
+    fw = cov.get("firmware_families", [])
+    pp = cov.get("pcr_profiles", [])
+    ca = cov.get("root_cas", {})
+    uki = cov.get("uki_measurements", {})
+    et = cov.get("event_types", {})
+
+    strip = f"""
+    <div class="cov-strip">
+      <div class="cov-cell">
+        <div class="label">TPM vendors</div>
+        <div class="value">{v.get('total', 0)}</div>
+        <div class="muted">across {len(v.get('by_kind', {}))} kinds</div>
+      </div>
+      <div class="cov-cell">
+        <div class="label">Firmware families</div>
+        <div class="value">{len(fw)}</div>
+        <div class="muted">OEM + third-party UEFI</div>
+      </div>
+      <div class="cov-cell">
+        <div class="label">PCR profiles</div>
+        <div class="value">{len(pp)}</div>
+        <div class="muted">populated</div>
+      </div>
+      <div class="cov-cell">
+        <div class="label">Vendor root CAs</div>
+        <div class="value">{ca.get('count', 0)}</div>
+        <div class="muted">{'deployer-supplied' if ca.get('count',0)==0 else 'provisioned'}</div>
+      </div>
+      <div class="cov-cell">
+        <div class="label">UKI measurements</div>
+        <div class="value">{uki.get('count', 0)}</div>
+        <div class="muted">kernel/UKI hashes</div>
+      </div>
+      <div class="cov-cell">
+        <div class="label">Event-type decoders</div>
+        <div class="value">{et.get('decoded', 0)} / {et.get('total', 0)}</div>
+        <div class="muted">structured decode</div>
+      </div>
+    </div>
+    """
+
+    # Vendors card: kind breakdown + sample names.
+    kind_rows = []
+    for k, n in sorted(v.get("by_kind", {}).items(), key=lambda kv: -kv[1]):
+        kind_rows.append(
+            f"<tr><th>{escape(k)}</th><td>{n}</td></tr>"
+        )
+    sample = v.get("sample") or []
+    vendors_card = f"""
+    <div class="card">
+      <div class="card-title">Vendors by kind</div>
+      <table>{''.join(kind_rows)}</table>
+      <p class="muted">
+        Sample: {', '.join(escape(x) for x in sample)}...<br>
+        Deployer supplies vendor root CA(s) matching the EK chain.
+      </p>
+    </div>
+    """
+
+    # Firmware families card.
+    fw_rows = []
+    for e in fw:
+        tt = e.get("trust_tier") or ""
+        tt_html = (f' <span class="badge sev-info">{escape(tt)}</span>'
+                   if tt == "development-only" else "")
+        fw_rows.append(f"""
+        <tr>
+          <td><code>{escape(e['file'])}</code></td>
+          <td>{escape(e['vendor'])}{tt_html}</td>
+          <td class="num">{e['platforms']}</td>
+        </tr>
+        """)
+    fw_card = f"""
+    <div class="card">
+      <div class="card-title">Firmware families
+        ({len(fw)} entries)</div>
+      <table>
+        <thead><tr><th>file</th><th>vendor</th>
+                   <th>platforms</th></tr></thead>
+        <tbody>{''.join(fw_rows) or
+          '<tr><td colspan="3" class="muted">none</td></tr>'}</tbody>
+      </table>
+    </div>
+    """
+
+    # PCR profiles card.
+    pp_rows = []
+    for p in pp:
+        pp_rows.append(f"""
+        <tr>
+          <td><code>{escape(p['file'])}</code></td>
+          <td>{escape(p['platform'])}</td>
+          <td>{escape(p['trust_tier'])}</td>
+          <td class="num">{p['pcrs_matched']}</td>
+        </tr>
+        """)
+    pp_card = f"""
+    <div class="card">
+      <div class="card-title">PCR profiles
+        ({len(pp)})</div>
+      <table>
+        <thead><tr><th>file</th><th>platform</th>
+                   <th>trust-tier</th><th>pcrs</th></tr></thead>
+        <tbody>{''.join(pp_rows) or
+          '<tr><td colspan="4" class="muted">none populated — real-hardware PCR captures go here</td></tr>'}</tbody>
+      </table>
+    </div>
+    """
+
+    # Event-type decoder coverage card: full table.
+    et_rows = []
+    for r in et.get("rows", []):
+        mark = ('<span class="badge ok">decoded</span>' if r["decoded"]
+                else '<span class="badge sev-info">opaque</span>')
+        et_rows.append(f"""
+        <tr>
+          <td class="mono">{escape(r['code_hex'])}</td>
+          <td><code>{escape(r['name'])}</code></td>
+          <td>{mark}</td>
+          <td class="muted">{escape(r['data_format'])}</td>
+        </tr>
+        """)
+    et_card = f"""
+    <div class="card full-width">
+      <div class="card-title">Event-type decoder coverage
+        ({et.get('decoded', 0)} / {et.get('total', 0)})</div>
+      <p class="muted">Structured decoders produce a <code>parsed</code>
+        submap per event; unimplemented codes fall through with an
+        empty <code>parsed</code> (raw bytes still available at
+        <code>event-data</code>). Every event still carries its TCG
+        name from this registry.</p>
+      <table class="full">
+        <thead><tr><th>code</th><th>name</th><th>status</th>
+                   <th>data format</th></tr></thead>
+        <tbody>{''.join(et_rows)}</tbody>
+      </table>
+    </div>
+    """
+
+    # Live per-PCR derived-field population.
+    pd = cov.get("pcr_derived", [])
+    pd_rows = []
+    for r in pd:
+        t = r["total"]
+        c = r["concrete"]
+        u = r["unknown"]
+        e = r["empty"]
+        pct = int(round((c / t) * 100)) if t else 0
+        bar = f"""
+        <div class="bar">
+          <div class="bar-fill" style="width:{pct}%"></div>
+          <div class="bar-label">{c}/{t}</div>
+        </div>
+        """
+        pd_rows.append(f"""
+        <tr>
+          <td class="num">{r['pcr']}</td>
+          <td>{escape(r['role'])}</td>
+          <td class="num">{r['events']}</td>
+          <td>{bar}</td>
+          <td class="num">{c}</td>
+          <td class="num">{u}</td>
+          <td class="num">{e}</td>
+        </tr>
+        """)
+    pd_card = f"""
+    <div class="card full-width">
+      <div class="card-title">Per-PCR derived-field population
+        (from live interpret)</div>
+      <p class="muted">Each PCR's <code>derived/</code> submessage has a
+        fixed shape; population depends on whether the attestation
+        includes the relevant events. <code>unknown</code> and empty
+        collections are honest sentinels — "evidence not present",
+        not "evidence said no". Real UEFI silicon populates most
+        rows; SeaBIOS under QEMU populates a handful.</p>
+      <table class="full">
+        <thead><tr><th>PCR</th><th>role</th><th>events</th>
+            <th>concrete ratio</th>
+            <th>concrete</th><th>unknown</th><th>empty</th></tr></thead>
+        <tbody>{''.join(pd_rows) or
+          '<tr><td colspan="7" class="muted">no live interpret tree available</td></tr>'}</tbody>
+      </table>
+    </div>
+    """
+
+    return f"""
+    <section id="coverage">
+      <h2>Coverage — DB audit + live derived-field population</h2>
+      <p class="muted">Everything under <code>priv/tpm-interpret/</code>
+        that ships with the release, plus how richly the live
+        attestation populates the derived-field templates. Counts
+        come straight from the files on disk, so this strip stays
+        honest as the DB grows (adding an OEM's firmware identifier
+        is a file drop, not a code change). See
+        <code>priv/tpm-interpret/COVERAGE.md</code> for the full
+        gap audit.</p>
+      {strip}
+      <div class="grid-2" style="margin-top:18px">
+        {vendors_card}
+        {fw_card}
+      </div>
+      <div class="grid-2" style="margin-top:14px">
+        {pp_card}
+        <div class="card">
+          <div class="card-title">Vendor root CAs</div>
+          {(
+             f'<ul>{"".join(f"<li><code>{escape(n)}</code></li>" for n in ca.get("files") or [])}</ul>'
+             if ca.get("count", 0) else
+             '<p class="muted">0 provisioned — each deployer supplies '
+             'the vendor EK root CA(s) that match the TPMs they trust. '
+             'Drop <code>*.pem</code> into '
+             '<code>priv/tpm-interpret/root-cas/</code>. Infineon / '
+             'STMicro / Nuvoton / AMD / Intel / Lenovo / Dell all '
+             'publish downloadable root CA chains (see COVERAGE.md).</p>'
+          )}
+          <div class="card-title" style="margin-top:14px">UKI measurements</div>
+          {(
+             f'<ul>{"".join(f"<li><code>{escape(n)}</code></li>" for n in uki.get("files") or [])}</ul>'
+             if uki.get("count", 0) else
+             '<p class="muted">0 provisioned — kernel/UKI PE hashes are '
+             'deploy-specific. Populate once a measured UKI image is '
+             'available from a real systemd-boot host.</p>'
+          )}
+        </div>
+      </div>
+      <div style="margin-top:14px">{et_card}</div>
+      <div style="margin-top:14px">{pd_card}</div>
+    </section>
+    """
+
+
 def render_raw_files(files: list[dict]) -> str:
     if not files:
         return ""
@@ -942,6 +1359,43 @@ h4 { margin: 12px 0 6px; font-size: 13px; color: #cbd5e1; }
   padding: 1px 5px; border-radius: 3px; margin-right: 4px;
 }
 .recon { font-size: 12px; color: #9ca3af; margin: 6px 0; }
+.cov-strip {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;
+  margin: 12px 0;
+}
+@media (max-width: 1100px) {
+  .cov-strip { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+  .cov-strip { grid-template-columns: repeat(2, 1fr); }
+}
+.cov-cell {
+  background: #151823; border: 1px solid #24283b;
+  padding: 12px; border-radius: 8px;
+}
+.cov-cell .label {
+  color: #9ca3af; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 6px;
+}
+.cov-cell .value {
+  font-size: 22px; font-weight: 700; color: #fbbf24;
+}
+.cov-cell .muted { font-size: 11px; margin-top: 4px; }
+.card.full-width { grid-column: 1 / -1; }
+.bar {
+  position: relative; background: #0a0c10; border: 1px solid #24283b;
+  border-radius: 3px; height: 18px; width: 160px;
+}
+.bar-fill {
+  background: linear-gradient(90deg, #065f46, #10b981);
+  height: 100%;
+}
+.bar-label {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #e5e7eb; font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px rgba(0,0,0,0.8);
+}
 """
 
 HTML_TMPL = """<!DOCTYPE html>
@@ -963,6 +1417,7 @@ HTML_TMPL = """<!DOCTYPE html>
   </header>
   <nav>
     <a href="#verdict">Verdict</a>
+    <a href="#coverage">Coverage</a>
     <a href="#acceptance">Acceptance (3 envelopes)</a>
     <a href="#tamper">Tamper (7-way)</a>
     <a href="#interpret">Interpret /verify</a>
@@ -974,6 +1429,7 @@ HTML_TMPL = """<!DOCTYPE html>
   </nav>
   <main>
     {verdict}
+    {coverage}
     {acceptance}
     {tamper}
     {interpret}
@@ -1004,12 +1460,14 @@ def build() -> Path:
         "hyperbuddy": load_hyperbuddy(),
         "files": load_raw_files(),
     }
+    ctx["coverage"] = load_coverage(ctx["interpret-tree"])
     html = HTML_TMPL.format(
         css=CSS,
         ts=escape(ctx["ts"]),
         branch=escape(ctx["branch"]),
         commit=escape(ctx["commit"]),
         verdict=render_verdict_strip(ctx),
+        coverage=render_coverage(ctx["coverage"]),
         acceptance=render_acceptance(ctx["acceptance"]),
         tamper=render_tamper(ctx["tamper"]),
         interpret=render_interpret(ctx["interpret"]),
