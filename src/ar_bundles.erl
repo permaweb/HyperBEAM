@@ -591,6 +591,11 @@ decode_avro_tags(<<>>, _) ->
     {[], <<>>};
 decode_avro_tags(Binary, Count) when Count =:= 0 ->
     {[], Binary};
+decode_avro_tags(Binary, Count) when Count < 0 ->
+    %% Avro long-form block: negative count encodes item count as abs(Count),
+    %% followed by a zigzag-encoded byte size which we skip.
+    {_ByteBlockSize, Rest} = decode_zigzag(Binary),
+    decode_avro_tags(Rest, -Count);
 decode_avro_tags(Binary, Count) ->
     {NameSize, Rest} = decode_zigzag(Binary),
     decode_avro_name(NameSize, Rest, Count).
@@ -1161,3 +1166,14 @@ deserialize_ethereum_transaction_test() ->
     ?assertEqual(<<"0x626334b6ef6D3e8537E9f8d97d65f59832219315">>,
         hb_util:human_id(ar_wallet:to_address(Deserialized#tx.owner, Deserialized#tx.signature_type))),
     ?assert(verify_item(Deserialized)).
+
+%% @doc Test TX header with avro with negative count.
+%% TXID: sfuxzQEEIFo5w6swrIPNjqUXCkaRm1BiuP5E3tmuNeU
+deserialize_header_test() ->
+    Binary = <<3,0,159,201,29,54,204,49,217,185,169,30,79,27,113,154,209,149,155,4,94,109,231,29,126,91,206,2,58,46,48,92,26,78,97,101,237,211,88,230,249,10,184,209,7,255,179,104,207,12,190,33,166,28,50,204,70,145,233,91,105,67,114,10,93,238,28,4,215,155,88,31,136,43,116,83,120,249,145,176,234,17,216,136,40,180,180,163,138,235,206,53,81,171,155,115,126,116,41,35,253,114,207,9,111,109,251,54,165,211,123,116,38,234,140,182,15,169,158,249,185,207,52,106,5,41,28,28,118,69,217,53,0,0,2,0,0,0,0,0,0,0,112,0,0,0,0,0,0,0,3,216,1,18,73,80,70,83,45,72,97,115,104,118,98,97,102,107,114,101,105,98,103,100,115,97,104,54,122,111,108,50,101,111,101,54,98,112,120,54,51,104,99,55,117,51,112,107,53,120,105,106,51,116,120,110,98,120,102,120,97,116,116,97,116,113,51,108,108,52,119,100,97,24,67,111,110,116,101,110,116,45,84,121,112,101,48,97,112,112,108,105,99,97,116,105,111,110,47,111,99,116,101,116,45,115,116,114,101,97,109,0,82,73,70,70,34,0,0,0,87,69,66,80,86,80,56,76,21,0,0,0,47,99,192,24,0,7,16,17,253,15,3,144,16,254,239,151,34,250,159,74,4,0>>,
+    {ok, _, TXheader} = deserialize_header(Binary),
+    [{T1, V1}, {T2, V2}] = TXheader#tx.tags,
+    ?assertEqual(<<"IPFS-Hash">>, T1),
+    ?assertEqual(<<"bafkreibgdsah6zol2eoe6bpx63hc7u3pk5xij3txnbxfxattatq3ll4wda">>, V1),
+    ?assertEqual(<<"Content-Type">>, T2),
+    ?assertEqual(<<"application/octet-stream">>, V2).
