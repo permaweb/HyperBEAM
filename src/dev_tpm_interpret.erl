@@ -921,8 +921,12 @@ interpret_envelope(E, Opts) ->
 
 interpret_events(E) ->
     case hb_maps:get(<<"tcg_event_log">>, E, <<>>, #{}) of
-        Log when is_binary(Log), byte_size(Log) > 0 ->
-            dev_tpm_tcg:decode_events(dev_tpm_tcg:parse(Log));
+        LogB64 when is_binary(LogB64), byte_size(LogB64) > 0 ->
+            LogBin = try hb_util:decode(LogB64) catch _:_ -> <<>> end,
+            case byte_size(LogBin) of
+                0 -> #{};
+                _ -> dev_tpm_tcg:decode_events(dev_tpm_tcg:parse(LogBin))
+            end;
         _ -> #{}
     end.
 
@@ -1804,7 +1808,7 @@ info_docs_full_surface_test() ->
 %% version, SecureBoot variable).
 events_returns_indexed_map_test() ->
     Fixture = build_tcg_fixture(),
-    Envelope = #{<<"tcg_event_log">> => Fixture},
+    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
     {ok, #{<<"body">> := Events}} = events(Envelope, #{}, #{}),
     ?assertEqual(3, maps:size(Events)),
     E1 = maps:get(<<"1">>, Events),
@@ -1826,7 +1830,7 @@ events_returns_indexed_map_test() ->
 %% string.
 claim_surface_extracts_secure_boot_and_crtm_test() ->
     Fixture = build_tcg_fixture(),
-    Envelope = #{<<"tcg_event_log">> => Fixture},
+    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
     {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
     SB = maps:get(<<"secure_boot">>, Claim),
     ?assertEqual(true, maps:get(<<"enabled">>, SB)),

@@ -766,7 +766,12 @@ chk_binding(Envelope) ->
 %%     the reconstructed value MUST match the quoted value. Mismatch
 %%     = fail.
 chk_tcg_event_log_replay(Envelope) ->
-    LogBin = hb_maps:get(<<"tcg_event_log">>, Envelope, <<>>, #{}),
+    LogB64 = hb_maps:get(<<"tcg_event_log">>, Envelope, <<>>, #{}),
+    LogBin = case LogB64 of
+                 <<>> -> <<>>;
+                 B when is_binary(B) ->
+                     try hb_util:decode(B) catch _:_ -> <<>> end
+             end,
     case byte_size(LogBin) of
         0 -> {ok, <<"no firmware log present (accepted)">>};
         _ ->
@@ -1012,17 +1017,19 @@ attestation(_Base, Req, Opts) ->
                         },
                         <<"runtime_event_log">> => EventLog,
                         %% Firmware-side TCG event log (PCRs 0-14
-                        %% measurements the kernel exposes). Raw
-                        %% binary bytes — HB's response codec
-                        %% handles encoding when callers use
-                        %% `accept-bundle: true'. The interpret
+                        %% measurements the kernel exposes).
+                        %% base64url — consistent with every other
+                        %% binary field in this envelope
+                        %% (runtime_event_log digests, tpm_quote
+                        %% values, PCR digests, …). The interpret
                         %% device parses this into per-event
                         %% messages and extracts machine-identifying
                         %% fields (Secure Boot, firmware version,
                         %% bootloader hash, …) per the paper's
                         %% §Architecture "every field is a named
                         %% event-log entry" requirement.
-                        <<"tcg_event_log">> => read_tcg_event_log(),
+                        <<"tcg_event_log">> =>
+                            hb_util:encode(read_tcg_event_log()),
                         <<"node_message">> => NodeMsg,
                         <<"node_message_id">> => NodeMsgId,
                         <<"wallet_address">> =>
@@ -1370,8 +1377,12 @@ resolve_pcr_list_test() ->
 %% require a firmware log chain should additionally check envelope.
 %% tcg_event_log size.
 chk_tcg_event_log_replay_empty_log_test() ->
-    ?assertMatch({ok, _}, chk_tcg_event_log_replay(#{<<"tcg_event_log">> =>
-                                                     <<>>})),
+    %% Both "no field" and "field but empty" accepted.
+    ?assertMatch({ok, _},
+                 chk_tcg_event_log_replay(#{<<"tcg_event_log">> => <<>>})),
+    ?assertMatch({ok, _},
+                 chk_tcg_event_log_replay(#{<<"tcg_event_log">> =>
+                                              hb_util:encode(<<>>)})),
     ?assertMatch({ok, _}, chk_tcg_event_log_replay(#{})).
 
 %% When the envelope carries a TCG log whose events replay to
@@ -1403,7 +1414,7 @@ chk_tcg_event_log_replay_accepts_consistent_fixture_test() ->
     %% Compute the expected PCR-0 reconstruction.
     ExpectedPcr0 = crypto:hash(sha256, <<0:256, Sha256/binary>>),
     Envelope = #{
-        <<"tcg_event_log">> => Log,
+        <<"tcg_event_log">> => hb_util:encode(Log),
         <<"tpm_quote">> => #{
             <<"pcr_values">> =>
                 #{<<"0">> => hb_util:encode(ExpectedPcr0)}
@@ -1441,7 +1452,7 @@ chk_tcg_event_log_replay_rejects_tampered_fixture_test() ->
     %% Quote claims the GOOD PCR 0 value. Log has tampered digest.
     GoodPcr0 = crypto:hash(sha256, <<0:256, GoodSha256/binary>>),
     Envelope = #{
-        <<"tcg_event_log">> => Log,
+        <<"tcg_event_log">> => hb_util:encode(Log),
         <<"tpm_quote">> => #{
             <<"pcr_values">> =>
                 #{<<"0">> => hb_util:encode(GoodPcr0)}
