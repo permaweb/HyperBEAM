@@ -1,0 +1,19 @@
+{
+    "schema-version": 1,
+    "name": "Dell Latitude + XPS BIOS identifier family",
+    "description": "Dell extends PCR 0 with an EV_S_CRTM_VERSION carrying the ASCII string `Dell Inc.' followed by a BIOS version like `1.22.0'. Unlike Lenovo, Dell's CRTM string is ASCII, not UTF-16.",
+    "match": {
+        "crtm-version-prefix": ["Dell Inc.", "Dell Computer", "Dell System"],
+        "crtm-version-regex": "^Dell (Inc\\.|Computer|System).*$"
+    },
+    "vendor": "Dell",
+    "platforms-note": "Dell does not encode the model in CRTM_VERSION itself; the model is read from SMBIOS (EV_EFI_HANDOFF_TABLES2 measurements on PCR 1). Cross-correlate CRTM version with SMBIOS product-name to identify the platform.",
+    "bios-version-anchors": {
+        "1.22.0": "Dell Latitude 5430 late 2024 revision",
+        "1.30.0": "Dell Latitude 5440 refresh",
+        "2.10.0": "Dell XPS 13 9320 / XPS 15 9530",
+        "2.20.0": "Dell Precision 5480 / 7480"
+    },
+    "notes": "Dell's EK certificate chains to `Dell Inc. TPM2 Root CA' (cert available from https://www.dell.com/support/contents/drivers/driverdetails?driverid=7W5V2). SecureBoot db is populated with Dell's own secure-boot cert plus Microsoft UEFI CA.",
+    "source": "Dell Latitude service manuals + observed /sys/firmware/dmi/entries tables on deployed Linux hosts."
+}

@@ -1,0 +1,25 @@
+{
+    "schema-version": 1,
+    "name": "QEMU SeaBIOS + EDK2/OVMF development firmware",
+    "description": "Development / CI firmware stacks. NOT a production trust anchor — present here so the interpret device can explicitly flag development boots.",
+    "entries": [
+        {
+            "match": {
+                "crtm-version-prefix": ["SeaBIOS"]
+            },
+            "vendor": "QEMU SeaBIOS (legacy BIOS under QEMU)",
+            "trust-tier": "development-only",
+            "notes": "SeaBIOS emits a SPARSE EV event log (no EV_S_CRTM_VERSION on older builds). PCR 1 reconstruction from the log diverges from the quoted PCR 1 because SeaBIOS under QEMU doesn't log every PCR 1 extension. The interpret device treats this mismatch as informational rather than a hard reject — see the firmware-tcg-event-log-replay check's `severity: informational'."
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["EDK II", "EDK 2", "edk2-stable"]
+            },
+            "vendor": "EDK II / OVMF (QEMU UEFI)",
+            "trust-tier": "development-only",
+            "notes": "EDK II is TianoCore's reference UEFI implementation; OVMF is its QEMU firmware packaging. Emits the full UEFI event log including EV_EFI_VARIABLE_DRIVER_CONFIG + EV_EFI_VARIABLE_AUTHORITY. A LapEE-style deploy on QEMU+OVMF gives a complete `pcrs/*/derived/*' view for development purposes."
+        }
+    ],
+    "notes": "A production verifier should REFUSE attestations whose matched firmware-version entry has `trust-tier: development-only', or require an explicit test-only trust anchor override.",
+    "source": "Measured on qemu-system-x86_64 8.x with seabios-1.16.3 and OVMF-2024.04; https://github.com/qemu/seabios + https://github.com/tianocore/edk2"
+}

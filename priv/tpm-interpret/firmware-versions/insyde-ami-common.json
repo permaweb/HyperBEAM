@@ -1,0 +1,43 @@
+{
+    "schema-version": 1,
+    "name": "InsydeH2O / American Megatrends (AMI) UEFI CRTM family",
+    "description": "InsydeH2O (Insyde Corp.) and AMI Aptio are the two most common third-party UEFI firmware stacks shipped by OEMs (Framework, Acer, Asus, Gigabyte, MSI, HP consumer, many others). They write EV_S_CRTM_VERSION as UTF-16LE strings identifying the CRTM build.",
+    "entries": [
+        {
+            "match": {
+                "crtm-version-prefix": ["INSYDE Corp."]
+            },
+            "vendor": "Insyde Software",
+            "platforms": ["Framework Laptop 13 AMD / Intel", "Framework 16",
+                           "Acer Swift", "Some Gigabyte boards"]
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["American Megatrends",
+                                         "American Megatrends International",
+                                         "AMI"]
+            },
+            "vendor": "American Megatrends Inc. (AMI)",
+            "platforms": ["Asus motherboards", "MSI motherboards",
+                           "Gigabyte boards", "some Supermicro",
+                           "Intel NUC (recent)"]
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["Phoenix Technologies"]
+            },
+            "vendor": "Phoenix Technologies",
+            "platforms": ["Legacy enterprise laptops — rarely seen on modern hardware"]
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["coreboot", "chromiumos"]
+            },
+            "vendor": "coreboot (open source)",
+            "platforms": ["Chromebooks (Google)", "System76 Oryx / Lemur",
+                           "Purism Librem 14", "StarLabs"]
+        }
+    ],
+    "notes": "Third-party firmware vendors don't typically ship their own TPM CA — the EK chain goes through the TPM chip manufacturer's CA (Infineon / STMicro / Nuvoton / AMD / Intel). Use `manufacturers.json' to resolve the EK vendor, not this file.",
+    "source": "CRTM version strings observed across Linux hosts with `tpm2_pcrread + /sys/kernel/security/tpm0/binary_bios_measurements'."
+}

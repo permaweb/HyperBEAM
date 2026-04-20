@@ -188,7 +188,12 @@ Message [ undefined ] {
           event-data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
           event-type => EV_EVENT_TAG
           event-type-code => 6
-          parsed => #{}
+          parsed => 
+            Message [ undefined ] {
+              tag-category => unknown
+              tag-data-length => 12
+              tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+            }
           pcr => 1
           seq => 2
         }
@@ -223,7 +228,12 @@ Message [ undefined ] {
           event-data => BwAAA..j5nqU
           event-type => EV_EVENT_TAG
           event-type-code => 6
-          parsed => #{}
+          parsed => 
+            Message [ undefined ] {
+              tag-category => unknown
+              tag-data-length => 16
+              tag-guid => 00000007-0018-0000-0000-000087fbc0ec
+            }
           pcr => 2
           seq => 4
         }
@@ -239,7 +249,12 @@ Message [ undefined ] {
           event-data => BwAAA..MK1p0
           event-type => EV_EVENT_TAG
           event-type-code => 6
-          parsed => #{}
+          parsed => 
+            Message [ undefined ] {
+              tag-category => unknown
+              tag-data-length => 16
+              tag-guid => 00000007-0018-0000-0000-0000a177fe95
+            }
           pcr => 2
           seq => 5
         }
@@ -255,7 +270,12 @@ Message [ undefined ] {
           event-data => BwAAA..mVmZI
           event-type => EV_EVENT_TAG
           event-type-code => 6
-          parsed => #{}
+          parsed => 
+            Message [ undefined ] {
+              tag-category => unknown
+              tag-data-length => 16
+              tag-guid => 00000007-0018-0000-0000-00000bff50c1
+            }
           pcr => 2
           seq => 6
         }
@@ -271,7 +291,12 @@ Message [ undefined ] {
           event-data => BwAAA..iLebQ
           event-type => EV_EVENT_TAG
           event-type-code => 6
-          parsed => #{}
+          parsed => 
+            Message [ undefined ] {
+              tag-category => unknown
+              tag-data-length => 16
+              tag-guid => 00000007-0018-0000-0000-0000670c9cc7
+            }
           pcr => 2
           seq => 7
         }

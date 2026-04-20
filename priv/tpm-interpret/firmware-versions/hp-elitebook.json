@@ -1,0 +1,13 @@
+{
+    "schema-version": 1,
+    "name": "HP EliteBook / ProBook / Z-series BIOS family",
+    "description": "HP's `HPQ' firmware uses an ASCII CRTM_VERSION of the form `<release-id> Ver. 01.<major>.<minor>' or similar. Appears as UTF-8 in PCR 0's EV_S_CRTM_VERSION.",
+    "match": {
+        "crtm-version-prefix": ["HP", "HPQ"],
+        "crtm-version-regex": "^(HP|HPQ).*Ver\\. 0[12]\\.[0-9]{2}\\.[0-9]{2}$"
+    },
+    "vendor": "HP Inc.",
+    "platforms-note": "HP's platform identification (EliteBook vs ProBook vs Z-workstation) is in SMBIOS, not CRTM. The CRTM string encodes the firmware release family.",
+    "notes": "HP's vendor EK root CA is the `HP TPM 2.0 Endorsement Key Root CA'. HP publishes it via their HP TPM Provisioning tool; it is also available as part of Microsoft's tpm-toolbox defaults. HP BIOS typically measures EV_EFI_VARIABLE_DRIVER_CONFIG + EV_EFI_VARIABLE_AUTHORITY on PCR 7 for Secure Boot db/dbx.",
+    "source": "HP BIOS release notes + public community disassemblies of HP firmware (HPQFlash)."
+}

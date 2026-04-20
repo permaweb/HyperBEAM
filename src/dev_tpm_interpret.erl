@@ -1000,33 +1000,62 @@ encode_field(_K, V) when is_map(V) ->
 encode_field(_K, V) when is_list(V) ->
     [encode_field_val(X) || X <- V];
 %% These keys carry UTF-8 strings by construction — leave as-is.
-encode_field(K, V) when is_binary(V),
-                        K =:= <<"event-type">>;
-                        K =:= <<"variable-name">>;
-                        K =:= <<"variable-guid">>;
-                        K =:= <<"type-guid">>;
-                        K =:= <<"action">>;
-                        K =:= <<"crtm-version">>;
-                        K =:= <<"post-code">>;
-                        K =:= <<"post-code-bytes">> -> V;
-encode_field(<<"format">>, V) when is_binary(V) -> V;
-encode_field(<<"key">>, V) when is_binary(V) -> V;
-encode_field(<<"value">>, V) when is_binary(V) -> V;
-encode_field(<<"separator">>, V) when is_binary(V) -> V;
-encode_field(<<"spec-id">>, V) when is_binary(V) -> V;
-encode_field(<<"marker">>, V) when is_binary(V) -> V;
-encode_field(<<"blob-description">>, V) when is_binary(V) -> V;
-encode_field(<<"text">>, V) when is_binary(V) -> V;
-encode_field(<<"hash-alg-name">>, V) when is_binary(V) -> V;
-encode_field(<<"error">>, V) when is_binary(V) -> V;
-%% Everything else that's a binary gets base64url-encoded.
-encode_field(_K, V) when is_binary(V) ->
-    hb_util:encode(V);
+%% Keys whose VALUE we know to be a UTF-8-safe string by
+%% construction (produced by our decoders, not firmware bytes).
+%% These pass through unchanged; all other binary values get
+%% base64url-encoded so the JSON encoder doesn't choke on raw
+%% firmware bytes.
+encode_field(K, V) when is_binary(V) ->
+    case is_utf8_safe_key(K) of
+        true  -> V;
+        false -> hb_util:encode(V)
+    end;
 encode_field(_K, V) -> V.
 
+is_utf8_safe_key(<<"event-type">>)              -> true;
+is_utf8_safe_key(<<"variable-name">>)           -> true;
+is_utf8_safe_key(<<"variable-guid">>)           -> true;
+is_utf8_safe_key(<<"type-guid">>)               -> true;
+is_utf8_safe_key(<<"tag-guid">>)                -> true;
+is_utf8_safe_key(<<"tag-category">>)            -> true;
+is_utf8_safe_key(<<"disk-guid">>)               -> true;
+is_utf8_safe_key(<<"load-option-description">>) -> true;
+is_utf8_safe_key(<<"table-description">>)       -> true;
+is_utf8_safe_key(<<"action">>)                  -> true;
+is_utf8_safe_key(<<"crtm-version">>)            -> true;
+is_utf8_safe_key(<<"post-code">>)               -> true;
+is_utf8_safe_key(<<"post-code-bytes">>)         -> true;
+is_utf8_safe_key(<<"format">>)                  -> true;
+is_utf8_safe_key(<<"key">>)                     -> true;
+is_utf8_safe_key(<<"value">>)                   -> true;
+is_utf8_safe_key(<<"separator">>)               -> true;
+is_utf8_safe_key(<<"separator-kind">>)          -> true;
+is_utf8_safe_key(<<"spec-id">>)                 -> true;
+is_utf8_safe_key(<<"marker">>)                  -> true;
+is_utf8_safe_key(<<"blob-description">>)        -> true;
+is_utf8_safe_key(<<"text">>)                    -> true;
+is_utf8_safe_key(<<"hash-alg-name">>)           -> true;
+is_utf8_safe_key(<<"error">>)                   -> true;
+is_utf8_safe_key(_)                             -> false.
+
 encode_field_val(V) when is_map(V) -> maps:map(fun encode_field/2, V);
-encode_field_val(V) when is_binary(V) -> hb_util:encode(V);
+encode_field_val(V) when is_binary(V) ->
+    %% List elements don't carry their key context, so we can't
+    %% look up is_utf8_safe_key/1. Inspect the bytes: if the whole
+    %% binary is printable ASCII, pass through; otherwise base64url.
+    %% This is the right policy for `boot-order` (list of
+    %% <<"Boot0001">>), `authorities` (list of UTF-8 names), etc.,
+    %% while still base64-encoding any list of opaque bytes.
+    case is_printable_ascii(V) of
+        true  -> V;
+        false -> hb_util:encode(V)
+    end;
 encode_field_val(V) -> V.
+
+is_printable_ascii(<<>>) -> true;
+is_printable_ascii(<<C, Rest/binary>>) when C >= 16#20, C =< 16#7E ->
+    is_printable_ascii(Rest);
+is_printable_ascii(_) -> false.
 
 %%---- claim (flat, policy-friendly surface with provenance) -------------
 %%

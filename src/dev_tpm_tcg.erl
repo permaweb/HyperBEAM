@@ -142,11 +142,24 @@ decode_event(E) -> E.
 %%%---- M4: Secure Boot variables + firmware CRTM + POST code -----------
 
 %% EV_EFI_VARIABLE_DRIVER_CONFIG (0x80000001)
-%% EV_EFI_VARIABLE_BOOT          (0x80000002)
+%% EV_EFI_VARIABLE_BOOT          (0x80000002) — adds BootOrder /
+%%   Boot#### parsing on top of the generic UEFI_VARIABLE_DATA shape
 %% EV_EFI_VARIABLE_AUTHORITY     (0x800000E0)
 do_decode(16#80000001, Event) -> decode_uefi_variable(Event);
-do_decode(16#80000002, Event) -> decode_uefi_variable(Event);
+do_decode(16#80000002, Event) -> decode_uefi_variable_boot(Event);
 do_decode(16#800000E0, Event) -> decode_uefi_variable(Event);
+
+%% EV_EFI_GPT_EVENT (0x80000006) — UEFI_GPT_DATA (header + entries).
+do_decode(16#80000006, Event) -> decode_uefi_gpt(Event);
+
+%% EV_EFI_HANDOFF_TABLES2 (0x8000000B) — named handoff table
+%% measurement (ACPI / SMBIOS / ...). Extract the descriptive name.
+do_decode(16#8000000B, Event) -> decode_handoff_tables2(Event);
+
+%% EV_EVENT_TAG (0x06) — 128-bit GUID + variable-length data.
+%% Expose the GUID; categorise common tags (firmware boot phases,
+%% Intel TXT init markers, QEMU-specific tags).
+do_decode(16#6, Event) -> decode_event_tag(Event);
 
 %% EV_S_CRTM_VERSION (0x08) — firmware/CRTM version string.
 %% Typically UTF-16LE; occasionally ASCII. Best-effort decode.
@@ -237,6 +250,162 @@ decode_uefi_variable(#{<<"event-data">> := Data}) ->
                                "header">>}
     end;
 decode_uefi_variable(_) -> #{}.
+
+%% EV_EFI_VARIABLE_BOOT: delegates to the generic UEFI_VARIABLE_DATA
+%% parser, then layers on BootOrder / Boot#### decoding on top of the
+%% `variable-data` binary. `BootOrder' is an array of u16 (little-
+%% endian) referencing the Boot#### entries to try in order; each
+%% Boot#### is an EFI_LOAD_OPTION: {attributes u32, file-path-list-
+%% length u16, description UTF-16 NUL-terminated, file-path-list
+%% [file-path-list-length], optional-data ...}.
+decode_uefi_variable_boot(Event) ->
+    Base = decode_uefi_variable(Event),
+    Name = maps:get(<<"variable-name">>, Base, <<>>),
+    Data = maps:get(<<"variable-data">>, Base, <<>>),
+    case {Name, Data} of
+        {<<"BootOrder">>, D} when is_binary(D), byte_size(D) > 0,
+                                  byte_size(D) rem 2 =:= 0 ->
+            Order = [N || <<N:16/little>> <= D],
+            Boot = #{
+                <<"boot-order">> =>
+                    [iolist_to_binary(
+                        io_lib:format("Boot~4.16.0B", [N])) || N <- Order],
+                <<"boot-order-count">> => length(Order)
+            },
+            Sem = maps:get(<<"semantic">>, Base, #{}),
+            Base#{<<"semantic">> => maps:merge(Sem, Boot)};
+        {<<"Boot", _/binary>>, D} when is_binary(D), byte_size(D) > 6 ->
+            case parse_efi_load_option(D) of
+                undefined -> Base;
+                LoadOpt ->
+                    Sem = maps:get(<<"semantic">>, Base, #{}),
+                    Base#{<<"semantic">> => maps:merge(Sem, LoadOpt)}
+            end;
+        _ -> Base
+    end.
+
+parse_efi_load_option(
+  <<Attributes:32/little,
+    FilePathListLength:16/little,
+    Rest/binary>>) ->
+    %% Read UTF-16LE NUL-terminated description.
+    case read_utf16_nul(Rest) of
+        {ok, DescBin, After} when byte_size(After) >= FilePathListLength ->
+            <<_FilePath:FilePathListLength/binary, _/binary>> = After,
+            #{
+                <<"load-option-attributes">> => Attributes,
+                <<"load-option-active">> =>
+                    (Attributes band 16#0001) =/= 0,
+                <<"load-option-hidden">> =>
+                    (Attributes band 16#0008) =/= 0,
+                <<"load-option-description">> => DescBin,
+                <<"load-option-file-path-length">> => FilePathListLength
+            };
+        _ -> undefined
+    end;
+parse_efi_load_option(_) -> undefined.
+
+read_utf16_nul(Bin) -> read_utf16_nul(Bin, []).
+read_utf16_nul(<<0:16, Rest/binary>>, Acc) ->
+    Raw = list_to_binary(lists:reverse(Acc)),
+    case unicode:characters_to_binary(Raw, {utf16, little}, utf8) of
+        U when is_binary(U) -> {ok, U, Rest};
+        _ -> {ok, Raw, Rest}
+    end;
+read_utf16_nul(<<C:2/binary, Rest/binary>>, Acc) ->
+    read_utf16_nul(Rest, [C | Acc]);
+read_utf16_nul(_, _) -> undefined.
+
+%% UEFI_GPT_DATA: EFI_PARTITION_TABLE_HEADER (92B) + NumberOfPartitions
+%% u64 + PARTITION_ENTRIES. The PARTITION_TABLE_HEADER fields we surface
+%% are the disk GUID + first/last LBA + number of entries; partition
+%% entries carry partition GUID + type GUID + name + span.
+decode_uefi_gpt(#{<<"event-data">> := Data})
+  when byte_size(Data) >= 92 + 8 ->
+    <<_Sig:8/binary,
+      _Rev:32/little,
+      HdrSize:32/little,
+      _HdrCrc:32/little,
+      _Reserved:32,
+      MyLba:64/little,
+      AltLba:64/little,
+      FirstUsable:64/little,
+      LastUsable:64/little,
+      DiskGuid:16/binary,
+      PartEntryLba:64/little,
+      NumEntries:32/little,
+      EntrySize:32/little,
+      _PartArrCrc:32/little,
+      _Rest0/binary>> = Data,
+    %% GPT header u64 for total-number-of-partition-entries may be
+    %% overridden by an EV_EFI_GPT_DATA-specific field after the header.
+    PartCount =
+        case byte_size(Data) of
+            N when N >= HdrSize + 8 ->
+                <<_:HdrSize/binary, PC:64/little, _/binary>> = Data,
+                PC;
+            _ -> NumEntries
+        end,
+    #{
+        <<"disk-guid">>               => format_guid(DiskGuid),
+        <<"my-lba">>                  => MyLba,
+        <<"alternate-lba">>           => AltLba,
+        <<"first-usable-lba">>        => FirstUsable,
+        <<"last-usable-lba">>         => LastUsable,
+        <<"partition-entry-lba">>     => PartEntryLba,
+        <<"number-of-partition-entries">> => NumEntries,
+        <<"size-of-partition-entry">> => EntrySize,
+        <<"measured-partition-count">> => PartCount
+    };
+decode_uefi_gpt(_) -> #{}.
+
+%% EV_EFI_HANDOFF_TABLES2 layout: tableDescription is a uint8-length-
+%% prefixed UTF-8 string (ACPI / SMBIOS / ...), followed by the table
+%% array. We only surface the description; the tables themselves are
+%% vendor-specific blobs.
+decode_handoff_tables2(#{<<"event-data">> := Data})
+  when byte_size(Data) >= 1 ->
+    <<DescLen:8, Rest/binary>> = Data,
+    case DescLen of
+        0 -> #{<<"table-description">> => <<>>};
+        _ when byte_size(Rest) >= DescLen ->
+            <<Desc:DescLen/binary, _/binary>> = Rest,
+            #{<<"table-description">> => Desc,
+              <<"table-description-length">> => DescLen};
+        _ -> #{<<"error">> => <<"truncated handoff-tables2 description">>}
+    end;
+decode_handoff_tables2(_) -> #{}.
+
+%% EV_EVENT_TAG — 128-bit GUID + variable-length data. Usually carries
+%% firmware-boot-phase markers. We expose the GUID + data length;
+%% categorise a handful of commonly-seen tag GUIDs.
+decode_event_tag(#{<<"event-data">> := Data})
+  when byte_size(Data) >= 16 ->
+    <<GuidBin:16/binary, Payload/binary>> = Data,
+    Guid = format_guid(GuidBin),
+    Category = classify_event_tag_guid(Guid, byte_size(Payload)),
+    #{
+        <<"tag-guid">>          => Guid,
+        <<"tag-data-length">>   => byte_size(Payload),
+        <<"tag-category">>      => Category
+    };
+decode_event_tag(_) -> #{}.
+
+classify_event_tag_guid(<<"d9dfa6d8-1d96-451e-9a9a-1b12e2a8e6f2">>, _) ->
+    <<"qemu-firmware-boot">>;
+classify_event_tag_guid(<<"00000000-", _/binary>>, _) ->
+    <<"null-guid">>;
+classify_event_tag_guid(_, _) -> <<"unknown">>.
+
+%% Format a 16-byte EFI_GUID as the canonical
+%% `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' lowercase string.
+%% EFI_GUID is mixed-endian: {u32-LE, u16-LE, u16-LE, byte[2], byte[6]}.
+format_guid(<<A:32/little, B:16/little, C:16/little,
+              D1:8, D2:8, E:6/binary>>) ->
+    iolist_to_binary(io_lib:format(
+        "~8.16.0b-~4.16.0b-~4.16.0b-~2.16.0b~2.16.0b-~12.16.0b",
+        [A, B, C, D1, D2, binary:decode_unsigned(E)]));
+format_guid(_) -> <<"malformed-guid">>.
 
 %% Extract the one thing a policy engine actually cares about per
 %% UEFI variable: for `SecureBoot' the single enabled/disabled
@@ -1071,6 +1240,89 @@ decode_unknown_event_type_is_no_op_test() ->
     Ev = #{<<"event-type-code">> => 16#DEADBEEF,
            <<"event-data">> => <<>>},
     ?assertEqual(#{}, maps:get(<<"parsed">>, decode_event(Ev))).
+
+%% EV_EFI_VARIABLE_BOOT — BootOrder is an array of u16 little-endian.
+decode_uefi_variable_boot_order_test() ->
+    %% UEFI_VARIABLE_DATA for BootOrder = [0001, 0002, 0000] (3 u16).
+    Guid = <<0:(16*8)>>,
+    Name = unicode:characters_to_binary(<<"BootOrder">>, utf8,
+                                          {utf16, little}),
+    NameLen = byte_size(Name) div 2,
+    DataBin = <<1:16/little, 2:16/little, 0:16/little>>,
+    DataLen = byte_size(DataBin),
+    Uv = <<Guid/binary, NameLen:64/little, DataLen:64/little,
+           Name/binary, DataBin/binary>>,
+    Ev = #{<<"event-type-code">> => 16#80000002,
+           <<"event-data">> => Uv},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    Sem = maps:get(<<"semantic">>, P),
+    ?assertEqual([<<"Boot0001">>, <<"Boot0002">>, <<"Boot0000">>],
+                 maps:get(<<"boot-order">>, Sem)),
+    ?assertEqual(3, maps:get(<<"boot-order-count">>, Sem)).
+
+%% EV_EFI_GPT_EVENT — UEFI_GPT_DATA with a minimal EFI_PARTITION_TABLE_
+%% HEADER. We check disk-guid parsing + header fields.
+decode_gpt_event_test() ->
+    DiskGuid = <<16#01,16#02,16#03,16#04,     %% u32-LE = 04030201
+                 16#05,16#06,                 %% u16-LE = 0605
+                 16#07,16#08,                 %% u16-LE = 0807
+                 16#09,16#0A,                 %% byte[2]
+                 16#0B,16#0C,16#0D,16#0E,16#0F,16#10>>,
+    Hdr = <<
+        "EFI PART",                           %% 8B sig
+        16#00010000:32/little,                %% rev
+        92:32/little,                         %% hdrSize
+        16#DEADBEEF:32/little,                %% hdrCrc
+        0:32,                                 %% reserved
+        1:64/little,                          %% myLba
+        2:64/little,                          %% altLba
+        34:64/little,                         %% firstUsable
+        100:64/little,                        %% lastUsable
+        DiskGuid/binary,                      %% diskGuid
+        2:64/little,                          %% partEntryLba
+        128:32/little,                        %% numEntries
+        128:32/little,                        %% entrySize
+        16#CAFEBEEF:32/little>>,              %% partArrCrc
+    %% UEFI_GPT_DATA adds a u64 "number-of-partition-entries" after the
+    %% header. Claim 4 measured entries.
+    Data = <<Hdr/binary, 4:64/little>>,
+    Ev = #{<<"event-type-code">> => 16#80000006,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"04030201-0605-0807-090a-0b0c0d0e0f10">>,
+                 maps:get(<<"disk-guid">>, P)),
+    ?assertEqual(1, maps:get(<<"my-lba">>, P)),
+    ?assertEqual(128, maps:get(<<"size-of-partition-entry">>, P)),
+    ?assertEqual(4, maps:get(<<"measured-partition-count">>, P)).
+
+%% EV_EFI_HANDOFF_TABLES2 — 1-byte-length-prefixed UTF-8 description.
+decode_handoff_tables2_test() ->
+    Desc = <<"ACPI 2.0">>,
+    Len = byte_size(Desc),
+    Data = <<Len:8, Desc/binary, 0,0,0,0>>,  %% trailing table bytes
+    Ev = #{<<"event-type-code">> => 16#8000000B,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"ACPI 2.0">>,
+                 maps:get(<<"table-description">>, P)),
+    ?assertEqual(Len,
+                 maps:get(<<"table-description-length">>, P)).
+
+%% EV_EVENT_TAG — 128-bit GUID + data.
+decode_event_tag_test() ->
+    Guid = <<16#D8,16#A6,16#DF,16#D9,   %% u32-LE 0xD9DFA6D8
+             16#96,16#1D,               %% u16-LE 0x1D96
+             16#1E,16#45,               %% u16-LE 0x451E
+             16#9A,16#9A,               %% byte[2]
+             16#1B,16#12,16#E2,16#A8,16#E6,16#F2>>,
+    Data = <<Guid/binary, "some-tag-payload">>,
+    Ev = #{<<"event-type-code">> => 16#6,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"d9dfa6d8-1d96-451e-9a9a-1b12e2a8e6f2">>,
+                 maps:get(<<"tag-guid">>, P)),
+    ?assertEqual(byte_size(<<"some-tag-payload">>),
+                 maps:get(<<"tag-data-length">>, P)).
 
 %% Pipeline: parse a log, then decode_events to get the
 %% per-event `parsed' enrichment on every entry.

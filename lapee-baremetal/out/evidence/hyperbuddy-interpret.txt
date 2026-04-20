@@ -5,7 +5,7 @@ Message [ undefined ] {
         Message [ undefined ] {
           algorithm => RSA
           key-size-bits => 2048
-          pub-der-sha256-b64url => GbK9a..JY0qM
+          pub-der-sha256-b64url => OFEA2..bhnQg
           public-exponent => 65537
         }
       boot => 
@@ -61,10 +61,10 @@ Message [ undefined ] {
         }
       envelope => 
         Message [ undefined ] {
-          issued-at-unix => 1776720610
-          node-message-id => m1lZl..N-Tuw
+          issued-at-unix => 1776721571
+          node-message-id => PPRB6..ZdEXI
           version => 0.3
-          wallet-address => hfarr..u8ssw
+          wallet-address => 6uGxU..tx4JY
         }
       events => 
         Message [ undefined ] {
@@ -255,7 +255,12 @@ Message [ undefined ] {
               event-data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
               event-type => EV_EVENT_TAG
               event-type-code => 6
-              parsed => #{}
+              parsed => 
+                Message [ undefined ] {
+                  tag-category => unknown
+                  tag-data-length => 12
+                  tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+                }
               pcr => 1
               seq => 2
             }
@@ -290,7 +295,12 @@ Message [ undefined ] {
               event-data => BwAAA..j5nqU
               event-type => EV_EVENT_TAG
               event-type-code => 6
-              parsed => #{}
+              parsed => 
+                Message [ undefined ] {
+                  tag-category => unknown
+                  tag-data-length => 16
+                  tag-guid => 00000007-0018-0000-0000-000087fbc0ec
+                }
               pcr => 2
               seq => 4
             }
@@ -306,7 +316,12 @@ Message [ undefined ] {
               event-data => BwAAA..MK1p0
               event-type => EV_EVENT_TAG
               event-type-code => 6
-              parsed => #{}
+              parsed => 
+                Message [ undefined ] {
+                  tag-category => unknown
+                  tag-data-length => 16
+                  tag-guid => 00000007-0018-0000-0000-0000a177fe95
+                }
               pcr => 2
               seq => 5
             }
@@ -322,7 +337,12 @@ Message [ undefined ] {
               event-data => BwAAA..mVmZI
               event-type => EV_EVENT_TAG
               event-type-code => 6
-              parsed => #{}
+              parsed => 
+                Message [ undefined ] {
+                  tag-category => unknown
+                  tag-data-length => 16
+                  tag-guid => 00000007-0018-0000-0000-00000bff50c1
+                }
               pcr => 2
               seq => 6
             }
@@ -338,7 +358,12 @@ Message [ undefined ] {
               event-data => BwAAA..iLebQ
               event-type => EV_EVENT_TAG
               event-type-code => 6
-              parsed => #{}
+              parsed => 
+                Message [ undefined ] {
+                  tag-category => unknown
+                  tag-data-length => 16
+                  tag-guid => 00000007-0018-0000-0000-0000670c9cc7
+                }
               pcr => 2
               seq => 7
             }
@@ -397,7 +422,7 @@ Message [ undefined ] {
         }
       node => 
         Message [ undefined ] {
-          node-message-id => m1lZl..N-Tuw
+          node-message-id => PPRB6..ZdEXI
           node-message-key-count => 79
           on-start-hook-device => tpm2@2.0a
           on-start-hook-path => extend
@@ -405,7 +430,7 @@ Message [ undefined ] {
           pcr15-event-types => List [1] {
               1 => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
             }
-          wallet-address => hfarr..u8ssw
+          wallet-address => 6uGxU..tx4JY
         }
       pcrs => 
         Message [ undefined ] {
@@ -541,7 +566,12 @@ Message [ undefined ] {
                       event-data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
                       event-type => EV_EVENT_TAG
                       event-type-code => 6
-                      parsed => #{}
+                      parsed => 
+                        Message [ undefined ] {
+                          tag-category => unknown
+                          tag-data-length => 12
+                          tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+                        }
                       pcr => 1
                       seq => 2
                     }
@@ -606,7 +636,7 @@ Message [ undefined ] {
                 Message [ undefined ] {
                   lapee-node-identity-committed => true
                 }
-              digest => pntgV..fhsb0
+              digest => L6DV8..dyPck
               event-count => 0
               events => #{}
               is-zero => false
@@ -664,20 +694,20 @@ Message [ undefined ] {
       quote => 
         Message [ undefined ] {
           attest-type => TPM_ST_ATTEST_QUOTE
-          clock-ms => 63297
+          clock-ms => 64320
           magic-ok => true
-          nonce => M2bA8..lHafo
-          reset-count => 3291255300
-          restart-count => 330723973
+          nonce => 03Qc_..9cR1A
+          reset-count => 1156923087
+          restart-count => 1939500709
           safe => true
         }
       tpm => 
         Message [ undefined ] {
           ek-cert-issuer => Q049T..QgQ0E [*]
-          ek-cert-serial => EdAewxFG-l2hKTMf_dKsh1p6ha4
+          ek-cert-serial => ePbMQYL0w62QPZ7DwbM892to_fk
           ek-cert-subject => CN=LapEE Test EK
-          ek-cert-valid-from => 260420212950Z
-          ek-cert-valid-to => 360417212950Z
+          ek-cert-valid-from => 260420214551Z
+          ek-cert-valid-to => 360417214551Z
           firmware-version => null
           manufacturer-id => null
           manufacturer-kind => null

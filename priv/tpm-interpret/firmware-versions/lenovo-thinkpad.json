@@ -1,0 +1,25 @@
+{
+    "schema-version": 1,
+    "name": "Lenovo ThinkPad EC/BIOS identifier family",
+    "description": "Lenovo ThinkPad firmware measurements extend EV_S_CRTM_VERSION into PCR 0 with a UTF-16LE-encoded ID string of the form `Nxxxx Hw (BIOS revision)` or `NnnnHT06W` style depending on firmware generation. The first 4-5 characters encode the model family.",
+    "match": {
+        "crtm-version-prefix": ["N"],
+        "crtm-version-regex": "^N[0-9A-Z]{3,4}[A-Z]{0,3}[0-9A-Z]*$"
+    },
+    "vendor": "Lenovo",
+    "platforms": {
+        "N1M":  "ThinkPad X1 Carbon Gen 5 / Gen 6",
+        "N2F":  "ThinkPad X1 Carbon Gen 7",
+        "N2I":  "ThinkPad X1 Carbon Gen 8",
+        "N2Z":  "ThinkPad X1 Carbon Gen 9 / Gen 10",
+        "N3H":  "ThinkPad X1 Carbon Gen 11",
+        "N2P":  "ThinkPad T14 Gen 1",
+        "N39":  "ThinkPad T14s Gen 1",
+        "R1M":  "ThinkPad P15 / P17 Gen 1",
+        "N50":  "ThinkPad X13 Gen 1 / X13s",
+        "N34":  "ThinkPad T480",
+        "N1Z":  "ThinkPad T470"
+    },
+    "notes": "Lenovo extends PCR 0 with the UTF-16LE-encoded `N<model>HT<revision>' string. `dev_tpm_tcg' decodes it into `pcrs/0/derived/crtm-version' as UTF-8. A policy engine can prefix-match on the first 3-4 chars to identify the platform family. Lenovo's EK root CA chain is `Lenovo ThinkPad TPM Root CA' → `Lenovo ThinkPad TPM EK Certificate`; obtain from https://pki.lenovo.com/.",
+    "source": "Lenovo ThinkPad service manuals + observed PCR 0 measurements on Linux kernel 6.x hosts."
+}
