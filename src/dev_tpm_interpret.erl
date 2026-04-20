@@ -526,10 +526,17 @@ resolve_inline_ca(Req, Opts) ->
 
 fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
     Base = strip_trailing_slash(PeerUrl),
+    %% Anti-replay: generate a fresh 32-byte nonce and require the
+    %% peer's TPM2_Quote to sign it. An attacker replaying an old
+    %% attestation envelope can't produce a new quote over OUR
+    %% nonce without access to the TPM's AK.
+    NonceBytes = crypto:strong_rand_bytes(32),
+    NonceB64 = hb_util:encode(NonceBytes),
     FetchMsg = #{
         <<"path">>          => <<"/~tpm2@2.0a/attestation">>,
         <<"accept">>        => <<"application/json@1.0">>,
-        <<"accept-bundle">> => <<"true">>
+        <<"accept-bundle">> => <<"true">>,
+        <<"nonce">>         => NonceB64
     },
     %% Wrap the fetch: `hb_http:get' can raise on malformed URLs,
     %% transport errors, or decode failures. Treat a raise the same
@@ -558,7 +565,11 @@ fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
                         }
                     }};
                 true ->
-                    run_cross_node_verify(Base, Envelope, InlineCa, Opts)
+                    %% Fresh-nonce check happens INSIDE run_cross_
+                    %% node_verify by comparing the envelope's
+                    %% tpm_quote.nonce to our challenge.
+                    run_cross_node_verify(Base, Envelope, InlineCa,
+                                          NonceBytes, Opts)
             end;
         {error, Why} ->
             {ok, #{
@@ -596,22 +607,70 @@ strip_trailing_slash(B) when is_binary(B) ->
 %% `body+link' references inside would trip hb_cache:write when this
 %% node normalises the response. We drop every map-valued field in
 %% the result and keep only JSON-primitive-friendly summaries.
-run_cross_node_verify(Base, Envelope, InlineCa, Opts) ->
-    {Verified, Verdict, Checks, CaSource} =
-        do_verify_summary(Envelope, InlineCa, Opts),
-    Interp = safe_interpret(Envelope, Opts),
-    Summary = summarise_interp(Interp),
-    {ok, #{
-        <<"status">> => 200,
-        <<"body">> => #{
-            <<"peer">>             => Base,
-            <<"verified">>         => Verified,
-            <<"verdict">>          => Verdict,
-            <<"checks">>           => Checks,
-            <<"summary">>          => Summary,
-            <<"trust_anchor_source">> => CaSource
-        }
-    }}.
+run_cross_node_verify(Base, Envelope, InlineCa, NonceBytes, Opts) ->
+    %% Anti-replay gate: if the peer's envelope doesn't quote OUR
+    %% challenge nonce, reject before anything else. Protects against
+    %% replay of a previously-captured valid attestation.
+    case envelope_quote_nonce(Envelope, Opts) of
+        Bytes when Bytes =:= NonceBytes ->
+            {Verified, Verdict, Checks, CaSource} =
+                do_verify_summary(Envelope, InlineCa, Opts),
+            Interp = safe_interpret(Envelope, Opts),
+            Summary = summarise_interp(Interp),
+            {ok, #{
+                <<"status">> => 200,
+                <<"body">> => #{
+                    <<"peer">>             => Base,
+                    <<"verified">>         => Verified,
+                    <<"verdict">>          => Verdict,
+                    <<"checks">>           => Checks,
+                    <<"summary">>          => Summary,
+                    <<"trust_anchor_source">> => CaSource,
+                    <<"nonce_challenge">>  => hb_util:encode(NonceBytes),
+                    <<"nonce_freshness">>  => <<"verified">>
+                }
+            }};
+        _ ->
+            %% Nonce mismatch: the peer returned an envelope that
+            %% wasn't signed over our specific challenge. Either the
+            %% peer ignored the nonce parameter (old implementation),
+            %% the envelope was replayed, or the peer substituted
+            %% a different envelope after seeing our challenge. All
+            %% three are trust-breaking.
+            {ok, #{
+                <<"status">> => 200,
+                <<"body">> => #{
+                    <<"peer">>             => Base,
+                    <<"verified">>         => false,
+                    <<"verdict">>          => <<"rejected">>,
+                    <<"nonce_challenge">>  => hb_util:encode(NonceBytes),
+                    <<"nonce_freshness">>  => <<"mismatch">>,
+                    <<"checks">>           => [#{
+                        <<"name">>   => <<"Verifier-supplied nonce is "
+                                          "echoed in the attestation "
+                                          "quote">>,
+                        <<"ok">>     => false,
+                        <<"detail">> =>
+                            <<"The peer's envelope quote did not match "
+                              "the verifier's random challenge. The "
+                              "attestation may be replayed, the peer "
+                              "may have ignored the `?nonce=' query, "
+                              "or the peer substituted a different "
+                              "envelope. Trust not established.">>
+                    }]
+                }
+            }}
+    end.
+
+%% Pull the TPM2_Quote's nonce (extraData) from an envelope and
+%% decode it to raw bytes. Returns `undefined' on any shape issue.
+envelope_quote_nonce(Envelope, Opts) ->
+    try
+        Q = hb_maps:get(<<"tpm_quote">>, Envelope, #{}, Opts),
+        B64 = hb_maps:get(<<"nonce">>, Q, <<>>, Opts),
+        hb_util:decode(B64)
+    catch _:_ -> undefined
+    end.
 
 do_verify_summary(Envelope, InlineCa, Opts) ->
     %% Pass both keys through so dev_tpm2:resolve_trusted_ca can
