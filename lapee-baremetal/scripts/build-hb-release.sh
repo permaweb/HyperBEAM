@@ -30,6 +30,16 @@ if [[ ! -f "$SRC/rebar.config" ]]; then
     HB_ROOT="$LAPEE/.."
     if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
         echo "=== seeding $SRC from $HB_ROOT (first run) ==="
+        # HyperBEAM's `native/lib/secp256k1/' is a git submodule. The
+        # in-tree Makefile runs `git submodule update' from inside the
+        # builder container, which can't reach the host's worktree
+        # .git/ — initialise the submodule on the host once, before
+        # the rsync, so the builder sees a populated tree.
+        if [[ ! -f "$HB_ROOT/native/lib/secp256k1/CMakeLists.txt" ]]; then
+            echo "=== initialising secp256k1 submodule on host ==="
+            (cd "$HB_ROOT" && git submodule update --init \
+                native/lib/secp256k1 >/dev/null 2>&1) || true
+        fi
         mkdir -p "$SRC"
         rsync -a --delete \
             --exclude='_build/' --exclude='.git/' \
