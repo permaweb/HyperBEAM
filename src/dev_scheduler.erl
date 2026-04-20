@@ -29,55 +29,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--ifdef(TEST).
-%% Test cases exported so `all_tests_test_/0' can run them in parallel via
-%% `fun ?MODULE:name/0'.
--export([
-    status_tc/0,
-    register_new_process_tc/0,
-    schedule_message_and_get_slot_tc/0,
-    redirect_to_hint_tc/0,
-    redirect_from_graphql_tc_/0,
-    get_local_schedule_tc/0,
-    http_get_schedule_redirect_tc_/0,
-    http_post_schedule_tc_/0,
-    http_get_schedule_tc_/0,
-    http_get_legacy_schedule_tc_/0,
-    http_get_legacy_slot_tc_/0,
-    http_get_legacy_schedule_slot_range_tc_/0,
-    http_get_legacy_schedule_as_aos2_tc_/0,
-    http_get_json_schedule_tc_/0,
-    benchmark_suite_tc_/0
-]).
--endif.
-
-%% @doc Run every test in this module in parallel. The benchmark suite
-%% lets the OS pick ports and uses per-test `hb_test_utils:test_store/1',
-%% so it carries no more shared state than any other test in the batch.
-all_tests_test_() ->
-    {inparallel,
-        [
-            {atom_to_list(F), fun ?MODULE:F/0}
-        ||
-            F <- [
-                status_tc,
-                register_new_process_tc,
-                schedule_message_and_get_slot_tc,
-                redirect_to_hint_tc,
-                redirect_from_graphql_tc_,
-                get_local_schedule_tc,
-                http_get_schedule_redirect_tc_,
-                http_post_schedule_tc_,
-                http_get_schedule_tc_,
-                http_get_legacy_schedule_tc_,
-                http_get_legacy_slot_tc_,
-                http_get_legacy_schedule_slot_range_tc_,
-                http_get_legacy_schedule_as_aos2_tc_,
-                http_get_json_schedule_tc_,
-                benchmark_suite_tc_
-            ]
-        ]
-    }.
 %%% The maximum number of assignments that we will query/return at a time.
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 %%% The timeout for a lookahead worker.
@@ -1493,7 +1444,7 @@ test_process(Address) ->
         <<"test-random-seed">> => rand:uniform(1337)
     }.
 
-status_tc() ->
+status_test_parallel() ->
     start(),
     ?assertMatch(
         #{<<"processes">> := Processes,
@@ -1502,7 +1453,7 @@ status_tc() ->
         hb_ao:get(status, test_process())
     ).
 
-register_new_process_tc() ->
+register_new_process_test_parallel() ->
     start(),
     Opts = #{ priv_wallet => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
@@ -1528,7 +1479,7 @@ register_new_process_tc() ->
         )
     ).
 
-schedule_message_and_get_slot_tc() ->
+schedule_message_and_get_slot_test_parallel() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1553,7 +1504,7 @@ schedule_message_and_get_slot_tc() ->
             when CurrentSlot > 0,
         hb_ao:resolve(Base, Res, #{})).
 
-redirect_to_hint_tc() ->
+redirect_to_hint_test_parallel() ->
     start(),
     RandAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
     TestLoc = <<"http://test.computer">>,
@@ -1579,7 +1530,7 @@ redirect_to_hint_tc() ->
         )
     ).
 
-redirect_from_graphql_tc_() ->
+redirect_from_graphql_test_parallel_() ->
     {timeout, 60, fun redirect_from_graphql/0}.
 redirect_from_graphql() ->
     start(),
@@ -1614,7 +1565,7 @@ redirect_from_graphql() ->
         )
     ).
 
-get_local_schedule_tc() ->
+get_local_schedule_test_parallel() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1707,7 +1658,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"accept">> => Format
     }, #{ priv_wallet => Wallet }), #{}).
 
-http_get_schedule_redirect_tc_() ->
+http_get_schedule_redirect_test_parallel_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
     Opts =
@@ -1725,7 +1676,7 @@ http_get_schedule_redirect() ->
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, Opts),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
 
-http_post_schedule_tc_() ->
+http_post_schedule_test_parallel_() ->
     {timeout, 60, fun http_post_schedule/0}.
 http_post_schedule() ->
     start(),
@@ -1747,7 +1698,7 @@ http_post_schedule() ->
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
     ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
 
-http_get_schedule_tc_() ->
+http_get_schedule_test_parallel_() ->
 	{timeout, 20, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1790,7 +1741,7 @@ http_get_schedule_tc_() ->
 			end}.
     
 
-http_get_legacy_schedule_tc_() ->
+http_get_legacy_schedule_test_parallel_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1800,7 +1751,7 @@ http_get_legacy_schedule_tc_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
 	    end}.
 
-http_get_legacy_slot_tc_() ->
+http_get_legacy_slot_test_parallel_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1808,7 +1759,7 @@ http_get_legacy_slot_tc_() ->
         ?assertMatch({ok, #{ <<"current">> := Slot }} when Slot > 0, Res)
     end}.
 
-http_get_legacy_schedule_slot_range_tc_() ->
+http_get_legacy_schedule_slot_range_test_parallel_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1820,7 +1771,7 @@ http_get_legacy_schedule_slot_range_tc_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
 	    end}.
 
-http_get_legacy_schedule_as_aos2_tc_() ->
+http_get_legacy_schedule_as_aos2_test_parallel_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1870,7 +1821,7 @@ http_post_legacy_schedule_test_disabled() ->
         )
     end}.
 
-http_get_json_schedule_tc_() ->
+http_get_json_schedule_test_parallel_() ->
 	{timeout, 60, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1979,7 +1930,7 @@ many_clients(Opts) ->
     ?event(bench, {res, Res}),
     ?assert(Iterations > 10).
 
-benchmark_suite_tc_() ->
+benchmark_suite_test_parallel_() ->
     {timeout, 10, fun() ->
         Bench = [
             {benchmark, "benchmark", fun single_resolution/1},

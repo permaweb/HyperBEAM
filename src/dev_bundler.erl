@@ -20,38 +20,6 @@
 %%% Test-only exports.
 -export([start_mock_gateway/1]).
 
--ifdef(TEST).
-%% Test cases exported so `all_tests_test_/0' can run them in parallel via
-%% `fun ?MODULE:name/0'. Each case builds its own wallet, and `server_name/1'
-%% derives the bundler server's registration name from the wallet address,
-%% so concurrent tests own independent bundler servers by construction.
--export([
-    bundle_count_tc/0,
-    bundle_size_tc/0,
-    bundle_dispatch_delay_tc/0,
-    nested_bundle_tc/0,
-    price_error_tc/0,
-    anchor_error_tc/0,
-    tx_error_tc/0,
-    unsigned_dataitem_tc/0,
-    idle_tc/0,
-    dispatch_blocking_tc/0,
-    recover_respects_max_items_tc/0,
-    complete_task_sequence_tc/0,
-    recover_bundles_tc/0,
-    post_tx_price_failure_retry_tc/0,
-    post_tx_anchor_failure_retry_tc/0,
-    post_tx_post_failure_retry_tc/0,
-    post_proof_failure_retry_tc/0,
-    rapid_dispatch_tc/0,
-    one_bundle_fails_others_continue_tc/0,
-    parallel_task_execution_tc/0,
-    exponential_backoff_timing_tc/0,
-    independent_task_retry_counts_tc/0,
-    invalid_item_tc/0,
-    cache_write_failure_tc/0
-]).
--endif.
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -576,80 +544,25 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 %%% Tests
 %%%===================================================================
 
-%% @doc Run most tests in this module in parallel: each test's wallet is
-%% fresh, so `server_name/1' hands each test an independent bundler
-%% registration without any shared-name contention. A few tests assert
-%% tight wall-clock timing bounds (retry backoff, non-blocking dispatch
-%% timings), and those false-fail under the CPU contention of a parallel
-%% run. Those run after the parallel batch in an `inorder' group.
-all_tests_test_() ->
-    ParallelSafe = [
-        bundle_count_tc,
-        bundle_size_tc,
-        nested_bundle_tc,
-        price_error_tc,
-        anchor_error_tc,
-        tx_error_tc,
-        unsigned_dataitem_tc,
-        recover_respects_max_items_tc,
-        complete_task_sequence_tc,
-        recover_bundles_tc,
-        post_tx_price_failure_retry_tc,
-        post_tx_anchor_failure_retry_tc,
-        post_tx_post_failure_retry_tc,
-        post_proof_failure_retry_tc,
-        rapid_dispatch_tc,
-        one_bundle_fails_others_continue_tc,
-        parallel_task_execution_tc,
-        independent_task_retry_counts_tc,
-        invalid_item_tc,
-        cache_write_failure_tc
-    ],
-    %% These tests assert tight wall-clock timing windows that only hold
-    %% when the VM has spare schedulers; run after the parallel batch so
-    %% they see an un-contended system.
-    %% - bundle_dispatch_delay_tc / dispatch_blocking_tc: mock server
-    %%   sleeps and the test asserts on timing differences.
-    %% - exponential_backoff_timing_tc: asserts exact retry delay
-    %%   windows (`?assert(Delay1 >= 70 andalso Delay1 =< 200)').
-    %% - idle_tc: the bundler flushes on a ~400 ms idle timer and
-    %%   `?assertEqual(0, length(...))' depends on nothing having
-    %%   flushed yet 150 ms after the post, which fails under contention.
-    TimingSensitive = [
-        idle_tc,
-        bundle_dispatch_delay_tc,
-        dispatch_blocking_tc,
-        exponential_backoff_timing_tc
-    ],
-    {inorder,
-        [
-            {inparallel,
-                [
-                    {atom_to_list(F), fun ?MODULE:F/0}
-                ||
-                    F <- ParallelSafe
-                ]
-            },
-            {inorder,
-                [
-                    {atom_to_list(F), fun ?MODULE:F/0}
-                ||
-                    F <- TimingSensitive
-                ]
-            }
-        ]
-    }.
+%%% Four test cases below (`idle_test', `bundle_dispatch_delay_test',
+%%% `dispatch_blocking_test', `exponential_backoff_timing_test') assert
+%%% wall-clock timing against the bundler's internal timers. They use
+%%% EUnit's plain `_test/0' convention rather than `_test_parallel/0'
+%%% so they run sequentially, before the parse_transform-injected
+%%% `all_parallel_test_/0' inparallel batch runs the other 20 cases.
+%%% Keeping them out of the batch avoids a ~20% flake seen when
+%%% `timer:sleep/1' returns late under same-module scheduler pressure.
 
-bundle_count_tc() ->
+bundle_count_test_parallel() ->
     test_bundle(#{ bundler_max_items => 3 }).
 
-bundle_size_tc() ->
+bundle_size_test_parallel() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
-bundle_dispatch_delay_tc() -> 
+bundle_dispatch_delay_test() ->
     test_bundle(#{ bundler_max_bundle_dispatch_delay => 3000  }).
 
-nested_bundle_tc() ->
+nested_bundle_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -687,19 +600,19 @@ nested_bundle_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-price_error_tc() ->
+price_error_test_parallel() ->
     test_api_error(#{
         price => {500, <<"error">>},
         tx_anchor => {200, hb_util:encode(rand:bytes(32))}
     }).
 
-anchor_error_tc() ->
+anchor_error_test_parallel() ->
     test_api_error(#{
         price => {200, <<"12345">>},
         tx_anchor => {500, <<"error">>}
     }).
 
-tx_error_tc() ->
+tx_error_test_parallel() ->
     {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
@@ -728,7 +641,7 @@ tx_error_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-unsigned_dataitem_tc() ->
+unsigned_dataitem_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -762,7 +675,7 @@ unsigned_dataitem_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-idle_tc() ->
+idle_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(
@@ -815,7 +728,7 @@ idle_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-dispatch_blocking_tc() ->
+dispatch_blocking_test() ->
     BlockTime = 500,
     Anchor = rand:bytes(32),
     Price = 12345,
@@ -876,7 +789,7 @@ dispatch_blocking_tc() ->
 
 %% @doc Test that items are recovered and posted while respecting the
 %% max_items limit.
-recover_respects_max_items_tc() ->
+recover_respects_max_items_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -916,7 +829,7 @@ recover_respects_max_items_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-complete_task_sequence_tc() ->
+complete_task_sequence_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -960,7 +873,7 @@ complete_task_sequence_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-recover_bundles_tc() ->
+recover_bundles_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1017,7 +930,7 @@ recover_bundles_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_price_failure_retry_tc() ->
+post_tx_price_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
     setup_test_counter(price_attempts_counter),
@@ -1053,7 +966,7 @@ post_tx_price_failure_retry_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_anchor_failure_retry_tc() ->
+post_tx_anchor_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 3,
     setup_test_counter(anchor_attempts_counter),
@@ -1089,7 +1002,7 @@ post_tx_anchor_failure_retry_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_post_failure_retry_tc() ->
+post_tx_post_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 4,
@@ -1127,7 +1040,7 @@ post_tx_post_failure_retry_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_proof_failure_retry_tc() ->
+post_proof_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 2,
@@ -1167,7 +1080,7 @@ post_proof_failure_retry_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-rapid_dispatch_tc() ->
+rapid_dispatch_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1201,7 +1114,7 @@ rapid_dispatch_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-one_bundle_fails_others_continue_tc() ->
+one_bundle_fails_others_continue_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(mixed_attempts_counter),
@@ -1238,7 +1151,7 @@ one_bundle_fails_others_continue_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-parallel_task_execution_tc() ->
+parallel_task_execution_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     SleepTime = 120,
@@ -1276,7 +1189,7 @@ parallel_task_execution_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-exponential_backoff_timing_tc() ->
+exponential_backoff_timing_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 5,
@@ -1329,7 +1242,7 @@ exponential_backoff_timing_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-independent_task_retry_counts_tc() ->
+independent_task_retry_counts_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(independent_retry_counter),
@@ -1368,7 +1281,7 @@ independent_task_retry_counts_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-invalid_item_tc() ->
+invalid_item_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1411,7 +1324,7 @@ invalid_item_tc() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-cache_write_failure_tc() ->
+cache_write_failure_test_parallel() ->
     GoodOpts = #{store => hb_test_utils:test_store()},
     BadOpts = #{
         store => undefined,
