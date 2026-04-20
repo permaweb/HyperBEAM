@@ -157,7 +157,26 @@ verify_peer(_Base, Req, Opts) ->
                 }
             }};
         PeerUrl when is_binary(PeerUrl) ->
-            fetch_and_verify_peer(PeerUrl, Opts);
+            %% Optional inline trust anchor. If absent, we fall back
+            %% to this verifier's configured `lapee_tpm_ca_cert' via
+            %% dev_tpm2's `resolve_trusted_ca/2'. Two inline forms
+            %% are accepted:
+            %%
+            %%   `trusted-ca'      — base64url-encoded PEM bytes
+            %%                       (HyperBEAM wire convention; the
+            %%                       safe form over HTTP/URL).
+            %%   `trusted-ca-pem'  — raw PEM text. *Only* works when
+            %%                       the request carries an
+            %%                       unambiguous binary (e.g. POST
+            %%                       body, not GET query string),
+            %%                       because the URL form treats `+'
+            %%                       as space and mangles the PEM
+            %%                       header "BEGIN CERTIFICATE".
+            %%
+            %% Both mechanisms resolve to raw PEM bytes before we
+            %% hand them to dev_tpm2.
+            InlineCa = resolve_inline_ca(Req, Opts),
+            fetch_and_verify_peer(PeerUrl, InlineCa, Opts);
         Other ->
             {ok, #{
                 <<"status">> => 400,
@@ -171,7 +190,26 @@ verify_peer(_Base, Req, Opts) ->
             }}
     end.
 
-fetch_and_verify_peer(PeerUrl, Opts) ->
+%% Pull an inline trust anchor out of Req, normalising whichever of
+%% the two supported forms the caller used. Returns raw PEM bytes
+%% (a binary) or undefined.
+resolve_inline_ca(Req, Opts) ->
+    case hb_maps:get(<<"trusted-ca">>, Req, undefined, Opts) of
+        B when is_binary(B), byte_size(B) > 0 ->
+            try hb_util:decode(B) of
+                Decoded when is_binary(Decoded), byte_size(Decoded) > 0 ->
+                    Decoded;
+                _ -> undefined
+            catch _:_ -> undefined
+            end;
+        _ ->
+            case hb_maps:get(<<"trusted-ca-pem">>, Req, undefined, Opts) of
+                Pem when is_binary(Pem), byte_size(Pem) > 0 -> Pem;
+                _ -> undefined
+            end
+    end.
+
+fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
     Base = strip_trailing_slash(PeerUrl),
     FetchMsg = #{
         <<"path">>          => <<"/~tpm2@2.0a/attestation">>,
@@ -205,7 +243,7 @@ fetch_and_verify_peer(PeerUrl, Opts) ->
                         }
                     }};
                 true ->
-                    run_cross_node_verify(Base, Envelope, Opts)
+                    run_cross_node_verify(Base, Envelope, InlineCa, Opts)
             end;
         {error, Why} ->
             {ok, #{
@@ -243,25 +281,33 @@ strip_trailing_slash(B) when is_binary(B) ->
 %% `body+link' references inside would trip hb_cache:write when this
 %% node normalises the response. We drop every map-valued field in
 %% the result and keep only JSON-primitive-friendly summaries.
-run_cross_node_verify(Base, Envelope, Opts) ->
-    {Verified, Verdict, Checks} = do_verify_summary(Envelope, Opts),
+run_cross_node_verify(Base, Envelope, InlineCa, Opts) ->
+    {Verified, Verdict, Checks} = do_verify_summary(Envelope, InlineCa, Opts),
     Interp = safe_interpret(Envelope, Opts),
     Summary = summarise_interp(Interp),
+    CaSource = case InlineCa of
+                   undefined -> <<"node_config">>;
+                   _         -> <<"request">>
+               end,
     {ok, #{
         <<"status">> => 200,
         <<"body">> => #{
-            <<"peer">>     => Base,
-            <<"verified">> => Verified,
-            <<"verdict">>  => Verdict,
-            <<"checks">>   => Checks,
-            <<"summary">>  => Summary
+            <<"peer">>             => Base,
+            <<"verified">>         => Verified,
+            <<"verdict">>          => Verdict,
+            <<"checks">>           => Checks,
+            <<"summary">>          => Summary,
+            <<"trust_anchor_source">> => CaSource
         }
     }}.
 
-do_verify_summary(Envelope, Opts) ->
-    case dev_tpm2:verify(Envelope,
-                         #{<<"envelope">> => Envelope},
-                         Opts) of
+do_verify_summary(Envelope, InlineCa, Opts) ->
+    Req0 = #{<<"envelope">> => Envelope},
+    Req  = case InlineCa of
+               undefined -> Req0;
+               _         -> Req0#{<<"trusted-ca-pem">> => InlineCa}
+           end,
+    case dev_tpm2:verify(Envelope, Req, Opts) of
         {ok, #{<<"body">> := #{<<"verified">> := V,
                                <<"verdict">>  := D,
                                <<"checks">>   := C}}} ->

@@ -402,21 +402,81 @@ chk_ek_chain(Envelope, TrustedCaPem) ->
     EkPem = hb_maps:get(<<"ek_cert_pem">>, Envelope, <<>>, #{}),
     case {decode_pem_cert(EkPem), decode_pem_cert(TrustedCaPem)} of
         {{ok, EkDer}, {ok, CaDer}} ->
-            CaOtp = public_key:pkix_decode_cert(CaDer, otp),
-            case public_key:pkix_path_validation(CaOtp, [EkDer],
-                                                 [{verify_fun,
-                                                   ek_chain_verify_fun()}]) of
-                {ok, _} -> {ok, <<"OpenSSL pkix_path_validation ok">>};
-                {error, Why} ->
+            %% pkix_decode_cert on the CA can raise if the PEM
+            %% structurally parsed but the DER is malformed (ASN.1
+            %% decode errors). Catch here so the check cleanly
+            %% returns {error, _} with a useful message instead of
+            %% bubbling as a raw exception.
+            try public_key:pkix_decode_cert(CaDer, otp) of
+                CaOtp ->
+                    case public_key:pkix_path_validation(
+                            CaOtp, [EkDer],
+                            [{verify_fun, ek_chain_verify_fun()}]) of
+                        {ok, _} ->
+                            {ok, <<"OpenSSL pkix_path_validation ok">>};
+                        {error, Why} ->
+                            {error, diagnose_chain_failure(Why, EkDer, CaDer)}
+                    end
+            catch
+                Class:Reason ->
                     {error,
-                        iolist_to_binary(io_lib:format("chain invalid: ~p",
-                                                       [Why]))}
+                        iolist_to_binary(io_lib:format(
+                            "trusted CA is structurally PEM-shaped but "
+                            "not a valid DER certificate (~p:~p); likely "
+                            "corrupted over the wire (e.g. URL-encoding "
+                            "mangled a PEM boundary). Use the `trusted-ca' "
+                            "key with base64url-encoded PEM bytes for "
+                            "unambiguous transport.",
+                            [Class, Reason]))}
             end;
         {_, {error, _}} ->
-            {error, <<"trusted-ca-pem missing or unparseable">>};
+            {error, <<"trusted CA missing or unparseable; set "
+                      "`lapee_tpm_ca_cert' in node config or pass "
+                      "`trusted-ca' (base64url PEM bytes) in the "
+                      "request">>};
         {{error, Why}, _} ->
             {error, iolist_to_binary(io_lib:format("ek_cert_pem invalid: ~p",
                                                     [Why]))}
+    end.
+
+%% Produce a targeted error message for common pkix_path_validation
+%% failures. The most confusing one in practice is `{bad_cert,
+%% invalid_signature}' when the trusted CA's *subject* matches the
+%% EK's *issuer* (same CN, same DN) but the CA's public key is from
+%% a different generation (e.g. per-boot test CA that got out of
+%% sync with the peer's current boot). That case is indistinguishable
+%% from a rogue-CA attack at the pkix level, but we can make it
+%% diagnosable by comparing the RDNs and flagging "name match, key
+%% mismatch" so an operator knows whether to refresh their trust
+%% anchor vs. investigate tampering.
+diagnose_chain_failure(Why, EkDer, CaDer) ->
+    Generic = iolist_to_binary(io_lib:format("chain invalid: ~p", [Why])),
+    try
+        EkOtp = public_key:pkix_decode_cert(EkDer, otp),
+        CaOtp = public_key:pkix_decode_cert(CaDer, otp),
+        EkTbs = EkOtp#'OTPCertificate'.tbsCertificate,
+        CaTbs = CaOtp#'OTPCertificate'.tbsCertificate,
+        EkIssuer = EkTbs#'OTPTBSCertificate'.issuer,
+        CaSubject = CaTbs#'OTPTBSCertificate'.subject,
+        case {Why, public_key:pkix_normalize_name(EkIssuer)
+                 =:= public_key:pkix_normalize_name(CaSubject)} of
+            {{bad_cert, invalid_signature}, true} ->
+                <<"chain invalid: EK's issuer DN matches the trusted CA's "
+                  "subject DN, but the signature does not verify under that "
+                  "CA's public key. The trust anchor is from a different "
+                  "CA generation than the one that signed this EK (common "
+                  "when the peer rebooted and regenerated a per-boot test "
+                  "CA — refresh the trust anchor from the peer's CURRENT "
+                  "boot), or a rogue CA with the same DN is being "
+                  "presented (investigate).">>;
+            {{bad_cert, invalid_issuer}, _} ->
+                <<"chain invalid: EK's issuer DN does not match any "
+                  "trusted CA's subject DN. The peer presented an EK "
+                  "signed by a different CA entirely.">>;
+            _ ->
+                Generic
+        end
+    catch _:_ -> Generic
     end.
 
 %% Verify-fun for the EK cert chain validation. Pulled out so it can
