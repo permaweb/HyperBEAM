@@ -925,10 +925,61 @@ interpret_events(E) ->
             LogBin = try hb_util:decode(LogB64) catch _:_ -> <<>> end,
             case byte_size(LogBin) of
                 0 -> #{};
-                _ -> dev_tpm_tcg:decode_events(dev_tpm_tcg:parse(LogBin))
+                _ ->
+                    Events = dev_tpm_tcg:decode_events(
+                               dev_tpm_tcg:parse(LogBin)),
+                    %% Binaries in `event_data', `digests', and
+                    %% nested `parsed' values can be arbitrary
+                    %% firmware bytes — NOT guaranteed UTF-8. JSON
+                    %% encoding requires strings to be valid UTF-8,
+                    %% so we base64url every non-ASCII-safe binary
+                    %% before returning. Consistent with the
+                    %% envelope's convention (every other binary
+                    %% on the wire is base64url).
+                    encode_events_for_wire(Events)
             end;
         _ -> #{}
     end.
+
+%% Recursively walk the events map and encode every BINARY value
+%% as base64url, EXCEPT for fields we know are safe UTF-8 strings
+%% (event_type, variable_name, action, etc.).
+encode_events_for_wire(M) when is_map(M) ->
+    maps:map(fun encode_field/2, M);
+encode_events_for_wire(Other) -> Other.
+
+encode_field(_K, V) when is_map(V) ->
+    maps:map(fun encode_field/2, V);
+encode_field(_K, V) when is_list(V) ->
+    [encode_field_val(X) || X <- V];
+%% These keys carry UTF-8 strings by construction — leave as-is.
+encode_field(K, V) when is_binary(V),
+                        K =:= <<"event_type">>;
+                        K =:= <<"variable_name">>;
+                        K =:= <<"variable_guid">>;
+                        K =:= <<"type_guid">>;
+                        K =:= <<"action">>;
+                        K =:= <<"crtm_version">>;
+                        K =:= <<"post_code">>;
+                        K =:= <<"post_code_bytes">> -> V;
+encode_field(<<"format">>, V) when is_binary(V) -> V;
+encode_field(<<"key">>, V) when is_binary(V) -> V;
+encode_field(<<"value">>, V) when is_binary(V) -> V;
+encode_field(<<"separator">>, V) when is_binary(V) -> V;
+encode_field(<<"spec_id">>, V) when is_binary(V) -> V;
+encode_field(<<"marker">>, V) when is_binary(V) -> V;
+encode_field(<<"blob_description">>, V) when is_binary(V) -> V;
+encode_field(<<"text">>, V) when is_binary(V) -> V;
+encode_field(<<"hash_alg_name">>, V) when is_binary(V) -> V;
+encode_field(<<"error">>, V) when is_binary(V) -> V;
+%% Everything else that's a binary gets base64url-encoded.
+encode_field(_K, V) when is_binary(V) ->
+    hb_util:encode(V);
+encode_field(_K, V) -> V.
+
+encode_field_val(V) when is_map(V) -> maps:map(fun encode_field/2, V);
+encode_field_val(V) when is_binary(V) -> hb_util:encode(V);
+encode_field_val(V) -> V.
 
 %%---- claim (flat, policy-friendly surface with provenance) -------------
 %%
@@ -1821,6 +1872,32 @@ events_returns_indexed_map_test() ->
     P3 = maps:get(<<"parsed">>, E3),
     Sem = maps:get(<<"semantic">>, P3),
     ?assertEqual(true, maps:get(<<"secure_boot_enabled">>, Sem)),
+    ok.
+
+%% Raw firmware bytes (event_data, digest algorithms) are not
+%% UTF-8. They must arrive on the wire as base64url so HB's
+%% JSON encoder can serialise the response. UTF-8-safe string
+%% fields (event_type, variable_name, ...) stay as-is.
+events_wire_encodes_nonutf8_binaries_test() ->
+    Fixture = build_tcg_fixture(),
+    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
+    {ok, #{<<"body">> := Events}} = events(Envelope, #{}, #{}),
+    E3 = maps:get(<<"3">>, Events),
+    %% event_data is 43 bytes of UEFI_VARIABLE_DATA (binary,
+    %% not UTF-8): must be base64url.
+    ED = maps:get(<<"event_data">>, E3),
+    ?assert(is_binary(ED)),
+    ?assertNotEqual(nomatch,
+        re:run(ED, <<"^[A-Za-z0-9_-]+$">>)),
+    %% digests.sha256 is 32 raw bytes: must be base64url (43 chars).
+    Digests = maps:get(<<"digests">>, E3),
+    Sha = maps:get(<<"sha256">>, Digests),
+    ?assertEqual(43, byte_size(Sha)),
+    ?assertNotEqual(nomatch,
+        re:run(Sha, <<"^[A-Za-z0-9_-]+$">>)),
+    %% UTF-8-safe keys must NOT be base64url-encoded.
+    ?assertEqual(<<"EV_EFI_VARIABLE_DRIVER_CONFIG">>,
+                 maps:get(<<"event_type">>, E3)),
     ok.
 
 %% `claim/3' aggregates events into a flat, policy-friendly shape
