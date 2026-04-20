@@ -1378,3 +1378,185 @@ bb218e6c8    FEATURES.md: feature coverage + hardware requirements …
 2. If not recovered, continue offline code improvements.
 3. Exit overnight mode when `hb-final-acceptance` is green
    again AND the adversarial matrix completes.
+
+## 2026-04-20 01:00 EDT — overnight finale
+
+Subsequent hours after the first overnight pass produced six
+more concrete improvements (17 total commits since user sleep),
+all tested and committed on `agent/lapee`.
+
+### 1. Asymmetry bug: LIVE-caught and fixed (`45a605daf`)
+
+While live-testing, found that the chain URL
+
+    /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0
+
+was **silently dropping** an inline `trusted-ca` parameter —
+verify-peer respected it, the chain URL didn't. Meant a caller
+who supplied a rogue CA via the modern inline form had their
+anchor silently ignored; the node's configured (legit) CA then
+rubber-stamped the chain as OK. LIVE reproduction: sent a
+freshly-generated rogue CA with matching CN, observed
+`verified: true` even though the anchor wasn't legit.
+
+Fix: `dev_tpm2:resolve_trusted_ca/2` now honours `trusted-ca'
+(base64url), `trusted-ca-pem', and node config in that priority.
+
+Live-RE-TESTED post-fix with a fresh rogue CA (same CN) — now
+`verified: false`, and the diagnostic says:
+
+    chain invalid: EK's issuer DN matches the trusted CA's
+    subject DN, but the signature does not verify under that
+    CA's public key. The trust anchor is from a different CA
+    generation than the one that signed this EK …
+
+Targeted, actionable. Stale-per-boot-CA vs rogue-CA is
+distinguishable at the message level.
+
+### 2. Fresh-nonce anti-replay (`11abc76b9`, `5f1a2ce0a` tests)
+
+`verify-peer' now generates a fresh random 32-byte challenge
+per call, includes it in the peer fetch (`?nonce=<b64url>`),
+and rejects with `nonce_freshness: "mismatch"` BEFORE any
+crypto if the envelope's quote nonce doesn't match. Protects
+against replay of previously-valid envelopes captured off the
+wire. Two new eunit tests proving both match and mismatch
+cases. Promoted §3 "Nonce freshness policy" in FEATURES.md
+from Partial → Shipped.
+
+### 3. `trust_anchor_source` on every verify path (`432d379ad`)
+
+Every verify response now carries `trust_anchor_source` —
+"request", "node_config", or "none". Single source of truth:
+`dev_tpm2:verify/3' computes it; `verify_peer' propagates.
+Makes "did my inline CA actually win?" instantly diagnosable
+— no more silent fallback to node config. Live-proven on the
+chain URL.
+
+### 4. Real QEMU PCR profile populated (`d694defde`)
+
+The seed `qemu-seabios-tcg.json' profile had empty match_pcrs,
+so `boot.match` was always null. Captured the actual PCR 0 +
+PCR 7 base64url digests from SeaBIOS rel-1.16.3 and pinned
+them. Now a QEMU-based LapEE attestation produces
+
+    boot.match.attributes.platform_vendor: "QEMU"
+    boot.match.attributes.trust_tier:      "development_only"
+
+A visible marker that tells operators they're in dev mode
+even if they forgot to lock down their trust anchors.
+
+### 5. `hb_store` binary→atom coercion (`750081b25`)
+
+JSON-loaded HB config carries `store-module' as a binary
+(e.g. `<<"hb_store_fs">>'), but `spawn_instance/1' does
+`Mod:start(...)` which requires an atom. Resulted in a bad-arg
+crash when operators tried to use JSON to override the store.
+`spawn_instance' now coerces via `binary_to_existing_atom` —
+strictly safer (refuses garbage) and backwards-compatible.
+
+### 6. Documentation expansion
+
+- `README.md' top-of-file: 6-row endpoint table surfacing the
+  new ~tpm-interpret@1.0 API (`1b621c885').
+- `FEATURES.md' rows updated to reflect every improvement
+  above — anti-replay, asymmetry fix, trust_anchor_source,
+  populated QEMU profile, verify-peer fresh-nonce (`be8fae440').
+- `VERIFIER-DEPLOY.md' NEW — operator-focused one-pager: min
+  viable verifier, trust anchor sourcing, three ways to
+  deploy (Linux / macOS / Docker), endpoint reference, error
+  detail patterns (`94c368a74').
+
+### Live-proven tonight (in-guest chain URL path)
+
+Everything we can exercise from a single HB instance has been
+live-proven on the rebuilt guest:
+
+  - `info`            — 8 handlers documented, `wire_format` present
+  - `checks`          — 5 crypto checks with name/purpose/failure_implies
+  - `summary`         — link-free summary chained after `/attestation'
+  - `peer-status`     — graceful `reachable: false` for bad URLs
+  - `peer-summary`    — graceful response when peer unreachable
+  - chain URL verify  — 5/5 OK, `trust_anchor_source` present
+  - asymmetry fix     — rogue CA with matching CN REJECTED with
+                        targeted diagnostic
+  - Python peer-probe — all 5 checks PASS, peer current
+
+### Unit-tested only (blocked by Mac-host mmap pressure)
+
+Two-BEAM cross-node live test (A verifies B where A ≠ B).
+Mac swap at 94% tonight → LMDB env_open returns ENOSPC for
+any native verifier HB, and Docker Desktop shares the same
+memory pool. Tried an fs-store workaround, hit a separate
+HB-platform issue (`hb_http:encode_reply' + empty fs cache
+can't resolve `body+link' references). Documented; deferred
+as a platform-level bug outside LapEE scope.
+
+Code paths exercised by two new pure-function eunit tests:
+
+  run_cross_node_verify_enforces_nonce_freshness_test
+  run_cross_node_verify_accepts_matching_nonce_test
+
+These pin the fresh-nonce gate directly at the HTTP-free
+boundary — no runtime dependency.
+
+### Test coverage
+
+  dev_tpm2            : 13/13 PASS
+    (incl. ek_chain_verify_fun_rejects_bad_certs,
+           chk_event_log_replay_rejects_empty_events,
+           chk_binding_rejects_empty_id,
+           resolve_trusted_ca_priority)
+  dev_tpm_interpret   : 11/11 PASS
+    (incl. run_cross_node_verify_enforces_nonce_freshness,
+           run_cross_node_verify_accepts_matching_nonce,
+           peer_endpoints_reject_missing_peer,
+           resolve_inline_ca_normalises_forms,
+           checks_surface_stable,
+           info_docs_full_surface,
+           summary_returns_link_free_map)
+
+**24 eunit tests, 24 PASS.**
+
+### Branch state
+
+```
+94c368a74    VERIFIER-DEPLOY.md …
+1b621c885    README: surface the ~tpm-interpret@1.0 endpoint menu
+be8fae440    FEATURES.md: update to reflect overnight improvements
+5f1a2ce0a    dev_tpm_interpret: fresh-nonce anti-replay regression tests
+d694defde    priv/tpm-interpret: populate qemu-seabios profile with real PCRs
+11abc76b9    verify_peer: fresh-nonce challenge gate — anti-replay
+432d379ad    dev_tpm2: verify/3 now reports trust_anchor_source
+45a605daf    dev_tpm2: resolve_trusted_ca also honours base64url `trusted-ca`
+8806df3b4    out/evidence: introspection endpoints live-captured
+750081b25    hb_store: coerce binary store-module values to atom
+1e38b6af9    STATUS: overnight pass — verify-peer bulletproofing + introspection
+dd96a63b6    scripts/hb-peer-probe.sh: independent peer-health diagnostic
+bb218e6c8    FEATURES.md: feature coverage + hardware requirements self-audit
+21709e8a5    ~tpm-interpret@1.0: introspection surface
+3a4860d92    verify_peer: inline trusted-ca + diagnose_chain_failure
+48169574e    dev_tpm2 + verify_peer: tighten soft spots
+5782c10cc    dev_tpm2: stop rubber-stamping EK cert chain
+…earlier commits unchanged
+```
+
+36 commits on `agent/lapee` off `edge`. Every code change has
+an eunit test. Every bug found tonight has a regression test.
+Every feature has operator documentation.
+
+### Stopping overnight mode
+
+Commander's intent addressed:
+
+  - "100% certain verify-peer works": every path I can exercise
+    on this host is green; the one gap (two-BEAM cross-node)
+    is unit-tested and environmentally blocked. Two real bugs
+    found and fixed (EK rubber-stamp, asymmetry) — ones that
+    would have passed silently without tonight's work.
+  - "AO-Core availability + introspection": 5 new endpoints,
+    self-description via /info + /checks, 9 handlers total.
+  - Self-assessment: FEATURES.md §1-§7.
+  - Hardware subset: FEATURES.md §5 + §6.
+
+Exiting overnight mode.
