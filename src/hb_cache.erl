@@ -540,50 +540,66 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
         maps:from_list(lists:filtermap(
             fun(<<"ao-types">>) -> false;
                 (<<"commitments">>) ->
-                    % List the commitments for this message, and load them into
-                    % memory. If there no commitments at the path, we exclude
+                    % List ALL commitments for this message, and load them into
+                    % memory. If there are no commitments at the path, we exclude
                     % commitments from the list of links.
-                    CommPath =
+                    % FIX: Previously only loaded Target commitment, missing others
+                    % like HMAC commitments with different IDs.
+                    CommBasePath =
                         hb_store:resolve(
                             Store,
                             hb_store:path(
                                 Store,
-                                [
-                                    RootPath,
-                                    <<"commitments">>,
-                                    Target
-                                ]
+                                [RootPath, <<"commitments">>]
                             )
                         ),
                     ?event(read_commitment,
-                        {reading_commitment,
+                        {reading_all_commitments,
                             {target, Target},
                             {root_path, RootPath},
-                            {commitments_path, CommPath}
+                            {commitments_base_path, CommBasePath}
                         }
                     ),
-                    case do_read_commitment(CommPath, Opts) of
-                        {ok, Commitment} ->
-                            LoadedCommitment = 
-                                ensure_all_loaded(
-                                    Commitment,
-                                    Opts#{ commitment => true }
-                                ),
-                            ?event(read_commitment,
-                                {found_target_commitment,
-                                    {path, CommPath},
-                                    {commitment, LoadedCommitment}
-                                }
+                    case hb_store:list(Store, CommBasePath) of
+                        {ok, CommitmentIDs} ->
+                            LoadedCommitments = lists:filtermap(
+                                fun(CommID) ->
+                                    CommPath = hb_store:path(
+                                        Store,
+                                        [CommBasePath, CommID]
+                                    ),
+                                    case do_read_commitment(CommPath, Opts) of
+                                        {ok, Commitment} ->
+                                            LoadedCommitment =
+                                                ensure_all_loaded(
+                                                    Commitment,
+                                                    Opts#{ commitment => true }
+                                                ),
+                                            ?event(read_commitment,
+                                                {found_commitment,
+                                                    {id, CommID},
+                                                    {path, CommPath},
+                                                    {commitment, LoadedCommitment}
+                                                }
+                                            ),
+                                            {true, {CommID, LoadedCommitment}};
+                                        _ ->
+                                            false
+                                    end
+                                end,
+                                CommitmentIDs
                             ),
-                            % We have commitments, so we read each commitment
-                            % into memory, and return it as part of the message.
-                            {
-                                true,
-                                {
-                                    <<"commitments">>,
-                                    #{ Target => LoadedCommitment }
-                                }
-                            };
+                            case LoadedCommitments of
+                                [] -> false;
+                                _ ->
+                                    {
+                                        true,
+                                        {
+                                            <<"commitments">>,
+                                            maps:from_list(LoadedCommitments)
+                                        }
+                                    }
+                            end;
                         _ ->
                             false
                     end;
