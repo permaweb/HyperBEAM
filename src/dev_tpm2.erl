@@ -387,6 +387,17 @@ resolve_trusted_ca(Req, Opts) ->
     end.
 
 %%---- check 1: EK cert chain --------------------------------------------
+%%
+%% pkix_path_validation drives a verify_fun when it encounters events
+%% it can't resolve unilaterally — most legitimately, unknown TCG
+%% extensions on EK certs (tpmManufacturer / tpmModel / tpmVersion /
+%% tpmSpecification OIDs, which stock OTP doesn't know). We allow
+%% ONLY those extension events through; every {bad_cert, _} event
+%% (unknown_ca, self-signed, expired, name-mismatch, etc.) is a hard
+%% reject. Returning {valid, State} for everything — the original
+%% implementation — was a rubber stamp: pkix would surface
+%% `{bad_cert, selfsigned_peer}` for a rogue EK and the callback
+%% would tell it "that's fine", defeating the whole chain check.
 chk_ek_chain(Envelope, TrustedCaPem) ->
     EkPem = hb_maps:get(<<"ek_cert_pem">>, Envelope, <<>>, #{}),
     case {decode_pem_cert(EkPem), decode_pem_cert(TrustedCaPem)} of
@@ -394,9 +405,7 @@ chk_ek_chain(Envelope, TrustedCaPem) ->
             CaOtp = public_key:pkix_decode_cert(CaDer, otp),
             case public_key:pkix_path_validation(CaOtp, [EkDer],
                                                  [{verify_fun,
-                                                   {fun (_, _, State) ->
-                                                       {valid, State}
-                                                    end, []}}]) of
+                                                   ek_chain_verify_fun()}]) of
                 {ok, _} -> {ok, <<"OpenSSL pkix_path_validation ok">>};
                 {error, Why} ->
                     {error,
@@ -409,6 +418,21 @@ chk_ek_chain(Envelope, TrustedCaPem) ->
             {error, iolist_to_binary(io_lib:format("ek_cert_pem invalid: ~p",
                                                     [Why]))}
     end.
+
+%% Verify-fun for the EK cert chain validation. Pulled out so it can
+%% be unit-tested in isolation — the previous implementation
+%% returned `{valid, State}' for every event and that rubber-stamped
+%% `{bad_cert, selfsigned_peer}', `{bad_cert, unknown_ca}' et al.
+%% Here, only `{extension, _}' events (unknown TCG TPM OIDs) are
+%% silently accepted; every `{bad_cert, _}' is a hard reject.
+ek_chain_verify_fun() ->
+    {fun
+        (_, {bad_cert, _} = Reason, _) -> {fail, Reason};
+        (_, {extension, _}, State)     -> {unknown, State};
+        (_, valid, State)              -> {valid, State};
+        (_, valid_peer, State)         -> {valid, State};
+        (_, _Other, State)             -> {unknown, State}
+     end, []}.
 
 %%---- check 2: quote signature + extraData + pcrDigest -----------------
 chk_quote(Envelope) ->
@@ -1020,6 +1044,34 @@ resolve_pcr_list_test() ->
                          ?DEFAULT_QUOTE_PCRS, #{})),
     ?assertEqual(?DEFAULT_QUOTE_PCRS,
         resolve_pcr_list(#{}, ?DEFAULT_QUOTE_PCRS, #{})).
+
+%% Regression test: the verify_fun used in chk_ek_chain must reject
+%% every structural / trust failure pkix can report, and only let
+%% through unknown-extension events. A previous implementation
+%% returned {valid, _} for every event, which rubber-stamped rogue
+%% self-signed EK certs as "OpenSSL pkix_path_validation ok".
+ek_chain_verify_fun_rejects_bad_certs_test() ->
+    {F, []} = ek_chain_verify_fun(),
+    %% Any {bad_cert, _} must fail hard.
+    ?assertMatch({fail, {bad_cert, unknown_ca}},
+                 F(ignored, {bad_cert, unknown_ca},    state)),
+    ?assertMatch({fail, {bad_cert, selfsigned_peer}},
+                 F(ignored, {bad_cert, selfsigned_peer}, state)),
+    ?assertMatch({fail, {bad_cert, invalid_issuer}},
+                 F(ignored, {bad_cert, invalid_issuer}, state)),
+    ?assertMatch({fail, {bad_cert, invalid_signature}},
+                 F(ignored, {bad_cert, invalid_signature}, state)),
+    ?assertMatch({fail, {bad_cert, cert_expired}},
+                 F(ignored, {bad_cert, cert_expired},   state)),
+    %% Unknown TCG TPM extensions (tpmManufacturer /
+    %% tpmModel / tpmVersion / tpmSpecification OIDs) are
+    %% informational; let pkix decide.
+    ?assertMatch({unknown, state},
+                 F(ignored, {extension, some_tcg_ext}, state)),
+    %% Valid events pass through.
+    ?assertMatch({valid, state}, F(ignored, valid, state)),
+    ?assertMatch({valid, state}, F(ignored, valid_peer, state)),
+    ok.
 
 event_log_append_test() ->
     %% Reset state for the test.
