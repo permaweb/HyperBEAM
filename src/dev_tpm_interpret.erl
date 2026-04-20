@@ -41,7 +41,8 @@
 %%% into maps at load time). Format is documented in the first entry
 %%% of each file.
 -module(dev_tpm_interpret).
--export([info/1, info/3, interpret/3, verify/3, verify_peer/3]).
+-export([info/1, info/3, interpret/3, verify/3, verify_peer/3,
+         summary/3, peer_summary/3, peer_status/3, checks/3]).
 -include("include/hb.hrl").
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -52,7 +53,8 @@
 
 info(_) ->
     #{ exports => [<<"info">>, <<"interpret">>, <<"verify">>,
-                   <<"verify-peer">>] }.
+                   <<"verify-peer">>, <<"summary">>, <<"peer-summary">>,
+                   <<"peer-status">>, <<"checks">>] }.
 
 info(_Base, _Req, _Opts) ->
     {ok, #{
@@ -67,35 +69,348 @@ info(_Base, _Req, _Opts) ->
                   "verify': the `verify' export here runs the crypto "
                   "chain first and only interprets on success.">>,
             <<"version">> => <<"1.0">>,
+            <<"wire_format">> =>
+                <<"All binary fields on the wire are base64url "
+                  "(hb_util:encode/1). No hex, except short always-"
+                  "hex-displayed namespaced identifiers (e.g. "
+                  "TPM_ST constants like 0x8018).">>,
             <<"api">> => #{
                 <<"interpret">> => #{
                     <<"description">> =>
                         <<"Structured interpretation of the envelope. "
                           "Does NOT itself verify — pair with `verify' "
-                          "or pre-verified input.">>
+                          "or pre-verified input.">>,
+                    <<"input">> =>
+                        <<"An attestation envelope (lapee_attestation_"
+                          "version present) via Base/Req/body.">>,
+                    <<"response">> =>
+                        <<"9 sections: envelope, tpm, ak, quote, pcrs, "
+                          "boot, kernel, ima, node.">>
                 },
                 <<"verify">> => #{
                     <<"description">> =>
                         <<"Call ~tpm2@2.0a/verify, then if the chain "
                           "is accepted, return the verification result "
-                          "plus the full interpretation.">>
+                          "plus the full interpretation.">>,
+                    <<"input">> => <<"Envelope (see interpret).">>,
+                    <<"response">> =>
+                        <<"{verified, verdict, checks, interpretation}.">>
                 },
                 <<"verify-peer">> => #{
                     <<"description">> =>
                         <<"Fetch another HB node's `~tpm2@2.0a/"
                           "attestation' envelope (GET), verify its "
                           "crypto chain locally, and return the full "
-                          "interpretation. Designed for the "
-                          "documented cross-node flow: the caller "
-                          "trusts THIS node's verdict about the peer "
-                          "without itself having to speak the TPM "
-                          "crypto. `peer' is required and is the base "
-                          "URL of the peer (e.g. "
-                          "`http://host.example:8734/').">>
+                          "interpretation + a link-free summary. "
+                          "Designed for the documented cross-node flow: "
+                          "the caller trusts THIS node's verdict about "
+                          "the peer without itself having to speak the "
+                          "TPM crypto.">>,
+                    <<"params">> => #{
+                        <<"peer">> =>
+                            <<"Required. Base URL of the peer to "
+                              "verify (e.g. http://host.example:8734).">>,
+                        <<"trusted-ca">> =>
+                            <<"Optional. base64url-encoded PEM of the "
+                              "TPM vendor root CA to trust for this "
+                              "request. Overrides node config. Preferred "
+                              "inline form.">>,
+                        <<"trusted-ca-pem">> =>
+                            <<"Optional (back-compat). Raw PEM as a "
+                              "string. Unsafe over URL-encoded GET — "
+                              "the `+' in base64 base-64 values and in "
+                              "the PEM BEGIN header get mangled. Use "
+                              "`trusted-ca' instead.">>
+                    },
+                    <<"response">> =>
+                        <<"{peer, verified, verdict, checks, summary, "
+                          "trust_anchor_source}.">>
+                },
+                <<"summary">> => #{
+                    <<"description">> =>
+                        <<"Lightweight, link-free interpretation "
+                          "summary of an envelope. Same shape as the "
+                          "`summary' field inside verify-peer, but "
+                          "without the crypto verification. Use for "
+                          "quick introspection when verification has "
+                          "already happened (or will happen) "
+                          "separately.">>,
+                    <<"input">> => <<"Envelope (see interpret).">>,
+                    <<"response">> =>
+                        <<"{envelope_version, tpm_manufacturer, "
+                          "tpm_manufacturer_kind, tpm_model, "
+                          "tpm_firmware_version, ak_algorithm, "
+                          "ak_key_size_bits, ak_public_key_b64url, "
+                          "quote_attest_type, quote_clock_ms, "
+                          "quote_reset_count, secure_boot_measured, "
+                          "wallet_address, node_message_id, "
+                          "on_start_hook_device, pcr15_event_count}.">>
+                },
+                <<"peer-summary">> => #{
+                    <<"description">> =>
+                        <<"Fetch a peer's attestation and return the "
+                          "summary (interpret-only, NO crypto "
+                          "verification). ~10x cheaper than verify-peer "
+                          "— use for dashboards or discovery where "
+                          "you'll crypto-verify separately.">>,
+                    <<"params">> => #{
+                        <<"peer">> => <<"Required. Base URL.">>
+                    },
+                    <<"response">> =>
+                        <<"{peer, reachable, envelope_shape_ok, "
+                          "summary}.">>
+                },
+                <<"peer-status">> => #{
+                    <<"description">> =>
+                        <<"Cheapest possible probe: is the peer "
+                          "reachable and LapEE-shaped? Does not fetch "
+                          "the full envelope — only the first layer "
+                          "(envelope_version + wallet + node_message_id). "
+                          "Intended for liveness checks.">>,
+                    <<"params">> => #{
+                        <<"peer">> => <<"Required. Base URL.">>
+                    },
+                    <<"response">> =>
+                        <<"{peer, reachable, lapee_attestation_version, "
+                          "wallet_address, node_message_id}.">>
+                },
+                <<"checks">> => #{
+                    <<"description">> =>
+                        <<"Return the machine-readable list of crypto "
+                          "checks that verify / verify-peer performs, "
+                          "with per-check failure implications. "
+                          "Clients use this to build UI, programmatic "
+                          "policy, or adversarial test harnesses.">>,
+                    <<"response">> =>
+                        <<"[{name, purpose, failure_implies}].">>
                 }
             }
         }
     }}.
+
+%%%============================================================================
+%%% summary/3 — lightweight interpret (no verify)
+%%%============================================================================
+
+summary(Base, Req, Opts) ->
+    Envelope = resolve_envelope(Base, Req, Opts),
+    Interp = safe_interpret(Envelope, Opts),
+    {ok, #{
+        <<"status">> => 200,
+        <<"body">> => summarise_interp(Interp)
+    }}.
+
+%%%============================================================================
+%%% peer_summary/3, peer_status/3 — lightweight cross-node introspection
+%%%============================================================================
+
+peer_summary(_Base, Req, Opts) ->
+    case hb_maps:get(<<"peer">>, Req, undefined, Opts) of
+        PeerUrl when is_binary(PeerUrl) ->
+            Base = strip_trailing_slash(PeerUrl),
+            case fetch_peer_envelope(Base, Opts) of
+                {ok, Envelope} ->
+                    Interp = safe_interpret(Envelope, Opts),
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"body">> => #{
+                            <<"peer">>     => Base,
+                            <<"reachable">> => true,
+                            <<"envelope_shape_ok">> => true,
+                            <<"summary">> => summarise_interp(Interp)
+                        }
+                    }};
+                {error, Reason} ->
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"body">> => #{
+                            <<"peer">>     => Base,
+                            <<"reachable">> => false,
+                            <<"envelope_shape_ok">> => false,
+                            <<"detail">>   => fmt_reason(Reason)
+                        }
+                    }}
+            end;
+        _ -> missing_peer_400()
+    end.
+
+peer_status(_Base, Req, Opts) ->
+    case hb_maps:get(<<"peer">>, Req, undefined, Opts) of
+        PeerUrl when is_binary(PeerUrl) ->
+            Base = strip_trailing_slash(PeerUrl),
+            case fetch_peer_envelope(Base, Opts) of
+                {ok, Envelope} ->
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"body">> => #{
+                            <<"peer">> => Base,
+                            <<"reachable">> => true,
+                            <<"lapee_attestation_version">> =>
+                                hb_maps:get(
+                                    <<"lapee_attestation_version">>,
+                                    Envelope, null, Opts),
+                            <<"wallet_address">> =>
+                                hb_maps:get(<<"wallet_address">>,
+                                            Envelope, null, Opts),
+                            <<"node_message_id">> =>
+                                hb_maps:get(<<"node_message_id">>,
+                                            Envelope, null, Opts)
+                        }
+                    }};
+                {error, Reason} ->
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"body">> => #{
+                            <<"peer">> => Base,
+                            <<"reachable">> => false,
+                            <<"lapee_attestation_version">> => null,
+                            <<"wallet_address">> => null,
+                            <<"node_message_id">> => null,
+                            <<"detail">> => fmt_reason(Reason)
+                        }
+                    }}
+            end;
+        _ -> missing_peer_400()
+    end.
+
+%%%============================================================================
+%%% checks/3 — machine-readable description of the five-check battery
+%%%============================================================================
+
+checks(_Base, _Req, _Opts) ->
+    {ok, #{
+        <<"status">> => 200,
+        <<"body">> => #{
+            <<"checks">> => [
+                #{
+                    <<"name">> =>
+                        <<"EK certificate chains to trusted TPM "
+                          "vendor root CA">>,
+                    <<"purpose">> =>
+                        <<"Proves this TPM was manufactured by a "
+                          "known vendor whose root CA is in the "
+                          "verifier's trust anchors. Without this, "
+                          "the EK (and thus the AK, and thus the "
+                          "quote) could be synthesised by anyone.">>,
+                    <<"failure_implies">> =>
+                        <<"The EK cert cannot be tied back to a "
+                          "trusted TPM vendor. Either the TPM is "
+                          "not a vendor we trust, OR the verifier's "
+                          "trust anchor is stale, OR the cert was "
+                          "tampered.">>
+                },
+                #{
+                    <<"name">> =>
+                        <<"TPM2_Quote signature + pcrDigest + "
+                          "nonce all valid">>,
+                    <<"purpose">> =>
+                        <<"Proves the TPM signed the quoted PCR "
+                          "values (and nothing else) with its AK, "
+                          "and that extraData equals the caller's "
+                          "nonce (anti-replay).">>,
+                    <<"failure_implies">> =>
+                        <<"Either the quote signature is invalid "
+                          "(wrong key / tampered message), the "
+                          "pcrDigest doesn't match the reported "
+                          "PCR values, or the nonce was replayed.">>
+                },
+                #{
+                    <<"name">> =>
+                        <<"Runtime event log replay of PCR 15 "
+                          "matches quoted value">>,
+                    <<"purpose">> =>
+                        <<"Proves the envelope's declared PCR 15 "
+                          "events hash together to the quoted "
+                          "PCR 15 value. Establishes a correspondence "
+                          "between declared events and hardware "
+                          "state.">>,
+                    <<"failure_implies">> =>
+                        <<"The runtime_event_log doesn't match "
+                          "what was actually quoted — events "
+                          "missing, inserted, or out of order.">>
+                },
+                #{
+                    <<"name">> =>
+                        <<"PCR 15 extension commits to "
+                          "node_message_id">>,
+                    <<"purpose">> =>
+                        <<"Proves THIS node's node_message_id was "
+                          "extended into PCR 15 — the LapEE key "
+                          "binding. Ties the attestation to the "
+                          "specific node configuration.">>,
+                    <<"failure_implies">> =>
+                        <<"The node_message_id claimed in the "
+                          "envelope isn't in the PCR 15 event log. "
+                          "The enforced on.start hook may not have "
+                          "run, or the envelope is stitched from "
+                          "another node's attestation.">>
+                },
+                #{
+                    <<"name">> =>
+                        <<"Embedded node_message + id present "
+                          "and correct shape">>,
+                    <<"purpose">> =>
+                        <<"Proves the attestation carries its own "
+                          "node message (configuration) with a 43-"
+                          "character base64url id that decodes to "
+                          "32 bytes. Enables offline inspection of "
+                          "what was actually attested to.">>,
+                    <<"failure_implies">> =>
+                        <<"Envelope is malformed or missing the "
+                          "node_message / node_message_id fields.">>
+                }
+            ]
+        }
+    }}.
+
+%%%============================================================================
+%%% Helpers for the introspection endpoints
+%%%============================================================================
+
+missing_peer_400() ->
+    {ok, #{
+        <<"status">> => 400,
+        <<"body">> => #{
+            <<"error">> => <<"missing_peer">>,
+            <<"detail">> =>
+                <<"This endpoint requires a `peer' key — the base "
+                  "URL of a LapEE node (e.g. "
+                  "http://127.0.0.1:8734).">>
+        }
+    }}.
+
+fetch_peer_envelope(Base, Opts) ->
+    FetchMsg = #{
+        <<"path">>          => <<"/~tpm2@2.0a/attestation">>,
+        <<"accept">>        => <<"application/json@1.0">>,
+        <<"accept-bundle">> => <<"true">>
+    },
+    FetchResult =
+        try hb_http:get(Base, FetchMsg, Opts)
+        catch Class:Reason ->
+            {error, {Class, Reason}}
+        end,
+    case FetchResult of
+        {ok, Response} when is_map(Response) ->
+            Envelope = unwrap_envelope(Response, Opts),
+            case is_envelope(Envelope) of
+                true  -> {ok, Envelope};
+                false -> {error, not_lapee_shaped}
+            end;
+        {error, Why} -> {error, {transport, Why}};
+        Unexpected   -> {error, {unexpected, Unexpected}}
+    end.
+
+fmt_reason({transport, Why}) ->
+    iolist_to_binary(io_lib:format("transport: ~p", [Why]));
+fmt_reason(not_lapee_shaped) ->
+    <<"peer responded, but the response is not a LapEE "
+      "attestation envelope (no lapee_attestation_version "
+      "field).">>;
+fmt_reason({unexpected, X}) ->
+    iolist_to_binary(io_lib:format("unexpected response: ~p", [X]));
+fmt_reason(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
 
 %%%============================================================================
 %%% verify/3 — the target endpoint
@@ -1079,8 +1394,117 @@ info_shape_test() ->
     Info = info(ignored),
     ?assert(maps:is_key(exports, Info)),
     Exports = maps:get(exports, Info),
+    %% Core surface
     ?assert(lists:member(<<"interpret">>, Exports)),
-    ?assert(lists:member(<<"verify">>, Exports)).
+    ?assert(lists:member(<<"verify">>, Exports)),
+    %% Cross-node introspection surface
+    ?assert(lists:member(<<"verify-peer">>, Exports)),
+    ?assert(lists:member(<<"peer-summary">>, Exports)),
+    ?assert(lists:member(<<"peer-status">>, Exports)),
+    ?assert(lists:member(<<"summary">>, Exports)),
+    ?assert(lists:member(<<"checks">>, Exports)),
+    ok.
+
+%% `info/3' response documents every export's parameters + response
+%% shape. A client must be able to discover the full surface by
+%% calling `GET /~tpm-interpret@1.0/info'.
+info_docs_full_surface_test() ->
+    {ok, #{<<"body">> := Body}} = info(#{}, #{}, #{}),
+    Api = maps:get(<<"api">>, Body),
+    %% Every exported handler is documented in info.
+    [?assert(maps:is_key(K, Api))
+     || K <- [<<"interpret">>, <<"verify">>, <<"verify-peer">>,
+              <<"summary">>, <<"peer-summary">>, <<"peer-status">>,
+              <<"checks">>]],
+    %% Params are spelled out for the peer-facing handlers.
+    VpParams = maps:get(<<"params">>, maps:get(<<"verify-peer">>, Api)),
+    ?assert(maps:is_key(<<"peer">>, VpParams)),
+    ?assert(maps:is_key(<<"trusted-ca">>, VpParams)),
+    %% `wire_format' tells callers what encoding to expect.
+    ?assert(maps:is_key(<<"wire_format">>, Body)),
+    ok.
+
+%% `checks/3' returns a machine-readable description of the
+%% cryptographic battery — clients build UI + policy on this, so
+%% the shape must not drift silently.
+checks_surface_stable_test() ->
+    {ok, #{<<"body">> := #{<<"checks">> := Cs}}} = checks(#{}, #{}, #{}),
+    ?assertEqual(5, length(Cs)),
+    lists:foreach(
+        fun(C) ->
+            ?assert(maps:is_key(<<"name">>, C)),
+            ?assert(maps:is_key(<<"purpose">>, C)),
+            ?assert(maps:is_key(<<"failure_implies">>, C))
+        end, Cs),
+    Names = [maps:get(<<"name">>, C) || C <- Cs],
+    ?assert(lists:any(fun(N) ->
+                          binary:match(N, <<"EK certificate">>) =/= nomatch
+                      end, Names)),
+    ok.
+
+%% `summary/3' on a structurally-complete envelope returns the same
+%% link-free shape that verify-peer's `summary' uses.
+summary_returns_link_free_map_test() ->
+    Zero = hb_util:encode(<<0:256>>),
+    Envelope = #{
+        <<"lapee_attestation_version">> => <<"0.3">>,
+        <<"ek_cert_pem">> => <<>>,
+        <<"ak_pub_pem">> => <<>>,
+        <<"tpm_quote">> => #{<<"pcr_values">> => #{}, <<"quoted">> => <<>>,
+                             <<"signature">> => <<>>, <<"nonce">> => <<>>,
+                             <<"pcr_selection">> => []},
+        <<"runtime_event_log">> => [],
+        <<"node_message">> =>
+            #{<<"on">> => #{<<"start">> =>
+                              #{<<"device">> => <<"tpm2@2.0a">>}}},
+        <<"node_message_id">> => Zero,
+        <<"wallet_address">> => <<"sample-wallet">>
+    },
+    {ok, #{<<"body">> := S}} = summary(Envelope, #{}, #{}),
+    ?assertEqual(<<"0.3">>, maps:get(<<"envelope_version">>, S)),
+    ?assertEqual(<<"tpm2@2.0a">>,
+                 maps:get(<<"on_start_hook_device">>, S)),
+    ?assertEqual(<<"sample-wallet">>,
+                 maps:get(<<"wallet_address">>, S)),
+    %% Summary must not carry maps inside its values — that's the
+    %% link-free property. Spot-check a few known fields.
+    [?assert(not is_map(maps:get(K, S, null)))
+     || K <- [<<"tpm_manufacturer">>, <<"ak_algorithm">>,
+              <<"quote_attest_type">>, <<"secure_boot_measured">>,
+              <<"pcr15_event_count">>]],
+    ok.
+
+%% A missing `peer' parameter on any peer-* endpoint returns 400
+%% with a targeted error — not silent.
+peer_endpoints_reject_missing_peer_test() ->
+    [?assertMatch({ok, #{<<"status">> := 400,
+                         <<"body">> :=
+                           #{<<"error">> := <<"missing_peer">>}}},
+                  F(#{}, #{}, #{}))
+     || F <- [fun peer_summary/3, fun peer_status/3]],
+    ok.
+
+%% `resolve_inline_ca/2' normalises both accepted forms of the
+%% inline trust anchor — base64url `trusted-ca' wins over raw PEM
+%% `trusted-ca-pem', and undefined/empty inputs stay undefined.
+resolve_inline_ca_normalises_forms_test() ->
+    Pem = <<"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----">>,
+    B64u = hb_util:encode(Pem),
+    %% base64url form decodes back to the raw PEM bytes
+    ?assertEqual(Pem, resolve_inline_ca(#{<<"trusted-ca">> => B64u}, #{})),
+    %% raw-PEM form passes through
+    ?assertEqual(Pem, resolve_inline_ca(#{<<"trusted-ca-pem">> => Pem}, #{})),
+    %% both keys — base64url wins
+    B64u2 = hb_util:encode(<<"OTHER">>),
+    ?assertEqual(<<"OTHER">>,
+                 resolve_inline_ca(#{<<"trusted-ca">> => B64u2,
+                                     <<"trusted-ca-pem">> => Pem}, #{})),
+    %% neither: undefined
+    ?assertEqual(undefined, resolve_inline_ca(#{}, #{})),
+    %% empty string: undefined
+    ?assertEqual(undefined,
+                 resolve_inline_ca(#{<<"trusted-ca">> => <<>>}, #{})),
+    ok.
 
 %% Interpret a hand-built envelope with NO valid EK cert — we still
 %% get a map back with null TPM fields and the other sections filled
