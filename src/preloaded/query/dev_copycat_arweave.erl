@@ -1666,7 +1666,7 @@ get_index_store(Opts) ->
 %% @doc Scan the mempool and index any accessible unconfirmed TXs.
 index_mempool(Request, Opts) ->
     SenderFilter = mempool_sender_filter(Request, Opts),
-    case dev_arweave:pending(#{}, #{}, Opts) of
+    case mempool_pending(#{}, #{}, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
             mempool_progress(
                 Opts,
@@ -1688,6 +1688,14 @@ mempool_progress(Opts, Event) ->
     case hb_opts:get(arweave_mempool_progress, false, Opts) of
         true -> ?event(copycat_short, Event);
         false -> ok
+    end.
+
+mempool_pending(Base, Request, Opts) ->
+    case hb_opts:get(arweave_pending_fun, undefined, Opts) of
+        Fun when is_function(Fun, 3) ->
+            Fun(Base, Request, Opts);
+        _ ->
+            dev_arweave:pending(Base, Request, Opts)
     end.
 
 mempool_sender_filter(Request, Opts) ->
@@ -1800,11 +1808,25 @@ load_mempool_tx_header(TXID, Opts) ->
         Opts,
         {mempool_tx_header_fetch_started, {tx_id, {explicit, TXID}}}
     ),
-    case dev_arweave:pending(
+    case mempool_pending(
         #{},
         #{ <<"pending">> => TXID },
         Opts#{ exclude_data => true }
     ) of
+        {ok, TX} when is_record(TX, tx) ->
+            mempool_progress(
+                Opts,
+                {mempool_tx_header_fetch_finished,
+                    {tx_id, {explicit, TXID}}}
+            ),
+            mempool_progress(
+                Opts,
+                {mempool_tx_convert_finished,
+                    {tx_id, {explicit, TXID}},
+                    {data_size, TX#tx.data_size},
+                    {bundle, is_bundle_tx(TX, Opts)}}
+            ),
+            {ok, TX};
         {ok, StructuredTX} ->
             mempool_progress(
                 Opts,
@@ -2022,6 +2044,53 @@ mempool_tx_sender_matches_owner_address_test_parallel() ->
     TX = #tx{ owner = <<1>>, owner_address = Address },
     ?assert(mempool_tx_sender_matches(TX, hb_util:human_id(Address))),
     ?assertNot(mempool_tx_sender_matches(TX, hb_util:human_id(crypto:strong_rand_bytes(32)))).
+
+mempool_sender_filter_indexes_matching_tx_test_parallel() ->
+    TestStore = hb_test_utils:test_store(),
+    IndexStore = #{ <<"index-store">> => [TestStore] },
+    BaseOpts = #{
+        store => [TestStore],
+        arweave_index_ids => true,
+        arweave_index_store => IndexStore
+    },
+    ok = hb_store:reset([TestStore]),
+    ok = hb_store:start([TestStore]),
+    MatchTXID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    OtherTXID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Sender = <<"FPjbN_btYKzcf8QASjs30v5C0FPv7XpwKXENBW8dqVw">>,
+    MatchTX = mempool_test_pending_tx(Sender),
+    OtherTX = mempool_test_pending_tx(
+        hb_util:human_id(crypto:strong_rand_bytes(32))
+    ),
+    Opts = BaseOpts#{
+        arweave_pending_fun =>
+            fun(_, #{ <<"pending">> := PendingTXID }, _)
+                    when PendingTXID =:= MatchTXID ->
+                    {ok, MatchTX};
+               (_, #{ <<"pending">> := PendingTXID }, _)
+                    when PendingTXID =:= OtherTXID ->
+                    {ok, OtherTX};
+               (_, Request, _) when map_size(Request) =:= 0 ->
+                    {ok, [MatchTXID, OtherTXID]}
+            end
+    },
+    ?assertEqual(
+        {ok, (mempool_empty_summary())#{ indexed => 1, tx_offsets_written => 1 }},
+        arweave(
+            #{},
+            #{ <<"mode">> => <<"mempool">>, <<"sender">> => Sender },
+            Opts
+        )
+    ),
+    ?assert(is_tx_indexed(MatchTXID, Opts)),
+    ?assertNot(is_tx_indexed(OtherTXID, Opts)).
+
+mempool_test_pending_tx(Sender) ->
+    #tx{
+        format = 2,
+        owner = <<1>>,
+        owner_address = Sender
+    }.
 
 index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
