@@ -61,7 +61,8 @@
 %%% end, so callers see "this many events were fine, then something
 %%% went wrong."
 -module(dev_tpm_tcg).
--export([parse/1, parse/2, event_type_name/1, event_type_name/2]).
+-export([parse/1, parse/2, event_type_name/1, event_type_name/2,
+         decode_event/1, decode_events/1]).
 
 %%%============================================================================
 %%% Public API
@@ -105,6 +106,435 @@ event_type_name(Code, Opts) ->
         #{<<"name">> := Name} -> Name;
         _ -> iolist_to_binary(io_lib:format("EV_UNKNOWN_0x~.16B", [Code]))
     end.
+
+%%%============================================================================
+%%% Per-event-type decoders
+%%%============================================================================
+%%%
+%%% `decode_event/1' takes a parsed event message (as produced by
+%%% `parse/1,2') and returns it with a `parsed' sub-map of
+%%% structured fields when the event type is recognised. Unknown
+%%% event types are returned unchanged.
+%%%
+%%% The decoders are defensive: a malformed event body (truncated,
+%%% wrong shape for its type) produces `parsed => #{error => …}'
+%%% rather than a crash or a misleading value.
+%%%
+%%% `decode_events/1' maps decode_event across the map form
+%%% produced by `parse/1,2' — gives callers a one-shot "parse +
+%%% decode" pipeline.
+
+-spec decode_events(map()) -> map().
+decode_events(Events) when is_map(Events) ->
+    maps:map(fun(_K, V) when is_map(V) -> decode_event(V);
+                (_K, V) -> V
+             end, Events);
+decode_events(Other) -> Other.
+
+-spec decode_event(map()) -> map().
+decode_event(Event) when is_map(Event) ->
+    case maps:get(<<"event_type_code">>, Event, undefined) of
+        undefined -> Event;
+        Code -> Event#{<<"parsed">> => do_decode(Code, Event)}
+    end;
+decode_event(E) -> E.
+
+%%%---- M4: Secure Boot variables + firmware CRTM + POST code -----------
+
+%% EV_EFI_VARIABLE_DRIVER_CONFIG (0x80000001)
+%% EV_EFI_VARIABLE_BOOT          (0x80000002)
+%% EV_EFI_VARIABLE_AUTHORITY     (0x800000E0)
+do_decode(16#80000001, Event) -> decode_uefi_variable(Event);
+do_decode(16#80000002, Event) -> decode_uefi_variable(Event);
+do_decode(16#800000E0, Event) -> decode_uefi_variable(Event);
+
+%% EV_S_CRTM_VERSION (0x08) — firmware/CRTM version string.
+%% Typically UTF-16LE; occasionally ASCII. Best-effort decode.
+do_decode(16#8, Event) -> decode_crtm_version(Event);
+
+%% EV_POST_CODE (0x01) — firmware POST code; usually short ASCII
+%% or manufacturer-defined bytes.
+do_decode(16#1, Event) -> decode_post_code(Event);
+
+%%%---- M5: bootloader + UKI + systemd-stub -----------------------------
+
+%% EV_EFI_BOOT_SERVICES_APPLICATION (0x80000003)
+%% EV_EFI_BOOT_SERVICES_DRIVER      (0x80000004)
+%% EV_EFI_RUNTIME_SERVICES_DRIVER   (0x80000005)
+do_decode(16#80000003, Event) -> decode_uefi_image_load(Event);
+do_decode(16#80000004, Event) -> decode_uefi_image_load(Event);
+do_decode(16#80000005, Event) -> decode_uefi_image_load(Event);
+
+%% EV_IPL (0x0D) — generic OS-loader event. systemd-stub encodes
+%% "key=value" ASCII on PCR 11/12/13; other users encode opaque
+%% data. Try key=value, fall back to raw.
+do_decode(16#D, Event) -> decode_ev_ipl(Event);
+
+%% EV_EFI_PLATFORM_FIRMWARE_BLOB  (0x80000008)
+%% EV_EFI_PLATFORM_FIRMWARE_BLOB2 (0x8000000A) — with blob description
+do_decode(16#80000008, Event) -> decode_firmware_blob(Event);
+do_decode(16#8000000A, Event) -> decode_firmware_blob2(Event);
+
+%%%---- M6: remaining TCG codes -----------------------------------------
+
+%% EV_CPU_MICROCODE (0x09) — microcode update header.
+do_decode(16#9, Event) -> decode_cpu_microcode(Event);
+
+%% EV_SEPARATOR (0x04) — typically 0x00000000 (normal) or
+%% 0xFFFFFFFF (firmware reports an error).
+do_decode(16#4, Event) -> decode_separator(Event);
+
+%% EV_ACTION (0x05) + EV_EFI_ACTION (0x80000007) — ASCII action markers.
+do_decode(16#5, Event) -> decode_ascii_action(Event);
+do_decode(16#80000007, Event) -> decode_ascii_action(Event);
+
+%% EV_EFI_HCRTM_EVENT (0x80000010) — fixed "HCRTM" ASCII.
+do_decode(16#80000010, Event) -> decode_ascii_action(Event);
+
+%% EV_NO_ACTION (0x03) — first record carries SpecID; others may
+%% carry StartupLocality or similar markers.
+do_decode(16#3, Event) -> decode_no_action(Event);
+
+%% EV_OMIT_BOOT_DEVICE_EVENTS (0x12) — ASCII.
+do_decode(16#12, Event) -> decode_ascii_action(Event);
+
+%% Anything else: no structured decode.
+do_decode(_Code, _Event) -> #{}.
+
+%%%---- Decoders (bodies) -----------------------------------------------
+
+%% UEFI_VARIABLE_DATA:
+%%   variableName        EFI_GUID (16B)
+%%   unicodeNameLength   uint64 LE  (count of UTF-16 chars)
+%%   variableDataLength  uint64 LE
+%%   unicodeName         [unicodeNameLength] UTF-16LE chars
+%%                         (2 * unicodeNameLength bytes)
+%%   variableData        [variableDataLength] bytes
+decode_uefi_variable(#{<<"event_data">> := Data}) ->
+    case Data of
+        <<GuidBin:16/binary,
+          NameLen:64/unsigned-little,
+          DataLen:64/unsigned-little,
+          Rest0/binary>> ->
+            NameBytes = NameLen * 2,
+            case Rest0 of
+                <<NameUtf16:NameBytes/binary, VarData:DataLen/binary,
+                  _Tail/binary>> ->
+                    Name = utf16le_to_utf8(NameUtf16),
+                    #{
+                        <<"variable_guid">> => fmt_efi_guid(GuidBin),
+                        <<"variable_name">> => Name,
+                        <<"variable_data">> => VarData,
+                        <<"variable_data_length">> => DataLen,
+                        <<"semantic">> =>
+                            decode_uefi_variable_semantic(Name, VarData)
+                    };
+                _ ->
+                    #{<<"error">> => <<"truncated UEFI_VARIABLE_DATA">>}
+            end;
+        _ ->
+            #{<<"error">> => <<"event_data too short for UEFI_VARIABLE_DATA "
+                               "header">>}
+    end;
+decode_uefi_variable(_) -> #{}.
+
+%% Extract the one thing a policy engine actually cares about per
+%% UEFI variable: for `SecureBoot' the single enabled/disabled
+%% byte; for `PK`/`KEK`/`db`/`dbx` the signature-list summary.
+decode_uefi_variable_semantic(<<"SecureBoot">>, <<1>>) ->
+    #{<<"secure_boot_enabled">> => true};
+decode_uefi_variable_semantic(<<"SecureBoot">>, <<0>>) ->
+    #{<<"secure_boot_enabled">> => false};
+decode_uefi_variable_semantic(<<"SecureBoot">>, _) ->
+    #{<<"secure_boot_enabled">> => <<"malformed">>};
+decode_uefi_variable_semantic(<<"SetupMode">>, <<B:8>>) ->
+    #{<<"setup_mode">> => B == 1};
+decode_uefi_variable_semantic(<<"AuditMode">>, <<B:8>>) ->
+    #{<<"audit_mode">> => B == 1};
+decode_uefi_variable_semantic(<<"DeployedMode">>, <<B:8>>) ->
+    #{<<"deployed_mode">> => B == 1};
+decode_uefi_variable_semantic(Name, Data)
+  when Name =:= <<"PK">>; Name =:= <<"KEK">>;
+       Name =:= <<"db">>; Name =:= <<"dbx">> ->
+    #{<<"signature_list">> => summarise_signature_list(Data)};
+decode_uefi_variable_semantic(_, _) -> #{}.
+
+%% EFI_SIGNATURE_LIST header:
+%%   signatureType     EFI_GUID (16B)
+%%   signatureListSize uint32 LE
+%%   signatureHeaderSize uint32 LE
+%%   signatureSize      uint32 LE
+%%   signatureHeader   [signatureHeaderSize]
+%%   signatures         [...] — each is {owner: EFI_GUID, data: ...}
+%%
+%% We don't try to decode the cert bytes fully; we just report
+%% per-list {type, n_entries, total_bytes}.
+summarise_signature_list(Bin) -> summarise_signature_list(Bin, []).
+
+summarise_signature_list(<<>>, Acc) -> lists:reverse(Acc);
+summarise_signature_list(<<GuidBin:16/binary,
+                           ListSize:32/unsigned-little,
+                           HdrSize:32/unsigned-little,
+                           SigSize:32/unsigned-little,
+                           Rest/binary>>, Acc)
+  when ListSize >= 28 + HdrSize ->
+    SignaturesBytes = ListSize - 28 - HdrSize,
+    case Rest of
+        <<_Header:HdrSize/binary,
+          Sigs:SignaturesBytes/binary,
+          Tail/binary>> when SigSize > 0 ->
+            N = SignaturesBytes div SigSize,
+            Entry = #{
+                <<"type_guid">>   => fmt_efi_guid(GuidBin),
+                <<"entry_count">> => N,
+                <<"entry_size">>  => SigSize
+            },
+            summarise_signature_list(Tail, [Entry | Acc]);
+        _ ->
+            lists:reverse([#{<<"error">> =>
+                                 <<"malformed signature list">>} | Acc])
+    end;
+summarise_signature_list(_, Acc) ->
+    lists:reverse([#{<<"error">> =>
+                         <<"truncated signature list">>} | Acc]).
+
+%% EV_S_CRTM_VERSION — event data is the version string.
+%% Heuristic: if it's an even length and looks like UTF-16LE
+%% (every odd byte is 0x00 for ASCII range), decode as UTF-16LE.
+%% Otherwise return as ASCII best-effort.
+decode_crtm_version(#{<<"event_data">> := Data}) ->
+    Decoded = case looks_like_utf16le(Data) of
+        true  -> utf16le_to_utf8(Data);
+        false -> ascii_trim(Data)
+    end,
+    #{<<"crtm_version">> => Decoded};
+decode_crtm_version(_) -> #{}.
+
+decode_post_code(#{<<"event_data">> := Data}) ->
+    case ascii_only(Data) of
+        true  -> #{<<"post_code">> => ascii_trim(Data)};
+        false -> #{<<"post_code_bytes">> => Data}
+    end;
+decode_post_code(_) -> #{}.
+
+%% UEFI_IMAGE_LOAD_EVENT:
+%%   imageLocationInMemory  uint64 LE
+%%   imageLengthInMemory    uint64 LE
+%%   imageLinkTimeAddress   uint64 LE
+%%   lengthOfDevicePath     uint64 LE
+%%   devicePath             [lengthOfDevicePath] EFI_DEVICE_PATH_PROTOCOL
+decode_uefi_image_load(#{<<"event_data">> := Data}) ->
+    case Data of
+        <<LocInMem:64/unsigned-little,
+          LenInMem:64/unsigned-little,
+          LinkAddr:64/unsigned-little,
+          DpLen:64/unsigned-little,
+          DevicePath:DpLen/binary,
+          _Tail/binary>> ->
+            #{
+                <<"image_location_in_memory">> => LocInMem,
+                <<"image_length_in_memory">>   => LenInMem,
+                <<"image_link_time_address">>  => LinkAddr,
+                <<"device_path_length">>       => DpLen,
+                <<"device_path">>              => DevicePath
+            };
+        _ ->
+            #{<<"error">> => <<"malformed UEFI_IMAGE_LOAD_EVENT">>}
+    end;
+decode_uefi_image_load(_) -> #{}.
+
+%% EV_IPL — systemd-stub encodes "key=value\0" ASCII on PCR
+%% 11/12/13 for UKI measurements (kernel_cmdline, kernel,
+%% initrd, etc.). Other users encode opaque data.
+decode_ev_ipl(#{<<"event_data">> := Data}) ->
+    %% systemd-stub records are NUL-terminated UTF-8 strings
+    %% with a single `=' separator.
+    TrimmedData = case binary:last(Data) of
+        0  -> binary:part(Data, 0, byte_size(Data) - 1);
+        _  -> Data
+    end,
+    case ascii_only(TrimmedData) of
+        true ->
+            case binary:split(TrimmedData, <<"=">>) of
+                [Key, Value] ->
+                    #{
+                        <<"key">>   => Key,
+                        <<"value">> => Value,
+                        <<"format">> => <<"key_value_ascii">>
+                    };
+                _ ->
+                    #{<<"text">> => TrimmedData,
+                      <<"format">> => <<"ascii">>}
+            end;
+        false ->
+            #{<<"format">> => <<"opaque">>,
+              <<"length">> => byte_size(Data)}
+    end;
+decode_ev_ipl(_) -> #{}.
+
+%% UEFI_PLATFORM_FIRMWARE_BLOB:
+%%   blobBase   uint64 LE
+%%   blobLength uint64 LE
+decode_firmware_blob(#{<<"event_data">> := Data}) ->
+    case Data of
+        <<Base:64/unsigned-little, Len:64/unsigned-little, _Tail/binary>> ->
+            #{
+                <<"blob_physical_address">> => Base,
+                <<"blob_length">>           => Len
+            };
+        _ ->
+            #{<<"error">> => <<"malformed UEFI_PLATFORM_FIRMWARE_BLOB">>}
+    end;
+decode_firmware_blob(_) -> #{}.
+
+%% UEFI_PLATFORM_FIRMWARE_BLOB2:
+%%   blobDescSize u8
+%%   blobDesc     [blobDescSize] ASCII
+%%   blobBase     uint64 LE
+%%   blobLength   uint64 LE
+decode_firmware_blob2(#{<<"event_data">> := Data}) ->
+    case Data of
+        <<DescSize:8, Rest0/binary>> ->
+            case Rest0 of
+                <<Desc:DescSize/binary, Base:64/unsigned-little,
+                  Len:64/unsigned-little, _Tail/binary>> ->
+                    #{
+                        <<"blob_description">>      => Desc,
+                        <<"blob_physical_address">> => Base,
+                        <<"blob_length">>           => Len
+                    };
+                _ ->
+                    #{<<"error">> => <<"malformed UEFI_PLATFORM_FIRMWARE_"
+                                       "BLOB2">>}
+            end;
+        _ ->
+            #{<<"error">> => <<"UEFI_PLATFORM_FIRMWARE_BLOB2 too short">>}
+    end;
+decode_firmware_blob2(_) -> #{}.
+
+%% CPU microcode update header (Intel):
+%%   headerVersion       uint32 LE
+%%   updateRevision      uint32 LE
+%%   date                uint32 LE   (yyyymmdd BCD)
+%%   processorSignature  uint32 LE   (CPUID leaf 1 EAX)
+%%   checksum            uint32 LE
+%%   loaderRevision      uint32 LE
+%%   processorFlags      uint32 LE
+%%   dataSize            uint32 LE
+%%   totalSize           uint32 LE
+%%   …reserved 12 bytes
+%%   data…
+%%
+%% AMD microcode layout differs — we return what we can read
+%% with a `format' tag so callers can try vendor-specific decoding.
+decode_cpu_microcode(#{<<"event_data">> := Data}) ->
+    case Data of
+        <<HV:32/little, UR:32/little, Date:32/little,
+          ProcSig:32/little, Checksum:32/little, LoaderRev:32/little,
+          ProcFlags:32/little, _/binary>> ->
+            #{
+                <<"format">>             => <<"intel_or_compatible">>,
+                <<"header_version">>     => HV,
+                <<"update_revision">>    => UR,
+                <<"date_bcd">>           => Date,
+                <<"processor_signature">> => ProcSig,
+                <<"checksum">>           => Checksum,
+                <<"loader_revision">>    => LoaderRev,
+                <<"processor_flags">>    => ProcFlags
+            };
+        _ ->
+            #{<<"error">> => <<"EV_CPU_MICROCODE too short for header">>}
+    end;
+decode_cpu_microcode(_) -> #{}.
+
+decode_separator(#{<<"event_data">> := <<16#FF, 16#FF, 16#FF, 16#FF>>}) ->
+    #{<<"separator">> => <<"firmware_error">>};
+decode_separator(#{<<"event_data">> := <<0, 0, 0, 0>>}) ->
+    #{<<"separator">> => <<"normal">>};
+decode_separator(#{<<"event_data">> := Data}) ->
+    #{<<"separator">> => <<"other">>,
+      <<"bytes">> => Data};
+decode_separator(_) -> #{}.
+
+decode_ascii_action(#{<<"event_data">> := Data}) ->
+    case ascii_only(Data) of
+        true -> #{<<"action">> => ascii_trim(Data)};
+        false -> #{<<"action_bytes">> => Data}
+    end;
+decode_ascii_action(_) -> #{}.
+
+%% EV_NO_ACTION — first record carries TCG_EfiSpecIdEvent; others
+%% may carry StartupLocality ("StartupLocality" + 1 byte) or
+%% other markers.
+decode_no_action(#{<<"event_data">> := <<"Spec ID Event03", 0, _/binary>>
+                   = Data}) ->
+    case parse_spec_id(Data) of
+        {ok, AlgList} ->
+            #{<<"spec_id">> => <<"Event03">>,
+              <<"algorithms">> =>
+                [#{<<"hash_alg_id">> => AlgId,
+                   <<"hash_alg_name">> => hash_alg_name(AlgId),
+                   <<"digest_size">> => Sz}
+                 || {AlgId, Sz} <- AlgList]};
+        _ -> #{<<"error">> => <<"malformed SpecID">>}
+    end;
+decode_no_action(#{<<"event_data">> := <<"StartupLocality", 0, Locality:8,
+                                           _/binary>>}) ->
+    #{<<"marker">> => <<"StartupLocality">>,
+      <<"locality">> => Locality};
+decode_no_action(#{<<"event_data">> := Data}) ->
+    #{<<"marker">> => <<"other">>,
+      <<"length">> => byte_size(Data)};
+decode_no_action(_) -> #{}.
+
+%%%---- Small text helpers ----------------------------------------------
+
+utf16le_to_utf8(Bin) ->
+    case unicode:characters_to_binary(Bin, {utf16, little}, utf8) of
+        B when is_binary(B) -> ascii_trim(B);
+        _ -> ascii_trim(Bin)
+    end.
+
+looks_like_utf16le(Bin) when is_binary(Bin), byte_size(Bin) >= 2 ->
+    byte_size(Bin) rem 2 =:= 0 andalso
+        lists:all(fun(<<_:8, 0:8>>) -> true;
+                    (_) -> false
+                 end,
+                 [binary:part(Bin, I, 2)
+                  || I <- lists:seq(0, byte_size(Bin) - 2, 2)]);
+looks_like_utf16le(_) -> false.
+
+ascii_only(Bin) when is_binary(Bin) ->
+    lists:all(
+        fun(B) -> (B =:= 9) orelse (B =:= 10) orelse (B =:= 13)
+                   orelse (B >= 16#20 andalso B =< 16#7E)
+                   orelse (B =:= 0) end,
+        binary_to_list(Bin));
+ascii_only(_) -> false.
+
+ascii_trim(Bin) when is_binary(Bin) ->
+    %% Strip trailing NUL bytes (common in UEFI strings + a
+    %% byproduct of UTF-16LE → UTF-8 conversion when the source
+    %% had a trailing null terminator).
+    strip_trailing_nulls(Bin);
+ascii_trim(Other) -> Other.
+
+strip_trailing_nulls(<<>>) -> <<>>;
+strip_trailing_nulls(Bin) ->
+    case binary:last(Bin) of
+        0 -> strip_trailing_nulls(binary:part(Bin, 0, byte_size(Bin) - 1));
+        _ -> Bin
+    end.
+
+fmt_efi_guid(<<A:32/little, B:16/little, C:16/little, D:8/binary>>) ->
+    iolist_to_binary(
+        io_lib:format("~8.16.0B-~4.16.0B-~4.16.0B-~s",
+                      [A, B, C, fmt_guid_tail(D)])).
+
+fmt_guid_tail(<<D0:8, D1:8, D2:8, D3:8, D4:8, D5:8, D6:8, D7:8>>) ->
+    io_lib:format("~2.16.0B~2.16.0B-~2.16.0B~2.16.0B~2.16.0B~2.16.0B"
+                  "~2.16.0B~2.16.0B",
+                  [D0, D1, D2, D3, D4, D5, D6, D7]).
 
 %%%============================================================================
 %%% Legacy first record (TCG_PCR_EVENT + TCG_EfiSpecIdEvent)
@@ -498,5 +928,171 @@ parse_empty_input_test() ->
 parse_non_binary_input_test() ->
     R = parse(not_a_binary),
     ?assertMatch(#{<<"error">> := _}, R).
+
+%%%---- Decoder tests ---------------------------------------------------
+
+%% The Secure Boot UEFI variable encodes `enabled' as a single byte
+%% (0x01/0x00). Surface as `semantic.secure_boot_enabled: bool'.
+decode_secure_boot_variable_enabled_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"SecureBoot">>, <<1>>),
+    Ev = #{<<"event_type_code">> => 16#80000001,
+           <<"event_data">> => Data},
+    Parsed = (decode_event(Ev))#{<<"parsed">> => _P = maps:get(<<"parsed">>,
+                                          decode_event(Ev), #{})},
+    P = maps:get(<<"parsed">>, Parsed),
+    ?assertEqual(<<"SecureBoot">>, maps:get(<<"variable_name">>, P)),
+    ?assertEqual(#{<<"secure_boot_enabled">> => true},
+                 maps:get(<<"semantic">>, P)).
+
+decode_secure_boot_variable_disabled_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"SecureBoot">>, <<0>>),
+    Ev = #{<<"event_type_code">> => 16#80000001,
+           <<"event_data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(#{<<"secure_boot_enabled">> => false},
+                 maps:get(<<"semantic">>, P)).
+
+decode_crtm_version_utf16le_test() ->
+    Utf16 = unicode:characters_to_binary(<<"BIOS 1.23">>, utf8,
+                                           {utf16, little}),
+    Ev = #{<<"event_type_code">> => 16#8, <<"event_data">> => Utf16},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"BIOS 1.23">>, maps:get(<<"crtm_version">>, P)).
+
+decode_crtm_version_ascii_test() ->
+    Ev = #{<<"event_type_code">> => 16#8,
+           <<"event_data">> => <<"AMI v5.19">>},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"AMI v5.19">>, maps:get(<<"crtm_version">>, P)).
+
+decode_separator_normal_vs_error_test() ->
+    EvNormal = #{<<"event_type_code">> => 16#4,
+                 <<"event_data">> => <<0,0,0,0>>},
+    EvError = #{<<"event_type_code">> => 16#4,
+                <<"event_data">> => <<16#FF,16#FF,16#FF,16#FF>>},
+    ?assertEqual(<<"normal">>,
+                 maps:get(<<"separator">>,
+                          maps:get(<<"parsed">>,
+                                   decode_event(EvNormal)))),
+    ?assertEqual(<<"firmware_error">>,
+                 maps:get(<<"separator">>,
+                          maps:get(<<"parsed">>,
+                                   decode_event(EvError)))).
+
+decode_no_action_spec_id_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8, 2:32/little,
+               AlgPairs/binary, 0:8>>,
+    Ev = #{<<"event_type_code">> => 16#3, <<"event_data">> => SpecId},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"Event03">>, maps:get(<<"spec_id">>, P)),
+    ?assertEqual(2, length(maps:get(<<"algorithms">>, P))).
+
+decode_uefi_image_load_test() ->
+    DevicePath = <<16#01,16#02,16#03,16#04,16#05>>,  %% arbitrary bytes
+    DpLen = byte_size(DevicePath),
+    Data = <<16#1000:64/little, 16#20000:64/little,
+             16#FFFFFFFF00000000:64/little, DpLen:64/little,
+             DevicePath/binary>>,
+    Ev = #{<<"event_type_code">> => 16#80000003,
+           <<"event_data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(16#1000, maps:get(<<"image_location_in_memory">>, P)),
+    ?assertEqual(16#20000, maps:get(<<"image_length_in_memory">>, P)),
+    ?assertEqual(DpLen, maps:get(<<"device_path_length">>, P)),
+    ?assertEqual(DevicePath, maps:get(<<"device_path">>, P)).
+
+decode_ev_ipl_systemd_stub_kernel_cmdline_test() ->
+    Ev = #{<<"event_type_code">> => 16#D,
+           <<"event_data">> => <<"kernel_cmdline=ro quiet",0>>},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"kernel_cmdline">>, maps:get(<<"key">>, P)),
+    ?assertEqual(<<"ro quiet">>, maps:get(<<"value">>, P)),
+    ?assertEqual(<<"key_value_ascii">>, maps:get(<<"format">>, P)).
+
+decode_ev_ipl_opaque_test() ->
+    Ev = #{<<"event_type_code">> => 16#D,
+           <<"event_data">> => <<0,1,2,3,4,5>>},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    %% Not key=value ASCII → format=opaque
+    ?assertEqual(<<"opaque">>, maps:get(<<"format">>, P)),
+    ?assertEqual(6, maps:get(<<"length">>, P)).
+
+decode_firmware_blob_test() ->
+    Ev = #{<<"event_type_code">> => 16#80000008,
+           <<"event_data">> => <<16#FF000000:64/little,
+                                 16#100000:64/little>>},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(16#FF000000, maps:get(<<"blob_physical_address">>, P)),
+    ?assertEqual(16#100000, maps:get(<<"blob_length">>, P)).
+
+decode_firmware_blob2_with_description_test() ->
+    Desc = <<"main_fw">>,
+    DescLen = byte_size(Desc),
+    Ev = #{<<"event_type_code">> => 16#8000000A,
+           <<"event_data">> =>
+               <<DescLen:8, Desc/binary,
+                 16#FF000000:64/little,
+                 16#100000:64/little>>},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"main_fw">>, maps:get(<<"blob_description">>, P)).
+
+decode_cpu_microcode_header_test() ->
+    %% 28-byte header prefix is enough for our parser.
+    Data = <<1:32/little, 16#12345:32/little, 16#20240101:32/little,
+             16#806EA:32/little, 0:32/little, 1:32/little,
+             1:32/little, 100:32/little, 200:32/little,
+             0:96>>,
+    Ev = #{<<"event_type_code">> => 16#9,
+           <<"event_data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"intel_or_compatible">>, maps:get(<<"format">>, P)),
+    ?assertEqual(16#12345, maps:get(<<"update_revision">>, P)),
+    ?assertEqual(16#20240101, maps:get(<<"date_bcd">>, P)).
+
+decode_malformed_uefi_variable_returns_error_test() ->
+    Ev = #{<<"event_type_code">> => 16#80000001,
+           <<"event_data">> => <<1,2,3>>},  %% way too short
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertMatch(#{<<"error">> := _}, P).
+
+decode_unknown_event_type_is_no_op_test() ->
+    %% Unregistered code → empty `parsed'.
+    Ev = #{<<"event_type_code">> => 16#DEADBEEF,
+           <<"event_data">> => <<>>},
+    ?assertEqual(#{}, maps:get(<<"parsed">>, decode_event(Ev))).
+
+%% Pipeline: parse a log, then decode_events to get the
+%% per-event `parsed' enrichment on every entry.
+decode_events_on_full_fixture_test() ->
+    Raw = build_fixture(),
+    Parsed = parse(Raw),
+    Decoded = decode_events(Parsed),
+    %% Event 3 is the SecureBoot variable — should be
+    %% semantically decoded.
+    E3 = maps:get(<<"3">>, Decoded),
+    P3 = maps:get(<<"parsed">>, E3),
+    ?assertEqual(<<"SecureBoot">>, maps:get(<<"variable_name">>, P3)),
+    Sem = maps:get(<<"semantic">>, P3),
+    ?assertEqual(#{<<"secure_boot_enabled">> => true}, Sem),
+    %% Event 2 is CRTM_VERSION — should have decoded string.
+    E2 = maps:get(<<"2">>, Decoded),
+    P2 = maps:get(<<"parsed">>, E2),
+    ?assertEqual(<<"TEST FW v1">>, maps:get(<<"crtm_version">>, P2)).
+
+%%%---- Helper used by decoder tests ------------------------------------
+
+build_uefi_variable(GuidBin, NameUtf8, VarData) ->
+    Name = unicode:characters_to_binary(NameUtf8, utf8,
+                                          {utf16, little}),
+    NameLen = byte_size(Name) div 2,
+    DataLen = byte_size(VarData),
+    <<GuidBin/binary,
+      NameLen:64/little,
+      DataLen:64/little,
+      Name/binary,
+      VarData/binary>>.
 
 -endif.
