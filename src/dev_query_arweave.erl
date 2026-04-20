@@ -449,7 +449,7 @@ annotate_offsets([], _StoreOpts, _LastOffset, _Ordinate, _Opts) -> [];
 annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
     {Offset, Annotated} =
         case hb_store_arweave:read_offset(StoreOpts, ID) of
-            {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
+            {ok, #{ <<"offset">> := StartOffset, <<"length">> := Length }} ->
                 {
                     StartOffset,
                     #{
