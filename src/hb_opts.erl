@@ -567,13 +567,13 @@ get(Key, Default, Opts)
              not is_map_key(prefer, Opts),
              not is_map_key(<<"only">>, Opts),
              not is_map_key(<<"prefer">>, Opts) ->
-    %% Fast path for the overwhelmingly-common shapes: (a) no preference
-    %% set, (b) `only => local' (all real-world HTTP request handling).
-    %% The final clause falls through to do_get/3 for ENV_KEYS-backed keys
-    %% (HB_PARANOID, HB_PORT, etc.) so env-var parsing + caching still
-    %% happens; the `is_map_key' check is too fast (~7 ns) to move to a
-    %% guard, and ?ENV_KEYS contains fun references so it can't appear in
-    %% a guard anyway.
+    % Fast path for the overwhelmingly-common shapes: (a) no preference
+    % set, (b) `only => local' (all real-world HTTP request handling).
+    % The final clause falls through to do_get/3 for ENV_KEYS-backed keys
+    % (HB_PARANOID, HB_PORT, etc.) so env-var parsing + caching still
+    % happens; the `is_map_key' check is too fast (~7 ns) to move to a
+    % guard, and ?ENV_KEYS contains fun references so it can't appear in
+    % a guard anyway.
     case Opts of
         #{ only := global } -> do_get(Key, Default, Opts);
         #{ Key   := Value } -> Value;
