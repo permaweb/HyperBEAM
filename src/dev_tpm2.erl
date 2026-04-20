@@ -298,6 +298,7 @@ pcr_read(_Base, Req, Opts) ->
 verify(Base, Req, Opts) ->
     Envelope = resolve_envelope(Base, Req, Opts),
     TrustedCaPem = resolve_trusted_ca(Req, Opts),
+    CaSource = trust_anchor_source(Req, Opts, TrustedCaPem),
     Checks = [
         safely_run(fun() -> chk_ek_chain(Envelope, TrustedCaPem) end,
                    <<"EK certificate chains to trusted TPM vendor root CA">>),
@@ -320,9 +321,33 @@ verify(Base, Req, Opts) ->
         <<"body">> => #{
             <<"verified">> => AllOk,
             <<"verdict">> => Verdict,
-            <<"checks">> => Checks
+            <<"checks">> => Checks,
+            %% Tells callers which trust anchor was actually used.
+            %% Helpful when debugging "I passed a CA and it was
+            %% ignored": `request' means the inline anchor won,
+            %% `node_config' means we fell through to the node's
+            %% configured file.
+            <<"trust_anchor_source">> => CaSource
         }
     }}.
+
+%% Classify which source produced the trust anchor actually used
+%% by `resolve_trusted_ca/2'. Returns a binary: "request", "node_config",
+%% or "none" (when no anchor was found anywhere — the chain check
+%% will then fail with a targeted "missing or unparseable" message).
+trust_anchor_source(Req, _Opts, <<>>) ->
+    case {hb_maps:get(<<"trusted-ca">>, Req, undefined, #{}),
+          hb_maps:get(<<"trusted-ca-pem">>, Req, undefined, #{})} of
+        {undefined, undefined} -> <<"none">>;
+        _ -> <<"request_but_empty">>
+    end;
+trust_anchor_source(Req, _Opts, _Pem) ->
+    case {hb_maps:get(<<"trusted-ca">>, Req, undefined, #{}),
+          hb_maps:get(<<"trusted-ca-pem">>, Req, undefined, #{})} of
+        {B, _} when is_binary(B), byte_size(B) > 0 -> <<"request">>;
+        {_, P} when is_binary(P), byte_size(P) > 0 -> <<"request">>;
+        _ -> <<"node_config">>
+    end.
 
 %% Wrap any check in a try/catch so one misformed field doesn't take
 %% down the whole verifier — the relevant check just becomes `ok=false,

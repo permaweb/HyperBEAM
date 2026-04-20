@@ -597,13 +597,10 @@ strip_trailing_slash(B) when is_binary(B) ->
 %% node normalises the response. We drop every map-valued field in
 %% the result and keep only JSON-primitive-friendly summaries.
 run_cross_node_verify(Base, Envelope, InlineCa, Opts) ->
-    {Verified, Verdict, Checks} = do_verify_summary(Envelope, InlineCa, Opts),
+    {Verified, Verdict, Checks, CaSource} =
+        do_verify_summary(Envelope, InlineCa, Opts),
     Interp = safe_interpret(Envelope, Opts),
     Summary = summarise_interp(Interp),
-    CaSource = case InlineCa of
-                   undefined -> <<"node_config">>;
-                   _         -> <<"request">>
-               end,
     {ok, #{
         <<"status">> => 200,
         <<"body">> => #{
@@ -617,21 +614,24 @@ run_cross_node_verify(Base, Envelope, InlineCa, Opts) ->
     }}.
 
 do_verify_summary(Envelope, InlineCa, Opts) ->
+    %% Pass both keys through so dev_tpm2:resolve_trusted_ca can
+    %% classify the source itself (and return it to us via body.
+    %% trust_anchor_source). Avoids duplicating the priority rule
+    %% here.
     Req0 = #{<<"envelope">> => Envelope},
     Req  = case InlineCa of
                undefined -> Req0;
                _         -> Req0#{<<"trusted-ca-pem">> => InlineCa}
            end,
     case dev_tpm2:verify(Envelope, Req, Opts) of
-        {ok, #{<<"body">> := #{<<"verified">> := V,
-                               <<"verdict">>  := D,
-                               <<"checks">>   := C}}} ->
-            {V, D, flatten_checks(C)};
-        {ok, #{<<"body">> := #{<<"verified">> := V,
-                               <<"verdict">>  := D}}} ->
-            {V, D, []};
+        {ok, #{<<"body">> := Body}} ->
+            V = maps:get(<<"verified">>, Body, false),
+            D = maps:get(<<"verdict">>, Body, <<"rejected">>),
+            C = maps:get(<<"checks">>, Body, []),
+            S = maps:get(<<"trust_anchor_source">>, Body, <<"node_config">>),
+            {V, D, flatten_checks(C), S};
         _ ->
-            {false, <<"rejected">>, []}
+            {false, <<"rejected">>, [], <<"none">>}
     end.
 
 flatten_checks(Cs) when is_list(Cs) ->
