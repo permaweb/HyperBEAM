@@ -225,7 +225,7 @@ interpret_tpm_identity(E, Db) ->
                     <<"ek_cert_issuer">> =>
                         or_null(maps:get(issuer_rdn, Attrs, undefined)),
                     <<"ek_cert_serial">> =>
-                        or_null(maps:get(serial_hex, Attrs, undefined)),
+                        or_null(maps:get(serial_b64url, Attrs, undefined)),
                     <<"ek_cert_valid_from">> =>
                         or_null(maps:get(valid_from, Attrs, undefined)),
                     <<"ek_cert_valid_to">> =>
@@ -307,10 +307,13 @@ interpret_quote_metadata(E) ->
           RestartCount:32/unsigned-big,
           SafeByte:8, _Rest3/binary>> = Rest2,
         #{
-            <<"magic_hex">> => hexenc(Magic),
+            %% Magic is a 4-byte TCG sentinel (0xFF "TCG"). We don't
+            %% expose the raw bytes — `magic_ok' is the single fact a
+            %% caller needs; an unrecognised magic means the quote is
+            %% not TPM-shaped and `error' is returned instead.
             <<"magic_ok">> => (Magic =:= <<16#FF, "TCG">>),
             <<"attest_type">> => attest_type_name(Type),
-            <<"nonce_b64url">> =>
+            <<"nonce">> =>
                 hb_util:encode(ExtraData),
             <<"clock_ms">> => Clock,
             <<"reset_count">> => ResetCount,
@@ -352,8 +355,11 @@ interpret_one_pcr(Idx, B64) ->
           end,
     Zero = (Raw =:= <<0:256>>) orelse (Raw =:= <<>>),
     #{
-        <<"raw_b64url">> => B64,
-        <<"hex">>        => hexenc(Raw),
+        %% Canonical base64url form, carried through unchanged from the
+        %% attestation envelope. No hex twin: HyperBEAM wire convention
+        %% is base64url everywhere, and the raw digest is well over the
+        %% "short and always-displayed-in-hex" exception threshold.
+        <<"digest">>     => B64,
         <<"role">>       => pcr_role(Idx),
         <<"role_notes">> => pcr_role_notes(Idx),
         <<"is_zero">>    => Zero
@@ -405,13 +411,13 @@ pcr_role_notes(_) -> <<"">>.
 
 interpret_boot_chain(_E, Db, Pcrs) ->
     Profile = match_pcr_profile(Pcrs, Db),
-    Pcr0 = pcr_hex(<<"0">>, Pcrs),
-    Pcr1 = pcr_hex(<<"1">>, Pcrs),
-    Pcr7 = pcr_hex(<<"7">>, Pcrs),
+    Pcr0 = pcr_digest(<<"0">>, Pcrs),
+    Pcr1 = pcr_digest(<<"1">>, Pcrs),
+    Pcr7 = pcr_digest(<<"7">>, Pcrs),
     Base = #{
-        <<"firmware_srtm_hex">> => or_null(Pcr0),
-        <<"platform_firmware_config_hex">> => or_null(Pcr1),
-        <<"secure_boot_policy_hex">> => or_null(Pcr7),
+        <<"firmware_srtm">> => or_null(Pcr0),
+        <<"platform_firmware_config">> => or_null(Pcr1),
+        <<"secure_boot_policy">> => or_null(Pcr7),
         <<"secure_boot_measured">> =>
             %% PCR 7 all-zero => Secure Boot was OFF (or disabled) at
             %% boot. Non-zero => something extended it, likely
@@ -441,7 +447,7 @@ match_pcr_profile(Pcrs, Db) ->
 %% Accept either `match_pcrs' (preferred) or `pcrs' (legacy).
 %% An empty match block doesn't match — callers who want a
 %% documentation-only profile to surface can look at the DB
-%% directly.
+%% directly. Profile digests are base64url strings (no hex).
 profile_matches(Entry, Actual) when is_map(Entry) ->
     Expected =
         case maps:get(<<"match_pcrs">>, Entry, undefined) of
@@ -452,8 +458,8 @@ profile_matches(Entry, Actual) when is_map(Entry) ->
         0 -> false;
         _ ->
             lists:all(
-                fun({PcrKey, ExpHex}) ->
-                    pcr_hex(PcrKey, Actual) == ExpHex
+                fun({PcrKey, ExpectedDigest}) ->
+                    pcr_digest(PcrKey, Actual) == ExpectedDigest
                 end,
                 maps:to_list(Expected))
     end;
@@ -465,9 +471,13 @@ summarise_profile(#{<<"name">> := Name}) ->
     #{<<"name">> => Name};
 summarise_profile(Entry) -> Entry.
 
-pcr_hex(Key, Pcrs) ->
+%% Look up a PCR's base64url digest. Accepts both the new shape
+%% (`digest' key) and any entry that still only has `raw_b64url'
+%% from an older serialisation.
+pcr_digest(Key, Pcrs) ->
     case hb_maps:get(Key, Pcrs, undefined, #{}) of
-        #{<<"hex">> := H} -> H;
+        #{<<"digest">> := D} -> D;
+        #{<<"raw_b64url">> := D} -> D;
         _ -> undefined
     end.
 
@@ -480,13 +490,13 @@ pcr_is_zero(Key, Pcrs) ->
 %%---- Kernel identity ---------------------------------------------------
 
 interpret_kernel(_E, _Db, Pcrs) ->
-    Pcr4 = pcr_hex(<<"4">>, Pcrs),
-    Pcr11 = pcr_hex(<<"11">>, Pcrs),
-    Pcr12 = pcr_hex(<<"12">>, Pcrs),
+    Pcr4 = pcr_digest(<<"4">>, Pcrs),
+    Pcr11 = pcr_digest(<<"11">>, Pcrs),
+    Pcr12 = pcr_digest(<<"12">>, Pcrs),
     #{
-        <<"boot_loader_hex">> => or_null(Pcr4),
-        <<"uki_image_hex">> => or_null(Pcr11),
-        <<"uki_cmdline_hex">> => or_null(Pcr12),
+        <<"boot_loader">> => or_null(Pcr4),
+        <<"uki_image">> => or_null(Pcr11),
+        <<"uki_cmdline">> => or_null(Pcr12),
         <<"uki_measured">> =>
             (not pcr_is_zero(<<"11">>, Pcrs))
                 orelse (not pcr_is_zero(<<"12">>, Pcrs))
@@ -498,10 +508,10 @@ interpret_ima(_E, _Db, Pcrs) ->
     %% Without the firmware/IMA event log (which we don't transport
     %% end-to-end today — a gap noted in SECURITY.md item 8), we can
     %% only report the PCR 10 final value + whether IMA was active.
-    Pcr10 = pcr_hex(<<"10">>, Pcrs),
+    Pcr10 = pcr_digest(<<"10">>, Pcrs),
     Active = not pcr_is_zero(<<"10">>, Pcrs),
     #{
-        <<"pcr10_hex">> => or_null(Pcr10),
+        <<"pcr10">> => or_null(Pcr10),
         <<"active">> => Active,
         <<"events_available">> => false,
         <<"note">> =>
@@ -580,7 +590,7 @@ decode_pub_key(Pem) when is_binary(Pem) ->
 tpm_attrs_from_cert(#'OTPCertificate'{tbsCertificate = Tbs}) ->
     Subject = rdn_to_binary(Tbs#'OTPTBSCertificate'.subject),
     Issuer  = rdn_to_binary(Tbs#'OTPTBSCertificate'.issuer),
-    Serial  = serial_hex(Tbs#'OTPTBSCertificate'.serialNumber),
+    Serial  = serial_b64url(Tbs#'OTPTBSCertificate'.serialNumber),
     {From, To} = validity(Tbs#'OTPTBSCertificate'.validity),
     Exts = case Tbs#'OTPTBSCertificate'.extensions of
         asn1_NOVALUE -> [];
@@ -593,7 +603,7 @@ tpm_attrs_from_cert(#'OTPCertificate'{tbsCertificate = Tbs}) ->
             #{
                 subject_rdn => Subject,
                 issuer_rdn => Issuer,
-                serial_hex => Serial,
+                serial_b64url => Serial,
                 valid_from => From,
                 valid_to   => To
             },
@@ -644,9 +654,22 @@ format_time({utcTime, S}) -> list_to_binary(S);
 format_time({generalTime, S}) -> list_to_binary(S);
 format_time(_) -> undefined.
 
-serial_hex(N) when is_integer(N) ->
-    iolist_to_binary(io_lib:format("~.16B", [N]));
-serial_hex(_) -> undefined.
+%% X.509 certificate serial numbers are positive integers up to 20
+%% bytes long. We encode them as the minimal big-endian byte string
+%% and base64url, matching the HyperBEAM wire convention. (OpenSSL
+%% conventionally prints them as colon-separated hex; callers who
+%% need that presentation can decode + format locally.)
+serial_b64url(N) when is_integer(N), N >= 0 ->
+    hb_util:encode(int_to_bigendian_bytes(N));
+serial_b64url(_) -> undefined.
+
+int_to_bigendian_bytes(0) -> <<0>>;
+int_to_bigendian_bytes(N) when is_integer(N), N > 0 ->
+    int_to_bigendian_bytes(N, <<>>).
+
+int_to_bigendian_bytes(0, Acc) -> Acc;
+int_to_bigendian_bytes(N, Acc) ->
+    int_to_bigendian_bytes(N bsr 8, <<(N band 16#FF):8, Acc/binary>>).
 
 %%% Walk the extensions and pull out any TPM-specific attributes.
 extract_san_attrs(Exts) ->
@@ -731,10 +754,6 @@ extract_spec_fields(_) -> {undefined, undefined, undefined}.
 %%%============================================================================
 %%% Misc helpers
 %%%============================================================================
-
-hexenc(B) when is_binary(B) ->
-    string:lowercase(binary:encode_hex(B));
-hexenc(_) -> <<>>.
 
 %% Walk a nested-key path through a map. The map may have keys as
 %% either atoms or binaries depending on whether we are reading a

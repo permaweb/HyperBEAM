@@ -1,7 +1,7 @@
 {
     "name": "EXAMPLE — Framework Laptop 13 (AMD Ryzen 7040, InsydeH2O firmware)",
     "match_pcrs": {
-        "0": "0000000000000000000000000000000000000000000000000000000000000000"
+        "0": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     },
     "attributes": {
         "platform_vendor": "Framework",

@@ -12,9 +12,24 @@ actually composes. It should never be shipped as evidence that LapEE
 works end-to-end.
 
 The real implementation lives in the parent directory alongside this
-one: `buildroot-external/`, `lapee-init/`, `lapee-tpm/`, and so on. When
-the real implementation produces an attestation, the verifier in
-`reference-demo/verifier/verifier.py` can still be used to consume it —
-the attestation envelope format is deliberately stable — but the
-verifier is the only piece of this directory that has value beyond
-pedagogy.
+one: `buildroot-external/`, `lapee-init/`, `lapee-tpm/`, the Erlang
+`src/dev_tpm2.erl` / `src/dev_tpm_interpret.erl` devices, and so on.
+
+## Verifier: use `verifier_hb.py`, not `verifier.py`
+
+The current LapEE envelope (v0.3) uses base64url everywhere — the
+HyperBEAM wire convention. The Phase-3 verifier for that schema is
+`reference-demo/verifier/verifier_hb.py`:
+
+```sh
+python3 reference-demo/verifier/verifier_hb.py \
+    out/evidence/att-baseline.json \
+    out/evidence/ca-baseline.crt
+```
+
+The older `verifier.py` + `hyperbeam_node.py` in this directory target
+the **Phase-1 hex-encoded schema** and are kept only for pedagogy —
+they cannot consume an output from `src/dev_tpm2.erl` today. If you
+want to reimplement the LapEE verifier in another language, start from
+`verifier_hb.py`: the envelope it parses is the one the real HB device
+produces.

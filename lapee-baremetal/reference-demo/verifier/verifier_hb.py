@@ -59,6 +59,14 @@ def b64url_decode(s):
     return base64.urlsafe_b64decode(s + pad)
 
 
+def _b64u(b: bytes) -> str:
+    """Encode raw bytes as HyperBEAM-wire base64url (no padding).
+    Used only in diagnostic output — matches the encoding of every
+    binary on the HB wire, so a human reading a verifier message
+    can copy/paste directly against `/attestation' output."""
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+
 def _verify_cert_chain(ek_pem, ca_path):
     with tempfile.NamedTemporaryFile(suffix=".pem", mode="w", delete=False) as f:
         f.write(ek_pem)
@@ -107,8 +115,8 @@ def _verify_quote_openssl(envelope):
     extra = quoted[off:off + ed_size]; off += ed_size
     if extra != nonce:
         return Check("TPM2_Quote extraData == nonce",
-                     False, f"extraData={extra.hex()[:16]}... "
-                            f"nonce={nonce.hex()[:16]}...")
+                     False, f"extraData={_b64u(extra)[:22]}… "
+                            f"nonce={_b64u(nonce)[:22]}…")
     off += 17 + 8
     n_sel = int.from_bytes(quoted[off:off + 4], "big"); off += 4
     for _ in range(n_sel):
@@ -128,8 +136,8 @@ def _verify_quote_openssl(envelope):
     if claimed_digest != m.digest():
         return Check("Quote pcrDigest matches reported PCR values",
                      False,
-                     f"quote={claimed_digest.hex()[:16]} vs "
-                     f"computed={m.digest().hex()[:16]}")
+                     f"quote={_b64u(claimed_digest)[:22]} vs "
+                     f"computed={_b64u(m.digest())[:22]}")
     return Check("TPM2_Quote signature + pcrDigest + nonce all valid",
                  True, "OpenSSL PSS + TPMS_ATTEST parse ok")
 
@@ -150,8 +158,8 @@ def _verify_pcr15_replay(envelope):
     return Check(
         "Runtime event log replay of PCR 15 matches quoted value",
         ok,
-        f"{len(events)} PCR-15 event(s); replay={pcr.hex()[:16]}... "
-        f"quote={quoted.hex()[:16]}..."
+        f"{len(events)} PCR-15 event(s); replay={_b64u(pcr)[:22]}… "
+        f"quote={_b64u(quoted)[:22]}…"
     )
 
 
@@ -247,9 +255,7 @@ def main():
     print(f"  wallet_address    : {envelope.get('wallet_address')}")
     print(f"  node_message_id   : {envelope.get('node_message_id')}")
     q15 = envelope['tpm_quote']['pcr_values'].get('15')
-    print(f"  quoted pcr15 (b64): {q15}")
-    if q15:
-        print(f"  quoted pcr15 (hex): {b64url_decode(q15).hex()}")
+    print(f"  quoted pcr15      : {q15}")
     print()
     results = verify(envelope, ca)
     for r in results:

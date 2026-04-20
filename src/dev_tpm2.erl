@@ -86,8 +86,9 @@ info(_Base, _Req, _Opts) ->
                 },
                 <<"response">> =>
                     <<"`#{<<\"status\">> => 200, <<\"body\">> => "
-                      "#{<<\"pcr\">> => N, <<\"digest\">> => hex, "
-                      "<<\"pcr_after\">> => hex}}'">>
+                      "#{<<\"pcr\">> => N, "
+                      "<<\"digest\">>    => base64url(bytes), "
+                      "<<\"pcr_after\">> => base64url(bytes)}}'">>
             },
             <<"quote">> => #{
                 <<"description">> =>
@@ -99,8 +100,10 @@ info(_Base, _Req, _Opts) ->
                         <<"List of PCR indices to include (defaults to "
                           "[0, 1, 7, 10, 11, 14, 15]).">>,
                     <<"nonce">> =>
-                        <<"Hex- or base64-encoded binary nonce. If absent, "
-                          "a fresh random 32-byte value is generated.">>
+                        <<"base64url-encoded binary nonce (any length). If "
+                          "absent, a fresh random 32-byte value is generated. "
+                          "Hex input is NOT accepted — HyperBEAM wire is "
+                          "base64url everywhere.">>
                 }
             },
             <<"pcr-read">> => #{
@@ -762,14 +765,19 @@ pcr_int(B) when is_binary(B) ->
     catch _:_ -> 0
     end.
 
+%% Nonce convention: base64url-encoded bytes. If the caller passes a
+%% binary that decodes cleanly as base64url we hand the bytes to the
+%% TPM; otherwise we treat the input as the raw bytes directly. Hex
+%% is not supported (HyperBEAM wire convention is base64url
+%% everywhere).
 resolve_nonce(Req) when is_map(Req) ->
     case maps:get(<<"nonce">>, Req, undefined) of
-        undefined -> crypto:strong_rand_bytes(32);
-        Hex when is_binary(Hex), byte_size(Hex) =:= 64 ->
-            try binary:decode_hex(Hex)
-            catch _:_ -> Hex
-            end;
-        Other when is_binary(Other) -> Other
+        undefined ->
+            crypto:strong_rand_bytes(32);
+        B when is_binary(B) ->
+            try hb_util:decode(B)
+            catch _:_ -> B
+            end
     end;
 resolve_nonce(_) -> crypto:strong_rand_bytes(32).
 

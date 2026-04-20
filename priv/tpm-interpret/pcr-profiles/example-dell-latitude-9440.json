@@ -1,8 +1,8 @@
 {
     "name": "EXAMPLE — Dell Latitude 9440 (BIOS 1.14.0)",
     "match_pcrs": {
-        "0": "0000000000000000000000000000000000000000000000000000000000000000",
-        "7": "0000000000000000000000000000000000000000000000000000000000000000"
+        "0": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "7": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     },
     "attributes": {
         "platform_vendor": "Dell",
@@ -14,5 +14,5 @@
         "tpm_vendor": "STMicroelectronics ST33TPHF2E",
         "trust_tier": "example_only"
     },
-    "notes": "Shape example. Replace match_pcrs with real values. See README.md."
+    "notes": "Shape example. Replace match_pcrs with real base64url SHA-256 digests (43 chars, no padding) — match the `digest' field on the /pcrs output from a real boot of this hardware."
 }

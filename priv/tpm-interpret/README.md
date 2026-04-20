@@ -18,9 +18,9 @@ Layout:
 {
     "name": "short human label",
     "match_pcrs": {
-        "0": "hex-expected-pcr0",
-        "1": "hex-expected-pcr1",
-        "7": "hex-expected-pcr7"
+        "0": "<base64url-sha256-of-expected-pcr0>",
+        "1": "<base64url-sha256-of-expected-pcr1>",
+        "7": "<base64url-sha256-of-expected-pcr7>"
     },
     "attributes": {
         "platform_vendor": "Lenovo",
@@ -36,6 +36,12 @@ Layout:
 }
 ```
 
+PCR digests in `match_pcrs` are always **base64url-encoded SHA-256
+digests (43 characters, no padding)** — the same encoding the
+`~tpm-interpret@1.0/pcrs` output produces for each PCR's `digest`
+field, and the same convention used by every other binary value on
+the HyperBEAM wire. *Never* hex.
+
 `match_pcrs` need not cover every PCR; a profile matches when *all*
 keys it lists match the quoted values. So one profile can pin just
 PCR 0 + PCR 7 and leave PCR 1 free for kernel-command-line variance.
@@ -43,8 +49,12 @@ PCR 0 + PCR 7 and leave PCR 1 free for kernel-command-line variance.
 ## Contributing new profiles
 
 1. Boot the target hardware into a trusted state.
-2. `cat /sys/class/tpm/tpm0/pcr-sha256/0` etc. (or run
-   `~tpm2@2.0a/pcr-read` from a local HB).
+2. Run `GET /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0` against
+   the node and copy the `digest` values straight out of the `pcrs`
+   section of the response. They are already base64url.
+   (If you are measuring outside HB: the raw 32-byte SHA-256 digest
+   passed through `hb_util:encode/1` or Python's
+   `base64.urlsafe_b64encode(d).rstrip(b"=")`.)
 3. Fill in the JSON and drop it in `pcr-profiles/`.
 4. The matcher picks the first entry that matches all listed PCRs,
    so order of file inclusion doesn't matter for correctness — but

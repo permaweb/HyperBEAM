@@ -84,7 +84,7 @@ for k in ('algorithm','key_size_bits','public_exponent',
 print()
 print('--- Quote metadata ---')
 for k in ('magic_ok','attest_type','clock_ms','reset_count',
-         'restart_count','safe','nonce_b64url'):
+         'restart_count','safe','nonce'):
     say('quote', k)
 
 print()
@@ -95,23 +95,26 @@ for key, e in sorted([(k, v) for k, v in pcrs.items()
                      key=lambda kv: int(kv[0])):
     role = e.get('role', '')
     z = 'zero' if e.get('is_zero') in (True, 'true') else 'set '
-    h = (e.get('hex') or '')[:16]
-    print(f'  PCR {key:>2} ({z}): {role:<35} {h}...')
+    # PCR digests are base64url (HyperBEAM wire convention). Print the
+    # first 22 chars — enough to eyeball-compare between runs without
+    # wrapping.
+    d = (e.get('digest') or '')[:22]
+    print(f'  PCR {key:>2} ({z}): {role:<35} {d}…')
 
 print()
 print('--- Boot chain ---')
-for k in ('secure_boot_measured','secure_boot_policy_hex',
-         'firmware_srtm_hex','match'):
+for k in ('secure_boot_measured','secure_boot_policy',
+         'firmware_srtm','match'):
     say('boot', k)
 
 print()
 print('--- Kernel ---')
-for k in ('uki_measured','uki_image_hex','boot_loader_hex'):
+for k in ('uki_measured','uki_image','boot_loader'):
     say('kernel', k)
 
 print()
 print('--- IMA ---')
-for k in ('active','pcr10_hex','note'):
+for k in ('active','pcr10','note'):
     say('ima', k)
 
 print()
