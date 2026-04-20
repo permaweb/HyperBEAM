@@ -1664,7 +1664,8 @@ get_index_store(Opts) ->
     end.
 
 %% @doc Scan the mempool and index any accessible unconfirmed TXs.
-index_mempool(_Request, Opts) ->
+index_mempool(Request, Opts) ->
+    SenderFilter = mempool_sender_filter(Request, Opts),
     case dev_arweave:pending(#{}, #{}, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
             mempool_progress(
@@ -1672,7 +1673,7 @@ index_mempool(_Request, Opts) ->
                 {mempool_scan_started, {pending_count, length(TXIDs)}}
             ),
             Results = parallel_map(TXIDs,
-                fun(TXID) -> index_mempool_tx(TXID, Opts) end, Opts),
+                fun(TXID) -> index_mempool_tx(TXID, SenderFilter, Opts) end, Opts),
             Summary = lists:foldl(
                 fun mempool_accumulate_result/2,
                 mempool_empty_summary(),
@@ -1687,6 +1688,23 @@ mempool_progress(Opts, Event) ->
     case hb_opts:get(arweave_mempool_progress, false, Opts) of
         true -> ?event(copycat_short, Event);
         false -> ok
+    end.
+
+mempool_sender_filter(Request, Opts) ->
+    case hb_maps:find(<<"sender">>, Request, Opts) of
+        {ok, Sender} when is_binary(Sender) ->
+            normalize_sender_filter(Sender);
+        _ ->
+            not_found
+    end.
+
+normalize_sender_filter(Sender) when is_binary(Sender) ->
+    case byte_size(Sender) of
+        32 -> hb_util:human_id(Sender);
+        42 -> Sender;
+        43 -> Sender;
+        44 -> Sender;
+        _ -> Sender
     end.
 
 mempool_empty_summary() ->
@@ -1711,6 +1729,8 @@ mempool_accumulate_result(Result, Acc) ->
 
 mempool_result_summary(existing) ->
     (mempool_empty_summary())#{ existing => 1 };
+mempool_result_summary(filtered) ->
+    mempool_empty_summary();
 mempool_result_summary(indexed) ->
     (mempool_empty_summary())#{ indexed => 1 };
 mempool_result_summary(missing_data) ->
@@ -1733,44 +1753,14 @@ mempool_result_summary(#{ status := Status } = Result) ->
 mempool_result_summary(_) ->
     (mempool_empty_summary())#{ failed => 1 }.
 
-index_mempool_tx(TXID, Opts) ->
+index_mempool_tx(TXID, SenderFilter, Opts) ->
     mempool_progress(Opts, {mempool_tx_started, {tx_id, {explicit, TXID}}}),
     Result =
-        case is_tx_indexed(TXID, Opts) of
-            true -> existing;
-            false ->
-                mempool_progress(
-                    Opts,
-                    {mempool_tx_header_fetch_started, {tx_id, {explicit, TXID}}}
-                ),
-                case dev_arweave:pending(
-                    #{},
-                    #{ <<"pending">> => TXID },
-                    Opts#{ exclude_data => true }
-                ) of
-                    {ok, StructuredTX} ->
-                        mempool_progress(
-                            Opts,
-                            {mempool_tx_header_fetch_finished,
-                                {tx_id, {explicit, TXID}}}
-                        ),
-                        TX = hb_message:convert(
-                            StructuredTX,
-                            <<"tx@1.0">>,
-                            <<"structured@1.0">>,
-                            Opts
-                        ),
-                        mempool_progress(
-                            Opts,
-                            {mempool_tx_convert_finished,
-                                {tx_id, {explicit, TXID}},
-                                {data_size, TX#tx.data_size},
-                                {bundle, is_bundle_tx(TX, Opts)}}
-                        ),
-                        write_mempool_offsets(TXID, TX, Opts);
-                    _ ->
-                        failed
-                end
+        case SenderFilter of
+            not_found ->
+                index_mempool_tx_unfiltered(TXID, Opts);
+            _ ->
+                index_mempool_tx_filtered(TXID, SenderFilter, Opts)
         end,
     mempool_progress(
         Opts,
@@ -1780,8 +1770,69 @@ index_mempool_tx(TXID, Opts) ->
     ),
     Result.
 
+index_mempool_tx_unfiltered(TXID, Opts) ->
+    case is_tx_indexed(TXID, Opts) of
+        true -> existing;
+        false ->
+            case load_mempool_tx_header(TXID, Opts) of
+                {ok, TX} -> write_mempool_offsets(TXID, TX, Opts);
+                error -> failed
+            end
+    end.
+
+index_mempool_tx_filtered(TXID, SenderFilter, Opts) ->
+    case load_mempool_tx_header(TXID, Opts) of
+        {ok, TX} ->
+            case mempool_tx_sender_matches(TX, SenderFilter) of
+                false -> filtered;
+                true ->
+                    case is_tx_indexed(TXID, Opts) of
+                        true -> existing;
+                        false -> write_mempool_offsets(TXID, TX, Opts)
+                    end
+            end;
+        error ->
+            failed
+    end.
+
+load_mempool_tx_header(TXID, Opts) ->
+    mempool_progress(
+        Opts,
+        {mempool_tx_header_fetch_started, {tx_id, {explicit, TXID}}}
+    ),
+    case dev_arweave:pending(
+        #{},
+        #{ <<"pending">> => TXID },
+        Opts#{ exclude_data => true }
+    ) of
+        {ok, StructuredTX} ->
+            mempool_progress(
+                Opts,
+                {mempool_tx_header_fetch_finished,
+                    {tx_id, {explicit, TXID}}}
+            ),
+            TX = hb_message:convert(
+                StructuredTX,
+                <<"tx@1.0">>,
+                <<"structured@1.0">>,
+                Opts
+            ),
+            mempool_progress(
+                Opts,
+                {mempool_tx_convert_finished,
+                    {tx_id, {explicit, TXID}},
+                    {data_size, TX#tx.data_size},
+                    {bundle, is_bundle_tx(TX, Opts)}}
+            ),
+            {ok, TX};
+        _ ->
+            error
+    end.
+
 mempool_progress_result(existing) ->
     {status, existing};
+mempool_progress_result(filtered) ->
+    {status, filtered};
 mempool_progress_result(indexed) ->
     {status, indexed};
 mempool_progress_result(missing_data) ->
@@ -1794,6 +1845,12 @@ mempool_progress_result(#{ status := Status }) ->
     {status, Status};
 mempool_progress_result(_) ->
     {status, failed}.
+
+mempool_tx_sender_matches(TX, SenderFilter) ->
+    case ar_tx:get_owner_address(TX) of
+        not_set -> false;
+        OwnerAddress -> normalize_sender_filter(OwnerAddress) =:= SenderFilter
+    end.
 
 write_mempool_offsets(TXID, TX, Opts) ->
     Store = hb_store_arweave:store_from_opts(Opts),
