@@ -24,6 +24,23 @@ if ! curl -fsS -m 5 "$PEER/~meta@1.0/info" -o /dev/null; then
     exit 1
 fi
 
+# Refresh the four `format~hyperbuddy@1.0' AO-Core message trees so
+# the dashboard can embed them as the "full picture" views. Silent
+# failures are fine — the dashboard degrades gracefully if any of
+# the four aren't available.
+mkdir -p out/evidence
+for pair in \
+    'attestation:/~tpm2@2.0a/attestation/format~hyperbuddy@1.0&truncate-keys=1000' \
+    'interpret:/~tpm2@2.0a/attestation/interpret~tpm-interpret@1.0/format~hyperbuddy@1.0&truncate-keys=1000' \
+    'events:/~tpm2@2.0a/attestation/events~tpm-interpret@1.0/format~hyperbuddy@1.0&truncate-keys=1000' \
+    'claim:/~tpm2@2.0a/attestation/claim~tpm-interpret@1.0/format~hyperbuddy@1.0&truncate-keys=1000' \
+; do
+    label=${pair%%:*}
+    path=${pair#*:}
+    curl -fsS -m 60 "${PEER}${path}" \
+        -o "out/evidence/hyperbuddy-${label}.txt" 2>/dev/null || true
+done
+
 echo "============================================================"
 echo "=== GET ${PEER}/~tpm2@2.0a/attestation/events~tpm-interpret@1.0"
 echo "============================================================"
