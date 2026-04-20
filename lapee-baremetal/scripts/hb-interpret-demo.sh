@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
 # hb-interpret-demo.sh — end-to-end demo of `~tpm-interpret@1.0'.
 #
-# Assumes the LapEE guest is running (either via `make hb-boot
-# --keep-alive' or because you just finished `make hb-all').
+# Uses the chain URL that matches the user's documented paper-ready
+# pattern:
 #
-# Flow:
-#   1. POST the baseline attestation envelope (from out/evidence/) to
-#      /~tpm-interpret@1.0/verify on the same node.
-#   2. Print the returned interpretation — verdict, checks, and the
-#      rich per-section fields (tpm / ak / quote / pcrs / boot /
-#      kernel / ima / node).
-#   3. Same for a tampered envelope, showing the interpret pathway
-#      ALSO fires on rejected input (so a caller sees both the
-#      rejection reason and the structured description).
+#     ~relay@1.0/call&relay-path="http://PEER/~tpm2@2.0a/attestation"
+#         /verify~tpm-interpret@1.0
 #
-# Uses the same content-negotiation as the rest of the flow:
-#   accept: application/json@1.0 + accept-bundle: true.
+# Here we call the LOCAL HB as both the peer and the verifier (so
+# the demo doesn't need a relay route configured). The semantics are
+# identical: `attestation' is resolved first, its result is piped
+# into `verify' with device ~tpm-interpret@1.0.
+#
+# Prints the returned `verified' / `verdict' / `checks', then the
+# rich per-section interpretation (tpm / ak / quote / pcrs / boot /
+# kernel / ima / node).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PORT=${PORT:-18734}
 PEER=${PEER:-"http://127.0.0.1:${PORT}"}
-ENV=${ENV:-/tmp/lapee-interpret-demo-envelope.json}
 
 # Sanity: is HB actually up?
 if ! curl -fsS -m 5 "$PEER/~meta@1.0/info" -o /dev/null; then
@@ -30,141 +28,96 @@ if ! curl -fsS -m 5 "$PEER/~meta@1.0/info" -o /dev/null; then
     exit 1
 fi
 
-# Fetch a fresh envelope from the live guest so the shapes match
-# the HB version running right now (avoids stale hex vs base64url
-# schema drift).
-echo "=== fetching fresh attestation from $PEER ==="
-curl -fsS -m 180 \
-    -H 'accept: application/json@1.0' -H 'accept-bundle: true' \
-    "$PEER/~tpm2@2.0a/attestation" -o "$ENV" \
-    -w 'HTTP=%{http_code} SIZE=%{size_download}\n'
-
 echo "============================================================"
-echo "=== verify + interpret (baseline)"
+echo "=== GET ${PEER}/~tpm2@2.0a/attestation/verify~tpm-interpret@1.0"
 echo "============================================================"
 curl -fsS -m 180 \
     -H 'accept: application/json@1.0' \
     -H 'accept-bundle: true' \
-    -H 'content-type: application/json' \
-    --data-binary @"$ENV" \
-    "$PEER/~tpm-interpret@1.0/verify" \
-  | python3 -c "
-import json, sys
-r = json.load(sys.stdin)
+    "$PEER/~tpm2@2.0a/attestation/verify~tpm-interpret@1.0" \
+    -o /tmp/hb-interpret-result.json \
+    -w 'HTTP=%{http_code} SIZE=%{size_download} TIME=%{time_total}\n'
+
+echo ""
+python3 <<'PY'
+import json
+r = json.load(open('/tmp/hb-interpret-result.json'))
 b = r.get('body', r)
+
 print('verified:', b.get('verified'), '| verdict:', b.get('verdict'))
-checks = b.get('checks') or []
-if isinstance(checks, list):
-    for c in checks:
-        if isinstance(c, dict):
-            mark = 'OK ' if c.get('ok') else 'XX '
-            name = (c.get('name') or '')[:55]
-            det = (str(c.get('detail')) or '')[:60]
-            print(f'  {mark}| {name:<55} -> {det}')
+print()
+print('--- verifier checks ---')
+for c in (b.get('checks') or []):
+    if isinstance(c, dict):
+        mark = 'OK ' if (c.get('ok') in (True, 'true')) else 'XX '
+        name = (c.get('name') or '')[:55]
+        det = (str(c.get('detail')) or '')[:60]
+        print(f'  {mark}| {name:<55} -> {det}')
 
 interp = b.get('interpretation') or {}
+
+def say(section, key):
+    v = (interp.get(section) or {}).get(key)
+    if v not in (None, 'null'):
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v)[:100]
+        print(f'  {key:<30} {v}')
+
+print()
+print('--- envelope ---')
+for k in ('version','issued_at_unix','wallet_address','node_message_id'):
+    say('envelope', k)
+
 print()
 print('--- TPM identity ---')
 for k in ('manufacturer_id','manufacturer_name','manufacturer_kind',
          'model','firmware_version','spec_family','spec_level',
-         'spec_revision','ek_cert_issuer'):
-    v = interp.get('tpm', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
+         'spec_revision','ek_cert_issuer','ek_cert_serial'):
+    say('tpm', k)
+
 print()
 print('--- AK ---')
-for k in ('algorithm','key_size_bits','public_exponent','pub_der_sha256_b64url'):
-    v = interp.get('ak', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
+for k in ('algorithm','key_size_bits','public_exponent',
+         'pub_der_sha256_b64url'):
+    say('ak', k)
+
 print()
 print('--- Quote metadata ---')
-for k in ('magic_ok','attest_type','clock_ms','reset_count','restart_count','safe'):
-    v = interp.get('quote', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
+for k in ('magic_ok','attest_type','clock_ms','reset_count',
+         'restart_count','safe','nonce_b64url'):
+    say('quote', k)
+
 print()
 print('--- PCR roles ---')
-for key, e in sorted((interp.get('pcrs') or {}).items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 99):
-    role = e.get('role')
-    z = 'zero' if e.get('is_zero') else 'set'
+pcrs = interp.get('pcrs') or {}
+for key, e in sorted([(k, v) for k, v in pcrs.items()
+                      if isinstance(v, dict) and k.isdigit()],
+                     key=lambda kv: int(kv[0])):
+    role = e.get('role', '')
+    z = 'zero' if e.get('is_zero') in (True, 'true') else 'set '
     h = (e.get('hex') or '')[:16]
     print(f'  PCR {key:>2} ({z}): {role:<35} {h}...')
+
 print()
 print('--- Boot chain ---')
-for k in ('secure_boot_measured','match'):
-    v = interp.get('boot', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v if not isinstance(v, dict) else v.get(\"name\",\"(matched)\")}')
+for k in ('secure_boot_measured','secure_boot_policy_hex',
+         'firmware_srtm_hex','match'):
+    say('boot', k)
+
 print()
 print('--- Kernel ---')
-for k in ('uki_measured','uki_image_hex'):
-    v = interp.get('kernel', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
+for k in ('uki_measured','uki_image_hex','boot_loader_hex'):
+    say('kernel', k)
+
 print()
 print('--- IMA ---')
-for k in ('active','note'):
-    v = interp.get('ima', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
+for k in ('active','pcr10_hex','note'):
+    say('ima', k)
+
 print()
 print('--- Node identity ---')
 for k in ('wallet_address','node_message_id','node_message_key_count',
-         'on_start_hook_device','pcr15_event_count'):
-    v = interp.get('node', {}).get(k)
-    if v is not None:
-        print(f'  {k}: {v}')
-"
-
-echo ""
-echo "============================================================"
-echo "=== verify + interpret (TAMPERED — signature byte flipped)"
-echo "============================================================"
-python3 -c "
-import json, base64, sys
-r = json.load(open('$ENV'))
-# Unwrap HB's {status,body,commitments} if needed.
-env = r.get('body', r) if 'lapee_attestation_version' not in r else r
-if 'lapee_attestation_version' not in env:
-    print('ERROR: fetched envelope has no lapee_attestation_version', file=sys.stderr)
-    sys.exit(2)
-sig = env['tpm_quote'].get('signature') or env['tpm_quote'].get('signature_b64')
-pad = '=' * (-len(sig) % 4)
-try:
-    raw = bytearray(base64.urlsafe_b64decode(sig + pad))
-except Exception:
-    raw = bytearray(base64.b64decode(sig + pad))
-raw[0] ^= 0xFF
-encoded = base64.urlsafe_b64encode(bytes(raw)).rstrip(b'=').decode()
-if 'signature' in env['tpm_quote']:
-    env['tpm_quote']['signature'] = encoded
-else:
-    env['tpm_quote']['signature_b64'] = encoded
-json.dump(env, open('/tmp/hb-interpret-tampered.json','w'))
-"
-
-curl -fsS -m 180 \
-    -H 'accept: application/json@1.0' \
-    -H 'accept-bundle: true' \
-    -H 'content-type: application/json' \
-    --data-binary @/tmp/hb-interpret-tampered.json \
-    "$PEER/~tpm-interpret@1.0/verify" \
-  | python3 -c "
-import json, sys
-r = json.load(sys.stdin)
-b = r.get('body', r)
-print('verified:', b.get('verified'), '| verdict:', b.get('verdict'))
-for c in (b.get('checks') or []):
-    if isinstance(c, dict):
-        mark = 'OK ' if c.get('ok') else 'XX '
-        name = (c.get('name') or '')[:55]
-        det = (str(c.get('detail')) or '')[:60]
-        print(f'  {mark}| {name:<55} -> {det}')
-# Interpretation was still generated despite rejection.
-i = b.get('interpretation') or {}
-print()
-print('interpretation still produced for rejected envelope:',
-      list(i.keys())[:6])
-print('  tpm.manufacturer_name:', i.get('tpm', {}).get('manufacturer_name'))
-"
+         'on_start_hook_device','pcr15_event_count',
+         'pcr15_event_types'):
+    say('node', k)
+PY
