@@ -20,39 +20,35 @@ cd "$(dirname "$0")/.."
 LAPEE=$(pwd)
 
 SRC="$LAPEE/build-hyperbeam/src-edge"
+HB_ROOT="$LAPEE/.."
 
-# If src-edge isn't populated yet, seed it from the HyperBEAM repo
-# that this `lapee-baremetal/' lives inside (the common case when
-# building from a clean checkout of the lapee branch). The bind mount
-# into the Rosetta builder is a COPY, not a symlink, so that `_build/'
-# artefacts don't pollute the parent tree.
-if [[ ! -f "$SRC/rebar.config" ]]; then
-    HB_ROOT="$LAPEE/.."
-    if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
-        echo "=== seeding $SRC from $HB_ROOT (first run) ==="
-        # HyperBEAM's `native/lib/secp256k1/' is a git submodule. The
-        # in-tree Makefile runs `git submodule update' from inside the
-        # builder container, which can't reach the host's worktree
-        # .git/ — initialise the submodule on the host once, before
-        # the rsync, so the builder sees a populated tree.
-        if [[ ! -f "$HB_ROOT/native/lib/secp256k1/CMakeLists.txt" ]]; then
-            echo "=== initialising secp256k1 submodule on host ==="
-            (cd "$HB_ROOT" && git submodule update --init \
-                native/lib/secp256k1 >/dev/null 2>&1) || true
-        fi
-        mkdir -p "$SRC"
-        rsync -a --delete \
-            --exclude='_build/' --exclude='.git/' \
-            --exclude='priv/' --exclude='logs/' --exclude='metrics/' \
-            --exclude='rebar3.crashdump' \
-            "$HB_ROOT/" "$SRC/"
-    else
-        echo "missing HyperBEAM source at $SRC, and parent ($HB_ROOT) does"   >&2
-        echo "not look like a HyperBEAM checkout either. Either populate"    >&2
-        echo "$SRC manually or run this script from inside a HyperBEAM repo" >&2
-        echo "where lapee-baremetal/ is a subdirectory."                     >&2
-        exit 1
+# Always re-seed src-edge from the parent HB repo so edits to src/,
+# native/, etc. on the lapee branch propagate without a manual delete.
+# `_build/' is preserved across seedings (cheap incremental rebar3).
+if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
+    echo "=== seeding $SRC from $HB_ROOT (sync source) ==="
+    # `native/lib/secp256k1/' is a submodule. In-tree Makefile runs
+    # `git submodule update' inside the builder container, which
+    # can't reach the host's worktree .git/ — initialise the
+    # submodule on the host once so the builder sees a populated
+    # tree.
+    if [[ ! -f "$HB_ROOT/native/lib/secp256k1/CMakeLists.txt" ]]; then
+        echo "=== initialising secp256k1 submodule on host ==="
+        (cd "$HB_ROOT" && git submodule update --init \
+            native/lib/secp256k1 >/dev/null 2>&1) || true
     fi
+    mkdir -p "$SRC"
+    rsync -a \
+        --exclude='_build/' --exclude='.git/' \
+        --exclude='priv/' --exclude='logs/' --exclude='metrics/' \
+        --exclude='rebar3.crashdump' \
+        "$HB_ROOT/" "$SRC/"
+elif [[ ! -f "$SRC/rebar.config" ]]; then
+    echo "missing HyperBEAM source at $SRC, and parent ($HB_ROOT) does"   >&2
+    echo "not look like a HyperBEAM checkout either. Either populate"    >&2
+    echo "$SRC manually or run this script from inside a HyperBEAM repo" >&2
+    echo "where lapee-baremetal/ is a subdirectory."                     >&2
+    exit 1
 fi
 
 # Kill any dangling build container.
