@@ -1,24 +1,12 @@
 #!/usr/bin/env bash
-# hb-tamper-test.sh — negative completeness check for the verifier.
-# Starts with a valid envelope (out/evidence/att-baseline.json) and
-# produces ~N tampered variants, confirming that the verifier
-# REJECTS each one. This is what gives us confidence the verifier is
-# actually checking the chain, rather than just rubber-stamping a
-# well-formed JSON blob.
+# hb-tamper-test.sh — completeness test for the verifier.
 #
-# Variants:
-#   1. Flip one byte in the TPM2_Quote signature           → quote sig fails
-#   2. Flip one byte in the `quoted' blob                  → quote sig fails
-#   3. Flip the reported PCR 15 value                      → pcrDigest mismatch
-#   4. Change `nonce_hex' to a different nonce             → extraData mismatch
-#   5. Change the single event-log entry's digest_sha256   → PCR 15 replay fail
-#   6. Change `node_message_id_hex'                        → binding check fails
-#   7. Replace EK cert PEM with a self-signed cert for the same key
-#                                                          → CA chain fails
+# Starts with a valid envelope and produces seven targeted
+# byte-flipped variants, one per verifier check. Runs the Python
+# verifier on each; non-zero exit is required. Exit 0 iff all seven
+# are correctly rejected.
 #
-# Each variant is written under out/acceptance/tamper/*.json; the
-# verifier is invoked on each; a non-zero exit from verifier is
-# expected and counted as PASS for this script.
+# Uses the v0.3 AO-Core schema (base64url binaries, unwrapped body).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,7 +21,6 @@ if [[ ! -f "$BASE" || ! -f "$CA" ]]; then
     exit 1
 fi
 
-# First confirm the BASE passes.
 echo "=== sanity: baseline envelope should ACCEPT ==="
 python3 "$VERIFIER" "$BASE" "$CA" >/dev/null
 echo "baseline accepted ✓"
@@ -48,38 +35,46 @@ run_variant() {
     echo "=== tamper: $name"
     echo "============================================================"
     python3 - "$BASE" "$out" <<PY
-import json, sys, base64, os
+import json, sys, base64
 base_path, out_path = sys.argv[1], sys.argv[2]
-env = json.load(open(base_path))
+raw = json.load(open(base_path))
+# Envelope lives under body in the HB response wrapper; accept
+# both shapes.
+env = raw if "lapee_attestation_version" in raw else raw.get("body", raw)
 
-def flip_first_byte_of_b64(s):
-    raw = bytearray(base64.b64decode(s))
+def b64url_decode(s):
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+def b64url_encode(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+def flip_first_byte_b64url(s):
+    raw = bytearray(b64url_decode(s))
     raw[0] ^= 0xFF
-    return base64.b64encode(bytes(raw)).decode()
-
-def flip_first_hex_byte(h):
-    b = bytearray.fromhex(h)
-    b[0] ^= 0xFF
-    return b.hex()
+    return b64url_encode(bytes(raw))
 
 $script
 
-json.dump(env, open(out_path, "w"), indent=2)
+# Re-wrap if original was wrapped.
+if raw is not env:
+    raw["body"] = env
+    json.dump(raw, open(out_path, "w"), indent=2)
+else:
+    json.dump(env, open(out_path, "w"), indent=2)
 print(f"wrote {out_path}")
 PY
 
-    # Run verifier — we EXPECT failure. Capture exit code.
+    # Run verifier; we EXPECT failure.
     if python3 "$VERIFIER" "$out" "$CA" >/tmp/tamper-output.txt 2>&1; then
         echo "FAIL: verifier ACCEPTED tampered envelope '$name'"
         tail -20 /tmp/tamper-output.txt
         return 1
     fi
-    # Verifier exited non-zero — expected. Show the failing check line.
     FAILED=$(grep '^\[FAIL\]' /tmp/tamper-output.txt | head -1)
     if [[ -n "$FAILED" ]]; then
         echo "PASS: verifier rejected — $FAILED"
     else
-        # No [FAIL] line; show the verdict.
         VERDICT=$(grep 'VERDICT:' /tmp/tamper-output.txt | head -1)
         echo "PASS: verifier rejected — $VERDICT"
     fi
@@ -89,42 +84,37 @@ PY
 ALL_OK=1
 
 run_variant flip-signature '
-env["tpm_quote"]["signature_b64"] = flip_first_byte_of_b64(env["tpm_quote"]["signature_b64"])
+env["tpm_quote"]["signature"] = flip_first_byte_b64url(env["tpm_quote"]["signature"])
 ' || ALL_OK=0
 
 run_variant flip-quoted '
-env["tpm_quote"]["quoted_b64"] = flip_first_byte_of_b64(env["tpm_quote"]["quoted_b64"])
+env["tpm_quote"]["quoted"] = flip_first_byte_b64url(env["tpm_quote"]["quoted"])
 ' || ALL_OK=0
 
 run_variant flip-pcr15-reported '
-env["tpm_quote"]["pcr_values"]["15"] = flip_first_hex_byte(env["tpm_quote"]["pcr_values"]["15"])
+env["tpm_quote"]["pcr_values"]["15"] = flip_first_byte_b64url(env["tpm_quote"]["pcr_values"]["15"])
 ' || ALL_OK=0
 
 run_variant swap-nonce '
-env["tpm_quote"]["nonce_hex"] = "deadbeef" * 4
+env["tpm_quote"]["nonce"] = b64url_encode(b"\xde\xad\xbe\xef" * 8)
 ' || ALL_OK=0
 
 run_variant flip-event-digest '
 for e in env["runtime_event_log"]:
     if int(e["pcr"]) == 15:
-        e["digest_sha256"] = flip_first_hex_byte(e["digest_sha256"])
+        e["digest"] = flip_first_byte_b64url(e["digest"])
         break
 ' || ALL_OK=0
 
 run_variant flip-node-id '
-env["node_message_id_hex"] = flip_first_hex_byte(env["node_message_id_hex"])
+env["node_message_id"] = flip_first_byte_b64url(env["node_message_id"])
 ' || ALL_OK=0
 
-# EK cert swap: use a throwaway self-signed cert (not chained to our CA).
-python3 - <<'PY'
-import subprocess, sys
-subprocess.check_call([
-    "openssl","req","-x509","-newkey","rsa:2048","-nodes","-days","30",
-    "-subj","/CN=not-a-real-lapee-ca",
-    "-keyout","/tmp/tamper-rogue.key",
-    "-out","/tmp/tamper-rogue.crt",
-], stderr=subprocess.DEVNULL)
-PY
+# Rogue EK cert: throwaway self-signed, not chained to our trust anchor.
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+    -subj "/CN=not-a-real-lapee-ca" \
+    -keyout /tmp/tamper-rogue.key \
+    -out /tmp/tamper-rogue.crt 2>/dev/null
 
 run_variant swap-ek-cert '
 with open("/tmp/tamper-rogue.crt") as f:
