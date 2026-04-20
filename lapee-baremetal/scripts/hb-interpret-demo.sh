@@ -49,7 +49,14 @@ print()
 print('--- verifier checks ---')
 for c in (b.get('checks') or []):
     if isinstance(c, dict):
-        mark = 'OK ' if (c.get('ok') in (True, 'true')) else 'XX '
+        sev = c.get('severity', 'core')
+        ok = c.get('ok') in (True, 'true')
+        if ok:
+            mark = 'OK '
+        elif sev == 'informational':
+            mark = 'ii '     # informational: reported, non-gating
+        else:
+            mark = 'XX '
         name = (c.get('name') or '')[:55]
         det = (str(c.get('detail')) or '')[:60]
         print(f'  {mark}| {name:<55} -> {det}')

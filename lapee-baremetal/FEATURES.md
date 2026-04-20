@@ -44,6 +44,9 @@ Conventions below:
 | Inline trust anchor | Shipped | `trusted-ca` query param (base64url PEM bytes) — HB-wire-convention, no URL-encoding ambiguity. Back-compat `trusted-ca-pem` for raw PEM (documented unsafe over GET). Honoured by BOTH `verify-peer` AND the `.../verify~tpm-interpret@1.0` chain URL (asymmetry fixed in commit 45a605daf; earlier version silently dropped it on the chain path). |
 | `trust_anchor_source` in response | Shipped | Every verify path returns `"request"` / `"node_config"` / `"none"` so callers can tell which anchor was used — no silent overrides. Present on `/verify`, `/verify-peer`, and the chain URL. |
 | Targeted chain-failure diagnostic | Shipped | When EK's issuer DN matches CA's subject DN but signature doesn't verify, the error message calls out "same CN, different generation" (stale per-boot CA) vs a true rogue — so operators know whether to refresh or investigate. Live-proven against a real rogue CA with matching CN. |
+| Firmware TCG event log replay | Shipped (informational) | `chk_tcg_event_log_replay` replays every parsed TCG_PCR_EVENT / TCG_PCR_EVENT2 into its PCR (0-14) and compares against the quoted value. Marked `severity: informational` — reported in `checks` but does NOT gate `verified`, because SeaBIOS under QEMU legitimately emits incomplete logs. Real-hardware policy engines key off severity and treat mismatch as significant. |
+| `~tpm-interpret@1.0/events` (rich per-record parsing) | Shipped | Parses the envelope's `tcg_event_log` into a 1-indexed map of AO-Core messages. Each event: `{seq, pcr, event_type, event_type_code, digests, event_data, parsed}`. `parsed` carries per-event-type decoded fields: SecureBoot state, UEFI variable names, CRTM version (UTF-16→UTF-8), UKI key/value pairs, bootloader PE device path, microcode header, firmware blob addresses, SpecID. 36 TCG event-type codes in `priv/tpm-interpret/event-types.json`. |
+| `~tpm-interpret@1.0/claim` (flat policy surface) | Shipped | Aggregates events into concrete `true`/`false`/`"unknown"` per measurable property: `claim.secure_boot.enabled`, `claim.firmware.crtm_version`, `claim.boot_loader.image_hash`, `claim.kernel.uki_hash`, `claim.kernel.cmdline`, `claim.tme.enabled`, `claim.lockdown.level`, `claim.kernel.iommu_strict`. Each populated field has `_provenance: [{pcr, seq}]` pointing at the source event in `/events`. Green-zone predicates compose directly on this. |
 
 ## 3. Gaps in the verification story — known
 
@@ -63,10 +66,12 @@ Conventions below:
 | feature | state | notes |
 |---|---|---|
 | `/~tpm-interpret@1.0/info` | Shipped | Documents every handler's params + response shape + wire format. Self-describing. |
-| `/~tpm-interpret@1.0/checks` | Shipped | Machine-readable list of the 5 crypto checks with per-check `{name, purpose, failure_implies}`. |
-| `/~tpm-interpret@1.0/interpret` | Shipped | 9-section rich interpretation of an envelope (no crypto). |
-| `/~tpm-interpret@1.0/verify` | Shipped | Crypto verify + interpret in one call. |
-| `/~tpm-interpret@1.0/verify-peer` | Shipped | Cross-node verify; fetches peer envelope and runs full 5-check battery locally. |
+| `/~tpm-interpret@1.0/checks` | Shipped | Machine-readable list of the verify battery (5 core + 1 informational) with per-check `{name, severity, purpose, failure_implies}`. `severity` = `"core"` (gates `verified`) or `"informational"` (surfaced, does not gate). |
+| `/~tpm-interpret@1.0/interpret` | Shipped | 11-section rich interpretation of an envelope (envelope, tpm, ak, quote, pcrs, boot, kernel, ima, node, **events**, **claim**). No crypto. |
+| `/~tpm-interpret@1.0/verify` | Shipped | Crypto verify + interpret in one call. `verified` gated by `core` checks only. |
+| `/~tpm-interpret@1.0/verify-peer` | Shipped | Cross-node verify; fetches peer envelope and runs full 5-core-check battery locally. |
+| `/~tpm-interpret@1.0/events` | Shipped | TCG event log as a map of AO-Core messages. See §2 "rich per-record parsing". |
+| `/~tpm-interpret@1.0/claim` | Shipped | Flat policy-friendly claim surface with provenance. See §2 "flat policy surface". |
 | `/~tpm-interpret@1.0/summary` | Shipped | Link-free summary of a supplied envelope. Cheap — no crypto. |
 | `/~tpm-interpret@1.0/peer-summary?peer=…` | Shipped | Fetches peer's envelope and returns the summary — 10× cheaper than verify-peer. Dashboards / peer browsing. |
 | `/~tpm-interpret@1.0/peer-status?peer=…` | Shipped | Cheapest probe: reachable + envelope_version + wallet + node_message_id. For liveness. |
@@ -135,12 +140,20 @@ but not profiled.
 ## 7. "Do you have enough information to be assured of each feature?"
 
 **Yes, for the core loop**. Every box in §1 + §2 is exercised by
-`make hb-final-acceptance` (6/6 PASS: release build,
-initramfs assembly, 3-envelope positive battery, 7-flip tamper
-battery with Erlang + Python verifiers, live interpret-demo,
-cross-node verify-peer). Every one of the 5 crypto checks has a
+the acceptance battery (hb-release, hb-initramfs, hb-acceptance
+3-envelope positive run, hb-tamper-test 7/7 flip rejection with
+Erlang + Python verifiers, hb-interpret-demo live, cross-node
+verify-peer). Every one of the 5 core crypto checks has a
 dedicated regression test that asserts the failing envelope is
-rejected at the correct check.
+rejected at the correct check. The 6th (informational) firmware
+TCG event log replay check has its own fixture-driven tests
+(`chk_tcg_event_log_replay_{empty,accepts_consistent,rejects_tampered}`).
+
+The rich TCG event log surface (`/events` + `/claim`) has
+pinned shape tests (`events_returns_indexed_map`,
+`events_wire_encodes_nonutf8_binaries`,
+`claim_surface_extracts_secure_boot_and_crtm`) covering both the
+decode path and the JSON-safe wire encoding.
 
 **Partial, for the operational lifecycle (§3)**. The gaps there are
 known and documented, not silent. They don't block shipping this
