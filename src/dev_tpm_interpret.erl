@@ -326,9 +326,15 @@ interpret_quote_metadata(E) ->
 tpm2b(<<Size:16/unsigned-big, Payload:Size/binary, Rest/binary>>) ->
     {Payload, Rest}.
 
-attest_type_name(16#8017) -> <<"TPM_ST_ATTEST_QUOTE">>;
-attest_type_name(16#8014) -> <<"TPM_ST_ATTEST_CERTIFY">>;
-attest_type_name(16#8015) -> <<"TPM_ST_ATTEST_CREATION">>;
+%% Per TCG TPM 2.0 Part 2 Table 19 (TPM_ST Constants):
+attest_type_name(16#8014) -> <<"TPM_ST_ATTEST_NV">>;
+attest_type_name(16#8015) -> <<"TPM_ST_ATTEST_COMMAND_AUDIT">>;
+attest_type_name(16#8016) -> <<"TPM_ST_ATTEST_SESSION_AUDIT">>;
+attest_type_name(16#8017) -> <<"TPM_ST_ATTEST_CERTIFY">>;
+attest_type_name(16#8018) -> <<"TPM_ST_ATTEST_QUOTE">>;
+attest_type_name(16#8019) -> <<"TPM_ST_ATTEST_TIME">>;
+attest_type_name(16#801A) -> <<"TPM_ST_ATTEST_CREATION">>;
+attest_type_name(16#801C) -> <<"TPM_ST_ATTEST_NV_DIGEST">>;
 attest_type_name(N) -> iolist_to_binary(io_lib:format("0x~.16B", [N])).
 
 %%---- PCRs --------------------------------------------------------------
@@ -524,15 +530,10 @@ interpret_node(E) ->
                 M when is_map(M) -> maps:size(M);
                 _ -> null
             end,
-        <<"on_start_hook_device">> =>
-            case Nm of
-                M when is_map(M) ->
-                    case hb_maps:get(<<"on">>, M, undefined, #{}) of
-                        #{<<"start">> := #{<<"device">> := D}} -> D;
-                        _ -> null
-                    end;
-                _ -> null
-            end,
+        <<"on_start_hook_device">> => nested_get(Nm, [<<"on">>, <<"start">>,
+                                                      <<"device">>]),
+        <<"on_start_hook_path">>   => nested_get(Nm, [<<"on">>, <<"start">>,
+                                                      <<"path">>]),
         <<"pcr15_event_count">> => length(Pcr15Events),
         <<"pcr15_event_types">> =>
             [hb_maps:get(<<"event_type">>, Ev, null, #{})
@@ -734,6 +735,34 @@ extract_spec_fields(_) -> {undefined, undefined, undefined}.
 hexenc(B) when is_binary(B) ->
     string:lowercase(binary:encode_hex(B));
 hexenc(_) -> <<>>.
+
+%% Walk a nested-key path through a map. The map may have keys as
+%% either atoms or binaries depending on whether we are reading a
+%% native HB node message (atoms) or a TABM (binaries) — look up
+%% both forms, binary first.
+nested_get(M, [K]) when is_map(M) ->
+    case map_get_anykey(K, M) of
+        undefined -> null;
+        V -> V
+    end;
+nested_get(M, [K|Rest]) when is_map(M) ->
+    case map_get_anykey(K, M) of
+        Inner when is_map(Inner) -> nested_get(Inner, Rest);
+        _ -> null
+    end;
+nested_get(_, _) -> null.
+
+map_get_anykey(K, M) when is_binary(K), is_map(M) ->
+    case hb_maps:get(K, M, undefined, #{}) of
+        undefined ->
+            %% Fall through to atom form.
+            try binary_to_existing_atom(K, utf8) of
+                Atom -> hb_maps:get(Atom, M, undefined, #{})
+            catch _:_ -> undefined
+            end;
+        V -> V
+    end;
+map_get_anykey(_, _) -> undefined.
 
 or_null(undefined) -> null;
 or_null(V) -> V.
