@@ -9,9 +9,11 @@ Three real attestation envelopes captured inside the QEMU guest
 | file | what it is |
 |---|---|
 | `att-baseline.json` | Envelope produced by `make hb-boot` with no user config. The guest ran only the enforced `on.start` hook and HB's defaults. **All 5 verifier checks pass.** |
-| `att-user-diff.json` | Envelope after booting with `--user user-diff.flat`. The user added two harmless custom keys (`operator/label`, `operator/deployment_id`). The resulting `node_message_id_hex` differs from baseline, proving the user config actually became part of the attested node message. Verifier still passes. |
+| `att-user-diff.json` | Envelope after booting with `--user user-diff.flat`. The user added two harmless custom keys (`operator/label`, `operator/deployment_id`). The resulting `node_message_id` (43-char base64url) differs from baseline, proving the user config actually became part of the attested node message. Verifier still passes. |
 | `att-hostile-override.json` | Envelope after booting with `--user user-hostile.flat`. The user tried to disable the attestation hook by setting `on/start/device: noop@1.0` / `on/start/path: nothing` / `on/start/method: GET`. The enforced config layer overrode those keys; the embedded `node_message.on.start` in the envelope shows `device: tpm2@2.0a, path: extend, method: POST` — the real hook. The runtime event log still contains `EV_HYPERBEAM_NODE_IDENTITY_EXTEND` at PCR 15. The user's non-colliding key (`operator/intent: hostile-override-attempt`) did pass through, as expected from a rightmost-wins merge. **Verifier still passes.** |
-| `ca-baseline.crt` | Self-signed "LapEE Test TPM Vendor Root CA" emitted by the guest on serial. Used by the verifier to check the EK certificate chain. Each boot generates a fresh CA — this is the one that corresponds to `att-baseline.json`. The user-diff and hostile-override envelopes each have their own CA; only the baseline is checked in to keep the directory small. |
+| `ca-baseline.crt` | Self-signed "LapEE Test TPM Vendor Root CA" emitted by the baseline boot on serial. The EK in `att-baseline.json` chains to this. |
+| `ca-user-diff.crt` | Same, for the user-diff run. |
+| `ca-hostile.crt`   | Same, for the hostile-override run. Each boot generates a fresh CA; verifying an envelope requires the CA from the **same** boot. |
 | `user-diff.flat`, `user-hostile.flat` | The two user-supplied flat configs used as inputs. |
 
 ## How to reproduce
@@ -45,4 +47,5 @@ Each envelope matches what the paper calls the full chain:
 
 | file | what it is |
 |---|---|
-| `interpret-verify-baseline.json` | Full live output of `GET /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0` against the baseline guest. Contains `verified: true`, all 5 crypto checks passing, **and** the rich `interpretation` block (envelope, tpm, ak, quote, pcrs, boot, kernel, ima, node). This is what the user's final target URL produces end-to-end. |
+| `interpret-verify-baseline.json` | Full live output of `GET /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0` against the baseline guest. Contains `verified: true`, all 5 crypto checks passing, **and** the rich `interpretation` block (envelope, tpm, ak, quote, pcrs, boot, kernel, ima, node). This is what the user's final target URL produces end-to-end. All binary fields are base64url (43-char SHA-256 digests under `pcrs[N].digest`; `boot.firmware_srtm`, `kernel.uki_image` etc. as base64url; no `_hex` fields anywhere). |
+| `cross-node-verify-baseline.json` | Full live output of a **separate HB node outside QEMU** verifying the guest inside QEMU. `GET http://127.0.0.1:18735/~tpm-interpret@1.0/verify-peer?peer=http://127.0.0.1:18734`. Includes the five crypto checks + a link-free `summary` (envelope version, TPM identity, AK fingerprint, quote metadata, node identity, hook device, pcr15 event count). The verifier has its own OS process, its own BEAM VM, its own network origin, and its trust anchor was installed before the call. See `scripts/hb-cross-node-verify.sh`. |

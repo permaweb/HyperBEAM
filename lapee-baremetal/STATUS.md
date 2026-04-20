@@ -1044,3 +1044,191 @@ Per the acceptance test at the top of this session, the user-stated
 criterion ("everything from 1–6 + item 7 with `make hb-final-
 acceptance' green") is met. Staying in overnight mode until the user
 says stop.
+
+## 2026-04-19 21:45 EDT — base64url sweep + cross-node verify
+
+Two directives from the user after item 7 landed:
+
+1. **"Always base64URL in HyperBEAM if you need encoded binary.
+   Never hex over the wire or in the interfaces, unless you are
+   relaying information that is _always_ displayed in hex, and is
+   short (Ethereum addresses, for example)."**
+2. **"On acceptance: Please run a HB node outside of the `qemu'
+   environment and point it to verify inside the environment.
+   Minimize the possibility of tricks and accidental hooliganism."**
+
+Both landed on `agent/lapee`.
+
+### Part 1 — base64url audit (`af5ca04ea`)
+
+Every `_hex' field in the device interfaces became base64url (or
+was dropped where it was redundant with an existing base64url
+twin). Changes:
+
+`dev_tpm_interpret.erl' — nine field renames / removals:
+
+  pcrs[N].hex              → dropped (digest is the one value)
+  pcrs[N].raw_b64url       → digest (same bytes, cleaner name)
+  boot.firmware_srtm_hex   → firmware_srtm
+  boot.platform_firmware_config_hex → platform_firmware_config
+  boot.secure_boot_policy_hex       → secure_boot_policy
+  kernel.boot_loader_hex   → boot_loader
+  kernel.uki_image_hex     → uki_image
+  kernel.uki_cmdline_hex   → uki_cmdline
+  ima.pcr10_hex            → pcr10
+  quote.magic_hex          → dropped (magic_ok boolean suffices)
+  quote.nonce_b64url       → nonce
+  tpm.ek_cert_serial       → base64url bytes of the integer
+                             (big-endian), not uppercase hex
+
+`dev_tpm2.erl' — stale docstring fixed (extend returns base64url
+digests); `/quote' nonce accepts base64url only (was "hex-or-
+base64"). `resolve_nonce/1' now tries `hb_util:decode' and falls
+back to raw bytes — no hex path at all.
+
+`priv/tpm-interpret/pcr-profiles/*.json' — match_pcrs digests are
+now 43-char base64url (the shape of `digest' in the interpret
+output); 32-byte-zero placeholders are 43 `A's. README updated to
+document the schema + explicitly forbid hex.
+
+`reference-demo/verifier/verifier_hb.py' — diagnostic prints use
+base64url prefixes (22 chars) instead of hex prefixes (16 chars).
+New `_b64u' helper. `reference-demo/README.md' directs callers to
+`verifier_hb.py'; the legacy `verifier.py' / `hyperbeam_node.py'
+targeted the Phase-1 hex schema and can no longer consume the
+current envelope.
+
+Exception kept: the TPM_ST-constant fallback (`"0x8018"' etc.) is
+still hex — it's a short namespaced 16-bit identifier conventionally
+written in hex across the TCG spec, matching the user's stated
+exception.
+
+### Part 2 — cross-node verify (`78a726cce`)
+
+Topology:
+
+```
+  +------------------------------------+     +---------------+
+  |  macOS host                        |     |  QEMU guest   |
+  |                                    |     |               |
+  |  verifier HB (native rebar3 shell) |     |  peer HB      |
+  |    :18735 ----(HTTP)---->  127.0.0.1:18734 :8734         |
+  |                                    |     |               |
+  |  + /tmp/test-tpm-ca.crt            |     |  + dev_tpm2   |
+  |    (guest's per-boot CA, copied    |     |    + libtss2  |
+  |     BEFORE the call — so trust     |     |    + swtpm    |
+  |     establishment is out-of-band   |     +---------------+
+  |     w.r.t. verification)           |
+  +------------------------------------+
+```
+
+#### Why not the direct relay-chain URL?
+
+The paper-style single URL
+
+```
+    /~relay@1.0/call&relay-path="http://PEER/~tpm2@2.0a/attestation"
+        /verify~tpm-interpret@1.0
+```
+
+trips two HB-platform bugs when the response wraps an HB-native
+node_message:
+
+- with `accept-bundle: true' (inline content): `{badmap,true}' in
+  `hb_link:normalize/3' during `hb_cache:write' — HB recurses
+  into nested boolean values treating them as submessages.
+- without: `necessary_message_not_found' because `body+link'
+  refs in the peer's response aren't resolvable in this node's
+  cache.
+
+Both are the same class of bug as the parked POST-JSON
+`{badmap,<<>>}' issue. These are HB-platform bugs, not bugs in
+LapEE's attestation/verify logic; filed under parked work.
+
+#### The cross-node path we built instead
+
+`~tpm-interpret@1.0/verify-peer' is a single-hop HTTP endpoint:
+
+```
+    GET /~tpm-interpret@1.0/verify-peer?peer=http://PEER
+```
+
+Semantics:
+1. Verifier does `hb_http:get(Peer, "/~tpm2@2.0a/attestation")'.
+2. Parses the returned envelope (peels HB `{status,body}' wrapper).
+3. Runs `dev_tpm2:verify/3' locally (five checks).
+4. Attaches a link-free `summary' (envelope_version, TPM identity,
+   AK fingerprint, quote metadata, secure_boot_measured, node
+   identity, hook device, pcr15_event_count) plus the full
+   `checks' list.
+
+The summary avoids re-serialising the peer's envelope into this
+node's cache — that's what sidesteps the relay-chain bug. The
+full interpretation is still available via
+`/~tpm-interpret@1.0/interpret' if a caller wants every field;
+verify-peer returns the headlines.
+
+#### NIF-less verifier (`lapee_tpm_nif.erl' patch)
+
+The verifier doesn't need a TPM — it's verifying, not attesting.
+`lapee_tpm_nif:init/0' now tolerates a missing `.so' / failed
+TCTI init when `LAPEE_TPM_ALLOW_NO_NIF=1' is set. The module
+loads successfully; the stubs still raise `nif_not_loaded' if
+actually invoked (so attest operations fail fast). This lets a
+verifier-only HB run on *any* box — a macOS laptop, a Linux box
+without libtss2, a Raspberry Pi — without dragging in the TPM
+stack.
+
+### Acceptance
+
+`scripts/hb-cross-node-verify.sh' (new — wired into
+`make hb-cross-node-verify' and `hb-final-acceptance' step 6).
+
+Observed output against the QEMU guest (saved verbatim to
+`out/evidence/cross-node-verify-baseline.json'):
+
+```
+=== 4/5 verifier verifies peer via GET verify-peer ===
+HTTP=200 SIZE=5605 TIME=5.225591
+
+=== 5/5 assert verdict ===
+PASS: verified == true
+PASS: verdict == accepted
+PASS: all 5 crypto checks ran
+PASS: all 5 checks PASS
+PASS: summary.on_start_hook_device == tpm2@2.0a (enforced hook)
+PASS: summary.pcr15_event_count == 1
+PASS: summary.node_message_id is 43-char base64url
+PASS: summary.envelope_version == 0.3
+PASS: summary.ak_public_key_b64url is 43-char base64url
+
+CROSS-NODE VERIFY: PASS
+```
+
+Invariants this test defends:
+
+- Verifier and peer are **separate BEAM VMs** (different OS
+  processes, different ERTS instances, no shared cache).
+- **Different network origin** — macOS host vs Linux guest inside
+  QEMU.
+- Trust anchor is **installed out-of-band** (CA file copied to
+  the verifier's filesystem BEFORE the `hb_http:get') — so the
+  peer cannot inject its own CA into the verification.
+- Verifier independently runs the **full five-check crypto
+  battery**: `pkix_path_validation', RSA-PSS quote signature,
+  PCR 15 event-log replay, node-message binding, envelope shape.
+
+Minimising the possibility of tricks and accidental hooliganism,
+per the user's directive.
+
+### Files that landed this pass
+
+```
+af5ca04ea    tpm interpret+devices: base64url everywhere
+78a726cce    lapee: cross-node verify-peer — HB outside verifies inside
+```
+
+And the housekeeping commit from the start of this pass:
+```
+614e41441    hb-interpret-demo: switch to chain URL pattern
+```
