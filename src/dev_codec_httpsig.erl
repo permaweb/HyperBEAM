@@ -520,7 +520,10 @@ signature_params_line(RawCommitment, Opts) ->
                                     <<"tag">>,
                                     <<"bundle">>
                                 ],
-                                Commitment#{ <<"alg">> => maps:get(<<"type">>, Commitment) }
+                                %% FIX: Fall back to alg when type is not present
+                                %% hbsig client sends alg,keyid but not type
+                                Commitment#{ <<"alg">> => maps:get(<<"type">>, Commitment,
+                                    maps:get(<<"alg">>, Commitment, <<"rsa-pss-sha512">>)) }
                             )
                         ))
                     )
