@@ -25,7 +25,8 @@ Conventions below:
 | Enforced `on.start` hook | Shipped | `config/lapee-enforced.flat` — extends PCR 15 with `hb_message:id(node_message)` on every boot; layered last in `HB_CONFIG` so hostile user config cannot override. Acceptance test `user-hostile.flat` proves override is blocked. |
 | `/attestation` endpoint | Shipped | `dev_tpm2:attestation/3` returns v0.3 envelope: EK cert PEM, AK pub PEM, TPM2_Quote (pcr_selection, nonce, quoted, signature, pcr_values), runtime_event_log, node_message, node_message_id, wallet_address, issued_at_unix. All binaries base64url. |
 | Content negotiation | Shipped | `accept: application/json@1.0` + `accept-bundle: true` = canonical HB pattern. No `attestation-json` hack endpoint. |
-| Anti-replay nonce | Partial | `Req/nonce` accepted (base64url); if absent, random 32 bytes. Callers *should* pass their own nonce to prove freshness, but we don't enforce it at the verifier. See §3 "Freshness" below. |
+| Anti-replay nonce (attester side) | Shipped | `Req/nonce` accepted (base64url); if absent, random 32 bytes. |
+| Anti-replay nonce (verifier side) | Shipped | `verify-peer' generates a fresh random 32-byte challenge per call and passes it in the peer fetch. After receiving the envelope, verifies the envelope's quote nonce matches the challenge BEFORE any crypto. Mismatch → hard reject with `nonce_freshness: "mismatch"'. Match → `nonce_freshness: "verified"'. Protects against replay of a previously-valid envelope captured off the wire. |
 
 ## 2. Verification loop
 
@@ -40,9 +41,9 @@ Conventions below:
 | PCR 15 event commits to node_message_id | Shipped | Decode id to raw bytes, decode each event's digest, compare. Tightened: id decoded byte-size must be exactly 32; empty/short ids are a hard reject. |
 | node_message + id shape | Shipped | 43-char base64url id, decodes to 32 bytes, node_message is a map. |
 | `verify-peer` (cross-node) | Shipped | Separate HB process fetches peer's attestation, verifies locally, returns link-free summary. Tested natively on macOS against QEMU-guest peer. |
-| Inline trust anchor | Shipped | `trusted-ca` query param (base64url PEM bytes) — HB-wire-convention, no URL-encoding ambiguity. Back-compat `trusted-ca-pem` for raw PEM (documented unsafe over GET). |
-| `trust_anchor_source` in response | Shipped | Tells the caller whether the verifier used node-config CA or request-supplied CA — no silent overrides. |
-| Targeted chain-failure diagnostic | Shipped | When EK's issuer DN matches CA's subject DN but signature doesn't verify, the error message calls out "same CN, different generation" (stale per-boot CA) vs a true rogue — so operators know whether to refresh or investigate. |
+| Inline trust anchor | Shipped | `trusted-ca` query param (base64url PEM bytes) — HB-wire-convention, no URL-encoding ambiguity. Back-compat `trusted-ca-pem` for raw PEM (documented unsafe over GET). Honoured by BOTH `verify-peer` AND the `.../verify~tpm-interpret@1.0` chain URL (asymmetry fixed in commit 45a605daf; earlier version silently dropped it on the chain path). |
+| `trust_anchor_source` in response | Shipped | Every verify path returns `"request"` / `"node_config"` / `"none"` so callers can tell which anchor was used — no silent overrides. Present on `/verify`, `/verify-peer`, and the chain URL. |
+| Targeted chain-failure diagnostic | Shipped | When EK's issuer DN matches CA's subject DN but signature doesn't verify, the error message calls out "same CN, different generation" (stale per-boot CA) vs a true rogue — so operators know whether to refresh or investigate. Live-proven against a real rogue CA with matching CN. |
 
 ## 3. Gaps in the verification story — known
 
@@ -50,7 +51,7 @@ Conventions below:
 |---|---|---|
 | Vendor root CA bundle | Parked | We don't ship AMD / Intel / Infineon / STMicro / Nuvoton root CAs. Every deployer ships their own. `priv/tpm-interpret/root-cas/` is the intended location. |
 | Revocation (CRL / OCSP) | Open | No revocation check today. A compromised EK cert would continue to be trusted until the deployer rotates their CA bundle. |
-| Nonce freshness policy | Partial | We don't REJECT stale nonces; caller is responsible for supplying a nonce they know is recent. A verifier-side policy ("nonce must match a recent challenge") is out of scope for this release. |
+| Nonce freshness policy | Shipped (promoted from Partial) | `verify-peer' now enforces challenge-response freshness automatically: verifier generates a random 32-byte challenge, includes it in the peer fetch, and rejects with `nonce_freshness: mismatch` if the envelope's quote nonce doesn't match. See §2 "Anti-replay nonce (verifier side)". |
 | Clock authority | Open | `issued_at_unix` is self-reported. No trusted-time binding. |
 | IMA per-file event log | Parked | Only PCR 10 final value is in the envelope. Per-file IMA chain not yet transported. A future `~tpm2@2.0a` envelope version will include it. |
 | UKI PCRs 11/12/13 | Parked | No UKI in the QEMU dev path. Works on real silicon with `systemd-stub`. |
@@ -80,7 +81,7 @@ Conventions below:
 | **Discrete TPM 2.0** (Infineon SLB 9670/9672, STMicro ST33, Nuvoton NPCT7xx) | The paper's intended case. High trust: TPM runs on a dedicated chip with its own RAM + hardware-isolated storage. EK cert chain to vendor root is meaningful. |
 | **AMD fTPM via PSP** (EPYC, Ryzen) | ACPI device ID `MSFT0101`. TPM 2.0 inside the Platform Security Processor (AMD's on-die security co-processor). Manufacturer `"AMD\0"` / `41 4D 44 00` = key `414d4400` in `manufacturers.json`. Lower trust than discrete — PSP is a firmware TEE, not a separate chip — but still real hardware isolation. Deploys require AMD's fTPM EK root CA. |
 | **Intel PTT / fTPM** (Core, Xeon) | Equivalent to AMD's fTPM, inside Intel ME (Management Engine). ACPI `MSFT0101`. Manufacturer `INTC` (`494e5443`). Same trust tier as AMD fTPM. |
-| **QEMU + swtpm** (development only) | `trust_tier: development_only` in the QEMU profile (`priv/tpm-interpret/pcr-profiles/qemu-seabios-tcg.json`). A real deploy either refuses QEMU-shaped attestations or requires a test-only trust anchor. |
+| **QEMU + swtpm** (development only) | `trust_tier: development_only` in the QEMU profile (`priv/tpm-interpret/pcr-profiles/qemu-seabios-tcg.json`). **Profile now populated with real measured PCR 0 + 7 values** (from SeaBIOS rel-1.16.3) — a QEMU-based LapEE attestation will produce `boot.match.attributes.platform_vendor: "QEMU"` + `trust_tier: "development_only"`, a recognisable marker even if an operator forgot to restrict their trust anchors. A production deploy should either refuse development_only matches or require a test-only trust anchor. |
 
 ### Out-of-scope / won't work
 
@@ -148,11 +149,16 @@ release, but they do constrain the deployments it's suitable for:
 - LapEE-as-shipped is suitable for **per-request trust**: a caller
   generates a fresh nonce, asks the peer to sign it with its AK,
   verifies the attestation, and then trusts the peer *for that
-  request*. Challenge-response style.
-- LapEE is **not yet** suitable for **long-lived trust**: if
+  request*. Challenge-response style. *Freshness is now enforced
+  automatically by `verify-peer'* — the verifier won't accept an
+  envelope that isn't signed over its own random challenge, so
+  replay of captured envelopes is prevented by construction.
+- LapEE is **not yet** suitable for **long-lived trust**: if a
   caller wants to trust a peer "for the next hour", there's no
-  revocation, no re-attest policy, no clock authority. That's a
-  §3 roadmap.
+  revocation (CRL / OCSP) and no clock authority (the envelope's
+  `issued_at_unix` is self-reported). Operators can re-challenge
+  periodically to approximate long-lived trust at the cost of
+  per-interval round-trip.
 
 **On hardware**: discrete TPMs and fTPMs (AMD, Intel) are the
 target substrate. The code is hardware-agnostic at the NIF layer
