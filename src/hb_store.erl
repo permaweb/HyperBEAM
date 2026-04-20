@@ -131,22 +131,7 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
     end.
 
 %% @doc Create a new instance of a store and return its term.
-%%
-%% JSON-loaded config carries `store-module' as a binary (e.g.
-%% `<<"hb_store_fs">>'); Erlang-literal config carries it as an
-%% atom (e.g. `hb_store_fs'). `Mod:start(...)' requires an atom, so
-%% coerce once here — `binary_to_existing_atom' is strictly safer
-%% than `binary_to_atom' since it refuses to populate the atom
-%% table with garbage from an untrusted config.
-spawn_instance(StoreOpts = #{ <<"store-module">> := Mod0 }) ->
-    Mod =
-        case Mod0 of
-            B when is_binary(B) ->
-                try binary_to_existing_atom(B, utf8)
-                catch error:badarg -> Mod0
-                end;
-            _ -> Mod0
-        end,
+spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
     Name = maps:get(<<"name">>, StoreOpts, Mod),
     try Mod:start(StoreOpts) of
         ok -> ok;
