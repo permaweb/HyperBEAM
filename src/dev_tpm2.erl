@@ -374,16 +374,48 @@ is_envelope(M) when is_map(M) ->
 is_envelope(_) ->
     false.
 
+%% Resolve the trust anchor in priority order:
+%%
+%%   1. `Req/trusted-ca'     — base64url-encoded PEM bytes (the
+%%                             HyperBEAM wire convention; the safe
+%%                             form over URL-encoded GET).
+%%   2. `Req/trusted-ca-pem' — raw PEM text (back-compat; unsafe
+%%                             over URL-encoded GET because `+' is
+%%                             treated as literal `+', not space).
+%%   3. Opts/`lapee_tpm_ca_cert' — node-configured CA PEM path.
+%%                             Default `/etc/lapee/tpm-ca.crt'.
+%%
+%% Keeping BOTH forms in sync across verify / verify-peer / the
+%% chain-URL path is essential: an earlier version only handled
+%% `trusted-ca-pem' here, so `.../verify~tpm-interpret@1.0?trusted-
+%% ca=<rogue-b64>' silently fell back to the node's configured CA
+%% and rubber-stamped the caller's rogue anchor as "ok" because
+%% the legitimate CA actually did verify. A rogue-CA-with-same-CN
+%% adversarial test now catches that.
 resolve_trusted_ca(Req, Opts) ->
+    case hb_maps:get(<<"trusted-ca">>, Req, undefined, Opts) of
+        B when is_binary(B), byte_size(B) > 0 ->
+            try hb_util:decode(B) of
+                Decoded when is_binary(Decoded), byte_size(Decoded) > 0 ->
+                    Decoded;
+                _ -> resolve_trusted_ca_pem(Req, Opts)
+            catch _:_ -> resolve_trusted_ca_pem(Req, Opts)
+            end;
+        _ -> resolve_trusted_ca_pem(Req, Opts)
+    end.
+
+resolve_trusted_ca_pem(Req, Opts) ->
     case hb_maps:get(<<"trusted-ca-pem">>, Req, undefined, Opts) of
         Pem when is_binary(Pem), byte_size(Pem) > 0 -> Pem;
-        _ ->
-            Path = hb_opts:get(lapee_tpm_ca_cert,
-                               <<"/etc/lapee/tpm-ca.crt">>, Opts),
-            case file:read_file(binary_to_list(Path)) of
-                {ok, Pem}  -> Pem;
-                {error, _} -> <<>>
-            end
+        _ -> resolve_trusted_ca_from_config(Opts)
+    end.
+
+resolve_trusted_ca_from_config(Opts) ->
+    Path = hb_opts:get(lapee_tpm_ca_cert,
+                       <<"/etc/lapee/tpm-ca.crt">>, Opts),
+    case file:read_file(binary_to_list(Path)) of
+        {ok, Pem}  -> Pem;
+        {error, _} -> <<>>
     end.
 
 %%---- check 1: EK cert chain --------------------------------------------
@@ -1136,6 +1168,47 @@ resolve_pcr_list_test() ->
                          ?DEFAULT_QUOTE_PCRS, #{})),
     ?assertEqual(?DEFAULT_QUOTE_PCRS,
         resolve_pcr_list(#{}, ?DEFAULT_QUOTE_PCRS, #{})).
+
+%% Regression test: `resolve_trusted_ca' must honour inline
+%% request-supplied anchors in priority order — base64url
+%% `trusted-ca' wins over raw `trusted-ca-pem', which wins over
+%% node config. An earlier version only handled `trusted-ca-pem'
+%% here, so a caller supplying a ROGUE CA via `trusted-ca' on
+%% the chain-URL path had the whole parameter silently dropped
+%% — leaving the node's configured (legitimate) CA to
+%% rubber-stamp the chain as OK.
+resolve_trusted_ca_priority_test() ->
+    InlinePemBin = <<"-----BEGIN CERTIFICATE-----\ninline-pem\n"
+                    "-----END CERTIFICATE-----">>,
+    %% Base64url-encoded bytes of a DISTINCT PEM.
+    B64uPem = <<"-----BEGIN CERTIFICATE-----\nbase64url-pem\n"
+                "-----END CERTIFICATE-----">>,
+    B64u = hb_util:encode(B64uPem),
+    %% (1) `trusted-ca' wins when both inline forms are present.
+    ?assertEqual(B64uPem,
+                 resolve_trusted_ca(#{<<"trusted-ca">> => B64u,
+                                      <<"trusted-ca-pem">> => InlinePemBin},
+                                    #{})),
+    %% (2) `trusted-ca-pem' is used when `trusted-ca' is absent.
+    ?assertEqual(InlinePemBin,
+                 resolve_trusted_ca(#{<<"trusted-ca-pem">> => InlinePemBin},
+                                    #{})),
+    %% (3) Empty/malformed `trusted-ca' falls through to
+    %%     `trusted-ca-pem', not to config.
+    ?assertEqual(InlinePemBin,
+                 resolve_trusted_ca(#{<<"trusted-ca">> => <<>>,
+                                      <<"trusted-ca-pem">> => InlinePemBin},
+                                    #{})),
+    %% (4) Neither inline nor config → empty binary (triggers clean
+    %%     "trusted CA missing" error downstream in chk_ek_chain).
+    %% Supply a nonexistent config path so file:read_file returns
+    %% error; the default /etc/lapee/... likely isn't present in
+    %% the test env either.
+    ?assertEqual(<<>>,
+                 resolve_trusted_ca(#{},
+                                    #{lapee_tpm_ca_cert =>
+                                          <<"/nonexistent/ca.pem">>})),
+    ok.
 
 %% Regression test: `chk_event_log_replay' must refuse to
 %% "replay" zero events into a zero PCR and call it valid. Even
