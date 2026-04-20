@@ -42,7 +42,8 @@
 %%% of each file.
 -module(dev_tpm_interpret).
 -export([info/1, info/3, interpret/3, verify/3, verify_peer/3,
-         summary/3, peer_summary/3, peer_status/3, checks/3]).
+         summary/3, peer_summary/3, peer_status/3, checks/3,
+         events/3, claim/3]).
 -include("include/hb.hrl").
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -54,7 +55,8 @@
 info(_) ->
     #{ exports => [<<"info">>, <<"interpret">>, <<"verify">>,
                    <<"verify-peer">>, <<"summary">>, <<"peer-summary">>,
-                   <<"peer-status">>, <<"checks">>] }.
+                   <<"peer-status">>, <<"checks">>,
+                   <<"events">>, <<"claim">>] }.
 
 info(_Base, _Req, _Opts) ->
     {ok, #{
@@ -183,9 +185,77 @@ info(_Base, _Req, _Opts) ->
                           "policy, or adversarial test harnesses.">>,
                     <<"response">> =>
                         <<"[{name, purpose, failure_implies}].">>
+                },
+                <<"events">> => #{
+                    <<"description">> =>
+                        <<"Parse the envelope's tcg_event_log into a "
+                          "1-indexed map of AO-Core messages. Each "
+                          "event has {seq, pcr, event_type, "
+                          "event_type_code, digests, event_data, "
+                          "parsed}. The `parsed' sub-map carries "
+                          "per-event-type decoded fields (Secure "
+                          "Boot state, UEFI variable names, UKI key/"
+                          "value, firmware version, bootloader PE "
+                          "hash, microcode header, etc.). Individual "
+                          "events are path-addressable: "
+                          "`.../events/3/event_type', "
+                          "`.../events/3/parsed/semantic/"
+                          "secure_boot_enabled'.">>,
+                    <<"input">> => <<"An envelope (same resolution "
+                                     "as interpret).">>,
+                    <<"response">> => <<"map of {<<\"1\">> => message, "
+                                        "<<\"2\">> => message, ...}">>
+                },
+                <<"claim">> => #{
+                    <<"description">> =>
+                        <<"Flat, policy-friendly surface of machine-"
+                          "identifying facts derived from the "
+                          "attestation. Each claim has a value "
+                          "(binary / bool / string / \"unknown\") "
+                          "and a `_provenance' key listing the "
+                          "source events that backed the derivation. "
+                          "Designed to compose directly with green-"
+                          "zone style predicates: "
+                          "\"claim.secure_boot.enabled == true AND "
+                          "claim.tme.enabled == true AND "
+                          "claim.kernel.uki_hash IN {X, Y, Z}\".">>,
+                    <<"input">> => <<"An envelope.">>,
+                    <<"response">> =>
+                        <<"#{secure_boot => #{enabled, db_authorities, "
+                          "setup_mode, deployed_mode, _provenance}, "
+                          "firmware => #{crtm_version, _provenance}, "
+                          "boot_loader => #{image_hash, _provenance},"
+                          " kernel => #{cmdline, uki_hash, iommu_"
+                          "strict, _provenance}, tme => #{enabled, "
+                          "_provenance}, lockdown => #{level, "
+                          "_provenance}}.">>
                 }
             }
         }
+    }}.
+
+%%%============================================================================
+%%% events/3 — parsed TCG event log as AO-Core messages
+%%%============================================================================
+
+events(Base, Req, Opts) ->
+    Envelope = resolve_envelope(Base, Req, Opts),
+    {ok, #{
+        <<"status">> => 200,
+        <<"body">> => interpret_events(Envelope)
+    }}.
+
+%%%============================================================================
+%%% claim/3 — flat, policy-friendly surface
+%%%============================================================================
+
+claim(Base, Req, Opts) ->
+    Envelope = resolve_envelope(Base, Req, Opts),
+    Db = hb_db_tpm:load(Opts),
+    Events = interpret_events(Envelope),
+    {ok, #{
+        <<"status">> => 200,
+        <<"body">> => interpret_claim(Events, Envelope, Db)
     }}.
 
 %%%============================================================================
@@ -821,6 +891,8 @@ interpret_envelope(E, Opts) ->
     Ima = interpret_ima(E, Db, Pcrs),
     Node = interpret_node(E),
     Env = interpret_envelope_meta(E),
+    Events = interpret_events(E),
+    Claim = interpret_claim(Events, E, Db),
     #{
         <<"envelope">> => Env,
         <<"tpm">>      => Tpm,
@@ -830,8 +902,248 @@ interpret_envelope(E, Opts) ->
         <<"boot">>     => Boot,
         <<"kernel">>   => Kernel,
         <<"ima">>      => Ima,
-        <<"node">>     => Node
+        <<"node">>     => Node,
+        <<"events">>   => Events,
+        <<"claim">>    => Claim
     }.
+
+%%---- events (full parsed + decoded TCG event log) ----------------------
+%%
+%% Surfaces every firmware-side event as an AO-Core native message.
+%% Empty when the envelope has no tcg_event_log (e.g. QEMU+swtpm
+%% test guests). Keyed by 1-based sequence number so individual
+%% events are path-addressable:
+%%
+%%     /.../events/3                → whole event 3
+%%     /.../events/3/event_type     → its type string
+%%     /.../events/3/digests/sha256 → one digest
+%%     /.../events/3/parsed         → the per-type decoded payload
+
+interpret_events(E) ->
+    case hb_maps:get(<<"tcg_event_log">>, E, <<>>, #{}) of
+        Log when is_binary(Log), byte_size(Log) > 0 ->
+            dev_tpm_tcg:decode_events(dev_tpm_tcg:parse(Log));
+        _ -> #{}
+    end.
+
+%%---- claim (flat, policy-friendly surface with provenance) -------------
+%%
+%% Each claim names a concrete property of the attested node. Value
+%% is either a concrete binary / bool / string OR `"unknown"' when
+%% the envelope doesn't carry enough evidence to decide. Every
+%% populated claim carries a `_provenance' key listing the source
+%% events (by {pcr, seq} tuples) that backed the derivation, so a
+%% downstream verifier can audit.
+%%
+%%   claim.secure_boot.enabled
+%%   claim.secure_boot.db_authorities
+%%   claim.firmware.crtm_version
+%%   claim.boot_loader.image_hash
+%%   claim.kernel.uki_hash
+%%   claim.kernel.cmdline
+%%   claim.kernel.iommu_strict
+%%   claim.tme.enabled
+%%   claim.lockdown.level
+
+interpret_claim(Events, E, Db) ->
+    EvList = event_list(Events),
+    #{
+        <<"secure_boot">> => claim_secure_boot(EvList),
+        <<"firmware">>    => claim_firmware(EvList),
+        <<"boot_loader">> => claim_boot_loader(EvList),
+        <<"kernel">>      => claim_kernel(EvList, E),
+        <<"tme">>         => claim_tme(EvList, E, Db),
+        <<"lockdown">>    => claim_lockdown(EvList)
+    }.
+
+%% Convert the keyed events map into a list sorted by seq number —
+%% more convenient for iterating and filtering per event-type.
+event_list(Events) when is_map(Events) ->
+    Sorted = lists:sort(
+        fun({KA, _}, {KB, _}) ->
+            binary_to_integer(KA) =< binary_to_integer(KB)
+        end,
+        maps:to_list(Events)),
+    [V || {_, V} <- Sorted, is_map(V), not maps:is_key(<<"error">>, V)];
+event_list(_) -> [].
+
+%% Secure Boot state + enrolled authorities.
+claim_secure_boot(Events) ->
+    SbEvents = [Ev || Ev <- Events,
+                      maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+                      sem_var_name(Ev) =:= <<"SecureBoot">>],
+    {Enabled, Prov} = case SbEvents of
+        [] -> {<<"unknown">>, []};
+        [Ev0 | _] ->
+            Sem = nested(Ev0, [<<"parsed">>, <<"semantic">>], #{}),
+            V = maps:get(<<"secure_boot_enabled">>, Sem, <<"unknown">>),
+            {V, [event_provenance(Ev0)]}
+    end,
+    DbAuths = collect_authorities(Events),
+    SetupMode = lookup_binary_sem(Events, <<"SetupMode">>,
+                                  <<"setup_mode">>),
+    DeployedMode = lookup_binary_sem(Events, <<"DeployedMode">>,
+                                     <<"deployed_mode">>),
+    #{
+        <<"enabled">>          => Enabled,
+        <<"enabled_provenance">>=> Prov,
+        <<"db_authorities">>   => DbAuths,
+        <<"setup_mode">>       => SetupMode,
+        <<"deployed_mode">>    => DeployedMode
+    }.
+
+%% Collect summarised signature-list entries from PK / KEK / db
+%% variable events (which enumerate which keys are enrolled).
+collect_authorities(Events) ->
+    lists:flatten(
+        [nested(Ev, [<<"parsed">>, <<"semantic">>, <<"signature_list">>], [])
+         || Ev <- Events,
+            maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+            lists:member(sem_var_name(Ev),
+                         [<<"PK">>, <<"KEK">>, <<"db">>, <<"dbx">>])]).
+
+lookup_binary_sem(Events, VarName, SemKey) ->
+    case [Ev || Ev <- Events,
+                maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+                sem_var_name(Ev) =:= VarName] of
+        [] -> <<"unknown">>;
+        [Ev | _] ->
+            nested(Ev, [<<"parsed">>, <<"semantic">>, SemKey], <<"unknown">>)
+    end.
+
+sem_var_name(Ev) ->
+    nested(Ev, [<<"parsed">>, <<"variable_name">>], <<>>).
+
+%% Firmware identity from EV_S_CRTM_VERSION.
+claim_firmware(Events) ->
+    Matches = [Ev || Ev <- Events,
+                     maps:get(<<"event_type_code">>, Ev, 0) =:= 16#8],
+    case Matches of
+        [] ->
+            #{<<"crtm_version">> => <<"unknown">>,
+              <<"crtm_version_provenance">> => []};
+        [Ev0 | _] ->
+            Version = nested(Ev0, [<<"parsed">>, <<"crtm_version">>],
+                             <<"unknown">>),
+            #{<<"crtm_version">> => Version,
+              <<"crtm_version_provenance">> =>
+                  [event_provenance(Ev0)]}
+    end.
+
+%% Bootloader: the first EV_EFI_BOOT_SERVICES_APPLICATION on PCR 4.
+%% SHA-256 of the image is in digests.sha256.
+claim_boot_loader(Events) ->
+    Matches = [Ev || Ev <- Events,
+                     maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000003,
+                     maps:get(<<"pcr">>, Ev, 0) =:= 4],
+    case Matches of
+        [] ->
+            #{<<"image_hash">> => <<"unknown">>,
+              <<"image_hash_provenance">> => []};
+        [Ev0 | _] ->
+            Hash = nested(Ev0, [<<"digests">>, <<"sha256">>], <<"unknown">>),
+            #{<<"image_hash">> => Hash,
+              <<"image_hash_provenance">> =>
+                  [event_provenance(Ev0)]}
+    end.
+
+%% Kernel / UKI identity. systemd-stub emits key=value EV_IPL events
+%% on PCR 11/12/13 whose keys include `kernel_name', `kernel_
+%% version', `initrd', and the cmdline. We collect them.
+claim_kernel(Events, E) ->
+    %% Cmdline: systemd-stub writes "cmdline" on PCR 12.
+    CmdlineEvs = ipl_kv_matches(Events, <<"cmdline">>),
+    Cmdline = case CmdlineEvs of
+        [] -> <<"unknown">>;
+        [Ev | _] -> nested(Ev, [<<"parsed">>, <<"value">>], <<"unknown">>)
+    end,
+    %% UKI kernel hash: PCR 11's accumulated digest (from envelope's
+    %% pcr_values). Gives us the CURRENT PCR 11 state directly.
+    UkiHash = hb_maps:get(
+                <<"11">>,
+                nested(E, [<<"tpm_quote">>, <<"pcr_values">>], #{}),
+                <<"unknown">>),
+    IommuStrict = kernel_cmdline_flag(Cmdline, <<"iommu.strict=1">>),
+    #{
+        <<"cmdline">>             => Cmdline,
+        <<"cmdline_provenance">>  =>
+            [event_provenance(Ev) || Ev <- CmdlineEvs],
+        <<"uki_hash">>            => UkiHash,
+        <<"uki_hash_provenance">> => [{<<"pcr">>, 11}],
+        <<"iommu_strict">>        => IommuStrict
+    }.
+
+ipl_kv_matches(Events, Key) ->
+    [Ev || Ev <- Events,
+           maps:get(<<"event_type_code">>, Ev, 0) =:= 16#D,
+           nested(Ev, [<<"parsed">>, <<"key">>], <<>>) =:= Key].
+
+kernel_cmdline_flag(<<"unknown">>, _) -> <<"unknown">>;
+kernel_cmdline_flag(Cmdline, Flag) when is_binary(Cmdline) ->
+    case binary:match(Cmdline, Flag) of
+        nomatch -> false;
+        _       -> true
+    end;
+kernel_cmdline_flag(_, _) -> <<"unknown">>.
+
+%% TME/SME: per paper §Arch line 229, a successful attestation is
+%% itself proof that TME was enabled (kernel halts at init if it
+%% isn't). So if uki_hash matches a known TME-checking UKI in our
+%% DB, tme.enabled = true. Otherwise "unknown".
+claim_tme(_Events, E, Db) ->
+    UkiHash = hb_maps:get(
+                <<"11">>,
+                nested(E, [<<"tpm_quote">>, <<"pcr_values">>], #{}),
+                <<"unknown">>),
+    UkiProfiles = maps:get(<<"uki_profiles">>, Db, #{}),
+    Matched = lists:any(
+        fun(#{<<"uki_hash">> := H, <<"checks_tme">> := true}) -> H =:= UkiHash;
+           (_) -> false
+        end, maps:values(UkiProfiles)),
+    case Matched of
+        true ->
+            #{
+                <<"enabled">>          => true,
+                <<"enabled_provenance">> =>
+                    [{<<"derivation">>, <<"known_TME_checking_UKI_hash">>}]
+            };
+        false ->
+            #{
+                <<"enabled">>          => <<"unknown">>,
+                <<"enabled_provenance">> =>
+                    [{<<"derivation">>,
+                      <<"uki_hash_not_in_known_TME_checking_list">>}]
+            }
+    end.
+
+%% Lockdown state. We don't have a direct event for this — paper
+%% §Arch says kernel runs with lockdown=confidentiality. For MVP,
+%% this is "unknown" unless we recognise the UKI (same pattern as
+%% TME). Once an operator onboards a kernel and asserts its
+%% lockdown level in the uki-measurements DB, we can resolve it.
+claim_lockdown(_Events) ->
+    #{
+        <<"level">>             => <<"unknown">>,
+        <<"level_provenance">>  =>
+            [{<<"derivation">>,
+              <<"uki_not_in_known_lockdown_level_list">>}]
+    }.
+
+%%---- small helpers -----------------------------------------------------
+
+event_provenance(Ev) ->
+    #{
+        <<"pcr">> => maps:get(<<"pcr">>, Ev, null),
+        <<"seq">> => maps:get(<<"seq">>, Ev, null)
+    }.
+
+nested(M, [K], D) when is_map(M) -> hb_maps:get(K, M, D, #{});
+nested(M, [K | Rest], D) when is_map(M) ->
+    case hb_maps:get(K, M, undefined, #{}) of
+        Inner when is_map(Inner) -> nested(Inner, Rest, D);
+        _ -> D
+    end;
+nested(_, _, D) -> D.
 
 %%---- envelope meta -----------------------------------------------------
 
@@ -1462,6 +1774,9 @@ info_shape_test() ->
     ?assert(lists:member(<<"peer-status">>, Exports)),
     ?assert(lists:member(<<"summary">>, Exports)),
     ?assert(lists:member(<<"checks">>, Exports)),
+    %% Rich-event-log surface
+    ?assert(lists:member(<<"events">>, Exports)),
+    ?assert(lists:member(<<"claim">>, Exports)),
     ok.
 
 %% `info/3' response documents every export's parameters + response
@@ -1474,7 +1789,7 @@ info_docs_full_surface_test() ->
     [?assert(maps:is_key(K, Api))
      || K <- [<<"interpret">>, <<"verify">>, <<"verify-peer">>,
               <<"summary">>, <<"peer-summary">>, <<"peer-status">>,
-              <<"checks">>]],
+              <<"checks">>, <<"events">>, <<"claim">>]],
     %% Params are spelled out for the peer-facing handlers.
     VpParams = maps:get(<<"params">>, maps:get(<<"verify-peer">>, Api)),
     ?assert(maps:is_key(<<"peer">>, VpParams)),
@@ -1482,6 +1797,79 @@ info_docs_full_surface_test() ->
     %% `wire_format' tells callers what encoding to expect.
     ?assert(maps:is_key(<<"wire_format">>, Body)),
     ok.
+
+%% `events/3' parses the envelope's tcg_event_log into a
+%% 1-indexed map of AO-Core messages. Uses the same synthetic
+%% fixture as dev_tpm_tcg's tests (3 records: SpecID, CRTM
+%% version, SecureBoot variable).
+events_returns_indexed_map_test() ->
+    Fixture = build_tcg_fixture(),
+    Envelope = #{<<"tcg_event_log">> => Fixture},
+    {ok, #{<<"body">> := Events}} = events(Envelope, #{}, #{}),
+    ?assertEqual(3, maps:size(Events)),
+    E1 = maps:get(<<"1">>, Events),
+    ?assertEqual(<<"EV_NO_ACTION">>, maps:get(<<"event_type">>, E1)),
+    E3 = maps:get(<<"3">>, Events),
+    ?assertEqual(<<"EV_EFI_VARIABLE_DRIVER_CONFIG">>,
+                 maps:get(<<"event_type">>, E3)),
+    %% decode_events enrichment: the SecureBoot variable's
+    %% semantic decode surfaces as secure_boot_enabled: true.
+    P3 = maps:get(<<"parsed">>, E3),
+    Sem = maps:get(<<"semantic">>, P3),
+    ?assertEqual(true, maps:get(<<"secure_boot_enabled">>, Sem)),
+    ok.
+
+%% `claim/3' aggregates events into a flat, policy-friendly shape
+%% with provenance. On a fixture that has a SecureBoot=enabled
+%% event + a CRTM_VERSION event, claim.secure_boot.enabled =
+%% true and claim.firmware.crtm_version carries the decoded
+%% string.
+claim_surface_extracts_secure_boot_and_crtm_test() ->
+    Fixture = build_tcg_fixture(),
+    Envelope = #{<<"tcg_event_log">> => Fixture},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    SB = maps:get(<<"secure_boot">>, Claim),
+    ?assertEqual(true, maps:get(<<"enabled">>, SB)),
+    %% Provenance points back at the source event.
+    Prov = maps:get(<<"enabled_provenance">>, SB),
+    ?assertEqual(1, length(Prov)),
+    FW = maps:get(<<"firmware">>, Claim),
+    ?assertEqual(<<"TEST FW v1">>, maps:get(<<"crtm_version">>, FW)),
+    %% Fields we can't derive from the fixture are "unknown" with
+    %% empty provenance.
+    TME = maps:get(<<"tme">>, Claim),
+    ?assertEqual(<<"unknown">>, maps:get(<<"enabled">>, TME)),
+    Lockdown = maps:get(<<"lockdown">>, Claim),
+    ?assertEqual(<<"unknown">>, maps:get(<<"level">>, Lockdown)),
+    ok.
+
+%% Helper: same fixture dev_tpm_tcg uses for its own tests.
+build_tcg_fixture() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    Data2 = <<"TEST FW v1">>,
+    Sha1_2 = crypto:hash(sha, Data2),
+    Sha256_2 = crypto:hash(sha256, Data2),
+    Rec2 = <<0:32/little, 16#8:32/little, 2:32/little,
+             16#04:16/little, Sha1_2/binary,
+             16#0B:16/little, Sha256_2/binary,
+             (byte_size(Data2)):32/little, Data2/binary>>,
+    Uname = unicode:characters_to_binary(<<"SecureBoot">>, utf8,
+                                           {utf16, little}),
+    UvData = <<0:(16*8), 10:64/little, 1:64/little, Uname/binary, 1>>,
+    Sha1_3 = crypto:hash(sha, UvData),
+    Sha256_3 = crypto:hash(sha256, UvData),
+    Rec3 = <<7:32/little, 16#80000001:32/little, 2:32/little,
+             16#04:16/little, Sha1_3/binary,
+             16#0B:16/little, Sha256_3/binary,
+             (byte_size(UvData)):32/little, UvData/binary>>,
+    <<FirstRec/binary, Rec2/binary, Rec3/binary>>.
 
 %% `checks/3' returns a machine-readable description of the
 %% cryptographic battery — clients build UI + policy on this, so
