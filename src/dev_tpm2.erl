@@ -522,6 +522,15 @@ compute_pcr_digest(Indices, PcrMap) ->
     crypto:hash(sha256, Concat).
 
 %%---- check 3: event-log replay matches quoted PCR 15 ------------------
+%%
+%% Require at least one PCR-15 event. With zero events, `Replayed'
+%% would be the all-zero sentinel; if an attestation also reported
+%% PCR 15 as all-zero, the check would vacuously pass. `chk_binding'
+%% separately catches that shape, but we make the intent explicit
+%% here too: a LapEE node MUST have extended PCR 15 at least once
+%% (via the enforced `on.start' hook), so an envelope with zero
+%% PCR-15 events is not a valid LapEE attestation regardless of the
+%% quoted PCR value.
 chk_event_log_replay(Envelope) ->
     Events = [E || E <- hb_maps:get(<<"runtime_event_log">>, Envelope, [],
                                     #{}),
@@ -532,17 +541,21 @@ chk_event_log_replay(Envelope) ->
             hb_maps:get(<<"pcr_values">>,
                 hb_maps:get(<<"tpm_quote">>, Envelope, #{}, #{}), #{}, #{}),
             undefined, #{}),
-    Replayed =
-        lists:foldl(
-            fun(E, Acc) ->
-                Dig = hb_util:decode(hb_maps:get(<<"digest">>, E, <<>>, #{})),
-                crypto:hash(sha256, <<Acc/binary, Dig/binary>>)
-            end,
-            <<0:256>>, Events),
-    case Quoted15 of
-        undefined ->
+    case {Events, Quoted15} of
+        {[], _} ->
+            {error, <<"no PCR-15 events in runtime_event_log "
+                      "(LapEE guest must extend PCR 15 via on.start)">>};
+        {_, undefined} ->
             {error, <<"envelope has no tpm_quote.pcr_values[15]">>};
         _ ->
+            Replayed =
+                lists:foldl(
+                    fun(E, Acc) ->
+                        Dig = hb_util:decode(
+                                hb_maps:get(<<"digest">>, E, <<>>, #{})),
+                        crypto:hash(sha256, <<Acc/binary, Dig/binary>>)
+                    end,
+                    <<0:256>>, Events),
             case hb_util:decode(Quoted15) of
                 Replayed ->
                     {ok,
@@ -573,19 +586,38 @@ chk_binding(Envelope) ->
             %% node_message_id is a base64url human_id (43 chars).
             %% Each event digest is also base64url. Compare the decoded
             %% raw bytes so encoding quirks don't matter.
-            IdRaw = hb_util:decode(Id),
-            Match = [E || E <- Events,
-                          hb_util:decode(hb_maps:get(<<"digest">>, E, <<>>,
-                                                     #{})) =:= IdRaw],
-            case Match of
-                [] ->
+            IdRaw =
+                try hb_util:decode(Id)
+                catch _:_ -> <<>>
+                end,
+            case byte_size(IdRaw) of
+                32 ->
+                    %% Real 32-byte id; look for an event whose raw
+                    %% digest matches byte-for-byte.
+                    Match = [E || E <- Events,
+                                  hb_util:decode(
+                                    hb_maps:get(<<"digest">>, E, <<>>, #{}))
+                                      =:= IdRaw],
+                    case Match of
+                        [] ->
+                            {error, iolist_to_binary(io_lib:format(
+                                "no PCR-15 event matches node_message_id ~s",
+                                [binary:part(Id, 0,
+                                             min(16, byte_size(Id)))]))};
+                        [E|_] ->
+                            Seq = hb_maps:get(<<"seq">>, E, <<>>, #{}),
+                            {ok, iolist_to_binary(io_lib:format(
+                                "match at seq=~p", [Seq]))}
+                    end;
+                Size ->
+                    %% Empty / short / unparseable id. Refuse to
+                    %% consider any event a match — otherwise an
+                    %% envelope with `node_message_id = ""' and an
+                    %% event with `digest = ""' would match the empty
+                    %% binary trivially.
                     {error, iolist_to_binary(io_lib:format(
-                        "no PCR-15 event matches node_message_id ~s",
-                        [binary:part(Id, 0, min(16, byte_size(Id)))]))};
-                [E|_] ->
-                    Seq = hb_maps:get(<<"seq">>, E, <<>>, #{}),
-                    {ok, iolist_to_binary(io_lib:format(
-                        "match at seq=~p", [Seq]))}
+                        "node_message_id decodes to ~B bytes, expected 32",
+                        [Size]))}
             end
     end.
 
@@ -1044,6 +1076,42 @@ resolve_pcr_list_test() ->
                          ?DEFAULT_QUOTE_PCRS, #{})),
     ?assertEqual(?DEFAULT_QUOTE_PCRS,
         resolve_pcr_list(#{}, ?DEFAULT_QUOTE_PCRS, #{})).
+
+%% Regression test: `chk_event_log_replay' must refuse to
+%% "replay" zero events into a zero PCR and call it valid. Even
+%% though `chk_binding' catches the same shape, we want the replay
+%% check to be explicit about non-emptiness too — defence in depth.
+chk_event_log_replay_rejects_empty_events_test() ->
+    Zero43 = hb_util:encode(<<0:256>>),
+    Envelope = #{
+        <<"runtime_event_log">> => [],
+        <<"tpm_quote">> => #{
+            <<"pcr_values">> => #{<<"15">> => Zero43}
+        }
+    },
+    ?assertMatch({error, _}, chk_event_log_replay(Envelope)).
+
+%% Regression test: `chk_binding' must refuse to treat an empty /
+%% malformed node_message_id as matching an empty event digest
+%% (both would trivially `hb_util:decode' to `<<>>'). Real ids
+%% decode to 32 bytes; anything else is a hard reject.
+chk_binding_rejects_empty_id_test() ->
+    %% Event whose digest decodes to <<>>.
+    EmptyDigestEvent = #{<<"pcr">> => 15,
+                         <<"digest">> => <<"">>,
+                         <<"seq">> => 0},
+    EnvelopeEmptyId = #{
+        <<"node_message_id">> => <<"">>,
+        <<"runtime_event_log">> => [EmptyDigestEvent]
+    },
+    ?assertMatch({error, _}, chk_binding(EnvelopeEmptyId)),
+    %% Also: id that decodes to fewer than 32 bytes (shorter base64url).
+    EnvelopeShortId = #{
+        <<"node_message_id">> => <<"AAAA">>,   %% 3 bytes
+        <<"runtime_event_log">> =>
+            [EmptyDigestEvent#{<<"digest">> => <<"AAAA">>}]
+    },
+    ?assertMatch({error, _}, chk_binding(EnvelopeShortId)).
 
 %% Regression test: the verify_fun used in chk_ek_chain must reject
 %% every structural / trust failure pkix can report, and only let

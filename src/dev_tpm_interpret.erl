@@ -178,7 +178,16 @@ fetch_and_verify_peer(PeerUrl, Opts) ->
         <<"accept">>        => <<"application/json@1.0">>,
         <<"accept-bundle">> => <<"true">>
     },
-    case hb_http:get(Base, FetchMsg, Opts) of
+    %% Wrap the fetch: `hb_http:get' can raise on malformed URLs,
+    %% transport errors, or decode failures. Treat a raise the same
+    %% way we treat `{error, _}' — 502 with a diagnostic — so a
+    %% verifier never crashes because a peer misbehaved.
+    FetchResult =
+        try hb_http:get(Base, FetchMsg, Opts)
+        catch Class:Reason ->
+            {error, {Class, Reason}}
+        end,
+    case FetchResult of
         {ok, Response} when is_map(Response) ->
             Envelope = unwrap_envelope(Response, Opts),
             case is_envelope(Envelope) of
@@ -685,7 +694,9 @@ profile_matches(Entry, Actual) when is_map(Entry) ->
         _ ->
             lists:all(
                 fun({PcrKey, ExpectedDigest}) ->
-                    pcr_digest(PcrKey, Actual) == ExpectedDigest
+                    %% =:= not == so integer-valued profile digests
+                    %% (if ever) don't coerce against binary actuals.
+                    pcr_digest(PcrKey, Actual) =:= ExpectedDigest
                 end,
                 maps:to_list(Expected))
     end;
