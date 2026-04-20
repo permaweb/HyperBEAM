@@ -42,7 +42,18 @@ if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
         --exclude='_build/' --exclude='.git/' \
         --exclude='priv/' --exclude='logs/' --exclude='metrics/' \
         --exclude='rebar3.crashdump' \
+        --exclude='native/lib/secp256k1/build/' \
+        --exclude='*.o' --exclude='*.so' --exclude='*.dylib' \
+        --exclude='*.cargo/' \
         "$HB_ROOT/" "$SRC/"
+    # Also scrub any platform-specific build detritus that may have
+    # been rsynced on earlier passes. If the host previously ran
+    # `rebar3 compile' natively (e.g. to build a macOS-native
+    # verifier HB), native/*/ will contain Mach-O .o files that the
+    # Linux container's linker can't grok.
+    find "$SRC/native" \( -name '*.o' -o -name '*.so' -o -name '*.dylib' \) \
+        -delete 2>/dev/null || true
+    find "$SRC/native/lib/secp256k1/build" -type f -delete 2>/dev/null || true
 elif [[ ! -f "$SRC/rebar.config" ]]; then
     echo "missing HyperBEAM source at $SRC, and parent ($HB_ROOT) does"   >&2
     echo "not look like a HyperBEAM checkout either. Either populate"    >&2
