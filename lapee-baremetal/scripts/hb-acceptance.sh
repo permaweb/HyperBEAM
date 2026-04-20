@@ -72,7 +72,10 @@ runs = ["baseline", "user-diff", "user-hostile"]
 ids = {}
 hook_devices = {}
 for r in runs:
-    env = json.load(open(f"out/acceptance/{r}-attestation.json"))
+    raw = json.load(open(f"out/acceptance/{r}-attestation.json"))
+    # HB wraps the device response in {status, body, commitments};
+    # the envelope lives under body. Accept either shape.
+    env = raw if "lapee_attestation_version" in raw else raw.get("body", raw)
     ids[r] = env["node_message_id"]
     hook_devices[r] = (
         env.get("node_message", {}).get("on", {}).get("start", {}).get("device")
