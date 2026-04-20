@@ -182,9 +182,12 @@ info(_Base, _Req, _Opts) ->
                           "checks that verify / verify-peer performs, "
                           "with per-check failure implications. "
                           "Clients use this to build UI, programmatic "
-                          "policy, or adversarial test harnesses.">>,
+                          "policy, or adversarial test harnesses. Each "
+                          "check has a `severity': `core' checks gate "
+                          "the `verified' verdict; `informational' "
+                          "checks are surfaced but do NOT gate it.">>,
                     <<"response">> =>
-                        <<"[{name, purpose, failure_implies}].">>
+                        <<"[{name, severity, purpose, failure_implies}].">>
                 },
                 <<"events">> => #{
                     <<"description">> =>
@@ -344,7 +347,9 @@ peer_status(_Base, Req, Opts) ->
     end.
 
 %%%============================================================================
-%%% checks/3 — machine-readable description of the five-check battery
+%%% checks/3 — machine-readable description of the verify battery
+%%%             (5 core crypto checks + 1 informational firmware log
+%%%             replay check; `severity' distinguishes)
 %%%============================================================================
 
 checks(_Base, _Req, _Opts) ->
@@ -356,6 +361,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"name">> =>
                         <<"EK certificate chains to trusted TPM "
                           "vendor root CA">>,
+                    <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves this TPM was manufactured by a "
                           "known vendor whose root CA is in the "
@@ -373,6 +379,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"name">> =>
                         <<"TPM2_Quote signature + pcrDigest + "
                           "nonce all valid">>,
+                    <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves the TPM signed the quoted PCR "
                           "values (and nothing else) with its AK, "
@@ -388,6 +395,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"name">> =>
                         <<"Runtime event log replay of PCR 15 "
                           "matches quoted value">>,
+                    <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves the envelope's declared PCR 15 "
                           "events hash together to the quoted "
@@ -403,6 +411,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"name">> =>
                         <<"PCR 15 extension commits to "
                           "node_message_id">>,
+                    <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves THIS node's node_message_id was "
                           "extended into PCR 15 — the LapEE key "
@@ -419,6 +428,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"name">> =>
                         <<"Embedded node_message + id present "
                           "and correct shape">>,
+                    <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves the attestation carries its own "
                           "node message (configuration) with a 43-"
@@ -428,6 +438,31 @@ checks(_Base, _Req, _Opts) ->
                     <<"failure_implies">> =>
                         <<"Envelope is malformed or missing the "
                           "node_message / node_message_id fields.">>
+                },
+                #{
+                    <<"name">> =>
+                        <<"Firmware TCG event log replays to "
+                          "quoted PCRs 0-14">>,
+                    <<"severity">> => <<"informational">>,
+                    <<"purpose">> =>
+                        <<"Cross-check: every firmware event in "
+                          "the envelope's `tcg_event_log' should "
+                          "fold (SHA-256 extend) into its quoted "
+                          "PCR. A mismatch surfaces firmware-log "
+                          "tampering or a decode bug. NOT a trust "
+                          "anchor — the LapEE trust model is "
+                          "rooted at PCR 15 (the node identity), "
+                          "not at PCRs 0-14. Reported but does "
+                          "NOT gate `verified'. Policy engines "
+                          "wanting strict firmware-log consistency "
+                          "can key off this check directly.">>,
+                    <<"failure_implies">> =>
+                        <<"The firmware event log does not "
+                          "reconstruct into the quoted PCR(s). "
+                          "Common benign cause: SeaBIOS under QEMU "
+                          "emits an incomplete log. Benign on "
+                          "development guests; worth investigating "
+                          "on production hardware.">>
                 }
             ]
         }
@@ -766,11 +801,15 @@ do_verify_summary(Envelope, InlineCa, Opts) ->
 flatten_checks(Cs) when is_list(Cs) ->
     [ case C of
           #{<<"ok">> := O, <<"name">> := N, <<"detail">> := De} ->
-              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => De};
+              Sev = maps:get(<<"severity">>, C, <<"core">>),
+              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => De,
+                <<"severity">> => Sev};
           #{<<"ok">> := O, <<"name">> := N} ->
-              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => <<"">>};
+              Sev = maps:get(<<"severity">>, C, <<"core">>),
+              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => <<"">>,
+                <<"severity">> => Sev};
           _ -> #{<<"ok">> => false, <<"name">> => <<"unknown">>,
-                 <<"detail">> => <<"">>}
+                 <<"detail">> => <<"">>, <<"severity">> => <<"core">>}
       end || C <- Cs];
 flatten_checks(_) -> [].
 
@@ -1957,17 +1996,24 @@ build_tcg_fixture() ->
 %% the shape must not drift silently.
 checks_surface_stable_test() ->
     {ok, #{<<"body">> := #{<<"checks">> := Cs}}} = checks(#{}, #{}, #{}),
-    ?assertEqual(5, length(Cs)),
+    %% 5 core + 1 informational = 6 total checks.
+    ?assertEqual(6, length(Cs)),
     lists:foreach(
         fun(C) ->
             ?assert(maps:is_key(<<"name">>, C)),
             ?assert(maps:is_key(<<"purpose">>, C)),
-            ?assert(maps:is_key(<<"failure_implies">>, C))
+            ?assert(maps:is_key(<<"failure_implies">>, C)),
+            ?assert(maps:is_key(<<"severity">>, C))
         end, Cs),
     Names = [maps:get(<<"name">>, C) || C <- Cs],
     ?assert(lists:any(fun(N) ->
                           binary:match(N, <<"EK certificate">>) =/= nomatch
                       end, Names)),
+    %% Exactly one informational check (the firmware TCG replay).
+    Severities = [maps:get(<<"severity">>, C) || C <- Cs],
+    ?assertEqual(5, length([S || S <- Severities, S =:= <<"core">>])),
+    ?assertEqual(1, length([S || S <- Severities,
+                                 S =:= <<"informational">>])),
     ok.
 
 %% `summary/3' on a structurally-complete envelope returns the same

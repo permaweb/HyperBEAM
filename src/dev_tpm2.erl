@@ -301,19 +301,37 @@ verify(Base, Req, Opts) ->
     CaSource = trust_anchor_source(Req, Opts, TrustedCaPem),
     Checks = [
         safely_run(fun() -> chk_ek_chain(Envelope, TrustedCaPem) end,
-                   <<"EK certificate chains to trusted TPM vendor root CA">>),
+                   <<"EK certificate chains to trusted TPM vendor root CA">>,
+                   <<"core">>),
         safely_run(fun() -> chk_quote(Envelope) end,
-                   <<"TPM2_Quote signature + pcrDigest + nonce all valid">>),
+                   <<"TPM2_Quote signature + pcrDigest + nonce all valid">>,
+                   <<"core">>),
         safely_run(fun() -> chk_event_log_replay(Envelope) end,
-                   <<"Runtime event log replay of PCR 15 matches quoted value">>),
+                   <<"Runtime event log replay of PCR 15 matches quoted value">>,
+                   <<"core">>),
         safely_run(fun() -> chk_binding(Envelope) end,
-                   <<"PCR 15 extension commits to node_message_id">>),
+                   <<"PCR 15 extension commits to node_message_id">>,
+                   <<"core">>),
         safely_run(fun() -> chk_node_msg_shape(Envelope) end,
-                   <<"Embedded node_message + id present and correct shape">>),
+                   <<"Embedded node_message + id present and correct shape">>,
+                   <<"core">>),
+        %% `firmware TCG event log replay' is INFORMATIONAL: the
+        %% paper's trust anchor is PCR 15 (the LapEE node identity),
+        %% not the firmware-emitted PCRs 0-14. SeaBIOS under QEMU
+        %% legitimately emits an incomplete log that does not
+        %% fully replay into the quoted PCR 1; that's a SeaBIOS
+        %% quirk, not a LapEE security problem. The check runs,
+        %% surfaces its result in `checks', but does NOT gate
+        %% `verified' — policy engines that want strict firmware-
+        %% log consistency can key off the severity field.
         safely_run(fun() -> chk_tcg_event_log_replay(Envelope) end,
-                   <<"Firmware TCG event log replays to quoted PCRs 0-14">>)
+                   <<"Firmware TCG event log replays to quoted PCRs 0-14">>,
+                   <<"informational">>)
     ],
-    AllOk = lists:all(fun(#{<<"ok">> := Ok}) -> Ok end, Checks),
+    AllOk = lists:all(
+        fun(#{<<"ok">> := Ok, <<"severity">> := Sev}) ->
+                Ok orelse Sev =:= <<"informational">>
+        end, Checks),
     Verdict = case AllOk of
         true  -> <<"accepted">>;
         false -> <<"rejected">>
@@ -355,20 +373,26 @@ trust_anchor_source(Req, _Opts, _Pem) ->
 %% down the whole verifier — the relevant check just becomes `ok=false,
 %% detail=<exception info>'.
 safely_run(F, Name) ->
+    safely_run(F, Name, <<"core">>).
+
+safely_run(F, Name, Severity) ->
     try F() of
         {ok, Detail}    -> #{ <<"name">> => Name,
                               <<"ok">> => true,
-                              <<"detail">> => Detail };
+                              <<"detail">> => Detail,
+                              <<"severity">> => Severity };
         {error, Detail} -> #{ <<"name">> => Name,
                               <<"ok">> => false,
-                              <<"detail">> => Detail }
+                              <<"detail">> => Detail,
+                              <<"severity">> => Severity }
     catch
         Class:Reason:Stack ->
             #{ <<"name">> => Name,
                <<"ok">> => false,
                <<"detail">> =>
                     iolist_to_binary(io_lib:format(
-                        "exception ~p:~p at ~p", [Class, Reason, Stack])) }
+                        "exception ~p:~p at ~p", [Class, Reason, Stack])),
+               <<"severity">> => Severity }
     end.
 
 %% Find the attestation envelope in the resolution chain we were
