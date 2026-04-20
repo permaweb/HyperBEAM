@@ -1533,6 +1533,82 @@ summary_returns_link_free_map_test() ->
               <<"pcr15_event_count">>]],
     ok.
 
+%% `run_cross_node_verify' MUST reject when the envelope's
+%% tpm_quote.nonce does NOT match the verifier's challenge. That
+%% gate sits BEFORE any crypto verification — defence against a
+%% replay of a previously-valid envelope captured off the wire.
+%% Proof: hand-build an envelope with a known nonce, pass a
+%% DIFFERENT nonce as the challenge, assert the response is
+%% `verified: false, nonce_freshness: "mismatch"' and that the
+%% single returned check names the nonce mismatch.
+run_cross_node_verify_enforces_nonce_freshness_test() ->
+    NonceInEnvelope = crypto:strong_rand_bytes(32),
+    DifferentChallenge = crypto:strong_rand_bytes(32),
+    ?assertNotEqual(NonceInEnvelope, DifferentChallenge),
+    Envelope = #{
+        <<"lapee_attestation_version">> => <<"0.3">>,
+        <<"tpm_quote">> => #{
+            <<"nonce">> => hb_util:encode(NonceInEnvelope)
+        }
+    },
+    {ok, #{<<"body">> := Body}} =
+        run_cross_node_verify(<<"http://peer">>,
+                              Envelope,
+                              undefined,
+                              DifferentChallenge,
+                              #{}),
+    ?assertEqual(false, maps:get(<<"verified">>, Body)),
+    ?assertEqual(<<"rejected">>, maps:get(<<"verdict">>, Body)),
+    ?assertEqual(<<"mismatch">>, maps:get(<<"nonce_freshness">>, Body)),
+    %% Response should carry exactly one failed check describing
+    %% the nonce mismatch — no crypto checks should have run,
+    %% because we gated BEFORE them.
+    [FailedCheck] = maps:get(<<"checks">>, Body),
+    ?assertEqual(false, maps:get(<<"ok">>, FailedCheck)),
+    ?assert(binary:match(maps:get(<<"name">>, FailedCheck),
+                         <<"nonce">>) =/= nomatch),
+    ok.
+
+%% Positive: matching nonce passes the freshness gate, letting the
+%% crypto checks run.
+run_cross_node_verify_accepts_matching_nonce_test() ->
+    Challenge = crypto:strong_rand_bytes(32),
+    Envelope = #{
+        <<"lapee_attestation_version">> => <<"0.3">>,
+        <<"tpm_quote">> => #{
+            <<"nonce">> => hb_util:encode(Challenge),
+            <<"pcr_values">> => #{},
+            <<"quoted">> => <<>>,
+            <<"signature">> => <<>>,
+            <<"pcr_selection">> => []
+        },
+        <<"ek_cert_pem">> => <<>>,
+        <<"ak_pub_pem">> => <<>>,
+        <<"runtime_event_log">> => [],
+        <<"node_message">> => #{<<"port">> => 8734},
+        <<"node_message_id">> => hb_util:encode(<<0:256>>),
+        <<"wallet_address">> => <<"sample">>
+    },
+    {ok, #{<<"body">> := Body}} =
+        run_cross_node_verify(<<"http://peer">>, Envelope,
+                              undefined, Challenge, #{}),
+    %% Freshness gate passed — crypto checks attempted (and will
+    %% fail on this synthetic envelope for other reasons, which is
+    %% fine — we only assert nonce_freshness says "verified" and
+    %% the check list isn't the single-entry nonce-mismatch form).
+    ?assertEqual(<<"verified">>,
+                 maps:get(<<"nonce_freshness">>, Body)),
+    ?assertEqual(Challenge,
+                 hb_util:decode(maps:get(<<"nonce_challenge">>, Body))),
+    Checks = maps:get(<<"checks">>, Body),
+    ?assert(length(Checks) >= 1),
+    %% None of the checks should be the "verifier-supplied nonce"
+    %% one — that's only emitted when the gate fails.
+    [?assert(binary:match(maps:get(<<"name">>, C, <<>>),
+                          <<"Verifier-supplied nonce">>) =:= nomatch)
+     || C <- Checks],
+    ok.
+
 %% A missing `peer' parameter on any peer-* endpoint returns 400
 %% with a targeted error — not silent.
 peer_endpoints_reject_missing_peer_test() ->
