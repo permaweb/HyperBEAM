@@ -45,6 +45,9 @@ if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
         --exclude='native/lib/secp256k1/build/' \
         --exclude='*.o' --exclude='*.so' --exclude='*.dylib' \
         --exclude='*.cargo/' \
+        --exclude='lapee-baremetal/build-hyperbeam/' \
+        --exclude='lapee-baremetal/work/' \
+        --exclude='lapee-baremetal/out/' \
         "$HB_ROOT/" "$SRC/"
     # Also scrub any platform-specific build detritus that may have
     # been rsynced on earlier passes. If the host previously ran
