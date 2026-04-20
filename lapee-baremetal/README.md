@@ -9,8 +9,38 @@ A real Linux kernel (Buildroot-built) boots under QEMU with a real
 TPM 2.0 (swtpm), a HyperBEAM release runs as PID 2, the enforced
 `on.start` hook fires and extends PCR 15 with
 `hb_message:id(node_message)`, and any consumer can
-`GET /~tpm2@2.0a/attestation-json` and feed the envelope through
-the Python verifier to get a cryptographic proof of the chain.
+`GET /~tpm2@2.0a/attestation` (with `accept: application/json@1.0 +
+accept-bundle: true`) and feed the envelope through either the
+Python reference verifier or a second HyperBEAM node's
+`~tpm-interpret@1.0/verify-peer` to get a cryptographic proof of
+the chain. All binary fields are base64url (no hex anywhere on
+the wire).
+
+### `~tpm-interpret@1.0` — discovery + verification endpoints
+
+| endpoint | what |
+|---|---|
+| `.../verify-peer?peer=<url>` | Fetch peer's attestation with a **fresh random nonce challenge**, run the 5-check crypto battery locally, return link-free summary. Full trust decision. |
+| `.../peer-summary?peer=<url>` | Fetch + interpret, no crypto (~10× cheaper than verify-peer). Dashboards. |
+| `.../peer-status?peer=<url>` | Reachability + envelope version + wallet + node_message_id only. Cheapest probe. |
+| `.../summary` | Same-node summary (takes envelope, returns link-free summary). |
+| `.../checks` | Machine-readable description of the 5 crypto checks, with per-check `{name, purpose, failure_implies}`. |
+| `.../info` | Full self-description: every handler's params + response shape + `wire_format` convention. |
+
+Every `verify` path (same-node `/verify`, chain URL
+`/attestation/verify~tpm-interpret@1.0`, and cross-node
+`verify-peer`) returns a `trust_anchor_source` field so callers
+see which CA was used: `"request"` / `"node_config"` / `"none"` —
+no silent overrides. Inline trust anchor: `?trusted-ca=<base64url
+PEM bytes>`. Raw-PEM `?trusted-ca-pem=` is back-compat but unsafe
+over URL-encoded GET (form encoding mangles the PEM header).
+
+`verify-peer` additionally enforces a **fresh-nonce challenge**
+by default: the verifier generates a random 32-byte nonce per
+call, passes it in the peer fetch, and rejects with
+`nonce_freshness: "mismatch"` BEFORE any crypto if the envelope's
+quote nonce doesn't match. Protects against replay of previously-
+captured valid envelopes.
 
 Quickest demo (Mac + Homebrew `qemu swtpm docker` + Rosetta):
 
@@ -28,7 +58,7 @@ Expected tail:
 [PASS] EK certificate chains to trusted TPM vendor root CA
 [PASS] TPM2_Quote signature + pcrDigest + nonce all valid
 [PASS] Runtime event log replay of PCR 15 matches quoted value
-[PASS] PCR 15 extension commits to node_message_id_hex
+[PASS] PCR 15 extension commits to node_message_id
 [PASS] Embedded node_message + id present and correct shape
 VERDICT: ATTESTATION ACCEPTED
 ```
