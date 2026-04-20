@@ -353,39 +353,28 @@ parse_offset_test() ->
 
 offset_item_cases_test() ->
     Opts = #{},
-    % A simple message.
-    assert_offset_item(
-        <<"160399272861859">>,
-        498852,
-        #{ <<"content-type">> => <<"image/png">> },
-        Opts
-    ),
-    % A reference with a given length.
-    assert_offset_item(
-        <<"160399272861859-498852">>,
-        498852,
-        #{ <<"content-type">> => <<"image/png">> },
-        Opts
-    ),
-    % A reference to a byte in the middle of the test message.
-    assert_offset_item(
-        <<"160399273000000">>,
-        498852,
-        #{ <<"content-type">> => <<"image/png">> },
-        Opts
-    ),
-    % A megabyte reference to the item, occurring in the middle of the item.
-    assert_offset_item(
-        <<"160399273m">>,
-        498852,
-        #{ <<"content-type">> => <<"image/png">> },
-        Opts
-    ),
-    assert_offset_item(
-        <<"384600234780716">>,
-        856691,
-        #{ <<"content-type">> => <<"image/jpeg">> },
-        Opts
+    Png = #{ <<"content-type">> => <<"image/png">> },
+    Jpeg = #{ <<"content-type">> => <<"image/jpeg">> },
+    %% Each case fetches a live item from arweave.net; running the five
+    %% cases in parallel cuts the wall time to roughly the slowest fetch.
+    Cases =
+        [
+            %% A simple message.
+            {<<"160399272861859">>, 498852, Png},
+            %% A reference with a given length.
+            {<<"160399272861859-498852">>, 498852, Png},
+            %% A reference to a byte in the middle of the test message.
+            {<<"160399273000000">>, 498852, Png},
+            %% A megabyte reference to the item, occurring in the middle.
+            {<<"160399273m">>, 498852, Png},
+            {<<"384600234780716">>, 856691, Jpeg}
+        ],
+    hb_pmap:parallel_map(
+        Cases,
+        fun({Path, DataSize, Tags}) ->
+            assert_offset_item(Path, DataSize, Tags, Opts)
+        end,
+        length(Cases)
     ),
     ok.
 

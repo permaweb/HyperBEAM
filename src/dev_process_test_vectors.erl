@@ -170,7 +170,7 @@ schedule_wasm_call(Base, FuncName, Params, Opts) ->
         ),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)).
 
-schedule_on_process_test_() ->
+schedule_on_process_test_parallel_() ->
 	{timeout, 30, fun()->
 		Opts = test_opts(),
 		Base = aos_process(Opts),
@@ -192,7 +192,7 @@ schedule_on_process_test_() ->
 		)
 	end}.
 
-get_scheduler_slot_test() ->
+get_scheduler_slot_test_parallel() ->
     Opts = test_opts(),
     Base = base_process(Opts),
     schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
@@ -206,7 +206,7 @@ get_scheduler_slot_test() ->
         hb_ao:resolve(Base, Req, Opts)
     ).
 
-recursive_path_resolution_test() ->
+recursive_path_resolution_test_parallel() ->
     Opts = test_opts(),
     Base = base_process(Opts),
     schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
@@ -223,7 +223,7 @@ recursive_path_resolution_test() ->
     ),
     ok.
 
-test_device_compute_test() ->
+test_device_compute_test_parallel() ->
     Opts = test_opts(),
     Base = test_process(Opts),
     schedule_test_message(Base, <<"TEST TEXT 1">>, Opts),
@@ -242,7 +242,7 @@ test_device_compute_test() ->
     ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Res, Opts)),
     ?assertEqual([1,1,0,0], hb_ao:get(<<"already-seen">>, Res, Opts)).
 
-wasm_compute_test() ->
+wasm_compute_test_parallel() ->
     Opts = test_opts(),
     Base = wasm_process(<<"test/test-64.wasm">>, Opts),
     schedule_wasm_call(Base, <<"fac">>, [2.0], Opts),
@@ -285,7 +285,7 @@ wasm_compute_test() ->
     % ?assertEqual([2.0], hb_ao:get(<<"results/output">>, Slot0Res, Opts)),
     % ?assertEqual([6.0], hb_ao:get(<<"results/output">>, Slot1Res, Opts)).
 
-wasm_compute_from_id_test() ->
+wasm_compute_from_id_test_parallel() ->
     Opts = test_opts(#{ cache_control => <<"always">> }),
     Base = wasm_process(<<"test/test-64.wasm">>, Opts),
     schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
@@ -295,7 +295,7 @@ wasm_compute_from_id_test() ->
     ?event(process_compute, {computed_message, {res, Res}}),
     ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Res, Opts)).
 
-http_wasm_process_by_id_test() ->
+http_wasm_process_by_id_test_parallel() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),
     Node = hb_http_server:start_node(Opts = #{
@@ -344,7 +344,7 @@ http_wasm_process_by_id_test() ->
     ?event({compute_msg_res, {msg4, Msg4}}),
     ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Msg4, Opts)).
 
-aos_compute_test_() ->
+aos_compute_test_parallel_() ->
     {timeout, 30, fun() ->
         Opts = test_opts(),
         Base = aos_process(Opts),
@@ -363,7 +363,7 @@ aos_compute_test_() ->
         {ok, Res3}
     end}.
 
-aos_browsable_state_test_() ->
+aos_browsable_state_test_parallel_() ->
     {timeout, 30, fun() ->
         Opts = test_opts(#{ cache_control => <<"always">> }),
         Base = aos_process(Opts),
@@ -385,7 +385,7 @@ aos_browsable_state_test_() ->
         ?assertEqual(4, Res)
     end}.
 
-aos_state_access_via_http_test_() ->
+aos_state_access_via_http_test_parallel_() ->
     {timeout, 60, fun() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
@@ -444,7 +444,7 @@ aos_state_access_via_http_test_() ->
         ok
     end}.
 
-aos_state_patch_test_() ->
+aos_state_patch_test_parallel_() ->
     {timeout, 30, fun() ->
         Wallet = hb:wallet(),
         Opts = test_opts(),
@@ -487,7 +487,7 @@ aos_state_patch_test_() ->
     end}.
 
 %% @doc Manually test state restoration without using the cache.
-restore_test_() -> {timeout, 30, fun do_test_restore/0}.
+restore_test_parallel_() -> {timeout, 30, fun do_test_restore/0}.
 
 do_test_restore() ->
     % Init the process and schedule 3 messages:
@@ -518,7 +518,7 @@ do_test_restore() ->
     ?event({result_b, ResultB}),
     ?assertEqual(<<"1337">>, hb_ao:get(<<"results/data">>, ResultB, Opts)).
 
-now_results_test_() ->
+now_results_test_parallel_() ->
     {timeout, 30, fun() ->
         Opts = test_opts(),
         Base = aos_process(Opts),
@@ -527,7 +527,7 @@ now_results_test_() ->
         ?assertEqual({ok, <<"4">>}, hb_ao:resolve(Base, <<"now/results/data">>, Opts))
     end}.
 
-prior_results_accessible_test_() ->
+prior_results_accessible_test_parallel_() ->
 	{timeout, 30, fun() ->
 		Opts = test_opts(#{ process_async_cache => false }),
 		Base = aos_process(Opts),
@@ -549,7 +549,7 @@ prior_results_accessible_test_() ->
 		)
 	end}.
 
-persistent_process_test() ->
+persistent_process_test_parallel() ->
     {timeout, 30, fun() ->
         Opts = test_opts(),
         Base = aos_process(Opts),
@@ -583,7 +583,7 @@ persistent_process_test() ->
         ?assert(T2 - T1 < ((T1 - T0)/2))
     end}.
 
-simple_wasm_persistent_worker_benchmark_test() ->
+simple_wasm_persistent_worker_benchmark_test_parallel() ->
     Opts = test_opts(),
     BenchTime = 0.05,
     Base = wasm_process(<<"test/test-64.wasm">>, Opts),
@@ -622,7 +622,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
     ?assert(Iterations >= 1),
     ok.
 
-aos_persistent_worker_benchmark_test_() ->
+aos_persistent_worker_benchmark_test_parallel_() ->
     {timeout, 30, fun() ->
         BenchTime = 0.25,
         init(),

@@ -28,6 +28,7 @@
 -export([test_process/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
 %%% The maximum number of assignments that we will query/return at a time.
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 %%% The timeout for a lookahead worker.
@@ -1443,7 +1444,7 @@ test_process(Address) ->
         <<"test-random-seed">> => rand:uniform(1337)
     }.
 
-status_test() ->
+status_test_parallel() ->
     start(),
     ?assertMatch(
         #{<<"processes">> := Processes,
@@ -1452,7 +1453,7 @@ status_test() ->
         hb_ao:get(status, test_process())
     ).
 
-register_new_process_test() ->
+register_new_process_test_parallel() ->
     start(),
     Opts = #{ priv_wallet => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
@@ -1478,7 +1479,7 @@ register_new_process_test() ->
         )
     ).
 
-schedule_message_and_get_slot_test() ->
+schedule_message_and_get_slot_test_parallel() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1503,7 +1504,7 @@ schedule_message_and_get_slot_test() ->
             when CurrentSlot > 0,
         hb_ao:resolve(Base, Res, #{})).
 
-redirect_to_hint_test() ->
+redirect_to_hint_test_parallel() ->
     start(),
     RandAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
     TestLoc = <<"http://test.computer">>,
@@ -1529,7 +1530,7 @@ redirect_to_hint_test() ->
         )
     ).
 
-redirect_from_graphql_test_() ->
+redirect_from_graphql_test_parallel_() ->
     {timeout, 60, fun redirect_from_graphql/0}.
 redirect_from_graphql() ->
     start(),
@@ -1564,7 +1565,7 @@ redirect_from_graphql() ->
         )
     ).
 
-get_local_schedule_test() ->
+get_local_schedule_test_parallel() ->
     start(),
     Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
     Req = #{
@@ -1603,16 +1604,13 @@ http_init() -> http_init(#{}).
 http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
-	ExtendedOpts = Opts#{
-		priv_wallet => Wallet,
-		store => [
-			#{
-                <<"store-module">> => hb_store_volatile,
-                <<"name">> => <<"cache-TEST/volatile">>
-            },
-			#{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
-		]
-	},
+    ExtendedOpts = Opts#{
+        priv_wallet => Wallet,
+        store => [
+            hb_test_utils:test_store(),
+            #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
+        ]
+    },
     Node = hb_http_server:start_node(ExtendedOpts),
     {Node, ExtendedOpts}.
 
@@ -1660,7 +1658,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"accept">> => Format
     }, #{ priv_wallet => Wallet }), #{}).
 
-http_get_schedule_redirect_test_() ->
+http_get_schedule_redirect_test_parallel_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
     Opts =
@@ -1678,7 +1676,7 @@ http_get_schedule_redirect() ->
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, Opts),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
 
-http_post_schedule_test_() ->
+http_post_schedule_test_parallel_() ->
     {timeout, 60, fun http_post_schedule/0}.
 http_post_schedule() ->
     start(),
@@ -1700,7 +1698,7 @@ http_post_schedule() ->
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
     ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
 
-http_get_schedule_test_() ->
+http_get_schedule_test_parallel_() ->
 	{timeout, 20, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1734,7 +1732,6 @@ http_get_schedule_test_() ->
 					lists:seq(1, 3)
 				),
 				?assertMatch({ok, #{ <<"current">> := 3 }}, http_get_slot(Node, PMsg)),
-			        ?debug_wait(100),
 				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3),
 				Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
 				?assertEqual(
@@ -1744,7 +1741,7 @@ http_get_schedule_test_() ->
 			end}.
     
 
-http_get_legacy_schedule_test_() ->
+http_get_legacy_schedule_test_parallel_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1754,7 +1751,7 @@ http_get_legacy_schedule_test_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
 	    end}.
 
-http_get_legacy_slot_test_() ->
+http_get_legacy_slot_test_parallel_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1762,7 +1759,7 @@ http_get_legacy_slot_test_() ->
         ?assertMatch({ok, #{ <<"current">> := Slot }} when Slot > 0, Res)
     end}.
 
-http_get_legacy_schedule_slot_range_test_() ->
+http_get_legacy_schedule_slot_range_test_parallel_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1774,7 +1771,7 @@ http_get_legacy_schedule_slot_range_test_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
 	    end}.
 
-http_get_legacy_schedule_as_aos2_test_() ->
+http_get_legacy_schedule_as_aos2_test_parallel_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1824,7 +1821,7 @@ http_post_legacy_schedule_test_disabled() ->
         )
     end}.
 
-http_get_json_schedule_test_() ->
+http_get_json_schedule_test_parallel_() ->
 	{timeout, 60, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1933,32 +1930,24 @@ many_clients(Opts) ->
     ?event(bench, {res, Res}),
     ?assert(Iterations > 10).
 
-benchmark_suite_test_() ->
-	{timeout, 10, fun() -> 
-		rand:seed(exsplus, erlang:timestamp()),
-		Port = 30000 + rand:uniform(10000),
-		Bench = [
-			{benchmark, "benchmark", fun single_resolution/1},
-			{multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
-		],
-		filelib:ensure_dir(
-			binary_to_list(Base = <<"cache-TEST/run-">>)
-		),
-		hb_test_utils:suite_with_opts(Bench, benchmark_suite(Port, Base))
-	end}.
+benchmark_suite_test_parallel_() ->
+    {timeout, 10, fun() ->
+        Bench = [
+            {benchmark, "benchmark", fun single_resolution/1},
+            {multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
+        ],
+        hb_test_utils:suite_with_opts(Bench, benchmark_suite())
+    end}.
 
-benchmark_suite(Port, Base) ->
-    PortBin = integer_to_binary(Port),
+benchmark_suite() ->
     [
         #{
             name => fs,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-A">>
-                },
+                store => hb_test_utils:test_store(hb_store_fs),
                 scheduling_mode => local_confirmation,
-                port => Port
+                port => 0
             },
             desc => <<"FS store, local conf.">>
         },
@@ -1966,11 +1955,9 @@ benchmark_suite(Port, Base) ->
             name => fs_aggressive,
             requires => [hb_store_fs],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_fs, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-B">>
-                },
+                store => hb_test_utils:test_store(hb_store_fs),
                 scheduling_mode => aggressive,
-                port => Port + 1
+                port => 0
             },
             desc => <<"FS store, aggressive conf.">>
         },
@@ -1978,11 +1965,9 @@ benchmark_suite(Port, Base) ->
             name => rocksdb,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-C">>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => local_confirmation,
-                port => Port + 2
+                port => 0
             },
             desc => <<"RocksDB store, local conf.">>
         },
@@ -1990,11 +1975,9 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_aggressive,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> => <<Base/binary, PortBin/binary, "-D">>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => aggressive,
-                port => Port + 3
+                port => 0
             },
             desc => <<"RocksDB store, aggressive conf.">>
         },
@@ -2002,14 +1985,7 @@ benchmark_suite(Port, Base) ->
             name => rocksdb_extreme_aggressive_h3,
             requires => [http3],
             opts => #{
-                store => #{ <<"store-module">> => hb_store_rocksdb, 
-                    <<"name">> =>
-                          <<
-                              Base/binary,
-                              "run-",
-                              (integer_to_binary(Port+4))/binary
-                          >>
-                },
+                store => hb_test_utils:test_store(hb_store_rocksdb),
                 scheduling_mode => aggressive,
                 protocol => http3,
                 workers => 100

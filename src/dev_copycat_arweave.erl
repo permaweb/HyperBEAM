@@ -486,7 +486,7 @@ observe_event(MetricName, Fun) ->
 
 %%% Tests
 
-index_ids_test() ->
+index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     %% Note: this block includes a data item with an Ethereum signature. This
     %% signature type is not yet (as of Jan 2026) supported by ar_bundles.erl,
@@ -555,7 +555,7 @@ index_ids_test() ->
    ok.
 
 %% @doc Test a bundle header that fits in a single chunk.
-small_bundle_header_test() ->
+small_bundle_header_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     TXID = <<"29TsnbqPQ_7rQ_r4KF5qRr995W1wBw_mTy6WEMy40aw">>,
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -576,7 +576,7 @@ small_bundle_header_test() ->
     ok.
 
 %% @doc Test a bundle header that doesn't fit in a single chunk.
-large_bundle_header_test() ->
+large_bundle_header_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     TXID = <<"bnMTI7LglBGSaK5EdV_juh6GNtXLm0cd5lkd2q4nlT0">>,
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -596,7 +596,7 @@ large_bundle_header_test() ->
     ?assertEqual(960032, HeaderSize),
     ok.
 
-invalid_bundle_header_test() ->
+invalid_bundle_header_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     TXID = <<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>,
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -614,7 +614,7 @@ invalid_bundle_header_test() ->
         download_bundle_header(EndOffset, Size, Opts)),
     ok.
 
-invalid_bundle_test() ->
+invalid_bundle_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1307606,
     {ok, Block} =
@@ -634,7 +634,7 @@ invalid_bundle_test() ->
     assert_item_read(<<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>, Opts),
     ok.
 
-block_with_large_integer_test() ->
+block_with_large_integer_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 633719,
     {ok, Block} =
@@ -647,7 +647,7 @@ block_with_large_integer_test() ->
     assert_item_read(<<"UXpcKTl6Mh34eTFSgny4NcIqoUjBcgYIcMqromcS6_Q">>, Opts),
     ok.
 
-empty_block_test() ->
+empty_block_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1865858,
     {ok, Block} =
@@ -720,7 +720,7 @@ tx_with_data_tag_test_disabled() ->
     assert_item_read(<<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>, Opts),
     ok.
 
-tx_with_no_data_test() ->
+tx_with_no_data_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     BlockBin = hb_util:bin(Block),
@@ -781,13 +781,13 @@ tx_with_no_data_test() ->
     ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
 
-non_string_tags_test() ->
+non_string_tags_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Res = resolve_tx_header(<<"752P6t4cOjMabYHqzC6hyLhxyo4YKZLblg7va_J21YE">>, Opts),
     ?assertEqual(error, Res),
     ok.
 
-list_index_test() ->
+list_index_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     %% First index the block using write mode
@@ -836,7 +836,7 @@ list_index_test() ->
     ?assertEqual([ ], maps:get(<<"not-indexed">>, BlockInfo)),
     ok.
 
-auto_stop_on_indexed_block_test() ->
+auto_stop_on_indexed_block_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     IndexedBlock = 1827941,
     Higher1 = IndexedBlock + 1,
@@ -866,7 +866,7 @@ auto_stop_on_indexed_block_test() ->
     ?assertNot(has_any_indexed_tx(IndexedBlock-1, Opts)),
     ok.
 
-explicit_to_reindexes_all_test() ->
+explicit_to_reindexes_all_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     IndexedBlock = 1827942,
     LowerBlock = IndexedBlock - 1,
@@ -896,7 +896,7 @@ explicit_to_reindexes_all_test() ->
 
 %% @doc Manually write to the index to simulate a partially indexed block.
 %% This should also trigger a stop when the `to` option is omitted.
-auto_stop_partial_index_test() ->
+auto_stop_partial_index_test_parallel() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     HigherBlock = Block + 1,
@@ -933,7 +933,7 @@ auto_stop_partial_index_test() ->
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ok.
 
-negative_parse_range_test() ->
+negative_parse_range_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, Tip} =
         hb_ao:resolve(
@@ -950,7 +950,7 @@ negative_parse_range_test() ->
     ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
     ok.
 
-latest_height_failure_test() ->
+latest_height_failure_test_parallel() ->
     {ok, MockURL, MockHandle} = hb_mock_server:start([
         {"/block/current", block_current, {500, <<"Internal Server Error">>}}
     ]),
@@ -987,7 +987,7 @@ latest_height_failure_test() ->
         hb_mock_server:stop(MockHandle)
     end.
 
-negative_resolved_height_test() ->
+negative_resolved_height_test_parallel() ->
     {ok, MockURL, MockHandle} = hb_mock_server:start([
         {"/block/current", block_current,
             {200, <<"{\"height\": 5}">>}}
@@ -1021,7 +1021,7 @@ negative_resolved_height_test() ->
         hb_mock_server:stop(MockHandle)
     end.
 
-negative_from_index_test() ->
+negative_from_index_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, Tip} = latest_height(Opts),
     StopBlock = 1827942,

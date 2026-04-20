@@ -7,7 +7,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Use the `route/4' function as the handler for all requests, aside 
+%% @doc Use the `route/4' function as the handler for all requests, aside
 %% from `keys' and `set', which are handled by the default resolver.
 info() ->
     #{
@@ -203,7 +203,7 @@ linkify(Manifest, _Opts) ->
 
 %%% Tests
 
-resolve_test() ->
+resolve_test_parallel() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         on => #{
@@ -263,7 +263,7 @@ resolve_test() ->
         hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
 
-manifest_default_fallback_test() ->
+manifest_default_fallback_test_parallel() ->
     Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
@@ -274,7 +274,7 @@ manifest_default_fallback_test() ->
     ),
     ok.
 
-manifest_404_error_test() ->
+manifest_404_error_test_parallel() ->
     Opts = #{
         store => hb_opts:get(store, no_viable_store, #{}),
         manifest_404 => error
@@ -346,7 +346,7 @@ manifest_download_via_raw_endpoint_test_ignore() ->
     ).
 
 %% @doc Accessing `/TXID` of a manifest transaction should access the index key.
-manifest_inner_redirect_test() ->
+manifest_inner_redirect_test_parallel() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
@@ -360,7 +360,7 @@ manifest_inner_redirect_test() ->
     ).
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
-access_key_path_in_manifest_test() ->
+access_key_path_in_manifest_test_parallel() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -374,7 +374,7 @@ access_key_path_in_manifest_test() ->
 
 %% This works with `not_found.js` but doesn't follow the logic if under a 
 %% folder structure, like `assets/not_found.js .
-manifest_should_fallback_on_not_found_path_test() ->
+manifest_should_fallback_on_not_found_path_test_parallel() ->
     Opts = test_env_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(

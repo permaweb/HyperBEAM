@@ -182,7 +182,7 @@ name_from_host(ReqHost, RawNodeHost) ->
 
 %%% Tests.
 
-no_resolvers_test() ->
+no_resolvers_test_parallel() ->
     ?assertEqual(
         not_found,
         resolve(<<"hello">>, #{}, #{}, #{ only => local })
@@ -206,7 +206,7 @@ device_resolver(Msg) ->
         }
     }.
 
-single_resolver_test() ->
+single_resolver_test_parallel() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -222,7 +222,7 @@ single_resolver_test() ->
     ).
 
 %% @doc Lookup a name in a message and return it.
-message_lookup_test() ->
+message_lookup_test_parallel() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -239,7 +239,7 @@ message_lookup_test() ->
         )
     ).
 
-multiple_resolvers_test() ->
+multiple_resolvers_test_parallel() ->
     ?assertEqual(
         {ok, <<"bigger-world">>},
         resolve(
@@ -260,7 +260,7 @@ multiple_resolvers_test() ->
     ).
 
 %% @doc Test that we can resolve messages from a name loaded with the device.
-load_and_execute_test() ->
+load_and_execute_test_parallel() ->
     TestKey = <<"test-key", (hb_util:bin(erlang:system_time(millisecond)))/binary>>,
     {ok, ID} = hb_cache:write(
         #{
@@ -309,7 +309,7 @@ test_arns_opts() ->
     }.
 
 %% @doc Names from JSON test.
-arns_json_snapshot_test() ->
+arns_json_snapshot_test_parallel() ->
     Opts = test_arns_opts(),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -323,7 +323,7 @@ arns_json_snapshot_test() ->
         )
     ).
 
-arns_host_resolution_test() ->
+arns_host_resolution_test_parallel() ->
     Opts = test_arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -338,7 +338,7 @@ arns_host_resolution_test() ->
         )
     ).
 
-arns_host_resolution_with_node_host_test() ->
+arns_host_resolution_with_node_host_test_parallel() ->
     Opts = (test_arns_opts())#{ node_host => <<"http://localhost">>, port => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -353,7 +353,7 @@ arns_host_resolution_with_node_host_test() ->
         )
     ).
 
-localhost_root_request_skips_name_resolution_test() ->
+localhost_root_request_skips_name_resolution_test_parallel() ->
     Opts = (test_arns_opts())#{ port => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(

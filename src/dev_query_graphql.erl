@@ -31,24 +31,33 @@
 schema() ->
     hb_util:ok(file:read_file("scripts/schema.gql")).
 
-%% @doc Ensure that the GraphQL schema and context are initialized. Can be 
-%% called many times.
+%% @doc Ensure that the GraphQL schema and context are initialized. Safe to
+%% call many times, including concurrently. `hb_name:singleton/2' guarantees
+%% only one process runs `init/1' -- the `graphql' library rejects a second
+%% `load_schema' with `entry_already_exists_in_schema'. A `persistent_term'
+%% flag lets callers wait for init to finish: `singleton/2' returns as soon
+%% as the spawned process is registered, which is before `init/1' completes.
 ensure_started() -> ensure_started(#{}).
 ensure_started(Opts) ->
-    case hb_name:lookup(graphql_controller) of
-        PID when is_pid(PID) -> ok;
-        undefined ->
-            Parent = self(),
-            PID =
-                spawn_link(
+    case persistent_term:get({?MODULE, ready}, false) of
+        true -> ok;
+        false ->
+            hb_name:singleton(
+                graphql_controller,
+                fun() ->
+                    init(Opts),
+                    persistent_term:put({?MODULE, ready}, true),
+                    receive stop -> ok end
+                end
+            ),
+            case hb_util:wait_until(
                     fun() ->
-                        init(Opts),
-                        Parent ! {started, self()},
-                        receive stop -> ok end
-                    end
-                ),
-            receive {started, PID} -> ok
-            after ?START_TIMEOUT -> exit(graphql_start_timeout)
+                        persistent_term:get({?MODULE, ready}, false)
+                    end,
+                    ?START_TIMEOUT
+                ) of
+                true -> ok;
+                false -> exit(graphql_start_timeout)
             end
     end.
 
@@ -78,8 +87,6 @@ init(_Opts) ->
     ?event(graphql_schema_definition_inserted),
     ok = graphql:validate_schema(),
     ?event(graphql_schema_validated),
-    hb_name:register(graphql_controller, self()),
-    ?event(graphql_controller_registered),
     ok.
 
 handle(_Base, RawReq, Opts) ->

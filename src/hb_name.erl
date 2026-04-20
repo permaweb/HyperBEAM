@@ -249,5 +249,13 @@ all_test() ->
     BaseRegistered = length(hb_name:all()),
     spawn_test_workers(random),
     ?assertEqual(BaseRegistered + ?CONCURRENT_REGISTRATIONS, length(hb_name:all())),
-    timer:sleep(1000),
-    ?assertEqual(BaseRegistered, length(hb_name:all())).
+    %% Workers stay alive 500 ms then exit; their names are unregistered
+    %% once the `hb_name' cleanup reaper notices. Poll rather than sleep
+    %% a flat second.
+    ?assertEqual(
+        BaseRegistered,
+        hb_util:wait_until(
+            fun() -> length(hb_name:all()) =:= BaseRegistered end,
+            2000
+        ) andalso length(hb_name:all())
+    ).

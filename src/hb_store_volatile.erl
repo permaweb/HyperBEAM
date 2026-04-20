@@ -55,9 +55,15 @@ owner_loop(StoreOpts) ->
     end.
 
 maybe_start_ttl_timer(StoreOpts, PID) ->
-    case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
-        infinity -> skip;
-        MaxTTL -> timer:send_after(hb_util:int(MaxTTL) * 1000, PID, reset)
+    case maps:get(<<"max-ttl-ms">>, StoreOpts, undefined) of
+        undefined ->
+            case maps:get(<<"max-ttl">>, StoreOpts, infinity) of
+                infinity -> skip;
+                MaxTTL ->
+                    timer:send_after(hb_util:int(MaxTTL) * 1000, PID, reset)
+            end;
+        MaxTTLMs ->
+            timer:send_after(hb_util:int(MaxTTLMs), PID, reset)
     end.
 
 %% @doc Stop the ETS owner process (which also drops the table).
@@ -246,15 +252,15 @@ max_ttl_test() ->
         #{
             <<"store-module">> => ?MODULE,
             <<"name">> => <<"ets-max-ttl-test">>,
-            <<"max-ttl">> => 1
+            <<"max-ttl-ms">> => 100
         },
     hb_store:start(StoreOpts),
     hb_store:write(StoreOpts, <<"a">>, <<"b">>),
     ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>)),
-    timer:sleep(1250),
+    timer:sleep(200),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
     hb_store:write(StoreOpts, <<"a">>, <<"c">>),
     ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>)),
-    timer:sleep(1250),
+    timer:sleep(200),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
     hb_store:stop(StoreOpts).

@@ -15,9 +15,11 @@
 %%% available for reading instantly (`optimistically'), even before the
 %%% transaction is dispatched.
 -module(dev_bundler).
--export([tx/3, item/3, ensure_server/1, stop_server/0, get_state/0]).
+-export([tx/3, item/3, ensure_server/1, stop_server/0, stop_server/1]).
+-export([get_state/0, get_state/1]).
 %%% Test-only exports.
 -export([start_mock_gateway/1]).
+
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -129,25 +131,48 @@ cache_item(Item, Opts) ->
 
 %%% Bundling server.
 
+%% @doc Look up the registration name for the bundler server. Derived from
+%% the HTTP server's identity (which `hb_http_server:new_server/1' itself
+%% computes from `priv_wallet') so there is exactly one bundler per HTTP
+%% server on a BEAM node. Falls back to the legacy global `?SERVER_NAME'
+%% atom when no wallet is available (kept for production callers that
+%% stopped the server without a configured wallet).
+server_name(Opts) ->
+    case hb_opts:get(priv_wallet, undefined, Opts) of
+        undefined -> ?SERVER_NAME;
+        Wallet ->
+            {bundler_server,
+                hb_util:human_id(ar_wallet:to_address(Wallet))}
+    end.
+
 %% @doc Return the PID of the bundler server. If the server is not running,
-%% it is started and registered with the name `?SERVER_NAME'.
+%% it is started and registered with the name returned by `server_name/1'.
 ensure_server(Opts) ->
+    Name = server_name(Opts),
     hb_name:singleton(
-        ?SERVER_NAME,
+        Name,
         fun() -> init(Opts) end
     ).
 
+%% @doc Stop the default bundler server. Used by production-oriented
+%% tests that rely on the global `?SERVER_NAME'.
 stop_server() ->
-    case hb_name:lookup(?SERVER_NAME) of
+    stop_server(#{}).
+stop_server(Opts) ->
+    Name = server_name(Opts),
+    case hb_name:lookup(Name) of
         undefined -> ok;
         PID ->
             PID ! stop,
-            hb_name:unregister(?SERVER_NAME)
+            hb_name:unregister(Name)
     end.
 
 %% @doc Return the current bundler server state for tests.
 get_state() ->
-    case hb_name:lookup(?SERVER_NAME) of
+    get_state(#{}).
+get_state(Opts) ->
+    Name = server_name(Opts),
+    case hb_name:lookup(Name) of
         undefined -> undefined;
         PID ->
             PID ! {get_state, self(), Ref = make_ref()},
@@ -519,16 +544,25 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 %%% Tests
 %%%===================================================================
 
-bundle_count_test() ->
+%%% Four test cases below (`idle_test', `bundle_dispatch_delay_test',
+%%% `dispatch_blocking_test', `exponential_backoff_timing_test') assert
+%%% wall-clock timing against the bundler's internal timers. They use
+%%% EUnit's plain `_test/0' convention rather than `_test_parallel/0'
+%%% so they run sequentially, before the parse_transform-injected
+%%% `all_parallel_test_/0' inparallel batch runs the other 20 cases.
+%%% Keeping them out of the batch avoids a ~20% flake seen when
+%%% `timer:sleep/1' returns late under same-module scheduler pressure.
+
+bundle_count_test_parallel() ->
     test_bundle(#{ bundler_max_items => 3 }).
 
-bundle_size_test() ->
+bundle_size_test_parallel() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
-bundle_dispatch_delay_test() -> 
+bundle_dispatch_delay_test() ->
     test_bundle(#{ bundler_max_bundle_dispatch_delay => 3000  }).
 
-nested_bundle_test() ->
+nested_bundle_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -563,22 +597,22 @@ nested_bundle_test() ->
         ok
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-price_error_test() ->
+price_error_test_parallel() ->
     test_api_error(#{
         price => {500, <<"error">>},
         tx_anchor => {200, hb_util:encode(rand:bytes(32))}
     }).
 
-anchor_error_test() ->
+anchor_error_test_parallel() ->
     test_api_error(#{
         price => {200, <<"12345">>},
         tx_anchor => {500, <<"error">>}
     }).
 
-tx_error_test() ->
+tx_error_test_parallel() ->
     {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
@@ -604,10 +638,10 @@ tx_error_test() ->
         ok
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-unsigned_dataitem_test() ->
+unsigned_dataitem_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -638,7 +672,7 @@ unsigned_dataitem_test() ->
             Response)
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 idle_test() ->
@@ -691,7 +725,7 @@ idle_test() ->
             Node, Items, Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 dispatch_blocking_test() ->
@@ -750,12 +784,12 @@ dispatch_blocking_test() ->
         ok
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 %% @doc Test that items are recovered and posted while respecting the
 %% max_items limit.
-recover_respects_max_items_test() ->
+recover_respects_max_items_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -792,10 +826,10 @@ recover_respects_max_items_test() ->
         ?assertEqual(3, length(TXs)),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-complete_task_sequence_test() ->
+complete_task_sequence_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -821,7 +855,7 @@ complete_task_sequence_test() ->
         ?assertEqual(1, length(TXs)),
         Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
         ?assertEqual(1, length(Proofs)),
-        State = get_state(),
+        State = get_state(Opts),
         ?assertNotEqual(undefined, State),
         ?assertNotEqual(timeout, State),
         Workers = State#state.workers,
@@ -836,10 +870,10 @@ complete_task_sequence_test() ->
         ?assertEqual(0, maps:size(Bundles)),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-recover_bundles_test() ->
+recover_bundles_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -876,7 +910,7 @@ recover_bundles_test() ->
         ok = dev_bundler_cache:write_tx(CommittedTX2, [Item4], Opts),
         ok = dev_bundler_cache:complete_tx(CommittedTX2, Opts),
         ensure_server(Opts),
-        State = get_state(),
+        State = get_state(Opts),
         ?assertNotEqual(undefined, State),
         ?assertNotEqual(timeout, State),
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle, 200),
@@ -889,14 +923,14 @@ recover_bundles_test() ->
                 2000
             )
         ),
-        FinalState = get_state(),
+        FinalState = get_state(Opts),
         ?assertEqual(0, maps:size(FinalState#state.bundles)),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_price_failure_retry_test() ->
+post_tx_price_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
     setup_test_counter(price_attempts_counter),
@@ -929,10 +963,10 @@ post_tx_price_failure_retry_test() ->
         ok
     after
         cleanup_test_counter(price_attempts_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_anchor_failure_retry_test() ->
+post_tx_anchor_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 3,
     setup_test_counter(anchor_attempts_counter),
@@ -965,10 +999,10 @@ post_tx_anchor_failure_retry_test() ->
         ok
     after
         cleanup_test_counter(anchor_attempts_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_post_failure_retry_test() ->
+post_tx_post_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 4,
@@ -1003,10 +1037,10 @@ post_tx_post_failure_retry_test() ->
         ok
     after
         cleanup_test_counter(tx_attempts_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_proof_failure_retry_test() ->
+post_proof_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 2,
@@ -1043,10 +1077,10 @@ post_proof_failure_retry_test() ->
         ok
     after
         cleanup_test_counter(chunk_attempts_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-rapid_dispatch_test() ->
+rapid_dispatch_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1077,10 +1111,10 @@ rapid_dispatch_test() ->
         ?assertEqual(10, length(TXs)),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-one_bundle_fails_others_continue_test() ->
+one_bundle_fails_others_continue_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(mixed_attempts_counter),
@@ -1114,10 +1148,10 @@ one_bundle_fails_others_continue_test() ->
         ok
     after
         cleanup_test_counter(mixed_attempts_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-parallel_task_execution_test() ->
+parallel_task_execution_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     SleepTime = 120,
@@ -1152,7 +1186,7 @@ parallel_task_execution_test() ->
         ?assert(ElapsedTime < 2000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 exponential_backoff_timing_test() ->
@@ -1205,10 +1239,10 @@ exponential_backoff_timing_test() ->
         ok
     after
         cleanup_test_counter(backoff_cap_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-independent_task_retry_counts_test() ->
+independent_task_retry_counts_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(independent_retry_counter),
@@ -1244,10 +1278,10 @@ independent_task_retry_counts_test() ->
         ok
     after
         cleanup_test_counter(independent_retry_counter),
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-invalid_item_test() ->
+invalid_item_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1287,10 +1321,10 @@ invalid_item_test() ->
             <<"details">> := <<"signature-verification-failed">>}}, DirectResult),
         ok
     after
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-cache_write_failure_test() ->
+cache_write_failure_test_parallel() ->
     GoodOpts = #{store => hb_test_utils:test_store()},
     BadOpts = #{
         store => undefined,
@@ -1320,8 +1354,10 @@ cache_write_failure_test() ->
     end.
 
 stop_test_servers(ServerHandle) ->
+    stop_test_servers(ServerHandle, #{}).
+stop_test_servers(ServerHandle, Opts) ->
     hb_mock_server:stop(ServerHandle),
-    stop_server().
+    stop_server(Opts).
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
@@ -1358,7 +1394,7 @@ test_bundle(Opts) ->
         ok
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 test_api_error(Responses) ->
@@ -1384,7 +1420,7 @@ test_api_error(Responses) ->
         ok
     after
         %% Always cleanup, even if test fails
-        stop_test_servers(ServerHandle)
+        stop_test_servers(ServerHandle, NodeOpts)
     end.
 
 new_data_item(Index, Size) ->
