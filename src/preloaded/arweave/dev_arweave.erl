@@ -422,14 +422,15 @@ post_chunk(Request, Opts) ->
 %% global Arweave data tree, or relative to the start of a specific pending
 %% transaction.
 get_chunk(_Base, Request, Opts) ->
+    HasExplicitLength = hb_maps:is_key(<<"length">>, Request, Opts),
     {ok, Offset, Length, MaybeRelativeTXID} = extract_chunk_params(Request, Opts),
     case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
         {ok, Chunks} ->
             Data = hb_util:bin(Chunks),
-            case Length of
-                undefined ->
+            case HasExplicitLength of
+                false ->
                     {ok, Data};
-                Length ->
+                true ->
                     {
                         ok,
                         binary:part(Data, 0, min(hb_util:int(Length), byte_size(Data)))
@@ -442,7 +443,7 @@ get_chunk(_Base, Request, Opts) ->
 %% @doc Extract the parameters from a chunk request. Supports both global offsets
 %% and relative offset+parent ID pairs.
 extract_chunk_params(Request, Opts) ->
-    Length = hb_maps:get(<<"length">>, Request, undefined, Opts),
+    Length = hb_maps:get(<<"length">>, Request, 1, Opts),
     case hb_maps:find(<<"offset">>, Request, Opts) of
         {ok, RelativeInfo} when is_map(RelativeInfo) ->
             {ok, RelativeOffset} = hb_maps:find(<<"offset">>, RelativeInfo, Opts),
@@ -1997,6 +1998,12 @@ get_mid_chunk_pre_split_test_parallel() ->
         hb_util:encode(crypto:hash(sha256, Data))
     ),
     ok.
+
+extract_chunk_params_default_length_test_parallel() ->
+    ?assertEqual(
+        {ok, 123, 1, undefined},
+        extract_chunk_params(#{ <<"offset">> => 123 }, #{})
+    ).
 
 get_pre_split_small_chunks_test_parallel() ->
     TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
