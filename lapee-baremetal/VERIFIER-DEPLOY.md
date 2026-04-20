@@ -142,23 +142,23 @@ Response fields (on success):
   "verdict": "accepted",
   "checks": [ /* 5 entries, all ok:true */ ],
   "summary": {
-    "envelope_version": "0.3",
-    "tpm_manufacturer": "…",
-    "ak_algorithm": "RSA",
-    "ak_key_size_bits": 2048,
-    "ak_public_key_b64url": "…",           // pin this to refuse AK swaps
-    "quote_attest_type": "TPM_ST_ATTEST_QUOTE",
-    "quote_clock_ms": 601558,
-    "quote_reset_count": …,
-    "secure_boot_measured": false,
-    "wallet_address": "…",                 // the peer's wallet
-    "node_message_id": "…",                // 43-char base64url
-    "on_start_hook_device": "tpm2@2.0a",   // MUST be this — enforced hook
-    "pcr15_event_count": 1
+    "envelope-version": "0.3",
+    "tpm-manufacturer": "…",
+    "ak-algorithm": "RSA",
+    "ak-key-size-bits": 2048,
+    "ak-public-key-b64url": "…",           // pin this to refuse AK swaps
+    "quote-attest-type": "TPM_ST_ATTEST_QUOTE",
+    "quote-clock-ms": 601558,
+    "quote-reset-count": …,
+    "secure-boot-measured": false,
+    "wallet-address": "…",                 // the peer's wallet
+    "node-message-id": "…",                // 43-char base64url
+    "on-start-hook-device": "tpm2@2.0a",   // MUST be this — enforced hook
+    "pcr15-event-count": 1
   },
-  "trust_anchor_source": "node_config",
-  "nonce_challenge": "…",                  // the verifier's 32-byte challenge
-  "nonce_freshness": "verified"            // "verified" or "mismatch"
+  "trust-anchor-source": "node_config",
+  "nonce-challenge": "…",                  // the verifier's 32-byte challenge
+  "nonce-freshness": "verified"            // "verified" or "mismatch"
 }
 ```
 

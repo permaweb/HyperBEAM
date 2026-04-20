@@ -65,7 +65,7 @@ print()
 print(f"--- events: {len(event_keys)} record(s) ---")
 for key in event_keys:
     e = events[key]
-    et = e.get('event_type', '?')
+    et = e.get('event-type', '?')
     pcr = e.get('pcr', '?')
     seq = e.get('seq', '?')
     have_parsed = 'parsed' in e
@@ -108,16 +108,16 @@ def show_section(label):
     # HB injects "commitments" (signature metadata) at every nested
     # level; filter it from the human-readable view.
     for k in sorted(sec.keys()):
-        if k.endswith('_provenance') or k == 'commitments':
+        if k.endswith('-provenance') or k == 'commitments':
             continue
         v = sec[k]
-        prov = sec.get(f"{k}_provenance")
+        prov = sec.get(f"{k}-provenance")
         prov_tag = (
             f"  (prov: {len(prov)} src)"
             if isinstance(prov, list) and prov else ""
         )
         print(f"    {k:<28} {fmt_value(v):<32}{prov_tag}")
 
-for s in ('secure_boot','firmware','boot_loader','kernel','tme','lockdown'):
+for s in ('secure-boot','firmware','boot-loader','kernel','tme','lockdown'):
     show_section(s)
 PY

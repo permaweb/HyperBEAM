@@ -71,7 +71,7 @@ info(_Base, _Req, _Opts) ->
                   "verify': the `verify' export here runs the crypto "
                   "chain first and only interprets on success.">>,
             <<"version">> => <<"1.0">>,
-            <<"wire_format">> =>
+            <<"wire-format">> =>
                 <<"All binary fields on the wire are base64url "
                   "(hb_util:encode/1). No hex, except short always-"
                   "hex-displayed namespaced identifiers (e.g. "
@@ -289,7 +289,7 @@ peer_summary(_Base, Req, Opts) ->
                         <<"body">> => #{
                             <<"peer">>     => Base,
                             <<"reachable">> => true,
-                            <<"envelope_shape_ok">> => true,
+                            <<"envelope-shape-ok">> => true,
                             <<"summary">> => summarise_interp(Interp)
                         }
                     }};
@@ -299,7 +299,7 @@ peer_summary(_Base, Req, Opts) ->
                         <<"body">> => #{
                             <<"peer">>     => Base,
                             <<"reachable">> => false,
-                            <<"envelope_shape_ok">> => false,
+                            <<"envelope-shape-ok">> => false,
                             <<"detail">>   => fmt_reason(Reason)
                         }
                     }}
@@ -318,15 +318,15 @@ peer_status(_Base, Req, Opts) ->
                         <<"body">> => #{
                             <<"peer">> => Base,
                             <<"reachable">> => true,
-                            <<"lapee_attestation_version">> =>
+                            <<"lapee-attestation-version">> =>
                                 hb_maps:get(
-                                    <<"lapee_attestation_version">>,
+                                    <<"lapee-attestation-version">>,
                                     Envelope, null, Opts),
-                            <<"wallet_address">> =>
-                                hb_maps:get(<<"wallet_address">>,
+                            <<"wallet-address">> =>
+                                hb_maps:get(<<"wallet-address">>,
                                             Envelope, null, Opts),
-                            <<"node_message_id">> =>
-                                hb_maps:get(<<"node_message_id">>,
+                            <<"node-message-id">> =>
+                                hb_maps:get(<<"node-message-id">>,
                                             Envelope, null, Opts)
                         }
                     }};
@@ -336,9 +336,9 @@ peer_status(_Base, Req, Opts) ->
                         <<"body">> => #{
                             <<"peer">> => Base,
                             <<"reachable">> => false,
-                            <<"lapee_attestation_version">> => null,
-                            <<"wallet_address">> => null,
-                            <<"node_message_id">> => null,
+                            <<"lapee-attestation-version">> => null,
+                            <<"wallet-address">> => null,
+                            <<"node-message-id">> => null,
                             <<"detail">> => fmt_reason(Reason)
                         }
                     }}
@@ -368,7 +368,7 @@ checks(_Base, _Req, _Opts) ->
                           "verifier's trust anchors. Without this, "
                           "the EK (and thus the AK, and thus the "
                           "quote) could be synthesised by anyone.">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"The EK cert cannot be tied back to a "
                           "trusted TPM vendor. Either the TPM is "
                           "not a vendor we trust, OR the verifier's "
@@ -385,7 +385,7 @@ checks(_Base, _Req, _Opts) ->
                           "values (and nothing else) with its AK, "
                           "and that extraData equals the caller's "
                           "nonce (anti-replay).">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"Either the quote signature is invalid "
                           "(wrong key / tampered message), the "
                           "pcrDigest doesn't match the reported "
@@ -402,7 +402,7 @@ checks(_Base, _Req, _Opts) ->
                           "PCR 15 value. Establishes a correspondence "
                           "between declared events and hardware "
                           "state.">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"The runtime_event_log doesn't match "
                           "what was actually quoted — events "
                           "missing, inserted, or out of order.">>
@@ -410,14 +410,14 @@ checks(_Base, _Req, _Opts) ->
                 #{
                     <<"name">> =>
                         <<"PCR 15 extension commits to "
-                          "node_message_id">>,
+                          "node-message-id">>,
                     <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves THIS node's node_message_id was "
                           "extended into PCR 15 — the LapEE key "
                           "binding. Ties the attestation to the "
                           "specific node configuration.">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"The node_message_id claimed in the "
                           "envelope isn't in the PCR 15 event log. "
                           "The enforced on.start hook may not have "
@@ -435,7 +435,7 @@ checks(_Base, _Req, _Opts) ->
                           "character base64url id that decodes to "
                           "32 bytes. Enables offline inspection of "
                           "what was actually attested to.">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"Envelope is malformed or missing the "
                           "node_message / node_message_id fields.">>
                 },
@@ -456,7 +456,7 @@ checks(_Base, _Req, _Opts) ->
                           "NOT gate `verified'. Policy engines "
                           "wanting strict firmware-log consistency "
                           "can key off this check directly.">>,
-                    <<"failure_implies">> =>
+                    <<"failure-implies">> =>
                         <<"The firmware event log does not "
                           "reconstruct into the quoted PCR(s). "
                           "Common benign cause: SeaBIOS under QEMU "
@@ -476,7 +476,7 @@ missing_peer_400() ->
     {ok, #{
         <<"status">> => 400,
         <<"body">> => #{
-            <<"error">> => <<"missing_peer">>,
+            <<"error">> => <<"missing-peer">>,
             <<"detail">> =>
                 <<"This endpoint requires a `peer' key — the base "
                   "URL of a LapEE node (e.g. "
@@ -569,7 +569,7 @@ verify_peer(_Base, Req, Opts) ->
             {ok, #{
                 <<"status">> => 400,
                 <<"body">> => #{
-                    <<"error">> => <<"missing_peer">>,
+                    <<"error">> => <<"missing-peer">>,
                     <<"detail">> =>
                         <<"verify-peer requires a `peer' key (base URL "
                           "of the node to verify, e.g. "
@@ -660,7 +660,7 @@ fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
                     {ok, #{
                         <<"status">> => 502,
                         <<"body">> => #{
-                            <<"error">> => <<"peer_did_not_return_envelope">>,
+                            <<"error">> => <<"peer-did-not-return-envelope">>,
                             <<"peer">>  => Base,
                             <<"detail">> =>
                                 <<"GET /~tpm2@2.0a/attestation did not "
@@ -680,7 +680,7 @@ fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
             {ok, #{
                 <<"status">> => 502,
                 <<"body">> => #{
-                    <<"error">> => <<"peer_unreachable">>,
+                    <<"error">> => <<"peer-unreachable">>,
                     <<"peer">>  => Base,
                     <<"detail">> =>
                         iolist_to_binary(
@@ -691,7 +691,7 @@ fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
             {ok, #{
                 <<"status">> => 502,
                 <<"body">> => #{
-                    <<"error">> => <<"peer_unexpected_response">>,
+                    <<"error">> => <<"peer-unexpected-response">>,
                     <<"peer">>  => Base,
                     <<"detail">> =>
                         iolist_to_binary(
@@ -730,9 +730,9 @@ run_cross_node_verify(Base, Envelope, InlineCa, NonceBytes, Opts) ->
                     <<"verdict">>          => Verdict,
                     <<"checks">>           => Checks,
                     <<"summary">>          => Summary,
-                    <<"trust_anchor_source">> => CaSource,
-                    <<"nonce_challenge">>  => hb_util:encode(NonceBytes),
-                    <<"nonce_freshness">>  => <<"verified">>
+                    <<"trust-anchor-source">> => CaSource,
+                    <<"nonce-challenge">>  => hb_util:encode(NonceBytes),
+                    <<"nonce-freshness">>  => <<"verified">>
                 }
             }};
         _ ->
@@ -748,8 +748,8 @@ run_cross_node_verify(Base, Envelope, InlineCa, NonceBytes, Opts) ->
                     <<"peer">>             => Base,
                     <<"verified">>         => false,
                     <<"verdict">>          => <<"rejected">>,
-                    <<"nonce_challenge">>  => hb_util:encode(NonceBytes),
-                    <<"nonce_freshness">>  => <<"mismatch">>,
+                    <<"nonce-challenge">>  => hb_util:encode(NonceBytes),
+                    <<"nonce-freshness">>  => <<"mismatch">>,
                     <<"checks">>           => [#{
                         <<"name">>   => <<"Verifier-supplied nonce is "
                                           "echoed in the attestation "
@@ -771,7 +771,7 @@ run_cross_node_verify(Base, Envelope, InlineCa, NonceBytes, Opts) ->
 %% decode it to raw bytes. Returns `undefined' on any shape issue.
 envelope_quote_nonce(Envelope, Opts) ->
     try
-        Q = hb_maps:get(<<"tpm_quote">>, Envelope, #{}, Opts),
+        Q = hb_maps:get(<<"tpm-quote">>, Envelope, #{}, Opts),
         B64 = hb_maps:get(<<"nonce">>, Q, <<>>, Opts),
         hb_util:decode(B64)
     catch _:_ -> undefined
@@ -792,7 +792,7 @@ do_verify_summary(Envelope, InlineCa, Opts) ->
             V = maps:get(<<"verified">>, Body, false),
             D = maps:get(<<"verdict">>, Body, <<"rejected">>),
             C = maps:get(<<"checks">>, Body, []),
-            S = maps:get(<<"trust_anchor_source">>, Body, <<"node_config">>),
+            S = maps:get(<<"trust-anchor-source">>, Body, <<"node_config">>),
             {V, D, flatten_checks(C), S};
         _ ->
             {false, <<"rejected">>, [], <<"none">>}
@@ -826,38 +826,38 @@ summarise_interp(Interp) when is_map(Interp) ->
     Node = maps:get(<<"node">>, Interp, #{}),
     Env  = maps:get(<<"envelope">>, Interp, #{}),
     #{
-        <<"envelope_version">> =>
+        <<"envelope-version">> =>
             maps:get(<<"version">>, Env, null),
-        <<"tpm_manufacturer">> =>
-            maps:get(<<"manufacturer_name">>, Tpm, null),
-        <<"tpm_manufacturer_kind">> =>
-            maps:get(<<"manufacturer_kind">>, Tpm, null),
-        <<"tpm_model">> =>
+        <<"tpm-manufacturer">> =>
+            maps:get(<<"manufacturer-name">>, Tpm, null),
+        <<"tpm-manufacturer-kind">> =>
+            maps:get(<<"manufacturer-kind">>, Tpm, null),
+        <<"tpm-model">> =>
             maps:get(<<"model">>, Tpm, null),
-        <<"tpm_firmware_version">> =>
-            maps:get(<<"firmware_version">>, Tpm, null),
-        <<"ak_algorithm">> =>
+        <<"tpm-firmware-version">> =>
+            maps:get(<<"firmware-version">>, Tpm, null),
+        <<"ak-algorithm">> =>
             maps:get(<<"algorithm">>, Ak, null),
-        <<"ak_key_size_bits">> =>
-            maps:get(<<"key_size_bits">>, Ak, null),
-        <<"ak_public_key_b64url">> =>
-            maps:get(<<"pub_der_sha256_b64url">>, Ak, null),
-        <<"quote_attest_type">> =>
-            maps:get(<<"attest_type">>, Q, null),
-        <<"quote_clock_ms">> =>
-            maps:get(<<"clock_ms">>, Q, null),
-        <<"quote_reset_count">> =>
-            maps:get(<<"reset_count">>, Q, null),
-        <<"secure_boot_measured">> =>
-            maps:get(<<"secure_boot_measured">>, Boot, null),
-        <<"wallet_address">> =>
-            maps:get(<<"wallet_address">>, Node, null),
-        <<"node_message_id">> =>
-            maps:get(<<"node_message_id">>, Node, null),
-        <<"on_start_hook_device">> =>
-            maps:get(<<"on_start_hook_device">>, Node, null),
-        <<"pcr15_event_count">> =>
-            maps:get(<<"pcr15_event_count">>, Node, null)
+        <<"ak-key-size-bits">> =>
+            maps:get(<<"key-size-bits">>, Ak, null),
+        <<"ak-public-key-b64url">> =>
+            maps:get(<<"pub-der-sha256-b64url">>, Ak, null),
+        <<"quote-attest-type">> =>
+            maps:get(<<"attest-type">>, Q, null),
+        <<"quote-clock-ms">> =>
+            maps:get(<<"clock-ms">>, Q, null),
+        <<"quote-reset-count">> =>
+            maps:get(<<"reset-count">>, Q, null),
+        <<"secure-boot-measured">> =>
+            maps:get(<<"secure-boot-measured">>, Boot, null),
+        <<"wallet-address">> =>
+            maps:get(<<"wallet-address">>, Node, null),
+        <<"node-message-id">> =>
+            maps:get(<<"node-message-id">>, Node, null),
+        <<"on-start-hook-device">> =>
+            maps:get(<<"on-start-hook-device">>, Node, null),
+        <<"pcr15-event-count">> =>
+            maps:get(<<"pcr15-event-count">>, Node, null)
     };
 summarise_interp(_) -> #{}.
 
@@ -906,7 +906,7 @@ resolve_envelope(Base, Req, Opts) ->
     end.
 
 is_envelope(M) when is_map(M) ->
-    hb_maps:get(<<"lapee_attestation_version">>, M, undefined, #{}) /=
+    hb_maps:get(<<"lapee-attestation-version">>, M, undefined, #{}) /=
         undefined;
 is_envelope(_) -> false.
 
@@ -967,7 +967,7 @@ interpret_envelope(E, Opts) ->
 %%     /.../events/3/parsed         → the per-type decoded payload
 
 interpret_events(E) ->
-    case hb_maps:get(<<"tcg_event_log">>, E, <<>>, #{}) of
+    case hb_maps:get(<<"tcg-event-log">>, E, <<>>, #{}) of
         LogB64 when is_binary(LogB64), byte_size(LogB64) > 0 ->
             LogBin = try hb_util:decode(LogB64) catch _:_ -> <<>> end,
             case byte_size(LogBin) of
@@ -1001,23 +1001,23 @@ encode_field(_K, V) when is_list(V) ->
     [encode_field_val(X) || X <- V];
 %% These keys carry UTF-8 strings by construction — leave as-is.
 encode_field(K, V) when is_binary(V),
-                        K =:= <<"event_type">>;
-                        K =:= <<"variable_name">>;
-                        K =:= <<"variable_guid">>;
-                        K =:= <<"type_guid">>;
+                        K =:= <<"event-type">>;
+                        K =:= <<"variable-name">>;
+                        K =:= <<"variable-guid">>;
+                        K =:= <<"type-guid">>;
                         K =:= <<"action">>;
-                        K =:= <<"crtm_version">>;
-                        K =:= <<"post_code">>;
-                        K =:= <<"post_code_bytes">> -> V;
+                        K =:= <<"crtm-version">>;
+                        K =:= <<"post-code">>;
+                        K =:= <<"post-code-bytes">> -> V;
 encode_field(<<"format">>, V) when is_binary(V) -> V;
 encode_field(<<"key">>, V) when is_binary(V) -> V;
 encode_field(<<"value">>, V) when is_binary(V) -> V;
 encode_field(<<"separator">>, V) when is_binary(V) -> V;
-encode_field(<<"spec_id">>, V) when is_binary(V) -> V;
+encode_field(<<"spec-id">>, V) when is_binary(V) -> V;
 encode_field(<<"marker">>, V) when is_binary(V) -> V;
-encode_field(<<"blob_description">>, V) when is_binary(V) -> V;
+encode_field(<<"blob-description">>, V) when is_binary(V) -> V;
 encode_field(<<"text">>, V) when is_binary(V) -> V;
-encode_field(<<"hash_alg_name">>, V) when is_binary(V) -> V;
+encode_field(<<"hash-alg-name">>, V) when is_binary(V) -> V;
 encode_field(<<"error">>, V) when is_binary(V) -> V;
 %% Everything else that's a binary gets base64url-encoded.
 encode_field(_K, V) when is_binary(V) ->
@@ -1050,9 +1050,9 @@ encode_field_val(V) -> V.
 interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
     #{
-        <<"secure_boot">> => claim_secure_boot(EvList),
+        <<"secure-boot">> => claim_secure_boot(EvList),
         <<"firmware">>    => claim_firmware(EvList),
-        <<"boot_loader">> => claim_boot_loader(EvList),
+        <<"boot-loader">> => claim_boot_loader(EvList),
         <<"kernel">>      => claim_kernel(EvList, E),
         <<"tme">>         => claim_tme(EvList, E, Db),
         <<"lockdown">>    => claim_lockdown(EvList)
@@ -1072,41 +1072,41 @@ event_list(_) -> [].
 %% Secure Boot state + enrolled authorities.
 claim_secure_boot(Events) ->
     SbEvents = [Ev || Ev <- Events,
-                      maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+                      maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000001,
                       sem_var_name(Ev) =:= <<"SecureBoot">>],
     {Enabled, Prov} = case SbEvents of
         [] -> {<<"unknown">>, []};
         [Ev0 | _] ->
             Sem = nested(Ev0, [<<"parsed">>, <<"semantic">>], #{}),
-            V = maps:get(<<"secure_boot_enabled">>, Sem, <<"unknown">>),
+            V = maps:get(<<"secure-boot-enabled">>, Sem, <<"unknown">>),
             {V, [event_provenance(Ev0)]}
     end,
     DbAuths = collect_authorities(Events),
     SetupMode = lookup_binary_sem(Events, <<"SetupMode">>,
-                                  <<"setup_mode">>),
+                                  <<"setup-mode">>),
     DeployedMode = lookup_binary_sem(Events, <<"DeployedMode">>,
-                                     <<"deployed_mode">>),
+                                     <<"deployed-mode">>),
     #{
         <<"enabled">>          => Enabled,
-        <<"enabled_provenance">>=> Prov,
-        <<"db_authorities">>   => DbAuths,
-        <<"setup_mode">>       => SetupMode,
-        <<"deployed_mode">>    => DeployedMode
+        <<"enabled-provenance">>=> Prov,
+        <<"db-authorities">>   => DbAuths,
+        <<"setup-mode">>       => SetupMode,
+        <<"deployed-mode">>    => DeployedMode
     }.
 
 %% Collect summarised signature-list entries from PK / KEK / db
 %% variable events (which enumerate which keys are enrolled).
 collect_authorities(Events) ->
     lists:flatten(
-        [nested(Ev, [<<"parsed">>, <<"semantic">>, <<"signature_list">>], [])
+        [nested(Ev, [<<"parsed">>, <<"semantic">>, <<"signature-list">>], [])
          || Ev <- Events,
-            maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+            maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000001,
             lists:member(sem_var_name(Ev),
                          [<<"PK">>, <<"KEK">>, <<"db">>, <<"dbx">>])]).
 
 lookup_binary_sem(Events, VarName, SemKey) ->
     case [Ev || Ev <- Events,
-                maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000001,
+                maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000001,
                 sem_var_name(Ev) =:= VarName] of
         [] -> <<"unknown">>;
         [Ev | _] ->
@@ -1114,21 +1114,21 @@ lookup_binary_sem(Events, VarName, SemKey) ->
     end.
 
 sem_var_name(Ev) ->
-    nested(Ev, [<<"parsed">>, <<"variable_name">>], <<>>).
+    nested(Ev, [<<"parsed">>, <<"variable-name">>], <<>>).
 
 %% Firmware identity from EV_S_CRTM_VERSION.
 claim_firmware(Events) ->
     Matches = [Ev || Ev <- Events,
-                     maps:get(<<"event_type_code">>, Ev, 0) =:= 16#8],
+                     maps:get(<<"event-type-code">>, Ev, 0) =:= 16#8],
     case Matches of
         [] ->
-            #{<<"crtm_version">> => <<"unknown">>,
-              <<"crtm_version_provenance">> => []};
+            #{<<"crtm-version">> => <<"unknown">>,
+              <<"crtm-version-provenance">> => []};
         [Ev0 | _] ->
-            Version = nested(Ev0, [<<"parsed">>, <<"crtm_version">>],
+            Version = nested(Ev0, [<<"parsed">>, <<"crtm-version">>],
                              <<"unknown">>),
-            #{<<"crtm_version">> => Version,
-              <<"crtm_version_provenance">> =>
+            #{<<"crtm-version">> => Version,
+              <<"crtm-version-provenance">> =>
                   [event_provenance(Ev0)]}
     end.
 
@@ -1136,16 +1136,16 @@ claim_firmware(Events) ->
 %% SHA-256 of the image is in digests.sha256.
 claim_boot_loader(Events) ->
     Matches = [Ev || Ev <- Events,
-                     maps:get(<<"event_type_code">>, Ev, 0) =:= 16#80000003,
+                     maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000003,
                      maps:get(<<"pcr">>, Ev, 0) =:= 4],
     case Matches of
         [] ->
-            #{<<"image_hash">> => <<"unknown">>,
-              <<"image_hash_provenance">> => []};
+            #{<<"image-hash">> => <<"unknown">>,
+              <<"image-hash-provenance">> => []};
         [Ev0 | _] ->
             Hash = nested(Ev0, [<<"digests">>, <<"sha256">>], <<"unknown">>),
-            #{<<"image_hash">> => Hash,
-              <<"image_hash_provenance">> =>
+            #{<<"image-hash">> => Hash,
+              <<"image-hash-provenance">> =>
                   [event_provenance(Ev0)]}
     end.
 
@@ -1163,21 +1163,21 @@ claim_kernel(Events, E) ->
     %% pcr_values). Gives us the CURRENT PCR 11 state directly.
     UkiHash = hb_maps:get(
                 <<"11">>,
-                nested(E, [<<"tpm_quote">>, <<"pcr_values">>], #{}),
+                nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
     IommuStrict = kernel_cmdline_flag(Cmdline, <<"iommu.strict=1">>),
     #{
         <<"cmdline">>             => Cmdline,
-        <<"cmdline_provenance">>  =>
+        <<"cmdline-provenance">>  =>
             [event_provenance(Ev) || Ev <- CmdlineEvs],
-        <<"uki_hash">>            => UkiHash,
-        <<"uki_hash_provenance">> => [{<<"pcr">>, 11}],
-        <<"iommu_strict">>        => IommuStrict
+        <<"uki-hash">>            => UkiHash,
+        <<"uki-hash-provenance">> => [{<<"pcr">>, 11}],
+        <<"iommu-strict">>        => IommuStrict
     }.
 
 ipl_kv_matches(Events, Key) ->
     [Ev || Ev <- Events,
-           maps:get(<<"event_type_code">>, Ev, 0) =:= 16#D,
+           maps:get(<<"event-type-code">>, Ev, 0) =:= 16#D,
            nested(Ev, [<<"parsed">>, <<"key">>], <<>>) =:= Key].
 
 kernel_cmdline_flag(<<"unknown">>, _) -> <<"unknown">>;
@@ -1195,24 +1195,24 @@ kernel_cmdline_flag(_, _) -> <<"unknown">>.
 claim_tme(_Events, E, Db) ->
     UkiHash = hb_maps:get(
                 <<"11">>,
-                nested(E, [<<"tpm_quote">>, <<"pcr_values">>], #{}),
+                nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
-    UkiProfiles = maps:get(<<"uki_profiles">>, Db, #{}),
+    UkiProfiles = maps:get(<<"uki-profiles">>, Db, #{}),
     Matched = lists:any(
-        fun(#{<<"uki_hash">> := H, <<"checks_tme">> := true}) -> H =:= UkiHash;
+        fun(#{<<"uki-hash">> := H, <<"checks-tme">> := true}) -> H =:= UkiHash;
            (_) -> false
         end, maps:values(UkiProfiles)),
     case Matched of
         true ->
             #{
                 <<"enabled">>          => true,
-                <<"enabled_provenance">> =>
+                <<"enabled-provenance">> =>
                     [{<<"derivation">>, <<"known_TME_checking_UKI_hash">>}]
             };
         false ->
             #{
                 <<"enabled">>          => <<"unknown">>,
-                <<"enabled_provenance">> =>
+                <<"enabled-provenance">> =>
                     [{<<"derivation">>,
                       <<"uki_hash_not_in_known_TME_checking_list">>}]
             }
@@ -1226,9 +1226,9 @@ claim_tme(_Events, E, Db) ->
 claim_lockdown(_Events) ->
     #{
         <<"level">>             => <<"unknown">>,
-        <<"level_provenance">>  =>
+        <<"level-provenance">>  =>
             [{<<"derivation">>,
-              <<"uki_not_in_known_lockdown_level_list">>}]
+              <<"uki-not-in-known-lockdown-level-list">>}]
     }.
 
 %%---- small helpers -----------------------------------------------------
@@ -1252,19 +1252,19 @@ nested(_, _, D) -> D.
 interpret_envelope_meta(E) ->
     #{
         <<"version">> =>
-            hb_maps:get(<<"lapee_attestation_version">>, E, null, #{}),
-        <<"issued_at_unix">> =>
-            hb_maps:get(<<"issued_at_unix">>, E, null, #{}),
-        <<"wallet_address">> =>
-            hb_maps:get(<<"wallet_address">>, E, null, #{}),
-        <<"node_message_id">> =>
-            hb_maps:get(<<"node_message_id">>, E, null, #{})
+            hb_maps:get(<<"lapee-attestation-version">>, E, null, #{}),
+        <<"issued-at-unix">> =>
+            hb_maps:get(<<"issued-at-unix">>, E, null, #{}),
+        <<"wallet-address">> =>
+            hb_maps:get(<<"wallet-address">>, E, null, #{}),
+        <<"node-message-id">> =>
+            hb_maps:get(<<"node-message-id">>, E, null, #{})
     }.
 
 %%---- TPM identity ------------------------------------------------------
 
 interpret_tpm_identity(E, Db) ->
-    Pem = hb_maps:get(<<"ek_cert_pem">>, E, <<>>, #{}),
+    Pem = hb_maps:get(<<"ek-cert-pem">>, E, <<>>, #{}),
     case decode_cert(Pem) of
         {ok, Cert} ->
             Attrs = tpm_attrs_from_cert(Cert),
@@ -1272,40 +1272,40 @@ interpret_tpm_identity(E, Db) ->
             VendorEntry = lookup_vendor(VendorId, Db),
             maps:merge(
                 #{
-                    <<"manufacturer_id">> =>
+                    <<"manufacturer-id">> =>
                         or_null(VendorId),
-                    <<"manufacturer_name">> =>
+                    <<"manufacturer-name">> =>
                         maps:get(<<"name">>, VendorEntry, null),
-                    <<"manufacturer_kind">> =>
+                    <<"manufacturer-kind">> =>
                         maps:get(<<"kind">>, VendorEntry, null),
                     <<"model">> =>
                         or_null(maps:get(model, Attrs, undefined)),
-                    <<"firmware_version">> =>
+                    <<"firmware-version">> =>
                         or_null(maps:get(firmware_version, Attrs,
                                          undefined)),
-                    <<"spec_family">> =>
+                    <<"spec-family">> =>
                         or_null(maps:get(spec_family, Attrs, undefined)),
-                    <<"spec_level">> =>
+                    <<"spec-level">> =>
                         or_null(maps:get(spec_level, Attrs, undefined)),
-                    <<"spec_revision">> =>
+                    <<"spec-revision">> =>
                         or_null(maps:get(spec_revision, Attrs, undefined)),
-                    <<"ek_cert_subject">> =>
+                    <<"ek-cert-subject">> =>
                         or_null(maps:get(subject_rdn, Attrs, undefined)),
-                    <<"ek_cert_issuer">> =>
+                    <<"ek-cert-issuer">> =>
                         or_null(maps:get(issuer_rdn, Attrs, undefined)),
-                    <<"ek_cert_serial">> =>
+                    <<"ek-cert-serial">> =>
                         or_null(maps:get(serial_b64url, Attrs, undefined)),
-                    <<"ek_cert_valid_from">> =>
+                    <<"ek-cert-valid-from">> =>
                         or_null(maps:get(valid_from, Attrs, undefined)),
-                    <<"ek_cert_valid_to">> =>
+                    <<"ek-cert-valid-to">> =>
                         or_null(maps:get(valid_to, Attrs, undefined))
                 },
                 extra_vendor_fields(VendorEntry))
             ;
         {error, Why} ->
             #{
-                <<"manufacturer_id">> => null,
-                <<"manufacturer_name">> => null,
+                <<"manufacturer-id">> => null,
+                <<"manufacturer-name">> => null,
                 <<"error">> =>
                     iolist_to_binary(
                         io_lib:format("ek_cert_pem not decodable: ~p", [Why]))
@@ -1329,7 +1329,7 @@ lookup_vendor(_, _) -> #{}.
 %%---- AK -----------------------------------------------------------------
 
 interpret_ak(E) ->
-    Pem = hb_maps:get(<<"ak_pub_pem">>, E, <<>>, #{}),
+    Pem = hb_maps:get(<<"ak-pub-pem">>, E, <<>>, #{}),
     case decode_pub_key(Pem) of
         {ok, #'RSAPublicKey'{modulus = N, publicExponent = Exp}} ->
             Der = public_key:der_encode('RSAPublicKey',
@@ -1337,10 +1337,10 @@ interpret_ak(E) ->
                                             modulus=N, publicExponent=Exp}),
             #{
                 <<"algorithm">> => <<"RSA">>,
-                <<"key_size_bits">> =>
+                <<"key-size-bits">> =>
                     bit_size_of_modulus(N),
-                <<"public_exponent">> => Exp,
-                <<"pub_der_sha256_b64url">> =>
+                <<"public-exponent">> => Exp,
+                <<"pub-der-sha256-b64url">> =>
                     hb_util:encode(crypto:hash(sha256, Der))
             };
         {ok, Other} ->
@@ -1364,7 +1364,7 @@ bit_length(N, Acc) -> bit_length(N bsr 1, Acc + 1).
 %%---- Quote metadata -----------------------------------------------------
 
 interpret_quote_metadata(E) ->
-    Q = hb_maps:get(<<"tpm_quote">>, E, #{}, #{}),
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
     QuotedB64 = hb_maps:get(<<"quoted">>, Q, <<>>, #{}),
     try
         Quoted = hb_util:decode(QuotedB64),
@@ -1380,13 +1380,13 @@ interpret_quote_metadata(E) ->
             %% expose the raw bytes — `magic_ok' is the single fact a
             %% caller needs; an unrecognised magic means the quote is
             %% not TPM-shaped and `error' is returned instead.
-            <<"magic_ok">> => (Magic =:= <<16#FF, "TCG">>),
-            <<"attest_type">> => attest_type_name(Type),
+            <<"magic-ok">> => (Magic =:= <<16#FF, "TCG">>),
+            <<"attest-type">> => attest_type_name(Type),
             <<"nonce">> =>
                 hb_util:encode(ExtraData),
-            <<"clock_ms">> => Clock,
-            <<"reset_count">> => ResetCount,
-            <<"restart_count">> => RestartCount,
+            <<"clock-ms">> => Clock,
+            <<"reset-count">> => ResetCount,
+            <<"restart-count">> => RestartCount,
             <<"safe">> => SafeByte =/= 0
         }
     catch
@@ -1412,8 +1412,8 @@ attest_type_name(N) -> iolist_to_binary(io_lib:format("0x~.16B", [N])).
 %%---- PCRs --------------------------------------------------------------
 
 interpret_pcrs(E, _Db, Events) ->
-    Q = hb_maps:get(<<"tpm_quote">>, E, #{}, #{}),
-    Vals = hb_maps:get(<<"pcr_values">>, Q, #{}, #{}),
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    Vals = hb_maps:get(<<"pcr-values">>, Q, #{}, #{}),
     %% Group events by the PCR they extended — a single pass over the
     %% parsed event log. The resulting `EventsByPcr' is a map from
     %% PCR index (integer) to a list of events sorted by seq.
@@ -1470,12 +1470,12 @@ interpret_one_pcr(Idx, B64, EventsByPcr) ->
         %% "short and always-displayed-in-hex" exception threshold.
         <<"digest">>     => B64,
         <<"role">>       => pcr_role(Idx),
-        <<"role_notes">> => pcr_role_notes(Idx),
-        <<"is_zero">>    => Zero,
+        <<"role-notes">> => pcr_role_notes(Idx),
+        <<"is-zero">>    => Zero,
         %% The filtered event log for this PCR. Each event is
         %% path-addressable under `/interpret/pcrs/<N>/events/<seq>'.
         <<"events">>     => EvMap,
-        <<"event_count">> => length(EvList),
+        <<"event-count">> => length(EvList),
         %% `derived' is the merged named-field view. Every fact that
         %% can be unambiguously extracted from this PCR's events lands
         %% here as a concrete value (binary / bool / integer) OR the
@@ -1501,7 +1501,7 @@ reconstruct_pcr([], _Quoted) -> undefined;
 reconstruct_pcr(EvList, Quoted) ->
     Replayed = lists:foldl(
         fun(Ev, Acc) ->
-            case maps:get(<<"event_type_code">>, Ev, 0) of
+            case maps:get(<<"event-type-code">>, Ev, 0) of
                 3 -> Acc;  %% EV_NO_ACTION — per TCG spec, not extended
                 _ ->
                     Digests = maps:get(<<"digests">>, Ev, #{}),
@@ -1516,9 +1516,9 @@ reconstruct_pcr(EvList, Quoted) ->
         EvList),
     Matches = (Replayed =:= Quoted),
     #{
-        <<"replayed_digest">> => hb_util:encode(Replayed),
-        <<"matches_quoted">>  => Matches,
-        <<"replayed_from_events">> => length(EvList)
+        <<"replayed-digest">> => hb_util:encode(Replayed),
+        <<"matches-quoted">>  => Matches,
+        <<"replayed-from-events">> => length(EvList)
     }.
 
 %% Derive named-field values from a PCR's events. The idea is that
@@ -1541,56 +1541,56 @@ derive_fields_from_events(Pcr, EvList) ->
 derived_template_for_pcr(0) ->
     %% PCR 0 = SRTM / firmware code.
     #{
-        <<"crtm_version">>        => <<"unknown">>,
+        <<"crtm-version">>        => <<"unknown">>,
         <<"hcrtm">>               => <<"unknown">>,
-        <<"post_codes">>          => [],
-        <<"firmware_blobs">>      => [],
-        <<"separator_seen">>      => false
+        <<"post-codes">>          => [],
+        <<"firmware-blobs">>      => [],
+        <<"separator-seen">>      => false
     };
 derived_template_for_pcr(1) ->
     %% PCR 1 = platform configuration (CPU microcode, platform
     %% config flags, UEFI boot variables).
     #{
-        <<"cpu_microcode">>       => <<"unknown">>,
-        <<"uefi_boot_order">>     => [],
-        <<"separator_seen">>      => false
+        <<"cpu-microcode">>       => <<"unknown">>,
+        <<"uefi-boot-order">>     => [],
+        <<"separator-seen">>      => false
     };
 derived_template_for_pcr(N) when N =:= 2; N =:= 3 ->
     #{
-        <<"option_rom_scanned">>  => false,
-        <<"separator_seen">>      => false
+        <<"option-rom-scanned">>  => false,
+        <<"separator-seen">>      => false
     };
 derived_template_for_pcr(4) ->
     #{
-        <<"boot_services_applications">> => [],
-        <<"boot_action_markers">>        => [],
-        <<"separator_seen">>             => false
+        <<"boot-services-applications">> => [],
+        <<"boot-action-markers">>        => [],
+        <<"separator-seen">>             => false
     };
 derived_template_for_pcr(5) ->
     #{
-        <<"gpt_partition_tables">>  => 0,
-        <<"separator_seen">>        => false
+        <<"gpt-partition-tables">>  => 0,
+        <<"separator-seen">>        => false
     };
 derived_template_for_pcr(7) ->
     %% PCR 7 = Secure Boot state + keyset.
     #{
-        <<"secure_boot_enabled">>       => <<"unknown">>,
-        <<"pk_entry_count">>            => <<"unknown">>,
-        <<"kek_entry_count">>           => <<"unknown">>,
-        <<"db_entry_count">>            => <<"unknown">>,
-        <<"dbx_entry_count">>           => <<"unknown">>,
+        <<"secure-boot-enabled">>       => <<"unknown">>,
+        <<"pk-entry-count">>            => <<"unknown">>,
+        <<"kek-entry-count">>           => <<"unknown">>,
+        <<"db-entry-count">>            => <<"unknown">>,
+        <<"dbx-entry-count">>           => <<"unknown">>,
         <<"authorities">>               => [],
-        <<"separator_seen">>            => false
+        <<"separator-seen">>            => false
     };
-derived_template_for_pcr(8) -> #{<<"grub_cmdline">> => <<"unknown">>};
-derived_template_for_pcr(9) -> #{<<"grub_modules">> => []};
+derived_template_for_pcr(8) -> #{<<"grub-cmdline">> => <<"unknown">>};
+derived_template_for_pcr(9) -> #{<<"grub-modules">> => []};
 derived_template_for_pcr(10) ->
     %% PCR 10 = IMA runtime. Per-file chain not yet transported —
     %% documented gap in the envelope.
     #{
-        <<"ima_active">>            => true,
-        <<"ima_event_count">>       => <<"unknown">>,
-        <<"ima_files_measured">>    => <<"unknown">>,
+        <<"ima-active">>            => true,
+        <<"ima-event-count">>       => <<"unknown">>,
+        <<"ima-files-measured">>    => <<"unknown">>,
         <<"note">>                  =>
             <<"LapEE does not yet transport the IMA per-file event "
               "log in the envelope; only PCR 10's final value is "
@@ -1599,27 +1599,27 @@ derived_template_for_pcr(10) ->
 derived_template_for_pcr(11) ->
     %% PCR 11 = UKI kernel image (systemd-stub PE hashes).
     #{
-        <<"uki_measured">>          => false,
-        <<"uki_image_hash">>        => <<"unknown">>,
-        <<"uki_kernel_version">>    => <<"unknown">>
+        <<"uki-measured">>          => false,
+        <<"uki-image-hash">>        => <<"unknown">>,
+        <<"uki-kernel-version">>    => <<"unknown">>
     };
 derived_template_for_pcr(12) ->
     #{
-        <<"uki_cmdline">>           => <<"unknown">>,
-        <<"uki_initrd_hash">>       => <<"unknown">>
+        <<"uki-cmdline">>           => <<"unknown">>,
+        <<"uki-initrd-hash">>       => <<"unknown">>
     };
 derived_template_for_pcr(13) ->
     #{
-        <<"uki_sysext_count">>      => <<"unknown">>
+        <<"uki-sysext-count">>      => <<"unknown">>
     };
 derived_template_for_pcr(14) ->
     #{
-        <<"mok_entry_count">>       => <<"unknown">>
+        <<"mok-entry-count">>       => <<"unknown">>
     };
 derived_template_for_pcr(15) ->
     %% LapEE node identity — fully parsed elsewhere in `node.*'.
     #{
-        <<"lapee_node_identity_committed">> => true
+        <<"lapee-node-identity-committed">> => true
     };
 derived_template_for_pcr(_) -> #{}.
 
@@ -1634,35 +1634,35 @@ derive_from_event(Pcr, Ev) ->
             #{<<"semantic">> := S} when is_map(S) -> S;
             _ -> #{}
         end,
-    EtCode = maps:get(<<"event_type_code">>, Ev, 0),
+    EtCode = maps:get(<<"event-type-code">>, Ev, 0),
     derive_from_event(Pcr, EtCode, Parsed, Semantic).
 
 %% EV_NO_ACTION — SpecID header (PCR 0).
 derive_from_event(0, 3, Parsed, _) ->
-    case maps:get(<<"spec_id">>, Parsed, undefined) of
+    case maps:get(<<"spec-id">>, Parsed, undefined) of
         undefined -> #{};
-        V -> #{<<"spec_id">> => V}
+        V -> #{<<"spec-id">> => V}
     end;
 %% EV_SEPARATOR — boundary marker. Fires on many PCRs.
 derive_from_event(_, 4, Parsed, _) ->
-    #{<<"separator_seen">> => true,
-      <<"separator_kind">> => maps:get(<<"separator">>, Parsed,
+    #{<<"separator-seen">> => true,
+      <<"separator-kind">> => maps:get(<<"separator">>, Parsed,
                                        <<"unknown">>)};
 %% EV_S_CRTM_VERSION — PCR 0.
 derive_from_event(0, 8, Parsed, _) ->
-    case maps:get(<<"crtm_version">>, Parsed, undefined) of
+    case maps:get(<<"crtm-version">>, Parsed, undefined) of
         V when is_binary(V), byte_size(V) > 0 ->
-            #{<<"crtm_version">> => V};
+            #{<<"crtm-version">> => V};
         _ -> #{}
     end;
 %% EV_CPU_MICROCODE — PCR 1.
 derive_from_event(1, 9, Parsed, _) ->
-    UpdRev = maps:get(<<"update_revision">>, Parsed, undefined),
-    ProcSig = maps:get(<<"processor_signature">>, Parsed, undefined),
+    UpdRev = maps:get(<<"update-revision">>, Parsed, undefined),
+    ProcSig = maps:get(<<"processor-signature">>, Parsed, undefined),
     Base = #{},
     B1 = case UpdRev of
              undefined -> Base;
-             _ -> Base#{<<"cpu_microcode">> =>
+             _ -> Base#{<<"cpu-microcode">> =>
                  iolist_to_binary(io_lib:format(
                      "rev=0x~.16B sig=0x~.16B",
                      [UpdRev, (ProcSig =/= undefined)
@@ -1671,9 +1671,9 @@ derive_from_event(1, 9, Parsed, _) ->
     B1;
 %% EV_POST_CODE — PCR 0.
 derive_from_event(0, 1, Parsed, _) ->
-    case maps:get(<<"post_code">>, Parsed, undefined) of
+    case maps:get(<<"post-code">>, Parsed, undefined) of
         V when is_binary(V), byte_size(V) > 0 ->
-            #{<<"post_codes">> => [V]};
+            #{<<"post-codes">> => [V]};
         _ -> #{}
     end;
 %% EV_EFI_HCRTM_EVENT — PCR 0.
@@ -1682,44 +1682,44 @@ derive_from_event(0, 16#80000010, _, _) ->
 %% EV_EFI_PLATFORM_FIRMWARE_BLOB(2) — PCR 0.
 derive_from_event(0, Code, Parsed, _) when Code =:= 16#80000008;
                                            Code =:= 16#8000000A ->
-    Addr = maps:get(<<"blob_physical_address">>, Parsed, 0),
-    Len  = maps:get(<<"blob_length">>, Parsed, 0),
-    Desc = maps:get(<<"blob_description">>, Parsed, <<>>),
+    Addr = maps:get(<<"blob-physical-address">>, Parsed, 0),
+    Len  = maps:get(<<"blob-length">>, Parsed, 0),
+    Desc = maps:get(<<"blob-description">>, Parsed, <<>>),
     Blob = #{<<"address">> => Addr,
              <<"length">>  => Len,
              <<"description">> => Desc},
-    #{<<"firmware_blobs">> => [Blob]};
+    #{<<"firmware-blobs">> => [Blob]};
 %% EV_EFI_VARIABLE_DRIVER_CONFIG — PCR 7.
 derive_from_event(7, 16#80000001, Parsed, Semantic) ->
-    Name = maps:get(<<"variable_name">>, Parsed, <<>>),
+    Name = maps:get(<<"variable-name">>, Parsed, <<>>),
     case Name of
         <<"SecureBoot">> ->
-            case maps:get(<<"secure_boot_enabled">>, Semantic, undefined) of
-                true  -> #{<<"secure_boot_enabled">> => true};
-                false -> #{<<"secure_boot_enabled">> => false};
+            case maps:get(<<"secure-boot-enabled">>, Semantic, undefined) of
+                true  -> #{<<"secure-boot-enabled">> => true};
+                false -> #{<<"secure-boot-enabled">> => false};
                 _ -> #{}
             end;
         <<"PK">> ->
-            SL = maps:get(<<"signature_list">>, Semantic, []),
-            #{<<"pk_entry_count">> =>
-                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+            SL = maps:get(<<"signature-list">>, Semantic, []),
+            #{<<"pk-entry-count">> =>
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
         <<"KEK">> ->
-            SL = maps:get(<<"signature_list">>, Semantic, []),
-            #{<<"kek_entry_count">> =>
-                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+            SL = maps:get(<<"signature-list">>, Semantic, []),
+            #{<<"kek-entry-count">> =>
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
         <<"db">> ->
-            SL = maps:get(<<"signature_list">>, Semantic, []),
-            #{<<"db_entry_count">> =>
-                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+            SL = maps:get(<<"signature-list">>, Semantic, []),
+            #{<<"db-entry-count">> =>
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
         <<"dbx">> ->
-            SL = maps:get(<<"signature_list">>, Semantic, []),
-            #{<<"dbx_entry_count">> =>
-                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+            SL = maps:get(<<"signature-list">>, Semantic, []),
+            #{<<"dbx-entry-count">> =>
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
         _ -> #{}
     end;
 %% EV_EFI_VARIABLE_AUTHORITY — PCR 7.
 derive_from_event(7, 16#800000E0, Parsed, _) ->
-    case maps:get(<<"variable_name">>, Parsed, undefined) of
+    case maps:get(<<"variable-name">>, Parsed, undefined) of
         V when is_binary(V), byte_size(V) > 0 ->
             #{<<"authorities">> => [V]};
         _ -> #{}
@@ -1731,42 +1731,42 @@ derive_from_event(2, 5, Parsed, _) ->
             Low = string:lowercase(A),
             case binary:match(Low, <<"option rom">>) of
                 nomatch -> #{};
-                _ -> #{<<"option_rom_scanned">> => true}
+                _ -> #{<<"option-rom-scanned">> => true}
             end;
         _ -> #{}
     end;
 derive_from_event(4, 5, Parsed, _) ->
     case maps:get(<<"action">>, Parsed, undefined) of
-        A when is_binary(A) -> #{<<"boot_action_markers">> => [A]};
+        A when is_binary(A) -> #{<<"boot-action-markers">> => [A]};
         _ -> #{}
     end;
 %% EV_EFI_BOOT_SERVICES_APPLICATION — PCR 4.
 derive_from_event(4, 16#80000003, Parsed, _) ->
     App = #{
-        <<"image_location_in_memory">> =>
-            maps:get(<<"image_location_in_memory">>, Parsed, 0),
-        <<"image_length_in_memory">>   =>
-            maps:get(<<"image_length_in_memory">>, Parsed, 0)
+        <<"image-location-in-memory">> =>
+            maps:get(<<"image-location-in-memory">>, Parsed, 0),
+        <<"image-length-in-memory">>   =>
+            maps:get(<<"image-length-in-memory">>, Parsed, 0)
     },
-    #{<<"boot_services_applications">> => [App]};
+    #{<<"boot-services-applications">> => [App]};
 %% EV_EFI_GPT_EVENT — PCR 5.
 derive_from_event(5, 16#80000006, _, _) ->
-    #{<<"gpt_partition_tables">> => 1};
+    #{<<"gpt-partition-tables">> => 1};
 %% EV_IPL — PCR 11/12/13 (systemd-stub key=value).
 derive_from_event(11, 16#0D, Parsed, _) ->
     case {maps:get(<<"key">>, Parsed, undefined),
           maps:get(<<"value">>, Parsed, undefined)} of
         {<<"kernel-name">>, V} when is_binary(V) ->
-            #{<<"uki_kernel_version">> => V, <<"uki_measured">> => true};
+            #{<<"uki-kernel-version">> => V, <<"uki-measured">> => true};
         {<<"kernel-image">>, _} ->
-            #{<<"uki_measured">> => true};
+            #{<<"uki-measured">> => true};
         _ -> #{}
     end;
 derive_from_event(12, 16#0D, Parsed, _) ->
     case {maps:get(<<"key">>, Parsed, undefined),
           maps:get(<<"value">>, Parsed, undefined)} of
         {<<"kernel-cmdline">>, V} when is_binary(V) ->
-            #{<<"uki_cmdline">> => V};
+            #{<<"uki-cmdline">> => V};
         _ -> #{}
     end;
 derive_from_event(_, _, _, _) -> #{}.
@@ -1798,24 +1798,24 @@ merge_value(_K, _Old, New) -> New.
 
 %% Canonical TCG PCR usage. Source: TCG PC Client Platform Firmware
 %% Profile + UEFI Spec + systemd-stub docs.
-pcr_role(<<"0">>) -> <<"firmware_srtm">>;
-pcr_role(<<"1">>) -> <<"platform_firmware_config">>;
-pcr_role(<<"2">>) -> <<"option_rom_code">>;
-pcr_role(<<"3">>) -> <<"option_rom_config">>;
-pcr_role(<<"4">>) -> <<"boot_loader_code">>;
-pcr_role(<<"5">>) -> <<"boot_loader_config">>;
-pcr_role(<<"6">>) -> <<"platform_manufacturer">>;
-pcr_role(<<"7">>) -> <<"secure_boot_policy">>;
-pcr_role(<<"8">>) -> <<"grub_kernel_cmdline_legacy">>;
-pcr_role(<<"9">>) -> <<"grub_kernel_modules_legacy">>;
-pcr_role(<<"10">>) -> <<"ima_runtime_measurements">>;
-pcr_role(<<"11">>) -> <<"uki_kernel_image">>;
-pcr_role(<<"12">>) -> <<"uki_kernel_cmdline">>;
-pcr_role(<<"13">>) -> <<"uki_system_extensions">>;
-pcr_role(<<"14">>) -> <<"secure_boot_authority_mok">>;
-pcr_role(<<"15">>) -> <<"lapee_node_identity">>;
+pcr_role(<<"0">>) -> <<"firmware-srtm">>;
+pcr_role(<<"1">>) -> <<"platform-firmware-config">>;
+pcr_role(<<"2">>) -> <<"option-rom-code">>;
+pcr_role(<<"3">>) -> <<"option-rom-config">>;
+pcr_role(<<"4">>) -> <<"boot-loader-code">>;
+pcr_role(<<"5">>) -> <<"boot-loader-config">>;
+pcr_role(<<"6">>) -> <<"platform-manufacturer">>;
+pcr_role(<<"7">>) -> <<"secure-boot-policy">>;
+pcr_role(<<"8">>) -> <<"grub-kernel-cmdline-legacy">>;
+pcr_role(<<"9">>) -> <<"grub-kernel-modules-legacy">>;
+pcr_role(<<"10">>) -> <<"ima-runtime-measurements">>;
+pcr_role(<<"11">>) -> <<"uki-kernel-image">>;
+pcr_role(<<"12">>) -> <<"uki-kernel-cmdline">>;
+pcr_role(<<"13">>) -> <<"uki-system-extensions">>;
+pcr_role(<<"14">>) -> <<"secure-boot-authority-mok">>;
+pcr_role(<<"15">>) -> <<"lapee-node-identity">>;
 pcr_role(N) when is_integer(N) -> pcr_role(integer_to_binary(N));
-pcr_role(_) -> <<"unassigned_or_application">>.
+pcr_role(_) -> <<"unassigned-or-application">>.
 
 pcr_role_notes(<<"0">>) ->
     <<"Extended by the CRTM/firmware with measurements of the firmware "
@@ -1846,10 +1846,10 @@ interpret_boot_chain(_E, Db, Pcrs) ->
     Pcr1 = pcr_digest(<<"1">>, Pcrs),
     Pcr7 = pcr_digest(<<"7">>, Pcrs),
     Base = #{
-        <<"firmware_srtm">> => or_null(Pcr0),
-        <<"platform_firmware_config">> => or_null(Pcr1),
-        <<"secure_boot_policy">> => or_null(Pcr7),
-        <<"secure_boot_measured">> =>
+        <<"firmware-srtm">> => or_null(Pcr0),
+        <<"platform-firmware-config">> => or_null(Pcr1),
+        <<"secure-boot-policy">> => or_null(Pcr7),
+        <<"secure-boot-measured">> =>
             %% PCR 7 all-zero => Secure Boot was OFF (or disabled) at
             %% boot. Non-zero => something extended it, likely
             %% genuine UEFI SB. We can't tell *on* vs *on-with-dev-
@@ -1862,7 +1862,7 @@ interpret_boot_chain(_E, Db, Pcrs) ->
     end.
 
 match_pcr_profile(Pcrs, Db) ->
-    Profiles = case maps:get(<<"pcr_profiles">>, Db, #{}) of
+    Profiles = case maps:get(<<"pcr-profiles">>, Db, #{}) of
         M when is_map(M) -> M;
         _ -> #{}
     end,
@@ -1881,7 +1881,7 @@ match_pcr_profile(Pcrs, Db) ->
 %% directly. Profile digests are base64url strings (no hex).
 profile_matches(Entry, Actual) when is_map(Entry) ->
     Expected =
-        case maps:get(<<"match_pcrs">>, Entry, undefined) of
+        case maps:get(<<"match-pcrs">>, Entry, undefined) of
             undefined -> maps:get(<<"pcrs">>, Entry, #{});
             M -> M
         end,
@@ -1910,13 +1910,13 @@ summarise_profile(Entry) -> Entry.
 pcr_digest(Key, Pcrs) ->
     case hb_maps:get(Key, Pcrs, undefined, #{}) of
         #{<<"digest">> := D} -> D;
-        #{<<"raw_b64url">> := D} -> D;
+        #{<<"raw-b64url">> := D} -> D;
         _ -> undefined
     end.
 
 pcr_is_zero(Key, Pcrs) ->
     case hb_maps:get(Key, Pcrs, undefined, #{}) of
-        #{<<"is_zero">> := V} -> V;
+        #{<<"is-zero">> := V} -> V;
         _ -> true
     end.
 
@@ -1927,10 +1927,10 @@ interpret_kernel(_E, _Db, Pcrs) ->
     Pcr11 = pcr_digest(<<"11">>, Pcrs),
     Pcr12 = pcr_digest(<<"12">>, Pcrs),
     #{
-        <<"boot_loader">> => or_null(Pcr4),
-        <<"uki_image">> => or_null(Pcr11),
-        <<"uki_cmdline">> => or_null(Pcr12),
-        <<"uki_measured">> =>
+        <<"boot-loader">> => or_null(Pcr4),
+        <<"uki-image">> => or_null(Pcr11),
+        <<"uki-cmdline">> => or_null(Pcr12),
+        <<"uki-measured">> =>
             (not pcr_is_zero(<<"11">>, Pcrs))
                 orelse (not pcr_is_zero(<<"12">>, Pcrs))
     }.
@@ -1946,7 +1946,7 @@ interpret_ima(_E, _Db, Pcrs) ->
     #{
         <<"pcr10">> => or_null(Pcr10),
         <<"active">> => Active,
-        <<"events_available">> => false,
+        <<"events-available">> => false,
         <<"note">> =>
             <<"LapEE does not yet transport the kernel IMA event log "
               "in the attestation envelope (PCR 10's final value is "
@@ -1958,28 +1958,28 @@ interpret_ima(_E, _Db, Pcrs) ->
 %%---- Node identity ----------------------------------------------------
 
 interpret_node(E) ->
-    Nm = hb_maps:get(<<"node_message">>, E, undefined, #{}),
-    Id = hb_maps:get(<<"node_message_id">>, E, null, #{}),
-    Wallet = hb_maps:get(<<"wallet_address">>, E, null, #{}),
-    EventLog = hb_maps:get(<<"runtime_event_log">>, E, [], #{}),
+    Nm = hb_maps:get(<<"node-message">>, E, undefined, #{}),
+    Id = hb_maps:get(<<"node-message-id">>, E, null, #{}),
+    Wallet = hb_maps:get(<<"wallet-address">>, E, null, #{}),
+    EventLog = hb_maps:get(<<"runtime-event-log">>, E, [], #{}),
     Pcr15Events = [Ev ||
         Ev <- EventLog,
         int_pcr(hb_maps:get(<<"pcr">>, Ev, 0, #{})) =:= 15],
     #{
-        <<"wallet_address">> => Wallet,
-        <<"node_message_id">> => Id,
-        <<"node_message_key_count">> =>
+        <<"wallet-address">> => Wallet,
+        <<"node-message-id">> => Id,
+        <<"node-message-key-count">> =>
             case Nm of
                 M when is_map(M) -> maps:size(M);
                 _ -> null
             end,
-        <<"on_start_hook_device">> => nested_get(Nm, [<<"on">>, <<"start">>,
+        <<"on-start-hook-device">> => nested_get(Nm, [<<"on">>, <<"start">>,
                                                       <<"device">>]),
-        <<"on_start_hook_path">>   => nested_get(Nm, [<<"on">>, <<"start">>,
+        <<"on-start-hook-path">>   => nested_get(Nm, [<<"on">>, <<"start">>,
                                                       <<"path">>]),
-        <<"pcr15_event_count">> => length(Pcr15Events),
-        <<"pcr15_event_types">> =>
-            [hb_maps:get(<<"event_type">>, Ev, null, #{})
+        <<"pcr15-event-count">> => length(Pcr15Events),
+        <<"pcr15-event-types">> =>
+            [hb_maps:get(<<"event-type">>, Ev, null, #{})
              || Ev <- Pcr15Events]
     }.
 
@@ -2259,7 +2259,7 @@ info_docs_full_surface_test() ->
     ?assert(maps:is_key(<<"peer">>, VpParams)),
     ?assert(maps:is_key(<<"trusted-ca">>, VpParams)),
     %% `wire_format' tells callers what encoding to expect.
-    ?assert(maps:is_key(<<"wire_format">>, Body)),
+    ?assert(maps:is_key(<<"wire-format">>, Body)),
     ok.
 
 %% `events/3' parses the envelope's tcg_event_log into a
@@ -2268,19 +2268,19 @@ info_docs_full_surface_test() ->
 %% version, SecureBoot variable).
 events_returns_indexed_map_test() ->
     Fixture = build_tcg_fixture(),
-    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Fixture)},
     {ok, #{<<"body">> := Events}} = events(Envelope, #{}, #{}),
     ?assertEqual(3, maps:size(Events)),
     E1 = maps:get(<<"1">>, Events),
-    ?assertEqual(<<"EV_NO_ACTION">>, maps:get(<<"event_type">>, E1)),
+    ?assertEqual(<<"EV_NO_ACTION">>, maps:get(<<"event-type">>, E1)),
     E3 = maps:get(<<"3">>, Events),
     ?assertEqual(<<"EV_EFI_VARIABLE_DRIVER_CONFIG">>,
-                 maps:get(<<"event_type">>, E3)),
+                 maps:get(<<"event-type">>, E3)),
     %% decode_events enrichment: the SecureBoot variable's
     %% semantic decode surfaces as secure_boot_enabled: true.
     P3 = maps:get(<<"parsed">>, E3),
     Sem = maps:get(<<"semantic">>, P3),
-    ?assertEqual(true, maps:get(<<"secure_boot_enabled">>, Sem)),
+    ?assertEqual(true, maps:get(<<"secure-boot-enabled">>, Sem)),
     ok.
 
 %% Raw firmware bytes (event_data, digest algorithms) are not
@@ -2289,12 +2289,12 @@ events_returns_indexed_map_test() ->
 %% fields (event_type, variable_name, ...) stay as-is.
 events_wire_encodes_nonutf8_binaries_test() ->
     Fixture = build_tcg_fixture(),
-    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Fixture)},
     {ok, #{<<"body">> := Events}} = events(Envelope, #{}, #{}),
     E3 = maps:get(<<"3">>, Events),
     %% event_data is 43 bytes of UEFI_VARIABLE_DATA (binary,
     %% not UTF-8): must be base64url.
-    ED = maps:get(<<"event_data">>, E3),
+    ED = maps:get(<<"event-data">>, E3),
     ?assert(is_binary(ED)),
     ?assertNotEqual(nomatch,
         re:run(ED, <<"^[A-Za-z0-9_-]+$">>)),
@@ -2306,7 +2306,7 @@ events_wire_encodes_nonutf8_binaries_test() ->
         re:run(Sha, <<"^[A-Za-z0-9_-]+$">>)),
     %% UTF-8-safe keys must NOT be base64url-encoded.
     ?assertEqual(<<"EV_EFI_VARIABLE_DRIVER_CONFIG">>,
-                 maps:get(<<"event_type">>, E3)),
+                 maps:get(<<"event-type">>, E3)),
     ok.
 
 %% `claim/3' aggregates events into a flat, policy-friendly shape
@@ -2316,15 +2316,15 @@ events_wire_encodes_nonutf8_binaries_test() ->
 %% string.
 claim_surface_extracts_secure_boot_and_crtm_test() ->
     Fixture = build_tcg_fixture(),
-    Envelope = #{<<"tcg_event_log">> => hb_util:encode(Fixture)},
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Fixture)},
     {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
-    SB = maps:get(<<"secure_boot">>, Claim),
+    SB = maps:get(<<"secure-boot">>, Claim),
     ?assertEqual(true, maps:get(<<"enabled">>, SB)),
     %% Provenance points back at the source event.
-    Prov = maps:get(<<"enabled_provenance">>, SB),
+    Prov = maps:get(<<"enabled-provenance">>, SB),
     ?assertEqual(1, length(Prov)),
     FW = maps:get(<<"firmware">>, Claim),
-    ?assertEqual(<<"TEST FW v1">>, maps:get(<<"crtm_version">>, FW)),
+    ?assertEqual(<<"TEST FW v1">>, maps:get(<<"crtm-version">>, FW)),
     %% Fields we can't derive from the fixture are "unknown" with
     %% empty provenance.
     TME = maps:get(<<"tme">>, Claim),
@@ -2372,7 +2372,7 @@ checks_surface_stable_test() ->
         fun(C) ->
             ?assert(maps:is_key(<<"name">>, C)),
             ?assert(maps:is_key(<<"purpose">>, C)),
-            ?assert(maps:is_key(<<"failure_implies">>, C)),
+            ?assert(maps:is_key(<<"failure-implies">>, C)),
             ?assert(maps:is_key(<<"severity">>, C))
         end, Cs),
     Names = [maps:get(<<"name">>, C) || C <- Cs],
@@ -2391,31 +2391,31 @@ checks_surface_stable_test() ->
 summary_returns_link_free_map_test() ->
     Zero = hb_util:encode(<<0:256>>),
     Envelope = #{
-        <<"lapee_attestation_version">> => <<"0.3">>,
-        <<"ek_cert_pem">> => <<>>,
-        <<"ak_pub_pem">> => <<>>,
-        <<"tpm_quote">> => #{<<"pcr_values">> => #{}, <<"quoted">> => <<>>,
+        <<"lapee-attestation-version">> => <<"0.3">>,
+        <<"ek-cert-pem">> => <<>>,
+        <<"ak-pub-pem">> => <<>>,
+        <<"tpm-quote">> => #{<<"pcr-values">> => #{}, <<"quoted">> => <<>>,
                              <<"signature">> => <<>>, <<"nonce">> => <<>>,
-                             <<"pcr_selection">> => []},
-        <<"runtime_event_log">> => [],
-        <<"node_message">> =>
+                             <<"pcr-selection">> => []},
+        <<"runtime-event-log">> => [],
+        <<"node-message">> =>
             #{<<"on">> => #{<<"start">> =>
                               #{<<"device">> => <<"tpm2@2.0a">>}}},
-        <<"node_message_id">> => Zero,
-        <<"wallet_address">> => <<"sample-wallet">>
+        <<"node-message-id">> => Zero,
+        <<"wallet-address">> => <<"sample-wallet">>
     },
     {ok, #{<<"body">> := S}} = summary(Envelope, #{}, #{}),
-    ?assertEqual(<<"0.3">>, maps:get(<<"envelope_version">>, S)),
+    ?assertEqual(<<"0.3">>, maps:get(<<"envelope-version">>, S)),
     ?assertEqual(<<"tpm2@2.0a">>,
-                 maps:get(<<"on_start_hook_device">>, S)),
+                 maps:get(<<"on-start-hook-device">>, S)),
     ?assertEqual(<<"sample-wallet">>,
-                 maps:get(<<"wallet_address">>, S)),
+                 maps:get(<<"wallet-address">>, S)),
     %% Summary must not carry maps inside its values — that's the
     %% link-free property. Spot-check a few known fields.
     [?assert(not is_map(maps:get(K, S, null)))
-     || K <- [<<"tpm_manufacturer">>, <<"ak_algorithm">>,
-              <<"quote_attest_type">>, <<"secure_boot_measured">>,
-              <<"pcr15_event_count">>]],
+     || K <- [<<"tpm-manufacturer">>, <<"ak-algorithm">>,
+              <<"quote-attest-type">>, <<"secure-boot-measured">>,
+              <<"pcr15-event-count">>]],
     ok.
 
 %% `run_cross_node_verify' MUST reject when the envelope's
@@ -2431,8 +2431,8 @@ run_cross_node_verify_enforces_nonce_freshness_test() ->
     DifferentChallenge = crypto:strong_rand_bytes(32),
     ?assertNotEqual(NonceInEnvelope, DifferentChallenge),
     Envelope = #{
-        <<"lapee_attestation_version">> => <<"0.3">>,
-        <<"tpm_quote">> => #{
+        <<"lapee-attestation-version">> => <<"0.3">>,
+        <<"tpm-quote">> => #{
             <<"nonce">> => hb_util:encode(NonceInEnvelope)
         }
     },
@@ -2444,7 +2444,7 @@ run_cross_node_verify_enforces_nonce_freshness_test() ->
                               #{}),
     ?assertEqual(false, maps:get(<<"verified">>, Body)),
     ?assertEqual(<<"rejected">>, maps:get(<<"verdict">>, Body)),
-    ?assertEqual(<<"mismatch">>, maps:get(<<"nonce_freshness">>, Body)),
+    ?assertEqual(<<"mismatch">>, maps:get(<<"nonce-freshness">>, Body)),
     %% Response should carry exactly one failed check describing
     %% the nonce mismatch — no crypto checks should have run,
     %% because we gated BEFORE them.
@@ -2459,20 +2459,20 @@ run_cross_node_verify_enforces_nonce_freshness_test() ->
 run_cross_node_verify_accepts_matching_nonce_test() ->
     Challenge = crypto:strong_rand_bytes(32),
     Envelope = #{
-        <<"lapee_attestation_version">> => <<"0.3">>,
-        <<"tpm_quote">> => #{
+        <<"lapee-attestation-version">> => <<"0.3">>,
+        <<"tpm-quote">> => #{
             <<"nonce">> => hb_util:encode(Challenge),
-            <<"pcr_values">> => #{},
+            <<"pcr-values">> => #{},
             <<"quoted">> => <<>>,
             <<"signature">> => <<>>,
-            <<"pcr_selection">> => []
+            <<"pcr-selection">> => []
         },
-        <<"ek_cert_pem">> => <<>>,
-        <<"ak_pub_pem">> => <<>>,
-        <<"runtime_event_log">> => [],
-        <<"node_message">> => #{<<"port">> => 8734},
-        <<"node_message_id">> => hb_util:encode(<<0:256>>),
-        <<"wallet_address">> => <<"sample">>
+        <<"ek-cert-pem">> => <<>>,
+        <<"ak-pub-pem">> => <<>>,
+        <<"runtime-event-log">> => [],
+        <<"node-message">> => #{<<"port">> => 8734},
+        <<"node-message-id">> => hb_util:encode(<<0:256>>),
+        <<"wallet-address">> => <<"sample">>
     },
     {ok, #{<<"body">> := Body}} =
         run_cross_node_verify(<<"http://peer">>, Envelope,
@@ -2482,9 +2482,9 @@ run_cross_node_verify_accepts_matching_nonce_test() ->
     %% fine — we only assert nonce_freshness says "verified" and
     %% the check list isn't the single-entry nonce-mismatch form).
     ?assertEqual(<<"verified">>,
-                 maps:get(<<"nonce_freshness">>, Body)),
+                 maps:get(<<"nonce-freshness">>, Body)),
     ?assertEqual(Challenge,
-                 hb_util:decode(maps:get(<<"nonce_challenge">>, Body))),
+                 hb_util:decode(maps:get(<<"nonce-challenge">>, Body))),
     Checks = maps:get(<<"checks">>, Body),
     ?assert(length(Checks) >= 1),
     %% None of the checks should be the "verifier-supplied nonce"
@@ -2499,7 +2499,7 @@ run_cross_node_verify_accepts_matching_nonce_test() ->
 peer_endpoints_reject_missing_peer_test() ->
     [?assertMatch({ok, #{<<"status">> := 400,
                          <<"body">> :=
-                           #{<<"error">> := <<"missing_peer">>}}},
+                           #{<<"error">> := <<"missing-peer">>}}},
                   F(#{}, #{}, #{}))
      || F <- [fun peer_summary/3, fun peer_status/3]],
     ok.
@@ -2532,13 +2532,13 @@ resolve_inline_ca_normalises_forms_test() ->
 interpret_handles_partial_envelope_test() ->
     Zero = hb_util:encode(<<0:256>>),
     Envelope = #{
-        <<"lapee_attestation_version">> => <<"0.3">>,
-        <<"issued_at_unix">> => 1700000000,
-        <<"ek_cert_pem">> => <<>>,
-        <<"ak_pub_pem">> => <<>>,
-        <<"tpm_quote">> => #{
-            <<"pcr_selection">> => [0, 15],
-            <<"pcr_values">> => #{
+        <<"lapee-attestation-version">> => <<"0.3">>,
+        <<"issued-at-unix">> => 1700000000,
+        <<"ek-cert-pem">> => <<>>,
+        <<"ak-pub-pem">> => <<>>,
+        <<"tpm-quote">> => #{
+            <<"pcr-selection">> => [0, 15],
+            <<"pcr-values">> => #{
                 <<"0">> => Zero,
                 <<"15">> => Zero
             },
@@ -2546,15 +2546,15 @@ interpret_handles_partial_envelope_test() ->
             <<"signature">> => <<>>,
             <<"nonce">> => <<>>
         },
-        <<"runtime_event_log">> => [],
-        <<"node_message">> =>
+        <<"runtime-event-log">> => [],
+        <<"node-message">> =>
             #{<<"port">> => 8734,
               <<"on">> =>
                 #{<<"start">> =>
                     #{<<"device">> => <<"tpm2@2.0a">>,
                       <<"path">> => <<"extend">>}}},
-        <<"node_message_id">> => Zero,
-        <<"wallet_address">> => <<"sample-wallet-address-XX">>
+        <<"node-message-id">> => Zero,
+        <<"wallet-address">> => <<"sample-wallet-address-XX">>
     },
     #{<<"status">> := 200, <<"body">> := Body} =
         element(2, interpret(Envelope, #{}, #{})),
@@ -2567,20 +2567,20 @@ interpret_handles_partial_envelope_test() ->
     %% PCR 15 is zero (got decoded) and its role is node identity
     Pcrs = maps:get(<<"pcrs">>, Body),
     Pcr15 = maps:get(<<"15">>, Pcrs),
-    ?assertEqual(<<"lapee_node_identity">>, maps:get(<<"role">>, Pcr15)),
-    ?assertEqual(true, maps:get(<<"is_zero">>, Pcr15)),
+    ?assertEqual(<<"lapee-node-identity">>, maps:get(<<"role">>, Pcr15)),
+    ?assertEqual(true, maps:get(<<"is-zero">>, Pcr15)),
     %% Node section reads on.start.device
     Node = maps:get(<<"node">>, Body),
     ?assertEqual(<<"tpm2@2.0a">>,
-                 maps:get(<<"on_start_hook_device">>, Node)).
+                 maps:get(<<"on-start-hook-device">>, Node)).
 
 pcr_role_canonical_mapping_test() ->
-    ?assertEqual(<<"firmware_srtm">>, pcr_role(<<"0">>)),
-    ?assertEqual(<<"secure_boot_policy">>, pcr_role(<<"7">>)),
-    ?assertEqual(<<"ima_runtime_measurements">>, pcr_role(<<"10">>)),
-    ?assertEqual(<<"uki_kernel_image">>, pcr_role(<<"11">>)),
-    ?assertEqual(<<"lapee_node_identity">>, pcr_role(<<"15">>)),
-    ?assertEqual(<<"unassigned_or_application">>, pcr_role(<<"22">>)).
+    ?assertEqual(<<"firmware-srtm">>, pcr_role(<<"0">>)),
+    ?assertEqual(<<"secure-boot-policy">>, pcr_role(<<"7">>)),
+    ?assertEqual(<<"ima-runtime-measurements">>, pcr_role(<<"10">>)),
+    ?assertEqual(<<"uki-kernel-image">>, pcr_role(<<"11">>)),
+    ?assertEqual(<<"lapee-node-identity">>, pcr_role(<<"15">>)),
+    ?assertEqual(<<"unassigned-or-application">>, pcr_role(<<"22">>)).
 
 %% Every PCR section includes a `derived' submap — named fields
 %% extracted from the events extended into that PCR. When events are
@@ -2594,16 +2594,16 @@ pcrs_derived_fields_populate_from_events_test() ->
     %% for SecureBoot (PCR 7). Run it through the top-level
     %% interpreter.
     Fixture = build_tcg_fixture(),
-    Q = #{<<"pcr_values">> => #{
+    Q = #{<<"pcr-values">> => #{
             <<"0">> => hb_util:encode(<<0:256>>),
             <<"7">> => hb_util:encode(<<0:256>>)}},
     Envelope = #{
-        <<"lapee_attestation_version">> => <<"0.3">>,
-        <<"tcg_event_log">>             => hb_util:encode(Fixture),
-        <<"tpm_quote">>                 => Q,
-        <<"runtime_event_log">>         => [],
-        <<"node_message">>              => #{},
-        <<"node_message_id">>           => <<>>
+        <<"lapee-attestation-version">> => <<"0.3">>,
+        <<"tcg-event-log">>             => hb_util:encode(Fixture),
+        <<"tpm-quote">>                 => Q,
+        <<"runtime-event-log">>         => [],
+        <<"node-message">>              => #{},
+        <<"node-message-id">>           => <<>>
     },
     Interp = interpret_envelope(Envelope, #{}),
     Pcrs = maps:get(<<"pcrs">>, Interp),
@@ -2611,19 +2611,19 @@ pcrs_derived_fields_populate_from_events_test() ->
     Pcr0 = maps:get(<<"0">>, Pcrs),
     Derived0 = maps:get(<<"derived">>, Pcr0),
     ?assertEqual(<<"TEST FW v1">>,
-                 maps:get(<<"crtm_version">>, Derived0)),
-    ?assert(maps:get(<<"event_count">>, Pcr0) >= 1),
+                 maps:get(<<"crtm-version">>, Derived0)),
+    ?assert(maps:get(<<"event-count">>, Pcr0) >= 1),
     %% PCR 7 has the SecureBoot variable (seq 3) → enabled=true.
     Pcr7 = maps:get(<<"7">>, Pcrs),
     Derived7 = maps:get(<<"derived">>, Pcr7),
     ?assertEqual(true,
-                 maps:get(<<"secure_boot_enabled">>, Derived7)),
+                 maps:get(<<"secure-boot-enabled">>, Derived7)),
     %% Every PCR carries a reconstruction submessage when events are
     %% present. We didn't quote the real values here, so it'll say
     %% matches_quoted=false — but the SHAPE must be there.
     Recon0 = maps:get(<<"reconstruction">>, Pcr0),
-    ?assert(maps:is_key(<<"replayed_digest">>, Recon0)),
-    ?assert(maps:is_key(<<"matches_quoted">>, Recon0)),
+    ?assert(maps:is_key(<<"replayed-digest">>, Recon0)),
+    ?assert(maps:is_key(<<"matches-quoted">>, Recon0)),
     ok.
 
 %% Direct test that the manufacturer DB actually loads when the

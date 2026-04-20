@@ -135,8 +135,8 @@ def load_acceptance() -> dict:
     out = {}
     for key, name in [
         ("baseline", "baseline"),
-        ("user_diff", "user-diff"),
-        ("user_hostile", "user-hostile"),
+        ("user-diff", "user-diff"),
+        ("user-hostile", "user-hostile"),
     ]:
         raw = read_json(ACCEPTANCE / f"{name}-attestation.json")
         if not raw:
@@ -175,7 +175,7 @@ def load_tamper() -> list[dict]:
         name = fn.stem
         out.append({
             "name": name,
-            "expected_check": expected.get(name, "(unknown)"),
+            "expected-check": expected.get(name, "(unknown)"),
             "size": fn.stat().st_size,
         })
     return out
@@ -337,11 +337,11 @@ def render_acceptance(acc: dict) -> str:
     cards = []
     for key, data in acc.items():
         env = data["envelope"]
-        wallet = get(env, "wallet_address", default="-")
-        node_id = get(env, "node_message_id", default="-")
-        hook_dev = get(env, "node_message", "on", "start", "device",
+        wallet = get(env, "wallet-address", default="-")
+        node_id = get(env, "node-message-id", default="-")
+        hook_dev = get(env, "node-message", "on", "start", "device",
                        default="-")
-        pcrs = get(env, "tpm_quote", "pcr_values", default={}) or {}
+        pcrs = get(env, "tpm-quote", "pcr-values", default={}) or {}
         pcr15 = pcrs.get("15", "-")
         cards.append(f"""
         <div class="card">
@@ -355,9 +355,9 @@ def render_acceptance(acc: dict) -> str:
         </div>
         """)
     # Assert invariants.
-    ids = [get(d["envelope"], "node_message_id") for d in acc.values()]
+    ids = [get(d["envelope"], "node-message-id") for d in acc.values()]
     ids_distinct = len(set(ids)) == len(ids)
-    hooks = [get(d["envelope"], "node_message", "on", "start",
+    hooks = [get(d["envelope"], "node-message", "on", "start",
                  "device") for d in acc.values()]
     hook_holds = all(h == "tpm2@2.0a" for h in hooks)
     return f"""
@@ -385,7 +385,7 @@ def render_tamper(tamper: list[dict]) -> str:
         <tr>
           <td>{pass_badge(True, 'rejected')}</td>
           <td><code>{escape(t['name'])}</code></td>
-          <td>{escape(t['expected_check'])}</td>
+          <td>{escape(t['expected-check'])}</td>
           <td class="muted">{t['size']:,} bytes</td>
         </tr>
         """)
@@ -408,7 +408,7 @@ def render_interpret(interp: dict | None) -> str:
         return ""
     verified = bool(interp.get("verified"))
     verdict = interp.get("verdict", "-")
-    trust_src = interp.get("trust_anchor_source", "-")
+    trust_src = interp.get("trust-anchor-source", "-")
     checks = interp.get("checks") or []
 
     check_rows = []
@@ -450,7 +450,7 @@ def render_interpret(interp: dict | None) -> str:
         if not isinstance(e, dict):
             continue
         role = e.get("role", "-")
-        is_zero = e.get("is_zero") in (True, "true")
+        is_zero = e.get("is-zero") in (True, "true")
         digest = e.get("digest") or ""
         pcr_rows.append(f"""
         <tr>
@@ -494,25 +494,25 @@ def render_interpret(interp: dict | None) -> str:
       <div class="grid-2">
         <div>
           <h3>Envelope</h3>
-          <table>{kv(envelope, ['version','issued_at_unix',
-            'wallet_address','node_message_id'])}</table>
+          <table>{kv(envelope, ['version','issued-at-unix',
+            'wallet-address','node-message-id'])}</table>
         </div>
         <div>
           <h3>TPM identity</h3>
-          <table>{kv(tpm, ['manufacturer_id','manufacturer_name',
-            'manufacturer_kind','model','firmware_version',
-            'spec_family','spec_level','spec_revision',
-            'ek_cert_issuer','ek_cert_serial'])}</table>
+          <table>{kv(tpm, ['manufacturer-id','manufacturer-name',
+            'manufacturer-kind','model','firmware-version',
+            'spec-family','spec-level','spec-revision',
+            'ek-cert-issuer','ek-cert-serial'])}</table>
         </div>
         <div>
           <h3>AK</h3>
-          <table>{kv(ak, ['algorithm','key_size_bits','public_exponent',
-            'pub_der_sha256_b64url'])}</table>
+          <table>{kv(ak, ['algorithm','key-size-bits','public-exponent',
+            'pub-der-sha256-b64url'])}</table>
         </div>
         <div>
           <h3>Quote metadata</h3>
-          <table>{kv(quote, ['magic_ok','attest_type','clock_ms',
-            'reset_count','restart_count','safe','nonce'])}</table>
+          <table>{kv(quote, ['magic-ok','attest-type','clock-ms',
+            'reset-count','restart-count','safe','nonce'])}</table>
         </div>
       </div>
 
@@ -526,13 +526,13 @@ def render_interpret(interp: dict | None) -> str:
       <div class="grid-2">
         <div>
           <h3>Boot chain</h3>
-          <table>{kv(boot, ['secure_boot_measured','secure_boot_policy',
-            'firmware_srtm','match'])}</table>
+          <table>{kv(boot, ['secure-boot-measured','secure-boot-policy',
+            'firmware-srtm','match'])}</table>
         </div>
         <div>
           <h3>Kernel</h3>
-          <table>{kv(kernel, ['uki_measured','uki_image',
-            'boot_loader'])}</table>
+          <table>{kv(kernel, ['uki-measured','uki-image',
+            'boot-loader'])}</table>
         </div>
         <div>
           <h3>IMA</h3>
@@ -540,9 +540,9 @@ def render_interpret(interp: dict | None) -> str:
         </div>
         <div>
           <h3>Node identity</h3>
-          <table>{kv(node, ['wallet_address','node_message_id',
-            'node_message_key_count','on_start_hook_device',
-            'pcr15_event_count','pcr15_event_types'])}</table>
+          <table>{kv(node, ['wallet-address','node-message-id',
+            'node-message-key-count','on-start-hook-device',
+            'pcr15-event-count','pcr15-event-types'])}</table>
         </div>
       </div>
     </section>
@@ -556,7 +556,7 @@ def render_events(events: list[dict]) -> str:
     for e in events:
         seq = e.get("seq", e.get("key", "?"))
         pcr = e.get("pcr", "?")
-        et = e.get("event_type", "?")
+        et = e.get("event-type", "?")
         parsed = e.get("parsed") or {}
         decoded = []
         semantic = parsed.get("semantic") if isinstance(parsed, dict) else None
@@ -564,9 +564,9 @@ def render_events(events: list[dict]) -> str:
             for k, v in semantic.items():
                 decoded.append(f"{k}={v}")
         if isinstance(parsed, dict):
-            for k in ("crtm_version", "blob_physical_address", "blob_length",
-                      "image_length_in_memory", "variable_name",
-                      "separator", "key", "value", "format", "spec_id"):
+            for k in ("crtm-version", "blob-physical-address", "blob-length",
+                      "image-length-in-memory", "variable-name",
+                      "separator", "key", "value", "format", "spec-id"):
                 if k in parsed and k not in (semantic or {}):
                     decoded.append(f"{k}={parsed[k]}")
         decoded_str = ", ".join(decoded) if decoded else ""
@@ -594,7 +594,7 @@ def render_events(events: list[dict]) -> str:
 def render_claim(claim: dict | None) -> str:
     if not claim:
         return ""
-    sections = ["secure_boot", "firmware", "boot_loader", "kernel",
+    sections = ["secure-boot", "firmware", "boot-loader", "kernel",
                 "tme", "lockdown"]
     cards = []
     for s in sections:
@@ -717,7 +717,7 @@ def render_pcr_breakdown(interp: dict | None) -> str:
             continue
         role = p.get("role", "-")
         digest = p.get("digest") or "-"
-        event_count = p.get("event_count", 0)
+        event_count = p.get("event-count", 0)
         derived = p.get("derived") or {}
         recon = p.get("reconstruction") or {}
         # Render derived fields as a table.
@@ -746,8 +746,8 @@ def render_pcr_breakdown(interp: dict | None) -> str:
         ) or "<span class='muted'>(no events)</span>"
         recon_html = ""
         if recon:
-            matches = recon.get("matches_quoted")
-            from_n = recon.get("replayed_from_events", 0)
+            matches = recon.get("matches-quoted")
+            from_n = recon.get("replayed-from-events", 0)
             recon_html = f"""
             <div class="recon">
               reconstruction: {pass_badge(bool(matches), 'matches quoted', 'DIVERGES')}
@@ -998,7 +998,7 @@ def build() -> Path:
         "acceptance": load_acceptance(),
         "tamper": load_tamper(),
         "interpret": load_interpret(),
-        "interpret_tree": load_interpret_tree(),
+        "interpret-tree": load_interpret_tree(),
         "events": load_events(),
         "claim": load_claim(),
         "hyperbuddy": load_hyperbuddy(),
@@ -1013,7 +1013,7 @@ def build() -> Path:
         acceptance=render_acceptance(ctx["acceptance"]),
         tamper=render_tamper(ctx["tamper"]),
         interpret=render_interpret(ctx["interpret"]),
-        pcr_breakdown=render_pcr_breakdown(ctx["interpret_tree"]),
+        pcr_breakdown=render_pcr_breakdown(ctx["interpret-tree"]),
         events=render_events(ctx["events"]),
         claim=render_claim(ctx["claim"]),
         hyperbuddy=render_hyperbuddy(ctx["hyperbuddy"]),

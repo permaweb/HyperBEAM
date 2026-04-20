@@ -65,16 +65,16 @@ load_fresh() ->
         <<"vendors">> =>
             read_json_map(filename:join(Root, "manufacturers.json"),
                           <<"vendors">>),
-        <<"event_types">> =>
+        <<"event-types">> =>
             read_json_map(filename:join(Root, "event-types.json"),
                           <<"types">>),
-        <<"pcr_profiles">> =>
+        <<"pcr-profiles">> =>
             read_dir_of_json(filename:join(Root, "pcr-profiles")),
-        <<"uki_profiles">> =>
+        <<"uki-profiles">> =>
             read_dir_of_json(filename:join(Root, "uki-measurements")),
-        <<"firmware_versions">> =>
+        <<"firmware-versions">> =>
             read_dir_of_json(filename:join(Root, "firmware-versions")),
-        <<"cert_roots">> =>
+        <<"cert-roots">> =>
             read_cert_roots(filename:join(Root, "root-cas"))
     }.
 

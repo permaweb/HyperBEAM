@@ -1449,7 +1449,7 @@ even if they forgot to lock down their trust anchors.
 ### 5. `hb_store` binary→atom coercion (`750081b25`)
 
 JSON-loaded HB config carries `store-module' as a binary
-(e.g. `<<"hb_store_fs">>'), but `spawn_instance/1' does
+(e.g. `<<"hb-store-fs">>'), but `spawn_instance/1' does
 `Mod:start(...)` which requires an atom. Resulted in a bad-arg
 crash when operators tried to use JSON to override the store.
 `spawn_instance' now coerces via `binary_to_existing_atom` —
@@ -1647,8 +1647,8 @@ firmware-log consistency key off the check's severity directly.
 ```
 {
   "seq": 2, "pcr": 1,
-  "event_type": "EV_EVENT_TAG",
-  "event_data": "AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw",
+  "event-type": "EV_EVENT_TAG",
+  "event-data": "AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw",
   "digests": {
     "sha1":   "_JUhYdEUhx0a-P4OiJyDvgmtBds",
     "sha256": "YoRwO2hGlNw_Akh17X0oaoa0T6fo...",

@@ -84,13 +84,13 @@ def _verify_cert_chain(ek_pem, ca_path):
 
 
 def _verify_quote_openssl(envelope):
-    q = envelope["tpm_quote"]
+    q = envelope["tpm-quote"]
     quoted = b64url_decode(q["quoted"])
     sig = b64url_decode(q["signature"])
-    ak_pem = envelope["ak_pub_pem"].encode()
+    ak_pem = envelope["ak-pub-pem"].encode()
     nonce = b64url_decode(q["nonce"])
-    pcr_values = q["pcr_values"]
-    selection = q["pcr_selection"]
+    pcr_values = q["pcr-values"]
+    selection = q["pcr-selection"]
 
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import padding
@@ -144,12 +144,12 @@ def _verify_quote_openssl(envelope):
 
 def _verify_pcr15_replay(envelope):
     """Replay the event log's PCR 15 extensions from zero; must match quote."""
-    events = [e for e in envelope["runtime_event_log"] if int(e["pcr"]) == 15]
+    events = [e for e in envelope["runtime-event-log"] if int(e["pcr"]) == 15]
     pcr = b"\x00" * 32
     for e in events:
         digest = b64url_decode(e["digest"])
         pcr = hashlib.sha256(pcr + digest).digest()
-    quoted15_b64 = envelope["tpm_quote"]["pcr_values"].get("15")
+    quoted15_b64 = envelope["tpm-quote"]["pcr-values"].get("15")
     if quoted15_b64 is None:
         return Check("Runtime event log replay of PCR 15 matches quoted value",
                      False, "no pcr_values[15] in envelope")
@@ -167,8 +167,8 @@ def _verify_node_msg_binding(envelope):
     """The single PCR 15 event's digest must equal the envelope's
     node_message_id; compare the decoded raw bytes so that either side
     can be encoded differently and we still notice inequality."""
-    events = [e for e in envelope["runtime_event_log"] if int(e["pcr"]) == 15]
-    claimed_id = envelope.get("node_message_id")
+    events = [e for e in envelope["runtime-event-log"] if int(e["pcr"]) == 15]
+    claimed_id = envelope.get("node-message-id")
     if not claimed_id:
         return Check("PCR 15 extension commits to node_message_id",
                      False, "no node_message_id in envelope")
@@ -196,8 +196,8 @@ def _verify_node_msg_id_matches_content(envelope):
     """Sanity check: node_message is present and node_message_id is a
     43-character base64url string (which decodes to 32 bytes). Full
     content-binding is via the PCR 15 event log (check 6)."""
-    nm = envelope.get("node_message")
-    idh = envelope.get("node_message_id")
+    nm = envelope.get("node-message")
+    idh = envelope.get("node-message-id")
     if not nm or not idh:
         return Check(
             "Embedded node_message + id shape",
@@ -225,7 +225,7 @@ def _verify_node_msg_id_matches_content(envelope):
 
 def verify(envelope, ca_path):
     return [
-        _verify_cert_chain(envelope["ek_cert_pem"], ca_path),
+        _verify_cert_chain(envelope["ek-cert-pem"], ca_path),
         _verify_quote_openssl(envelope),
         _verify_pcr15_replay(envelope),
         _verify_node_msg_binding(envelope),
@@ -241,7 +241,7 @@ def main():
     raw = json.loads(pathlib.Path(sys.argv[1]).read_text())
     # HB wraps device responses in `{status, commitments, body}' — the
     # attestation envelope lives under `body'. Accept either shape.
-    if isinstance(raw, dict) and "lapee_attestation_version" in raw:
+    if isinstance(raw, dict) and "lapee-attestation-version" in raw:
         envelope = raw
     elif isinstance(raw, dict) and isinstance(raw.get("body"), dict):
         envelope = raw["body"]
@@ -252,9 +252,9 @@ def main():
     print("=" * 68)
     print("LapEE (dev_tpm2) verifier")
     print("=" * 68)
-    print(f"  wallet_address    : {envelope.get('wallet_address')}")
-    print(f"  node_message_id   : {envelope.get('node_message_id')}")
-    q15 = envelope['tpm_quote']['pcr_values'].get('15')
+    print(f"  wallet_address    : {envelope.get('wallet-address')}")
+    print(f"  node_message_id   : {envelope.get('node-message-id')}")
+    q15 = envelope['tpm-quote']['pcr-values'].get('15')
     print(f"  quoted pcr15      : {q15}")
     print()
     results = verify(envelope, ca)

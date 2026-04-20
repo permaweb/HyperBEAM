@@ -4,67 +4,67 @@ Message [ undefined ] {
       ak => 
         Message [ undefined ] {
           algorithm => RSA
-          key_size_bits => 2048
-          pub_der_sha256_b64url => nTJY_..2Bemk
-          public_exponent => 65537
+          key-size-bits => 2048
+          pub-der-sha256-b64url => GbK9a..JY0qM
+          public-exponent => 65537
         }
       boot => 
         Message [ undefined ] {
-          firmware_srtm => 4htwP..qP6pM
+          firmware-srtm => 4htwP..qP6pM
           match => null
-          platform_firmware_config => StAAW..t9SF8
-          secure_boot_measured => true
-          secure_boot_policy => 4htwP..qP6pM
+          platform-firmware-config => StAAW..t9SF8
+          secure-boot-measured => true
+          secure-boot-policy => 4htwP..qP6pM
         }
       claim => 
         Message [ undefined ] {
-          boot_loader => 
+          boot-loader => 
             Message [ undefined ] {
-              image_hash => unknown
-              image_hash_provenance => []
+              image-hash => unknown
+              image-hash-provenance => []
             }
           firmware => 
             Message [ undefined ] {
-              crtm_version => unknown
-              crtm_version_provenance => []
+              crtm-version => unknown
+              crtm-version-provenance => []
             }
           kernel => 
             Message [ undefined ] {
               cmdline => unknown
-              cmdline_provenance => []
-              iommu_strict => unknown
-              uki_hash => AAAAA..AAAAA
-              uki_hash_provenance => [{<<"pcr">>,11}]
+              cmdline-provenance => []
+              iommu-strict => unknown
+              uki-hash => AAAAA..AAAAA
+              uki-hash-provenance => [{<<"pcr">>,11}]
             }
           lockdown => 
             Message [ undefined ] {
               level => unknown
-              level_provenance => List [1] {
-                  1 => derivation: uki_not_in_known_lockdown_level_list
+              level-provenance => List [1] {
+                  1 => derivation: uki-not-in-known-lockdown-level-list
                 }
             }
-          secure_boot => 
+          secure-boot => 
             Message [ undefined ] {
-              db_authorities => []
-              deployed_mode => unknown
+              db-authorities => []
+              deployed-mode => unknown
               enabled => unknown
-              enabled_provenance => []
-              setup_mode => unknown
+              enabled-provenance => []
+              setup-mode => unknown
             }
           tme => 
             Message [ undefined ] {
               enabled => unknown
-              enabled_provenance => List [1] {
+              enabled-provenance => List [1] {
                   1 => derivation: uki_hash_not_in_known_TME_checking_list
                 }
             }
         }
       envelope => 
         Message [ undefined ] {
-          issued_at_unix => 1776718444
-          node_message_id => 6ZtER..zez6g
+          issued-at-unix => 1776720610
+          node-message-id => m1lZl..N-Tuw
           version => 0.3
-          wallet_address => NYNhb..HrlDg
+          wallet-address => hfarr..u8ssw
         }
       events => 
         Message [ undefined ] {
@@ -74,38 +74,38 @@ Message [ undefined ] {
                 Message [ undefined ] {
                   sha1 => AAAAAAAAAAAAAAAAAAAAAAAAAAA
                 }
-              event_data => U3BlYyBJRCBFdmVudDAzAAAAAAAAAgICBAAAAAQAFAALACAADAAwAA0AQAAA
-              event_type => EV_NO_ACTION
-              event_type_code => 3
+              event-data => U3BlYyBJRCBFdmVudDAzAAAAAAAAAgICBAAAAAQAFAALACAADAAwAA0AQAAA
+              event-type => EV_NO_ACTION
+              event-type-code => 3
               parsed => 
                 Message [ undefined ] {
                   algorithms => List [4] {
                       1 => 
                         Message [ undefined ] {
-                          digest_size => 20
-                          hash_alg_id => 4
-                          hash_alg_name => sha1
+                          digest-size => 20
+                          hash-alg-id => 4
+                          hash-alg-name => sha1
                         }
                       2 => 
                         Message [ undefined ] {
-                          digest_size => 32
-                          hash_alg_id => 11
-                          hash_alg_name => sha256
+                          digest-size => 32
+                          hash-alg-id => 11
+                          hash-alg-name => sha256
                         }
                       3 => 
                         Message [ undefined ] {
-                          digest_size => 48
-                          hash_alg_id => 12
-                          hash_alg_name => sha384
+                          digest-size => 48
+                          hash-alg-id => 12
+                          hash-alg-name => sha384
                         }
                       4 => 
                         Message [ undefined ] {
-                          digest_size => 64
-                          hash_alg_id => 13
-                          hash_alg_name => sha512
+                          digest-size => 64
+                          hash-alg-id => 13
+                          hash-alg-name => sha512
                         }
                     }
-                  spec_id => Event03
+                  spec-id => Event03
                 }
               pcr => 0
               seq => 1
@@ -119,9 +119,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -138,9 +138,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -157,9 +157,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -176,9 +176,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -195,9 +195,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -214,9 +214,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -233,9 +233,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -252,9 +252,9 @@ Message [ undefined ] {
                   sha384 => t1vf_cbReNKLLshsjm_BKuZDal0JzoSI2Ft6FoXUf47OTv1iEY3HhF1WoiwM0aD1
                   sha512 => 4jDCNWb-AqmKEZBJCfE6zMfES-LXSRRSQLENjSf_yAIexjTc2ocE1gsi631owc145021aFFVTyXZERf3og1Pbw
                 }
-              event_data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
-              event_type => EV_EVENT_TAG
-              event_type_code => 6
+              event-data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
+              event-type => EV_EVENT_TAG
+              event-type-code => 6
               parsed => #{}
               pcr => 1
               seq => 2
@@ -268,9 +268,9 @@ Message [ undefined ] {
                   sha384 => j28BukrJuadb_Tx2px37tOx6T9kS8cw22ybP4sL0bgBxT1yQ_ryTXNUcpjyA00T1
                   sha512 => _2Ud-lhBsiFTbuTYOdScfc7KwIst5lTDjSZpk4AIi3NiOnZRZ83psiRyTyW8xOJMGH1Qm9nABgTz28GOiXBvUA
                 }
-              event_data => U3RhcnQgT3B0aW9uIFJPTSBTY2Fu
-              event_type => EV_ACTION
-              event_type_code => 5
+              event-data => U3RhcnQgT3B0aW9uIFJPTSBTY2Fu
+              event-type => EV_ACTION
+              event-type-code => 5
               parsed => 
                 Message [ undefined ] {
                   action => Start Option ROM Scan
@@ -287,9 +287,9 @@ Message [ undefined ] {
                   sha384 => JM-oer7KGzZ9hhmL9yyZfzo40GJrQxnmrnic-PdkwX6_ZFkseYD7ra4KyR3_AuBt
                   sha512 => IKWUzWXrf7ghdsOO8kv_O0MH30eZMuXk7lAct9DDZuMpMJzDTduuKjtZ-4MKuaMuqpJ3wad0S25Xp0W70oug5Q
                 }
-              event_data => BwAAA..j5nqU
-              event_type => EV_EVENT_TAG
-              event_type_code => 6
+              event-data => BwAAA..j5nqU
+              event-type => EV_EVENT_TAG
+              event-type-code => 6
               parsed => #{}
               pcr => 2
               seq => 4
@@ -303,9 +303,9 @@ Message [ undefined ] {
                   sha384 => SxuQJHmAVyr0zny5cSKzFgQrmKs-Wqf9P1_EIzODiRMGhbXcG6vj26tQr-AP8agc
                   sha512 => MUWBFPcs1HxP9gZjdPAajtEQMGT2oFz9JK8NasDF8fsTBWU7gnfHiwHyWSWuFO6YfXeSQ0t1l_PpiP-mUE4Mtw
                 }
-              event_data => BwAAA..MK1p0
-              event_type => EV_EVENT_TAG
-              event_type_code => 6
+              event-data => BwAAA..MK1p0
+              event-type => EV_EVENT_TAG
+              event-type-code => 6
               parsed => #{}
               pcr => 2
               seq => 5
@@ -319,9 +319,9 @@ Message [ undefined ] {
                   sha384 => fmr2o-C8ZXCel9rKAu5HTU5KOunkULJj9CkSy13fBFkfN44MShC8V4J4svt2Pm2S
                   sha512 => q-A-7mteoXqtq3zO4hYb_6bg-S0CEqiBAIPWK_KtOz0vmX3X00aW2VIszcl0SqpXB3AXzn3jqwBmVIenQwR_tQ
                 }
-              event_data => BwAAA..mVmZI
-              event_type => EV_EVENT_TAG
-              event_type_code => 6
+              event-data => BwAAA..mVmZI
+              event-type => EV_EVENT_TAG
+              event-type-code => 6
               parsed => #{}
               pcr => 2
               seq => 6
@@ -335,9 +335,9 @@ Message [ undefined ] {
                   sha384 => ej2xIXF_zgdJGz-30mk3E7t7-TM1QHDkFZxtSiPSwvIGncOml3S56_X0lpWx2epL
                   sha512 => X3XXYcIaGzPTKSQT-amkhztraVF8G5KLAHYFlMq2OzVu1NjvQRVuorGW7dPP8BIeYib5N9RCu6JNb-P97eCsCA
                 }
-              event_data => BwAAA..iLebQ
-              event_type => EV_EVENT_TAG
-              event_type_code => 6
+              event-data => BwAAA..iLebQ
+              event-type => EV_EVENT_TAG
+              event-type-code => 6
               parsed => #{}
               pcr => 2
               seq => 7
@@ -351,9 +351,9 @@ Message [ undefined ] {
                   sha384 => 1EMWxQhurQTTocwZpbO6wanqu99HyJ49Xxid6XQh0LRwLmT5hGawWcGljJXuaKaE
                   sha512 => geRDnSkrh87cS_j4Sigu5zkjBRzuP4J_A6m4aV7_jIMTYIthV2hhx7HY_GwJp-3cOUYIEa1_U2nzoCuMuI9qkw
                 }
-              event_data => Q2FsbGluZyBJTlQgMTlo
-              event_type => EV_ACTION
-              event_type_code => 5
+              event-data => Q2FsbGluZyBJTlQgMTlo
+              event-type => EV_ACTION
+              event-type-code => 5
               parsed => 
                 Message [ undefined ] {
                   action => Calling INT 19h
@@ -370,9 +370,9 @@ Message [ undefined ] {
                   sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                   sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                 }
-              event_data => _____w
-              event_type => EV_SEPARATOR
-              event_type_code => 4
+              event-data => _____w
+              event-type => EV_SEPARATOR
+              event-type-code => 4
               parsed => 
                 Message [ undefined ] {
                   separator => firmware_error
@@ -384,28 +384,28 @@ Message [ undefined ] {
       ima => 
         Message [ undefined ] {
           active => true
-          events_available => false
+          events-available => false
           note => "LapEE does not yet transport the kernel IMA event log in the..." <263 bytes>
           pcr10 => n_Xbz..U0pro
         }
       kernel => 
         Message [ undefined ] {
-          boot_loader => null
-          uki_cmdline => null
-          uki_image => AAAAA..AAAAA
-          uki_measured => false
+          boot-loader => null
+          uki-cmdline => null
+          uki-image => AAAAA..AAAAA
+          uki-measured => false
         }
       node => 
         Message [ undefined ] {
-          node_message_id => 6ZtER..zez6g
-          node_message_key_count => 79
-          on_start_hook_device => tpm2@2.0a
-          on_start_hook_path => extend
-          pcr15_event_count => 1
-          pcr15_event_types => List [1] {
+          node-message-id => m1lZl..N-Tuw
+          node-message-key-count => 79
+          on-start-hook-device => tpm2@2.0a
+          on-start-hook-path => extend
+          pcr15-event-count => 1
+          pcr15-event-types => List [1] {
               1 => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
             }
-          wallet_address => NYNhb..HrlDg
+          wallet-address => hfarr..u8ssw
         }
       pcrs => 
         Message [ undefined ] {
@@ -413,16 +413,16 @@ Message [ undefined ] {
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  crtm_version => unknown
-                  firmware_blobs => []
+                  crtm-version => unknown
+                  firmware-blobs => []
                   hcrtm => unknown
-                  post_codes => []
-                  separator_kind => firmware_error
-                  separator_seen => true
-                  spec_id => Event03
+                  post-codes => []
+                  separator-kind => firmware_error
+                  separator-seen => true
+                  spec-id => Event03
                 }
               digest => 4htwP..qP6pM
-              event_count => 2
+              event-count => 2
               events => 
                 Message [ undefined ] {
                   1 => 
@@ -431,38 +431,38 @@ Message [ undefined ] {
                         Message [ undefined ] {
                           sha1 => AAAAAAAAAAAAAAAAAAAAAAAAAAA
                         }
-                      event_data => U3BlYyBJRCBFdmVudDAzAAAAAAAAAgICBAAAAAQAFAALACAADAAwAA0AQAAA
-                      event_type => EV_NO_ACTION
-                      event_type_code => 3
+                      event-data => U3BlYyBJRCBFdmVudDAzAAAAAAAAAgICBAAAAAQAFAALACAADAAwAA0AQAAA
+                      event-type => EV_NO_ACTION
+                      event-type-code => 3
                       parsed => 
                         Message [ undefined ] {
                           algorithms => List [4] {
                               1 => 
                                 Message [ undefined ] {
-                                  digest_size => 20
-                                  hash_alg_id => 4
-                                  hash_alg_name => sha1
+                                  digest-size => 20
+                                  hash-alg-id => 4
+                                  hash-alg-name => sha1
                                 }
                               2 => 
                                 Message [ undefined ] {
-                                  digest_size => 32
-                                  hash_alg_id => 11
-                                  hash_alg_name => sha256
+                                  digest-size => 32
+                                  hash-alg-id => 11
+                                  hash-alg-name => sha256
                                 }
                               3 => 
                                 Message [ undefined ] {
-                                  digest_size => 48
-                                  hash_alg_id => 12
-                                  hash_alg_name => sha384
+                                  digest-size => 48
+                                  hash-alg-id => 12
+                                  hash-alg-name => sha384
                                 }
                               4 => 
                                 Message [ undefined ] {
-                                  digest_size => 64
-                                  hash_alg_id => 13
-                                  hash_alg_name => sha512
+                                  digest-size => 64
+                                  hash-alg-id => 13
+                                  hash-alg-name => sha512
                                 }
                             }
-                          spec_id => Event03
+                          spec-id => Event03
                         }
                       pcr => 0
                       seq => 1
@@ -476,9 +476,9 @@ Message [ undefined ] {
                           sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                           sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                         }
-                      event_data => _____w
-                      event_type => EV_SEPARATOR
-                      event_type_code => 4
+                      event-data => _____w
+                      event-type => EV_SEPARATOR
+                      event-type-code => 4
                       parsed => 
                         Message [ undefined ] {
                           separator => firmware_error
@@ -487,27 +487,27 @@ Message [ undefined ] {
                       seq => 9
                     }
                 }
-              is_zero => false
+              is-zero => false
               reconstruction => 
                 Message [ undefined ] {
-                  matches_quoted => false
-                  replayed_digest => AAAAA..AAAAA
-                  replayed_from_events => 2
+                  matches-quoted => false
+                  replayed-digest => AAAAA..AAAAA
+                  replayed-from-events => 2
                 }
-              role => firmware_srtm
-              role_notes => "Extended by the CRTM/firmware with measurements of the firmw..." <122 bytes>
+              role => firmware-srtm
+              role-notes => "Extended by the CRTM/firmware with measurements of the firmw..." <122 bytes>
             }
           1 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  cpu_microcode => unknown
-                  separator_kind => firmware_error
-                  separator_seen => true
-                  uefi_boot_order => []
+                  cpu-microcode => unknown
+                  separator-kind => firmware_error
+                  separator-seen => true
+                  uefi-boot-order => []
                 }
               digest => StAAW..t9SF8
-              event_count => 2
+              event-count => 2
               events => 
                 Message [ undefined ] {
                   10 => 
@@ -519,9 +519,9 @@ Message [ undefined ] {
                           sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                           sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                         }
-                      event_data => _____w
-                      event_type => EV_SEPARATOR
-                      event_type_code => 4
+                      event-data => _____w
+                      event-type => EV_SEPARATOR
+                      event-type-code => 4
                       parsed => 
                         Message [ undefined ] {
                           separator => firmware_error
@@ -538,96 +538,96 @@ Message [ undefined ] {
                           sha384 => t1vf_cbReNKLLshsjm_BKuZDal0JzoSI2Ft6FoXUf47OTv1iEY3HhF1WoiwM0aD1
                           sha512 => 4jDCNWb-AqmKEZBJCfE6zMfES-LXSRRSQLENjSf_yAIexjTc2ocE1gsi631owc145021aFFVTyXZERf3og1Pbw
                         }
-                      event_data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
-                      event_type => EV_EVENT_TAG
-                      event_type_code => 6
+                      event-data => AQAAABQAAAAOK6DAHhTedyOHk3eUKECS3CXBFw
+                      event-type => EV_EVENT_TAG
+                      event-type-code => 6
                       parsed => #{}
                       pcr => 1
                       seq => 2
                     }
                 }
-              is_zero => false
+              is-zero => false
               reconstruction => 
                 Message [ undefined ] {
-                  matches_quoted => false
-                  replayed_digest => AAAAA..AAAAA
-                  replayed_from_events => 2
+                  matches-quoted => false
+                  replayed-digest => AAAAA..AAAAA
+                  replayed-from-events => 2
                 }
-              role => platform_firmware_config
-              role_notes => 
+              role => platform-firmware-config
+              role-notes => 
             }
           10 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  ima_active => true
-                  ima_event_count => unknown
-                  ima_files_measured => unknown
+                  ima-active => true
+                  ima-event-count => unknown
+                  ima-files-measured => unknown
                   note => "LapEE does not yet transport the IMA per-file event log in t..." <155 bytes>
                 }
               digest => n_Xbz..U0pro
-              event_count => 0
+              event-count => 0
               events => #{}
-              is_zero => false
-              role => ima_runtime_measurements
-              role_notes => "Extended by the Linux IMA subsystem with every exec'd binary..." <143 bytes>
+              is-zero => false
+              role => ima-runtime-measurements
+              role-notes => "Extended by the Linux IMA subsystem with every exec'd binary..." <143 bytes>
             }
           11 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  uki_image_hash => unknown
-                  uki_kernel_version => unknown
-                  uki_measured => false
+                  uki-image-hash => unknown
+                  uki-kernel-version => unknown
+                  uki-measured => false
                 }
               digest => AAAAA..AAAAA
-              event_count => 0
+              event-count => 0
               events => #{}
-              is_zero => true
-              role => uki_kernel_image
-              role_notes => "Extended by systemd-stub / sd-boot for the UKI's kernel imag..." <123 bytes>
+              is-zero => true
+              role => uki-kernel-image
+              role-notes => "Extended by systemd-stub / sd-boot for the UKI's kernel imag..." <123 bytes>
             }
           14 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  mok_entry_count => unknown
+                  mok-entry-count => unknown
                 }
               digest => AAAAA..AAAAA
-              event_count => 0
+              event-count => 0
               events => #{}
-              is_zero => true
-              role => secure_boot_authority_mok
-              role_notes => 
+              is-zero => true
+              role => secure-boot-authority-mok
+              role-notes => 
             }
           15 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
-                  lapee_node_identity_committed => true
+                  lapee-node-identity-committed => true
                 }
-              digest => NqTQW..ewO0g
-              event_count => 0
+              digest => pntgV..fhsb0
+              event-count => 0
               events => #{}
-              is_zero => false
-              role => lapee_node_identity
-              role_notes => "LapEE node identity. Extended at HB startup via the enforced..." <182 bytes>
+              is-zero => false
+              role => lapee-node-identity
+              role-notes => "LapEE node identity. Extended at HB startup via the enforced..." <182 bytes>
             }
           7 => 
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
                   authorities => []
-                  db_entry_count => unknown
-                  dbx_entry_count => unknown
-                  kek_entry_count => unknown
-                  pk_entry_count => unknown
-                  secure_boot_enabled => unknown
-                  separator_kind => firmware_error
-                  separator_seen => true
+                  db-entry-count => unknown
+                  dbx-entry-count => unknown
+                  kek-entry-count => unknown
+                  pk-entry-count => unknown
+                  secure-boot-enabled => unknown
+                  separator-kind => firmware_error
+                  separator-seen => true
                 }
               digest => 4htwP..qP6pM
-              event_count => 1
+              event-count => 1
               events => 
                 Message [ undefined ] {
                   16 => 
@@ -639,9 +639,9 @@ Message [ undefined ] {
                           sha384 => Sga4ecfu2-AclF1Gtb14W1kgPc6B6moSBsKAkcooU2X3YNkWd3jw3Bdj1IVKr9QK
                           sha512 => 6nG7JDsLLbcpueuI48VaP0kPv_I0V4JQUSJKH-bm0_SAWQz6OkprEsYi1qw2b-sDzRcATtAEyz8NUnMWJpRmeQ
                         }
-                      event_data => _____w
-                      event_type => EV_SEPARATOR
-                      event_type_code => 4
+                      event-data => _____w
+                      event-type => EV_SEPARATOR
+                      event-type-code => 4
                       parsed => 
                         Message [ undefined ] {
                           separator => firmware_error
@@ -650,42 +650,42 @@ Message [ undefined ] {
                       seq => 16
                     }
                 }
-              is_zero => false
+              is-zero => false
               reconstruction => 
                 Message [ undefined ] {
-                  matches_quoted => false
-                  replayed_digest => AAAAA..AAAAA
-                  replayed_from_events => 1
+                  matches-quoted => false
+                  replayed-digest => AAAAA..AAAAA
+                  replayed-from-events => 1
                 }
-              role => secure_boot_policy
-              role_notes => "Extended with Secure Boot state + the PK/KEK/db/dbx keyset. ..." <172 bytes>
+              role => secure-boot-policy
+              role-notes => "Extended with Secure Boot state + the PK/KEK/db/dbx keyset. ..." <172 bytes>
             }
         }
       quote => 
         Message [ undefined ] {
-          attest_type => TPM_ST_ATTEST_QUOTE
-          clock_ms => 119803
-          magic_ok => true
-          nonce => CG2qH..aKB38
-          reset_count => 4098649755
-          restart_count => 3182556276
+          attest-type => TPM_ST_ATTEST_QUOTE
+          clock-ms => 63297
+          magic-ok => true
+          nonce => M2bA8..lHafo
+          reset-count => 3291255300
+          restart-count => 330723973
           safe => true
         }
       tpm => 
         Message [ undefined ] {
-          ek_cert_issuer => Q049T..QgQ0E [*]
-          ek_cert_serial => IpOpZjhQoJI06UQfnPMsS_0H5bE
-          ek_cert_subject => CN=LapEE Test EK
-          ek_cert_valid_from => 260420205247Z
-          ek_cert_valid_to => 360417205247Z
-          firmware_version => null
-          manufacturer_id => null
-          manufacturer_kind => null
-          manufacturer_name => null
+          ek-cert-issuer => Q049T..QgQ0E [*]
+          ek-cert-serial => EdAewxFG-l2hKTMf_dKsh1p6ha4
+          ek-cert-subject => CN=LapEE Test EK
+          ek-cert-valid-from => 260420212950Z
+          ek-cert-valid-to => 360417212950Z
+          firmware-version => null
+          manufacturer-id => null
+          manufacturer-kind => null
+          manufacturer-name => null
           model => null
-          spec_family => null
-          spec_level => null
-          spec_revision => null
+          spec-family => null
+          spec-level => null
+          spec-revision => null
         }
     }
   status => 200

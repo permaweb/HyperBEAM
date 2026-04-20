@@ -38,11 +38,11 @@ Green-zone-style predicates compose on top.
 
   ```
   #{<<"1">> => #{ <<"pcr">> => 0,
-                  <<"event_type">> => <<"EV_NO_ACTION">>,
-                  <<"event_type_code">> => 3,
+                  <<"event-type">> => <<"EV_NO_ACTION">>,
+                  <<"event-type-code">> => 3,
                   <<"digests">> => #{ <<"sha1">> => <<…>>,
                                       <<"sha256">> => <<…>> },
-                  <<"event_data">> => <<…>> },
+                  <<"event-data">> => <<…>> },
     <<"2">> => …}
   ```
 

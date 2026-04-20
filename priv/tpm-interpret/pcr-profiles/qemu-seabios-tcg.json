@@ -1,20 +1,20 @@
 {
     "name": "QEMU SeaBIOS + TCG emulated TPM (LapEE test guest)",
-    "match_pcrs": {
+    "match-pcrs": {
         "0": "4htwPuacd0drzLQ-wDNqmhspFLN4lE97AKECFMqP6pM",
         "7": "4htwPuacd0drzLQ-wDNqmhspFLN4lE97AKECFMqP6pM"
     },
     "attributes": {
-        "platform_vendor": "QEMU",
-        "platform_model": "pc-q35",
-        "firmware_vendor": "SeaBIOS",
-        "firmware_version": "rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org",
-        "secure_boot_enabled": false,
-        "secure_boot_authorities": [],
-        "tpm_vendor": "QEMU TCG (swtpm)",
-        "measurement_root": "SRTM via SeaBIOS ACPI TPM2 table",
-        "trust_tier": "development_only",
-        "captured_from": "lapee-baremetal/out/attestation.json (baseline boot 2026-04-20)"
+        "platform-vendor": "QEMU",
+        "platform-model": "pc-q35",
+        "firmware-vendor": "SeaBIOS",
+        "firmware-version": "rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org",
+        "secure-boot-enabled": false,
+        "secure-boot-authorities": [],
+        "tpm-vendor": "QEMU TCG (swtpm)",
+        "measurement-root": "SRTM via SeaBIOS ACPI TPM2 table",
+        "trust-tier": "development_only",
+        "captured-from": "lapee-baremetal/out/attestation.json (baseline boot 2026-04-20)"
     },
     "notes": "SeaBIOS's TCG log extends PCR 0 and PCR 7 with the same deterministic digest (both equal to sha256 of a fixed sequence of EV_NO_ACTION + EV_S_CRTM_VERSION events plus the Secure-Boot-OFF signal). PCR 1 varies with ACPI config so we don't pin it. Values here are from SeaBIOS rel-1.16.3 bundled with QEMU — they WILL change across QEMU versions. This profile identifies a *development* platform: `trust_tier: development_only'. Production LapEE verifiers should refuse `trust_tier: development_only' matches, or require a separate test-only trust anchor provisioned out-of-band."
 }

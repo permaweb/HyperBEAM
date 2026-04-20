@@ -1,14 +1,14 @@
 Message [ undefined ] {
   body => 
     Message [ undefined ] {
-      ak_pub_pem => "-----BEGIN PUBLIC KEY-----..." <451 bytes>
-      ek_cert_pem => "-----BEGIN CERTIFICATE-----..." <1,025 bytes>
-      issued_at_unix => 1776718440
-      lapee_attestation_version => 0.3
-      node_message => 
+      ak-pub-pem => "-----BEGIN PUBLIC KEY-----..." <451 bytes>
+      ek-cert-pem => "-----BEGIN CERTIFICATE-----..." <1,025 bytes>
+      issued-at-unix => 1776720606
+      lapee-attestation-version => 0.3
+      node-message => 
         Message [ undefined ] {
           access_remote_cache_for_client => false
-          address => NYNhb..HrlDg
+          address => hfarr..u8ssw
           ans104_trust_gql => true
           arweave_chunk_fetch_concurrency => 5
           await_inprogress => named
@@ -19,7 +19,7 @@ Message [ undefined ] {
             }
           cache_lookup_hueristics => false
           cache_writers => List [1] {
-              1 => NYNhb..HrlDg
+              1 => hfarr..u8ssw
             }
           client_error_strategy => throw
           commitment_device => httpsig@1.0
@@ -1336,38 +1336,38 @@ Message [ undefined ] {
           trusted_device_signers => []
           wasm_allow_aot => false
         }
-      node_message_id => 6ZtER..zez6g
-      runtime_event_log => List [1] {
+      node-message-id => m1lZl..N-Tuw
+      runtime-event-log => List [1] {
           1 => 
             Message [ undefined ] {
               description => hb_message:id(Subject, all) over 79-key message
-              digest => 6ZtER..zez6g
-              emitted_at_unix => 1776718348
-              event_type => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
+              digest => m1lZl..N-Tuw
+              emitted-at-unix => 1776720577
+              event-type => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
               pcr => 15
               seq => 0
-              subject_is_message => true
+              subject-is-message => true
             }
         }
-      tcg_event_log => "AAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC0AAABTcGVjIElEIEV2ZW50..." <4,162 bytes>
-      tpm_quote => 
+      tcg-event-log => "AAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC0AAABTcGVjIElEIEV2ZW50..." <4,162 bytes>
+      tpm-quote => 
         Message [ undefined ] {
-          nonce => 8tbIV..gKrcg
-          pcr_selection => [0,1,7,10,11,14,15]
-          pcr_values => 
+          nonce => L-gXg..A9AUA
+          pcr-selection => [0,1,7,10,11,14,15]
+          pcr-values => 
             Message [ undefined ] {
               0 => 4htwP..qP6pM
               1 => StAAW..t9SF8
               10 => n_Xbz..U0pro
               11 => AAAAA..AAAAA
               14 => AAAAA..AAAAA
-              15 => NqTQW..ewO0g
+              15 => pntgV..fhsb0
               7 => 4htwP..qP6pM
             }
-          quoted => "_1RDR4AYACIACwVu8zHJmWWtDnVQ4Rap74piS4oM7A9N3W_70HOqK0VyACDy..." <194 bytes>
-          signature => "TCLnUsJGx7KYR1Uf_8lKigU-WJx4HcDsEiXe8UsNq05syDdVdQupotxVHySb..." <342 bytes>
+          quoted => "_1RDR4AYACIAC2iYkBJAFkzxkmurd_UyHFHleK9OoT_TIuV_5Hf5wfxwACAv..." <194 bytes>
+          signature => "lzcZAUNdiBsej0F0_hn1_ffr-kiZcT3FF-XyvJm04W2xe_Jk32oGn8rFif5_..." <342 bytes>
         }
-      wallet_address => NYNhb..HrlDg
+      wallet-address => hfarr..u8ssw
     }
   status => 200
 }

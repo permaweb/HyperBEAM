@@ -182,30 +182,30 @@ else:
     pa("all 5 checks PASS")
 
 s = b.get('summary') or {}
-if s.get('on_start_hook_device') != 'tpm2@2.0a':
-    fail(f"on_start_hook_device != tpm2@2.0a: {s.get('on_start_hook_device')!r}")
+if s.get('on-start-hook-device') != 'tpm2@2.0a':
+    fail(f"on_start_hook_device != tpm2@2.0a: {s.get('on-start-hook-device')!r}")
 else:
     pa("summary.on_start_hook_device == tpm2@2.0a (enforced hook)")
 
-if s.get('pcr15_event_count') not in (1, '1'):
-    fail(f"pcr15_event_count != 1: {s.get('pcr15_event_count')!r}")
+if s.get('pcr15-event-count') not in (1, '1'):
+    fail(f"pcr15_event_count != 1: {s.get('pcr15-event-count')!r}")
 else:
     pa("summary.pcr15_event_count == 1")
 
-nmid = s.get('node_message_id')
+nmid = s.get('node-message-id')
 if not isinstance(nmid, str) or len(nmid) != 43:
     fail(f"node_message_id not 43-char base64url: {nmid!r}")
 else:
     pa(f"summary.node_message_id is 43-char base64url")
 
-if s.get('envelope_version') != '0.3':
-    fail(f"envelope_version != 0.3: {s.get('envelope_version')!r}")
+if s.get('envelope-version') != '0.3':
+    fail(f"envelope_version != 0.3: {s.get('envelope-version')!r}")
 else:
     pa("summary.envelope_version == 0.3")
 
 # AK identity is an independent fingerprint that lets a trusting
 # caller pin subsequent messages to THIS attestation.
-pub = s.get('ak_public_key_b64url')
+pub = s.get('ak-public-key-b64url')
 if not isinstance(pub, str) or len(pub) != 43:
     fail(f"ak_public_key_b64url not 43-char base64url: {pub!r}")
 else:

@@ -84,51 +84,51 @@ def build_attestation(
     # Machine-identifying fields in human-readable form. This is the
     # "comprehensible form" the paper emphasizes at §4.3 and §5.
     machine_fields = {
-        "cpu_family": "x86_64 (simulated)",
-        "tpm_manufacturer": "swtpm (software TPM 2.0)",
-        "tpm_type": "software",
-        "tme_active": True,  # would be MSR-read on hardware
-        "secure_boot_state": "enabled (operator-enrolled PK/KEK/db)",
-        "iommu_policy": "strict",
-        "kernel_lockdown": "confidentiality",
-        "os_image": {
-            "golden_uki_hash": GOLDEN["uki_hash_sha256"],
+        "cpu-family": "x86_64 (simulated)",
+        "tpm-manufacturer": "swtpm (software TPM 2.0)",
+        "tpm-type": "software",
+        "tme-active": True,  # would be MSR-read on hardware
+        "secure-boot-state": "enabled (operator-enrolled PK/KEK/db)",
+        "iommu-policy": "strict",
+        "kernel-lockdown": "confidentiality",
+        "os-image": {
+            "golden-uki-hash": GOLDEN["uki-hash-sha256"],
             "cmdline": GOLDEN["cmdline"],
-            "rootfs_verity_root": GOLDEN["rootfs_verity_root"],
+            "rootfs-verity-root": GOLDEN["rootfs-verity-root"],
         },
-        "hyperbeam_version": GOLDEN["hyperbeam_version"],
+        "hyperbeam-version": GOLDEN["hyperbeam-version"],
     }
 
     return {
-        "lapee_attestation_version": "0.1",
-        "issued_at_unix": int(time.time()),
-        "machine_fields": machine_fields,
-        "ek_cert_pem": tpm.state.ek_cert_pem.decode(),
-        "ak_pub_pem": quote["ak_pub_pem"],
-        "tcg_event_log": tpm.event_log_json(),
-        "pcr_quote": {
-            "message_b64": quote["message_b64"],
-            "signature_b64": quote["signature_b64"],
-            "pcrs_b64": quote["pcrs_b64"],
-            "nonce_hex": quote["nonce_hex"],
-            "pcr_selection": pcr_set,
-            "pcr_values": pcrs_now,
+        "lapee-attestation-version": "0.1",
+        "issued-at-unix": int(time.time()),
+        "machine-fields": machine_fields,
+        "ek-cert-pem": tpm.state.ek_cert_pem.decode(),
+        "ak-pub-pem": quote["ak-pub-pem"],
+        "tcg-event-log": tpm.event_log_json(),
+        "pcr-quote": {
+            "message-b64": quote["message-b64"],
+            "signature-b64": quote["signature-b64"],
+            "pcrs-b64": quote["pcrs-b64"],
+            "nonce-hex": quote["nonce-hex"],
+            "pcr-selection": pcr_set,
+            "pcr-values": pcrs_now,
         },
-        "node_ephemeral_key": {
-            "public_pem": tpm.state.signing_key_public_pem.decode(),
-            "bound_to_pcr": 15,
-            "binding_event": "key-pubkey-extend",
+        "node-ephemeral-key": {
+            "public-pem": tpm.state.signing_key_public_pem.decode(),
+            "bound-to-pcr": 15,
+            "binding-event": "key-pubkey-extend",
         },
-        "ao_core": {
+        "ao-core": {
             "hashpath": hashpath.to_json(),
-            "user_message": user_message,
+            "user-message": user_message,
         },
-        "signature_over_hashpath_tip": {
+        "signature-over-hashpath-tip": {
             "scheme": signed["scheme"],
-            "digest_b64": signed["digest_b64"],
-            "signature_b64": signed["signature_b64"],
-            "signed_value_hex": final_tip.hex(),
-            "public_key_pem": signed["public_key_pem"],
+            "digest-b64": signed["digest-b64"],
+            "signature-b64": signed["signature-b64"],
+            "signed-value-hex": final_tip.hex(),
+            "public-key-pem": signed["public-key-pem"],
         },
     }
 
@@ -161,8 +161,8 @@ def main() -> None:
         extend_bytes=pk_pem,
         data={
             "description": "HyperBEAM ephemeral signing key bound to this boot.",
-            "public_key_pem": pk_pem.decode(),
-            "public_key_sha256": pk_digest,
+            "public-key-pem": pk_pem.decode(),
+            "public-key-sha256": pk_digest,
         },
     )
 
@@ -179,7 +179,7 @@ def main() -> None:
         "kind": "demo-inference",
         "id": secrets.token_hex(8),
         "prompt": "What is the TPM-attested trust chain of this result?",
-        "timestamp_unix": int(time.time()),
+        "timestamp-unix": int(time.time()),
     }
     hp.extend("ao-message/request", user_message)
     hp.extend("ao-message/response", {

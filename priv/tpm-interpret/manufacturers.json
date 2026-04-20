@@ -1,5 +1,5 @@
 {
-    "schema_version": 1,
+    "schema-version": 1,
     "description": "TCG-assigned TPM manufacturer IDs. Key is the 4-byte ASCII id expressed as 8 hex chars (the form that appears in the EK cert's tpmManufacturer attribute, with the 'id:' prefix stripped). Values match the TCG Vendor ID Registry (https://trustedcomputinggroup.org/resource/vendor-id-registry) as of 2024-09 plus a handful of firmware-TPM / virtual-TPM IDs commonly seen in the wild.",
     "source": "TCG Vendor ID Registry, plus /drivers/char/tpm/tpm-chip.c in the Linux kernel tree.",
     "vendors": {
@@ -30,7 +30,7 @@
         "4353434F": {
             "id": "id:4353434F",
             "name": "Cisco",
-            "kind": "server_platform",
+            "kind": "server-platform",
             "notes": "Shipped as part of Cisco UCS platforms."
         },
         "464C5953": {
@@ -42,25 +42,25 @@
         "474F4F47": {
             "id": "id:474F4F47",
             "name": "Google",
-            "kind": "server_platform",
+            "kind": "server-platform",
             "notes": "Titan/OpenTitan on Google server platforms."
         },
         "48495349": {
             "id": "id:48495349",
             "name": "HiSilicon",
-            "kind": "cpu_ip",
+            "kind": "cpu-ip",
             "notes": "TPM IP for HiSilicon Kunpeng series."
         },
         "48505100": {
             "id": "id:48505100",
             "name": "HPE",
-            "kind": "server_platform",
+            "kind": "server-platform",
             "notes": "HPE / HP TPMs on ProLiant / EliteBook platforms."
         },
         "49424D00": {
             "id": "id:49424D00",
             "name": "IBM",
-            "kind": "server_platform",
+            "kind": "server-platform",
             "notes": "IBM SW TPM and System z hardware TPM."
         },
         "49465800": {
@@ -84,7 +84,7 @@
         "4C454E00": {
             "id": "id:4C454E00",
             "name": "Lenovo",
-            "kind": "server_platform",
+            "kind": "server-platform",
             "notes": "Server platform TPM branding (ThinkSystem)."
         },
         "4D534654": {

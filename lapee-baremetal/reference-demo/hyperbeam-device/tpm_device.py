@@ -111,7 +111,7 @@ class TpmDevice:
         tpm.load_or_create_ek_certificate()
         # ...measured-boot simulator extends PCRs 0,7,11,14 here...
         pk_pem = tpm.create_ephemeral_key()
-        tpm.pcr_extend_event(15, "key-pubkey-extend", pk_pem, {"pubkey_pem": pk_pem.decode()})
+        tpm.pcr_extend_event(15, "key-pubkey-extend", pk_pem, {"pubkey-pem": pk_pem.decode()})
         quote = tpm.quote(nonce=<32 bytes>, pcrs=[0,1,7,11,14,15])
         sig = tpm.sign(data=some_bytes)
     """
@@ -276,8 +276,8 @@ class TpmDevice:
 
     def pcr_read(self, indices: list[int]) -> dict[int, str]:
         sel = "sha256:" + ",".join(str(i) for i in indices)
-        r = _run(["tpm2_pcrread", "-Q", sel + "+sha1:0"])  # tpm2-tools wants at least one banks list
-        r = _run(["tpm2_pcrread", sel])
+        r = _run(["tpm2-pcrread", "-Q", sel + "+sha1:0"])  # tpm2-tools wants at least one banks list
+        r = _run(["tpm2-pcrread", sel])
         # Parse tpm2_pcrread output, which looks like:
         #   sha256:
         #     0 : 0xAB...
@@ -363,12 +363,12 @@ class TpmDevice:
             tpm2_flushcontext -t
         """)
         return {
-            "message_b64": base64.b64encode((CONTEXT_DIR / "quote.msg").read_bytes()).decode(),
-            "signature_b64": base64.b64encode((CONTEXT_DIR / "quote.sig").read_bytes()).decode(),
-            "pcrs_b64": base64.b64encode((CONTEXT_DIR / "quote.pcrs").read_bytes()).decode(),
-            "ak_pub_pem": (CONTEXT_DIR / "ak.pub").read_text(),
-            "nonce_hex": nonce.hex(),
-            "pcr_selection": pcrs,
+            "message-b64": base64.b64encode((CONTEXT_DIR / "quote.msg").read_bytes()).decode(),
+            "signature-b64": base64.b64encode((CONTEXT_DIR / "quote.sig").read_bytes()).decode(),
+            "pcrs-b64": base64.b64encode((CONTEXT_DIR / "quote.pcrs").read_bytes()).decode(),
+            "ak-pub-pem": (CONTEXT_DIR / "ak.pub").read_text(),
+            "nonce-hex": nonce.hex(),
+            "pcr-selection": pcrs,
         }
 
     def sign(self, data: bytes) -> dict:
@@ -392,9 +392,9 @@ class TpmDevice:
         """)
         return {
             "scheme": "RSASSA-PSS/SHA-256",
-            "digest_b64": base64.b64encode(digest).decode(),
-            "signature_b64": base64.b64encode((CONTEXT_DIR / "sign.sig").read_bytes()).decode(),
-            "public_key_pem": self.state.signing_key_public_pem.decode(),
+            "digest-b64": base64.b64encode(digest).decode(),
+            "signature-b64": base64.b64encode((CONTEXT_DIR / "sign.sig").read_bytes()).decode(),
+            "public-key-pem": self.state.signing_key_public_pem.decode(),
         }
 
     # -- Event log ----------------------------------------------------------
@@ -404,8 +404,8 @@ class TpmDevice:
             {
                 "seq": e.seq,
                 "pcr": e.pcr,
-                "event_type": e.event_type,
-                "digest_sha256": e.digest_sha256,
+                "event-type": e.event_type,
+                "digest-sha256": e.digest_sha256,
                 "data": e.data,
             }
             for e in self.state.event_log

@@ -97,9 +97,9 @@ class HashPath:
                 {
                     "name": e.name,
                     "value": e.value,
-                    "value_hash": e.value_hash,
-                    "prev_tip": e.prev_tip,
-                    "new_tip": e.new_tip,
+                    "value-hash": e.value_hash,
+                    "prev-tip": e.prev_tip,
+                    "new-tip": e.new_tip,
                 }
                 for e in self.events
             ],
@@ -116,10 +116,10 @@ class HashPath:
         hp = cls(seed=bytes.fromhex(data["seed"]))
         for raw in data["events"]:
             ev = hp.extend(raw["name"], raw["value"])
-            if ev.new_tip != raw["new_tip"]:
+            if ev.new_tip != raw["new-tip"]:
                 raise ValueError(
                     f"hashpath divergence at event {raw['name']!r}: "
-                    f"expected {raw['new_tip']}, got {ev.new_tip}"
+                    f"expected {raw['new-tip']}, got {ev.new_tip}"
                 )
         if hp.tip_hex != data["tip"]:
             raise ValueError(f"final tip mismatch: {data['tip']} vs {hp.tip_hex}")

@@ -122,15 +122,15 @@ def run() -> int:
 # --- Mutators ---------------------------------------------------------------
 
 def _tamper_event_digest(b: dict) -> None:
-    b["tcg_event_log"][0]["digest_sha256"] = "f" * 64
+    b["tcg-event-log"][0]["digest-sha256"] = "f" * 64
 
 
 def _insert_bogus_event(b: dict) -> None:
-    b["tcg_event_log"].append({
+    b["tcg-event-log"].append({
         "seq": 999,
         "pcr": 15,
-        "event_type": "EV_BOGUS",
-        "digest_sha256": "a" * 64,
+        "event-type": "EV_BOGUS",
+        "digest-sha256": "a" * 64,
         "data": {"malicious": True},
     })
 
@@ -144,24 +144,24 @@ def _substitute_pubkey(b: dict) -> None:
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode()
-    b["node_ephemeral_key"]["public_pem"] = new_pem
-    b["signature_over_hashpath_tip"]["public_key_pem"] = new_pem
+    b["node-ephemeral-key"]["public-pem"] = new_pem
+    b["signature-over-hashpath-tip"]["public-key-pem"] = new_pem
 
 
 def _mutate_hashpath_event(b: dict) -> None:
-    b["ao_core"]["hashpath"]["events"][1]["value"]["prompt"] = "MUTATED BY ATTACKER"
+    b["ao-core"]["hashpath"]["events"][1]["value"]["prompt"] = "MUTATED BY ATTACKER"
 
 
 def _mutate_quote_nonce(b: dict) -> None:
-    b["pcr_quote"]["nonce_hex"] = "0" * 64
+    b["pcr-quote"]["nonce-hex"] = "0" * 64
 
 
 def _mutate_final_signature(b: dict) -> None:
     import base64 as _b64
-    sig = _b64.b64decode(b["signature_over_hashpath_tip"]["signature_b64"])
+    sig = _b64.b64decode(b["signature-over-hashpath-tip"]["signature-b64"])
     # Flip a byte in the middle of the signature.
     mutated = sig[:100] + bytes([sig[100] ^ 0xFF]) + sig[101:]
-    b["signature_over_hashpath_tip"]["signature_b64"] = _b64.b64encode(mutated).decode()
+    b["signature-over-hashpath-tip"]["signature-b64"] = _b64.b64encode(mutated).decode()
 
 
 def _substitute_ek_cert(b: dict) -> None:
@@ -185,7 +185,7 @@ def _substitute_ek_cert(b: dict) -> None:
         .not_valid_after(dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=365))
         .sign(key, hashes.SHA256())
     )
-    b["ek_cert_pem"] = cert.public_bytes(serialization.Encoding.PEM).decode()
+    b["ek-cert-pem"] = cert.public_bytes(serialization.Encoding.PEM).decode()
 
 
 if __name__ == "__main__":

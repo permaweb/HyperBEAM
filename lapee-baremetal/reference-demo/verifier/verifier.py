@@ -77,7 +77,7 @@ def _replay_event_log(events: list[dict], claimed_pcrs: dict[str, str]) -> Check
     pcrs: dict[int, bytes] = {}
     for e in events:
         idx = int(e["pcr"])
-        digest = bytes.fromhex(e["digest_sha256"])
+        digest = bytes.fromhex(e["digest-sha256"])
         prev = pcrs.get(idx, b"\x00" * 32)
         pcrs[idx] = hashlib.sha256(prev + digest).digest()
 
@@ -116,11 +116,11 @@ def _verify_pubkey_bound_to_pcr(events: list[dict], pubkey_pem: str, claimed_pcr
     for e in events:
         if int(e["pcr"]) != 15:
             continue
-        digest = bytes.fromhex(e["digest_sha256"])
+        digest = bytes.fromhex(e["digest-sha256"])
         pcr15 = hashlib.sha256(pcr15 + digest).digest()
         if (
-            e.get("event_type") == "EV_HYPERBEAM_KEY_BINDING"
-            and e.get("data", {}).get("public_key_sha256") == pubkey_hash
+            e.get("event-type") == "EV_HYPERBEAM_KEY_BINDING"
+            and e.get("data", {}).get("public-key-sha256") == pubkey_hash
         ):
             saw_binding = True
     if not saw_binding:
@@ -157,12 +157,12 @@ def _verify_quote_signature(bundle: dict) -> Check:
     This is equivalent in force to tpm2_checkquote, minus the PCR-file
     parsing step.
     """
-    quoted = base64.b64decode(bundle["pcr_quote"]["message_b64"])
-    sig = base64.b64decode(bundle["pcr_quote"]["signature_b64"])
-    ak_pem = bundle["ak_pub_pem"].encode()
-    nonce_hex = bundle["pcr_quote"]["nonce_hex"]
-    pcrs_b64 = bundle["pcr_quote"].get("pcrs_b64", "")
-    pcr_values = bundle["pcr_quote"].get("pcr_values", {})
+    quoted = base64.b64decode(bundle["pcr-quote"]["message-b64"])
+    sig = base64.b64decode(bundle["pcr-quote"]["signature-b64"])
+    ak_pem = bundle["ak-pub-pem"].encode()
+    nonce_hex = bundle["pcr-quote"]["nonce-hex"]
+    pcrs_b64 = bundle["pcr-quote"].get("pcrs-b64", "")
+    pcr_values = bundle["pcr-quote"].get("pcr-values", {})
 
     # Path 1: canonical tpm2_checkquote (needs pcrs_b64 populated).
     if pcrs_b64:
@@ -224,7 +224,7 @@ def _verify_quote_signature(bundle: dict) -> Check:
         pd_size = int.from_bytes(quoted[off:off + 2], "big"); off += 2
         claimed_digest = quoted[off:off + pd_size]
         # Recompute: SHA-256(pcr0 || pcr7 || pcr11 || pcr14 || pcr15) in selection order
-        sel = bundle["pcr_quote"]["pcr_selection"]
+        sel = bundle["pcr-quote"]["pcr-selection"]
         pcr_map = {int(k): v for k, v in pcr_values.items()}
         m = hashlib.sha256()
         for idx in sel:
@@ -248,9 +248,9 @@ def _verify_quote_signature(bundle: dict) -> Check:
 def _verify_nonce_binding(bundle: dict) -> Check:
     """Check that the quote nonce is a commitment to the hashpath tip."""
     expected_nonce = hashlib.sha256(
-        b"lapee/quote/" + bytes.fromhex(bundle["ao_core"]["hashpath"]["tip"])
+        b"lapee/quote/" + bytes.fromhex(bundle["ao-core"]["hashpath"]["tip"])
     ).hexdigest()
-    got = bundle["pcr_quote"]["nonce_hex"]
+    got = bundle["pcr-quote"]["nonce-hex"]
     ok = expected_nonce == got
     return Check(
         "Quote nonce binds to AO-Core hashpath tip (anti-replay)",
@@ -261,11 +261,11 @@ def _verify_nonce_binding(bundle: dict) -> Check:
 
 def _replay_hashpath(bundle: dict) -> Check:
     try:
-        HashPath.replay(bundle["ao_core"]["hashpath"])
+        HashPath.replay(bundle["ao-core"]["hashpath"])
         return Check(
             "AO-Core hashpath replays cleanly",
             True,
-            f"{len(bundle['ao_core']['hashpath']['events'])} events",
+            f"{len(bundle['ao-core']['hashpath']['events'])} events",
         )
     except Exception as e:
         return Check("AO-Core hashpath replays cleanly", False, str(e))
@@ -281,11 +281,11 @@ def _verify_final_signature(bundle: dict) -> Check:
     from cryptography.hazmat.primitives.asymmetric import padding
     from cryptography.exceptions import InvalidSignature
 
-    sig_block = bundle["signature_over_hashpath_tip"]
-    pubkey_pem = sig_block["public_key_pem"]
-    digest = base64.b64decode(sig_block["digest_b64"])
-    signature = base64.b64decode(sig_block["signature_b64"])
-    signed_value = bytes.fromhex(sig_block["signed_value_hex"])
+    sig_block = bundle["signature-over-hashpath-tip"]
+    pubkey_pem = sig_block["public-key-pem"]
+    digest = base64.b64decode(sig_block["digest-b64"])
+    signature = base64.b64decode(sig_block["signature-b64"])
+    signed_value = bytes.fromhex(sig_block["signed-value-hex"])
 
     if hashlib.sha256(signed_value).digest() != digest:
         return Check(
@@ -330,12 +330,12 @@ def verify(attestation_path: pathlib.Path, ca_root: pathlib.Path) -> list[Check]
     bundle = json.loads(attestation_path.read_text())
     checks: list[Check] = []
 
-    checks.append(_verify_cert_chain(bundle["ek_cert_pem"], ca_root))
-    checks.append(_replay_event_log(bundle["tcg_event_log"], bundle["pcr_quote"]["pcr_values"]))
+    checks.append(_verify_cert_chain(bundle["ek-cert-pem"], ca_root))
+    checks.append(_replay_event_log(bundle["tcg-event-log"], bundle["pcr-quote"]["pcr-values"]))
     checks.append(_verify_pubkey_bound_to_pcr(
-        bundle["tcg_event_log"],
-        bundle["node_ephemeral_key"]["public_pem"],
-        bundle["pcr_quote"]["pcr_values"].get("15", "0" * 64),
+        bundle["tcg-event-log"],
+        bundle["node-ephemeral-key"]["public-pem"],
+        bundle["pcr-quote"]["pcr-values"].get("15", "0" * 64),
     ))
     checks.append(_verify_quote_signature(bundle))
     checks.append(_verify_nonce_binding(bundle))
@@ -358,7 +358,7 @@ def main() -> int:
 
     bundle = json.loads(att_path.read_text())
     print("  Machine fields (human-readable):")
-    for k, v in bundle["machine_fields"].items():
+    for k, v in bundle["machine-fields"].items():
         if isinstance(v, dict):
             print(f"    {k}:")
             for kk, vv in v.items():
@@ -367,7 +367,7 @@ def main() -> int:
             print(f"    {k}: {v}")
     print()
     print(f"  Node signer pubkey sha256 = "
-          f"{hashlib.sha256(bundle['node_ephemeral_key']['public_pem'].encode()).hexdigest()}")
+          f"{hashlib.sha256(bundle['node-ephemeral-key']['public-pem'].encode()).hexdigest()}")
     print()
 
     checks = verify(att_path, ca_root)

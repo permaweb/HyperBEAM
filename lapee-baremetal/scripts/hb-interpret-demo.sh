@@ -72,26 +72,26 @@ def say(section, key):
 
 print()
 print('--- envelope ---')
-for k in ('version','issued_at_unix','wallet_address','node_message_id'):
+for k in ('version','issued-at-unix','wallet-address','node-message-id'):
     say('envelope', k)
 
 print()
 print('--- TPM identity ---')
-for k in ('manufacturer_id','manufacturer_name','manufacturer_kind',
-         'model','firmware_version','spec_family','spec_level',
-         'spec_revision','ek_cert_issuer','ek_cert_serial'):
+for k in ('manufacturer-id','manufacturer-name','manufacturer-kind',
+         'model','firmware-version','spec-family','spec-level',
+         'spec-revision','ek-cert-issuer','ek-cert-serial'):
     say('tpm', k)
 
 print()
 print('--- AK ---')
-for k in ('algorithm','key_size_bits','public_exponent',
-         'pub_der_sha256_b64url'):
+for k in ('algorithm','key-size-bits','public-exponent',
+         'pub-der-sha256-b64url'):
     say('ak', k)
 
 print()
 print('--- Quote metadata ---')
-for k in ('magic_ok','attest_type','clock_ms','reset_count',
-         'restart_count','safe','nonce'):
+for k in ('magic-ok','attest-type','clock-ms','reset-count',
+         'restart-count','safe','nonce'):
     say('quote', k)
 
 print()
@@ -101,7 +101,7 @@ for key, e in sorted([(k, v) for k, v in pcrs.items()
                       if isinstance(v, dict) and k.isdigit()],
                      key=lambda kv: int(kv[0])):
     role = e.get('role', '')
-    z = 'zero' if e.get('is_zero') in (True, 'true') else 'set '
+    z = 'zero' if e.get('is-zero') in (True, 'true') else 'set '
     # PCR digests are base64url (HyperBEAM wire convention). Print the
     # first 22 chars — enough to eyeball-compare between runs without
     # wrapping.
@@ -110,13 +110,13 @@ for key, e in sorted([(k, v) for k, v in pcrs.items()
 
 print()
 print('--- Boot chain ---')
-for k in ('secure_boot_measured','secure_boot_policy',
-         'firmware_srtm','match'):
+for k in ('secure-boot-measured','secure-boot-policy',
+         'firmware-srtm','match'):
     say('boot', k)
 
 print()
 print('--- Kernel ---')
-for k in ('uki_measured','uki_image','boot_loader'):
+for k in ('uki-measured','uki-image','boot-loader'):
     say('kernel', k)
 
 print()
@@ -126,8 +126,8 @@ for k in ('active','pcr10','note'):
 
 print()
 print('--- Node identity ---')
-for k in ('wallet_address','node_message_id','node_message_key_count',
-         'on_start_hook_device','pcr15_event_count',
-         'pcr15_event_types'):
+for k in ('wallet-address','node-message-id','node-message-key-count',
+         'on-start-hook-device','pcr15-event-count',
+         'pcr15-event-types'):
     say('node', k)
 PY

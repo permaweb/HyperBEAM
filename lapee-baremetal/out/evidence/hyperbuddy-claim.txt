@@ -1,43 +1,43 @@
 Message [ undefined ] {
   body => 
     Message [ undefined ] {
-      boot_loader => 
+      boot-loader => 
         Message [ undefined ] {
-          image_hash => unknown
-          image_hash_provenance => []
+          image-hash => unknown
+          image-hash-provenance => []
         }
       firmware => 
         Message [ undefined ] {
-          crtm_version => unknown
-          crtm_version_provenance => []
+          crtm-version => unknown
+          crtm-version-provenance => []
         }
       kernel => 
         Message [ undefined ] {
           cmdline => unknown
-          cmdline_provenance => []
-          iommu_strict => unknown
-          uki_hash => AAAAA..AAAAA
-          uki_hash_provenance => [{<<"pcr">>,11}]
+          cmdline-provenance => []
+          iommu-strict => unknown
+          uki-hash => AAAAA..AAAAA
+          uki-hash-provenance => [{<<"pcr">>,11}]
         }
       lockdown => 
         Message [ undefined ] {
           level => unknown
-          level_provenance => List [1] {
-              1 => derivation: uki_not_in_known_lockdown_level_list
+          level-provenance => List [1] {
+              1 => derivation: uki-not-in-known-lockdown-level-list
             }
         }
-      secure_boot => 
+      secure-boot => 
         Message [ undefined ] {
-          db_authorities => []
-          deployed_mode => unknown
+          db-authorities => []
+          deployed-mode => unknown
           enabled => unknown
-          enabled_provenance => []
-          setup_mode => unknown
+          enabled-provenance => []
+          setup-mode => unknown
         }
       tme => 
         Message [ undefined ] {
           enabled => unknown
-          enabled_provenance => List [1] {
+          enabled-provenance => List [1] {
               1 => derivation: uki_hash_not_in_known_TME_checking_list
             }
         }

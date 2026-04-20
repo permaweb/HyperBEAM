@@ -6,183 +6,183 @@
         "0": {
             "name": "EV_PREBOOT_CERT",
             "description": "TCG 1.2 only. Deprecated in TCG 2.0 PC Client spec; should not appear in modern event logs.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "1": {
             "name": "EV_POST_CODE",
             "description": "Firmware POST code / manufacturer-defined early-init marker. On PCR 0. Typical data: short ASCII string (e.g. 'POST CODE', 'ACPI DATA') or a 4-byte manufacturer code.",
-            "data_format": "ascii_or_bytes"
+            "data-format": "ascii_or_bytes"
         },
         "2": {
             "name": "EV_UNUSED",
             "description": "Reserved.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "3": {
             "name": "EV_NO_ACTION",
             "description": "Informational, NOT extended into the PCR. The first EV_NO_ACTION in a crypto-agile log carries the TCG_EfiSpecIdEvent (signature 'Spec ID Event03') declaring which digest algorithms are in use. Other EV_NO_ACTION events may carry StartupLocality or similar markers.",
-            "data_format": "spec_id_or_marker"
+            "data-format": "spec_id_or_marker"
         },
         "4": {
             "name": "EV_SEPARATOR",
             "description": "Boundary marker between firmware-controlled and OS-controlled PCR state. Event data is conventionally 0xFFFFFFFF (error) or 0x00000000 (normal). Extended into PCRs 0-7 once firmware hands off to the OS loader.",
-            "data_format": "uint32_le"
+            "data-format": "uint32_le"
         },
         "5": {
             "name": "EV_ACTION",
             "description": "Firmware-defined action marker (e.g. 'Calling EFI Application from Boot Option', 'Returning from EFI Application from Boot Option'). Data is an ASCII string.",
-            "data_format": "ascii"
+            "data-format": "ascii"
         },
         "6": {
             "name": "EV_EVENT_TAG",
             "description": "Tagged event with a 128-bit GUID + variable-length data. Rarely seen.",
-            "data_format": "tagged"
+            "data-format": "tagged"
         },
         "7": {
             "name": "EV_S_CRTM_CONTENTS",
             "description": "Measurement of the Static Core Root of Trust for Measurement's contents (the firmware blob that measured itself). On PCR 0.",
-            "data_format": "opaque_or_image_load"
+            "data-format": "opaque_or_image_load"
         },
         "8": {
             "name": "EV_S_CRTM_VERSION",
             "description": "Version string of the Static CRTM. On PCR 0. Data is typically UTF-16LE text (e.g. 'LENOVO N50HT36W') or ASCII. The most human-interpretable firmware-identifying event.",
-            "data_format": "utf16_or_ascii"
+            "data-format": "utf16_or_ascii"
         },
         "9": {
             "name": "EV_CPU_MICROCODE",
             "description": "CPU microcode update measurement. On PCR 1 (Intel) or PCR 0 (AMD). Data is the signed microcode update header: Intel format is 48 bytes starting with header_version:4, update_revision:4, date:4, processor_signature:4, checksum:4, loader_revision:4, processor_flags:4, data_size:4, total_size:4, then reserved.",
-            "data_format": "microcode_header"
+            "data-format": "microcode_header"
         },
         "10": {
             "name": "EV_PLATFORM_CONFIG_FLAGS",
             "description": "Platform-specific configuration flags. Firmware-defined; typically opaque unless we know the vendor format. On PCR 1.",
-            "data_format": "opaque_or_flags"
+            "data-format": "opaque_or_flags"
         },
         "11": {
             "name": "EV_TABLE_OF_DEVICES",
             "description": "List of device paths enumerated by firmware. On PCR 1.",
-            "data_format": "device_paths"
+            "data-format": "device_paths"
         },
         "12": {
             "name": "EV_COMPACT_HASH",
             "description": "Compact hash of some external data. Rarely seen in modern logs.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "13": {
             "name": "EV_IPL",
             "description": "Initial Program Load. Used generically for OS-loader measurements that don't fit another UEFI event type. Also used by systemd-boot/stub for tag=value measurements on PCR 11/12/13.",
-            "data_format": "opaque_or_key_value"
+            "data-format": "opaque_or_key_value"
         },
         "14": {
             "name": "EV_IPL_PARTITION_DATA",
             "description": "Partition data measured during IPL (GRUB legacy path).",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "15": {
             "name": "EV_NONHOST_CODE",
             "description": "Code executing outside the host CPU (ME, SMC, PSP). PCR 0.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "16": {
             "name": "EV_NONHOST_CONFIG",
             "description": "Configuration data for non-host code.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "17": {
             "name": "EV_NONHOST_INFO",
             "description": "Informational data about non-host components.",
-            "data_format": "opaque"
+            "data-format": "opaque"
         },
         "18": {
             "name": "EV_OMIT_BOOT_DEVICE_EVENTS",
             "description": "Marker indicating boot-device events have been intentionally omitted. On PCR 4.",
-            "data_format": "ascii"
+            "data-format": "ascii"
         },
 
         "2147483649": {
             "name": "EV_EFI_VARIABLE_DRIVER_CONFIG",
             "description": "UEFI variable measurement; used for Secure Boot state (SecureBoot, PK, KEK, db, dbx). On PCR 7. Data is UEFI_VARIABLE_DATA: variableName GUID (16B), unicodeNameLength u64LE, variableDataLength u64LE, unicodeName UTF-16LE (unicodeNameLength chars), variableData. For SecureBoot variable specifically, variableData is a single byte: 0x01 = Secure Boot enabled, 0x00 = disabled. For PK/KEK/db/dbx, variableData is an EFI_SIGNATURE_LIST.",
-            "data_format": "uefi_variable_data"
+            "data-format": "uefi_variable_data"
         },
         "2147483650": {
             "name": "EV_EFI_VARIABLE_BOOT",
             "description": "UEFI boot-order variable (BootOrder, Boot####). On PCR 1. Same UEFI_VARIABLE_DATA shape as EV_EFI_VARIABLE_DRIVER_CONFIG.",
-            "data_format": "uefi_variable_data"
+            "data-format": "uefi_variable_data"
         },
         "2147483651": {
             "name": "EV_EFI_BOOT_SERVICES_APPLICATION",
             "description": "Measurement of a UEFI application loaded during boot services (typically the bootloader PE image). On PCR 4. Data is UEFI_IMAGE_LOAD_EVENT: imageLocationInMemory u64LE, imageLengthInMemory u64LE, imageLinkTimeAddress u64LE, lengthOfDevicePath u64LE, devicePath[lengthOfDevicePath].",
-            "data_format": "uefi_image_load"
+            "data-format": "uefi_image_load"
         },
         "2147483652": {
             "name": "EV_EFI_BOOT_SERVICES_DRIVER",
             "description": "Measurement of a UEFI driver loaded during boot services. On PCR 2. Same UEFI_IMAGE_LOAD_EVENT format.",
-            "data_format": "uefi_image_load"
+            "data-format": "uefi_image_load"
         },
         "2147483653": {
             "name": "EV_EFI_RUNTIME_SERVICES_DRIVER",
             "description": "Measurement of a UEFI driver providing runtime services. On PCR 2. Same UEFI_IMAGE_LOAD_EVENT format.",
-            "data_format": "uefi_image_load"
+            "data-format": "uefi_image_load"
         },
         "2147483654": {
             "name": "EV_EFI_GPT_EVENT",
             "description": "Measurement of a GPT partition table. On PCR 5. Data is UEFI_GPT_DATA (header + partition entries).",
-            "data_format": "uefi_gpt_data"
+            "data-format": "uefi_gpt_data"
         },
         "2147483655": {
             "name": "EV_EFI_ACTION",
             "description": "UEFI boot action marker (e.g. 'Calling EFI Application from Boot Option'). Data is ASCII.",
-            "data_format": "ascii"
+            "data-format": "ascii"
         },
         "2147483656": {
             "name": "EV_EFI_PLATFORM_FIRMWARE_BLOB",
             "description": "Measurement of a firmware blob by its physical address + length. On PCR 0. Data is UEFI_PLATFORM_FIRMWARE_BLOB: physicalAddress u64LE, blobLength u64LE.",
-            "data_format": "uefi_firmware_blob"
+            "data-format": "uefi_firmware_blob"
         },
         "2147483657": {
             "name": "EV_EFI_HANDOFF_TABLES",
             "description": "Measurement of EFI handoff tables (ACPI, SMBIOS etc.). Deprecated in favour of HANDOFF_TABLES2.",
-            "data_format": "uefi_handoff_tables"
+            "data-format": "uefi_handoff_tables"
         },
         "2147483658": {
             "name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
             "description": "Revised firmware blob measurement with a descriptive blob name. Data: blobDescSize u8, blobDesc[blobDescSize], physicalAddress u64LE, blobLength u64LE.",
-            "data_format": "uefi_firmware_blob2"
+            "data-format": "uefi_firmware_blob2"
         },
         "2147483659": {
             "name": "EV_EFI_HANDOFF_TABLES2",
             "description": "Revised handoff tables measurement with a descriptive table name.",
-            "data_format": "uefi_handoff_tables2"
+            "data-format": "uefi_handoff_tables2"
         },
         "2147483664": {
             "name": "EV_EFI_HCRTM_EVENT",
             "description": "Hardware CRTM event. Data is the fixed ASCII string 'HCRTM'. On PCR 0. Indicates the platform booted via a hardware-anchored measurement.",
-            "data_format": "ascii"
+            "data-format": "ascii"
         },
         "2147483872": {
             "name": "EV_EFI_VARIABLE_AUTHORITY",
             "description": "UEFI variable authority — specifically, the certificate from db/dbx that authorised the loading of a particular image. On PCR 7. Data is UEFI_VARIABLE_DATA referencing the authority variable.",
-            "data_format": "uefi_variable_data"
+            "data-format": "uefi_variable_data"
         },
         "2147483873": {
             "name": "EV_EFI_SPDM_FIRMWARE_BLOB",
             "description": "SPDM-attested firmware blob (device firmware). Rare; appears when SPDM-capable devices are present.",
-            "data_format": "spdm_firmware_blob"
+            "data-format": "spdm_firmware_blob"
         },
         "2147483874": {
             "name": "EV_EFI_SPDM_FIRMWARE_CONFIG",
             "description": "SPDM-attested device firmware configuration.",
-            "data_format": "spdm_firmware_config"
+            "data-format": "spdm_firmware_config"
         },
         "2147483875": {
             "name": "EV_EFI_SPDM_DEVICE_POLICY",
             "description": "SPDM policy (UEFI Spec 2.10 §32).",
-            "data_format": "spdm_device_policy"
+            "data-format": "spdm_device_policy"
         },
         "2147483876": {
             "name": "EV_EFI_SPDM_DEVICE_AUTHORITY",
             "description": "SPDM authority (UEFI Spec 2.10 §32).",
-            "data_format": "spdm_device_authority"
+            "data-format": "spdm_device_authority"
         }
     }
 }

@@ -33,17 +33,17 @@ from tpm_device import TpmDevice, EventLogEntry
 # Secure Boot + dm-verity output.
 
 GOLDEN = {
-    "firmware_version": "LapEE-ref-UEFI/Edk2 202502",
-    "firmware_hash_sha256": "a" * 64,  # stand-in
-    "secureboot_db_hash_sha256": "b" * 64,
-    "uki_hash_sha256": "c" * 64,  # kernel + initramfs + cmdline, single hash
-    "rootfs_verity_root": "d" * 64,
+    "firmware-version": "LapEE-ref-UEFI/Edk2 202502",
+    "firmware-hash-sha256": "a" * 64,  # stand-in
+    "secureboot-db-hash-sha256": "b" * 64,
+    "uki-hash-sha256": "c" * 64,  # kernel + initramfs + cmdline, single hash
+    "rootfs-verity-root": "d" * 64,
     "cmdline": (
         "root=/dev/mapper/verity-root ro quiet "
         "lockdown=confidentiality iommu=strict module.sig_enforce=1 "
         "init_on_alloc=1 init_on_free=1 roothash=" + ("d" * 64)
     ),
-    "hyperbeam_version": "lapee-dev-M5M6",
+    "hyperbeam-version": "lapee-dev-M5M6",
 }
 
 
@@ -70,11 +70,11 @@ def run_measured_boot(tpm: TpmDevice, golden: dict = GOLDEN) -> MeasuredBootResu
     tpm.pcr_extend_event(
         pcr=0,
         event_type="EV_S_CRTM_VERSION",
-        extend_bytes=golden["firmware_hash_sha256"].encode("utf-8"),
+        extend_bytes=golden["firmware-hash-sha256"].encode("utf-8"),
         data={
             "description": "Platform firmware (UEFI).",
-            "firmware_version": golden["firmware_version"],
-            "firmware_hash_sha256": golden["firmware_hash_sha256"],
+            "firmware-version": golden["firmware-version"],
+            "firmware-hash-sha256": golden["firmware-hash-sha256"],
         },
     )
 
@@ -82,11 +82,11 @@ def run_measured_boot(tpm: TpmDevice, golden: dict = GOLDEN) -> MeasuredBootResu
     tpm.pcr_extend_event(
         pcr=7,
         event_type="EV_EFI_VARIABLE_DRIVER_CONFIG",
-        extend_bytes=golden["secureboot_db_hash_sha256"].encode("utf-8"),
+        extend_bytes=golden["secureboot-db-hash-sha256"].encode("utf-8"),
         data={
             "description": "Secure Boot policy: operator-enrolled PK/KEK/db.",
             "state": "enabled",
-            "db_hash_sha256": golden["secureboot_db_hash_sha256"],
+            "db-hash-sha256": golden["secureboot-db-hash-sha256"],
         },
     )
 
@@ -94,12 +94,12 @@ def run_measured_boot(tpm: TpmDevice, golden: dict = GOLDEN) -> MeasuredBootResu
     tpm.pcr_extend_event(
         pcr=11,
         event_type="EV_EFI_BOOT_SERVICES_APPLICATION",
-        extend_bytes=golden["uki_hash_sha256"].encode("utf-8"),
+        extend_bytes=golden["uki-hash-sha256"].encode("utf-8"),
         data={
             "description": "UKI (kernel + initramfs + cmdline).",
-            "uki_hash_sha256": golden["uki_hash_sha256"],
+            "uki-hash-sha256": golden["uki-hash-sha256"],
             "cmdline": golden["cmdline"],
-            "hyperbeam_version": golden["hyperbeam_version"],
+            "hyperbeam-version": golden["hyperbeam-version"],
         },
     )
 
@@ -108,10 +108,10 @@ def run_measured_boot(tpm: TpmDevice, golden: dict = GOLDEN) -> MeasuredBootResu
     tpm.pcr_extend_event(
         pcr=14,
         event_type="EV_COMPACT_HASH",
-        extend_bytes=golden["rootfs_verity_root"].encode("utf-8"),
+        extend_bytes=golden["rootfs-verity-root"].encode("utf-8"),
         data={
             "description": "dm-verity rootfs sealed by Merkle root.",
-            "verity_root_hash_sha256": golden["rootfs_verity_root"],
+            "verity-root-hash-sha256": golden["rootfs-verity-root"],
         },
     )
 

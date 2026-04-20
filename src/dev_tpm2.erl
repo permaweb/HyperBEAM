@@ -185,11 +185,11 @@ extend(Base, Req, Opts) ->
                 end,
             _ = append_event(Pcr,
                 #{
-                    <<"event_type">> =>
+                    <<"event-type">> =>
                         <<"EV_HYPERBEAM_NODE_IDENTITY_EXTEND">>,
                     <<"description">> => EventDescription,
                     <<"digest">> => hb_util:encode(Digest),
-                    <<"subject_is_message">> =>
+                    <<"subject-is-message">> =>
                         is_map(Subject)
                 }
             ),
@@ -202,7 +202,7 @@ extend(Base, Req, Opts) ->
                 <<"body">> => #{
                     <<"pcr">> => Pcr,
                     <<"digest">> => hb_util:encode(Digest),
-                    <<"pcr_after">> => After
+                    <<"pcr-after">> => After
                 }
             }};
         {error, Reason} ->
@@ -235,16 +235,16 @@ quote(_Base, Req, Opts) ->
                     {ok, #{
                         <<"status">> => 200,
                         <<"body">> => #{
-                            <<"pcr_selection">> => Pcrs,
+                            <<"pcr-selection">> => Pcrs,
                             <<"nonce">> => hb_util:encode(Nonce),
                             <<"quoted">> => hb_util:encode(Q),
                             <<"signature">> => hb_util:encode(Sig),
-                            <<"pcr_values">> =>
+                            <<"pcr-values">> =>
                                 maps:from_list(
                                     [{integer_to_binary(I),
                                       hb_util:encode(V)}
                                      || {I, V} <- maps:to_list(PcrMap)]),
-                            <<"ak_pub_pem">> => ak_pub_pem(Opts)
+                            <<"ak-pub-pem">> => ak_pub_pem(Opts)
                         }
                     }};
                 {error, Reason} ->
@@ -347,7 +347,7 @@ verify(Base, Req, Opts) ->
             %% ignored": `request' means the inline anchor won,
             %% `node_config' means we fell through to the node's
             %% configured file.
-            <<"trust_anchor_source">> => CaSource
+            <<"trust-anchor-source">> => CaSource
         }
     }}.
 
@@ -420,7 +420,7 @@ resolve_envelope(Base, Req, Opts) ->
     end.
 
 is_envelope(M) when is_map(M) ->
-    hb_maps:get(<<"lapee_attestation_version">>, M, undefined, #{}) /=
+    hb_maps:get(<<"lapee-attestation-version">>, M, undefined, #{}) /=
         undefined;
 is_envelope(_) ->
     false.
@@ -482,7 +482,7 @@ resolve_trusted_ca_from_config(Opts) ->
 %% `{bad_cert, selfsigned_peer}` for a rogue EK and the callback
 %% would tell it "that's fine", defeating the whole chain check.
 chk_ek_chain(Envelope, TrustedCaPem) ->
-    EkPem = hb_maps:get(<<"ek_cert_pem">>, Envelope, <<>>, #{}),
+    EkPem = hb_maps:get(<<"ek-cert-pem">>, Envelope, <<>>, #{}),
     case {decode_pem_cert(EkPem), decode_pem_cert(TrustedCaPem)} of
         {{ok, EkDer}, {ok, CaDer}} ->
             %% pkix_decode_cert on the CA can raise if the PEM
@@ -579,13 +579,13 @@ ek_chain_verify_fun() ->
 
 %%---- check 2: quote signature + extraData + pcrDigest -----------------
 chk_quote(Envelope) ->
-    Q = hb_maps:get(<<"tpm_quote">>, Envelope, #{}, #{}),
-    AkPem = hb_maps:get(<<"ak_pub_pem">>, Envelope, <<>>, #{}),
+    Q = hb_maps:get(<<"tpm-quote">>, Envelope, #{}, #{}),
+    AkPem = hb_maps:get(<<"ak-pub-pem">>, Envelope, <<>>, #{}),
     Quoted = hb_util:decode(hb_maps:get(<<"quoted">>, Q, <<>>, #{})),
     Sig    = hb_util:decode(hb_maps:get(<<"signature">>, Q, <<>>, #{})),
     Nonce  = hb_util:decode(hb_maps:get(<<"nonce">>, Q, <<>>, #{})),
-    Sel    = hb_maps:get(<<"pcr_selection">>, Q, [], #{}),
-    PcrMap = hb_maps:get(<<"pcr_values">>, Q, #{}, #{}),
+    Sel    = hb_maps:get(<<"pcr-selection">>, Q, [], #{}),
+    PcrMap = hb_maps:get(<<"pcr-values">>, Q, #{}, #{}),
 
     %% Signature: RSA-PSS with SHA-256, salt 32 (matches the NIF).
     case decode_pem_rsa_pub(AkPem) of
@@ -675,14 +675,14 @@ compute_pcr_digest(Indices, PcrMap) ->
 %% PCR-15 events is not a valid LapEE attestation regardless of the
 %% quoted PCR value.
 chk_event_log_replay(Envelope) ->
-    Events = [E || E <- hb_maps:get(<<"runtime_event_log">>, Envelope, [],
+    Events = [E || E <- hb_maps:get(<<"runtime-event-log">>, Envelope, [],
                                     #{}),
                    int_pcr(hb_maps:get(<<"pcr">>, E, 0, #{})) =:=
                        ?NODE_IDENTITY_PCR],
     Quoted15 =
         hb_maps:get(<<"15">>,
-            hb_maps:get(<<"pcr_values">>,
-                hb_maps:get(<<"tpm_quote">>, Envelope, #{}, #{}), #{}, #{}),
+            hb_maps:get(<<"pcr-values">>,
+                hb_maps:get(<<"tpm-quote">>, Envelope, #{}, #{}), #{}, #{}),
             undefined, #{}),
     case {Events, Quoted15} of
         {[], _} ->
@@ -717,8 +717,8 @@ int_pcr(V) when is_binary(V)  -> binary_to_integer(V).
 %%---- check 4: PCR 15 event commits to node_message_id ----------------
 chk_binding(Envelope) ->
     ExpectedId =
-        hb_maps:get(<<"node_message_id">>, Envelope, undefined, #{}),
-    Events = [E || E <- hb_maps:get(<<"runtime_event_log">>, Envelope, [],
+        hb_maps:get(<<"node-message-id">>, Envelope, undefined, #{}),
+    Events = [E || E <- hb_maps:get(<<"runtime-event-log">>, Envelope, [],
                                     #{}),
                    int_pcr(hb_maps:get(<<"pcr">>, E, 0, #{})) =:=
                        ?NODE_IDENTITY_PCR],
@@ -790,7 +790,7 @@ chk_binding(Envelope) ->
 %%     the reconstructed value MUST match the quoted value. Mismatch
 %%     = fail.
 chk_tcg_event_log_replay(Envelope) ->
-    LogB64 = hb_maps:get(<<"tcg_event_log">>, Envelope, <<>>, #{}),
+    LogB64 = hb_maps:get(<<"tcg-event-log">>, Envelope, <<>>, #{}),
     LogBin = case LogB64 of
                  <<>> -> <<>>;
                  B when is_binary(B) ->
@@ -802,8 +802,8 @@ chk_tcg_event_log_replay(Envelope) ->
             Parsed = dev_tpm_tcg:parse(LogBin),
             Events = [V || {_, V} <- maps:to_list(Parsed),
                            is_map(V), not maps:is_key(<<"error">>, V)],
-            Q = hb_maps:get(<<"tpm_quote">>, Envelope, #{}, #{}),
-            QuotedPcrs = hb_maps:get(<<"pcr_values">>, Q, #{}, #{}),
+            Q = hb_maps:get(<<"tpm-quote">>, Envelope, #{}, #{}),
+            QuotedPcrs = hb_maps:get(<<"pcr-values">>, Q, #{}, #{}),
             replay_and_compare(Events, QuotedPcrs, 0, [])
     end.
 
@@ -821,7 +821,7 @@ replay_and_compare([], _QuotedPcrs, Count, Mismatches) ->
     end;
 replay_and_compare([Ev | Rest], QuotedPcrs, Count, Mismatches) ->
     %% EV_NO_ACTION is explicitly NOT extended (the spec says so).
-    case maps:get(<<"event_type_code">>, Ev, 0) of
+    case maps:get(<<"event-type-code">>, Ev, 0) of
         3 ->  %% EV_NO_ACTION
             replay_and_compare(Rest, QuotedPcrs, Count, Mismatches);
         _ ->
@@ -902,8 +902,8 @@ collect_mismatches(QuotedPcrs, InitMismatches) ->
 
 %%---- check 5: node_message is present + id shape is right ------------
 chk_node_msg_shape(Envelope) ->
-    Nm = hb_maps:get(<<"node_message">>, Envelope, undefined, #{}),
-    Id = hb_maps:get(<<"node_message_id">>, Envelope, undefined, #{}),
+    Nm = hb_maps:get(<<"node-message">>, Envelope, undefined, #{}),
+    Id = hb_maps:get(<<"node-message-id">>, Envelope, undefined, #{}),
     case {Nm, Id} of
         {undefined, _} -> {error, <<"missing node_message">>};
         {_, undefined} -> {error, <<"missing node_message_id">>};
@@ -1023,23 +1023,23 @@ attestation(_Base, Req, Opts) ->
                                         hb_message:id(NodeMsg, all, Opts)))
                         end,
                     Envelope = #{
-                        <<"lapee_attestation_version">> => <<"0.3">>,
-                        <<"issued_at_unix">> =>
+                        <<"lapee-attestation-version">> => <<"0.3">>,
+                        <<"issued-at-unix">> =>
                             erlang:system_time(second),
-                        <<"ek_cert_pem">> => EKCertPem,
-                        <<"ak_pub_pem">> => AKPubPem,
-                        <<"tpm_quote">> => #{
-                            <<"pcr_selection">> => Pcrs,
+                        <<"ek-cert-pem">> => EKCertPem,
+                        <<"ak-pub-pem">> => AKPubPem,
+                        <<"tpm-quote">> => #{
+                            <<"pcr-selection">> => Pcrs,
                             <<"nonce">> => hb_util:encode(Nonce),
                             <<"quoted">> => hb_util:encode(Q),
                             <<"signature">> => hb_util:encode(Sig),
-                            <<"pcr_values">> =>
+                            <<"pcr-values">> =>
                                 maps:from_list(
                                     [{integer_to_binary(I),
                                       hb_util:encode(V)}
                                      || {I, V} <- maps:to_list(PcrMap)])
                         },
-                        <<"runtime_event_log">> => EventLog,
+                        <<"runtime-event-log">> => EventLog,
                         %% Firmware-side TCG event log (PCRs 0-14
                         %% measurements the kernel exposes).
                         %% base64url — consistent with every other
@@ -1052,11 +1052,11 @@ attestation(_Base, Req, Opts) ->
                         %% bootloader hash, …) per the paper's
                         %% §Architecture "every field is a named
                         %% event-log entry" requirement.
-                        <<"tcg_event_log">> =>
+                        <<"tcg-event-log">> =>
                             hb_util:encode(read_tcg_event_log()),
-                        <<"node_message">> => NodeMsg,
-                        <<"node_message_id">> => NodeMsgId,
-                        <<"wallet_address">> =>
+                        <<"node-message">> => NodeMsg,
+                        <<"node-message-id">> => NodeMsgId,
+                        <<"wallet-address">> =>
                             case hb_opts:get(priv_wallet, undefined, Opts) of
                                 undefined -> null;
                                 W ->
@@ -1091,7 +1091,7 @@ append_event(Pcr, Payload) ->
     Entry = Payload#{
         <<"seq">> => Seq,
         <<"pcr">> => Pcr,
-        <<"emitted_at_unix">> => erlang:system_time(second)
+        <<"emitted-at-unix">> => erlang:system_time(second)
     },
     Old = case persistent_term:get({dev_tpm2, event_log}, []) of
         L when is_list(L) -> L
@@ -1403,9 +1403,9 @@ resolve_pcr_list_test() ->
 chk_tcg_event_log_replay_empty_log_test() ->
     %% Both "no field" and "field but empty" accepted.
     ?assertMatch({ok, _},
-                 chk_tcg_event_log_replay(#{<<"tcg_event_log">> => <<>>})),
+                 chk_tcg_event_log_replay(#{<<"tcg-event-log">> => <<>>})),
     ?assertMatch({ok, _},
-                 chk_tcg_event_log_replay(#{<<"tcg_event_log">> =>
+                 chk_tcg_event_log_replay(#{<<"tcg-event-log">> =>
                                               hb_util:encode(<<>>)})),
     ?assertMatch({ok, _}, chk_tcg_event_log_replay(#{})).
 
@@ -1438,9 +1438,9 @@ chk_tcg_event_log_replay_accepts_consistent_fixture_test() ->
     %% Compute the expected PCR-0 reconstruction.
     ExpectedPcr0 = crypto:hash(sha256, <<0:256, Sha256/binary>>),
     Envelope = #{
-        <<"tcg_event_log">> => hb_util:encode(Log),
-        <<"tpm_quote">> => #{
-            <<"pcr_values">> =>
+        <<"tcg-event-log">> => hb_util:encode(Log),
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> =>
                 #{<<"0">> => hb_util:encode(ExpectedPcr0)}
         }
     },
@@ -1476,9 +1476,9 @@ chk_tcg_event_log_replay_rejects_tampered_fixture_test() ->
     %% Quote claims the GOOD PCR 0 value. Log has tampered digest.
     GoodPcr0 = crypto:hash(sha256, <<0:256, GoodSha256/binary>>),
     Envelope = #{
-        <<"tcg_event_log">> => hb_util:encode(Log),
-        <<"tpm_quote">> => #{
-            <<"pcr_values">> =>
+        <<"tcg-event-log">> => hb_util:encode(Log),
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> =>
                 #{<<"0">> => hb_util:encode(GoodPcr0)}
         }
     },
@@ -1532,9 +1532,9 @@ resolve_trusted_ca_priority_test() ->
 chk_event_log_replay_rejects_empty_events_test() ->
     Zero43 = hb_util:encode(<<0:256>>),
     Envelope = #{
-        <<"runtime_event_log">> => [],
-        <<"tpm_quote">> => #{
-            <<"pcr_values">> => #{<<"15">> => Zero43}
+        <<"runtime-event-log">> => [],
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> => #{<<"15">> => Zero43}
         }
     },
     ?assertMatch({error, _}, chk_event_log_replay(Envelope)).
@@ -1549,14 +1549,14 @@ chk_binding_rejects_empty_id_test() ->
                          <<"digest">> => <<"">>,
                          <<"seq">> => 0},
     EnvelopeEmptyId = #{
-        <<"node_message_id">> => <<"">>,
-        <<"runtime_event_log">> => [EmptyDigestEvent]
+        <<"node-message-id">> => <<"">>,
+        <<"runtime-event-log">> => [EmptyDigestEvent]
     },
     ?assertMatch({error, _}, chk_binding(EnvelopeEmptyId)),
     %% Also: id that decodes to fewer than 32 bytes (shorter base64url).
     EnvelopeShortId = #{
-        <<"node_message_id">> => <<"AAAA">>,   %% 3 bytes
-        <<"runtime_event_log">> =>
+        <<"node-message-id">> => <<"AAAA">>,   %% 3 bytes
+        <<"runtime-event-log">> =>
             [EmptyDigestEvent#{<<"digest">> => <<"AAAA">>}]
     },
     ?assertMatch({error, _}, chk_binding(EnvelopeShortId)).
@@ -1594,13 +1594,13 @@ event_log_append_test() ->
     persistent_term:erase({dev_tpm2, event_log}),
     persistent_term:erase({dev_tpm2, event_seq}),
     ?assertEqual([], event_log(#{})),
-    ok = append_event(15, #{<<"event_type">> => <<"T">>}),
+    ok = append_event(15, #{<<"event-type">> => <<"T">>}),
     Log = event_log(#{}),
     ?assertEqual(1, length(Log)),
     [E1] = Log,
     ?assertEqual(15, maps:get(<<"pcr">>, E1)),
     ?assertEqual(0, maps:get(<<"seq">>, E1)),
-    ok = append_event(15, #{<<"event_type">> => <<"U">>}),
+    ok = append_event(15, #{<<"event-type">> => <<"U">>}),
     ?assertEqual(2, length(event_log(#{}))).
 
 -endif.

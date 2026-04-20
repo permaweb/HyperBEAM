@@ -40,7 +40,7 @@ base_path, out_path = sys.argv[1], sys.argv[2]
 raw = json.load(open(base_path))
 # Envelope lives under body in the HB response wrapper; accept
 # both shapes.
-env = raw if "lapee_attestation_version" in raw else raw.get("body", raw)
+env = raw if "lapee-attestation-version" in raw else raw.get("body", raw)
 
 def b64url_decode(s):
     pad = "=" * (-len(s) % 4)
@@ -84,30 +84,30 @@ PY
 ALL_OK=1
 
 run_variant flip-signature '
-env["tpm_quote"]["signature"] = flip_first_byte_b64url(env["tpm_quote"]["signature"])
+env["tpm-quote"]["signature"] = flip_first_byte_b64url(env["tpm-quote"]["signature"])
 ' || ALL_OK=0
 
 run_variant flip-quoted '
-env["tpm_quote"]["quoted"] = flip_first_byte_b64url(env["tpm_quote"]["quoted"])
+env["tpm-quote"]["quoted"] = flip_first_byte_b64url(env["tpm-quote"]["quoted"])
 ' || ALL_OK=0
 
 run_variant flip-pcr15-reported '
-env["tpm_quote"]["pcr_values"]["15"] = flip_first_byte_b64url(env["tpm_quote"]["pcr_values"]["15"])
+env["tpm-quote"]["pcr-values"]["15"] = flip_first_byte_b64url(env["tpm-quote"]["pcr-values"]["15"])
 ' || ALL_OK=0
 
 run_variant swap-nonce '
-env["tpm_quote"]["nonce"] = b64url_encode(b"\xde\xad\xbe\xef" * 8)
+env["tpm-quote"]["nonce"] = b64url_encode(b"\xde\xad\xbe\xef" * 8)
 ' || ALL_OK=0
 
 run_variant flip-event-digest '
-for e in env["runtime_event_log"]:
+for e in env["runtime-event-log"]:
     if int(e["pcr"]) == 15:
         e["digest"] = flip_first_byte_b64url(e["digest"])
         break
 ' || ALL_OK=0
 
 run_variant flip-node-id '
-env["node_message_id"] = flip_first_byte_b64url(env["node_message_id"])
+env["node-message-id"] = flip_first_byte_b64url(env["node-message-id"])
 ' || ALL_OK=0
 
 # Rogue EK cert: throwaway self-signed, not chained to our trust anchor.
@@ -118,7 +118,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
 
 run_variant swap-ek-cert '
 with open("/tmp/tamper-rogue.crt") as f:
-    env["ek_cert_pem"] = f.read()
+    env["ek-cert-pem"] = f.read()
 ' || ALL_OK=0
 
 echo ""

@@ -17,20 +17,20 @@ Layout:
 ```json
 {
     "name": "short human label",
-    "match_pcrs": {
+    "match-pcrs": {
         "0": "<base64url-sha256-of-expected-pcr0>",
         "1": "<base64url-sha256-of-expected-pcr1>",
         "7": "<base64url-sha256-of-expected-pcr7>"
     },
     "attributes": {
-        "platform_vendor": "Lenovo",
-        "platform_model":  "ThinkPad X1 Carbon Gen 11",
-        "firmware_vendor": "Lenovo",
-        "firmware_version": "N50HT36W (1.20)",
-        "secure_boot_enabled": true,
-        "secure_boot_authorities": ["Microsoft UEFI CA", "Lenovo"],
-        "measured_on": "2024-08-15",
-        "contributed_by": "optional-verifier-identity"
+        "platform-vendor": "Lenovo",
+        "platform-model":  "ThinkPad X1 Carbon Gen 11",
+        "firmware-vendor": "Lenovo",
+        "firmware-version": "N50HT36W (1.20)",
+        "secure-boot-enabled": true,
+        "secure-boot-authorities": ["Microsoft UEFI CA", "Lenovo"],
+        "measured-on": "2024-08-15",
+        "contributed-by": "optional-verifier-identity"
     },
     "notes": "Free-form — caveats, known CVEs, etc."
 }
