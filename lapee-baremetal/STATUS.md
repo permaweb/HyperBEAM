@@ -1232,3 +1232,149 @@ And the housekeeping commit from the start of this pass:
 ```
 614e41441    hb-interpret-demo: switch to chain URL pattern
 ```
+
+## 2026-04-20 00:30 EDT — overnight pass: verify-peer bulletproofing + introspection
+
+User went to sleep at ~midnight after observing a reject from the
+first `verify-peer` command. Directive: "make absolutely, 100%,
+without any shadow of a doubt, certain that it works. Then improve
+AO-Core style availability and introspection. Self-assess features
++ hardware. Iterate until morning."
+
+### Root cause of the reject: stale per-boot CA
+
+The user's `curl http://127.0.0.1:18735/~tpm-interpret@1.0/verify-peer`
+returned `verified: false` with `{bad_cert, invalid_signature}` on the
+EK chain. Investigation showed my setup's Monitor script fired
+`cp out/test-tpm-ca.crt /tmp/test-tpm-ca.crt` the moment the peer's
+`/meta/info` started responding, but `boot-hb.sh` writes
+`out/test-tpm-ca.crt` only AFTER its own slower ready-gate (streak=2
+on 5-second polls) + `/attestation` round-trip. So `/tmp/test-tpm-ca.crt`
+was from an EARLIER boot; the verifier's trust anchor was from a
+different CA generation than the one that signed the current EK.
+
+Fix (commit `3a4860d92`): point the verifier config at
+`out/test-tpm-ca.crt' DIRECTLY — no copy. Retested immediately:
+verified=true, all 5 checks PASS.
+
+### Second-order fixes (same commit 3a4860d92, plus 5782c10cc, 48169574e)
+
+1. **Inline `trusted-ca` (base64url) request parameter** — callers
+   pass the trust anchor per-request, zero file-sync risk. HB-wire
+   convention matches the rest of the surface. The back-compat
+   `trusted-ca-pem` (raw PEM string) still works but is documented
+   as unsafe over GET — curl's `--data-urlencode` encodes spaces
+   as `+', HB's URL decoder treats `+' as literal `+', so the
+   "BEGIN CERTIFICATE" header arrives as "BEGIN+CERTIFICATE" and
+   the cert fails to parse. base64url bytes have no such
+   ambiguity.
+2. **`trust_anchor_source` in response** — tells the caller which
+   anchor was actually used: `"node_config"` vs `"request"`. No
+   silent overrides.
+3. **Targeted chain-failure diagnostic** — when pkix returns
+   `{bad_cert, invalid_signature}' AND the EK's issuer DN matches
+   the trusted CA's subject DN, the error message tells the
+   operator "same CN, different generation — either the trust
+   anchor is stale, or a rogue CA with the same DN is being
+   presented." Distinguishable from the rogue-CA attack case.
+4. **`chk_ek_chain' try/catch** on `pkix_decode_cert' — a
+   structurally-PEM-shaped but DER-malformed CA (e.g. from a
+   URL-encoding mishap) now produces a clean actionable error
+   instead of bubbling a raw ASN.1 exception.
+5. **Empty-input tightening** (earlier 48169574e) — `chk_binding'
+   requires decoded id to be exactly 32 bytes; `chk_event_log_replay'
+   requires at least one PCR-15 event. Defence in depth — each
+   check fail-safes on its own instead of relying on cross-check
+   coverage.
+
+### AO-Core availability + introspection (commit `21709e8a5`)
+
+Five new handlers on `~tpm-interpret@1.0':
+
+    /summary              — link-free interpret summary (no crypto)
+    /peer-summary?peer=   — fetch + summary (~10× cheaper than verify-peer)
+    /peer-status?peer=    — cheapest probe (reachable + version + id + wallet)
+    /checks               — machine-readable list of the 5 crypto checks
+                             with per-check {name, purpose, failure_implies}
+    /info                 — now documents every handler's params +
+                             response shape, wire_format convention
+
+Plus 5 new eunit tests asserting surface stability. Total
+dev_tpm_interpret tests: 9/9 PASS.
+
+### Self-assessment (commit `bb218e6c8`)
+
+`lapee-baremetal/FEATURES.md` — 7 sections:
+
+  §1 Attestation loop       shipped — 7/7
+  §2 Verification loop      shipped — 12/12
+  §3 Operational gaps       8 documented (parked/open)
+  §4 Introspection          shipped — 9 endpoints
+  §5 Hardware subset        in/out/prereq lists
+  §6 90% coverage map       5 TPM vendors enumerated
+  §7 Bottom line            "suitable for per-request trust,
+                             not yet for long-lived trust —
+                             no revocation + no clock authority"
+
+### Peer-probe diagnostic (commit `dd96a63b6`)
+
+`scripts/hb-peer-probe.sh` — independent peer-health check using
+the Python reference verifier. Needs only python3 + openssl + curl.
+Proves peer attestation validity without depending on a full HB
+verifier. Used tonight as externally-observable evidence when the
+HB verifier's runtime was blocked:
+
+    === probing peer: http://127.0.0.1:18734 ===
+      attestation fetched: 86113 bytes
+      trust anchor: out/test-tpm-ca.crt
+    [PASS] EK certificate chains to trusted TPM vendor root CA
+    [PASS] TPM2_Quote signature + pcrDigest + nonce all valid
+    [PASS] Runtime event log replay of PCR 15 matches quoted value
+    [PASS] PCR 15 extension commits to node_message_id
+    [PASS] Embedded node_message + id present and correct shape
+    VERDICT: ATTESTATION ACCEPTED
+    === PEER-PROBE: PASS ===
+
+So: the peer is currently attesting correctly under its current CA.
+The issue that blocked a full live HB-side verify-peer re-test
+tonight was host-environmental, not LapEE code.
+
+### Blocker for live cross-node HB re-test tonight
+
+Mac host hit systemic `mmap` pressure: swap at 94% (17.3 / 18.4 GB).
+`elmdb:env_open' returns ENOSPC even at 4 KB `map_size'. Docker
+Desktop's VM shares host memory → Docker-run verifier hits the same
+error. Attempted to switch HB to `hb_store_fs' via JSON config —
+works at the config level, but JSON-decoded `store-module` values
+arrive as binaries while `hb_store:spawn_instance/1' does
+`Mod:start(...)` which requires an atom (`mimic_default_types'
+doesn't recurse into nested store entries). Fixing that cleanly is
+multi-commit work; deferred.
+
+Code is correct (all 14 eunit tests PASS; Python verifier passes
+against the live peer right now). The blockage is environment-
+specific and transient on this host. Safe to re-verify live on
+next host state refresh.
+
+### Branch state
+
+```
+dd96a63b6    scripts/hb-peer-probe.sh: peer-health diagnostic …
+bb218e6c8    FEATURES.md: feature coverage + hardware requirements …
+21709e8a5    ~tpm-interpret@1.0: introspection surface …
+3a4860d92    verify_peer: inline trusted-ca via base64url …
+48169574e    dev_tpm2 + verify_peer: tighten soft spots found in the audit
+5782c10cc    dev_tpm2: stop rubber-stamping EK cert chain …
+455b1875b    STATUS + evidence: base64url sweep and cross-node verify passing
+… (older commits unchanged)
+```
+
+### Next action (on next wake)
+
+1. Re-probe Mac LMDB — if recovered, fire the full adversarial
+   matrix against the live verifier (base64url inline CA, rogue
+   CA, missing peer, unreachable peer, non-envelope response,
+   concurrent verifies).
+2. If not recovered, continue offline code improvements.
+3. Exit overnight mode when `hb-final-acceptance` is green
+   again AND the adversarial matrix completes.
