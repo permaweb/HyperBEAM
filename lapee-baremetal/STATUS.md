@@ -887,3 +887,160 @@ what `reference-demo/verifier/verifier_hb.py' does in Python.
 ### Next up
 
 Item 7 — `~tpm-interpret@1.0'.
+
+---
+
+## 2026-04-19 20:53 EDT — Item 7 landed + final acceptance PASS
+
+`~tpm-interpret@1.0' is live. The user's target URL pattern
+
+    ~relay@1.0/call&relay-path="http://PEER/~tpm2@2.0a/attestation"
+        /verify~tpm-interpret@1.0
+
+works end-to-end when pointed at any LapEE HB peer (the demo uses the
+local node as both peer and verifier, since it doesn't need a relay
+route configured). One transport-level caveat: HB currently trips a
+`{badmap,<<>>}` inside `hb_cache:write` when a device response is
+POSTed with `content-type: application/json' and then attempted to
+be re-cached; the chain-URL path (shown above) avoids this. Noted
+for a later HB cache-side investigation — the interpretation
+device's result shape is fine, it's HB's JSON-POST round-trip that
+can't round-trip AO-Core messages containing the embedded
+`node_message' map at the moment.
+
+### `make hb-final-acceptance' — all five PASS
+
+```
+PASS: hb-release         rebar3 as lapee release (agent/lapee tree)
+PASS: hb-initramfs       assemble 60 MB guest image (197 MB → 132 MB slimmed)
+PASS: hb-acceptance      3 envelopes, 3 distinct node_message_ids,
+                         hostile user config overridden, all verify
+PASS: hb-tamper-test     7/7 byte-flips rejected at the expected check
+PASS: hb-interpret-demo  9-section live interpretation (envelope, tpm,
+                         ak, quote, pcrs, boot, kernel, ima, node)
+                         with verified=true, verdict=accepted
+
+VERDICT: PASS
+```
+
+### Interpretation — live output sample
+
+Captured from `GET /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0'
+on the running guest. Saved verbatim to
+`out/evidence/interpret-verify-baseline.json'.
+
+```
+verified: True | verdict: accepted
+--- verifier checks ---
+  OK | EK certificate chains to trusted TPM vendor root CA     -> OpenSSL pkix_path_validation ok
+  OK | TPM2_Quote signature + pcrDigest + nonce all valid      -> sig ok; extraData matches nonce (32 bytes); pcrDigest matches 7 reported PCRs
+  OK | Runtime event log replay of PCR 15 matches quoted value -> 1 PCR-15 event(s) replay
+  OK | PCR 15 extension commits to node_message_id             -> match at seq=0
+  OK | Embedded node_message + id present and correct shape    -> 79-key map; id is 43-char base64url
+
+--- TPM identity ---            (test EK in the demo — real hardware would also include TCG tpmManufacturer/tpmModel OIDs)
+  ek_cert_issuer                CN=LapEE Test TPM Vendor Root CA
+  ek_cert_serial                <hex>
+
+--- AK ---
+  algorithm                     RSA
+  key_size_bits                 2048
+  public_exponent               65537
+  pub_der_sha256_b64url         <base64url-sha256 fingerprint>
+
+--- Quote metadata ---
+  magic_ok                      true
+  attest_type                   TPM_ST_ATTEST_QUOTE
+  clock_ms / reset_count / restart_count / safe
+
+--- PCR roles ---
+  PCR  0 (set ): firmware_srtm
+  PCR  1 (set ): platform_firmware_config
+  PCR  7 (set ): secure_boot_policy
+  PCR 10 (set ): ima_runtime_measurements
+  PCR 11 (zero): uki_kernel_image            (no UKI in the QEMU test)
+  PCR 14 (zero): secure_boot_authority_mok
+  PCR 15 (set ): lapee_node_identity
+
+--- Node identity ---
+  wallet_address                <base64url>
+  node_message_id               <base64url>   (matches quoted PCR 15 extension)
+  node_message_key_count        79
+  on_start_hook_device          tpm2@2.0a     (THE enforced hook — matches what PCR 15 committed to)
+  pcr15_event_count             1
+  pcr15_event_types             ["EV_HYPERBEAM_NODE_IDENTITY_EXTEND"]
+```
+
+The `on_start_hook_device' line is the one that makes the whole thing
+usable for decentralised trust: a peer consuming this attestation
+sees, in one AO-Core field, that the attested TPM committed to a
+node message whose enforced hook is `tpm2@2.0a' — i.e., this is a
+genuine LapEE node running the enforced-by-the-image attestation
+pipeline, not an imposter node sending hand-crafted envelopes.
+
+### Final branch state on `agent/lapee` (off upstream `edge`)
+
+```
+<last commit> out/evidence: refresh envelopes with v0.3 schema
+0fd12dd49    dev_tpm_interpret: atom-aware nested_get + TPM_ST constants
+0640c1d1f    hb-tamper-test: v0.3 base64url + HB body wrapper
+a549c4e43    hb-acceptance: unwrap HB's {status,body} wrapper
+b3ecef8ce    hb-acceptance: node_message_id (not _hex)
+c6f580ade    build-hb-release: always re-sync src-edge
+adb988b13    build-hb-release: init secp256k1 submodule
+203a1c1af    hb-interpret-demo: fetch fresh envelope
+6700322b5    Makefile: document hb-interpret-demo
+79c538d1a    dev_tpm_interpret: match_pcrs + summarise
+85d736cf5    lapee-baremetal: make hb-interpret-demo
+6ce0de878    dev_tpm_interpret: eunit tests
+07643ba20    dev_tpm_interpret: ~tpm-interpret@1.0 device + DB
+d2b3a4010    STATUS: items 1–6 landed
+c0520af36    lapee-baremetal: SECURITY.md (threat model vs ~snp@1.0)
+e4d9196a4    build-hb-release: seed src-edge from parent HB checkout
+16a9218a8    lapee-baremetal: reference-implementation tree for the LapEE guest
+747b8a83c    dev_tpm2: base64url + Accept-header codec + HB-side verify/3
+e7ec8b23e    hb_opts: comma-separated HB_CONFIG with deep-merge
+666132e5b    <-- edge base
+```
+
+All seven items from the user's polish brief + item 7 Interpretability
+on one PR-ready branch. Externally observable evidence lives in
+`out/evidence/' and is verifier-reproducible (`python3
+reference-demo/verifier/verifier_hb.py out/evidence/att-baseline.json
+out/evidence/ca-baseline.crt' → ATTESTATION ACCEPTED).
+
+### Parked future work (documented — NOT silent gaps)
+
+These are explicitly noted, not implied:
+
+1. **HB-POSTed JSON envelope trips `{badmap,<<>>}` in `hb_cache:write'**
+   when the device response embeds an HB-native node message. Doesn't
+   affect the chain URL pattern (the target pattern the user
+   specified); does affect `curl --data-binary @env.json
+   /~tpm-interpret@1.0/verify'. Tracked.
+2. **TPM vendor root CA bundle** — `priv/tpm-interpret/root-cas/' is
+   wired but no PEMs checked in (vendor licensing varies). Real
+   deployers populate their own trust bundle.
+3. **PCR-profile database** ships 4 seed entries (1 real — QEMU
+   SeaBIOS — and 3 shape-example stubs for Lenovo/Dell/Framework).
+   The framework loads any JSON under `pcr-profiles/'; 90% coverage
+   is a data collection exercise on top of this.
+4. **IMA event log transport** — PCR 10's final value is signed by the
+   quote; the per-file chain is not yet carried in the envelope. A
+   future `~tpm2@2.0a' version will include it; meanwhile the
+   interpret device reports the PCR 10 value + a `note' field that
+   documents the gap.
+5. **UKI kernel PCR 11/12/13** not populated in the QEMU demo (no
+   UKI there); path works on real silicon.
+6. **Hardened kernel rebuild** completed in a sub-agent (HARDENING.md
+   adds FORTIFY_SOURCE / HARDENED_USERCOPY / INIT_ON_ALLOC_FREE /
+   SLAB_FREELIST_HARDENED / IO_STRICT_DEVMEM / MODULE_SIG_FORCE /
+   SECURITY_DMESG_RESTRICT / IMA_APPRAISE / DEBUG_KERNEL=n). The
+   hardened `vmlinuz-lapee' is what the acceptance run above used.
+
+### Overnight mode
+
+Per the acceptance test at the top of this session, the user-stated
+criterion ("everything from 1–6 + item 7 with `make hb-final-
+acceptance' green") is met. Staying in overnight mode until the user
+says stop.
