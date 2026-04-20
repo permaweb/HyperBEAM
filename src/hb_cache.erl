@@ -275,7 +275,6 @@ do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Return the path.
     Path = generate_binary_path(Bin, Opts),
     hb_store:write(Store, Path, Bin),
-    %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
     do_write_message(

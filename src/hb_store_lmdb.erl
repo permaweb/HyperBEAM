@@ -148,11 +148,13 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     % Convert to binary
     PathBin = to_path(PathParts),
     write(Opts, PathBin, Value);
-write(Opts, Path, Value) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
+write(#{<<"name">> := Name} = Opts, Path, Value) ->
+    #{ <<"db">> := DBInstance, <<"env">> := Env } = find_env(Opts),
     ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
-        ok -> ok;
+        ok ->
+            sample_size_metrics(Env, Name),
+            ok;
         {error, Type, Description} ->
             ?event(
                 error,
@@ -624,6 +626,25 @@ sample_metrics(Name, StartTime, Type) ->
         miss -> ok
     end.
 
+%% @doc Sample LMDB size metrics on roughly 1/1024 writes (writable stores only).
+%%
+%% Uses the low bits of monotonic_time as a cheap random-ish gate so the
+%% env_stat NIF call does not run on every write.  Only called from the
+%% writable write/3 clause, so read-only stores are never sampled.
+sample_size_metrics(Env, Name) ->
+    case erlang:monotonic_time() band 1023 of
+        0 ->
+            case elmdb:env_stat(Env) of
+                {ok, MapSize, UsedBytes} ->
+                    prometheus_gauge:set(hb_store_lmdb_used_bytes, [Name], UsedBytes),
+                    prometheus_gauge:set(hb_store_lmdb_map_size_bytes, [Name], MapSize);
+                _ ->
+                    ok
+            end;
+        _ ->
+            ok
+    end.
+
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
         {name, hb_store_lmdb_duration_seconds},
@@ -635,6 +656,16 @@ init_prometheus() ->
         {name, hb_store_lmdb_hit},
         {labels, [name]},
         {help, "LMDB name requested"}
+    ]),
+    hb_prometheus:declare(gauge, [
+        {name, hb_store_lmdb_used_bytes},
+        {labels, [store_name]},
+        {help, "Approximate LMDB used bytes (high-water mark based on last_pgno)"}
+    ]),
+    hb_prometheus:declare(gauge, [
+        {name, hb_store_lmdb_map_size_bytes},
+        {labels, [store_name]},
+        {help, "Configured LMDB map_size limit in bytes"}
     ]),
     ok.
 
