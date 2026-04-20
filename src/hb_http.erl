@@ -481,7 +481,13 @@ reply(Req, TABMReq, Message, Opts) ->
         end,
     reply(Req, TABMReq, Status, Message, Opts).
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
-    reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
+    %% Safely parse the status as an integer. If it's not a valid number
+    %% (e.g., "pending" from a nested object's status field), default to 200.
+    IntStatus = case hb_util:safe_int(BinStatus) of
+        {ok, N} when N >= 100, N =< 599 -> N;
+        _ -> 200
+    end,
+    reply(Req, TABMReq, IntStatus, RawMessage, Opts);
 reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ReplyStartTime = os:system_time(millisecond),
     KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
