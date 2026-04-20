@@ -99,10 +99,14 @@ do_monitor(Group, Last, Opts) ->
     end.
 
 %% @doc Register the process to lead an execution if none is found, otherwise
-%% signal that we should await resolution.
+%% signal that we should await resolution. When `await_inprogress' is
+%% explicitly disabled (the common case for internal/recursive resolves) we
+%% skip the grouper dispatch entirely: the leader short-circuit below would
+%% discard the computed group name anyway.
+find_or_register(_Base, _Req, #{ await_inprogress := false }) ->
+    {leader, ungrouped_exec};
 find_or_register(Base, Req, Opts) ->
-    GroupName = group(Base, Req, Opts),
-    find_or_register(GroupName, Base, Req, Opts).
+    find_or_register(group(Base, Req, Opts), Base, Req, Opts).
 find_or_register(ungrouped_exec, _Base, _Req, _Opts) ->
     {leader, ungrouped_exec};
 find_or_register(GroupName, _Base, _Req, Opts) ->
