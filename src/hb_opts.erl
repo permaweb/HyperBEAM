@@ -75,6 +75,13 @@
         mode => {"HB_MODE", fun list_to_existing_atom/1},
         paranoid_verify =>
             {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
+        % Acceptable values for paranoid_verify:
+        %   false - No paranoid verification
+        %   true - Verify all messages in all contexts
+        %   [http_request] - Verify messages in outbound HTTP requests only
+        %   [cache_write] - Verify messages only when writing to cache
+        %   [cache_read] - Verify messages only when reading from cache
+        %   [http_request, cache_write] - Verify in both contexts
         debug_print =>
             {
                 "HB_PRINT",

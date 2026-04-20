@@ -357,6 +357,8 @@ route_to_request(M, {error, Reason}, _Opts) ->
 %% already present in the message, and sets it to `true' if it is not.
 prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage, Opts),
+    % Verify the outbound message if paranoid mode is enabled for http_request
+    hb_message:paranoid_verify(http_request, Message, Opts),
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.
     {MaybeCookie, WithoutCookie} =
