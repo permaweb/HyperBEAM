@@ -49,3 +49,12 @@
 %% @doc Draw a horizontal line in the logs.
 -define(hr(), io:format(standard_error, "--------------------------------------------------------------------------------~n", [])).
 -define(hr(Str), io:format(standard_error, iolist_to_binary(["---------------------------------------- ", Str, " ----------------------------------------~n"]), [])).
+
+%%% Parallel-test auto-wiring. In a test build, every module that includes
+%%% `hb.hrl' has `hb_test_parallel' activated: 0-arity functions whose
+%%% names end in `_test_parallel' or `_test_parallel_' are exported and
+%%% collected into an injected `all_parallel_test_/0' EUnit generator.
+%%% See `hb_test_parallel' for the contract.
+-ifdef(TEST).
+-compile({parse_transform, hb_test_parallel}).
+-endif.
