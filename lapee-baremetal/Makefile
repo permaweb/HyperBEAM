@@ -119,7 +119,7 @@ real-all: builders fetch-debian-kernel nif-linux initramfs boot-real verify
 #   - `on.start' hook extends PCR 15 with `hb_message:id(node_msg)'
 #   - HB HTTP server answers `/~tpm2@2.0a/attestation' with the full envelope
 
-.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test hb-interpret-demo
+.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test hb-interpret-demo hb-cross-node-verify
 
 hb-release:
 	./scripts/build-hb-release.sh
@@ -174,6 +174,18 @@ hb-tamper-test:
 # pretty-printing the rich per-section interpretation.
 hb-interpret-demo:
 	./scripts/hb-interpret-demo.sh
+
+# hb-cross-node-verify: the paper's real use-case. Starts a SEPARATE
+# HB node natively on macOS (outside QEMU) and has it verify the
+# guest peer via `GET /~tpm-interpret@1.0/verify-peer&peer=<url>'.
+# The verifier's trust anchor (TPM CA) is installed BEFORE the call,
+# mirroring how a real operator pre-configures a vendor root CA.
+# Minimises the possibility of same-process shortcuts or accidental
+# trust propagation: two separate BEAM VMs, two separate network
+# origins, independently-installed trust anchors, independent five-
+# check cryptographic verification on the verifier side.
+hb-cross-node-verify:
+	./scripts/hb-cross-node-verify.sh
 
 # ----- Buildroot path -----
 #

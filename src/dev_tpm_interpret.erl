@@ -41,7 +41,7 @@
 %%% into maps at load time). Format is documented in the first entry
 %%% of each file.
 -module(dev_tpm_interpret).
--export([info/1, info/3, interpret/3, verify/3]).
+-export([info/1, info/3, interpret/3, verify/3, verify_peer/3]).
 -include("include/hb.hrl").
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -51,7 +51,8 @@
 %%%============================================================================
 
 info(_) ->
-    #{ exports => [<<"info">>, <<"interpret">>, <<"verify">>] }.
+    #{ exports => [<<"info">>, <<"interpret">>, <<"verify">>,
+                   <<"verify-peer">>] }.
 
 info(_Base, _Req, _Opts) ->
     {ok, #{
@@ -78,6 +79,19 @@ info(_Base, _Req, _Opts) ->
                         <<"Call ~tpm2@2.0a/verify, then if the chain "
                           "is accepted, return the verification result "
                           "plus the full interpretation.">>
+                },
+                <<"verify-peer">> => #{
+                    <<"description">> =>
+                        <<"Fetch another HB node's `~tpm2@2.0a/"
+                          "attestation' envelope (GET), verify its "
+                          "crypto chain locally, and return the full "
+                          "interpretation. Designed for the "
+                          "documented cross-node flow: the caller "
+                          "trusts THIS node's verdict about the peer "
+                          "without itself having to speak the TPM "
+                          "crypto. `peer' is required and is the base "
+                          "URL of the peer (e.g. "
+                          "`http://host.example:8734/').">>
                 }
             }
         }
@@ -110,6 +124,218 @@ verify(Base, Req, Opts) ->
                 }
             }};
         Other -> Other
+    end.
+
+%%%============================================================================
+%%% verify_peer/3 — cross-node entry point
+%%%============================================================================
+%%%
+%%% Fetch another HB node's attestation envelope over HTTP, verify it
+%%% here, and return the interpretation. Intended for the paper's
+%%% cross-node flow where the caller wants THIS node to vouch for a
+%%% peer it cannot itself verify.
+%%%
+%%%   GET /~tpm-interpret@1.0/verify-peer&peer=<base-url>
+%%%
+%%% `peer' is a bare URL; we normalise it + append `/~tpm2@2.0a/
+%%% attestation' and fetch with the standard HB content-negotiation
+%%% (`accept: application/json@1.0 + accept-bundle: true') so the
+%%% envelope comes back inline with no body+link references (which
+%%% would be meaningless on this node's cache).
+
+verify_peer(_Base, Req, Opts) ->
+    case hb_maps:get(<<"peer">>, Req, undefined, Opts) of
+        undefined ->
+            {ok, #{
+                <<"status">> => 400,
+                <<"body">> => #{
+                    <<"error">> => <<"missing_peer">>,
+                    <<"detail">> =>
+                        <<"verify-peer requires a `peer' key (base URL "
+                          "of the node to verify, e.g. "
+                          "`http://127.0.0.1:8734').">>
+                }
+            }};
+        PeerUrl when is_binary(PeerUrl) ->
+            fetch_and_verify_peer(PeerUrl, Opts);
+        Other ->
+            {ok, #{
+                <<"status">> => 400,
+                <<"body">> => #{
+                    <<"error">> => <<"bad_peer">>,
+                    <<"detail">> =>
+                        iolist_to_binary(
+                            io_lib:format("peer must be a binary URL; got ~p",
+                                          [Other]))
+                }
+            }}
+    end.
+
+fetch_and_verify_peer(PeerUrl, Opts) ->
+    Base = strip_trailing_slash(PeerUrl),
+    FetchMsg = #{
+        <<"path">>          => <<"/~tpm2@2.0a/attestation">>,
+        <<"accept">>        => <<"application/json@1.0">>,
+        <<"accept-bundle">> => <<"true">>
+    },
+    case hb_http:get(Base, FetchMsg, Opts) of
+        {ok, Response} when is_map(Response) ->
+            Envelope = unwrap_envelope(Response, Opts),
+            case is_envelope(Envelope) of
+                false ->
+                    {ok, #{
+                        <<"status">> => 502,
+                        <<"body">> => #{
+                            <<"error">> => <<"peer_did_not_return_envelope">>,
+                            <<"peer">>  => Base,
+                            <<"detail">> =>
+                                <<"GET /~tpm2@2.0a/attestation did not "
+                                  "return a LapEE attestation envelope; "
+                                  "peer may be unreachable, not "
+                                  "LapEE-shaped, or returned an error.">>
+                        }
+                    }};
+                true ->
+                    run_cross_node_verify(Base, Envelope, Opts)
+            end;
+        {error, Why} ->
+            {ok, #{
+                <<"status">> => 502,
+                <<"body">> => #{
+                    <<"error">> => <<"peer_unreachable">>,
+                    <<"peer">>  => Base,
+                    <<"detail">> =>
+                        iolist_to_binary(
+                            io_lib:format("hb_http:get failed: ~p", [Why]))
+                }
+            }};
+        Unexpected ->
+            {ok, #{
+                <<"status">> => 502,
+                <<"body">> => #{
+                    <<"error">> => <<"peer_unexpected_response">>,
+                    <<"peer">>  => Base,
+                    <<"detail">> =>
+                        iolist_to_binary(
+                            io_lib:format("hb_http:get returned ~p",
+                                          [Unexpected]))
+                }
+            }}
+    end.
+
+strip_trailing_slash(B) when is_binary(B) ->
+    case binary:last(B) of
+        $/ -> binary:part(B, 0, byte_size(B) - 1);
+        _  -> B
+    end.
+
+%% The cross-node path must not return the Envelope map back through
+%% HB's response pipeline verbatim — the peer's commitments + any
+%% `body+link' references inside would trip hb_cache:write when this
+%% node normalises the response. We drop every map-valued field in
+%% the result and keep only JSON-primitive-friendly summaries.
+run_cross_node_verify(Base, Envelope, Opts) ->
+    {Verified, Verdict, Checks} = do_verify_summary(Envelope, Opts),
+    Interp = safe_interpret(Envelope, Opts),
+    Summary = summarise_interp(Interp),
+    {ok, #{
+        <<"status">> => 200,
+        <<"body">> => #{
+            <<"peer">>     => Base,
+            <<"verified">> => Verified,
+            <<"verdict">>  => Verdict,
+            <<"checks">>   => Checks,
+            <<"summary">>  => Summary
+        }
+    }}.
+
+do_verify_summary(Envelope, Opts) ->
+    case dev_tpm2:verify(Envelope,
+                         #{<<"envelope">> => Envelope},
+                         Opts) of
+        {ok, #{<<"body">> := #{<<"verified">> := V,
+                               <<"verdict">>  := D,
+                               <<"checks">>   := C}}} ->
+            {V, D, flatten_checks(C)};
+        {ok, #{<<"body">> := #{<<"verified">> := V,
+                               <<"verdict">>  := D}}} ->
+            {V, D, []};
+        _ ->
+            {false, <<"rejected">>, []}
+    end.
+
+flatten_checks(Cs) when is_list(Cs) ->
+    [ case C of
+          #{<<"ok">> := O, <<"name">> := N, <<"detail">> := De} ->
+              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => De};
+          #{<<"ok">> := O, <<"name">> := N} ->
+              #{<<"ok">> => O, <<"name">> => N, <<"detail">> => <<"">>};
+          _ -> #{<<"ok">> => false, <<"name">> => <<"unknown">>,
+                 <<"detail">> => <<"">>}
+      end || C <- Cs];
+flatten_checks(_) -> [].
+
+%% Produce a small, link-free summary of the interpretation — the
+%% fields a caller would actually act on when deciding whether to
+%% trust the peer. The full structured interpretation is still
+%% available via `/~tpm-interpret@1.0/interpret' against the same
+%% envelope if callers want every field.
+summarise_interp(Interp) when is_map(Interp) ->
+    Tpm  = maps:get(<<"tpm">>,  Interp, #{}),
+    Ak   = maps:get(<<"ak">>,   Interp, #{}),
+    Q    = maps:get(<<"quote">>, Interp, #{}),
+    Boot = maps:get(<<"boot">>, Interp, #{}),
+    Node = maps:get(<<"node">>, Interp, #{}),
+    Env  = maps:get(<<"envelope">>, Interp, #{}),
+    #{
+        <<"envelope_version">> =>
+            maps:get(<<"version">>, Env, null),
+        <<"tpm_manufacturer">> =>
+            maps:get(<<"manufacturer_name">>, Tpm, null),
+        <<"tpm_manufacturer_kind">> =>
+            maps:get(<<"manufacturer_kind">>, Tpm, null),
+        <<"tpm_model">> =>
+            maps:get(<<"model">>, Tpm, null),
+        <<"tpm_firmware_version">> =>
+            maps:get(<<"firmware_version">>, Tpm, null),
+        <<"ak_algorithm">> =>
+            maps:get(<<"algorithm">>, Ak, null),
+        <<"ak_key_size_bits">> =>
+            maps:get(<<"key_size_bits">>, Ak, null),
+        <<"ak_public_key_b64url">> =>
+            maps:get(<<"pub_der_sha256_b64url">>, Ak, null),
+        <<"quote_attest_type">> =>
+            maps:get(<<"attest_type">>, Q, null),
+        <<"quote_clock_ms">> =>
+            maps:get(<<"clock_ms">>, Q, null),
+        <<"quote_reset_count">> =>
+            maps:get(<<"reset_count">>, Q, null),
+        <<"secure_boot_measured">> =>
+            maps:get(<<"secure_boot_measured">>, Boot, null),
+        <<"wallet_address">> =>
+            maps:get(<<"wallet_address">>, Node, null),
+        <<"node_message_id">> =>
+            maps:get(<<"node_message_id">>, Node, null),
+        <<"on_start_hook_device">> =>
+            maps:get(<<"on_start_hook_device">>, Node, null),
+        <<"pcr15_event_count">> =>
+            maps:get(<<"pcr15_event_count">>, Node, null)
+    };
+summarise_interp(_) -> #{}.
+
+%% The response from `hb_http:get' is a full HB message. The
+%% attestation envelope may be returned directly (top-level
+%% `lapee_attestation_version' key) or wrapped under `body' (the
+%% usual device-response shape). Peel until we find something that
+%% looks like our envelope.
+unwrap_envelope(M, Opts) ->
+    case is_envelope(M) of
+        true -> M;
+        false ->
+            case hb_maps:get(<<"body">>, M, undefined, Opts) of
+                Inner when is_map(Inner) -> unwrap_envelope(Inner, Opts);
+                _ -> M
+            end
     end.
 
 %%%============================================================================

@@ -2,13 +2,15 @@
 # hb-final-acceptance.sh — run the whole LapEE acceptance battery
 # from cold, suitable for regression testing or PR review.
 #
-#   1. make hb-release     (auto-seeds src-edge from parent HB repo)
+#   1. make hb-release      (auto-seeds src-edge from parent HB repo)
 #   2. make hb-initramfs
-#   3. make hb-acceptance  (three-envelope positive battery)
-#   4. make hb-tamper-test (seven-way verifier completeness probe)
+#   3. make hb-acceptance   (three-envelope positive battery)
+#   4. make hb-tamper-test  (seven-way verifier completeness probe)
 #   5. boot with --keep-alive; run hb-interpret-demo against the
 #      live node; tear down.
-#   6. refresh out/evidence/ from the last baseline run
+#   6. make hb-cross-node-verify  (second HB outside QEMU verifies
+#      the peer inside QEMU — the paper's real use case).
+#   7. refresh out/evidence/ from the last baseline run
 #
 # Prints a one-line summary per step and a final PASS/FAIL verdict.
 # Exits 0 iff every step succeeds. Intended to be callable from CI
@@ -70,6 +72,13 @@ fi
 # Tear down guest.
 pkill -f qemu-system-x86_64 2>/dev/null || true
 pkill -f swtpm 2>/dev/null || true
+
+# 6. Cross-node verify: the paper's actual use case. A separate HB
+#    process on the host (native macOS, no TPM NIF) verifies the
+#    guest peer via GET /~tpm-interpret@1.0/verify-peer. Pre-installs
+#    the test CA as trust anchor BEFORE the call; the verifier does
+#    its own five-check cryptographic battery over HTTP.
+run_step "hb-cross-node-verify" make hb-cross-node-verify
 
 echo ""
 echo "============================================================"

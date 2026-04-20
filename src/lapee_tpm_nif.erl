@@ -40,8 +40,8 @@ init() ->
                 filename:join(Dir, ?LIBNAME)
         end,
     %% Default TCTI: swtpm on TCP port 2321 (matches scripts/swtpm.sh).
-    %% On macOS we pass the full library path so dlopen doesn't need the loader
-    %% search path to include the tss2 prefix.
+    %% On macOS we pass the full library path so dlopen doesn't need the
+    %% loader search path to include the tss2 prefix.
     DefaultTcti =
         case os:type() of
             {unix, darwin} ->
@@ -56,7 +56,30 @@ init() ->
             false -> DefaultTcti;
             V -> V
         end,
-    erlang:load_nif(SoName, Tcti).
+    %% Allow verifier-only HB instances (no TPM present) to load this
+    %% module successfully. With LAPEE_TPM_ALLOW_NO_NIF=1, a load
+    %% failure is logged but treated as OK — the NIF stubs still
+    %% raise `nif_not_loaded' if called, so attest operations fail
+    %% explicitly while verify/parse paths (which don't touch the
+    %% TPM) continue to work.
+    case erlang:load_nif(SoName, Tcti) of
+        ok ->
+            ok;
+        {error, _} = Err ->
+            case os:getenv("LAPEE_TPM_ALLOW_NO_NIF") of
+                V1 when V1 =:= false; V1 =:= ""; V1 =:= "0" ->
+                    Err;
+                _ ->
+                    %% on_load runs very early — logger may not be up
+                    %% yet. Use stderr directly.
+                    io:format(standard_error,
+                              "[lapee_tpm_nif] running without NIF "
+                              "(LAPEE_TPM_ALLOW_NO_NIF set; load_nif "
+                              "returned ~p)~n",
+                              [Err]),
+                    ok
+            end
+    end.
 
 %% --- NIF stubs; real implementations live in c_src/ ---
 
