@@ -815,6 +815,19 @@ standalone_item_id(_) -> not_found.
 
 %%% Tests
 
+mempool_result_summary_filtered_test() ->
+    ?assertEqual(mempool_empty_summary(), mempool_result_summary(filtered)).
+
+normalize_sender_filter_binary_address_test() ->
+    Address = crypto:strong_rand_bytes(32),
+    ?assertEqual(hb_util:human_id(Address), normalize_sender_filter(Address)).
+
+mempool_tx_sender_matches_owner_address_test() ->
+    Address = crypto:strong_rand_bytes(32),
+    TX = #tx{ owner = <<1>>, owner_address = Address },
+    ?assert(mempool_tx_sender_matches(TX, hb_util:human_id(Address))),
+    ?assertNot(mempool_tx_sender_matches(TX, hb_util:human_id(crypto:strong_rand_bytes(32)))).
+
 index_ids_test() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     %% Note: this block includes a data item with an Ethereum signature. This
