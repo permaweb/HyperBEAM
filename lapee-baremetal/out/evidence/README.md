@@ -40,3 +40,9 @@ Each envelope matches what the paper calls the full chain:
         → PCR 15 = sha256(0x00..00 || hb_message:id(node_message))
         → runtime_event_log entry for that extend
         → node_message itself, with the operator wallet bound
+
+## After the ~tpm-interpret@1.0 phase (2026-04-19)
+
+| file | what it is |
+|---|---|
+| `interpret-verify-baseline.json` | Full live output of `GET /~tpm2@2.0a/attestation/verify~tpm-interpret@1.0` against the baseline guest. Contains `verified: true`, all 5 crypto checks passing, **and** the rich `interpretation` block (envelope, tpm, ak, quote, pcrs, boot, kernel, ima, node). This is what the user's final target URL produces end-to-end. |
