@@ -14,7 +14,7 @@
 #   - runs reference-demo/verifier/verifier_hb.py
 #
 # The script then prints a summary showing:
-#   - each run's node_message_id_hex (must differ between runs if
+#   - each run's node_message_id (must differ between runs if
 #     the user config was picked up correctly)
 #   - the hostile run's on.start.device (must be `tpm2@2.0a', not
 #     the `noop@1.0' the user supplied)
@@ -73,14 +73,14 @@ ids = {}
 hook_devices = {}
 for r in runs:
     env = json.load(open(f"out/acceptance/{r}-attestation.json"))
-    ids[r] = env["node_message_id_hex"]
+    ids[r] = env["node_message_id"]
     hook_devices[r] = (
         env.get("node_message", {}).get("on", {}).get("start", {}).get("device")
     )
 
 ok = True
 
-print("node_message_id_hex per run:")
+print("node_message_id per run:")
 for r in runs:
     print(f"  {r:14}: {ids[r]}")
 
