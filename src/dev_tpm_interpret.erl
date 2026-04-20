@@ -924,13 +924,21 @@ interpret_envelope(E, Opts) ->
     Tpm = interpret_tpm_identity(E, Db),
     Ak  = interpret_ak(E),
     Quote = interpret_quote_metadata(E),
-    Pcrs = interpret_pcrs(E, Db),
+    %% Events first — the rich per-record decoded TCG event log. Every
+    %% downstream interpretation (PCR-level enrichment, boot chain,
+    %% kernel, IMA, claim) drills into these events to extract named
+    %% fields. Keeping events as the single source of truth keeps
+    %% the interpretation tree consistent: you can always navigate
+    %% from `/interpret/pcrs/N/derived/<field>' back to the source
+    %% events at `/interpret/pcrs/N/events/<seq>' and from there to
+    %% the raw record at `/interpret/events/<seq>'.
+    Events = interpret_events(E),
+    Pcrs = interpret_pcrs(E, Db, Events),
     Boot = interpret_boot_chain(E, Db, Pcrs),
     Kernel = interpret_kernel(E, Db, Pcrs),
     Ima = interpret_ima(E, Db, Pcrs),
     Node = interpret_node(E),
     Env = interpret_envelope_meta(E),
-    Events = interpret_events(E),
     Claim = interpret_claim(Events, E, Db),
     #{
         <<"envelope">> => Env,
@@ -1403,19 +1411,59 @@ attest_type_name(N) -> iolist_to_binary(io_lib:format("0x~.16B", [N])).
 
 %%---- PCRs --------------------------------------------------------------
 
-interpret_pcrs(E, _Db) ->
+interpret_pcrs(E, _Db, Events) ->
     Q = hb_maps:get(<<"tpm_quote">>, E, #{}, #{}),
     Vals = hb_maps:get(<<"pcr_values">>, Q, #{}, #{}),
+    %% Group events by the PCR they extended — a single pass over the
+    %% parsed event log. The resulting `EventsByPcr' is a map from
+    %% PCR index (integer) to a list of events sorted by seq.
+    EventsByPcr = group_events_by_pcr(Events),
     maps:from_list(
-        [{I, interpret_one_pcr(I, V)}
+        [{I, interpret_one_pcr(I, V, EventsByPcr)}
          || {I, V} <- maps:to_list(Vals)]).
 
-interpret_one_pcr(Idx, B64) ->
+%% For each PCR index in 0..23, the events that extended it, sorted
+%% by sequence number (insertion order in the log).
+group_events_by_pcr(Events) when is_map(Events) ->
+    %% `Events' is a map #{<<"1">> => EventMsg, <<"2">> => ...}.
+    SortedByseq =
+        [Ev || {_, Ev} <-
+            lists:sort(
+                fun({KA, _}, {KB, _}) ->
+                    key_to_int(KA) =< key_to_int(KB)
+                end,
+                [{K, V} || {K, V} <- maps:to_list(Events),
+                           is_map(V)]),
+            is_map(Ev)],
+    lists:foldl(
+        fun(Ev, Acc) ->
+            case maps:get(<<"pcr">>, Ev, undefined) of
+                P when is_integer(P) ->
+                    maps:update_with(P, fun(L) -> L ++ [Ev] end,
+                                     [Ev], Acc);
+                _ -> Acc
+            end
+        end,
+        #{},
+        SortedByseq);
+group_events_by_pcr(_) -> #{}.
+
+key_to_int(B) when is_binary(B) ->
+    try binary_to_integer(B) catch _:_ -> 0 end;
+key_to_int(I) when is_integer(I) -> I;
+key_to_int(_) -> 0.
+
+interpret_one_pcr(Idx, B64, EventsByPcr) ->
     Raw = try hb_util:decode(B64)
           catch _:_ -> <<>>
           end,
     Zero = (Raw =:= <<0:256>>) orelse (Raw =:= <<>>),
-    #{
+    PcrInt = key_to_int(Idx),
+    EvList = maps:get(PcrInt, EventsByPcr, []),
+    EvMap = events_list_to_seq_map(EvList),
+    Reconstruction = reconstruct_pcr(EvList, Raw),
+    Derived = derive_fields_from_events(PcrInt, EvList),
+    Base = #{
         %% Canonical base64url form, carried through unchanged from the
         %% attestation envelope. No hex twin: HyperBEAM wire convention
         %% is base64url everywhere, and the raw digest is well over the
@@ -1423,8 +1471,330 @@ interpret_one_pcr(Idx, B64) ->
         <<"digest">>     => B64,
         <<"role">>       => pcr_role(Idx),
         <<"role_notes">> => pcr_role_notes(Idx),
-        <<"is_zero">>    => Zero
+        <<"is_zero">>    => Zero,
+        %% The filtered event log for this PCR. Each event is
+        %% path-addressable under `/interpret/pcrs/<N>/events/<seq>'.
+        <<"events">>     => EvMap,
+        <<"event_count">> => length(EvList),
+        %% `derived' is the merged named-field view. Every fact that
+        %% can be unambiguously extracted from this PCR's events lands
+        %% here as a concrete value (binary / bool / integer) OR the
+        %% sentinel `<<"unknown">>' when the events don't carry the
+        %% evidence to decide. A policy engine consumes `derived' as
+        %% the policy input; `events' is the audit trail.
+        <<"derived">>    => Derived
+    },
+    case Reconstruction of
+        undefined -> Base;
+        _ -> Base#{<<"reconstruction">> => Reconstruction}
+    end.
+
+events_list_to_seq_map(EvList) ->
+    maps:from_list(
+        [{integer_to_binary(maps:get(<<"seq">>, Ev, 0)), Ev}
+         || Ev <- EvList]).
+
+%% Replay every event's SHA-256 digest into its PCR and compare
+%% against the quoted value. `undefined' when there are no events
+%% in this PCR (nothing to reconstruct from).
+reconstruct_pcr([], _Quoted) -> undefined;
+reconstruct_pcr(EvList, Quoted) ->
+    Replayed = lists:foldl(
+        fun(Ev, Acc) ->
+            case maps:get(<<"event_type_code">>, Ev, 0) of
+                3 -> Acc;  %% EV_NO_ACTION — per TCG spec, not extended
+                _ ->
+                    Digests = maps:get(<<"digests">>, Ev, #{}),
+                    case maps:get(<<"sha256">>, Digests, undefined) of
+                        D when is_binary(D), byte_size(D) =:= 32 ->
+                            crypto:hash(sha256, <<Acc/binary, D/binary>>);
+                        _ -> Acc
+                    end
+            end
+        end,
+        <<0:256>>,
+        EvList),
+    Matches = (Replayed =:= Quoted),
+    #{
+        <<"replayed_digest">> => hb_util:encode(Replayed),
+        <<"matches_quoted">>  => Matches,
+        <<"replayed_from_events">> => length(EvList)
     }.
+
+%% Derive named-field values from a PCR's events. The idea is that
+%% *every property we can parse out of the firmware/OS events should
+%% live here as a concrete AO-Core field*, navigable as
+%% `/interpret/pcrs/<N>/derived/<field>'. Unknowns stay as the binary
+%% `<<"unknown">>' so policy callers can distinguish "not present in
+%% log" from "present and false".
+derive_fields_from_events(Pcr, EvList) ->
+    Base = derived_template_for_pcr(Pcr),
+    lists:foldl(
+        fun(Ev, Acc) -> merge_derived(Acc, derive_from_event(Pcr, Ev)) end,
+        Base,
+        EvList).
+
+%% Per-PCR starting template of fields we expect to be able to derive
+%% on real hardware — callers can rely on the SHAPE always being
+%% present, with `<<"unknown">>' values when the current event log
+%% can't populate them.
+derived_template_for_pcr(0) ->
+    %% PCR 0 = SRTM / firmware code.
+    #{
+        <<"crtm_version">>        => <<"unknown">>,
+        <<"hcrtm">>               => <<"unknown">>,
+        <<"post_codes">>          => [],
+        <<"firmware_blobs">>      => [],
+        <<"separator_seen">>      => false
+    };
+derived_template_for_pcr(1) ->
+    %% PCR 1 = platform configuration (CPU microcode, platform
+    %% config flags, UEFI boot variables).
+    #{
+        <<"cpu_microcode">>       => <<"unknown">>,
+        <<"uefi_boot_order">>     => [],
+        <<"separator_seen">>      => false
+    };
+derived_template_for_pcr(N) when N =:= 2; N =:= 3 ->
+    #{
+        <<"option_rom_scanned">>  => false,
+        <<"separator_seen">>      => false
+    };
+derived_template_for_pcr(4) ->
+    #{
+        <<"boot_services_applications">> => [],
+        <<"boot_action_markers">>        => [],
+        <<"separator_seen">>             => false
+    };
+derived_template_for_pcr(5) ->
+    #{
+        <<"gpt_partition_tables">>  => 0,
+        <<"separator_seen">>        => false
+    };
+derived_template_for_pcr(7) ->
+    %% PCR 7 = Secure Boot state + keyset.
+    #{
+        <<"secure_boot_enabled">>       => <<"unknown">>,
+        <<"pk_entry_count">>            => <<"unknown">>,
+        <<"kek_entry_count">>           => <<"unknown">>,
+        <<"db_entry_count">>            => <<"unknown">>,
+        <<"dbx_entry_count">>           => <<"unknown">>,
+        <<"authorities">>               => [],
+        <<"separator_seen">>            => false
+    };
+derived_template_for_pcr(8) -> #{<<"grub_cmdline">> => <<"unknown">>};
+derived_template_for_pcr(9) -> #{<<"grub_modules">> => []};
+derived_template_for_pcr(10) ->
+    %% PCR 10 = IMA runtime. Per-file chain not yet transported —
+    %% documented gap in the envelope.
+    #{
+        <<"ima_active">>            => true,
+        <<"ima_event_count">>       => <<"unknown">>,
+        <<"ima_files_measured">>    => <<"unknown">>,
+        <<"note">>                  =>
+            <<"LapEE does not yet transport the IMA per-file event "
+              "log in the envelope; only PCR 10's final value is "
+              "signed. Future `~tpm2@2.0a' versions will include it.">>
+    };
+derived_template_for_pcr(11) ->
+    %% PCR 11 = UKI kernel image (systemd-stub PE hashes).
+    #{
+        <<"uki_measured">>          => false,
+        <<"uki_image_hash">>        => <<"unknown">>,
+        <<"uki_kernel_version">>    => <<"unknown">>
+    };
+derived_template_for_pcr(12) ->
+    #{
+        <<"uki_cmdline">>           => <<"unknown">>,
+        <<"uki_initrd_hash">>       => <<"unknown">>
+    };
+derived_template_for_pcr(13) ->
+    #{
+        <<"uki_sysext_count">>      => <<"unknown">>
+    };
+derived_template_for_pcr(14) ->
+    #{
+        <<"mok_entry_count">>       => <<"unknown">>
+    };
+derived_template_for_pcr(15) ->
+    %% LapEE node identity — fully parsed elsewhere in `node.*'.
+    #{
+        <<"lapee_node_identity_committed">> => true
+    };
+derived_template_for_pcr(_) -> #{}.
+
+%% Per-event extraction. For each event, dig into its `parsed'
+%% sub-map (populated by dev_tpm_tcg:decode_events/1) and return a
+%% partial derived map. `merge_derived' (below) reduces the list of
+%% partials into the final derived map.
+derive_from_event(Pcr, Ev) ->
+    Parsed = maps:get(<<"parsed">>, Ev, #{}),
+    Semantic =
+        case Parsed of
+            #{<<"semantic">> := S} when is_map(S) -> S;
+            _ -> #{}
+        end,
+    EtCode = maps:get(<<"event_type_code">>, Ev, 0),
+    derive_from_event(Pcr, EtCode, Parsed, Semantic).
+
+%% EV_NO_ACTION — SpecID header (PCR 0).
+derive_from_event(0, 3, Parsed, _) ->
+    case maps:get(<<"spec_id">>, Parsed, undefined) of
+        undefined -> #{};
+        V -> #{<<"spec_id">> => V}
+    end;
+%% EV_SEPARATOR — boundary marker. Fires on many PCRs.
+derive_from_event(_, 4, Parsed, _) ->
+    #{<<"separator_seen">> => true,
+      <<"separator_kind">> => maps:get(<<"separator">>, Parsed,
+                                       <<"unknown">>)};
+%% EV_S_CRTM_VERSION — PCR 0.
+derive_from_event(0, 8, Parsed, _) ->
+    case maps:get(<<"crtm_version">>, Parsed, undefined) of
+        V when is_binary(V), byte_size(V) > 0 ->
+            #{<<"crtm_version">> => V};
+        _ -> #{}
+    end;
+%% EV_CPU_MICROCODE — PCR 1.
+derive_from_event(1, 9, Parsed, _) ->
+    UpdRev = maps:get(<<"update_revision">>, Parsed, undefined),
+    ProcSig = maps:get(<<"processor_signature">>, Parsed, undefined),
+    Base = #{},
+    B1 = case UpdRev of
+             undefined -> Base;
+             _ -> Base#{<<"cpu_microcode">> =>
+                 iolist_to_binary(io_lib:format(
+                     "rev=0x~.16B sig=0x~.16B",
+                     [UpdRev, (ProcSig =/= undefined)
+                        andalso ProcSig orelse 0]))}
+         end,
+    B1;
+%% EV_POST_CODE — PCR 0.
+derive_from_event(0, 1, Parsed, _) ->
+    case maps:get(<<"post_code">>, Parsed, undefined) of
+        V when is_binary(V), byte_size(V) > 0 ->
+            #{<<"post_codes">> => [V]};
+        _ -> #{}
+    end;
+%% EV_EFI_HCRTM_EVENT — PCR 0.
+derive_from_event(0, 16#80000010, _, _) ->
+    #{<<"hcrtm">> => true};
+%% EV_EFI_PLATFORM_FIRMWARE_BLOB(2) — PCR 0.
+derive_from_event(0, Code, Parsed, _) when Code =:= 16#80000008;
+                                           Code =:= 16#8000000A ->
+    Addr = maps:get(<<"blob_physical_address">>, Parsed, 0),
+    Len  = maps:get(<<"blob_length">>, Parsed, 0),
+    Desc = maps:get(<<"blob_description">>, Parsed, <<>>),
+    Blob = #{<<"address">> => Addr,
+             <<"length">>  => Len,
+             <<"description">> => Desc},
+    #{<<"firmware_blobs">> => [Blob]};
+%% EV_EFI_VARIABLE_DRIVER_CONFIG — PCR 7.
+derive_from_event(7, 16#80000001, Parsed, Semantic) ->
+    Name = maps:get(<<"variable_name">>, Parsed, <<>>),
+    case Name of
+        <<"SecureBoot">> ->
+            case maps:get(<<"secure_boot_enabled">>, Semantic, undefined) of
+                true  -> #{<<"secure_boot_enabled">> => true};
+                false -> #{<<"secure_boot_enabled">> => false};
+                _ -> #{}
+            end;
+        <<"PK">> ->
+            SL = maps:get(<<"signature_list">>, Semantic, []),
+            #{<<"pk_entry_count">> =>
+                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+        <<"KEK">> ->
+            SL = maps:get(<<"signature_list">>, Semantic, []),
+            #{<<"kek_entry_count">> =>
+                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+        <<"db">> ->
+            SL = maps:get(<<"signature_list">>, Semantic, []),
+            #{<<"db_entry_count">> =>
+                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+        <<"dbx">> ->
+            SL = maps:get(<<"signature_list">>, Semantic, []),
+            #{<<"dbx_entry_count">> =>
+                lists:sum([maps:get(<<"entry_count">>, L, 0) || L <- SL])};
+        _ -> #{}
+    end;
+%% EV_EFI_VARIABLE_AUTHORITY — PCR 7.
+derive_from_event(7, 16#800000E0, Parsed, _) ->
+    case maps:get(<<"variable_name">>, Parsed, undefined) of
+        V when is_binary(V), byte_size(V) > 0 ->
+            #{<<"authorities">> => [V]};
+        _ -> #{}
+    end;
+%% EV_ACTION — PCR 2/4, contributions to the boot action list.
+derive_from_event(2, 5, Parsed, _) ->
+    case maps:get(<<"action">>, Parsed, undefined) of
+        A when is_binary(A) ->
+            Low = string:lowercase(A),
+            case binary:match(Low, <<"option rom">>) of
+                nomatch -> #{};
+                _ -> #{<<"option_rom_scanned">> => true}
+            end;
+        _ -> #{}
+    end;
+derive_from_event(4, 5, Parsed, _) ->
+    case maps:get(<<"action">>, Parsed, undefined) of
+        A when is_binary(A) -> #{<<"boot_action_markers">> => [A]};
+        _ -> #{}
+    end;
+%% EV_EFI_BOOT_SERVICES_APPLICATION — PCR 4.
+derive_from_event(4, 16#80000003, Parsed, _) ->
+    App = #{
+        <<"image_location_in_memory">> =>
+            maps:get(<<"image_location_in_memory">>, Parsed, 0),
+        <<"image_length_in_memory">>   =>
+            maps:get(<<"image_length_in_memory">>, Parsed, 0)
+    },
+    #{<<"boot_services_applications">> => [App]};
+%% EV_EFI_GPT_EVENT — PCR 5.
+derive_from_event(5, 16#80000006, _, _) ->
+    #{<<"gpt_partition_tables">> => 1};
+%% EV_IPL — PCR 11/12/13 (systemd-stub key=value).
+derive_from_event(11, 16#0D, Parsed, _) ->
+    case {maps:get(<<"key">>, Parsed, undefined),
+          maps:get(<<"value">>, Parsed, undefined)} of
+        {<<"kernel-name">>, V} when is_binary(V) ->
+            #{<<"uki_kernel_version">> => V, <<"uki_measured">> => true};
+        {<<"kernel-image">>, _} ->
+            #{<<"uki_measured">> => true};
+        _ -> #{}
+    end;
+derive_from_event(12, 16#0D, Parsed, _) ->
+    case {maps:get(<<"key">>, Parsed, undefined),
+          maps:get(<<"value">>, Parsed, undefined)} of
+        {<<"kernel-cmdline">>, V} when is_binary(V) ->
+            #{<<"uki_cmdline">> => V};
+        _ -> #{}
+    end;
+derive_from_event(_, _, _, _) -> #{}.
+
+%% Merge two partial derived maps. Rules:
+%%   - Lists concatenate.
+%%   - Counters (integers) sum.
+%%   - Booleans OR (so `option_rom_scanned = true' wins).
+%%   - `<<"unknown">>' is overridden by any concrete value.
+%%   - Otherwise rightmost wins.
+merge_derived(Acc, New) ->
+    maps:fold(
+        fun(K, V, Inner) ->
+            Existing = maps:get(K, Inner, undefined),
+            Inner#{K => merge_value(K, Existing, V)}
+        end,
+        Acc,
+        New).
+
+merge_value(_K, undefined, V) -> V;
+merge_value(_K, <<"unknown">>, V) -> V;
+merge_value(_K, Old, <<"unknown">>) -> Old;
+merge_value(_K, Old, New) when is_list(Old), is_list(New) -> Old ++ New;
+merge_value(_K, Old, New) when is_integer(Old), is_integer(New) ->
+    Old + New;
+merge_value(_K, true, _) -> true;
+merge_value(_K, _, true) -> true;
+merge_value(_K, _Old, New) -> New.
 
 %% Canonical TCG PCR usage. Source: TCG PC Client Platform Firmware
 %% Profile + UEFI Spec + systemd-stub docs.
@@ -2211,6 +2581,50 @@ pcr_role_canonical_mapping_test() ->
     ?assertEqual(<<"uki_kernel_image">>, pcr_role(<<"11">>)),
     ?assertEqual(<<"lapee_node_identity">>, pcr_role(<<"15">>)),
     ?assertEqual(<<"unassigned_or_application">>, pcr_role(<<"22">>)).
+
+%% Every PCR section includes a `derived' submap — named fields
+%% extracted from the events extended into that PCR. When events are
+%% present, the derived map pulls concrete values out of the events'
+%% `parsed' + `parsed.semantic' sub-maps. This is what makes the
+%% interpretation AO-Core navigable — every derivable property is
+%% path-addressable as `/interpret/pcrs/<N>/derived/<field>'.
+pcrs_derived_fields_populate_from_events_test() ->
+    %% Synthesize an envelope whose events include both a
+    %% EV_S_CRTM_VERSION (PCR 0) and an EV_EFI_VARIABLE_DRIVER_CONFIG
+    %% for SecureBoot (PCR 7). Run it through the top-level
+    %% interpreter.
+    Fixture = build_tcg_fixture(),
+    Q = #{<<"pcr_values">> => #{
+            <<"0">> => hb_util:encode(<<0:256>>),
+            <<"7">> => hb_util:encode(<<0:256>>)}},
+    Envelope = #{
+        <<"lapee_attestation_version">> => <<"0.3">>,
+        <<"tcg_event_log">>             => hb_util:encode(Fixture),
+        <<"tpm_quote">>                 => Q,
+        <<"runtime_event_log">>         => [],
+        <<"node_message">>              => #{},
+        <<"node_message_id">>           => <<>>
+    },
+    Interp = interpret_envelope(Envelope, #{}),
+    Pcrs = maps:get(<<"pcrs">>, Interp),
+    %% PCR 0 has the CRTM_VERSION event (seq 2 in the fixture).
+    Pcr0 = maps:get(<<"0">>, Pcrs),
+    Derived0 = maps:get(<<"derived">>, Pcr0),
+    ?assertEqual(<<"TEST FW v1">>,
+                 maps:get(<<"crtm_version">>, Derived0)),
+    ?assert(maps:get(<<"event_count">>, Pcr0) >= 1),
+    %% PCR 7 has the SecureBoot variable (seq 3) → enabled=true.
+    Pcr7 = maps:get(<<"7">>, Pcrs),
+    Derived7 = maps:get(<<"derived">>, Pcr7),
+    ?assertEqual(true,
+                 maps:get(<<"secure_boot_enabled">>, Derived7)),
+    %% Every PCR carries a reconstruction submessage when events are
+    %% present. We didn't quote the real values here, so it'll say
+    %% matches_quoted=false — but the SHAPE must be there.
+    Recon0 = maps:get(<<"reconstruction">>, Pcr0),
+    ?assert(maps:is_key(<<"replayed_digest">>, Recon0)),
+    ?assert(maps:is_key(<<"matches_quoted">>, Recon0)),
+    ok.
 
 %% Direct test that the manufacturer DB actually loads when the
 %% release ships it. If priv/tpm-interpret/manufacturers.json is

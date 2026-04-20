@@ -119,7 +119,7 @@ real-all: builders fetch-debian-kernel nif-linux initramfs boot-real verify
 #   - `on.start' hook extends PCR 15 with `hb_message:id(node_msg)'
 #   - HB HTTP server answers `/~tpm2@2.0a/attestation' with the full envelope
 
-.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test hb-interpret-demo hb-cross-node-verify
+.PHONY: hb-release hb-initramfs hb-boot hb-verify hb-all hb-acceptance hb-tamper-test hb-interpret-demo hb-cross-node-verify hb-dashboard hb-dashboard-open
 
 hb-release:
 	./scripts/build-hb-release.sh
@@ -160,20 +160,31 @@ hb-all:
 # ACCEPTED" verdicts plus a final summary showing that each run's
 # `node_message_id_hex' differs and that the hostile run did NOT
 # succeed in swapping the `on.start' hook device.
+# Each of hb-acceptance / hb-tamper-test / hb-interpret-demo rebuilds
+# the evidence dashboard at the end (even on failure) so the operator
+# always has a human-readable view of the latest run. The exit code
+# still reflects the underlying script's outcome.
 hb-acceptance:
-	./scripts/hb-acceptance.sh
+	./scripts/hb-acceptance.sh; rc=$$?; ./scripts/build-evidence-dashboard.py >/dev/null || true; exit $$rc
 
 # hb-tamper-test: starting from a valid envelope in out/evidence/,
 # produces seven targeted byte-flips and asserts the verifier rejects
 # each at the expected check. Completeness pair to hb-acceptance.
 hb-tamper-test:
-	./scripts/hb-tamper-test.sh
+	./scripts/hb-tamper-test.sh; rc=$$?; ./scripts/build-evidence-dashboard.py >/dev/null || true; exit $$rc
 
 # hb-interpret-demo: end-to-end demo of ~tpm-interpret@1.0, feeding
 # a saved envelope to /~tpm-interpret@1.0/verify over HTTP and
-# pretty-printing the rich per-section interpretation.
+# pretty-printing the rich per-section interpretation. Also exercises
+# /events + /claim via the new events+claim demo script.
 hb-interpret-demo:
-	./scripts/hb-interpret-demo.sh
+	./scripts/hb-interpret-demo.sh && ./scripts/hb-events-claim-demo.sh; rc=$$?; \
+	mkdir -p out/evidence; \
+	[ -f /tmp/hb-interpret-result.json ] && cp /tmp/hb-interpret-result.json out/evidence/interpret-verify-live.json || true; \
+	[ -f /tmp/hb-events-result.json ]    && cp /tmp/hb-events-result.json    out/evidence/events-live.json    || true; \
+	[ -f /tmp/hb-claim-result.json ]     && cp /tmp/hb-claim-result.json     out/evidence/claim-live.json     || true; \
+	./scripts/build-evidence-dashboard.py >/dev/null || true; \
+	exit $$rc
 
 # hb-cross-node-verify: the paper's real use-case. Starts a SEPARATE
 # HB node natively on macOS (outside QEMU) and has it verify the
@@ -186,6 +197,17 @@ hb-interpret-demo:
 # check cryptographic verification on the verifier side.
 hb-cross-node-verify:
 	./scripts/hb-cross-node-verify.sh
+
+# hb-dashboard: build a single-file HTML evidence dashboard from every
+# file in out/evidence/ + out/acceptance/. Use `hb-dashboard-open` to
+# auto-open it in Chrome on macOS. The dashboard is fully self-contained
+# (inline CSS, embedded JSON) so it works when emailed, stashed in
+# git, or served from a static file host.
+hb-dashboard:
+	./scripts/build-evidence-dashboard.py
+
+hb-dashboard-open:
+	./scripts/build-evidence-dashboard.py --open
 
 # ----- Buildroot path -----
 #
