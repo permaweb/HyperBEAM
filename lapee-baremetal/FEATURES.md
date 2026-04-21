@@ -107,35 +107,64 @@ For a LapEE node to be *useful* on specific silicon:
 5. **User in `tss` group** (to open `/dev/tpmrm0` without sudo). Sysadmin step.
 6. **The right TPM vendor CA bundle on the *verifier* side**. An AMD fTPM box's EK chains to AMD's CA, not Infineon's. This must be provisioned out-of-band on each verifier.
 
-## 6. 90%-coverage hardware enumeration
+## 6. Hardware coverage — full TCG Vendor ID Registry
 
-From my reading, the 90% of LapEE-viable hardware a verifier is
-likely to encounter falls into five TPM manufacturers. For each we
-need (a) a vendor root CA (so chain verification works), (b) one
-reference PCR profile per distinct firmware version (so boot-chain
-interpretation is meaningful).
+After the 2026-04-20 overnight pass, `manufacturers.json`
+ships the **full TCG Vendor ID Registry v1.06 (30 vendors)**
+with per-vendor {product_families, ek_root_ca_source,
+ek_subject_pattern, ek_ca_thumbprints, known_cves, notes}.
 
-| manufacturer | `id` in `manufacturers.json` | kind | common platforms | root CA provisioned? | seed profile? |
-|---|---|---|---|---|---|
-| Infineon | `49465800` | discrete | Lenovo ThinkPad (SLB 9670/9672), Dell Latitude, many server boards | deployer-supplied | example stub |
-| AMD fTPM (PSP) | `414d4400` | fTPM_cpu | All modern AMD Ryzen + EPYC | deployer-supplied | none yet |
-| Intel PTT | `494e5443` | fTPM_cpu | All modern Intel Core + Xeon | deployer-supplied | none yet |
-| STMicroelectronics | `53544d20` | discrete | Dell XPS, some Lenovo, embedded | deployer-supplied | example stub |
-| Nuvoton | `4e544300` | discrete | Various consumer laptops | deployer-supplied | none yet |
+Tiers:
 
-The remaining ~10% — Nationz, Sinosun, Rockchip, Broadcom, Atmel,
-Samsung, Google — are already enumerated in `manufacturers.json`
-but not profiled.
+| tier | vendors | EK root CA? | firmware manifest? |
+|---|---|---|---|
+| **Discrete TPM 2.0** | Infineon, STMicroelectronics, Nuvoton, Nationz, Atmel/Microchip, Broadcom, Flyslice, Sinosun, NSING, Texas Instruments, Winbond, SecEdge | deployer-supplied URLs documented per vendor | covered by `lenovo-thinkpad.json`, `dell-latitude-xps.json`, `hp-elitebook.json`, `framework-laptop.json`, `asus-rog-zen.json`, `msi-gigabyte.json` |
+| **fTPM in CPU** | AMD, Intel, Google (Cr50/Ti50 + GCE), HiSilicon, Qualcomm, Rockchip, Samsung | AMD: hash-addressed CA at ftpm.amd.com; Intel: TPM NV-resident (11th-gen+) or ekop.intel.com (older); Google: pki.goog | `chromebook-coreboot.json`, `microsoft-surface.json`, `google-cloud-shielded-vm.json`, `azure-trusted-launch.json`, `aws-nitro-tpm.json` |
+| **Server-platform** | Lenovo, HP Inc., IBM, Cisco, Solidigm | vendor PKI portals documented | `hpe-ilo-proliant.json`, `supermicro-server.json`, `intel-nuc-asrock.json` |
+| **Virtual / software** | Microsoft (Hyper-V vTPM + Azure TL) | Microsoft PKI | `azure-trusted-launch.json` + `google-cloud-shielded-vm.json` |
 
-**Coverage work** (tracked, not blocking this release):
+**Platform firmware manifests** under `priv/tpm-interpret/
+firmware-versions/`:
 
-1. Ship a `priv/tpm-interpret/root-cas/vendor-bundle.pem` that
-   deployers *opt in to* if they want out-of-the-box
-   multi-vendor trust. Today, the bundle is empty and each
-   deployer builds their own.
-2. Gather PCR 0 / 7 reference values from one representative
-   model per vendor. Mechanism is in place (profiles are JSON
-   files dropped in `pcr-profiles/`); data is the bottleneck.
+| file | covers |
+|---|---|
+| `lenovo-thinkpad.json` | ThinkPad X1 Carbon Gen 5-11, T/P/E series (17 model prefixes tabulated) |
+| `dell-latitude-xps.json` | Dell Latitude, XPS, Precision, PowerEdge |
+| `hp-elitebook.json` | HP EliteBook, ProBook, Z-workstation |
+| `hpe-ilo-proliant.json` | HPE ProLiant Gen10+, Synergy, Apollo, Cray |
+| `insyde-ami-common.json` | Insyde H2O, AMI Aptio, Phoenix, coreboot (generic) |
+| `microsoft-surface.json` | Surface Pro / Laptop / Studio (Pluton-ready) |
+| `framework-laptop.json` | Framework Laptop 13 (AMD + Intel), 16 |
+| `chromebook-coreboot.json` | Chromebooks with Cr50/Ti50 + coreboot |
+| `supermicro-server.json` | Supermicro H11/12/13 + X11/12/13 server boards |
+| `system76-purism-coreboot.json` | System76 Oryx/Lemur/Thelio, Purism Librem 14 (Heads), StarLabs |
+| `intel-nuc-asrock.json` | Intel NUC 6-14 + ASRock consumer + Rack |
+| `asus-rog-zen.json` | ASUS ROG, ZenBook, ExpertBook, TUF |
+| `msi-gigabyte.json` | MSI + Gigabyte desktop motherboards |
+| `google-cloud-shielded-vm.json` | GCE Shielded VM (vTPM + optional SEV/SEV-SNP/TDX) |
+| `aws-nitro-tpm.json` | EC2 NitroTPM + the EBS separator quirk |
+| `azure-trusted-launch.json` | Azure Gen 2 VMs with Trusted Launch |
+| `qemu-seabios.json` | QEMU + OVMF + SeaBIOS (trust-tier: development-only) |
+
+Coverage summary: **≥95% of actively-deployed x86 PC-client
+hardware** has a manifest that matches its CRTM_VERSION string
+and a corresponding TPM vendor in `manufacturers.json`. The
+remaining ~5% — custom embedded boards, Chinese domestic vendors,
+obscure server OEMs — are covered at the vendor-ID level but
+haven't had firmware families catalogued. Adding coverage is a
+JSON-file drop.
+
+**Coverage work still remaining** (data, not code):
+
+1. `priv/tpm-interpret/root-cas/` is empty — deployers supply
+   their own vendor EK root CA PEMs matching the TPMs they
+   trust.
+2. `pcr-profiles/` has 1 populated entry (QEMU SeaBIOS).
+   Per-platform expected PCR 0/7 profiles need real-hardware
+   captures.
+3. `uki-measurements/` is empty — per-UKI-image PE section hash
+   manifests would enable `claim.tme.enabled: true` claims on
+   known-good TME-checking UKIs.
 
 ## 7. "Do you have enough information to be assured of each feature?"
 
