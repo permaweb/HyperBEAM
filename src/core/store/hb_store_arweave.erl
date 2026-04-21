@@ -177,22 +177,36 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
         fun() ->
             case read_chunks(StartOffset, Length, Opts) of
                 {ok, SerializedItem} ->
-                    Item =
-                        ar_bundles:deserialize(SerializedItem),
-                    case hb_util:encode(Item#tx.id) of
-                        ExpectedID ->
-                            {ok, hb_message:convert(
-                                Item,
-                                <<"structured@1.0">>,
-                                <<"ans104@1.0">>,
-                                Opts
-                            )};
-                        ActualID ->
-                            {error,
-                                {id_mismatch,
-                                    ExpectedID, ActualID}}
+                    try
+                        Item =
+                            ar_bundles:deserialize(SerializedItem),
+                        case hb_util:encode(Item#tx.id) of
+                            ExpectedID ->
+                                {ok, hb_message:convert(
+                                    Item,
+                                    <<"structured@1.0">>,
+                                    <<"ans104@1.0">>,
+                                    Opts
+                                )};
+                            ActualID ->
+                                ?event(error, {load_item, {id_mismatch}}),
+                                {error,
+                                    {id_mismatch,
+                                        ExpectedID, ActualID}}
+                        end
+                    catch _:Reason:Stacktrace ->
+                        %% Due to malformed encoding, attempt to deserialize
+                        %% can throw.
+                        ?event(error, 
+                            {load_item, 
+                                {expected_id, ExpectedID}, 
+                                {reason, Reason},
+                                {stacktrace, Stacktrace}
+                            }),
+                        {error, Reason}
                     end;
                 {error, Reason} ->
+                    ?event(error, {load_item, Reason}),
                     {error, Reason}
             end
         end,
@@ -402,3 +416,17 @@ write_read_fake_bundle_tx_test() ->
     {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
+
+%% @doc Interior Arweave offset returns bytes that are not a valid ANS-104 item,
+%% so ar_bundles:deserialize/1 throws. The catch in load_item/4 must convert
+%% that throw into {error, _} rather than crashing.
+load_item_deserialize_throws_test() ->
+    Store = [hb_test_utils:test_store()],
+    Opts = #{<<"index-store">> => Store},
+    FakeID = <<"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB">>,
+    %% Same interior offset used in dev_arweave bundle_header_garbage_guard test:
+    %% the bytes at ProbeOffset are mid-TX application data, not an ANS-104 header.
+    ProbeOffset = 376836336327208,
+    Size = 4096,
+    ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size),
+    ?assertMatch({error, _}, read(Opts, FakeID)).
