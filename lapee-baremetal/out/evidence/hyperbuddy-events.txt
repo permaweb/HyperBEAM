@@ -190,9 +190,10 @@ Message [ undefined ] {
           event-type-code => 6
           parsed => 
             Message [ undefined ] {
-              tag-category => unknown
-              tag-data-length => 12
-              tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+              tag-data-length => 20
+              tag-id => 1
+              tag-id-hex => 0x00000001
+              tag-id-name => unknown-tag-id
             }
           pcr => 1
           seq => 2
@@ -230,9 +231,10 @@ Message [ undefined ] {
           event-type-code => 6
           parsed => 
             Message [ undefined ] {
-              tag-category => unknown
-              tag-data-length => 16
-              tag-guid => 00000007-0018-0000-0000-000087fbc0ec
+              tag-data-length => 24
+              tag-id => 7
+              tag-id-hex => 0x00000007
+              tag-id-name => unknown-tag-id
             }
           pcr => 2
           seq => 4
@@ -251,9 +253,10 @@ Message [ undefined ] {
           event-type-code => 6
           parsed => 
             Message [ undefined ] {
-              tag-category => unknown
-              tag-data-length => 16
-              tag-guid => 00000007-0018-0000-0000-0000a177fe95
+              tag-data-length => 24
+              tag-id => 7
+              tag-id-hex => 0x00000007
+              tag-id-name => unknown-tag-id
             }
           pcr => 2
           seq => 5
@@ -272,9 +275,10 @@ Message [ undefined ] {
           event-type-code => 6
           parsed => 
             Message [ undefined ] {
-              tag-category => unknown
-              tag-data-length => 16
-              tag-guid => 00000007-0018-0000-0000-00000bff50c1
+              tag-data-length => 24
+              tag-id => 7
+              tag-id-hex => 0x00000007
+              tag-id-name => unknown-tag-id
             }
           pcr => 2
           seq => 6
@@ -293,9 +297,10 @@ Message [ undefined ] {
           event-type-code => 6
           parsed => 
             Message [ undefined ] {
-              tag-category => unknown
-              tag-data-length => 16
-              tag-guid => 00000007-0018-0000-0000-0000670c9cc7
+              tag-data-length => 24
+              tag-id => 7
+              tag-id-hex => 0x00000007
+              tag-id-name => unknown-tag-id
             }
           pcr => 2
           seq => 7

@@ -5,13 +5,29 @@ Message [ undefined ] {
         Message [ undefined ] {
           algorithm => RSA
           key-size-bits => 2048
-          pub-der-sha256-b64url => OFEA2..bhnQg
+          pub-der-sha256-b64url => pMwuH..GseRM
           public-exponent => 65537
         }
       boot => 
         Message [ undefined ] {
           firmware-srtm => 4htwP..qP6pM
-          match => null
+          match => 
+            Message [ undefined ] {
+              attributes => 
+                Message [ undefined ] {
+                  captured-from => lapee-baremetal/out/attestation.json (baseline boot 2026-04-20)
+                  firmware-vendor => SeaBIOS
+                  firmware-version => rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org
+                  measurement-root => U1JUT..FibGU [*]
+                  platform-model => pc-q35
+                  platform-vendor => QEMU
+                  secure-boot-authorities => []
+                  secure-boot-enabled => false
+                  tpm-vendor => QEMU TCG (swtpm)
+                  trust-tier => development_only
+                }
+              name => QEMU SeaBIOS + TCG emulated TPM (LapEE test guest)
+            }
           platform-firmware-config => StAAW..t9SF8
           secure-boot-measured => true
           secure-boot-policy => 4htwP..qP6pM
@@ -22,6 +38,13 @@ Message [ undefined ] {
             Message [ undefined ] {
               image-hash => unknown
               image-hash-provenance => []
+            }
+          cpu => 
+            Message [ undefined ] {
+              microcode-description => unknown
+              microcode-description-provenance => []
+              vendor => unknown
+              vendor-provenance => []
             }
           firmware => 
             Message [ undefined ] {
@@ -51,6 +74,13 @@ Message [ undefined ] {
               enabled-provenance => []
               setup-mode => unknown
             }
+          shim => 
+            Message [ undefined ] {
+              moklist-trusted => unknown
+              moklist-trusted-provenance => []
+              sbat-revision => unknown
+              sbat-revision-provenance => []
+            }
           tme => 
             Message [ undefined ] {
               enabled => unknown
@@ -61,10 +91,10 @@ Message [ undefined ] {
         }
       envelope => 
         Message [ undefined ] {
-          issued-at-unix => 1776721571
-          node-message-id => PPRB6..ZdEXI
+          issued-at-unix => 1776811812
+          node-message-id => QxRVk..GcW6M
           version => 0.3
-          wallet-address => 6uGxU..tx4JY
+          wallet-address => dxFhv..5Qmeg
         }
       events => 
         Message [ undefined ] {
@@ -257,9 +287,10 @@ Message [ undefined ] {
               event-type-code => 6
               parsed => 
                 Message [ undefined ] {
-                  tag-category => unknown
-                  tag-data-length => 12
-                  tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+                  tag-data-length => 20
+                  tag-id => 1
+                  tag-id-hex => 0x00000001
+                  tag-id-name => unknown-tag-id
                 }
               pcr => 1
               seq => 2
@@ -297,9 +328,10 @@ Message [ undefined ] {
               event-type-code => 6
               parsed => 
                 Message [ undefined ] {
-                  tag-category => unknown
-                  tag-data-length => 16
-                  tag-guid => 00000007-0018-0000-0000-000087fbc0ec
+                  tag-data-length => 24
+                  tag-id => 7
+                  tag-id-hex => 0x00000007
+                  tag-id-name => unknown-tag-id
                 }
               pcr => 2
               seq => 4
@@ -318,9 +350,10 @@ Message [ undefined ] {
               event-type-code => 6
               parsed => 
                 Message [ undefined ] {
-                  tag-category => unknown
-                  tag-data-length => 16
-                  tag-guid => 00000007-0018-0000-0000-0000a177fe95
+                  tag-data-length => 24
+                  tag-id => 7
+                  tag-id-hex => 0x00000007
+                  tag-id-name => unknown-tag-id
                 }
               pcr => 2
               seq => 5
@@ -339,9 +372,10 @@ Message [ undefined ] {
               event-type-code => 6
               parsed => 
                 Message [ undefined ] {
-                  tag-category => unknown
-                  tag-data-length => 16
-                  tag-guid => 00000007-0018-0000-0000-00000bff50c1
+                  tag-data-length => 24
+                  tag-id => 7
+                  tag-id-hex => 0x00000007
+                  tag-id-name => unknown-tag-id
                 }
               pcr => 2
               seq => 6
@@ -360,9 +394,10 @@ Message [ undefined ] {
               event-type-code => 6
               parsed => 
                 Message [ undefined ] {
-                  tag-category => unknown
-                  tag-data-length => 16
-                  tag-guid => 00000007-0018-0000-0000-0000670c9cc7
+                  tag-data-length => 24
+                  tag-id => 7
+                  tag-id-hex => 0x00000007
+                  tag-id-name => unknown-tag-id
                 }
               pcr => 2
               seq => 7
@@ -422,7 +457,7 @@ Message [ undefined ] {
         }
       node => 
         Message [ undefined ] {
-          node-message-id => PPRB6..ZdEXI
+          node-message-id => QxRVk..GcW6M
           node-message-key-count => 79
           on-start-hook-device => tpm2@2.0a
           on-start-hook-path => extend
@@ -430,7 +465,7 @@ Message [ undefined ] {
           pcr15-event-types => List [1] {
               1 => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
             }
-          wallet-address => 6uGxU..tx4JY
+          wallet-address => dxFhv..5Qmeg
         }
       pcrs => 
         Message [ undefined ] {
@@ -526,7 +561,10 @@ Message [ undefined ] {
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
+                  boot-current => unknown
+                  boot-entries => []
                   cpu-microcode => unknown
+                  handoff-tables => []
                   separator-kind => firmware_error
                   separator-seen => true
                   uefi-boot-order => []
@@ -568,9 +606,10 @@ Message [ undefined ] {
                       event-type-code => 6
                       parsed => 
                         Message [ undefined ] {
-                          tag-category => unknown
-                          tag-data-length => 12
-                          tag-guid => 00000001-0014-0000-0e2b-a0c01e14de77
+                          tag-data-length => 20
+                          tag-id => 1
+                          tag-id-hex => 0x00000001
+                          tag-id-name => unknown-tag-id
                         }
                       pcr => 1
                       seq => 2
@@ -636,7 +675,7 @@ Message [ undefined ] {
                 Message [ undefined ] {
                   lapee-node-identity-committed => true
                 }
-              digest => L6DV8..dyPck
+              digest => Sxy80..mn63w
               event-count => 0
               events => #{}
               is-zero => false
@@ -647,14 +686,25 @@ Message [ undefined ] {
             Message [ undefined ] {
               derived => 
                 Message [ undefined ] {
+                  audit-mode => unknown
                   authorities => []
                   db-entry-count => unknown
+                  db-issuers => []
+                  db-x509-fingerprints => []
                   dbx-entry-count => unknown
+                  deployed-mode => unknown
                   kek-entry-count => unknown
+                  kek-issuers => []
+                  kek-x509-fingerprints => []
+                  moklist-trusted => unknown
                   pk-entry-count => unknown
+                  pk-x509-fingerprints => []
+                  sbat-entry-count => unknown
+                  sbat-self-revision => unknown
                   secure-boot-enabled => unknown
                   separator-kind => firmware_error
                   separator-seen => true
+                  setup-mode => unknown
                 }
               digest => 4htwP..qP6pM
               event-count => 1
@@ -694,20 +744,20 @@ Message [ undefined ] {
       quote => 
         Message [ undefined ] {
           attest-type => TPM_ST_ATTEST_QUOTE
-          clock-ms => 64320
+          clock-ms => 90579
           magic-ok => true
-          nonce => 03Qc_..9cR1A
-          reset-count => 1156923087
-          restart-count => 1939500709
+          nonce => 2n8gQ..soBKQ
+          reset-count => 269626218
+          restart-count => 2717511280
           safe => true
         }
       tpm => 
         Message [ undefined ] {
           ek-cert-issuer => Q049T..QgQ0E [*]
-          ek-cert-serial => ePbMQYL0w62QPZ7DwbM892to_fk
+          ek-cert-serial => FUYlEROwL1w7OANXyTQd7H-2cos
           ek-cert-subject => CN=LapEE Test EK
-          ek-cert-valid-from => 260420214551Z
-          ek-cert-valid-to => 360417214551Z
+          ek-cert-valid-from => 260421224926Z
+          ek-cert-valid-to => 360418224926Z
           firmware-version => null
           manufacturer-id => null
           manufacturer-kind => null

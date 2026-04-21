@@ -3,12 +3,12 @@ Message [ undefined ] {
     Message [ undefined ] {
       ak-pub-pem => "-----BEGIN PUBLIC KEY-----..." <451 bytes>
       ek-cert-pem => "-----BEGIN CERTIFICATE-----..." <1,025 bytes>
-      issued-at-unix => 1776721568
+      issued-at-unix => 1776811808
       lapee-attestation-version => 0.3
       node-message => 
         Message [ undefined ] {
           access_remote_cache_for_client => false
-          address => 6uGxU..tx4JY
+          address => dxFhv..5Qmeg
           ans104_trust_gql => true
           arweave_chunk_fetch_concurrency => 5
           await_inprogress => named
@@ -19,7 +19,7 @@ Message [ undefined ] {
             }
           cache_lookup_hueristics => false
           cache_writers => List [1] {
-              1 => 6uGxU..tx4JY
+              1 => dxFhv..5Qmeg
             }
           client_error_strategy => throw
           commitment_device => httpsig@1.0
@@ -1336,13 +1336,13 @@ Message [ undefined ] {
           trusted_device_signers => []
           wasm_allow_aot => false
         }
-      node-message-id => PPRB6..ZdEXI
+      node-message-id => QxRVk..GcW6M
       runtime-event-log => List [1] {
           1 => 
             Message [ undefined ] {
               description => hb_message:id(Subject, all) over 79-key message
-              digest => PPRB6..ZdEXI
-              emitted-at-unix => 1776721535
+              digest => QxRVk..GcW6M
+              emitted-at-unix => 1776811748
               event-type => EV_HYPERBEAM_NODE_IDENTITY_EXTEND
               pcr => 15
               seq => 0
@@ -1352,7 +1352,7 @@ Message [ undefined ] {
       tcg-event-log => "AAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC0AAABTcGVjIElEIEV2ZW50..." <4,162 bytes>
       tpm-quote => 
         Message [ undefined ] {
-          nonce => ymVID..OwJLM
+          nonce => zkPZn..b4PcU
           pcr-selection => [0,1,7,10,11,14,15]
           pcr-values => 
             Message [ undefined ] {
@@ -1361,13 +1361,13 @@ Message [ undefined ] {
               10 => n_Xbz..U0pro
               11 => AAAAA..AAAAA
               14 => AAAAA..AAAAA
-              15 => L6DV8..dyPck
+              15 => Sxy80..mn63w
               7 => 4htwP..qP6pM
             }
-          quoted => "_1RDR4AYACIAC6xAcOYw2H-pHFAvvadourMX_C_910JRiltWlMxQoYuAACDK..." <194 bytes>
-          signature => "tdgwn3jHchbMkyG2TNwGCmIwC2zpaL0NBSEC3COhxCvDStzrTgY5Itmm_F6l..." <342 bytes>
+          quoted => "_1RDR4AYACIACwC62DtW0fwZcw-vfOIbdJtSzlig9GUdsY7-wxqMwxjFACDO..." <194 bytes>
+          signature => "aZytr7QqwUJoUZAexkHUr_uEsKfGKp_j_Rwg6PbuVSJU13_s_MpzGhlVPxUj..." <342 bytes>
         }
-      wallet-address => 6uGxU..tx4JY
+      wallet-address => dxFhv..5Qmeg
     }
   status => 200
 }

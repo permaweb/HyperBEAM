@@ -6,6 +6,13 @@ Message [ undefined ] {
           image-hash => unknown
           image-hash-provenance => []
         }
+      cpu => 
+        Message [ undefined ] {
+          microcode-description => unknown
+          microcode-description-provenance => []
+          vendor => unknown
+          vendor-provenance => []
+        }
       firmware => 
         Message [ undefined ] {
           crtm-version => unknown
@@ -33,6 +40,13 @@ Message [ undefined ] {
           enabled => unknown
           enabled-provenance => []
           setup-mode => unknown
+        }
+      shim => 
+        Message [ undefined ] {
+          moklist-trusted => unknown
+          moklist-trusted-provenance => []
+          sbat-revision => unknown
+          sbat-revision-provenance => []
         }
       tme => 
         Message [ undefined ] {
