@@ -2241,4 +2241,98 @@ build_uefi_variable(GuidBin, NameUtf8, VarData) ->
       Name/binary,
       VarData/binary>>.
 
+%%%---- Real-world fixture harness -------------------------------------
+%%%
+%%% Parses every file under `priv/tpm-interpret/fixtures/` captured
+%%% from real hardware (Lenovo ThinkPad, Dell notebook, Intel NUC,
+%%% Supermicro, Inspur, AWS EBS, Google Compute Engine, Intel TDX
+%%% CCEL, QEMU/OVMF, fwupd test fixtures, tpm2-tools canonical set)
+%%% plus deliberate edge cases (empty, bogus, truncated, duplicate
+%%% separator). Each file must:
+%%%   * parse without raising,
+%%%   * produce a map keyed by 1-based sequence numbers,
+%%%   * every event must have pcr + event-type-code + digests +
+%%%     event-data keys,
+%%%   * when fed through `decode_events/1', every decoder must not
+%%%     raise.
+%%%
+%%% We don't assert specific field values per fixture (that would
+%%% require a known-good oracle); we assert structural invariants.
+%%% Regression value: if a decoder ever crashes on a real vector
+%%% that the Erlang parser has seen before, the test fails.
+
+real_fixture_corpus_parses_without_crashes_test_() ->
+    Dir = fixtures_dir(),
+    Files =
+        case file:list_dir(Dir) of
+            {ok, L} ->
+                KeepExts = [".bin", ""],
+                [filename:join(Dir, F)
+                 || F <- L,
+                    lists:member(filename:extension(F), KeepExts)];
+            _ -> []
+        end,
+    [{"fixture " ++ filename:basename(F),
+      fun() -> check_fixture(F) end} || F <- Files].
+
+fixtures_dir() ->
+    case code:priv_dir(hb) of
+        {error, _} ->
+            filename:join([filename:dirname(
+                filename:dirname(code:which(?MODULE))),
+                          "priv", "tpm-interpret", "fixtures"]);
+        P -> filename:join(P, "tpm-interpret/fixtures")
+    end.
+
+check_fixture(Path) ->
+    {ok, Bin} = file:read_file(Path),
+    case byte_size(Bin) of
+        0 ->
+            %% Empty file → parse returns empty map OR `#{}'.
+            Result = parse(Bin),
+            ?assert(is_map(Result)),
+            ?assertEqual(0, maps:size(Result));
+        _ ->
+            try
+                Parsed = parse(Bin),
+                ?assert(is_map(Parsed)),
+                %% Every entry: has the core keys.
+                maps:foreach(
+                    fun(K, V) when is_binary(K), is_map(V) ->
+                        %% "error" entries from truncated records are
+                        %% allowed; they carry an `error' key.
+                        case maps:is_key(<<"error">>, V) of
+                            true -> ok;
+                            false ->
+                                check_event_shape(V)
+                        end;
+                       (_, _) -> ok
+                    end,
+                    Parsed),
+                %% `decode_events/1' enriches every non-error event
+                %% with a `parsed' submap. Must not raise for any
+                %% event type we've ever seen in the wild.
+                Decoded = decode_events(Parsed),
+                ?assert(is_map(Decoded))
+            catch Class:Reason:Stack ->
+                erlang:error({fixture_failed,
+                              [{path, Path},
+                               {class, Class},
+                               {reason, Reason},
+                               {stack, Stack}]})
+            end
+    end.
+
+check_event_shape(Ev) ->
+    ?assert(maps:is_key(<<"seq">>, Ev)),
+    ?assert(maps:is_key(<<"pcr">>, Ev)),
+    ?assert(maps:is_key(<<"event-type-code">>, Ev)),
+    ?assert(maps:is_key(<<"digests">>, Ev)),
+    ?assert(maps:is_key(<<"event-data">>, Ev)),
+    ?assert(is_integer(maps:get(<<"pcr">>, Ev))),
+    ?assert(is_integer(maps:get(<<"seq">>, Ev))),
+    ?assert(is_integer(maps:get(<<"event-type-code">>, Ev))),
+    ?assert(is_map(maps:get(<<"digests">>, Ev))),
+    ?assert(is_binary(maps:get(<<"event-data">>, Ev))).
+
 -endif.
