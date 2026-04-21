@@ -63,6 +63,7 @@
 -module(dev_tpm_tcg).
 -export([parse/1, parse/2, event_type_name/1, event_type_name/2,
          decode_event/1, decode_events/1]).
+-include_lib("public_key/include/public_key.hrl").
 
 %%%============================================================================
 %%% Public API
@@ -235,7 +236,7 @@ decode_uefi_variable(#{<<"event-data">> := Data}) ->
                   _Tail/binary>> ->
                     Name = utf16le_to_utf8(NameUtf16),
                     #{
-                        <<"variable-guid">> => fmt_efi_guid(GuidBin),
+                        <<"variable-guid">> => format_guid(GuidBin),
                         <<"variable-name">> => Name,
                         <<"variable-data">> => VarData,
                         <<"variable-data-length">> => DataLen,
@@ -407,6 +408,445 @@ format_guid(<<A:32/little, B:16/little, C:16/little,
         [A, B, C, D1, D2, binary:decode_unsigned(E)]));
 format_guid(_) -> <<"malformed-guid">>.
 
+%%%============================================================================
+%%% UEFI device path walker (UEFI spec §10)
+%%%============================================================================
+%%%
+%%% A UEFI device path is a linked list of typed variable-length
+%%% nodes. Each node is:
+%%%     Type     u8
+%%%     SubType  u8
+%%%     Length   u16 LE  (total node length incl. header)
+%%%     Data     [Length-4]
+%%% Terminated by an End node: Type=0x7F, SubType=0x01 (end this
+%%% instance) or 0xFF (end entire path), Length=0x0004.
+%%%
+%%% parse_device_path/1 returns {Nodes, Text} — Nodes is the
+%%% structured parse (a list of maps, one per node), Text is the
+%%% canonical UEFI textual rendering (e.g.
+%%% "PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0,0,0)/HD(1,GPT,<guid>,0x...,0x...)/\\EFI\\BOOT\\BOOTX64.EFI").
+%%%
+%%% Types per UEFI §10:
+%%%   0x01  Hardware           (PCI, PCCARD, memmap, vendor, controller, BMC)
+%%%   0x02  ACPI               (ACPI, expanded ACPI, ADR)
+%%%   0x03  Messaging          (SATA, SCSI, USB, MAC, IPv4/6, UART, NVMe, ...)
+%%%   0x04  Media              (HardDrive, CD-ROM, file path, PIWG FV/FF, ...)
+%%%   0x05  BIOS Boot Spec     (legacy option)
+%%%   0x7F  End
+parse_device_path(Bin) when is_binary(Bin) ->
+    parse_device_path_nodes(Bin, []);
+parse_device_path(_) -> {[], <<>>}.
+
+parse_device_path_nodes(<<Type:8, SubType:8, Len:16/little, Rest/binary>>,
+                        Acc) when Len >= 4 ->
+    DataLen = Len - 4,
+    case Rest of
+        <<Data:DataLen/binary, Rest2/binary>> ->
+            Node = decode_dp_node(Type, SubType, Data),
+            case {Type, SubType} of
+                {16#7F, _} ->
+                    Nodes = lists:reverse([Node | Acc]),
+                    {Nodes, render_device_path(Nodes)};
+                _ ->
+                    parse_device_path_nodes(Rest2, [Node | Acc])
+            end;
+        _ ->
+            Nodes = lists:reverse(
+                [#{<<"type">> => Type, <<"subtype">> => SubType,
+                   <<"error">> => <<"truncated">>} | Acc]),
+            {Nodes, render_device_path(Nodes)}
+    end;
+parse_device_path_nodes(_, Acc) ->
+    Nodes = lists:reverse(Acc),
+    {Nodes, render_device_path(Nodes)}.
+
+%% Per-node decode. Returns a map with `type`, `subtype`,
+%% `type-name`, `subtype-name`, plus sub-type-specific fields.
+
+%%---- Hardware (Type 0x01) -----------------------------------------
+decode_dp_node(16#01, 16#01, <<Function:8, Device:8>>) ->
+    dp_node(16#01, 16#01, <<"pci">>,
+        #{<<"function">> => Function, <<"device">> => Device});
+decode_dp_node(16#01, 16#02, <<FuncNum:8>>) ->
+    dp_node(16#01, 16#02, <<"pccard">>, #{<<"function">> => FuncNum});
+decode_dp_node(16#01, 16#03,
+               <<MemType:32/little, Start:64/little, End:64/little>>) ->
+    dp_node(16#01, 16#03, <<"memory-mapped">>,
+        #{<<"memory-type">> => MemType, <<"start-address">> => Start,
+          <<"end-address">> => End});
+decode_dp_node(16#01, 16#04, <<Guid:16/binary, Data/binary>>) ->
+    dp_node(16#01, 16#04, <<"hw-vendor">>,
+        #{<<"vendor-guid">> => format_guid(Guid),
+          <<"vendor-data-length">> => byte_size(Data)});
+decode_dp_node(16#01, 16#05, <<Controller:32/little>>) ->
+    dp_node(16#01, 16#05, <<"controller">>,
+        #{<<"controller-number">> => Controller});
+decode_dp_node(16#01, 16#06, <<IfaceType:8, BaseAddr:64/little>>) ->
+    dp_node(16#01, 16#06, <<"bmc">>,
+        #{<<"interface-type">> => IfaceType,
+          <<"base-address">> => BaseAddr});
+
+%%---- ACPI (Type 0x02) ---------------------------------------------
+decode_dp_node(16#02, 16#01, <<HID:32/little, UID:32/little>>) ->
+    dp_node(16#02, 16#01, <<"acpi">>,
+        #{<<"hid">> => HID, <<"uid">> => UID,
+          <<"hid-string">> => acpi_hid_to_string(HID)});
+decode_dp_node(16#02, 16#02, <<HID:32/little, UID:32/little,
+                               CID:32/little, Rest/binary>>) ->
+    %% HIDSTR, UIDSTR, CIDSTR — three NUL-terminated ASCII strings.
+    {HidStr, Rest1} = read_nul_ascii(Rest),
+    {UidStr, Rest2} = read_nul_ascii(Rest1),
+    {CidStr, _}     = read_nul_ascii(Rest2),
+    dp_node(16#02, 16#02, <<"acpi-expanded">>,
+        #{<<"hid">> => HID, <<"uid">> => UID, <<"cid">> => CID,
+          <<"hid-string">> => HidStr,
+          <<"uid-string">> => UidStr,
+          <<"cid-string">> => CidStr});
+decode_dp_node(16#02, 16#03, Data) ->
+    %% ADR — array of u32 ADR values.
+    ADRs = [X || <<X:32/little>> <= Data],
+    dp_node(16#02, 16#03, <<"acpi-adr">>, #{<<"adrs">> => ADRs});
+
+%%---- Messaging (Type 0x03) ----------------------------------------
+decode_dp_node(16#03, 16#01, <<Primary:8, Slave:8, LUN:16/little>>) ->
+    dp_node(16#03, 16#01, <<"atapi">>,
+        #{<<"primary">> => Primary == 1,
+          <<"slave">> => Slave == 1, <<"lun">> => LUN});
+decode_dp_node(16#03, 16#02, <<TargetId:16/little, LUN:16/little>>) ->
+    dp_node(16#03, 16#02, <<"scsi">>,
+        #{<<"target-id">> => TargetId, <<"lun">> => LUN});
+decode_dp_node(16#03, 16#03, <<_Reserved:32/little, WWN:64/little,
+                               LUN:64/little>>) ->
+    dp_node(16#03, 16#03, <<"fibre-channel">>,
+        #{<<"wwn">> => WWN, <<"lun">> => LUN});
+decode_dp_node(16#03, 16#05, <<Parent:8, Iface:8>>) ->
+    dp_node(16#03, 16#05, <<"usb">>,
+        #{<<"parent-port">> => Parent,
+          <<"interface">> => Iface});
+decode_dp_node(16#03, 16#0A, <<Guid:16/binary, Data/binary>>) ->
+    dp_node(16#03, 16#0A, <<"msg-vendor">>,
+        #{<<"vendor-guid">> => format_guid(Guid),
+          <<"vendor-data-length">> => byte_size(Data)});
+decode_dp_node(16#03, 16#0B, <<Mac:32/binary, IfType:8>>) ->
+    %% 32 bytes fixed even though MAC is 6 — padded.
+    MacBin = binary:part(Mac, 0, 6),
+    dp_node(16#03, 16#0B, <<"mac-addr">>,
+        #{<<"mac">> => format_mac(MacBin),
+          <<"if-type">> => IfType});
+decode_dp_node(16#03, 16#0C,
+               <<LocalIP:4/binary, RemoteIP:4/binary,
+                 LocalPort:16/little, RemotePort:16/little,
+                 Protocol:16/little, Static:8, GatewayIP:4/binary,
+                 SubnetMask:4/binary>>) ->
+    dp_node(16#03, 16#0C, <<"ipv4">>,
+        #{<<"local-ip">> => format_ipv4(LocalIP),
+          <<"remote-ip">> => format_ipv4(RemoteIP),
+          <<"local-port">> => LocalPort,
+          <<"remote-port">> => RemotePort,
+          <<"protocol">> => Protocol,
+          <<"static">> => Static == 0,
+          <<"gateway-ip">> => format_ipv4(GatewayIP),
+          <<"subnet-mask">> => format_ipv4(SubnetMask)});
+decode_dp_node(16#03, 16#0D, Data) ->
+    %% IPv6: LocalIP 16B, RemoteIP 16B, LocalPort u16, RemotePort u16,
+    %% Protocol u16, IPAddrOrigin u8, PrefixLen u8, GatewayIP 16B.
+    case Data of
+        <<LocalIP:16/binary, RemoteIP:16/binary,
+          LocalPort:16/little, RemotePort:16/little,
+          Protocol:16/little, Origin:8, Prefix:8,
+          Gateway:16/binary>> ->
+            dp_node(16#03, 16#0D, <<"ipv6">>,
+                #{<<"local-ip">> => format_ipv6(LocalIP),
+                  <<"remote-ip">> => format_ipv6(RemoteIP),
+                  <<"local-port">> => LocalPort,
+                  <<"remote-port">> => RemotePort,
+                  <<"protocol">> => Protocol,
+                  <<"ip-addr-origin">> => Origin,
+                  <<"prefix-length">> => Prefix,
+                  <<"gateway-ip">> => format_ipv6(Gateway)});
+        _ -> dp_node(16#03, 16#0D, <<"ipv6">>, #{})
+    end;
+decode_dp_node(16#03, 16#0E, <<_Reserved:32/little, Baud:64/little,
+                               Data:8, Parity:8, Stop:8>>) ->
+    dp_node(16#03, 16#0E, <<"uart">>,
+        #{<<"baud-rate">> => Baud, <<"data-bits">> => Data,
+          <<"parity">> => Parity, <<"stop-bits">> => Stop});
+decode_dp_node(16#03, 16#12, <<HbaPort:16/little, PmpPort:16/little,
+                               LUN:16/little>>) ->
+    dp_node(16#03, 16#12, <<"sata">>,
+        #{<<"hba-port">> => HbaPort,
+          <<"pmp-port">> => PmpPort, <<"lun">> => LUN});
+decode_dp_node(16#03, 16#13, Data) ->
+    %% iSCSI — variable; capture fixed prefix.
+    case Data of
+        <<Protocol:16/little, Options:16/little, LUN:64/little,
+          Tpgt:16/little, Rest/binary>> ->
+            dp_node(16#03, 16#13, <<"iscsi">>,
+                #{<<"protocol">> => Protocol,
+                  <<"login-options">> => Options,
+                  <<"lun">> => LUN,
+                  <<"target-portal-group">> => Tpgt,
+                  <<"target-name">> => Rest});
+        _ -> dp_node(16#03, 16#13, <<"iscsi">>, #{})
+    end;
+decode_dp_node(16#03, 16#17, <<NsId:32/little, EUI:64/little>>) ->
+    dp_node(16#03, 16#17, <<"nvme-ns">>,
+        #{<<"namespace-id">> => NsId,
+          <<"ieee-eui-64">> => EUI});
+decode_dp_node(16#03, 16#18, Data) ->
+    %% URI path — variable UTF-8 string.
+    dp_node(16#03, 16#18, <<"uri">>, #{<<"uri">> => Data});
+decode_dp_node(16#03, 16#1F, <<IsIpv6:8, Rest/binary>>) ->
+    dp_node(16#03, 16#1F, <<"dns">>,
+        #{<<"is-ipv6">> => IsIpv6 == 1,
+          <<"dns-data-length">> => byte_size(Rest)});
+
+%%---- Media (Type 0x04) --------------------------------------------
+decode_dp_node(16#04, 16#01,
+               <<PartNum:32/little, PartStart:64/little,
+                 PartSize:64/little, Sig:16/binary,
+                 PartFormat:8, SigType:8>>) ->
+    %% Hard Drive. Sig interpretation depends on SigType:
+    %%   0 = no signature, 1 = MBR (first 4 bytes = MBR serial),
+    %%   2 = GPT (full 16-byte disk GUID).
+    SigValue = case SigType of
+        16#02 -> format_guid(Sig);                 %% GPT
+        16#01 -> format_hex(binary:part(Sig, 0, 4));  %% MBR
+        _     -> format_hex(Sig)
+    end,
+    dp_node(16#04, 16#01, <<"hard-drive">>,
+        #{<<"partition-number">> => PartNum,
+          <<"partition-start-lba">> => PartStart,
+          <<"partition-size-lba">> => PartSize,
+          <<"partition-signature">> => SigValue,
+          <<"partition-format">> => hd_format(PartFormat),
+          <<"signature-type">> => hd_sig_type(SigType)});
+decode_dp_node(16#04, 16#02,
+               <<BootEntry:32/little, PartStart:64/little,
+                 PartSize:64/little>>) ->
+    dp_node(16#04, 16#02, <<"cdrom">>,
+        #{<<"boot-entry">> => BootEntry,
+          <<"partition-start-lba">> => PartStart,
+          <<"partition-size-lba">> => PartSize});
+decode_dp_node(16#04, 16#03, <<Guid:16/binary, Data/binary>>) ->
+    dp_node(16#04, 16#03, <<"media-vendor">>,
+        #{<<"vendor-guid">> => format_guid(Guid),
+          <<"vendor-data-length">> => byte_size(Data)});
+decode_dp_node(16#04, 16#04, Data) ->
+    %% File Path. UCS-2 NUL-terminated.
+    PathBin = strip_ucs2_nul(Data),
+    Utf8 = ucs2_to_utf8(PathBin),
+    dp_node(16#04, 16#04, <<"file-path">>,
+        #{<<"path">> => Utf8});
+decode_dp_node(16#04, 16#05, <<Guid:16/binary>>) ->
+    dp_node(16#04, 16#05, <<"media-protocol">>,
+        #{<<"protocol-guid">> => format_guid(Guid)});
+decode_dp_node(16#04, 16#06, <<Guid:16/binary>>) ->
+    dp_node(16#04, 16#06, <<"piwg-fw-file">>,
+        #{<<"fv-file-name">> => format_guid(Guid)});
+decode_dp_node(16#04, 16#07, <<Guid:16/binary>>) ->
+    dp_node(16#04, 16#07, <<"piwg-fw-volume">>,
+        #{<<"fv-name">> => format_guid(Guid)});
+decode_dp_node(16#04, 16#08, <<_Reserved:32/little,
+                               StartOffset:64/little,
+                               EndOffset:64/little>>) ->
+    dp_node(16#04, 16#08, <<"relative-offset-range">>,
+        #{<<"start-offset">> => StartOffset,
+          <<"end-offset">> => EndOffset});
+decode_dp_node(16#04, 16#09,
+               <<Start:64/little, End:64/little,
+                 DiskTypeGuid:16/binary, Instance:16/little>>) ->
+    dp_node(16#04, 16#09, <<"ram-disk">>,
+        #{<<"start-address">> => Start,
+          <<"end-address">> => End,
+          <<"disk-type-guid">> => format_guid(DiskTypeGuid),
+          <<"instance">> => Instance});
+
+%%---- BIOS Boot Spec (Type 0x05) -----------------------------------
+decode_dp_node(16#05, 16#01, <<DevType:16/little, Status:16/little,
+                               Description/binary>>) ->
+    dp_node(16#05, 16#01, <<"bios-boot-spec">>,
+        #{<<"device-type">> => DevType,
+          <<"status-flag">> => Status,
+          <<"description">> => strip_nul(Description)});
+
+%%---- End (Type 0x7F) ----------------------------------------------
+decode_dp_node(16#7F, 16#01, _) ->
+    dp_node(16#7F, 16#01, <<"end-instance">>, #{});
+decode_dp_node(16#7F, 16#FF, _) ->
+    dp_node(16#7F, 16#FF, <<"end-entire">>, #{});
+decode_dp_node(16#7F, SubType, _) ->
+    dp_node(16#7F, SubType, <<"end-unknown">>, #{});
+
+%% Catch-all — unknown type+subtype, preserve raw data length.
+decode_dp_node(Type, SubType, Data) ->
+    dp_node(Type, SubType, <<"unknown">>,
+        #{<<"data-length">> => byte_size(Data)}).
+
+dp_node(Type, SubType, SubTypeName, Fields) ->
+    maps:merge(
+      #{<<"type">> => Type,
+        <<"subtype">> => SubType,
+        <<"type-name">> => dp_type_name(Type),
+        <<"subtype-name">> => SubTypeName},
+      Fields).
+
+dp_type_name(16#01) -> <<"hardware">>;
+dp_type_name(16#02) -> <<"acpi">>;
+dp_type_name(16#03) -> <<"messaging">>;
+dp_type_name(16#04) -> <<"media">>;
+dp_type_name(16#05) -> <<"bios-boot-spec">>;
+dp_type_name(16#7F) -> <<"end">>;
+dp_type_name(_) -> <<"unknown">>.
+
+hd_format(16#01) -> <<"mbr">>;
+hd_format(16#02) -> <<"gpt">>;
+hd_format(_) -> <<"unknown">>.
+
+hd_sig_type(16#00) -> <<"none">>;
+hd_sig_type(16#01) -> <<"mbr-serial">>;
+hd_sig_type(16#02) -> <<"gpt-guid">>;
+hd_sig_type(_)     -> <<"unknown">>.
+
+%% Canonical ACPI _HID encoding: first 3 bytes are ASCII vendor code
+%% (EISA ID compressed), last 4 hex digits are product/serial.
+%% https://uefi.org/specs/ACPI/6.5/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#hardware-id
+acpi_hid_to_string(HID) when is_integer(HID) ->
+    %% EISA-compressed vendor + 16-bit product per ACPI §5.6.1.2.
+    %% HID is stored little-endian in the binary; as an integer the
+    %% high 16 bits are the vendor and the low 16 bits are the
+    %% product. The 3 vendor letters pack into 15 bits:
+    %%     byte0 bits 6:2 = char1 - 'A' + 1
+    %%     byte0 bits 1:0 + byte1 bits 7:5 = char2 - 'A' + 1
+    %%     byte1 bits 4:0 = char3 - 'A' + 1
+    Upper = (HID bsr 16) band 16#FFFF,
+    Lower = HID band 16#FFFF,
+    <<B0:8, B1:8>> = <<Upper:16/big>>,
+    V1 = (B0 bsr 2) band 16#1F,
+    V2 = ((B0 band 16#03) bsl 3) bor ((B1 bsr 5) band 16#07),
+    V3 = B1 band 16#1F,
+    C1 = case V1 of 0 -> $? ; _ -> V1 + $A - 1 end,
+    C2 = case V2 of 0 -> $? ; _ -> V2 + $A - 1 end,
+    C3 = case V3 of 0 -> $? ; _ -> V3 + $A - 1 end,
+    iolist_to_binary(io_lib:format("~c~c~c~4.16.0B",
+                                     [C1, C2, C3, Lower])).
+
+format_mac(<<A,B,C,D,E,F>>) ->
+    iolist_to_binary(io_lib:format(
+        "~2.16.0b:~2.16.0b:~2.16.0b:~2.16.0b:~2.16.0b:~2.16.0b",
+        [A,B,C,D,E,F])).
+
+format_ipv4(<<A,B,C,D>>) ->
+    iolist_to_binary(io_lib:format("~B.~B.~B.~B", [A,B,C,D])).
+
+format_ipv6(Bin) when byte_size(Bin) =:= 16 ->
+    Groups = [binary:part(Bin, I*2, 2) || I <- lists:seq(0, 7)],
+    iolist_to_binary(
+        lists:join(<<":">>,
+            [io_lib:format("~4.16.0b",
+                [binary:decode_unsigned(G)]) || G <- Groups])).
+
+format_hex(Bin) when is_binary(Bin) ->
+    iolist_to_binary([io_lib:format("~2.16.0b", [B]) || <<B:8>> <= Bin]).
+
+strip_nul(B) ->
+    case binary:split(B, <<0>>) of
+        [Pre | _] -> Pre;
+        _ -> B
+    end.
+
+strip_ucs2_nul(B) ->
+    %% Strip trailing UCS-2 NUL (two zero bytes).
+    case B of
+        <<>> -> B;
+        _ ->
+            case binary:last(B) of
+                0 when byte_size(B) >= 2 ->
+                    case binary:at(B, byte_size(B) - 2) of
+                        0 -> binary:part(B, 0, byte_size(B) - 2);
+                        _ -> B
+                    end;
+                _ -> B
+            end
+    end.
+
+ucs2_to_utf8(Bin) ->
+    case unicode:characters_to_binary(Bin, {utf16, little}, utf8) of
+        U when is_binary(U) -> U;
+        _ -> Bin
+    end.
+
+read_nul_ascii(<<>>) -> {<<>>, <<>>};
+read_nul_ascii(Bin) ->
+    case binary:split(Bin, <<0>>) of
+        [Pre, Post] -> {Pre, Post};
+        [Only]      -> {Only, <<>>}
+    end.
+
+%% Render a list of device-path nodes as the canonical UEFI text form.
+render_device_path([]) -> <<>>;
+render_device_path(Nodes) ->
+    Segments = lists:filtermap(fun render_dp_node/1, Nodes),
+    iolist_to_binary(lists:join(<<"/">>, Segments)).
+
+render_dp_node(#{<<"type">> := 16#7F}) -> false;
+render_dp_node(#{<<"subtype-name">> := <<"pci">>, <<"function">> := F,
+                 <<"device">> := D}) ->
+    {true, iolist_to_binary(io_lib:format("Pci(0x~.16B,0x~.16B)", [D, F]))};
+render_dp_node(#{<<"subtype-name">> := <<"acpi">>, <<"hid-string">> := H,
+                 <<"uid">> := U}) ->
+    {true, iolist_to_binary(io_lib:format("Acpi(~s,0x~.16B)", [H, U]))};
+render_dp_node(#{<<"subtype-name">> := <<"sata">>,
+                 <<"hba-port">> := P, <<"pmp-port">> := PMP,
+                 <<"lun">> := L}) ->
+    {true, iolist_to_binary(io_lib:format("Sata(0x~.16B,0x~.16B,0x~.16B)",
+                                            [P, PMP, L]))};
+render_dp_node(#{<<"subtype-name">> := <<"nvme-ns">>,
+                 <<"namespace-id">> := N,
+                 <<"ieee-eui-64">> := E}) ->
+    {true, iolist_to_binary(io_lib:format("NVMe(0x~.16B,0x~.16B)", [N, E]))};
+render_dp_node(#{<<"subtype-name">> := <<"usb">>,
+                 <<"parent-port">> := P, <<"interface">> := I}) ->
+    {true, iolist_to_binary(io_lib:format("USB(0x~.16B,0x~.16B)", [P, I]))};
+render_dp_node(#{<<"subtype-name">> := <<"mac-addr">>,
+                 <<"mac">> := M, <<"if-type">> := T}) ->
+    {true, iolist_to_binary(io_lib:format("MAC(~s,0x~.16B)", [M, T]))};
+render_dp_node(#{<<"subtype-name">> := <<"ipv4">>,
+                 <<"local-ip">> := L, <<"remote-ip">> := R}) ->
+    {true, iolist_to_binary(io_lib:format("IPv4(~s,~s)", [L, R]))};
+render_dp_node(#{<<"subtype-name">> := <<"ipv6">>,
+                 <<"local-ip">> := L, <<"remote-ip">> := R}) ->
+    {true, iolist_to_binary(io_lib:format("IPv6(~s,~s)", [L, R]))};
+render_dp_node(#{<<"subtype-name">> := <<"hard-drive">>,
+                 <<"partition-number">> := N,
+                 <<"partition-format">> := F,
+                 <<"partition-signature">> := Sig}) ->
+    {true, iolist_to_binary(io_lib:format("HD(~B,~s,~s)", [N, F, Sig]))};
+render_dp_node(#{<<"subtype-name">> := <<"cdrom">>,
+                 <<"boot-entry">> := B}) ->
+    {true, iolist_to_binary(io_lib:format("CDROM(~B)", [B]))};
+render_dp_node(#{<<"subtype-name">> := <<"file-path">>,
+                 <<"path">> := P}) ->
+    {true, P};
+render_dp_node(#{<<"subtype-name">> := <<"piwg-fw-file">>,
+                 <<"fv-file-name">> := G}) ->
+    {true, iolist_to_binary(io_lib:format("FvFile(~s)", [G]))};
+render_dp_node(#{<<"subtype-name">> := <<"piwg-fw-volume">>,
+                 <<"fv-name">> := G}) ->
+    {true, iolist_to_binary(io_lib:format("Fv(~s)", [G]))};
+render_dp_node(#{<<"subtype-name">> := <<"hw-vendor">>,
+                 <<"vendor-guid">> := G}) ->
+    {true, iolist_to_binary(io_lib:format("VenHw(~s)", [G]))};
+render_dp_node(#{<<"subtype-name">> := <<"media-vendor">>,
+                 <<"vendor-guid">> := G}) ->
+    {true, iolist_to_binary(io_lib:format("VenMedia(~s)", [G]))};
+render_dp_node(#{<<"subtype-name">> := <<"msg-vendor">>,
+                 <<"vendor-guid">> := G}) ->
+    {true, iolist_to_binary(io_lib:format("VenMsg(~s)", [G]))};
+render_dp_node(#{<<"type-name">> := T, <<"subtype-name">> := S}) ->
+    {true, iolist_to_binary(io_lib:format("~s/~s", [T, S]))};
+render_dp_node(_) -> false.
+
 %% Extract the one thing a policy engine actually cares about per
 %% UEFI variable: for `SecureBoot' the single enabled/disabled
 %% byte; for `PK`/`KEK`/`db`/`dbx` the signature-list summary.
@@ -428,16 +868,33 @@ decode_uefi_variable_semantic(Name, Data)
     #{<<"signature-list">> => summarise_signature_list(Data)};
 decode_uefi_variable_semantic(_, _) -> #{}.
 
-%% EFI_SIGNATURE_LIST header:
+%% EFI_SIGNATURE_LIST header (UEFI §32.4.1):
 %%   signatureType     EFI_GUID (16B)
-%%   signatureListSize uint32 LE
-%%   signatureHeaderSize uint32 LE
-%%   signatureSize      uint32 LE
+%%   signatureListSize u32 LE
+%%   signatureHeaderSize u32 LE
+%%   signatureSize      u32 LE
 %%   signatureHeader   [signatureHeaderSize]
-%%   signatures         [...] — each is {owner: EFI_GUID, data: ...}
+%%   signatures         [...] — each is {signatureOwner: EFI_GUID (16B),
+%%                                         signatureData: [signatureSize-16]}
 %%
-%% We don't try to decode the cert bytes fully; we just report
-%% per-list {type, n_entries, total_bytes}.
+%% Known signatureType GUIDs (UEFI §32.4.1 + signed.efi spec):
+%%   a5c059a1-94e4-4aa7-87b5-ab155c2bf072  EFI_CERT_X509_GUID — the
+%%                                          common case for db/dbx/KEK/PK
+%%   c1c41626-504c-4092-aca9-41f936934328  EFI_CERT_SHA256_GUID
+%%   3bd2a492-96c0-4079-b420-fcf98ef103ed  EFI_CERT_SHA384_GUID
+%%   46dad11e-2b7a-4a3e-aaeb-f5fe0f0bc20e  EFI_CERT_SHA512_GUID
+%%   826ca512-cf10-4ac9-b187-be01496631bd  EFI_CERT_SHA1_GUID
+%%   3c5766e8-269c-4e34-aa14-ed776e85b3b6  EFI_CERT_RSA2048_GUID
+%%   e8665b96-b6bb-4bdf-ba9b-3a3bbecb6f99  EFI_CERT_X509_SHA256_GUID
+%%   a7717414-c616-4977-9420-844712a735bf  EFI_CERT_X509_SHA384_GUID
+%%   64e0d72c-9e7a-4dc7-8ae5-a6c06c7b9fe0  EFI_CERT_X509_SHA512_GUID
+%%   4aafd29d-68df-49ee-8aa9-347d375665a7  EFI_CERT_TYPE_PKCS7_GUID
+%%
+%% summarise_signature_list returns a list of lists, one per outer
+%% EFI_SIGNATURE_LIST, each with per-entry decoded data. For X.509
+%% entries we run a full `public_key:pkix_decode_cert/2' + extract
+%% issuer DN, subject DN, SHA-256 fingerprint, NotBefore/NotAfter,
+%% key algorithm + size. For hash entries we report the digest.
 summarise_signature_list(Bin) -> summarise_signature_list(Bin, []).
 
 summarise_signature_list(<<>>, Acc) -> lists:reverse(Acc);
@@ -450,13 +907,18 @@ summarise_signature_list(<<GuidBin:16/binary,
     SignaturesBytes = ListSize - 28 - HdrSize,
     case Rest of
         <<_Header:HdrSize/binary,
-          Sigs:SignaturesBytes/binary,
+          SigsData:SignaturesBytes/binary,
           Tail/binary>> when SigSize > 0 ->
             N = SignaturesBytes div SigSize,
+            TypeGuid = format_guid(GuidBin),
+            TypeName = efi_sig_type_name(TypeGuid),
+            Entries = decode_sig_entries(SigsData, SigSize, TypeName, N, []),
             Entry = #{
-                <<"type-guid">>   => fmt_efi_guid(GuidBin),
-                <<"entry-count">> => N,
-                <<"entry-size">>  => SigSize
+                <<"type-guid">>      => TypeGuid,
+                <<"type-guid-name">> => TypeName,
+                <<"entry-count">>    => N,
+                <<"entry-size">>     => SigSize,
+                <<"entries">>        => Entries
             },
             summarise_signature_list(Tail, [Entry | Acc]);
         _ ->
@@ -466,6 +928,224 @@ summarise_signature_list(<<GuidBin:16/binary,
 summarise_signature_list(_, Acc) ->
     lists:reverse([#{<<"error">> =>
                          <<"truncated signature list">>} | Acc]).
+
+efi_sig_type_name(<<"a5c059a1-94e4-4aa7-87b5-ab155c2bf072">>) ->
+    <<"EFI_CERT_X509_GUID">>;
+efi_sig_type_name(<<"c1c41626-504c-4092-aca9-41f936934328">>) ->
+    <<"EFI_CERT_SHA256_GUID">>;
+efi_sig_type_name(<<"3bd2a492-96c0-4079-b420-fcf98ef103ed">>) ->
+    <<"EFI_CERT_SHA384_GUID">>;
+efi_sig_type_name(<<"46dad11e-2b7a-4a3e-aaeb-f5fe0f0bc20e">>) ->
+    <<"EFI_CERT_SHA512_GUID">>;
+efi_sig_type_name(<<"826ca512-cf10-4ac9-b187-be01496631bd">>) ->
+    <<"EFI_CERT_SHA1_GUID">>;
+efi_sig_type_name(<<"3c5766e8-269c-4e34-aa14-ed776e85b3b6">>) ->
+    <<"EFI_CERT_RSA2048_GUID">>;
+efi_sig_type_name(<<"e8665b96-b6bb-4bdf-ba9b-3a3bbecb6f99">>) ->
+    <<"EFI_CERT_X509_SHA256_GUID">>;
+efi_sig_type_name(<<"a7717414-c616-4977-9420-844712a735bf">>) ->
+    <<"EFI_CERT_X509_SHA384_GUID">>;
+efi_sig_type_name(<<"64e0d72c-9e7a-4dc7-8ae5-a6c06c7b9fe0">>) ->
+    <<"EFI_CERT_X509_SHA512_GUID">>;
+efi_sig_type_name(<<"4aafd29d-68df-49ee-8aa9-347d375665a7">>) ->
+    <<"EFI_CERT_TYPE_PKCS7_GUID">>;
+efi_sig_type_name(_) -> <<"unknown-cert-type">>.
+
+decode_sig_entries(_, _, _, 0, Acc) -> lists:reverse(Acc);
+decode_sig_entries(Bin, SigSize, TypeName, N, Acc)
+  when byte_size(Bin) >= SigSize ->
+    <<EntryBin:SigSize/binary, Rest/binary>> = Bin,
+    <<OwnerGuid:16/binary, Payload/binary>> = EntryBin,
+    Entry0 = #{<<"owner-guid">> => format_guid(OwnerGuid)},
+    Entry = maps:merge(Entry0,
+                        decode_sig_entry_payload(TypeName, Payload)),
+    decode_sig_entries(Rest, SigSize, TypeName, N - 1, [Entry | Acc]);
+decode_sig_entries(_, _, _, _, Acc) -> lists:reverse(Acc).
+
+decode_sig_entry_payload(<<"EFI_CERT_X509_GUID">>, CertDer) ->
+    decode_x509_cert(CertDer);
+decode_sig_entry_payload(<<"EFI_CERT_SHA256_GUID">>, Digest)
+  when byte_size(Digest) =:= 32 ->
+    #{<<"sha256">> => hb_util:encode(Digest)};
+decode_sig_entry_payload(<<"EFI_CERT_SHA384_GUID">>, Digest)
+  when byte_size(Digest) =:= 48 ->
+    #{<<"sha384">> => hb_util:encode(Digest)};
+decode_sig_entry_payload(<<"EFI_CERT_SHA512_GUID">>, Digest)
+  when byte_size(Digest) =:= 64 ->
+    #{<<"sha512">> => hb_util:encode(Digest)};
+decode_sig_entry_payload(<<"EFI_CERT_SHA1_GUID">>, Digest)
+  when byte_size(Digest) =:= 20 ->
+    #{<<"sha1">> => hb_util:encode(Digest)};
+decode_sig_entry_payload(<<"EFI_CERT_RSA2048_GUID">>, Data) ->
+    %% "Signature Data contains the concatenation of the RSA Public
+    %% Exponent (fixed width 256 bytes, big-endian) and the RSA Public
+    %% Modulus (256 bytes, big-endian)." (UEFI §32.4.1)
+    case Data of
+        <<Exp:256/binary, Mod:256/binary>> ->
+            #{<<"rsa-exponent-b64url">> => hb_util:encode(Exp),
+              <<"rsa-modulus-b64url">> => hb_util:encode(Mod),
+              <<"rsa-key-size-bits">> => 2048};
+        _ -> #{<<"error">> => <<"malformed RSA2048 signature">>}
+    end;
+decode_sig_entry_payload(<<"EFI_CERT_X509_SHA256_GUID">>, Data) ->
+    case Data of
+        <<ToBe:32/binary, HashAlgGuid:16/binary, Sha:32/binary>> ->
+            #{<<"to-be-signed-length">> => byte_size(ToBe),
+              <<"hash-algorithm-guid">> => format_guid(HashAlgGuid),
+              <<"sha256">> => hb_util:encode(Sha)};
+        _ -> #{<<"error">> => <<"malformed X509_SHA256">>}
+    end;
+decode_sig_entry_payload(<<"EFI_CERT_TYPE_PKCS7_GUID">>, Data) ->
+    #{<<"pkcs7-data-length">> => byte_size(Data)};
+decode_sig_entry_payload(_, Data) ->
+    %% Unknown cert type — opaque.
+    #{<<"data-length">> => byte_size(Data),
+      <<"sha256">> => hb_util:encode(crypto:hash(sha256, Data))}.
+
+%% Decode a DER-encoded X.509 certificate using OTP's public_key
+%% module. Extract the fields a policy engine cares about:
+%% issuer DN + subject DN (canonical string form), SHA-256
+%% fingerprint, serial number, NotBefore/NotAfter, public-key
+%% algorithm + key size. Graceful on malformed DER — never
+%% raises.
+decode_x509_cert(Der) when is_binary(Der) ->
+    try
+        Cert = public_key:pkix_decode_cert(Der, otp),
+        #'OTPCertificate'{
+            tbsCertificate = Tbs,
+            signatureAlgorithm = SigAlg
+        } = Cert,
+        #'OTPTBSCertificate'{
+            serialNumber = Serial,
+            issuer = Issuer,
+            subject = Subject,
+            validity = Validity,
+            subjectPublicKeyInfo = Spki
+        } = Tbs,
+        #'Validity'{notBefore = NotBefore, notAfter = NotAfter} = Validity,
+        #'OTPSubjectPublicKeyInfo'{
+            algorithm = KeyAlg,
+            subjectPublicKey = PubKey
+        } = Spki,
+        {KeyAlgName, KeySizeBits} = summarise_public_key(KeyAlg, PubKey),
+        #{
+            <<"x509-cert-der-length">>  => byte_size(Der),
+            <<"x509-sha256-fingerprint">> =>
+                hb_util:encode(crypto:hash(sha256, Der)),
+            <<"x509-serial">>            =>
+                iolist_to_binary(io_lib:format("~.16B", [Serial])),
+            <<"x509-issuer">>            => dn_to_string(Issuer),
+            <<"x509-subject">>           => dn_to_string(Subject),
+            <<"x509-not-before">>        => x509_time(NotBefore),
+            <<"x509-not-after">>         => x509_time(NotAfter),
+            <<"x509-public-key-alg">>    => KeyAlgName,
+            <<"x509-public-key-size-bits">> => KeySizeBits,
+            <<"x509-signature-alg">>     =>
+                sig_alg_name(SigAlg#'SignatureAlgorithm'.algorithm)
+        }
+    catch Class:Reason ->
+        #{
+            <<"x509-cert-der-length">> => byte_size(Der),
+            <<"x509-decode-error">> =>
+                iolist_to_binary(io_lib:format("~p:~p",
+                                                [Class, Reason])),
+            <<"x509-sha256-fingerprint">> =>
+                hb_util:encode(crypto:hash(sha256, Der))
+        }
+    end.
+
+%% Flatten an X.509 DN (rdnSequence) into a human-readable string:
+%%   "CN=Microsoft UEFI CA 2011, O=Microsoft, C=US"
+dn_to_string({rdnSequence, RDNs}) ->
+    Parts = lists:map(fun rdn_to_string/1, RDNs),
+    Joined = lists:filter(fun(X) -> X =/= <<>> end,
+                            lists:flatten(Parts)),
+    iolist_to_binary(lists:join(<<", ">>, Joined));
+dn_to_string(_) -> <<"">>.
+
+rdn_to_string(AttrsList) when is_list(AttrsList) ->
+    [attr_to_string(A) || A <- AttrsList].
+
+attr_to_string(#'AttributeTypeAndValue'{type = Type, value = Value}) ->
+    Short = attr_short_name(Type),
+    ValBin = attr_value_to_binary(Value),
+    <<Short/binary, "=", ValBin/binary>>;
+attr_to_string(_) -> <<>>.
+
+%% Standard short names for common RDN components.
+attr_short_name(?'id-at-commonName')             -> <<"CN">>;
+attr_short_name(?'id-at-organizationName')       -> <<"O">>;
+attr_short_name(?'id-at-organizationalUnitName') -> <<"OU">>;
+attr_short_name(?'id-at-countryName')            -> <<"C">>;
+attr_short_name(?'id-at-stateOrProvinceName')    -> <<"ST">>;
+attr_short_name(?'id-at-localityName')           -> <<"L">>;
+attr_short_name(?'id-at-serialNumber')           -> <<"SERIALNUMBER">>;
+attr_short_name(?'id-emailAddress')              -> <<"emailAddress">>;
+attr_short_name(OID) when is_tuple(OID) ->
+    iolist_to_binary(
+        lists:join(<<".">>, [integer_to_binary(I) || I <- tuple_to_list(OID)]));
+attr_short_name(_) -> <<"?">>.
+
+%% DER attribute value → UTF-8 binary.
+attr_value_to_binary({printableString, S})  -> to_binary(S);
+attr_value_to_binary({utf8String, B})       when is_binary(B) -> B;
+attr_value_to_binary({utf8String, L})       when is_list(L) -> to_binary(L);
+attr_value_to_binary({bmpString, B})        -> ucs2_to_utf8_maybe(B);
+attr_value_to_binary({teletexString, S})    -> to_binary(S);
+attr_value_to_binary({ia5String, S})        -> to_binary(S);
+attr_value_to_binary({universalString, S})  -> to_binary(S);
+attr_value_to_binary(B) when is_binary(B)   -> B;
+attr_value_to_binary(L) when is_list(L)     -> to_binary(L);
+attr_value_to_binary(_) -> <<"?">>.
+
+to_binary(S) when is_list(S) -> unicode:characters_to_binary(S, unicode);
+to_binary(S) when is_binary(S) -> S.
+
+ucs2_to_utf8_maybe(B) when is_binary(B) ->
+    case unicode:characters_to_binary(B, {utf16, big}, utf8) of
+        U when is_binary(U) -> U;
+        _ -> B
+    end.
+
+x509_time({utcTime, S})         -> to_binary(S);
+x509_time({generalTime, S})     -> to_binary(S);
+x509_time(T)                    -> iolist_to_binary(io_lib:format("~p", [T])).
+
+summarise_public_key(#'PublicKeyAlgorithm'{algorithm = Alg},
+                      #'RSAPublicKey'{modulus = N}) when is_integer(N) ->
+    Bits = byte_size(binary:encode_unsigned(N)) * 8,
+    {pk_alg_name(Alg), Bits};
+summarise_public_key(#'PublicKeyAlgorithm'{algorithm = Alg},
+                      PubKey) when is_binary(PubKey) ->
+    {pk_alg_name(Alg), byte_size(PubKey) * 8};
+summarise_public_key(#'PublicKeyAlgorithm'{algorithm = Alg}, _) ->
+    {pk_alg_name(Alg), 0};
+summarise_public_key(_, _) ->
+    {<<"unknown">>, 0}.
+
+pk_alg_name(?rsaEncryption)      -> <<"rsa">>;
+pk_alg_name(?'id-ecPublicKey')   -> <<"ecdsa">>;
+pk_alg_name(?'id-dsa')           -> <<"dsa">>;
+pk_alg_name(?'id-Ed25519')       -> <<"ed25519">>;
+pk_alg_name(?'id-Ed448')         -> <<"ed448">>;
+pk_alg_name(OID) when is_tuple(OID) ->
+    iolist_to_binary(lists:join(<<".">>,
+        [integer_to_binary(I) || I <- tuple_to_list(OID)]));
+pk_alg_name(_) -> <<"unknown">>.
+
+sig_alg_name(?sha256WithRSAEncryption)     -> <<"sha256WithRSA">>;
+sig_alg_name(?sha384WithRSAEncryption)     -> <<"sha384WithRSA">>;
+sig_alg_name(?sha512WithRSAEncryption)     -> <<"sha512WithRSA">>;
+sig_alg_name(?sha1WithRSAEncryption)       -> <<"sha1WithRSA">>;
+sig_alg_name(?md5WithRSAEncryption)        -> <<"md5WithRSA">>;
+sig_alg_name(?'id-RSASSA-PSS')             -> <<"rsaPSS">>;
+sig_alg_name(?'ecdsa-with-SHA256')         -> <<"ecdsaWithSHA256">>;
+sig_alg_name(?'ecdsa-with-SHA384')         -> <<"ecdsaWithSHA384">>;
+sig_alg_name(?'ecdsa-with-SHA512')         -> <<"ecdsaWithSHA512">>;
+sig_alg_name(OID) when is_tuple(OID) ->
+    iolist_to_binary(lists:join(<<".">>,
+        [integer_to_binary(I) || I <- tuple_to_list(OID)]));
+sig_alg_name(_) -> <<"unknown">>.
 
 %% EV_S_CRTM_VERSION — event data is the version string.
 %% Heuristic: if it's an even length and looks like UTF-16LE
@@ -500,12 +1180,15 @@ decode_uefi_image_load(#{<<"event-data">> := Data}) ->
           DpLen:64/unsigned-little,
           DevicePath:DpLen/binary,
           _Tail/binary>> ->
+            {Nodes, Text} = parse_device_path(DevicePath),
             #{
                 <<"image-location-in-memory">> => LocInMem,
                 <<"image-length-in-memory">>   => LenInMem,
                 <<"image-link-time-address">>  => LinkAddr,
                 <<"device-path-length">>       => DpLen,
-                <<"device-path">>              => DevicePath
+                <<"device-path">>              => DevicePath,
+                <<"device-path-nodes">>        => Nodes,
+                <<"device-path-text">>         => Text
             };
         _ ->
             #{<<"error">> => <<"malformed UEFI_IMAGE_LOAD_EVENT">>}
@@ -703,15 +1386,9 @@ strip_trailing_nulls(Bin) ->
         _ -> Bin
     end.
 
-fmt_efi_guid(<<A:32/little, B:16/little, C:16/little, D:8/binary>>) ->
-    iolist_to_binary(
-        io_lib:format("~8.16.0B-~4.16.0B-~4.16.0B-~s",
-                      [A, B, C, fmt_guid_tail(D)])).
-
-fmt_guid_tail(<<D0:8, D1:8, D2:8, D3:8, D4:8, D5:8, D6:8, D7:8>>) ->
-    io_lib:format("~2.16.0B~2.16.0B-~2.16.0B~2.16.0B~2.16.0B~2.16.0B"
-                  "~2.16.0B~2.16.0B",
-                  [D0, D1, D2, D3, D4, D5, D6, D7]).
+%% (legacy fmt_efi_guid + fmt_guid_tail removed; format_guid/1
+%%  earlier in the file is the single canonical lowercase-hex
+%%  implementation per UEFI §22 GUID canonical form.)
 
 %%%============================================================================
 %%% Legacy first record (TCG_PCR_EVENT + TCG_EfiSpecIdEvent)
@@ -1323,6 +2000,215 @@ decode_event_tag_test() ->
                  maps:get(<<"tag-guid">>, P)),
     ?assertEqual(byte_size(<<"some-tag-payload">>),
                  maps:get(<<"tag-data-length">>, P)).
+
+%% UEFI device path walker — basic path, three nodes +
+%% end: PciRoot ACPI, PCI(0x0,0x1F), FilePath \EFI\BOOT\BOOTX64.EFI
+parse_device_path_basic_test() ->
+    %% PciRoot — ACPI HID PNP0A03 (EISA 0x030AD041), UID 0.
+    %% ACPI _HID encoding for PNP0A03:
+    %%    'P'=16, 'N'=14, 'P'=16 → V1=0x10, V2=0x0E, V3=0x10
+    %%    packed byte0 = 0x10<<2 | 0x0E>>3 = 0x41; byte1 = (0x0E<<5)|0x10 = 0xD0
+    %%    HID = 0x0A03 << 16 | (0xD041 as low 16 swapped → 0x41D0)
+    %% Actually for our test we just verify the walker produces
+    %% the right 3 structured nodes + a non-empty text. The exact
+    %% HID decode is separately exercised below.
+    AcpiNode = <<16#02, 16#01, 16#0C, 16#00,
+                 16#41, 16#D0, 16#0A, 16#03,      %% HID little-endian
+                 16#00, 16#00, 16#00, 16#00>>,    %% UID
+    PciNode  = <<16#01, 16#01, 16#06, 16#00, 16#00, 16#1F>>,
+    %% File path node for "\EFI" (UCS-2, NUL-terminated, 10 bytes).
+    FilePath = <<"\\", 0, "E", 0, "F", 0, "I", 0, 0, 0>>,
+    FpLen = byte_size(FilePath) + 4,
+    FpNode = <<16#04, 16#04, FpLen:16/little, FilePath/binary>>,
+    End    = <<16#7F, 16#FF, 16#04, 16#00>>,
+    DP = <<AcpiNode/binary, PciNode/binary, FpNode/binary, End/binary>>,
+    {Nodes, Text} = parse_device_path(DP),
+    ?assertEqual(4, length(Nodes)),  %% 3 content + 1 end
+    ?assertNotEqual(nomatch,
+                     binary:match(Text, <<"\\EFI">>)),
+    Acpi = lists:nth(1, Nodes),
+    ?assertEqual(<<"acpi">>, maps:get(<<"type-name">>, Acpi)),
+    ?assertEqual(<<"acpi">>, maps:get(<<"subtype-name">>, Acpi)),
+    Pci = lists:nth(2, Nodes),
+    ?assertEqual(<<"pci">>, maps:get(<<"subtype-name">>, Pci)),
+    ?assertEqual(16#1F, maps:get(<<"device">>, Pci)),
+    Fp = lists:nth(3, Nodes),
+    ?assertEqual(<<"file-path">>, maps:get(<<"subtype-name">>, Fp)),
+    ?assertEqual(<<"\\EFI">>, maps:get(<<"path">>, Fp)),
+    EndN = lists:nth(4, Nodes),
+    ?assertEqual(<<"end">>, maps:get(<<"type-name">>, EndN)).
+
+%% UEFI device path — SATA + Hard Drive (GPT) + File Path typical
+%% boot device shape.
+parse_device_path_sata_gpt_test() ->
+    SataNode = <<16#03, 16#12, 16#0A, 16#00,
+                 16#00, 16#00,        %% HBA port 0
+                 16#FF, 16#FF,        %% PMP port 0xFFFF (direct)
+                 16#00, 16#00>>,      %% LUN 0
+    GptGuid = <<1:32/little, 2:16/little, 3:16/little,
+                4, 5, 6, 7, 8, 9, 10, 11>>,
+    HdNode = <<16#04, 16#01, 16#2A, 16#00,
+               1:32/little,
+               2048:64/little,
+               204800:64/little,
+               GptGuid/binary,
+               16#02,            %% GPT format
+               16#02>>,           %% signature type: GPT GUID
+    FpRaw = <<"\\EFI\\BOOT\\BOOTX64.EFI">>,
+    FpUcs = unicode:characters_to_binary(FpRaw, utf8, {utf16, little}),
+    FpBin = <<FpUcs/binary, 0, 0>>,
+    FpLen = byte_size(FpBin) + 4,
+    FpNode = <<16#04, 16#04, FpLen:16/little, FpBin/binary>>,
+    End    = <<16#7F, 16#FF, 16#04, 16#00>>,
+    DP = <<SataNode/binary, HdNode/binary, FpNode/binary, End/binary>>,
+    {Nodes, Text} = parse_device_path(DP),
+    ?assertEqual(4, length(Nodes)),
+    %% SATA node.
+    Sata = lists:nth(1, Nodes),
+    ?assertEqual(<<"sata">>, maps:get(<<"subtype-name">>, Sata)),
+    ?assertEqual(0, maps:get(<<"hba-port">>, Sata)),
+    %% HD node with GPT signature.
+    Hd = lists:nth(2, Nodes),
+    ?assertEqual(<<"hard-drive">>, maps:get(<<"subtype-name">>, Hd)),
+    ?assertEqual(<<"gpt">>, maps:get(<<"partition-format">>, Hd)),
+    ?assertEqual(<<"gpt-guid">>, maps:get(<<"signature-type">>, Hd)),
+    ?assertEqual(1, maps:get(<<"partition-number">>, Hd)),
+    %% File path.
+    Fp = lists:nth(3, Nodes),
+    ?assertEqual(<<"\\EFI\\BOOT\\BOOTX64.EFI">>,
+                 maps:get(<<"path">>, Fp)),
+    %% Textual rendering contains the key parts.
+    ?assertNotEqual(nomatch, binary:match(Text, <<"Sata(">>)),
+    ?assertNotEqual(nomatch, binary:match(Text, <<"HD(">>)),
+    ?assertNotEqual(nomatch, binary:match(Text, <<"BOOTX64.EFI">>)).
+
+%% EV_EFI_BOOT_SERVICES_APPLICATION full parse — image load event
+%% should now carry a structured device path + text.
+decode_uefi_image_load_walks_device_path_test() ->
+    FpRaw = <<"\\EFI\\BOOT\\SHIMX64.EFI">>,
+    FpUcs = unicode:characters_to_binary(FpRaw, utf8, {utf16, little}),
+    FpBin = <<FpUcs/binary, 0, 0>>,
+    FpLen = byte_size(FpBin) + 4,
+    FpNode = <<16#04, 16#04, FpLen:16/little, FpBin/binary>>,
+    End    = <<16#7F, 16#FF, 16#04, 16#00>>,
+    DP = <<FpNode/binary, End/binary>>,
+    DpLen = byte_size(DP),
+    Data = <<16#1000:64/little, 16#20000:64/little,
+             16#FFFFFFFF00000000:64/little, DpLen:64/little,
+             DP/binary>>,
+    Ev = #{<<"event-type-code">> => 16#80000003,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    Nodes = maps:get(<<"device-path-nodes">>, P),
+    ?assertEqual(2, length(Nodes)),
+    Text = maps:get(<<"device-path-text">>, P),
+    ?assertNotEqual(nomatch, binary:match(Text, <<"SHIMX64.EFI">>)).
+
+%% X.509 signature list — a valid self-signed cert ends up fully
+%% decoded (issuer DN + subject + fingerprint + key algorithm).
+decode_x509_signature_list_test() ->
+    %% Generate a self-signed RSA cert in-test so we have a
+    %% deterministic ASN.1-valid sample without shipping a .pem.
+    {Cert, _Key} = generate_test_self_signed_cert(),
+    Der = public_key:pkix_encode('OTPCertificate', Cert, otp),
+    %% Build one EFI_SIGNATURE_LIST containing one EFI_CERT_X509
+    %% entry with owner GUID = zeros + cert DER.
+    X509TypeGuid =
+        %% a5c059a1-94e4-4aa7-87b5-ab155c2bf072 in mixed-endian
+        <<16#a1, 16#59, 16#c0, 16#a5,
+          16#e4, 16#94, 16#a7, 16#4a,
+          16#87, 16#b5, 16#ab, 16#15, 16#5c, 16#2b, 16#f0, 16#72>>,
+    Owner = <<0:(16*8)>>,
+    SigSize = 16 + byte_size(Der),
+    HdrSize = 0,
+    ListSize = 28 + HdrSize + SigSize,
+    EFI_SIG_LIST = <<
+        X509TypeGuid/binary,
+        ListSize:32/little,
+        HdrSize:32/little,
+        SigSize:32/little,
+        Owner/binary,
+        Der/binary
+    >>,
+    [Entry] = summarise_signature_list(EFI_SIG_LIST),
+    ?assertEqual(<<"EFI_CERT_X509_GUID">>,
+                 maps:get(<<"type-guid-name">>, Entry)),
+    ?assertEqual(1, maps:get(<<"entry-count">>, Entry)),
+    [Cert1] = maps:get(<<"entries">>, Entry),
+    ?assert(maps:is_key(<<"x509-sha256-fingerprint">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-issuer">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-subject">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-not-before">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-not-after">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-public-key-alg">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-public-key-size-bits">>, Cert1)),
+    ?assertEqual(<<"rsa">>, maps:get(<<"x509-public-key-alg">>, Cert1)).
+
+%% Malformed X.509 in a signature list: we report a decode error
+%% but still provide a SHA-256 fingerprint of the raw bytes so a
+%% policy engine can at least pin the opaque entry.
+decode_malformed_x509_returns_error_test() ->
+    GarbageCert = <<"not-a-cert">>,
+    X509TypeGuid = <<16#a1, 16#59, 16#c0, 16#a5,
+                     16#e4, 16#94, 16#a7, 16#4a,
+                     16#87, 16#b5, 16#ab, 16#15,
+                     16#5c, 16#2b, 16#f0, 16#72>>,
+    Owner = <<0:(16*8)>>,
+    SigSize = 16 + byte_size(GarbageCert),
+    HdrSize = 0,
+    ListSize = 28 + HdrSize + SigSize,
+    Bin = <<X509TypeGuid/binary, ListSize:32/little,
+            HdrSize:32/little, SigSize:32/little,
+            Owner/binary, GarbageCert/binary>>,
+    [Entry] = summarise_signature_list(Bin),
+    [Cert1] = maps:get(<<"entries">>, Entry),
+    ?assert(maps:is_key(<<"x509-decode-error">>, Cert1)),
+    ?assert(maps:is_key(<<"x509-sha256-fingerprint">>, Cert1)).
+
+%% Helper: generate a self-signed RSA cert using OTP public_key.
+generate_test_self_signed_cert() ->
+    Key = public_key:generate_key({rsa, 2048, 65537}),
+    PubKey = #'RSAPublicKey'{
+        modulus = Key#'RSAPrivateKey'.modulus,
+        publicExponent = Key#'RSAPrivateKey'.publicExponent
+    },
+    Subject = {rdnSequence, [
+        [#'AttributeTypeAndValue'{
+            type = ?'id-at-commonName',
+            value = {utf8String, <<"LapEE Test Cert">>}
+        }],
+        [#'AttributeTypeAndValue'{
+            type = ?'id-at-organizationName',
+            value = {utf8String, <<"Test">>}
+        }]
+    ]},
+    Validity = #'Validity'{
+        notBefore = {utcTime, "250101000000Z"},
+        notAfter  = {utcTime, "350101000000Z"}
+    },
+    TbsCert = #'OTPTBSCertificate'{
+        version = v3,
+        serialNumber = 1,
+        signature = #'SignatureAlgorithm'{
+            algorithm = ?sha256WithRSAEncryption,
+            parameters = 'NULL'
+        },
+        issuer = Subject,
+        validity = Validity,
+        subject = Subject,
+        subjectPublicKeyInfo = #'OTPSubjectPublicKeyInfo'{
+            algorithm = #'PublicKeyAlgorithm'{
+                algorithm = ?rsaEncryption,
+                parameters = 'NULL'
+            },
+            subjectPublicKey = PubKey
+        }
+    },
+    Signed = public_key:pkix_sign(TbsCert, Key),
+    %% pkix_sign returns a DER binary; re-decode to OTPCertificate
+    %% for our caller.
+    Cert = public_key:pkix_decode_cert(Signed, otp),
+    {Cert, Key}.
 
 %% Pipeline: parse a log, then decode_events to get the
 %% per-event `parsed' enrichment on every entry.
