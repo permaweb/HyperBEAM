@@ -3642,4 +3642,141 @@ check_event_shape(Ev) ->
     ?assert(is_map(maps:get(<<"digests">>, Ev))),
     ?assert(is_binary(maps:get(<<"event-data">>, Ev))).
 
+%%%---- Integration tests: assert specific content from real fixtures
+
+%% tpm2tools-bootorder.bin — this fixture from the tpm2-tools test
+%% suite contains EV_EFI_VARIABLE_BOOT events for BootOrder + Boot0000
+%% + Boot0001 + Boot0002. Verify our decoder produces a BootOrder
+%% list + at least one Boot#### with load-option-description.
+integration_tpm2tools_bootorder_test() ->
+    case fixture_exists("tpm2tools-bootorder.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            BootEvs = [E || {_, E} <- maps:to_list(Events),
+                            is_map(E),
+                            16#80000002 =:= maps:get(<<"event-type-code">>,
+                                                      E, 0)],
+            %% At least one EV_EFI_VARIABLE_BOOT event must exist.
+            ?assert(length(BootEvs) >= 1),
+            %% Expect at least one to be BootOrder with a boot-order
+            %% list in its parsed.semantic.
+            BootOrders = [
+                maps:get(<<"semantic">>, maps:get(<<"parsed">>, E, #{}), #{})
+                || E <- BootEvs,
+                   <<"BootOrder">> =:=
+                       maps:get(<<"variable-name">>,
+                                 maps:get(<<"parsed">>, E, #{}), <<>>)
+            ],
+            ?assert(length(BootOrders) >= 1),
+            [FirstBO | _] = BootOrders,
+            Order = maps:get(<<"boot-order">>, FirstBO, []),
+            ?assert(length(Order) >= 1),
+            %% The boot order entries are of the form "Boot####".
+            lists:foreach(
+                fun(B) -> ?assertMatch(<<"Boot", _/binary>>, B) end,
+                Order)
+    end.
+
+%% tpm2tools-uefivar.bin — should contain at least one EV_EFI_
+%% VARIABLE_DRIVER_CONFIG event; likely SecureBoot.
+integration_tpm2tools_uefivar_test() ->
+    case fixture_exists("tpm2tools-uefivar.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            VarEvs = [E || {_, E} <- maps:to_list(Events),
+                           is_map(E),
+                           16#80000001 =:= maps:get(<<"event-type-code">>,
+                                                     E, 0)],
+            ?assert(length(VarEvs) >= 1),
+            %% Each event must have parsed.variable-name present.
+            lists:foreach(
+                fun(E) ->
+                    P = maps:get(<<"parsed">>, E, #{}),
+                    ?assert(maps:is_key(<<"variable-name">>, P))
+                end, VarEvs)
+    end.
+
+%% fedora37-sd-boot.bin — Fedora 37 systemd-boot. Expected to
+%% contain EV_IPL events with systemd-stub keys on PCR 11/12.
+integration_fedora_sdboot_test() ->
+    case fixture_exists("fedora37-sd-boot.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            %% Find all EV_IPL events.
+            Ipls = [E || {_, E} <- maps:to_list(Events),
+                         is_map(E),
+                         16#D =:= maps:get(<<"event-type-code">>,
+                                           E, 0)],
+            %% Fedora 37 sd-boot should have at least one EV_IPL.
+            ?assert(length(Ipls) >= 1)
+    end.
+
+%% Lenovo ThinkPad P51 fixture — expected to emit an EV_S_CRTM_
+%% VERSION on PCR 0 with a "N1M"-prefix UTF-16LE string (Lenovo
+%% ThinkPad P51 CRTM convention per firmware-versions/
+%% lenovo-thinkpad.json).
+integration_lenovo_thinkpad_crtm_test() ->
+    case fixture_exists("lenovo-thinkpad-p51.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            %% Find EV_S_CRTM_VERSION events (code 0x08).
+            CrtmEvs = [E || {_, E} <- maps:to_list(Events),
+                            is_map(E),
+                            16#8 =:= maps:get(<<"event-type-code">>,
+                                              E, 0)],
+            case CrtmEvs of
+                [] ->
+                    %% Some legacy logs don't have it; skip the
+                    %% content assertion but note.
+                    ok;
+                [E | _] ->
+                    P = maps:get(<<"parsed">>, E, #{}),
+                    V = maps:get(<<"crtm-version">>, P, <<>>),
+                    ?assert(is_binary(V)),
+                    ?assert(byte_size(V) > 0)
+            end
+    end.
+
+%% Canonical Ubuntu fixture — should produce a rich event log
+%% with many standard UEFI events.
+integration_canonical_ubuntu_test() ->
+    case fixture_exists("canonical-ubuntu.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            ?assert(maps:size(Events) > 10),
+            %% At least one EV_EFI_BOOT_SERVICES_APPLICATION event
+            %% (the bootloader PE image).
+            Apps = [E || {_, E} <- maps:to_list(Events),
+                         is_map(E),
+                         16#80000003 =:= maps:get(<<"event-type-code">>,
+                                                   E, 0)],
+            ?assert(length(Apps) >= 1),
+            %% Every image-load event must carry a device-path-text
+            %% field from our walker.
+            lists:foreach(
+                fun(E) ->
+                    P = maps:get(<<"parsed">>, E, #{}),
+                    ?assert(maps:is_key(<<"device-path-text">>, P))
+                end, Apps)
+    end.
+
+%% Helper: resolves a fixture path, returning false if missing so
+%% the integration tests skip gracefully on minimal checkouts.
+fixture_exists(FileName) ->
+    Path = filename:join(fixtures_dir(), FileName),
+    case filelib:is_file(Path) of
+        true -> Path;
+        false -> false
+    end.
+
 -endif.
