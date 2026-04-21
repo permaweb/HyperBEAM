@@ -1083,9 +1083,81 @@ interpret_claim(Events, E, Db) ->
         <<"firmware">>    => claim_firmware(EvList),
         <<"boot-loader">> => claim_boot_loader(EvList),
         <<"kernel">>      => claim_kernel(EvList, E),
+        <<"cpu">>         => claim_cpu(EvList),
+        <<"shim">>        => claim_shim(EvList),
         <<"tme">>         => claim_tme(EvList, E, Db),
         <<"lockdown">>    => claim_lockdown(EvList)
     }.
+
+%% CPU microcode identity — from EV_CPU_MICROCODE on PCR 1.
+%% Discriminates Intel vs AMD vs unknown via `parsed.format'.
+claim_cpu(Events) ->
+    UcodeEvs = [Ev || Ev <- Events,
+                      maps:get(<<"event-type-code">>, Ev, 0) =:= 16#09],
+    case UcodeEvs of
+        [] ->
+            #{<<"vendor">>              => <<"unknown">>,
+              <<"vendor-provenance">>   => [],
+              <<"microcode-description">>           => <<"unknown">>,
+              <<"microcode-description-provenance">>=> []};
+        [Ev | _] ->
+            P = nested(Ev, [<<"parsed">>], #{}),
+            Vendor = maps:get(<<"format">>, P, <<"unknown">>),
+            Desc =
+                case Vendor of
+                    <<"intel">> ->
+                        iolist_to_binary(io_lib:format(
+                            "intel rev=0x~.16B sig=0x~.16B ~s",
+                            [maps:get(<<"update-revision">>, P, 0),
+                             maps:get(<<"processor-signature">>, P, 0),
+                             maps:get(<<"cpu-family-model-stepping">>, P,
+                                       <<"">>)]));
+                    <<"amd">> ->
+                        iolist_to_binary(io_lib:format(
+                            "amd patch-id=0x~.16B proc-rev=0x~4.16.0B ~s",
+                            [maps:get(<<"patch-id">>, P, 0),
+                             maps:get(<<"processor-rev-id">>, P, 0),
+                             maps:get(<<"date">>, P, <<"">>)]));
+                    _ -> <<"unknown">>
+                end,
+            #{<<"vendor">>              => Vendor,
+              <<"vendor-provenance">>   => [event_provenance(Ev)],
+              <<"microcode-description">>           => Desc,
+              <<"microcode-description-provenance">>=>
+                  [event_provenance(Ev)]}
+    end.
+
+%% Shim-specific: the SBAT revocation policy + MokListTrusted
+%% state. Found in EV_EFI_VARIABLE_AUTHORITY events.
+claim_shim(Events) ->
+    AuthEvs = [Ev || Ev <- Events,
+                     maps:get(<<"event-type-code">>, Ev, 0) =:= 16#800000E0],
+    SbatEvs = [Ev || Ev <- AuthEvs,
+                     sem_var_name(Ev) =:= <<"SbatLevel">>],
+    MokEvs = [Ev || Ev <- AuthEvs,
+                    sem_var_name(Ev) =:= <<"MokListTrusted">>],
+    {SbatRev, SbatProv} = case SbatEvs of
+        [] -> {<<"unknown">>, []};
+        [Sev | _] ->
+            SSem = nested(Sev, [<<"parsed">>, <<"semantic">>], #{}),
+            case maps:get(<<"sbat-entries">>, SSem, []) of
+                [#{<<"component">> := <<"sbat">>,
+                   <<"revision">> := Rev} | _] ->
+                    {Rev, [event_provenance(Sev)]};
+                _ -> {<<"unknown">>, []}
+            end
+    end,
+    {MokTrusted, MokProv} = case MokEvs of
+        [] -> {<<"unknown">>, []};
+        [Mev | _] ->
+            MSem = nested(Mev, [<<"parsed">>, <<"semantic">>], #{}),
+            V = maps:get(<<"moklist-trusted">>, MSem, <<"unknown">>),
+            {V, [event_provenance(Mev)]}
+    end,
+    #{<<"sbat-revision">>               => SbatRev,
+      <<"sbat-revision-provenance">>    => SbatProv,
+      <<"moklist-trusted">>             => MokTrusted,
+      <<"moklist-trusted-provenance">>  => MokProv}.
 
 %% Convert the keyed events map into a list sorted by seq number —
 %% more convenient for iterating and filtering per event-type.
