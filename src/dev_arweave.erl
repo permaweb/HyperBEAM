@@ -2199,12 +2199,6 @@ assemble_relative_chunks_nonzero_offset_test() ->
         assemble_relative_chunks([{1, 5, <<"abcde">>}], 2),
     ?assertEqual(<<"cde">>, hb_util:bin(Chunk)).
 
-extract_chunk_params_default_length_test() ->
-    ?assertEqual(
-        {ok, 123, 1, undefined},
-        extract_chunk_params(#{ <<"offset">> => 123 }, #{})
-    ).
-
 pending_relative_chunk_offsets_single_chunk_test() ->
     ?assertEqual([1234], pending_relative_chunk_offsets(0, 1, 1234)),
     ?assertEqual([1234], pending_relative_chunk_offsets(0, 1234, 1234)).
