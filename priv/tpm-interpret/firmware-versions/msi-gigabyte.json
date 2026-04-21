@@ -1,0 +1,32 @@
+{
+    "schema-version": 2,
+    "name": "MSI + Gigabyte consumer motherboards (AMI Aptio variant)",
+    "description": "MSI + Gigabyte desktop motherboards ship AMI Aptio UEFI firmware. Common in enthusiast + consumer DIY builds. Both vendors customise AMI with a vendor-specific UI (Click BIOS for MSI, DualBIOS / AORUS for Gigabyte).",
+    "entries": [
+        {
+            "match": {
+                "crtm-version-prefix": ["MSI", "Micro-Star International"]
+            },
+            "vendor": "Micro-Star International (MSI)",
+            "platforms": ["MSI MEG / MPG series (high-end)",
+                          "MSI MAG / PRO series (mid-range)",
+                          "MSI Stealth / Raider / Sword laptops"],
+            "tpm-chip-vendors": ["Intel PTT / AMD fTPM (default)",
+                                "Nuvoton NPCT7xx (workstation SKUs)"],
+            "notes": "MSI 'Click BIOS' firmware. TPM enabled by default on AM5 / LGA1700 boards released post-Windows 11 launch."
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["Gigabyte", "AORUS"]
+            },
+            "vendor": "Gigabyte Technology / AORUS",
+            "platforms": ["Gigabyte AORUS Master / Ultra",
+                          "Gigabyte GAMING / PRO / ELITE",
+                          "Gigabyte Server (R-series)"],
+            "tpm-chip-vendors": ["Intel PTT / AMD fTPM",
+                                "Nuvoton NPCT (some server SKUs)"],
+            "notes": "Gigabyte 'DualBIOS' maintains two firmware copies on-board for recovery. Both are measured on boot."
+        }
+    ],
+    "source": "MSI + Gigabyte BIOS download portals; AMI Aptio documentation."
+}

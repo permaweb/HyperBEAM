@@ -1,7 +1,6 @@
 {
-    "description": "TCG event-type codes → name, description, and data_format. Used by dev_tpm_tcg to decode TCG_PCR_EVENT / TCG_PCR_EVENT2 records. Covers both the legacy TCG core codes (0x00-0x12) and the UEFI-specific range (0x80000001+). Data format hints guide per-type decoders in dev_tpm_interpret.",
-    "source": "TCG PC Client Platform Firmware Profile Specification (level 00, rev 1.05+), and UEFI Specification 2.10 §32 (Secure Boot and Driver Signing).",
-
+    "description": "TCG event-type codes \u2192 name, description, and data_format. Used by dev_tpm_tcg to decode TCG_PCR_EVENT / TCG_PCR_EVENT2 records. Covers both the legacy TCG core codes (0x00-0x12) and the UEFI-specific range (0x80000001+). Data format hints guide per-type decoders in dev_tpm_interpret.",
+    "source": "TCG PC Client Platform Firmware Profile Specification (level 00, rev 1.05+), and UEFI Specification 2.10 \u00a732 (Secure Boot and Driver Signing).",
     "types": {
         "0": {
             "name": "EV_PREBOOT_CERT",
@@ -98,7 +97,6 @@
             "description": "Marker indicating boot-device events have been intentionally omitted. On PCR 4.",
             "data-format": "ascii"
         },
-
         "2147483649": {
             "name": "EV_EFI_VARIABLE_DRIVER_CONFIG",
             "description": "UEFI variable measurement; used for Secure Boot state (SecureBoot, PK, KEK, db, dbx). On PCR 7. Data is UEFI_VARIABLE_DATA: variableName GUID (16B), unicodeNameLength u64LE, variableDataLength u64LE, unicodeName UTF-16LE (unicodeNameLength chars), variableData. For SecureBoot variable specifically, variableData is a single byte: 0x01 = Secure Boot enabled, 0x00 = disabled. For PK/KEK/db/dbx, variableData is an EFI_SIGNATURE_LIST.",
@@ -161,7 +159,7 @@
         },
         "2147483872": {
             "name": "EV_EFI_VARIABLE_AUTHORITY",
-            "description": "UEFI variable authority — specifically, the certificate from db/dbx that authorised the loading of a particular image. On PCR 7. Data is UEFI_VARIABLE_DATA referencing the authority variable.",
+            "description": "UEFI variable authority \u2014 specifically, the certificate from db/dbx that authorised the loading of a particular image. On PCR 7. Data is UEFI_VARIABLE_DATA referencing the authority variable.",
             "data-format": "uefi_variable_data"
         },
         "2147483873": {
@@ -176,13 +174,33 @@
         },
         "2147483875": {
             "name": "EV_EFI_SPDM_DEVICE_POLICY",
-            "description": "SPDM policy (UEFI Spec 2.10 §32).",
+            "description": "SPDM policy (UEFI Spec 2.10 \u00a732).",
             "data-format": "spdm_device_policy"
         },
         "2147483876": {
             "name": "EV_EFI_SPDM_DEVICE_AUTHORITY",
-            "description": "SPDM authority (UEFI Spec 2.10 §32).",
+            "description": "SPDM authority (UEFI Spec 2.10 \u00a732).",
             "data-format": "spdm_device_authority"
+        },
+        "19": {
+            "name": "EV_POST_CODE2",
+            "description": "PFP 1.06 \u00a710.4.2: newer variant of EV_POST_CODE. Data has the UEFI_PLATFORM_FIRMWARE_BLOB2 shape (u8 description length, description bytes, u64 blob base, u64 blob length). On PCR 0.",
+            "data_format": "uefi_firmware_blob2"
+        },
+        "2147483660": {
+            "name": "EV_EFI_VARIABLE_BOOT2",
+            "description": "PFP 1.06 \u00a710.5.5: revised EV_EFI_VARIABLE_BOOT. Same UEFI_VARIABLE_DATA layout as EV_EFI_VARIABLE_BOOT, but the digest is computed over a PII-normalised view (BootOrder strings and Boot#### descriptions get zeroed). Data decode is identical; only the digest semantics change. On PCR 1.",
+            "data_format": "uefi_variable_data"
+        },
+        "2147483661": {
+            "name": "EV_EFI_GPT_EVENT2",
+            "description": "PFP 1.06 \u00a710.5.3: revised EV_EFI_GPT_EVENT. Same UEFI_GPT_DATA layout as EV_EFI_GPT_EVENT, but the digest is computed over a GUID/CRC-normalised view (disk GUID and partition entry CRCs get zeroed to allow the same physical disk layout to produce a deterministic measurement across boots). Data decode is identical. On PCR 5.",
+            "data_format": "uefi_gpt_data"
+        },
+        "2147483877": {
+            "name": "EV_EFI_SPDM_DEVICE_BLOB",
+            "description": "Post-PFP-1.06 draft (provisional, not yet ratified). SPDM device firmware blob measurement. Data is TCG_DEVICE_SECURITY_EVENT_DATA2: header + EFI_DEVICE_PATH + SPDM payload.",
+            "data_format": "spdm_device_blob"
         }
     }
 }

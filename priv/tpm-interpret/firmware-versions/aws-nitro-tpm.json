@@ -1,0 +1,18 @@
+{
+    "schema-version": 2,
+    "name": "AWS NitroTPM (EC2 instances)",
+    "description": "AWS NitroTPM exposes a virtual TPM 2.0 to EC2 instances on Nitro System hosts. CRTM identifies the AWS hypervisor firmware generation.",
+    "match": {
+        "crtm-version-prefix": ["AWS Nitro", "Amazon EC2"],
+        "crtm-version-regex": "^(AWS Nitro|Amazon EC2).*$"
+    },
+    "vendor": "Amazon Web Services",
+    "tpm-vendor-id": "unknown",
+    "trust-tier": "cloud-vtpm",
+    "virtualization-platform": "AWS EC2 (Nitro)",
+    "secure-boot-default": "enabled when NitroTPM is enabled; default Secure Boot db is Amazon-maintained",
+    "ek-root-ca-source": "AWS publishes the Nitro TPM root CA via aws-nitro-enclaves-attestation endpoints; also available at https://aws.amazon.com/security/ for the Nitro hypervisor attestation root.",
+    "nitro-system-note": "NitroTPM is orthogonal to Nitro Enclaves — EC2 instance attestation uses NitroTPM; enclave attestation uses a separate AWS-signed document. LapEE verifiers may need to handle both depending on whether the attestation comes from an enclave or the host.",
+    "notes": "Nitro-specific event log quirk: EBS-backed instances emit an additional EV_SEPARATOR with a custom 8-byte marker instead of the standard 4-byte 0x00000000 (the go-attestation 'ebs_event_missing_eventlog' test vector shows this).",
+    "source": "AWS EC2 documentation, NitroTPM launch announcements, go-attestation test fixture 'ebs_event_missing_eventlog'."
+}

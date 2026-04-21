@@ -1,0 +1,18 @@
+{
+    "schema-version": 2,
+    "name": "Azure Trusted Launch (Hyper-V vTPM)",
+    "description": "Azure Virtual Machines with Trusted Launch (Gen 2 VMs with vTPM + Secure Boot enabled) expose a virtual TPM 2.0 implemented by Microsoft Hyper-V. EK cert chains to a Microsoft vTPM CA.",
+    "match": {
+        "crtm-version-prefix": ["Microsoft Azure", "Hyper-V UEFI"],
+        "crtm-version-regex": "^(Microsoft Azure|Hyper-V UEFI).*$"
+    },
+    "vendor": "Microsoft",
+    "tpm-vendor-id": "4D534654",
+    "trust-tier": "cloud-vtpm",
+    "virtualization-platform": "Microsoft Azure (Hyper-V)",
+    "secure-boot-default": "enabled (Trusted Launch requirement)",
+    "ek-root-ca-source": "https://www.microsoft.com/pkiops/certs/Microsoft%20Hyper-V%20TPM%20RSA2k%20CA%202022.crt",
+    "attestation-endpoint": "https://shared.attest.azure.net/ (Azure Attestation service — JWT-signed attestation report)",
+    "notes": "Azure Trusted Launch integrates with Microsoft Defender for Cloud + Azure Attestation for policy-gated boot integrity. Confidential Computing VMs (AMD SEV-SNP / Intel TDX) layer additional CPU-level attestation on top of the vTPM.",
+    "source": "Azure Trusted Launch documentation + Microsoft PKI cert publication feed."
+}

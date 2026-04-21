@@ -1,175 +1,358 @@
 {
-    "schema-version": 1,
-    "description": "TCG-assigned TPM manufacturer IDs. Key is the 4-byte ASCII id expressed as 8 hex chars (the form that appears in the EK cert's tpmManufacturer attribute, with the 'id:' prefix stripped). Values match the TCG Vendor ID Registry (https://trustedcomputinggroup.org/resource/vendor-id-registry) as of 2024-09 plus a handful of firmware-TPM / virtual-TPM IDs commonly seen in the wild.",
-    "source": "TCG Vendor ID Registry, plus /drivers/char/tpm/tpm-chip.c in the Linux kernel tree.",
-    "vendors": {
-        "414D4400": {
-            "id": "id:414D4400",
-            "name": "AMD",
-            "kind": "fTPM_cpu",
-            "notes": "fTPM inside AMD PSP firmware. Weaker than a discrete TPM: compromise of the PSP compromises the TPM. Known CVEs: CVE-2021-26355 (fTPM arbitrary code exec)."
-        },
-        "414E5400": {
-            "id": "id:414E5400",
-            "name": "Ant Group",
-            "kind": "unknown",
-            "notes": "TCG vendor code ANT; used by a handful of Chinese server boards."
-        },
-        "41544D4C": {
-            "id": "id:41544D4C",
-            "name": "Atmel",
-            "kind": "discrete",
-            "notes": "Acquired by Microchip Technology. AT97SC3204 series."
-        },
-        "4252434D": {
-            "id": "id:4252434D",
-            "name": "Broadcom",
-            "kind": "discrete",
-            "notes": "BCM0102 series."
-        },
-        "4353434F": {
-            "id": "id:4353434F",
-            "name": "Cisco",
-            "kind": "server-platform",
-            "notes": "Shipped as part of Cisco UCS platforms."
-        },
-        "464C5953": {
-            "id": "id:464C5953",
-            "name": "Flyslice Technologies",
-            "kind": "discrete",
-            "notes": "FlySlice/FLYS."
-        },
-        "474F4F47": {
-            "id": "id:474F4F47",
-            "name": "Google",
-            "kind": "server-platform",
-            "notes": "Titan/OpenTitan on Google server platforms."
-        },
-        "48495349": {
-            "id": "id:48495349",
-            "name": "HiSilicon",
-            "kind": "cpu-ip",
-            "notes": "TPM IP for HiSilicon Kunpeng series."
-        },
-        "48505100": {
-            "id": "id:48505100",
-            "name": "HPE",
-            "kind": "server-platform",
-            "notes": "HPE / HP TPMs on ProLiant / EliteBook platforms."
-        },
-        "49424D00": {
-            "id": "id:49424D00",
-            "name": "IBM",
-            "kind": "server-platform",
-            "notes": "IBM SW TPM and System z hardware TPM."
-        },
-        "49465800": {
-            "id": "id:49465800",
-            "name": "Infineon",
-            "kind": "discrete",
-            "notes": "Infineon SLB 9665 / SLB 9670 / SLB 9672. The most common discrete TPM in consumer laptops (Lenovo ThinkPad, Dell Latitude, HP EliteBook). Root CA: OptigaRsaRootCA (URL in vendor docs)."
-        },
-        "494E5443": {
-            "id": "id:494E5443",
-            "name": "Intel",
-            "kind": "fTPM_cpu",
-            "notes": "Intel Platform Trust Technology (PTT) — fTPM implemented inside the CSME. Weaker than discrete: compromise of CSME compromises the TPM. Known-bad: CVE-2019-0090."
-        },
-        "494E5458": {
-            "id": "id:494E5458",
-            "name": "IBM SW TPM",
-            "kind": "software",
-            "notes": "TCG TPM 2.0 software reference implementation."
-        },
-        "4C454E00": {
-            "id": "id:4C454E00",
-            "name": "Lenovo",
-            "kind": "server-platform",
-            "notes": "Server platform TPM branding (ThinkSystem)."
-        },
-        "4D534654": {
-            "id": "id:4D534654",
-            "name": "Microsoft",
-            "kind": "software",
-            "notes": "Microsoft-reserved vendor code."
-        },
-        "4E534D20": {
-            "id": "id:4E534D20",
-            "name": "National Semiconductor",
-            "kind": "discrete",
-            "notes": "Legacy TPM 1.2 line; largely discontinued."
-        },
-        "4E545A00": {
-            "id": "id:4E545A00",
-            "name": "Nationz Technologies",
-            "kind": "discrete",
-            "notes": "Chinese TPM vendor; common on Nationz-branded Chinese boards."
-        },
-        "4E544300": {
-            "id": "id:4E544300",
-            "name": "Nuvoton Technology",
-            "kind": "discrete",
-            "notes": "NPCT650/750 series. Common on Lenovo, ASUS, MSI consumer boards and some enterprise laptops. Ships its own root CA; widely deployed."
-        },
-        "51434F4D": {
-            "id": "id:51434F4D",
-            "name": "Qualcomm",
-            "kind": "fTPM_cpu",
-            "notes": "Qualcomm QSEE fTPM; Snapdragon platforms."
-        },
-        "524F4343": {
-            "id": "id:524F4343",
-            "name": "Fuzhou Rockchip",
-            "kind": "fTPM_cpu",
-            "notes": "Rockchip RK3399 and similar SoCs."
-        },
-        "534D4643": {
-            "id": "id:534D4643",
-            "name": "SMF Creative Technology",
-            "kind": "discrete",
-            "notes": "Less common; found on some embedded Chinese boards."
-        },
-        "534D4E4E": {
-            "id": "id:534D4E4E",
-            "name": "Samsung",
-            "kind": "fTPM_cpu",
-            "notes": "Samsung TrustZone-backed fTPM on some Exynos platforms."
-        },
-        "534D5343": {
-            "id": "id:534D5343",
-            "name": "SMSC",
-            "kind": "discrete",
-            "notes": "Legacy; acquired by Microchip."
-        },
-        "534E5300": {
-            "id": "id:534E5300",
-            "name": "Sinosun",
-            "kind": "discrete",
-            "notes": "Chinese discrete TPM vendor."
-        },
-        "53544D20": {
-            "id": "id:53544D20",
-            "name": "STMicroelectronics",
-            "kind": "discrete",
-            "notes": "ST33TPHF2E series. Common on Dell / Framework / HP laptops. Publishes root CA on www.st.com."
-        },
-        "54584E00": {
-            "id": "id:54584E00",
-            "name": "Texas Instruments",
-            "kind": "discrete",
-            "notes": "Mostly legacy; TPM 1.2 era."
-        },
-        "57454300": {
-            "id": "id:57454300",
-            "name": "Winbond",
-            "kind": "discrete",
-            "notes": "Acquired by Nuvoton; older WPCT301 series."
-        },
-        "unknown": {
-            "id": "id:00000000",
-            "name": "Unknown",
-            "kind": "unknown",
-            "notes": "The tpmManufacturer attribute on the EK cert did not match any TCG-assigned vendor ID in our database. This could mean a new vendor ID has been registered since this release was cut, or the cert is synthetic / from a virtual TPM that does not populate the attribute."
-        }
+  "schema-version": 1,
+  "description": "TCG Vendor ID Registry v1.06 (2024) with enriched metadata. Each entry: {id, name, kind, platforms, ek_root_ca_source, ek_subject_pattern, product_families, ek_ca_thumbprints, known_cves, notes}. Keys are the 4-byte ASCII vendor ID hex-encoded (same form as the `tpmManufacturer` TCG OID 2.23.133.2.1 value on the EK cert, with the `id:` prefix stripped). Look up this table to render a human-readable vendor name and derive EK-chain-validation metadata.",
+  "source": "TCG Vendor ID Registry v1.06 (2024); vendor PKI pages (Infineon / Nuvoton / ST / AMD / Intel / Microsoft / Google / Lenovo / HP); Linux kernel drivers/char/tpm/tpm-chip.c; NIST NVD for CVE references.",
+  "vendors": {
+    "414D4400": {
+      "id": "id:414D4400",
+      "name": "AMD",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Ryzen",
+        "EPYC",
+        "Threadripper"
+      ],
+      "ek_root_ca_source": "https://ftpm.amd.com/pki/aia/ (hash-addressed CA chain)",
+      "ek_cert_acquisition": "sha256(0x00002222 || exp || modulus)[0..16] as the hash key",
+      "known_cves": [
+        "CVE-2021-26355 (fTPM arbitrary code exec)",
+        "CVE-2022-24485 (fTPM elevation)",
+        "faulTPM (2023) voltage glitch attack"
+      ],
+      "notes": "fTPM runs inside the AMD PSP firmware. Compromise of the PSP compromises the TPM."
+    },
+    "414E5400": {
+      "id": "id:414E5400",
+      "name": "Ant Group",
+      "kind": "other",
+      "platforms": [
+        "Chinese server boards"
+      ],
+      "notes": "TCG vendor code ANT. New in TCG VID Registry v1.06 (2024)."
+    },
+    "41544D4C": {
+      "id": "id:41544D4C",
+      "name": "Atmel / Microchip",
+      "kind": "discrete",
+      "platforms": [
+        "Embedded Linux (older)",
+        "Supermicro server boards"
+      ],
+      "ek_root_ca_source": "Microchip support portal (Atmel acquired by Microchip Technology in 2016)",
+      "notes": "Atmel AT97SC3204 series."
+    },
+    "4252434D": {
+      "id": "id:4252434D",
+      "name": "Broadcom",
+      "kind": "discrete",
+      "platforms": [
+        "HPE ProLiant servers (some)",
+        "Legacy enterprise boards"
+      ],
+      "notes": "BCM0102 series. Rare in new products."
+    },
+    "4353434F": {
+      "id": "id:4353434F",
+      "name": "Cisco",
+      "kind": "server-platform",
+      "platforms": [
+        "Cisco UCS blade + rack servers"
+      ],
+      "notes": "Cisco UCS platforms ship TPMs identified as Cisco rather than the chip vendor."
+    },
+    "464C5953": {
+      "id": "id:464C5953",
+      "name": "Flyslice Technologies",
+      "kind": "discrete",
+      "platforms": [
+        "Chinese embedded boards"
+      ],
+      "notes": "FLYS. Small vendor; rarely encountered outside mainland China."
+    },
+    "474F4F47": {
+      "id": "id:474F4F47",
+      "name": "Google",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Chromebooks (Cr50 + Ti50 security chips)",
+        "Google Compute Engine vTPM (Shielded VM)",
+        "Pixel phones (Titan M/M2)"
+      ],
+      "ek_root_ca_source": "Google publishes the GCE + Chromebook EK root CA chain at https://pki.goog/; Cr50/Ti50 per-device certs via chromium.org attestation tools.",
+      "notes": "Google fTPM variants: (1) Cr50/Ti50 in Chromebooks/Pixels \u2014 true hardware isolated fTPM; (2) GCE Shielded VM vTPM \u2014 software TPM running on hypervisor. GCE vTPMs emit a UTF-16LE CRTM of \"GCE Virtual Firmware v2\"."
+    },
+    "48495349": {
+      "id": "id:48495349",
+      "name": "HiSilicon (Huawei)",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Huawei Kunpeng servers",
+        "Huawei Ascend AI accelerators",
+        "Huawei MateBook laptops"
+      ],
+      "notes": "HiSilicon is Huawei in-house. Kunpeng servers integrate an fTPM in the processor SoC."
+    },
+    "48505100": {
+      "id": "id:48505100",
+      "name": "HP Inc.",
+      "kind": "server-platform",
+      "platforms": [
+        "HP EliteBook / ProBook / Z-workstation",
+        "HP printers (some higher-end)"
+      ],
+      "ek_root_ca_source": "HP Inc. TPM 2.0 EK Root CA, distributed via HP TPM Provisioning tool and HP driver portal",
+      "notes": "HP Inc. (consumer + commercial client). Distinct from HPE (servers). Uses Infineon/STM/Nuvoton chips underneath; but EK is re-issued under an HP-owned intermediate."
+    },
+    "49424D00": {
+      "id": "id:49424D00",
+      "name": "IBM",
+      "kind": "server-platform",
+      "platforms": [
+        "IBM Power / AIX servers",
+        "IBM Z mainframe (PR/SM)",
+        "Legacy ThinkPad (pre-2005)"
+      ],
+      "notes": "IBM-identified TPMs on modern Power systems. ThinkPad TPMs after the Lenovo acquisition report as Lenovo."
+    },
+    "49465800": {
+      "id": "id:49465800",
+      "name": "Infineon",
+      "kind": "discrete",
+      "platforms": [
+        "Lenovo ThinkPad",
+        "Dell Latitude",
+        "many enterprise server boards"
+      ],
+      "product_families": [
+        "OPTIGA TPM SLB 9670 (TPM 2.0, LPC bus)",
+        "OPTIGA TPM SLB 9672 (TPM 2.0, LPC+SPI)",
+        "OPTIGA TPM SLB 9673 (TPM 2.0, SPI, hardened)",
+        "SLB 9665 (TPM 1.2)"
+      ],
+      "ek_root_ca_source": "https://pki.infineon.com/ (public, CC-BY)",
+      "ek_subject_pattern": "CN=Infineon OPTIGA(TM) TPM 2.0 RSA CA NNN, OU=OPTIGA(TM), O=Infineon Technologies AG, C=DE",
+      "known_cves": [
+        "CVE-2017-15361 (ROCA weak RSA key generation, affects SLB 9635 and earlier)",
+        "CVE-2023-1017 / CVE-2023-1018 (TCG reference library overflow)"
+      ],
+      "notes": "Largest share of enterprise/laptop discrete TPM chips. Affected by the 2017 ROCA vulnerability if not firmware-updated."
+    },
+    "494E5443": {
+      "id": "id:494E5443",
+      "name": "Intel",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Core 6th-gen+ (PTT enabled by default on most)",
+        "Xeon Scalable",
+        "NUC",
+        "Evo-certified laptops"
+      ],
+      "ek_root_ca_source": "11th-gen+: EK cert lives in TPM NV at 0x01C00100+; pre-11th-gen: https://ekop.intel.com/ekcertservice/WellKnownRoot/",
+      "known_cves": [
+        "CVE-2019-16863 / CVE-2019-11090 (TPM-FAIL timing leak on Intel ME fTPM)",
+        "CVE-2022-0004 (Intel CSME firmware privilege escalation)"
+      ],
+      "notes": "Intel Platform Trust Technology runs inside the Management Engine (CSME). PTT since Skylake (6th gen). 11th gen+ keeps EK cert NV-resident."
+    },
+    "494E5458": {
+      "id": "id:494E5458",
+      "name": "InteXX",
+      "kind": "other",
+      "platforms": [
+        "Rare / OEM"
+      ],
+      "notes": "Allocated in TCG VID Registry; very few devices observed."
+    },
+    "4C454E00": {
+      "id": "id:4C454E00",
+      "name": "Lenovo",
+      "kind": "server-platform",
+      "platforms": [
+        "Lenovo ThinkPad (post-2005)",
+        "Lenovo ThinkSystem servers (SR/ST/SN series)",
+        "Lenovo ThinkCentre desktop"
+      ],
+      "ek_root_ca_source": "https://pki.lenovo.com/ (Lenovo ThinkPad TPM Root CA + Lenovo ThinkSystem TPM Root CA)",
+      "notes": "Lenovo re-issues the underlying chip-vendor EK under a Lenovo intermediate. CRTM is UTF-16LE with 3-char prefix disambiguating generation (see firmware-versions/lenovo-thinkpad.json)."
+    },
+    "4D534654": {
+      "id": "id:4D534654",
+      "name": "Microsoft",
+      "kind": "virtual",
+      "platforms": [
+        "Hyper-V vTPM",
+        "Azure Trusted Launch VMs",
+        "Windows Defender Credential Guard VSM"
+      ],
+      "ek_root_ca_source": "https://www.microsoft.com/pkiops/certs/ (Microsoft Hyper-V vTPM CA 2022)",
+      "notes": "Software TPM used by Hyper-V + Azure."
+    },
+    "4E534D20": {
+      "id": "id:4E534D20",
+      "name": "NSING",
+      "kind": "discrete",
+      "platforms": [
+        "Chinese OEM"
+      ],
+      "notes": "New in TCG VID Registry v1.06 (2024)."
+    },
+    "4E544300": {
+      "id": "id:4E544300",
+      "name": "Nuvoton",
+      "kind": "discrete",
+      "platforms": [
+        "Framework Laptop (NPCT7xx)",
+        "Lenovo IdeaPad",
+        "Supermicro X12 series",
+        "Various consumer motherboards"
+      ],
+      "product_families": [
+        "NPCT7xx (2.0, LPC)",
+        "NPCT65x (2.0, SPI+LPC)",
+        "NPCT4xx / NPCT5xx (2.0, hardened)"
+      ],
+      "ek_root_ca_source": "https://www.nuvoton.com/security/NTC-TPM-EK-Cert/",
+      "ek_ca_thumbprints": {
+        "Nuvoton TPM Root CA 2111 (NPCT75x)": "a3:43:0d:4e:2f:07:55:61:96:5a:e6:ed:32:c9:1a:3d:73:22:c4:2b"
+      },
+      "known_cves": [
+        "CVE-2023-34440 (Nuvoton NPCT75x ECDSA leaked scalar bit)",
+        "CVE-2023-1017/1018 (TCG reference library)"
+      ],
+      "notes": "Strong adoption in consumer + embedded. Framework laptops use NPCT7xx."
+    },
+    "4E545A00": {
+      "id": "id:4E545A00",
+      "name": "Nationz",
+      "kind": "discrete",
+      "platforms": [
+        "Chinese consumer boards"
+      ],
+      "notes": "Nationz Technologies Inc. (Shenzhen). Major vendor in the Chinese domestic ecosystem."
+    },
+    "51434F4D": {
+      "id": "id:51434F4D",
+      "name": "Qualcomm",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Snapdragon mobile (Android)",
+        "Windows on Arm laptops (Surface Pro X, Galaxy Book4 Edge)"
+      ],
+      "notes": "Qualcomm fTPM inside the Snapdragon Security Processing Unit."
+    },
+    "524F4343": {
+      "id": "id:524F4343",
+      "name": "Rockchip",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Rockchip RK3399 / RK3588 (Linux SBCs: PineBook, Radxa)",
+        "Embedded Linux"
+      ],
+      "notes": "Rockchip fTPM via the SoC Secure-Enclave (BootROM + TrustZone)."
+    },
+    "534D4643": {
+      "id": "id:534D4643",
+      "name": "SMSC",
+      "kind": "discrete",
+      "platforms": [
+        "Legacy enterprise boards"
+      ],
+      "notes": "SMSC was acquired by Microchip in 2012. Rarely encountered in modern products."
+    },
+    "534D4E4E": {
+      "id": "id:534D4E4E",
+      "name": "Samsung",
+      "kind": "fTPM-cpu",
+      "platforms": [
+        "Exynos-based Galaxy phones",
+        "Galaxy Book laptops (Exynos variants)"
+      ],
+      "notes": "Samsung Exynos fTPM inside the Shannon baseband."
+    },
+    "534D5343": {
+      "id": "id:534D5343",
+      "name": "SMSC (alt code)",
+      "kind": "discrete",
+      "platforms": [
+        "Legacy embedded"
+      ],
+      "notes": "Alternate SMSC TCG VID."
+    },
+    "534E5300": {
+      "id": "id:534E5300",
+      "name": "Sinosun",
+      "kind": "discrete",
+      "platforms": [
+        "Chinese domestic market"
+      ],
+      "notes": "Shenzhen State Micro (Sinosun)."
+    },
+    "53544D20": {
+      "id": "id:53544D20",
+      "name": "STMicroelectronics",
+      "kind": "discrete",
+      "platforms": [
+        "Dell XPS",
+        "Some Lenovo models",
+        "Embedded automotive",
+        "Industrial controllers"
+      ],
+      "product_families": [
+        "ST33TPHF20X (TPM 2.0)",
+        "ST33TPM12 (TPM 1.2 legacy)"
+      ],
+      "ek_root_ca_source": "ST cert portal (https://www.st.com/content/st_com/en/tpm.html)",
+      "known_cves": [
+        "CVE-2019-16863 / CVE-2019-11090 (TPM-FAIL, ST33TPHF20X)",
+        "CVE-2018-6622 (S3 replay)",
+        "CVE-2023-1017/1018 (TCG reference library)"
+      ],
+      "notes": "Second-largest discrete vendor after Infineon. ST33TPHF20X common in PC-client."
+    },
+    "54584E00": {
+      "id": "id:54584E00",
+      "name": "Texas Instruments",
+      "kind": "discrete",
+      "platforms": [
+        "Embedded Linux",
+        "Industrial control"
+      ],
+      "notes": "TXN \u2014 Texas Instruments TPMs. Limited adoption."
+    },
+    "57454300": {
+      "id": "id:57454300",
+      "name": "Winbond / Nuvoton (legacy)",
+      "kind": "discrete",
+      "platforms": [
+        "Legacy boards (pre-Nuvoton spinout in 2008)"
+      ],
+      "notes": "Older devices may still report Winbond (WEC)."
+    },
+    "53656345": {
+      "id": "id:53656345",
+      "name": "SecEdge",
+      "kind": "discrete",
+      "platforms": [
+        "Embedded / IoT"
+      ],
+      "notes": "New in TCG VID Registry v1.06 (2024)."
+    },
+    "534F4C49": {
+      "id": "id:534F4C49",
+      "name": "Solidigm",
+      "kind": "other",
+      "platforms": [
+        "Solidigm SSDs with TCG Opal self-encrypting drive TPM-like attestation"
+      ],
+      "notes": "New in TCG VID Registry v1.06 (2024). Former Intel memory business."
+    },
+    "unknown": {
+      "id": "id:unknown",
+      "name": "Unknown / Unregistered",
+      "kind": "unknown",
+      "notes": "Vendor ID not in the TCG Vendor ID Registry. Could indicate a pre-release TPM, custom-fab chip, or corrupted cert."
     }
+  },
+  "schema_version": 2,
+  "vendor_count": 30
 }

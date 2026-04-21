@@ -1,0 +1,33 @@
+{
+    "schema-version": 2,
+    "name": "Intel NUC + ASRock consumer motherboards (AMI Aptio variant)",
+    "description": "Intel NUC kits and ASRock motherboards ship AMI Aptio firmware (with per-vendor customisation). CRTM_VERSION identifies the board + BIOS revision.",
+    "entries": [
+        {
+            "match": {
+                "crtm-version-prefix": ["American Megatrends", "AMI NUC"],
+                "crtm-version-regex": "^(American Megatrends|AMI NUC).*NUC.*$"
+            },
+            "vendor": "Intel Corporation (NUC)",
+            "platforms": ["NUC 6 / 7 / 8 (discontinued)",
+                          "NUC 9 Extreme",
+                          "NUC 10 / 11 / 12 / 13 Pro",
+                          "NUC 13 / 14 Rugged"],
+            "tpm-chip-vendors": ["Intel PTT (fTPM) on most SKUs",
+                                "Infineon SLB 9670 (optional add-on)"],
+            "bios-update-path": "Intel NUC BIOS Update utility + LVFS",
+            "notes": "Intel sold the NUC line to ASUS in 2023; post-acquisition BIOS strings include 'ASUS NUC' or 'ASUS NUC Pro' prefixes. Older Intel-branded NUCs continue to receive BIOS updates from Intel through end-of-support dates."
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["ASRock"]
+            },
+            "vendor": "ASRock",
+            "platforms": ["ASRock AMD AM4 / AM5 boards",
+                          "ASRock Intel LGA1700 boards",
+                          "ASRock Rack server boards (AMD EPYC / Xeon)"],
+            "notes": "ASRock boards commonly ship Nuvoton NPCT7xx TPMs. ASRock Rack server line uses either the same or Infineon depending on model."
+        }
+    ],
+    "source": "Intel NUC BIOS release notes; ASRock motherboard BIOS catalogue."
+}

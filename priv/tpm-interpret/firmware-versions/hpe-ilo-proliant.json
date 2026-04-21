@@ -1,0 +1,23 @@
+{
+    "schema-version": 2,
+    "name": "HPE ProLiant / Synergy servers (iLO-managed UEFI)",
+    "description": "HPE enterprise servers (ProLiant Gen10+, Synergy, Apollo, Cray) ship UEFI firmware managed through the iLO 5 / iLO 6 BMC. CRTM_VERSION identifies the HPE firmware generation; iLO provides a separate attestation surface (iLO Security Attestation).",
+    "match": {
+        "crtm-version-prefix": ["HPE BIOS", "HP BIOS", "Hewlett Packard Enterprise"],
+        "crtm-version-regex": "^(HPE|HP|Hewlett Packard Enterprise).*$"
+    },
+    "vendor": "Hewlett Packard Enterprise",
+    "bios-vendor": "HPE in-house UEFI (AMI-derived)",
+    "platforms": ["ProLiant DL Gen10 / DL Gen10 Plus / DL Gen11",
+                  "Synergy 480 / 660 Gen10/Gen11",
+                  "Apollo 2000 / 4200 Gen10",
+                  "HPE Alletra (storage)"],
+    "secure-boot-default": "disabled on server SKUs (can be enabled per-deployment)",
+    "silicon-root-of-trust": "HPE iLO 5+ implements a Silicon Root of Trust (SRoT) anchored in the iLO chip's TrustZone, independent of Intel/AMD CPU fTPM. Measured-boot chain: iLO → UEFI → OS.",
+    "tpm-chip-vendors": ["Infineon SLB 9672 (primary)",
+                        "Nuvoton NPCT (secondary)",
+                        "Broadcom BCM01xx (legacy)"],
+    "ek-root-ca-source": "HPE Integrated Lights-Out (iLO) Security Attestation CA; downloadable from the HPE support portal per server model.",
+    "notes": "HPE Silicon Root of Trust provides a lifecycle attestation for the iLO firmware itself, separate from the TPM-rooted attestation for UEFI + OS. A LapEE verifier wanting the full chain on HPE gear should query iLO for the SRoT cert + TPM for the UEFI/OS attestation.",
+    "source": "HPE ProLiant Security Whitepaper (2023); observed PK cert patterns from HPE ProLiant test logs."
+}

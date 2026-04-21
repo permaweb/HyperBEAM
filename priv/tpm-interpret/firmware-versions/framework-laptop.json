@@ -1,0 +1,19 @@
+{
+    "schema-version": 2,
+    "name": "Framework Laptop (13 / 16, AMD Ryzen / Intel Core)",
+    "description": "Framework laptops ship Insyde H2O UEFI firmware with Framework-customised splash + board-specific modules. Both the Intel and AMD variants use Nuvoton NPCT7xx discrete TPMs.",
+    "match": {
+        "crtm-version-prefix": ["Framework", "INSYDE Corp.", "H20 Main BIOS"],
+        "crtm-version-regex": "^(Framework|INSYDE Corp\\.|H20 Main BIOS).*$"
+    },
+    "vendor": "Framework Computer, Inc.",
+    "bios-vendor": "Insyde H2O",
+    "platforms": ["Framework Laptop 13 (Intel 11th-13th gen)",
+                  "Framework Laptop 13 (AMD Ryzen 7040 / 7xxx series)",
+                  "Framework Laptop 16 (AMD Ryzen 7040)"],
+    "tpm-chip-vendors": ["Nuvoton NPCT7xx (all variants to date)"],
+    "secure-boot-default": "enabled (UEFI Secure Boot with Microsoft UEFI CA + Framework Platform Key)",
+    "tpm-attestation-note": "Framework publishes EK root CA chain via their community support portal; end users can extract the per-device EK cert via `tpm2_getekcertificate` or the `tpm2_nvread` path for NV 0x01C00002.",
+    "notes": "Framework boards get BIOS updates via the UEFI Capsule path + LVFS (Linux Vendor Firmware Service). Each release is documented at https://knowledgebase.frame.work/en_us/framework-laptop-bios-releases-S1dMQt6F — verifiers can pin a specific BIOS revision against the known-good CRTM digest.",
+    "source": "Framework community forum firmware release notes; LVFS firmware catalogue; observed CRTM + TPM vendor ID from Framework 13 AMD Ryzen owner-submitted logs."
+}

@@ -1,0 +1,19 @@
+{
+    "schema-version": 2,
+    "name": "Google Chromebook (coreboot + Cr50 / Ti50)",
+    "description": "Google Chromebooks use coreboot firmware with a Google-designed security chip (Cr50 for older ARM/Intel Chromebooks; Ti50 for recent Chromebooks). CRTM_VERSION identifies the coreboot build.",
+    "match": {
+        "crtm-version-prefix": ["coreboot-chromiumos", "chromiumos", "Google_"],
+        "crtm-version-regex": "^(coreboot|chromiumos|Google_).*$"
+    },
+    "vendor": "Google",
+    "tpm-vendor-id": "474F4F47",
+    "trust-tier": "hardware-chromebook",
+    "bios-vendor": "coreboot (Google fork, chromium-os-tree)",
+    "secure-boot-default": "Google Verified Boot (not UEFI Secure Boot — uses chained signatures anchored in Cr50/Ti50)",
+    "ek-root-ca-source": "Google publishes the Chromebook attestation root CA via pki.goog/ and the `vpd` (Vital Product Data) tool on Chromebooks; per-device certs are derived from Cr50/Ti50.",
+    "platforms-note": "Chromebook CRTM strings often encode the code-name + date, e.g. 'Google_Dalboz.14675.0.0-rc1'. Map the code-name against the ChromeOS device catalogue at https://www.chromium.org/chromium-os/developer-information-for-chrome-os-devices/.",
+    "pluton-like-architecture": "Cr50/Ti50 are Google's answer to Pluton: a dedicated microcontroller (H1 for Cr50, Titan M-like for Ti50) that performs the TPM 2.0 implementation in a hardware-isolated enclave with measured-boot anchored in the chip's ROM.",
+    "notes": "Chromebooks don't use standard UEFI Secure Boot — they use Google's Verified Boot (coreboot → depthcharge → kernel, each link anchored in keys stored in the Cr50/Ti50). CRTM events are emitted by coreboot; the Cr50/Ti50 also provides a TPM 2.0 interface to the OS.",
+    "source": "coreboot source tree; ChromeOS firmware images; Google Pixel / Chromebook security whitepapers."
+}

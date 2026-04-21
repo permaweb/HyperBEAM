@@ -1,0 +1,23 @@
+{
+    "schema-version": 2,
+    "name": "ASUS ROG / ZenBook / ExpertBook (AMI Aptio variant)",
+    "description": "ASUS consumer + commercial laptops ship AMI Aptio V UEFI firmware. CRTM_VERSION identifies the ASUS board family + BIOS revision.",
+    "match": {
+        "crtm-version-prefix": ["ASUSTeK", "ASUS"],
+        "crtm-version-regex": "^(ASUSTeK|ASUS).*$"
+    },
+    "vendor": "ASUSTeK Computer Inc.",
+    "bios-vendor": "American Megatrends (AMI) Aptio V",
+    "platforms": ["ASUS ROG (gaming)",
+                  "ASUS ZenBook (ultrabook)",
+                  "ASUS ExpertBook (business)",
+                  "ASUS ProArt (creative)",
+                  "ASUS TUF (mid-range gaming)",
+                  "ASUS NUC (post-Intel-acquisition)"],
+    "tpm-chip-vendors": ["Intel PTT (most Intel models)",
+                        "AMD fTPM (most AMD models)",
+                        "Nuvoton NPCT (some higher-end business SKUs)"],
+    "secure-boot-default": "enabled on commercial + ExpertBook SKUs; variable on consumer SKUs",
+    "notes": "ASUS ROG gaming laptops often have the TPM disabled by default in BIOS; ExpertBook (business) has it enabled. CRTM string encodes the ASUS board code which can be cross-referenced via ASUS firmware catalogue at https://rog.asus.com/support/.",
+    "source": "ASUS BIOS download portal; AMI Aptio documentation."
+}

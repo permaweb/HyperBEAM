@@ -1,0 +1,41 @@
+{
+    "schema-version": 2,
+    "name": "System76 / Purism / StarLabs coreboot-based laptops",
+    "description": "Independent Linux-focused laptop vendors (System76, Purism, Star Labs) ship coreboot UEFI firmware on their high-end models. CRTM_VERSION identifies the coreboot build + vendor-specific payload.",
+    "entries": [
+        {
+            "match": {
+                "crtm-version-prefix": ["System76", "system76", "coreboot-system76"]
+            },
+            "vendor": "System76",
+            "platforms": ["Oryx Pro (oryp*)",
+                          "Lemur Pro (lemp*)",
+                          "Thelio (thelio-*)",
+                          "Pangolin (pang*)"],
+            "firmware-update-path": "System76 Open Firmware Update Manager (firmware-manager)",
+            "notes": "System76's 'Open Firmware' branding bundles coreboot + edk2 + System76-maintained ectool. TPM present on newer Oryx / Lemur / Thelio models."
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["Purism", "Librem", "coreboot-librem"]
+            },
+            "vendor": "Purism",
+            "platforms": ["Librem 14 (most measured)",
+                          "Librem 5 phone (Pluton-like, non-TPM)"],
+            "firmware-note": "Purism Librem 14 ships Heads (coreboot + Linuxboot) as a security-focused boot option. Supports TPM-sealed LUKS and detached firmware signing.",
+            "notes": "Heads-based boot path produces EV_IPL events with coreboot-specific annotations."
+        },
+        {
+            "match": {
+                "crtm-version-prefix": ["Star Labs", "StarLabs", "coreboot-starlabs"]
+            },
+            "vendor": "Star Labs",
+            "platforms": ["StarBook MkV / MkVI",
+                          "StarFighter",
+                          "StarLite MkIV / MkV"],
+            "notes": "StarLabs ships coreboot on most of their recent laptops. TPM 2.0 (Nuvoton NPCT7xx or similar)."
+        }
+    ],
+    "notes": "coreboot-based firmware has vastly fewer EV_EFI_* events than AMI/Insyde/EDK II because coreboot is purpose-specific and doesn't emulate the full UEFI boot service catalog. Verifiers should expect sparse PCR 2/3/4 state compared to mainstream UEFI hosts.",
+    "source": "System76 Open Firmware docs, Purism Heads docs, StarLabs firmware release notes."
+}

@@ -1,0 +1,16 @@
+{
+    "schema-version": 2,
+    "name": "Microsoft Surface (Pro, Laptop, Studio) firmware family",
+    "description": "Microsoft Surface devices ship UEFI firmware produced in-house by Microsoft Surface Firmware Team. Intel-based Surfaces use PTT; Arm-based Surfaces (Pro X / Pro 9 5G / Pro 11) use Microsoft Pluton.",
+    "match": {
+        "crtm-version-prefix": ["Microsoft Surface", "SurfaceUEFI"],
+        "crtm-version-regex": "^(Microsoft Surface|SurfaceUEFI).*$"
+    },
+    "vendor": "Microsoft",
+    "platforms-note": "CRTM version string encodes the Surface generation (e.g. 'SurfaceUEFI_1.2.1.0'). Combine with SMBIOS System Information Type 1 to identify the specific product line.",
+    "secure-boot-default": "enabled",
+    "bitlocker-default": "enabled (on modern consumer SKUs)",
+    "pluton-ready": true,
+    "notes": "Microsoft ships the only major consumer PC family with default BitLocker + optional Pluton. Pluton-equipped Surfaces report as Microsoft vendor ID (0x4D534654) for the TPM; Intel PTT-based Surfaces report as 0x494E5443. Surface UEFI + SEMM (Surface Enterprise Management Mode) allows enterprise lockdown of firmware settings per attestation.",
+    "source": "Microsoft Surface enterprise deployment guide; observed CRTM strings from Surface Pro 8/9/10."
+}

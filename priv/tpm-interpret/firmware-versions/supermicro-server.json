@@ -1,0 +1,20 @@
+{
+    "schema-version": 2,
+    "name": "Supermicro server boards (AMI Aptio variant)",
+    "description": "Supermicro server motherboards ship AMI Aptio V UEFI firmware customised by Supermicro. CRTM strings identify the board family + BIOS revision.",
+    "match": {
+        "crtm-version-prefix": ["Supermicro", "American Megatrends", "SMCI"],
+        "crtm-version-regex": "^(Supermicro|American Megatrends|SMCI).*$"
+    },
+    "vendor": "Super Micro Computer, Inc.",
+    "bios-vendor": "American Megatrends (AMI) Aptio V",
+    "platforms": ["H11 / H12 / H13 series (AMD EPYC)",
+                  "X11 / X12 / X13 series (Intel Xeon)",
+                  "M11 / M12 series (marketplace appliances)"],
+    "secure-boot-default": "disabled on server SKUs (can be enabled per-deployment)",
+    "ipmi-note": "Supermicro server BIOSes measure additional events for IPMI (BMC handoff) on PCR 6 — see the `supermicro-h12ssl` fixture in priv/tpm-interpret/fixtures/.",
+    "tpm-chip-vendors": ["Nuvoton NPCT75x (most common)",
+                        "Infineon SLB 9672 (enterprise line)"],
+    "notes": "Supermicro AMD EPYC (H12/H13) platforms commonly pair Nuvoton NPCT75x TPMs with AMD fTPM available as an alternative. The SUPERMICRO PK CA cert appears in PCR 7 EV_EFI_VARIABLE_DRIVER_CONFIG events; recognisable by `CN=Super Micro Computer, Inc. Platform Key, OU=BIOS`.",
+    "source": "Supermicro BIOS release notes; observed PK cert from the supermicro-h12ssl.bios_measurements test vector."
+}

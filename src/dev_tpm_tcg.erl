@@ -1752,9 +1752,73 @@ decode_uefi_variable_semantic(<<"DeployedMode">>, <<B:8>>) ->
     #{<<"deployed-mode">> => B == 1};
 decode_uefi_variable_semantic(Name, Data)
   when Name =:= <<"PK">>; Name =:= <<"KEK">>;
-       Name =:= <<"db">>; Name =:= <<"dbx">> ->
+       Name =:= <<"db">>; Name =:= <<"dbx">>;
+       Name =:= <<"dbr">>; Name =:= <<"dbt">>;
+       Name =:= <<"MokList">>; Name =:= <<"MokListX">>;
+       Name =:= <<"MokListRT">>; Name =:= <<"MokListXRT">>;
+       Name =:= <<"MokListTrusted">>;
+       Name =:= <<"SbatLevelRT">> ->
     #{<<"signature-list">> => summarise_signature_list(Data)};
+decode_uefi_variable_semantic(<<"MokListTrusted">>, <<1>>) ->
+    %% Shim: MokListTrusted = 1 means the user has explicitly
+    %% approved the MokList (i.e. Shim should trust the user-
+    %% enrolled keys alongside the UEFI db).
+    #{<<"moklist-trusted">> => true};
+decode_uefi_variable_semantic(<<"MokListTrusted">>, <<0>>) ->
+    #{<<"moklist-trusted">> => false};
+decode_uefi_variable_semantic(<<"SbatLevel">>, Data) ->
+    %% Shim's SBAT revocation policy. Data is ASCII lines:
+    %%   "sbat,<version>,<date-stamp>\n<component>,<revision>\n..."
+    %% The first line is the SBAT self-revision + a YYYYMMDDHH
+    %% date stamp (used as the revocation cutoff).
+    Lines = binary:split(strip_trailing_nulls(Data),
+                           <<"\n">>, [global, trim_all]),
+    Entries =
+        [case binary:split(L, <<",">>, [global]) of
+             [Component, Rev | _] -> #{<<"component">> => Component,
+                                       <<"revision">>  => Rev};
+             [Single]             -> #{<<"component">> => Single,
+                                       <<"revision">>  => <<"">>}
+         end || L <- Lines],
+    #{<<"sbat-entries">>       => Entries,
+      <<"sbat-entry-count">>   => length(Entries)};
+decode_uefi_variable_semantic(<<"Shim", _/binary>>, Data) ->
+    %% Shim's own variables (Shim, ShimRT, ShimGuid, ...). The
+    %% content is shim-specific; surface SHA-256 + length.
+    #{<<"shim-variable-sha256">> =>
+          hb_util:encode(crypto:hash(sha256, Data)),
+      <<"shim-variable-length">> => byte_size(Data)};
+decode_uefi_variable_semantic(<<"BootOrder">>, _) -> #{};
+decode_uefi_variable_semantic(<<"Boot", _/binary>>, _) -> #{};
+decode_uefi_variable_semantic(<<"BootCurrent">>, <<Curr:16/little>>) ->
+    #{<<"boot-current">> => iolist_to_binary(
+        io_lib:format("Boot~4.16.0B", [Curr]))};
+decode_uefi_variable_semantic(<<"BootNext">>, <<Next:16/little>>) ->
+    #{<<"boot-next">> => iolist_to_binary(
+        io_lib:format("Boot~4.16.0B", [Next]))};
+decode_uefi_variable_semantic(<<"Timeout">>, <<T:16/little>>) ->
+    #{<<"boot-menu-timeout-seconds">> => T};
+decode_uefi_variable_semantic(<<"OsIndications">>, <<V:64/little>>) ->
+    #{<<"os-indications">>       => V,
+      <<"os-indications-flags">> => os_indications_flags(V)};
+decode_uefi_variable_semantic(<<"OsIndicationsSupported">>,
+                                <<V:64/little>>) ->
+    #{<<"os-indications-supported">>       => V,
+      <<"os-indications-supported-flags">> => os_indications_flags(V)};
 decode_uefi_variable_semantic(_, _) -> #{}.
+
+%% UEFI §8 Table 8-1: OsIndications bit flags.
+os_indications_flags(V) ->
+    [Name || {Bit, Name} <- [
+        {16#01, <<"BOOT_TO_FW_UI">>},
+        {16#02, <<"TIMESTAMP_REVOCATION">>},
+        {16#04, <<"FILE_CAPSULE_DELIVERY_SUPPORTED">>},
+        {16#08, <<"FMP_CAPSULE_SUPPORTED">>},
+        {16#10, <<"CAPSULE_RESULT_VAR_SUPPORTED">>},
+        {16#20, <<"START_OS_RECOVERY">>},
+        {16#40, <<"START_PLATFORM_RECOVERY">>},
+        {16#80, <<"JSON_CONFIG_DATA_REFRESH">>}
+    ], (V band Bit) =/= 0].
 
 %% EFI_SIGNATURE_LIST header (UEFI §32.4.1):
 %%   signatureType     EFI_GUID (16B)

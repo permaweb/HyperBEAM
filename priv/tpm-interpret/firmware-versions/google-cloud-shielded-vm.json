@@ -1,0 +1,19 @@
+{
+    "schema-version": 2,
+    "name": "Google Compute Engine Shielded VM (vTPM)",
+    "description": "GCE Shielded VMs include a virtual TPM implemented by Google's hypervisor. CRTM identifies the virtual firmware generation. Suitable for per-VM attestation when Shielded VM is enabled.",
+    "match": {
+        "crtm-version-prefix": ["GCE Virtual Firmware"],
+        "crtm-version-regex": "^GCE Virtual Firmware v[0-9]+$"
+    },
+    "vendor": "Google",
+    "tpm-vendor-id": "474F4F47",
+    "trust-tier": "cloud-vtpm",
+    "virtualization-platform": "Google Cloud (GCE)",
+    "crtm-utf16": true,
+    "secure-boot-default": "enabled (Shielded VM)",
+    "known-crtm-strings": ["GCE Virtual Firmware v1", "GCE Virtual Firmware v2"],
+    "ek-root-ca-source": "https://pki.goog/ — Google vTPM EK intermediate chains from the google-cloud-platform attestation endpoints.",
+    "notes": "Shielded VMs also populate PCR 0 with a predictable per-firmware-version digest; see https://cloud.google.com/compute/shielded-vm/docs/integrity-monitoring#baseline_policies for the expected baselines. Shielded VM with SEV / SEV-SNP / TDX routes to AMD-SEV-SNP-specific attestation in addition to vTPM.",
+    "source": "Google Cloud docs + observed CRTM strings in go-eventlog test vectors (gce-ubuntu-2104, gce-coreos-no-sb)."
+}
