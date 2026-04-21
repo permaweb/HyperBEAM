@@ -40,7 +40,10 @@ if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
     mkdir -p "$SRC"
     rsync -a \
         --exclude='_build/' --exclude='.git/' \
-        --exclude='priv/' --exclude='logs/' --exclude='metrics/' \
+        --exclude='logs/' --exclude='metrics/' \
+        --exclude='priv/crates/' \
+        --exclude='priv/html/' \
+        --exclude='priv/static/' \
         --exclude='rebar3.crashdump' \
         --exclude='native/lib/secp256k1/build/' \
         --exclude='*.o' --exclude='*.so' --exclude='*.dylib' \
@@ -49,6 +52,14 @@ if [[ -f "$HB_ROOT/rebar.config" && -d "$HB_ROOT/src" ]]; then
         --exclude='lapee-baremetal/work/' \
         --exclude='lapee-baremetal/out/' \
         "$HB_ROOT/" "$SRC/"
+    #
+    # Keep `priv/tpm-interpret/` (static JSON DB + fixture corpus)
+    # so the release can serve manufacturer + firmware-version +
+    # event-type lookups. `priv/crates/` (Rust NIF cache) +
+    # `priv/html/` + `priv/static/` are excluded because they're
+    # rebuilt / shipped elsewhere; excluding them avoids copying
+    # macOS-platform build artefacts that the Linux container's
+    # linker can't consume.
     # Also scrub any platform-specific build detritus that may have
     # been rsynced on earlier passes. If the host previously ran
     # `rebar3 compile' natively (e.g. to build a macOS-native
