@@ -1750,22 +1750,20 @@ decode_uefi_variable_semantic(<<"AuditMode">>, <<B:8>>) ->
     #{<<"audit-mode">> => B == 1};
 decode_uefi_variable_semantic(<<"DeployedMode">>, <<B:8>>) ->
     #{<<"deployed-mode">> => B == 1};
+%% MokListTrusted is a SINGLE-BYTE bool in the shim source of
+%% truth — must match BEFORE the signature-list catch-all below.
+decode_uefi_variable_semantic(<<"MokListTrusted">>, <<1>>) ->
+    #{<<"moklist-trusted">> => true};
+decode_uefi_variable_semantic(<<"MokListTrusted">>, <<0>>) ->
+    #{<<"moklist-trusted">> => false};
 decode_uefi_variable_semantic(Name, Data)
   when Name =:= <<"PK">>; Name =:= <<"KEK">>;
        Name =:= <<"db">>; Name =:= <<"dbx">>;
        Name =:= <<"dbr">>; Name =:= <<"dbt">>;
        Name =:= <<"MokList">>; Name =:= <<"MokListX">>;
        Name =:= <<"MokListRT">>; Name =:= <<"MokListXRT">>;
-       Name =:= <<"MokListTrusted">>;
        Name =:= <<"SbatLevelRT">> ->
     #{<<"signature-list">> => summarise_signature_list(Data)};
-decode_uefi_variable_semantic(<<"MokListTrusted">>, <<1>>) ->
-    %% Shim: MokListTrusted = 1 means the user has explicitly
-    %% approved the MokList (i.e. Shim should trust the user-
-    %% enrolled keys alongside the UEFI db).
-    #{<<"moklist-trusted">> => true};
-decode_uefi_variable_semantic(<<"MokListTrusted">>, <<0>>) ->
-    #{<<"moklist-trusted">> => false};
 decode_uefi_variable_semantic(<<"SbatLevel">>, Data) ->
     %% Shim's SBAT revocation policy. Data is ASCII lines:
     %%   "sbat,<version>,<date-stamp>\n<component>,<revision>\n..."
@@ -1788,14 +1786,16 @@ decode_uefi_variable_semantic(<<"Shim", _/binary>>, Data) ->
     #{<<"shim-variable-sha256">> =>
           hb_util:encode(crypto:hash(sha256, Data)),
       <<"shim-variable-length">> => byte_size(Data)};
-decode_uefi_variable_semantic(<<"BootOrder">>, _) -> #{};
-decode_uefi_variable_semantic(<<"Boot", _/binary>>, _) -> #{};
+%% BootCurrent / BootNext must match BEFORE the generic Boot####
+%% catch-all below, since BootCurrent/BootNext start with "Boot".
 decode_uefi_variable_semantic(<<"BootCurrent">>, <<Curr:16/little>>) ->
     #{<<"boot-current">> => iolist_to_binary(
         io_lib:format("Boot~4.16.0B", [Curr]))};
 decode_uefi_variable_semantic(<<"BootNext">>, <<Next:16/little>>) ->
     #{<<"boot-next">> => iolist_to_binary(
         io_lib:format("Boot~4.16.0B", [Next]))};
+decode_uefi_variable_semantic(<<"BootOrder">>, _) -> #{};
+decode_uefi_variable_semantic(<<"Boot", _/binary>>, _) -> #{};
 decode_uefi_variable_semantic(<<"Timeout">>, <<T:16/little>>) ->
     #{<<"boot-menu-timeout-seconds">> => T};
 decode_uefi_variable_semantic(<<"OsIndications">>, <<V:64/little>>) ->
@@ -2891,6 +2891,76 @@ decode_secure_boot_variable_disabled_test() ->
     P = maps:get(<<"parsed">>, decode_event(Ev)),
     ?assertEqual(#{<<"secure-boot-enabled">> => false},
                  maps:get(<<"semantic">>, P)).
+
+%% SetupMode / AuditMode / DeployedMode single-byte bool semantic.
+decode_setup_mode_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"SetupMode">>, <<1>>),
+    Ev = #{<<"event-type-code">> => 16#80000001,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(true, maps:get(<<"setup-mode">>,
+                                 maps:get(<<"semantic">>, P))).
+
+decode_audit_mode_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"AuditMode">>, <<0>>),
+    Ev = #{<<"event-type-code">> => 16#80000001,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(false, maps:get(<<"audit-mode">>,
+                                  maps:get(<<"semantic">>, P))).
+
+%% MokListTrusted single-byte form (not signature-list form).
+decode_moklisttrusted_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"MokListTrusted">>, <<1>>),
+    Ev = #{<<"event-type-code">> => 16#800000E0,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(true, maps:get(<<"moklist-trusted">>,
+                                 maps:get(<<"semantic">>, P))).
+
+%% SbatLevel — parse ASCII SBAT revocation policy.
+decode_sbatlevel_test() ->
+    %% Minimal SBAT policy: self-revision header + 2 components.
+    Sbat = <<"sbat,1,2024030100\n"
+             "shim,4\n"
+             "grub,3\n">>,
+    Data = build_uefi_variable(<<0:128>>, <<"SbatLevel">>, Sbat),
+    Ev = #{<<"event-type-code">> => 16#800000E0,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    Sem = maps:get(<<"semantic">>, P),
+    Entries = maps:get(<<"sbat-entries">>, Sem),
+    ?assertEqual(3, length(Entries)),
+    ?assertEqual(3, maps:get(<<"sbat-entry-count">>, Sem)),
+    [E1 | _] = Entries,
+    ?assertEqual(<<"sbat">>, maps:get(<<"component">>, E1)).
+
+%% OsIndications u64 bit-flag decomposition.
+decode_os_indications_test() ->
+    %% Bits: 0x01 BOOT_TO_FW_UI + 0x04 FILE_CAPSULE + 0x20 START_OS_RECOVERY
+    Flags = 16#25,
+    Data = build_uefi_variable(<<0:128>>, <<"OsIndications">>,
+                                 <<Flags:64/little>>),
+    Ev = #{<<"event-type-code">> => 16#80000001,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    Sem = maps:get(<<"semantic">>, P),
+    ?assertEqual(Flags, maps:get(<<"os-indications">>, Sem)),
+    FlagNames = maps:get(<<"os-indications-flags">>, Sem),
+    ?assert(lists:member(<<"BOOT_TO_FW_UI">>, FlagNames)),
+    ?assert(lists:member(<<"FILE_CAPSULE_DELIVERY_SUPPORTED">>,
+                         FlagNames)),
+    ?assert(lists:member(<<"START_OS_RECOVERY">>, FlagNames)).
+
+%% BootOrder / BootCurrent semantic handling.
+decode_boot_current_test() ->
+    Data = build_uefi_variable(<<0:128>>, <<"BootCurrent">>,
+                                 <<16#0002:16/little>>),
+    Ev = #{<<"event-type-code">> => 16#80000002,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    Sem = maps:get(<<"semantic">>, P),
+    ?assertEqual(<<"Boot0002">>, maps:get(<<"boot-current">>, Sem)).
 
 decode_crtm_version_utf16le_test() ->
     Utf16 = unicode:characters_to_binary(<<"BIOS 1.23">>, utf8,
