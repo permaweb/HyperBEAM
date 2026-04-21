@@ -149,23 +149,24 @@ resolve_test() ->
     {ok, ManifestID} = hb_cache:write(ManifestMsg, Opts),
     ?event({manifest_id, ManifestID}),
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
-    ),
-    ?assertMatch(
-        {ok, #{ <<"body">> := <<"Page 2">>}}, 
-        hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
-    ok.
+    {ok, IndexRes} = hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts),
+    IndexBody = hb_ao:get(<<"body">>, IndexRes, #{}, Opts),
+    ?assertMatch(<<"Page 1">>, IndexBody),
+    {ok, Page2Res} = hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts),
+    Page2Body = hb_ao:get(<<"body">>, Page2Res, #{}, Opts),
+    ?assertMatch(<<"Page 2">>, Page2Body).
 
 manifest_default_fallback_test() ->
     Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
     Node = hb_http_server:start_node(Opts),
+    {ok, GetRes} =
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts),
+    Body = hb_ao:get(<<"body">>, GetRes, #{}),
     ?assertMatch(
-        {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+        <<"Page 1">>,
+        Body
     ),
     ok.
 
@@ -180,8 +181,7 @@ manifest_404_error_test() ->
     ?assertMatch(
         {error, not_found},
         hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
-    ),
-    ok.
+    ).
 
 create_generic_manifest(Opts) ->
     IndexPage = #{

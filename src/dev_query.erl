@@ -134,13 +134,18 @@ match(Keys, Base, Req, Opts) when is_list(Keys) ->
 match(UserSpec, _Base, Req, Opts) ->
     ?event({matching, {spec, UserSpec}}),
     FilteredSpec =
-        hb_maps:without(
-            hb_maps:get(<<"exclude">>, Req, ?DEFAULT_EXCLUDES, Opts),
-            UserSpec
+        hb_maps:expand(
+            hb_maps:without(
+                    hb_maps:get(<<"exclude">>, Req, ?DEFAULT_EXCLUDES, Opts),
+                    UserSpec
+                ),
+            Opts
         ),
     ReturnType = hb_maps:get(<<"return">>, Req, <<"paths">>, Opts),
     ?event({matching, {spec, FilteredSpec}, {return, ReturnType}}),
-    case hb_cache:match(FilteredSpec, Opts) of
+    MatchRes = hb_cache:match(FilteredSpec, Opts),
+    ?event(debug_query_match, {match_res, {explicit, MatchRes}}),
+    case MatchRes of
         {ok, RawMatches} ->
             Matches = dedupe_query_matches(RawMatches, Opts),
             case ReturnType of

@@ -105,13 +105,21 @@ name_from_host(Host, no_host) ->
     end;
 name_from_host(ReqHost, RawNodeHost) ->
     NodeHost = uri_string:parse(RawNodeHost),
-    ?event({node_host, NodeHost}),
+    ?event(debug_hook, {name_from_host, {req_host, ReqHost}, {node_host, NodeHost}}),
+    % TODO: scheme fix is for when testing and NodeHost is 'localhost:PORT'.
+    % This should be improved upon, ex test: dev_meta:permanent_node_message_test
+    Host = maps:get(host, NodeHost, <<>>),
     WithoutNodeHost =
-        binary:replace(
-            ReqHost,
-            maps:get(host, uri_string:parse(RawNodeHost)),
-            <<>>
-        ),
+        case Host of
+            <<>> ->
+                ReqHost;
+            _ ->
+                binary:replace(
+                    ReqHost,
+                    Host,
+                    <<>>
+                )
+        end,
     name_from_host(WithoutNodeHost, no_host).
 
 %% @doc Merge the base message with the resolved message, ensuring that `~` as

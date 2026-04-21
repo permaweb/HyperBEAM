@@ -330,9 +330,9 @@ handle_call({get_connection, Args, Opts}, From,
 		not_found ->
 			{ok, PID} = open_connection(Args, hb_maps:merge(State#state.opts, Opts, Opts)),
 			MonitorRef = monitor(process, PID),
-			PIDPeer2 = hb_maps:put(Peer, PID, PIDPeer, Opts),
+			PIDPeer2 = hb_maps_raw:put(Peer, PID, PIDPeer, Opts),
 			StatusByPID2 =
-                hb_maps:put(
+                hb_maps_raw:put(
                     PID,
                     {{connecting, [{From, Args}]}, MonitorRef, Peer},
 					StatusByPID,
@@ -350,7 +350,7 @@ handle_call({get_connection, Args, Opts}, From,
 			case hb_maps:get(PID, StatusByPID, undefined, Opts) of
 				{{connecting, PendingRequests}, MonitorRef, Peer} ->
 					StatusByPID2 =
-                        hb_maps:put(PID,
+                        hb_maps_raw:put(PID,
                             {
                                 {connecting, [{From, Args} | PendingRequests]},
                                 MonitorRef,
@@ -616,9 +616,10 @@ method_to_bin(_) ->
 	<<"unknown">>.
 
 do_gun_request(PID, Args, Opts) ->
+    Timeout = hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts),
 	Timer =
         inet:start_timer(
-            hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)
+            Timeout
         ),
 	Method = hb_maps:get(method, Args, undefined, Opts),
 	Path = hb_maps:get(path, Args, undefined, Opts),
@@ -627,7 +628,7 @@ do_gun_request(PID, Args, Opts) ->
     % lists of cookie lines and a single cookie line.
 	HeadersWithoutCookie =
         hb_maps:to_list(
-            hb_maps:without([<<"cookie">>], HeaderMap, Opts),
+            hb_maps_raw:without([<<"cookie">>], HeaderMap, Opts),
             Opts
         ),
     CookieLines =
@@ -662,9 +663,25 @@ do_gun_request(PID, Args, Opts) ->
 	Response.
 
 await_response(Args, Opts) ->
-	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
-			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
-	case gun:await(PID, Ref, inet:timeout(Timer)) of
+    ?event(debug_await_response, {await_response, {args, {explicit, Args}}}),
+    PID = hb_maps:get(pid, Args, Opts),
+    Ref = hb_maps:get(stream_ref, Args, Opts),
+    Timer = hb_maps:get(timer, Args, Opts),
+    Limit = hb_maps:get(limit, Args, Opts),
+    Counter = hb_maps:get(counter, Args, Opts),
+    Acc = hb_maps_raw:get(acc, Args, Opts),
+    Method = hb_maps:get(method, Args, Opts),
+    ?event(
+        debug_await_response,
+        {await_response_parsed_args,
+            {method, {explicit, Method}}, {acc, {explicit, Acc}}
+        },
+        Opts
+    ),
+    Timeout = inet:timeout(Timer),
+    Res = gun:await(PID, Ref, Timeout),
+    ?event(debug_gun_req, {await_response, {res, {explicit, Res}}}),
+	case Res of
 		{response, fin, Status, Headers} ->
 			upload_metric(Args),
 			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
@@ -716,7 +733,10 @@ await_response(Args, Opts) ->
 			Response
 	end.
 
-log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
+log(Type, Event, Args, Reason, Opts) ->
+    Method = hb_maps:get(method, Args, not_found, Opts),
+    Peer = hb_maps:get(peer, Args, not_found, Opts),
+    Path = hb_maps:get(path, Args, not_found, Opts),
     ?event(
         http,
         {gun_log,

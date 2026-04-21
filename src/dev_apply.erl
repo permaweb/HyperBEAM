@@ -241,8 +241,7 @@ reverse_resolve_pair_test() ->
 resolve_with_prefix_test() ->
     ShortTraceLen = hb_opts:get(short_trace_len),
     Node = hb_http_server:start_node(),
-    ?assertEqual(
-        {ok, ShortTraceLen},
+    Res = 
         hb_http:request(
             <<"GET">>,
             Node,
@@ -251,7 +250,10 @@ resolve_with_prefix_test() ->
                 <<"debug-info">> => <<"short_trace_len">>
             },
             #{}
-        )
+        ),
+    ?assertEqual(
+        {ok, ShortTraceLen},
+        Res
     ).
 
 apply_over_http_test() ->

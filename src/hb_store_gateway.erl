@@ -356,14 +356,14 @@ external_http_access_test() ->
                 ]
         }
     ),
-    ?assertMatch(
-        {ok, #{ <<"data-protocol">> := <<"ao">> }},
+    {ok, GetRes} = 
         hb_http:get(
             Node,
             <<"p45HPD-ENkLS7Ykqrx6p_DYGbmeHDeeF8LJ09N2K53g">>,
             #{}
-        )
-    ).
+        ),
+    DataProtocol = hb_ao:get(<<"data-protocol">>, GetRes, #{}),
+    ?assertEqual(<<"ao">>, DataProtocol).
 
 %% Ensure that we can get data from the gateway and execute upon it.
 % resolve_on_gateway_test_() ->

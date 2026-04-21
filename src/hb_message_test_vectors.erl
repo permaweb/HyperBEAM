@@ -204,7 +204,7 @@ codec_test_suite(Codecs, OptsType) ->
 suite_name(CodecSpec) when is_binary(CodecSpec) -> CodecSpec;
 suite_name(CodecSpec) when is_map(CodecSpec) ->
     CodecName = maps:get(<<"device">>, CodecSpec, <<"[! NO CODEC !]">>),
-    case maps:get(<<"bundle">>, CodecSpec, false) of
+    case hb_maps:get(<<"bundle">>, CodecSpec, false, #{}) of
         false -> CodecName;
         true -> << CodecName/binary, " (bundle)">>
     end.
@@ -1177,7 +1177,7 @@ deeply_nested_committed_keys_test() ->
     Signed = hb_message:commit(Msg, Opts, <<"httpsig@1.0">>),
     {ok, WithOnlyCommitted} = hb_message:with_only_committed(Signed, Opts),
     Committed = hb_message:committed(Signed, all, Opts),
-    ToCompare = hb_maps:without([<<"commitments">>], WithOnlyCommitted),
+    ToCompare = hb_maps_raw:without([<<"commitments">>], WithOnlyCommitted),
     ?event(
         {msgs,
             {base, Msg},
@@ -1204,40 +1204,41 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
         #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
         _ -> Codec
     end,
+    InnerSigned =
+        hb_message:commit(
+            #{
+                <<"c">> => <<"abc">>,
+                <<"e">> => 5,
+                <<"body">> => <<"inner-body">>,
+                <<"inner-2">> => #{
+                    <<"body">> => <<"inner-2-body">>
+                }
+            },
+            Opts,
+            NestedCodec
+        ),
+    Inner = 
+        hb_maps:merge(
+            % Uncommitted keys that should be ripped out of the inner
+            % message by `with_only_committed'. These should still be
+            % present in the `with_only_committed' outer message. 
+            % For now, only `httpsig@1.0' supports stripping
+            % non-committed keys.
+            case is_device_codec(<<"httpsig@1.0">>, NestedCodec) of
+                true -> #{ <<"f">> => 6, <<"g">> => 7};
+                false -> #{}
+            end,
+            InnerSigned
+        ),
     Msg =
         hb_message:commit(
             #{
                 <<"a">> => 1,
-                <<"inner">> =>
-                    hb_maps:merge(
-                        InnerSigned =
-                            hb_message:commit(
-                                #{
-                                    <<"c">> => <<"abc">>,
-                                    <<"e">> => 5
-                                    %<<"body">> => <<"inner-body">>
-                                    % <<"inner-2">> => #{
-                                    %     <<"body">> => <<"inner-2-body">>
-                                    % }
-                                },
-                                Opts,
-                                NestedCodec
-                            ),
-                        % Uncommitted keys that should be ripped out of the inner
-                        % message by `with_only_committed'. These should still be
-                        % present in the `with_only_committed' outer message. 
-                        % For now, only `httpsig@1.0' supports stripping
-                        % non-committed keys.
-                        case is_device_codec(<<"httpsig@1.0">>, NestedCodec) of
-                            true -> #{ <<"f">> => 6, <<"g">> => 7};
-                            false -> #{}
-                        end
-                    )
+                <<"inner">> => Inner                    
             },
             Opts,
             Codec
         ),
-    ?event({initial_msg, Msg}),
     % 1. Verify the outer message without changes.
     ?assert(hb_message:verify(Msg, all, Opts)),
     % 2. Convert the message to the format and back.
@@ -1269,10 +1270,10 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
     ?assert(hb_message:verify(Decoded, all, Opts)),
     % 4. If the message is not a bundle, verify the inner message from the
     % converted message, applying `with_only_committed` first.
-    Inner = hb_maps:get(<<"inner">>, Msg, not_found, Opts),
+    MsgInner = hb_maps:get(<<"inner">>, Msg, not_found, Opts),
     {ok, CommittedInner} =
         hb_message:with_only_committed(
-            Inner,
+            MsgInner,
             Opts
         ),
     ?event({committed_inner, CommittedInner}),

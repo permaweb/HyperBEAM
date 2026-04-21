@@ -37,7 +37,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     {
         ok,
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            hb_maps_raw:without([<<"commitments">>], Msg, Opts),
             <<"tx@1.0">>,
             <<"structured@1.0">>,
             Opts

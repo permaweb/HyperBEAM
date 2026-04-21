@@ -116,16 +116,16 @@ generate(_Msg, Req, Opts) ->
 %% @doc Derive a key from the authentication information using the PBKDF2
 %% algorithm and user specified parameters.
 derive_key(Decoded, Req, Opts) ->
-    Alg = hb_util:atom(hb_maps:get(<<"alg">>, Req, <<"sha256">>, Opts)),
+    Alg = hb_util:atom(hb_maps_raw:get(<<"alg">>, Req, <<"sha256">>, Opts)),
     Salt =
-        hb_maps:get(
+        hb_maps_raw:get(
             <<"salt">>,
             Req,
             hb_crypto:sha256(?DEFAULT_SALT),
             Opts
         ),
-    Iterations = hb_maps:get(<<"iterations">>, Req, 2 * 600_000, Opts),
-    KeyLength = hb_maps:get(<<"key-length">>, Req, 64, Opts),
+    Iterations = hb_maps_raw:get(<<"iterations">>, Req, 2 * 600_000, Opts),
+    KeyLength = hb_maps_raw:get(<<"key-length">>, Req, 64, Opts),
     ?event(key_gen,
         {derive_key,
             {alg, Alg},

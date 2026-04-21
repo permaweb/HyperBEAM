@@ -100,9 +100,9 @@ handle(_Base, RawReq, Opts) ->
             hb_maps:get(<<"variables">>, Req, #{}, Opts),
             Opts
         ),
-    ?event(
+    ?event(query_graphql_handle,
         {graphql_run_called,
-            {query, Query},
+            {query, {string, Query}},
             {operation, OpName},
             {variables, Vars}
         }
@@ -134,6 +134,7 @@ handle(_Base, RawReq, Opts) ->
                 ?event(graphql_context_created),
                 Response = graphql:execute(Ctx, AST2),
                 ?event(graphql_executed),
+                ?event(query_graphql_handle, {response, {explicit, Response}}),
                 JSON = hb_json:encode(Response),
                 ?event({graphql_response, {bytes, byte_size(JSON)}}),
                 {ok,
@@ -154,11 +155,23 @@ handle(_Base, RawReq, Opts) ->
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
 execute(#{opts := Opts}, Obj, Field, Args) ->
-    ?event({graphql_query, {object, Obj}, {field, Field}, {args, Args}}),
-    case lists:member(Field, ?MESSAGE_QUERY_KEYS) of
-        true -> message_query(Obj, Field, Args, Opts);
-        false -> dev_query_arweave:query(Obj, Field, Args, Opts)
-    end.
+    IsMember = lists:member(Field, ?MESSAGE_QUERY_KEYS),
+    ?event(
+        query_graphql_execute,
+        {graphql_query,
+            {object, Obj},
+            {field, Field},
+            {args, Args},
+            {is_member, IsMember}
+        }
+    ),
+    ExecuteRes = 
+        case IsMember of
+            true -> message_query(Obj, Field, Args, Opts);
+            false -> dev_query_arweave:query(Obj, Field, Args, Opts)
+        end,
+    ?event(query_graphql_execute, {execute_res, {explicit, ExecuteRes}}),
+    ExecuteRes.
 
 %% @doc No-op on input validation.
 input(_TypeID, Val) -> {ok, Val}.
@@ -187,12 +200,15 @@ message_query(Obj, <<"message">>, #{<<"keys">> := Keys}, Opts) ->
 message_query(Msg, Field, _Args, Opts) when Field =:= <<"keys">>; Field =:= <<"tags">> ->
     OnlyKeys =
         hb_maps:to_list(
-            hb_private:reset(
-                hb_maps:without(
-                    [<<"data">>, <<"body">>],
-                    hb_message:uncommitted(Msg, Opts),
-                    Opts
-                )
+            hb_maps:expand(
+                hb_private:reset(
+                    hb_maps:without(
+                        [<<"data">>, <<"body">>],
+                        hb_message:uncommitted(Msg, Opts),
+                        Opts
+                    )
+                ),
+                Opts
             ),
             Opts
         ),

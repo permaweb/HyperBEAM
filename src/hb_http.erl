@@ -72,7 +72,7 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
     % The request has a set of additional options, so we apply them to the
     % request.
     MergedOpts =
-        hb_maps:merge(
+        hb_maps_raw:merge(
             Opts,
             hb_opts:mimic_default_types(ReqOpts, new_atoms, Opts),
             Opts
@@ -87,22 +87,25 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
         ),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
-    ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
-    RawReq =
+    Format = 
+        hb_maps:get(
+            <<"codec-device">>,
+            RawMessage,
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    Req =
         prepare_request(
-            hb_maps:get(
-                <<"codec-device">>,
-                RawMessage,
-                <<"httpsig@1.0">>,
-                Opts
-            ),
+            Format,
             Method,
             Peer,
             Path,
-            RawMessage,
+            case hb_opts:get(http_expand, false, Opts) of
+                true -> hb_maps:expand(RawMessage, Opts);
+                false -> RawMessage
+            end,
             Opts
         ),
-    Req = hb_maps:expand(RawReq, Opts),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
     {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
@@ -168,9 +171,9 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             {path, {string, Path}},
             {body_size, byte_size(Body)}
         }),
-    ReturnAOResult =
-        hb_opts:get(http_only_result, true, Opts) andalso
-        hb_maps:get(<<"ao-result">>, NormHeaderMap, false, Opts),
+    HttpOnlyResult = hb_opts:get(http_only_result, true, Opts),
+    AoResult = hb_maps:get(<<"ao-result">>, NormHeaderMap, false, Opts),
+    ReturnAOResult = HttpOnlyResult andalso AoResult,
     case ReturnAOResult of
         Key when is_binary(Key) ->
             Msg = http_response_to_httpsig(Status, NormHeaderMap, Body, Opts),
@@ -259,10 +262,18 @@ outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
     end;
 outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
     ?event(http_outbound, {result_is_httpsig, {body, {explicit, Body}}}, Opts),
-    {
-        response_status_to_atom(Status),
-        http_response_to_httpsig(Status, Headers, Body, Opts)
-    }.
+    HTTPSig = http_response_to_httpsig(Status, Headers, Body, Opts),
+    StatusAtom = response_status_to_atom(Status),
+    HttpOnlyResult = hb_opts:get(http_only_result, true, Opts),
+    AoResult = hb_maps:get(<<"ao-result">>, HTTPSig, false, Opts),
+    ReturnAOResult = HttpOnlyResult andalso AoResult,
+    % TODO: Is this necessary?
+    case ReturnAOResult of
+        Key when is_binary(Key) ->
+            {StatusAtom, hb_maps:get(Key, HTTPSig, undefined, Opts)};
+        false ->
+            {StatusAtom, HTTPSig}
+    end.
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
@@ -277,12 +288,14 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
             BodyMap,
 			Opts
         ),
-    (hb_message:convert(
-        ConvertFrom,
-        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-        <<"httpsig@1.0">>,
-        Opts
-    ))#{ <<"status">> => hb_util:int(Status) }.
+    Converted = 
+        hb_message:convert(
+            ConvertFrom,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    Converted#{ <<"status">> => hb_util:int(Status) }.
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -372,7 +385,13 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
             not_found -> 
-                hb_ao:set(WithoutPriv, #{ <<"accept-bundle">> => true }, Opts);
+                hb_util:ok(
+                    dev_message:set(
+                        WithoutPriv,
+                        #{ <<"accept-bundle">> => true },
+                        Opts
+                    )
+                );
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -380,22 +399,24 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % the peer node should receive. This allows users to proxy requests to their
     % HB node from another port.
     WithSelfPort =
-        hb_ao:set(
-            WithAcceptBundle,
-            #{
-                <<"ao-peer-port">> =>
-                    hb_maps:get(
-                        <<"ao-peer-port">>,
-                        WithAcceptBundle,
-                        hb_opts:get(
-                            port_external,
-                            hb_opts:get(port, undefined, Opts),
+        hb_util:ok(
+            dev_message:set(
+                WithAcceptBundle,
+                #{
+                    <<"ao-peer-port">> =>
+                        hb_maps:get(
+                            <<"ao-peer-port">>,
+                            WithAcceptBundle,
+                            hb_opts:get(
+                                port_external,
+                                hb_opts:get(port, undefined, Opts),
+                                Opts
+                            ),
                             Opts
-                        ),
-                        Opts
-                    )
-            },
-            Opts
+                        )
+                },
+                Opts
+            )
         ),
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
     BinPath = hb_path:normalize(hb_path:to_binary(Path)),
@@ -403,7 +424,11 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     ?event(debug_httpc_req, {prepare_request, {format, Format}, {req_base, ReqBase}, {with_self_port, WithSelfPort}, {message, Message}}),
     case Format of
         <<"httpsig@1.0">> ->
-            Expanded = hb_maps:expand(WithSelfPort, Opts),
+            Expanded = 
+                case hb_opts:get(http_expand, false, Opts) of
+                    true -> hb_maps:expand(WithSelfPort, Opts);
+                    false -> WithSelfPort
+                end,
             ?event(debug_httpc_req, {expanded, {explicit, Expanded}}),
             FullEncoding =
                 hb_message:convert(
@@ -414,10 +439,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                     },
                     Opts
                 ),
-            Body = hb_maps:get(<<"body">>, FullEncoding, <<>>, Opts),
-            Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
-            MergedHeaders = maps:merge(MaybeCookie, Headers),
-            hb_maps:merge(
+            Body = hb_maps_raw:get(<<"body">>, FullEncoding, <<>>, Opts),
+            Headers = hb_maps_raw:without([<<"body">>], FullEncoding, Opts),
+            MergedHeaders = hb_maps_raw:merge(MaybeCookie, Headers, Opts),
+            hb_maps_raw:merge(
                 ReqBase,
                 #{ headers => MergedHeaders, body => Body },
                 Opts
@@ -466,12 +491,18 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     end.
 
 %% @doc Reply to the client's HTTP request with a message.
-reply(Req, TABMReq, Message, Opts) ->
+reply(Req, TABMReq, RawMessage, Opts) ->
     Status =
-        case hb_ao:get(<<"status">>, Message, Opts) of
+        case hb_maps:get(<<"status">>, RawMessage, not_found, Opts) of
             not_found -> 200;
             S-> S
         end,
+    Message = 
+        case hb_opts:get(http_expand, false, Opts) of
+            true -> hb_maps:expand(RawMessage, Opts);
+            false -> RawMessage
+        end,
+    ?event(debug_http_reply, {reply, {message, {explicit, Message}}}),
     reply(Req, TABMReq, Status, Message, Opts).
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
@@ -1008,30 +1039,34 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
     FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
     BaseMsg =
-        FilteredMsg#{
-            <<"method">> => Method,
-            <<"path">> => MsgPath,
-            <<"accept-bundle">> =>
-                maps:get(
-                    <<"accept-bundle">>,
-                    Msg,
-                    maps:get(
+        hb_ao:set(
+            FilteredMsg, 
+            #{
+                <<"method">> => Method,
+                <<"path">> => MsgPath,
+                <<"accept-bundle">> =>
+                    hb_maps:get(
                         <<"accept-bundle">>,
-                        PrimMsg,
-                        maps:get(<<"accept-bundle">>, RawHeaders, false)
-                    )
-                ),
-            <<"accept">> =>
-                Accept = maps:get(
-                    <<"accept">>,
-                    Msg,
-                    maps:get(
+                        Msg,
+                        hb_maps:get(
+                            <<"accept-bundle">>,
+                            PrimMsg,
+                            hb_maps:get(<<"accept-bundle">>, RawHeaders, false)
+                        )
+                    ),
+                <<"accept">> =>
+                    Accept = hb_maps:get(
                         <<"accept">>,
-                        PrimMsg,
-                        maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
+                        Msg,
+                        hb_maps:get(
+                            <<"accept">>,
+                            PrimMsg,
+                            hb_maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
+                        )
                     )
-                )
-        },
+            },
+            Opts
+        ),
     ?event(debug_accept, {normalize_unsigned, {accept, Accept}}),
     % Parse and add the cookie from the request, if present. We reinstate the
     % `cookie' field in the message, as it is not typically signed, yet should
@@ -1329,9 +1364,11 @@ parallel_request_test() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{<<"data">> := <<"1984">>}},
-        hb_http:get(
-            Node,
-            #{<<"path">> => <<"/BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>},
-            Opts
+        hb_maps:expand(
+            hb_http:get(
+                Node,
+                #{<<"path">> => <<"/BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>},
+                Opts
+            )
         )
     ).

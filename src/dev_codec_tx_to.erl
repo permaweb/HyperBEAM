@@ -13,7 +13,7 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
     }.
 
 format_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "format">>, Map, Opts) of
+    case hb_maps_raw:find(<<Prefix/binary, "format">>, Map, Opts) of
         {ok, EncodedFormat} ->
             case EncodedFormat of
                 <<"1">> -> 1;
@@ -23,7 +23,7 @@ format_field(Prefix, Map, Opts) ->
     end.
 
 target_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "target">>, Map, Opts) of
+    case hb_maps_raw:find(<<Prefix/binary, "target">>, Map, Opts) of
         {ok, EncodedTarget} ->
             case hb_util:safe_decode(EncodedTarget) of
                 {ok, Target} when ?IS_ID(Target) -> Target;
@@ -33,7 +33,7 @@ target_field(Prefix, Map, Opts) ->
     end.
 
 anchor_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "anchor">>, Map, Opts) of
+    case hb_maps_raw:find(<<Prefix/binary, "anchor">>, Map, Opts) of
         {ok, EncodedAnchor} ->
             case hb_util:safe_decode(EncodedAnchor) of
                 {ok, Anchor} -> Anchor;
@@ -43,7 +43,7 @@ anchor_field(Prefix, Map, Opts) ->
     end.
 
 quantity_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "quantity">>, Map, Opts) of
+    case hb_maps_raw:find(<<Prefix/binary, "quantity">>, Map, Opts) of
         {ok, EncodedQuantity} ->
             case hb_util:safe_int(EncodedQuantity) of
                 {ok, Quantity} -> Quantity;
@@ -53,7 +53,7 @@ quantity_field(Prefix, Map, Opts) ->
     end.
 
 reward_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "reward">>, Map, Opts) of
+    case hb_maps_raw:find(<<Prefix/binary, "reward">>, Map, Opts) of
         {ok, EncodedReward} ->
             case hb_util:safe_int(EncodedReward) of
                 {ok, Reward} -> Reward;
@@ -69,7 +69,7 @@ excluded_tags(TX, TABM, Opts) ->
     exclude_reward_tag(TX, TABM, Opts).
 
 exclude_target_tag(TX, TABM, Opts) ->
-    case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
+    case {TX#tx.target, hb_maps_raw:get(<<"target">>, TABM, undefined, Opts)} of
         {?DEFAULT_TARGET, _} -> [];
         {FieldTarget, TagTarget} when FieldTarget =/= TagTarget -> 
             [<<"target">>];
@@ -77,7 +77,7 @@ exclude_target_tag(TX, TABM, Opts) ->
     end.
 
 exclude_anchor_tag(TX, TABM, Opts) ->
-    case {TX#tx.anchor, hb_maps:get(<<"anchor">>, TABM, undefined, Opts)} of
+    case {TX#tx.anchor, hb_maps_raw:get(<<"anchor">>, TABM, undefined, Opts)} of
         {?DEFAULT_ANCHOR, _} -> [];
         {FieldAnchor, TagAnchor} when FieldAnchor =/= TagAnchor -> 
             [<<"anchor">>];
@@ -85,7 +85,7 @@ exclude_anchor_tag(TX, TABM, Opts) ->
     end.
 
 exclude_quantity_tag(TX, TABM, Opts) ->
-    case {TX#tx.quantity, hb_maps:get(<<"quantity">>, TABM, undefined, Opts)} of
+    case {TX#tx.quantity, hb_maps_raw:get(<<"quantity">>, TABM, undefined, Opts)} of
         {?DEFAULT_QUANTITY, _} -> [];
         {FieldQuantity, TagQuantity} when FieldQuantity =/= TagQuantity -> 
             [<<"quantity">>];
@@ -93,7 +93,7 @@ exclude_quantity_tag(TX, TABM, Opts) ->
     end.
 
 exclude_reward_tag(TX, TABM, Opts) ->
-    case {TX#tx.reward, hb_maps:get(<<"reward">>, TABM, undefined, Opts)} of
+    case {TX#tx.reward, hb_maps_raw:get(<<"reward">>, TABM, undefined, Opts)} of
         {?DEFAULT_REWARD, _} -> [];
         {FieldReward, TagReward} when FieldReward =/= TagReward -> 
             [<<"reward">>];

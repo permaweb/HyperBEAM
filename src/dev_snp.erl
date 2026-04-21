@@ -59,7 +59,7 @@
 -spec verify(M1 :: term(), M2 :: term(), NodeOpts :: map()) ->
     {ok, binary()} | {error, term()}.
 verify(M1, M2, NodeOpts) ->
-    ?event(snp_verify, verify_called),
+    ?event(debug_snp_verify, {verify_called, {m1, M1}, {m2, M2}}),
     maybe
         % In pipeline flows (e.g., /~relay@1.0/call/verify~snp@1.0), the report
         % comes from M1 (result of previous stage). For direct calls, it may be
@@ -208,23 +208,26 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % Search for a `body' key in the message, and if found use it as the source
         % of the report. If not found, use the message itself as the source.
         ?event({node_opts, {explicit, NodeOpts}}),
-        RawMsg = hb_ao:get(<<"body">>, M2, M2, NodeOpts#{ hashpath => ignore }),
-        ?event({msg, {explicit, RawMsg}}),
-        MsgWithJSONReport =
-            hb_util:ok(
-                hb_message:with_only_committed(
-                    hb_message:with_only_committers(
-                        RawMsg,
-                        hb_message:signers(
-                    RawMsg,
-                            NodeOpts
-                        ),
-                        NodeOpts
-                    ),
-                    NodeOpts
-                )
-            ),
-        ?event({msg_with_json_report, {explicit, MsgWithJSONReport}}),
+        Body = hb_ao:get(<<"body">>, M2, M2, NodeOpts#{ hashpath => ignore }),
+        ?event(debug_snp, {body, Body}),
+        RawMsg =
+            try 
+                hb_message:signed(Body, NodeOpts) 
+            catch E -> 
+                ?event(debug_snp, {error_signed, {error, E}}),
+                Body
+            end,
+        ?event(debug_snp, {signed_msg, {explicit, RawMsg}}),
+        Signers = hb_message:signers(RawMsg, NodeOpts),
+        ?event(debug_snp, {signers, {explicit, Signers}}),
+        RawMsgWithOnlyCommitters =
+            hb_message:with_only_committers(RawMsg, Signers, NodeOpts),
+        ?event(debug_snp, {raw_msg_with_only_committers, RawMsgWithOnlyCommitters}),
+        RawMsgWithOnlyCommitted =
+            hb_message:with_only_committed(RawMsgWithOnlyCommitters, NodeOpts),
+        ?event(debug_snp, {raw_msg_with_only_committed, RawMsgWithOnlyCommitted}),
+        MsgWithJSONReport = hb_util:ok(RawMsgWithOnlyCommitted),
+        ?event(debug_snp, {msg_with_json_report, {expanded, MsgWithJSONReport}}),
         % Normalize the request message. First try to get the report from the
         % committed message. If not found (e.g., message not signed), fall back
         % to the raw message.
@@ -250,6 +253,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % Extract address and node message ID
         Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
         ?event({snp_address, Address}),
+        ?event(debug_snp, {extract_node_msg, {msg, {explicit, Msg}}}),
         {ok, NodeMsgID} ?= extract_node_message_id(Msg, NodeOpts),
         ?event({snp_node_msg_id, NodeMsgID}),
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}}
@@ -699,10 +703,11 @@ verify_test() ->
     % the two, and encode. The result will be the new `Request/nonce' value.
     {ProxyOpts, VerifyingNode} = setup_test_nodes(),
     {ok, [Request]} = file:consult(<<"test/admissible-report.eterm">>),
+    CommittedRequest = hb_message:commit(Request, ProxyOpts),
     {ok, Result} = hb_http:post(
         VerifyingNode,
         <<"/~snp@1.0/verify">>,
-        hb_message:commit(Request, ProxyOpts),
+        CommittedRequest,
         ProxyOpts
     ),
     ?event({verify_test_result, Result}),

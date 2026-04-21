@@ -36,8 +36,8 @@ generate(Base, Request, Opts) ->
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe
-        {ok, SignedMsg} ?= hb_maps:find(<<"request">>, Request, Opts),
-        {ok, MessageSequence} ?= hb_maps:find(<<"body">>, Request, Opts),
+        {ok, SignedMsg} ?= hb_maps_raw:find(<<"request">>, Request, Opts),
+        {ok, MessageSequence} ?= hb_maps_raw:find(<<"body">>, Request, Opts),
         % Cookie auth adds set-cookie to response
         {ok, #{ <<"set-cookie">> := SetCookie }} =
             dev_codec_cookie:to(
@@ -141,7 +141,7 @@ verify(Base, Request, RawOpts) ->
 %% A `generator` may be either a path or full message. If no path is present in
 %% a generator message, the `generate` path is assumed.
 generate_secret(_Base, Request, Opts) ->
-    case hb_maps:get(<<"generator">>, Request, undefined, Opts) of
+    case hb_maps_raw:get(<<"generator">>, Request, undefined, Opts) of
         undefined ->
             % If no generator is specified, use the default generator.
             case hb_opts:get(cookie_default_generator, <<"random">>, Opts) of
@@ -163,7 +163,7 @@ default_generator(_Opts) ->
 execute_generator(GeneratorPath, Opts) when is_binary(GeneratorPath) ->
     hb_ao:resolve(GeneratorPath, Opts);
 execute_generator(Generator, Opts) ->
-    Path = hb_maps:get(<<"path">>, Generator, <<"generate">>, Opts),
+    Path = hb_maps_raw:get(<<"path">>, Generator, <<"generate">>, Opts),
     hb_ao:resolve(Generator#{ <<"path">> => Path }, Opts).
 
 %% @doc Find all secrets in the cookie of a message.
@@ -171,9 +171,9 @@ find_secrets(Request, Opts) ->
     maybe
         {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
         [
-            hb_maps:get(SecretRef, Cookie, secret_unavailable, Opts)
+            hb_maps_raw:get(SecretRef, Cookie, secret_unavailable, Opts)
         ||
-            SecretRef = <<"secret-", _/binary>> <- hb_maps:keys(Cookie)
+            SecretRef = <<"secret-", _/binary>> <- hb_maps_raw:keys(Cookie)
         ]
     else error -> []
     end.
@@ -181,14 +181,14 @@ find_secrets(Request, Opts) ->
 %% @doc Find the secret key for the given committer, if it exists in the cookie.
 find_secret(Request, Opts) ->
     maybe
-        {ok, Committer} ?= hb_maps:find(<<"committer">>, Request, Opts),
+        {ok, Committer} ?= hb_maps_raw:find(<<"committer">>, Request, Opts),
         find_secret(Committer, Request, Opts)
     else error -> {error, no_secret}
     end.
 find_secret(Committer, Request, Opts) ->
     maybe
         {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
-        {ok, _Secret} ?= hb_maps:find(<<"secret-", Committer/binary>>, Cookie, Opts)
+        {ok, _Secret} ?= hb_maps_raw:find(<<"secret-", Committer/binary>>, Cookie, Opts)
     else error -> {error, not_found}
     end.
 
@@ -215,7 +215,7 @@ directly_invoke_commit_verify_test() ->
             CommittedMsg,
             #{}
         ),
-    VerifyReqWithoutComms = hb_maps:without([<<"commitments">>], VerifyReq, #{}),
+    VerifyReqWithoutComms = hb_maps_raw:without([<<"commitments">>], VerifyReq, #{}),
     ?event({verify_req_without_comms, VerifyReqWithoutComms}),
     ?assert(hb_message:verify(CommittedMsg, VerifyReqWithoutComms, #{})),
     ok.
@@ -229,11 +229,14 @@ http_set_get_cookies_test() ->
             <<"/~cookie@1.0/store?k1=v1&k2=v2">>,
             #{}
         ),
-    ?event(debug_cookie, {set_cookie_test, {set_res, SetRes}}),
-    ?assertMatch(#{ <<"set-cookie">> := _ }, SetRes),
+    SetCookie = hb_maps:get(<<"set-cookie">>, SetRes, not_found, #{}),
+    ?assertNotEqual(not_found, SetCookie),
     Req = apply_cookie(#{ <<"path">> => <<"/~cookie@1.0/extract">> }, SetRes, #{}),
     {ok, Res} = hb_http:get(Node, Req, #{}),
-    ?assertMatch(#{ <<"k1">> := <<"v1">>, <<"k2">> := <<"v2">> }, Res),
+    K1 = hb_maps:get(<<"k1">>, Res, not_found, #{}),
+    ?assertEqual(<<"v1">>, K1),
+    K2 = hb_maps:get(<<"k2">>, Res, not_found, #{}),
+    ?assertEqual(<<"v2">>, K2),
     ok.
 
 %%% Test Helpers

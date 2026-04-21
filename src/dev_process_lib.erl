@@ -6,11 +6,25 @@
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Req, Opts) ->
+    ?event(debug_process_id, {process_id, {base, Base}}, Opts),
     case hb_ao:get(<<"process">>, Base, Opts#{ hashpath => ignore }) of
         not_found ->
-            process_id(ensure_process_key(Base, Opts), Req, Opts);
-        Process ->
+            ?event(debug_process_id, {process_not_found, ensuring_process_key}),
+            BaseWithProcess = ensure_process_key(Base, Opts),
+            ?event(debug_process_id, {base_with_process, BaseWithProcess}),
+            process_id(BaseWithProcess, Req, Opts);
+        RawProcess ->
+            ?event(debug_process_id, {process_found, {raw_process, RawProcess}}),
+            % TODO: Dont read all commitments (dev_genesis_wasm:dryrun_test_)
+            Process =
+                hb_cache:read_all_commitments(
+                    hb_cache:ensure_all_loaded(RawProcess, Opts),
+                    Opts
+                ),
+                % ),
+            ?event(debug_process_id, {process_id, {loaded_process, Process}}),
             Signers = hb_message:signers(Process, Opts),
+            ?event(debug_process_id, {signers, {explicit, Signers}}),
             case {hb_message:verify(Process, all, Opts), Signers} of
                 {false, _} ->
                     ?event({process_not_verified, {process, Process}}),
@@ -35,6 +49,7 @@ run_as(Key, Base, Path, Opts) when not is_map(Path) ->
 run_as(Key, Base, Req, Opts) ->
     % Store the original device so we can restore it after execution
     BaseDevice = hb_maps:get(<<"device">>, Base, not_found, Opts),
+    ?event(debug_run_as, {running_as, {base, Base}, {base_device, BaseDevice}}, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
@@ -78,13 +93,22 @@ run_as(Key, Base, Req, Opts) ->
             Req,
             Opts
         ),
+    BaseResultDevice = hb_maps:get(<<"device">>, BaseResult, not_found, Opts),
     % Restore the original device context after execution.
     % This ensures the process maintains its identity after device delegation.
-    case {Status, BaseResult} of
-        {ok, #{ <<"device">> := DeviceSet }} ->
+    case {Status, BaseResultDevice} of
+        {ok, not_found} ->
+            {Status, BaseResult};
+        {ok, DeviceSet} ->
+            ?event(
+                debug_run_as,
+                {restoring_device,
+                    {base_result, BaseResult},
+                    {base_device, BaseDevice}
+                }
+            ),
             {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};
         _ ->
-            ?event({returning_base_result, BaseResult}),
             {Status, BaseResult}
     end.
 
@@ -102,12 +126,19 @@ set_results(State, Results, Opts) ->
 
 %% @doc Helper function to store a copy of the `process' key in the message.
 ensure_process_key(Base, Opts) ->
+    ?event(debug_ensure_process_key, {ensure_process_key, {base, Base}}),
     case hb_maps:get(<<"process">>, Base, not_found, Opts) of
         not_found ->
             % If the message has lost its signers, we need to re-read it from
             % the cache. This can happen if the message was 'cast' to a different
             % device, leading the signers to be unset.
-            {ok, Committed} = hb_message:with_only_committed(Base, Opts),
+            ?event(debug_ensure_process_key, {process_not_found, getting_process_message}),
+            Committed =
+                case get_process_message(Base, Opts) of
+                    undefined -> Base;
+                    Other -> Other
+                end,
+            ?event(debug_ensure_process_key, {get_process_message, {committed, Committed}}),
             ?event(
                 {process_key_before_set,
                     {base, Base},
@@ -117,17 +148,38 @@ ensure_process_key(Base, Opts) ->
             ),
             Res =
                 hb_ao:set(
-                    hb_message:uncommitted(Base, Opts),
+                    Base,
                     #{ <<"process">> => Committed },
                     Opts#{ hashpath => ignore }
                 ),
-            ?event(
-                {set_process_key_res,
-                    {base, Base},
-                    {process_msg, Base},
-                    {res, Res}
-                }
-            ),
+            ?event(debug_ensure_process_key, {set_process_key_res, {res, Res}}),
             Res;
         _ -> Base
+    end.
+
+%% @doc Get the process message from the base message, possibly utilizing 
+%% message extensions to find the process message.
+get_process_message(Base, Opts) ->
+    {ok, Committed} = hb_message:with_only_committed(Base, Opts),
+    % TODO: Better way than type: process?
+    ?event(
+        debug_get_process_message,
+        {get_process_message, {base, Base}, {committed, Committed}}
+    ),
+    case {maps:get(<<"type">>, Committed, not_found), maps:is_key(<<"...">>, Committed)} of
+        {<<"Process">>, _} ->
+            ?event(debug_get_process_message, {get_process_message, {type, <<"Process">>}}),
+            Committed;
+        {<<"process">>, _} ->
+            ?event(debug_get_process_message, {get_process_message, {type, <<"process">>}}),
+            Committed;
+        {not_found, true} ->
+            ?event(debug_get_process_message, {get_process_message, {not_found, true}}),
+            get_process_message(
+                hb_maps_raw:get(<<"...">>, Committed, undefined, Opts),
+                Opts
+            );
+        _ ->
+            % TODO: More elegant?
+            undefined
     end.

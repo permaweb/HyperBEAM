@@ -154,7 +154,11 @@ routes(M1, M2, Opts) ->
                     ?event(debug_route_reg, no_registrar),
                     Owner = hb_opts:get(operator, undefined, Opts),
                     RouteOwners = hb_opts:get(route_owners, [Owner], Opts),
-                    Signers = hb_message:signers(M2, Opts),
+                    Signers =
+                        hb_message:signers(
+                            hb_message:signed(M2, Opts),
+                            Opts
+                        ),
                     IsTrusted =
                         lists:any(
                             fun(Signer) -> lists:member(Signer, Signers) end,
@@ -339,7 +343,7 @@ apply_routes(Msg, R, Opts) ->
                 ?event({apply_route, {msg, Msg}, {node, N}}),
                 case apply_route(Msg, N, Opts) of
                     {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
-                    {ok, RMsg} -> hb_maps:merge(N, RMsg);
+                    {ok, RMsg} -> hb_maps_raw:merge(N, RMsg);
                     {error, _} -> N
                 end
             end,
@@ -364,7 +368,7 @@ apply_route(Msg, Route, Opts) ->
             hb_util:ok(
                 do_apply_route(
                     Msg,
-                    hb_maps:without([<<"opts">>], Route, Opts),
+                    maps:without([<<"opts">>], Route),
                     Opts
                 )
             )
@@ -395,6 +399,7 @@ do_apply_route(
         _ ->
             {error, invalid_replace_args}
     end;
+% TODO: Maybe load ... instead of expand?
 do_apply_route(Msg = #{ <<"...">> := _ }, Req, Opts) ->
     Expanded = hb_maps:expand(Msg, Opts),
     do_apply_route(Expanded, Req, Opts).
@@ -602,7 +607,9 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) when is_binary(HashPath) ->
                 lists:seq(1, N)
             )
         )
-    ).
+    );
+choose(N, <<"Nearest">>, #{ <<"...">> := NestedMsg }, Nodes, Opts) ->
+    choose(N, <<"Nearest">>, NestedMsg, Nodes, Opts).
 
 choose_count(RawChoose, Nodes) ->
     NormalizedChoose =
@@ -848,7 +855,8 @@ dynamic_provider_test() ->
                 <<"node">> => <<"test-dynamic-node">>
             }
         },
-        priv_wallet => ar_wallet:new()
+        priv_wallet => ar_wallet:new(),
+        expand_params => true
     }),
     ?assertEqual(
         {ok, <<"test-dynamic-node">>},
@@ -878,7 +886,8 @@ local_process_provider() ->
                 <<"node">> => <<"router-node">>,
                 <<"function">> => <<"compute_routes">>
             }
-        }
+        },
+        expand_params => true
     }),
     ?assertEqual(
         {ok, <<"test1">>},
@@ -1353,7 +1362,8 @@ dynamic_routing_by_performance() ->
         http_monitor => #{
             <<"method">> => <<"POST">>,
             <<"path">> => <<"/perf-router~node-process@1.0/schedule">>
-        }
+        },
+        expand_params => true
     }),
     % Start and add a series of nodes with decreasing performance, via lag 
     % introduced with a hook set to `~test@1.0/delay'.
@@ -1841,7 +1851,7 @@ request_hook_reroute_to_nearest_test() ->
                     hb_http:get(
                         Node,
                         <<"/~meta@1.0/info/address">>,
-                        Opts#{ http_only_result => true }
+                        Opts#{ http_only_result => true, http_expand => true }
                     )
                 )
             end,

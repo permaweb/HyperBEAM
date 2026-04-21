@@ -9,6 +9,7 @@
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_set/5, deep_get/3, deep_get/4]).
+-export([deep_merge_raw/3, deep_set_raw/4, deep_set_raw/5, deep_get_raw/3, deep_get_raw/4]).
 -export([number/1, list_to_numbered_message/1]).
 -export([find_target_path/2, template_matches/3]).
 -export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
@@ -300,6 +301,26 @@ deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
 		Opts
     ).
 
+% TODO: Improve this/make more elegant. Implemented do to deep merge of priv values - 
+% When OldPriv and NewPriv are the same, resulted in Priv#{ ... => Priv }
+deep_merge_raw(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
+    hb_maps_raw:fold(
+        fun(Key, Value2, AccMap) ->
+            case deep_get_raw(Key, AccMap, Opts) of
+                Value1 when is_map(Value1), is_map(Value2) ->
+                    % Both values are maps, recursively merge them
+                    deep_set_raw(Key, deep_merge_raw(Value1, Value2, Opts), AccMap, Opts);
+                _ ->
+                    % Either the key doesn't exist in Map1 or at least one of 
+                    % the values isn't a map. Simply use the value from Map2
+                    deep_set_raw(Key, Value2, AccMap, Opts)
+            end
+        end,
+        Map1,
+        Map2,
+        Opts
+    ).
+
 %% @doc Set a deep value in a message by its path, _assuming all messages are
 %% `device: message@1.0`_.
 deep_set(Path, Value, Msg, Opts) -> deep_set(Path, Value, Msg, Opts, false).
@@ -324,6 +345,28 @@ deep_set([Key|Rest], Value, Map, Opts, UnsetMode) ->
     SubMap = hb_maps:get(Key, Map, #{}, Opts),
     hb_maps:put(Key, deep_set(Rest, Value, SubMap, Opts, UnsetMode), Map, Opts).
 
+deep_set_raw(Path, Value, Msg, Opts) -> deep_set_raw(Path, Value, Msg, Opts, false).
+deep_set_raw(_Path, undefined, Msg, _Opts, _) -> Msg;
+deep_set_raw(Path, Value, Msg, Opts, UnsetMode) when not is_list(Path) ->
+    deep_set_raw(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts, UnsetMode);
+deep_set_raw([], Msg2, Msg1, Opts, _) when ?IS_MESSAGE(Msg2) andalso ?IS_MESSAGE(Msg1) ->
+    hb_maps_raw:merge(Msg1, Msg2, Opts);
+deep_set_raw([], ReplacementValue, _Msg1, _Opts, _) ->
+    ReplacementValue;
+deep_set_raw([Key], unset, Msg, Opts, true) ->
+    hb_maps_raw:remove(Key, Msg, Opts);
+deep_set_raw([Key], Value, Msg, Opts, _) ->
+    case hb_maps_raw:get(Key, Msg, not_found, Opts) of
+        ExistingMap when ?IS_MESSAGE(ExistingMap) andalso ?IS_MESSAGE(Value) ->
+            % If both are maps, merge them
+            Msg#{ Key => hb_maps_raw:merge(ExistingMap, Value, Opts) };
+        _ ->
+            Msg#{ Key => Value }
+    end;
+deep_set_raw([Key|Rest], Value, Map, Opts, UnsetMode) ->
+    SubMap = hb_maps_raw:get(Key, Map, #{}, Opts),
+    hb_maps_raw:put(Key, deep_set_raw(Rest, Value, SubMap, Opts, UnsetMode), Map, Opts).
+
 %% @doc Get a deep value from a message.
 deep_get(Path, Msg, Opts) -> deep_get(Path, Msg, not_found, Opts).
 deep_get(Path, Msg, Default, Opts) when not is_list(Path) ->
@@ -337,6 +380,21 @@ deep_get([Key|Rest], Msg, Default, Opts) ->
     case hb_maps:find(Key, Msg, Opts) of
         {ok, DeepMsg} when is_map(DeepMsg) ->
             deep_get(Rest, DeepMsg, Default, Opts);
+        error -> Default
+    end.
+
+deep_get_raw(Path, Msg, Opts) -> deep_get_raw(Path, Msg, not_found, Opts).
+deep_get_raw(Path, Msg, Default, Opts) when not is_list(Path) ->
+    deep_get_raw(hb_path:term_to_path_parts(Path, Opts), Msg, Default, Opts);
+deep_get_raw([Key], Msg, Default, Opts) ->
+    case hb_maps_raw:find(Key, Msg, Opts) of
+        {ok, Value} -> Value;
+        error -> Default
+    end;
+deep_get_raw([Key|Rest], Msg, Default, Opts) ->
+    case hb_maps_raw:find(Key, Msg, Opts) of
+        {ok, DeepMsg} when is_map(DeepMsg) ->
+            deep_get_raw(Rest, DeepMsg, Default, Opts);
         error -> Default
     end.
 
@@ -455,11 +513,16 @@ message_to_ordered_list(Message, Opts) ->
             fun hb_ao:normalize_key/1,
             lists:sort(lists:map(fun int/1, Keys))
         ),
-    message_to_ordered_list(NormMessage, SortedKeys, erlang:hd(SortedKeys), Opts).
+    case length(SortedKeys) of
+        0 ->
+            [];
+        _ ->
+            message_to_ordered_list(NormMessage, SortedKeys, erlang:hd(SortedKeys), Opts)
+    end.
 message_to_ordered_list(_Message, [], _Key, _Opts) ->
     [];
 message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
-    case hb_maps:get(Key, Message, undefined, Opts#{ hashpath => ignore }) of
+    case hb_maps_raw:get(Key, Message, undefined, Opts#{ hashpath => ignore }) of
         undefined ->
             throw(
                 {missing_key,

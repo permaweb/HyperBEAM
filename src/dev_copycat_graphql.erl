@@ -140,7 +140,12 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
 parse_query(Base, Req, Opts) ->
     % Merge the keys of the base and request maps, and remove duplicates.
     Merged = hb_maps:merge(Base, Req, Opts),
-    LoadedMerged = hb_cache:ensure_all_loaded(Merged, Opts),
+    % Load, expand the query before matching
+    LoadedMerged =
+        hb_maps:expand(
+            hb_cache:ensure_all_loaded(Merged, Opts),
+            Opts
+        ),
     Keys = hb_maps:keys(LoadedMerged, Opts),
     SupportedKeys = ?SUPPORTED_FILTERS,
     MatchingKeys = 

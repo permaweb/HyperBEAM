@@ -195,7 +195,9 @@ transformer_message(Base, Opts) ->
 transform(Base, Key, Opts) ->
 	% Get the device stack message from Base.
     ?event({transforming_stack, {key, Key}, {base, Base}, {opts, Opts}}),
-	case hb_ao:get(<<"device-stack">>, {as, dev_message, Base}, Opts) of
+    % TODO: Why? {as, dev_message, Base} is not working as expected.
+    AsDevMsg = #{ <<"device">> => dev_message, <<"...">> => Base},
+	Transformed = case hb_ao:get(<<"device-stack">>, AsDevMsg, Opts) of
         not_found -> throw({error, no_valid_device_stack});
         StackMsg ->
 			% Find the requested key in the device stack.
@@ -210,7 +212,7 @@ transform(Base, Key, Opts) ->
 					% - Device-Stack-Previous key to the device we are replacing.
                     % - The prefixes for the device.
                     % - The prior prefixes for later restoration.
-					?event({activating_device, DevMsg}),
+					?event({activating_device, {explicit, DevMsg}}),
 					dev_message:set(
                         Base,
 						#{
@@ -219,53 +221,59 @@ transform(Base, Key, Opts) ->
                             <<"input-prefix">> =>
                                 hb_ao:get(
                                     [<<"input-prefixes">>, Key],
-                                    {as, dev_message, Base},
+                                    AsDevMsg,
                                     undefined,
                                     Opts
                                 ),
                             <<"output-prefix">> =>
                                 hb_ao:get(
                                     [<<"output-prefixes">>, Key],
-                                    {as, dev_message, Base},
+                                    AsDevMsg,
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-device">> =>
                                 hb_ao:get(
                                     <<"device">>,
-                                    {as, dev_message, Base},
+                                    AsDevMsg,
                                     Opts
                                 ),
                             <<"previous-input-prefix">> =>
                                 hb_ao:get(
                                     <<"input-prefix">>,
-                                    {as, dev_message, Base},
+                                    AsDevMsg,
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-output-prefix">> =>
                                 hb_ao:get(
                                     <<"output-prefix">>,
-                                    {as, dev_message, Base},
+                                    AsDevMsg,
                                     undefined,
                                     Opts
                                 )
 						},
-                        Opts
+                        Opts#{ do_normalize => false }
                     );
 				_ ->
 					?event({no_device_key, Key, {stack, StackMsg}}),
 					not_found
 			end
-	end.
+	end,
+    % Loaded = hb_cache:ensure_all_loaded(hb_util:ok(Transformed), Opts),
+    % ?event(debug_transform, {transformed, {key, Key}, {transformed, Loaded}, {explicit_transformed, {explicit, Loaded}}}),
+    Transformed.
 
 %% @doc The main device stack execution engine. See the moduledoc for more
 %% information.
 resolve_fold(Base, Request, Opts) ->
-	{ok, InitDevMsg} = dev_message:get(<<"device">>, Base, Opts),
+    ?event(debug_resolve_fold, {starting_resolve_fold, {explicit, Base}}),
+	{ok, InitDevMsg} = hb_maps:find(<<"device">>, Base, Opts),
     StartingPassValue =
-        hb_ao:get(<<"pass">>, {as, dev_message, Base}, unset, Opts),
-    PreparedMessage = hb_ao:set(Base, <<"pass">>, 1, Opts),
+        hb_ao:get(<<"pass">>, #{ <<"device">> => dev_message, <<"...">> => Base }, unset, Opts),
+    ?event(debug_resolve_fold, {starting_pass_value, {explicit, StartingPassValue}}),
+    PreparedMessage = hb_ao:set(Base, <<"pass">>, 1, Opts#{ do_normalize => false }),
+    ?event(debug_resolve_fold, {prepared_message, {explicit, PreparedMessage}}),
     case resolve_fold(PreparedMessage, Request, 1, Opts) of
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
@@ -292,7 +300,7 @@ resolve_fold(Base, Request, Opts) ->
                     <<"device-stack-previous">> => unset,
                     <<"pass">> => StartingPassValue
                 },
-                Opts
+                Opts#{ do_normalize => false }
             );
         Else ->
             Else
@@ -300,8 +308,10 @@ resolve_fold(Base, Request, Opts) ->
 resolve_fold(Base, Request, DevNum, Opts) ->
 	case transform(Base, DevNum, Opts) of
 		{ok, Result} ->
-			?event({stack_execute, DevNum, {base, Result}, {req, Request}}),
-			case hb_ao:resolve(Result, Request, Opts) of
+            ResolveRes =
+                hb_ao:resolve(Result, Request, Opts#{ do_normalize => false }),
+            ?event(debug_resolve_fold, {resolve_res, {explicit, ResolveRes}}),
+			case ResolveRes of
 				{ok, Message4} when is_map(Message4) ->
 					?event({result, ok, DevNum, Message4}),
 					resolve_fold(Message4, Request, DevNum + 1, Opts);
@@ -344,23 +354,30 @@ resolve_fold(Base, Request, DevNum, Opts) ->
 %% message of keys and values, where keys are the same as the keys in the
 %% original message (typically a number).
 resolve_map(Base, Request, Opts) ->
-    ?event({resolving_map, {base, Base}, {req, Request}}),
+    ?event(debug_resolve_map, {resolving_map, {base, Base}, {req, Request}}),
     DevKeys =
         hb_ao:get(
             <<"device-stack">>,
             {as, dev_message, Base},
             Opts
         ),
+    ?event(debug_resolve_map, {dev_keys, {explicit, DevKeys}}),
+    ExcludedKeys = [<<"commitments">> | ?AO_CORE_KEYS],
     Res = {ok,
         hb_maps:filtermap(
             fun(Key, _Dev) ->
+                ?event(debug_resolve_map, {transforming_device, {key, Key}}),
                 {ok, OrigWithDev} = transform(Base, Key, Opts),
                 case hb_ao:resolve(OrigWithDev, Request, Opts) of
                     {ok, Value} -> {true, Value};
                     _ -> false
                 end
             end,
-            hb_maps:without(?AO_CORE_KEYS, hb_ao:normalize_keys(DevKeys, Opts), Opts),
+            hb_maps_raw:without(
+                ExcludedKeys,
+                hb_ao:normalize_keys(DevKeys, Opts),
+                Opts
+            ),
 			Opts
         )
     },
@@ -370,8 +387,16 @@ resolve_map(Base, Request, Opts) ->
 increment_pass(Message, Opts) ->
     hb_ao:set(
         Message,
-        #{ <<"pass">> => hb_ao:get(<<"pass">>, {as, dev_message, Message}, 1, Opts) + 1 },
-        Opts
+        #{ 
+            <<"pass">> =>
+                hb_ao:get(
+                    <<"pass">>,
+                    #{ <<"device">> => dev_message, <<"...">> => Message },
+                    1,
+                    Opts
+                ) + 1 
+            },
+        Opts#{ do_normalize => false }
     ).
 
 maybe_error(Base, Request, DevNum, Info, Opts) ->
@@ -398,15 +423,23 @@ generate_append_device(Separator) ->
 generate_append_device(Separator, Status) ->
 	#{
 		append =>
-			fun(M1 = #{ <<"pass">> := 3 }, _) ->
-                % Stop after 3 passes.
-                {ok, M1};
-			   (M1 = #{ <<"result">> := Existing }, #{ <<"bin">> := New }) ->
-				?event({appending, {existing, Existing}, {new, New}}),
-				{Status, M1#{ <<"result">> =>
-					<< Existing/binary, Separator/binary, New/binary>>
-				}}
-			end
+			fun(M1, M2) ->
+                Pass = hb_maps:get(<<"pass">>, M1, 1, #{}),
+                Result = hb_maps:get(<<"result">>, M1, <<"">>, #{}),
+                New = hb_maps:get(<<"bin">>, M2, <<"">>, #{}),
+                case Pass of
+                    3 ->
+                        {ok, M1};
+                    _ ->
+                        {
+                            Status,
+                            M1#{ 
+                                <<"result">> =>
+                                    << Result/binary, Separator/binary, New/binary>>
+                            }
+                        }
+                end
+            end
 	}.
 
 %% @doc Test that the transform function can be called correctly internally
@@ -432,7 +465,9 @@ transform_internal_call_device_test() ->
 
 %% @doc Ensure we can generate a transformer message that can be called to
 %% return a version of base with only that device attached.
-transform_external_call_device_test() ->
+transform_external_call_device_test_() ->
+    {timeout, 15, fun transform_external_call_device/0}.
+transform_external_call_device() ->
 	Base = #{
 		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
@@ -496,8 +531,17 @@ simple_stack_execute_test() ->
 	},
 	?event({stack_executing, test, {explicit, Msg}}),
 	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT!D1!2_D2_2">> }},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
+		#{ <<"result">> := <<"INIT!D1!2_D2_2">> },
+		hb_maps:expand(
+            hb_util:ok(
+                hb_ao:resolve(
+                    Msg,
+                        #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
+                        #{}
+                    )
+                ),
+            #{}
+        )
 	).
 
 many_devices_test() ->
@@ -523,7 +567,13 @@ many_devices_test() ->
 					<<"INIT+D12+D22+D32+D42+D52+D62+D72+D82">>
 			}
 		},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
+		hb_maps:expand(
+            hb_ao:resolve(
+                Msg,
+                #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
+                #{}
+            )
+        )
 	).
 
 benchmark_test() ->
@@ -666,13 +716,13 @@ reinvocation_test() ->
 	Res1 = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12+D22">> }},
-		Res1
+		hb_maps:expand(Res1)
 	),
 	{ok, Req} = Res1,
 	Res2 = hb_ao:resolve(Req, #{ <<"path">> => <<"append">>, <<"bin">> => <<"3">> }, #{}),
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12+D22+D13+D23">> }},
-		Res2
+		hb_maps:expand(Res2)
 	).
 
 skip_test() ->
@@ -687,11 +737,13 @@ skip_test() ->
 	},
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12">> }},
-		hb_ao:resolve(
-			Base,
-			#{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
-            #{}
-		)
+		hb_maps:expand(
+            hb_ao:resolve(
+                Base,
+                #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
+                #{}
+            )
+        )
 	).
 
 pass_test() ->
@@ -708,7 +760,13 @@ pass_test() ->
 	},
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D1_+D1_">> }},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{})
+		hb_maps:expand(
+            hb_ao:resolve(
+                Msg,
+                #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> },
+                #{}
+            )
+        )
 	).
 
 not_found_test() ->
@@ -728,10 +786,15 @@ not_found_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-    {ok, Res} = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
+    {ok, Res} =
+        hb_ao:resolve(
+            Msg,
+            #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> },
+            #{}
+        ),
     ?assertMatch(
 		#{ <<"result">> := <<"INIT+D1_+D2_">> },
-		Res
+		hb_maps:expand(Res)
 	),
     ?event({ex3, Res}),
     ?assertEqual(1337, hb_ao:get(<<"special/output">>, Res, #{})).

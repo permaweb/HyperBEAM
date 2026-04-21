@@ -132,11 +132,13 @@ message_to_fun(Msg, Key, Opts) ->
 
 %% @doc Extract the device module from a message.
 message_to_device(Msg, Opts) ->
-    case dev_message:get(<<"device">>, Msg, Opts) of
-        {error, not_found} ->
+    % TODO: This is a hack to ensure that the default device is loaded.
+    dev_message:info(),
+    case hb_maps:get(<<"device">>, Msg, not_found, Opts) of
+        not_found ->
             % The message does not specify a device, so we use the default device.
             default();
-        {ok, DevID} ->
+        DevID ->
             case load(DevID, Opts) of
                 {error, Reason} ->
                     % Error case: A device is specified, but it is not loadable.
@@ -181,6 +183,17 @@ find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
 find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
     NormKey = hb_ao:normalize_key(Key),
     NormDev = hb_ao:normalize_keys(Dev, Opts),
+    ?event(
+        debug_find_exported_function, 
+        {find_exported_function, 
+            {norm_key, NormKey}, 
+            {norm_dev, {explicit, NormDev}}, 
+            {msg, Msg}, 
+            {dev, Dev}, 
+            {key, Key}, 
+            {max_arity, MaxArity}
+        }
+    ),
 	case hb_maps:get(NormKey, NormDev, not_found, Opts) of
 		not_found -> not_found;
 		Fun when is_function(Fun) ->

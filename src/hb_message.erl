@@ -66,6 +66,7 @@
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
+-export([signed/2]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -87,13 +88,13 @@ convert(Msg, TargetFormat, Opts) ->
     convert(Msg, TargetFormat, <<"structured@1.0">>, Opts).
 convert(Msg, TargetFormat, tabm, Opts) ->
     OldPriv =
-        if is_map(Msg) -> maps:get(<<"priv">>, Msg, #{});
+        if is_map(Msg) -> hb_maps:get(<<"priv">>, Msg, #{});
            true -> #{}
         end,
     from_tabm(Msg, TargetFormat, OldPriv, Opts);
 convert(Msg, TargetFormat, SourceFormat, Opts) ->
     OldPriv =
-        if is_map(Msg) -> maps:get(<<"priv">>, Msg, #{});
+        if is_map(Msg) -> hb_maps:get(<<"priv">>, Msg, #{});
            true -> #{}
         end,
     TABM =
@@ -137,9 +138,10 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 %% any existing `priv' sub-map that may already be present.
 restore_priv(Msg, EmptyPriv, _Opts) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv, Opts) ->
-    MsgPriv = hb_maps:get(<<"priv">>, Msg, #{}, Opts),
+    % Priv is top level, so we use hb_maps_raw:get instead of hb_maps:get.
+    MsgPriv = hb_maps_raw:get(<<"priv">>, Msg, #{}, Opts),
     ?event({restoring_priv, {msg_priv, MsgPriv}, {old_priv, OldPriv}}),
-    NewPriv = hb_util:deep_merge(MsgPriv, OldPriv, Opts),
+    NewPriv = hb_util:deep_merge_raw(MsgPriv, OldPriv, Opts),
     ?event({new_priv, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
@@ -224,7 +226,7 @@ normalize_commitments(Msg, _Opts, _Mode) ->
 do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
     Msg;
 do_normalize_commitments(Msg, Opts, passive) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    Commitments = hb_maps_raw:get(<<"commitments">>, Msg, #{}, Opts),
     {UnsignedCommitments, SignedCommitments} = 
         lists:partition(
             fun({_, #{ <<"committer">> := _Committer }}) -> false;
@@ -280,9 +282,9 @@ do_normalize_commitments(Msg, Opts, verify) ->
             attach_phash2(
                 Msg#{
                     <<"commitments">> =>
-                        hb_maps:merge(
+                        hb_maps_raw:merge(
                             NormCommitments,
-                            hb_maps:get(<<"commitments">>, Msg, #{}, Opts)
+                            hb_maps_raw:get(<<"commitments">>, Msg, #{}, Opts)
                         )
                 },
                 Opts
@@ -335,7 +337,7 @@ attach_phash2(Msg, ExpectedHash, Opts) ->
 %% performed unless necessary.
 with_only_committed(Msg, Opts) when is_map(Msg) ->
     ?event({with_only_committed, {msg, Msg}, {opts, Opts}}),
-    Comms = hb_maps:get(<<"commitments">>, Msg, not_found, Opts),
+    Comms = hb_maps_raw:get(<<"commitments">>, Msg, not_found, Opts),
     case is_map(Msg) andalso Comms /= not_found of
         true ->
             try
@@ -412,7 +414,7 @@ without_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
     without_unless_signed([Key], Msg, Opts);
 without_unless_signed(Keys, Msg, Opts) ->
     SignedKeys = hb_message:committed(Msg, all, Opts),
-    maps:without(
+    hb_maps:without(
         lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
         Msg
     ).
@@ -522,6 +524,7 @@ paranoid_verify(Topic, Msg, Opts) ->
     ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
     case hb_opts:get(paranoid_verify, false, Opts) of
         true -> do_paranoid_verify(Topic, Msg, Opts);
+        false -> true;
         Topics ->
             case lists:member(Topic, Topics) of
                 false -> true;
@@ -546,7 +549,7 @@ do_paranoid_verify(Topic, Msg, Opts) ->
                     {details, Details},
                     {stack, {trace, Stack}}
                 },
-                Opts#{
+                #{
                     paranoid_verify => false
                 }
             ),
@@ -610,6 +613,31 @@ uncommitted_deep(Msg, Opts) ->
 signers(Msg, Opts) ->
     hb_util:ok(dev_message:committers(Msg, #{}, Opts)).
 
+%% @doc Traverses through a nested message, looking for the first
+%% signed commitment.
+signed(Msg, Opts) ->
+    Commitments = hb_maps_raw:get(<<"commitments">>, Msg, #{}, Opts),
+    SignedCommitments = maps:filter(
+        fun(_, #{ <<"committer">> := _Committer }) -> true;
+           (_, _) -> false
+        end,
+        Commitments
+    ),
+    ?event(
+        debug_signed, 
+        {signed, 
+        {msg, {explicit, Msg}},
+        {commitments, {explicit, Commitments}},
+        {signed_commitments, {explicit, SignedCommitments}}}),
+    case maps:size(SignedCommitments) of
+        0 -> 
+            case hb_maps_raw:get(<<"...">>, Msg, undefined, Opts) of
+                undefined -> undefined;
+                Nested -> signed(Nested, Opts)
+            end;
+        _ ->
+            Msg
+    end.
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
 print(Msg, Indent) ->

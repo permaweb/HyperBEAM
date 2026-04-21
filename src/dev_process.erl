@@ -355,11 +355,12 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
             end
         ),
     ?event(
-        compute,
+        compute_short,
         {computed_slot,
             {proc_id, ProcID},
             {slot, Slot},
-            {runtime_microsecs, RuntimeMicroSecs}
+            {runtime_microsecs, RuntimeMicroSecs},
+            {res, Res}
         },
         Opts
     ),
@@ -638,12 +639,13 @@ ensure_loaded(Base, Req, Opts) ->
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
     ProcID = dev_process_lib:process_id(Base, #{}, Opts),
     ?event({ensure_loaded, {base, Base}, {req, Req}}),
-    case hb_ao:get(<<"initialized">>, Base, Opts) of
+    Initialized = hb_maps:get(<<"initialized">>, Base, not_found, Opts),
+    case Initialized of
         <<"true">> ->
-            ?event(already_initialized),
+            ?event(debug_load_process, {already_initialized}),
             {ok, Base};
         _ ->
-            ?event(not_initialized),
+            ?event(debug_load_process, {not_initialized}),
             % Try to load the latest complete state from disk.
             LoadRes =
                 dev_process_cache:latest(
@@ -674,6 +676,7 @@ ensure_loaded(Base, Req, Opts) ->
                             Opts
                         ),
                     Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
+                    % TODO: Is this necessary? Is anything happening here?
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
                             #{ <<"type">> => <<"hmac-sha256">>},
@@ -681,17 +684,24 @@ ensure_loaded(Base, Req, Opts) ->
                             Opts),
                     #{ <<"commitments">> := SignCommits } =
                         hb_message:with_commitments(ProcID, Process, Opts),
-                    UpdateProcess = hb_maps:put(
-                        <<"commitments">>,
-                        hb_maps:merge(HmacCommits, SignCommits),
-                        Process,
-                        Opts
-                    ),
+                    MergedCommitments = hb_maps_raw:merge(HmacCommits, SignCommits),
+                    UpdateProcess =
+                        hb_maps_raw:put(
+                            <<"commitments">>,
+                            MergedCommitments,
+                            Process,
+                            Opts
+                        ),
                     LoadedSnapshotReq =
-                        LoadedSnapshotMsg#{
-                            <<"process">> => UpdateProcess,
-                            <<"initialized">> => <<"true">>
-                        },
+                        hb_ao:set(
+                            LoadedSnapshotMsg,
+                                #{
+                                <<"process">> => UpdateProcess,
+                                <<"initialized">> => <<"true">>,
+                                <<"set-mode">> => <<"explicit">>
+                            },
+                            Opts
+                        ),
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
                     ?event(compute,
                         {found_state_checkpoint,

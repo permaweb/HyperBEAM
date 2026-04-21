@@ -8,7 +8,7 @@
 %%% @doc Fetch a resource from the cache using "target" ID extracted from the message
 read(_M1, M2, Opts) ->
     ID = hb_ao:get(<<"target">>, M2, Opts),
-    ?event({lookup, {id, ID}, {opts, Opts}}),
+    ?event({lookup, {id, ID}, {m2, M2}, {opts, Opts}}),
     case hb_cache:read(ID, Opts) of
         {ok, RawRes} ->
             % We are sending the result over the wire, so make sure it is

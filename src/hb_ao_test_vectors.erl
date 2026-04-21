@@ -217,20 +217,23 @@ exec_dummy_device(Opts) ->
     % Compile the test device and store it in an accessible cache to the execution
     % environment.
     {ok, ModName, Bin} = compile:file("test/dev_dummy.erl", [binary]),
+    ?event(debug_test, {compiling_device, {mod_name, ModName}, {bin, Bin}}),
+    Norm = 
+        hb_ao:normalize_keys(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"content-type">> => <<"application/beam">>,
+                <<"module-name">> => ModName,
+                <<"requires-otp-release">> =>
+                    hb_util:bin(erlang:system_info(otp_release)),
+                <<"body">> => Bin
+            },
+            Opts
+        ),
     DevMsg =
         hb_message:commit(
-            hb_ao:normalize_keys(
-                #{
-                    <<"data-protocol">> => <<"ao">>,
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"content-type">> => <<"application/beam">>,
-                    <<"module-name">> => ModName,
-                    <<"requires-otp-release">> =>
-                        hb_util:bin(erlang:system_info(otp_release)),
-                    <<"body">> => Bin
-                },
-				Opts
-            ),
+            Norm,
             Opts
         ),
     {ok, _UnsignedID} = hb_cache:write(DevMsg, Opts),

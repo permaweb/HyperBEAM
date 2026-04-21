@@ -38,11 +38,11 @@ tagfind(Key, Tags, Default) ->
 
 %% @doc Find a key potentially with a +link specifier
 find_key(Key, Map, Opts) ->
-    case hb_maps:find(Key, Map, Opts) of
+    case hb_maps_raw:find(Key, Map, Opts) of
         {ok, Value} -> {Key, Value};
         error ->
             KeyLink = <<Key/binary, "+link">>,
-            case hb_maps:find(KeyLink, Map, Opts) of
+            case hb_maps_raw:find(KeyLink, Map, Opts) of
                 {ok, Value} -> {KeyLink, Value};
                 error -> error
             end

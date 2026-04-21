@@ -404,7 +404,7 @@ match(Opts, MatchKVs) ->
             end,
             MatchKVs
         ),
-    ?event({elmdb_match, MatchKVs}),
+    ?event(debug_lmdb_match, {elmdb_match, MatchKVs}),
     case elmdb:match(DBInstance, WithPrefixes) of
         {ok, Matches} ->
             ?event({elmdb_matched, Matches}),
@@ -504,6 +504,7 @@ make_link(Opts, Existing, New) ->
    ExistingBin = hb_util:bin(Existing),
    % Ensure parent groups exist for the new link path (like filesystem ensure_dir)
    ensure_parent_groups(Opts, New),
+   ?event(debug_make_link, {making_link, {existing, ExistingBin}, {new, New}}),
    write(Opts, New, <<"link:", ExistingBin/binary>>). 
 
 %% @doc Transform a path into the store's canonical form.

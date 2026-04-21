@@ -222,4 +222,5 @@ read_test() ->
 		#{ <<"store-module">> => hb_store_remote_node, <<"node">> => Node }
 	],
     {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
-    ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)).
+    RetrievedRand = hb_ao:get(<<"test-key">>, RetrievedMsg, #{}),
+    ?assertEqual(Rand, RetrievedRand).

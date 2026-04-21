@@ -182,17 +182,24 @@ generate(Base, Request, Opts) ->
             register_wallet(Wallet, Base, Request, Opts);
         [WalletDetails] ->
             ?event({details, WalletDetails}),
+            SetRes = 
+                hb_ao:set(
+                    WalletDetails,
+                    #{
+                        <<"body">> =>
+                            hb_maps:get(
+                                <<"keyid">>,
+                                Base,
+                                Opts
+                            )
+                    },
+                    Opts
+                ),
+            ?event(debug_secret_generate, {set_res, {set_res, SetRes}}),
             % Wallets found, return them.
             {
                 ok,
-                WalletDetails#{
-                    <<"body">> =>
-                        hb_maps:get(
-                            <<"keyid">>,
-                            Base,
-                            Opts
-                        )
-                }
+                SetRes
             }
     end.
 
@@ -234,9 +241,13 @@ import_wallets(Wallets, Base, Request, Opts) ->
                                 RegRes,
                                 Opts
                             ),
-                        Merged#{
-                            <<"imported">> => [ WalletAddress | OldImported ]
-                        };
+                        hb_ao:set(
+                            Merged, 
+                            #{
+                                <<"imported">> => [ WalletAddress | OldImported ]
+                            },
+                            Opts
+                        );
                     {error, _} -> Acc
                 end
             end,
@@ -244,10 +255,16 @@ import_wallets(Wallets, Base, Request, Opts) ->
             Wallets
         ),
     {ok,
-        Res#{
-            <<"body">> =>
-                addresses_to_binary(hb_maps:get(<<"imported">>, Res, [], Opts))
-        }
+        hb_ao:set(
+            Res, 
+            #{
+                <<"body">> =>
+                    addresses_to_binary(
+                        hb_maps:get(<<"imported">>, Res, [], Opts)
+                    )
+            },
+            Opts
+        )
     }.
 
 %% @doc Transform a wallet key serialized form into a wallet.
@@ -282,9 +299,13 @@ register_wallet(Wallet, Base, Request, Opts) ->
                 end
         end,
     AccessControl =
-        BaseAccessControl#{
-            <<"wallet-address">> => hb_util:human_id(Address)
-        },
+        hb_ao:set(
+            BaseAccessControl, 
+            #{
+                <<"wallet-address">> => hb_util:human_id(Address)
+            },
+            Opts
+        ),
     Controllers =
         hb_ao:get(<<"controllers">>, Request, default, Opts),
     RequiredControllers =
@@ -295,14 +316,15 @@ register_wallet(Wallet, Base, Request, Opts) ->
     AuthRequest =
         case hb_ao:get(<<"secret">>, Base, undefined, Opts) of
             undefined ->
-                Request#{
+                hb_ao:set(
+                    Request, #{
                     <<"path">> => <<"commit">>
-                };
+                }, Opts);
             Secret ->
-                Request#{
+                hb_ao:set(Request, #{
                     <<"path">> => <<"commit">>,
                     <<"secret">> => Secret
-                }
+                }, Opts)
         end,
     ?event({register_wallet, {access_control, AccessControl}, {request, AuthRequest}}),
     case hb_ao:resolve(AccessControl, AuthRequest, Opts) of
@@ -353,7 +375,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             Opts
         ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
-    Base = RespBase#{ <<"body">> => KeyID },
+    Base = hb_ao:set(RespBase, #{ <<"body">> => KeyID }, Opts),
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
         <<"client">> ->
@@ -362,7 +384,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             JSONKey = hb_maps:get(<<"wallet">>, WalletDetails, undefined, Opts),
             % Don't store, set the cookie in the response.
             hb_ao:resolve(
-                Base#{ <<"device">> => <<"cookie@1.0">> },
+                hb_ao:set(Base, #{ <<"device">> => <<"cookie@1.0">> }, Opts),
                 #{
                     <<"path">> => <<"store">>,
                     <<"wallet-", Address/binary>> => hb_escape:encode_quotes(JSONKey)
@@ -435,7 +457,7 @@ request_to_wallets(Base, Request, Opts) ->
             <<"all">>,
             Opts
         ),
-    ?event({request_to_wallets, {keys, Keys}}),
+    ?event(debug_secret_generate, {request_to_wallets, {keys, Keys}}),
     WalletKeyIDs =
         case hb_maps:get(<<"keyids">>, Request, not_found, Opts) of
             not_found ->
@@ -527,11 +549,15 @@ verify_controllers(WalletDetails, Request, Opts) ->
 verify_auth(WalletDetails, Req, Opts) ->
     AuthBase = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
     AuthRequest =
-        Req#{
-            <<"path">> => <<"verify">>,
-            <<"committer">> =>
-                hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts)
-        },
+        hb_ao:set(
+            Req,
+            #{
+                <<"path">> => <<"verify">>,
+                <<"committer">> =>
+                    hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts)
+            },
+            Opts
+        ),
     ?event({verify_wallet, {auth_base, AuthBase}, {request, AuthRequest}}),
     hb_ao:resolve(AuthBase, AuthRequest, Opts).
 
@@ -579,7 +605,7 @@ export(Base, Request, Opts) ->
         case hb_ao:get(<<"keyids">>, Request, not_found, Opts) of
             <<"all">> ->
                 AllLocalWallets = list_wallets(Opts),
-                Request#{ <<"keyids">> => AllLocalWallets };
+                hb_ao:set(Request, #{ <<"keyids">> => AllLocalWallets }, Opts);
             _ -> Request
         end,
     ?event({export, {base, Base}, {request, ModReq}}),

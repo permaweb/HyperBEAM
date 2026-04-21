@@ -187,6 +187,8 @@ register(ProcMsg, PeerID, RawOpts) ->
 balance(ProcMsg, User, Opts) when not ?IS_ID(User) ->
     balance(ProcMsg, hb_util:human_id(ar_wallet:to_address(User)), Opts);
 balance(ProcMsg, ID, Opts) ->
+    Now = hb_ao:get(<<"now">>, ProcMsg, 0, Opts),
+    Balances = hb_ao:get(<<"now/balance">>, ProcMsg, #{}, Opts),
     hb_ao:get(<<"now/balance/", ID/binary>>, ProcMsg, 0, Opts).
 
 %% @doc Get the total balance for an ID across all ledgers in a set.
@@ -218,7 +220,7 @@ balances(Prefix, ProcMsg, Opts) ->
 supply(ProcMsg, Opts) ->
     supply(now, ProcMsg, Opts).
 supply(Mode, ProcMsg, Opts) ->
-    lists:sum(maps:values(balances(Mode, ProcMsg, Opts))).
+    lists:sum(maps:values(hb_maps:expand(balances(Mode, ProcMsg, Opts), Opts))).
 
 %% @doc Calculate the supply of tokens in all sub-ledgers, from the balances of
 %% the root ledger.

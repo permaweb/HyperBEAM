@@ -253,7 +253,7 @@ generate_secret(Provider, Request, Opts) ->
             % The provider returned a direct key, calculate the committer and
             % generate a wallet for it, if needed.
             ?event({secret_from_provider, Secret}),
-            {ok, Provider#{ <<"secret">> => Secret }, strip_sensitive(Request, Opts)};
+            {ok, #{ <<"secret">> => Secret, <<"...">> => Provider }, strip_sensitive(Request, Opts)};
         {ok, NormalizedReq} when is_map(NormalizedReq) ->
             % If there is a `wallet' field in the request, we move it to the
             % provider, else continue with the existing provider.
@@ -263,7 +263,7 @@ generate_secret(Provider, Request, Opts) ->
                     ?event({key_found_in_normalized_req, Key}),
                     {
                         ok,
-                        Provider#{ <<"secret">> => Key },
+                        #{ <<"secret">> => Key, <<"...">> => Provider },
                         strip_sensitive(NormalizedReq, Opts)
                     };
                 error ->
@@ -279,9 +279,8 @@ strip_sensitive(Request, Opts) ->
 %% @doc Generate a wallet with the key if the `wallet' field is not present in
 %% the provider after normalization.
 generate_wallet(Provider, Request, Opts) ->
-    {ok, #{ <<"body">> := WalletID }} =
-        dev_secret:generate(Provider, Request, Opts),
-    ?event({generated_wallet, WalletID}),
+    Wallet = dev_secret:generate(Provider, Request, Opts),
+    {ok, #{ <<"body">> := WalletID }} = Wallet,
     {ok, Provider, refresh_opts(Opts)}.
 
 %% @doc Sign a request using the configured key provider
@@ -512,7 +511,7 @@ http_auth_test() ->
         ),
     % Run a request and check that the response is a 401 with the
     % `www-authenticate' header.
-    Resp1 =
+    {error, Resp1} =
         hb_http:get(
             Node,
             #{
@@ -521,9 +520,10 @@ http_auth_test() ->
             },
             #{}
         ),
+    ?event(debug_test, {http_auth_test, {res, {explicit, Resp1}}}),
     ?assertMatch(
-        {error, #{ <<"status">> := 401, <<"www-authenticate">> := _ }},
-        Resp1
+        #{ <<"status">> := 401, <<"www-authenticate">> := _ },
+        hb_maps:expand(Resp1)
     ),
     % Run a request with the `Authorization' header and check that the response
     % is signed.

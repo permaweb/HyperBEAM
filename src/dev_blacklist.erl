@@ -262,15 +262,11 @@ basic_test() ->
         {ok, <<"test-3">>},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
-    ?assertMatch(
-        {error,
-            #{
-                <<"status">> := 451,
-                <<"reason">> := <<"content-policy">>
-            }},
-        hb_http:get(Node, SignedID1, Opts1)
-    ),
-    ok.
+    {error, ErrorRes} = hb_http:get(Node, SignedID1, Opts1),
+    ErrorStatus = hb_maps:get(<<"status">>, ErrorRes, undefined, Opts1),
+    Reason = hb_maps:get(<<"reason">>, ErrorRes, undefined, Opts1),
+    ?assert(ErrorStatus =:= 451),
+    ?assert(Reason =:= <<"content-policy">>).
 
 %% @doc Test the blacklist device with a blacklist that is provided via HTTP.
 blacklist_from_external_http_test() ->
@@ -298,9 +294,10 @@ blacklist_from_external_http_test() ->
             }
         },
     Node = hb_http_server:start_node(NodeOpts),
+    Res = hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, NodeOpts),
     ?assertMatch(
         {ok, <<"test-3">>},
-        hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, NodeOpts)
+        Res
     ),
     ?assertMatch(
         {error,

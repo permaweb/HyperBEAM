@@ -47,7 +47,13 @@ get(Key, Map, Default) ->
     Opts :: map()
 ) -> term().
 get(Key, Map, Default, Opts) ->
-    LoadedMap = hb_cache:ensure_all_loaded(Map, Opts),
+    case maps:get(print_get, Opts, false) of
+        true ->
+            ?event(debug_maps_get, {get, {key, {explicit, Key}}, {map, {explicit, Map}}, {default, {explicit, Default}}});
+        false ->
+            ok
+    end,
+    LoadedMap = hb_cache:ensure_loaded(Map, Opts),
     case maps:find(Key, LoadedMap) of
         % TODO: unify
         {ok, <<"unset">>} -> Default;
@@ -59,7 +65,7 @@ get(Key, Map, Default, Opts) ->
 get_from_extension(Key, LoadedMap, Default, Opts) ->
     case maps:find(<<"...">>, LoadedMap) of
         {ok, Expanded} ->
-            ExpandedLoaded = hb_cache:ensure_all_loaded(Expanded, Opts),
+            ExpandedLoaded = hb_cache:ensure_loaded(Expanded, Opts),
             case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
                 true -> get(Key, ExpandedLoaded, Default, Opts);
                 false -> Default
@@ -67,7 +73,7 @@ get_from_extension(Key, LoadedMap, Default, Opts) ->
         _ ->
             case maps:find(<<"...+link">>, LoadedMap) of
                 {ok, LinkID} ->
-                    ExpandedLoaded = hb_cache:ensure_all_loaded({link, LinkID, Opts}, Opts),
+                    ExpandedLoaded = hb_cache:ensure_loaded({link, LinkID, Opts}, Opts),
                     case is_map(ExpandedLoaded) andalso ExpandedLoaded =/= LoadedMap of
                         true -> get(Key, ExpandedLoaded, Default, Opts);
                         false -> Default
@@ -84,6 +90,8 @@ find(Key, Map) ->
 find(Key, Map, Opts) ->
     LoadedMap = hb_cache:ensure_loaded(Map, Opts),
     case maps:find(Key, LoadedMap) of
+        {ok, <<"unset">>} -> error;
+        {ok, unset} -> error;
         {ok, Value} -> {ok, hb_cache:ensure_loaded(Value, Opts)};
         error -> find_from_extension(Key, LoadedMap, Opts)
     end.
@@ -366,9 +374,12 @@ to_list(Map, Opts) ->
 %% @doc Expand message extensions (<<"...">>) into a merged map view.
 %% The extension key is treated as an overlay base and is omitted from
 %% the returned map.
+% TODO: Possibly move modules (no longer just map)
 expand(Map) ->
     expand(Map, #{}).
-expand(Map, Opts) ->
+expand(List, Opts) when is_list(List) ->
+    lists:map(fun(Item) -> expand(Item, Opts) end, List);
+expand(Map, Opts) when is_map(Map) ->
     LoadedMap = hb_cache:ensure_loaded(Map, Opts),
     FlatMap =
         case maps:find(<<"...">>, LoadedMap) of
@@ -425,10 +436,12 @@ expand(Map, Opts) ->
             end,
             LoadedMap
         ),
-    case map_size(UnsetKeys) of
-        0 -> ExpandedMap;
-        _ -> maps:without(maps:keys(UnsetKeys), ExpandedMap)
-    end.
+    % We need to remove the commitments key, as expanded commitments will
+    % be invalid
+    RemoveKeys = [<<"commitments">>] ++ maps:keys(UnsetKeys),
+    maps:without(RemoveKeys, ExpandedMap);
+expand(Other, _Opts) ->
+    Other.
 %%% Tests
 
 get_with_link_test() ->

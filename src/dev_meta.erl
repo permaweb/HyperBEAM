@@ -228,31 +228,35 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
             % Resolve the request message.
-            HTTPOpts = hb_maps:merge(
-                AfterPreprocOpts,
-                hb_opts:get(http_extra_opts, #{}, NodeMsg),
-				NodeMsg
-            ),
+            HTTPOpts = 
+                hb_maps_raw:merge(
+                    AfterPreprocOpts,
+                    hb_opts:get(http_extra_opts, #{}, NodeMsg),
+                    NodeMsg
+                ),
             Res =
                 hb_ao:resolve_many(
                     PreProcessedMsg,
                     HTTPOpts#{ force_message => true }
                 ),
             {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
+            ?event(debug_routes, {status_embedded_res, {explicit, StatusEmbeddedRes}}),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
+            AfterResolveRes = 
+                resolve_hook(
+                    <<"response">>,
+                    Req,
+                    StatusEmbeddedRes,
+                    AfterResolveOpts
+                ),
+            ?event(debug_routes, {after_resolve_res, {explicit, AfterResolveRes}}),
+            EmbeddedStatusOutput = embed_status(AfterResolveRes, NodeMsg),
             % Apply the post-processor to the result.
-            Output = maybe_sign(
-                embed_status(
-                    resolve_hook(
-                        <<"response">>,
-                        Req,
-                        StatusEmbeddedRes,
-                        AfterResolveOpts
-                    ),
+            Output = 
+                maybe_sign(
+                    EmbeddedStatusOutput,
                     NodeMsg
                 ),
-                NodeMsg
-            ),
             ?event(http_request,
                 {http_request,
                     {request, Req},
@@ -303,7 +307,7 @@ embed_status({ErlStatus, Res}, NodeMsg) when is_map(Res) ->
     case lists:member(<<"status">>, hb_message:committed(Res, all, NodeMsg)) of
         false ->
             HTTPCode = status_code({ErlStatus, Res}, NodeMsg),
-            {ok, Res#{ <<"status">> => HTTPCode }};
+            {ok, #{ <<"status">> => HTTPCode, <<"...">> => Res }};
         true ->
             {ok, Res}
     end;
@@ -373,10 +377,11 @@ message_to_status(_Item, _NodeMsg) ->
 maybe_sign({Status, Res}, NodeMsg) ->
     {Status, maybe_sign(Res, NodeMsg)};
 maybe_sign(Res, NodeMsg) ->
-    ?event({maybe_sign, Res}),
-    case hb_opts:get(force_signed, false, NodeMsg) of
+    ForceSigned = hb_maps:get(force_signed, NodeMsg, false, NodeMsg),
+    case ForceSigned of
         true ->
-            case hb_message:signers(Res, NodeMsg) of
+            Signers = hb_message:signers(Res, NodeMsg),
+            case Signers of
                 [] -> hb_message:commit(Res, NodeMsg);
                 _ -> Res
             end;
@@ -389,7 +394,8 @@ is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
     % Does the caller have the right to change the node message?
-    RequestSigners = hb_message:signers(Request, NodeMsg),
+    RequestSigners =
+        hb_message:signers(hb_message:signed(Request, NodeMsg), NodeMsg),
     ValidOperator =
         hb_util:bin(
             hb_opts:get(
@@ -419,7 +425,8 @@ is(operator, Req, NodeMsg) ->
     % Get the operator from the node message
     Operator = hb_opts:get(operator, unclaimed, NodeMsg),
     % Get the request signers
-    RequestSigners = hb_message:signers(Req, NodeMsg),
+    RequestSigners =
+        hb_message:signers(hb_message:signed(Req, NodeMsg), NodeMsg),
     % Ensure the operator is present in the request
     lists:member(Operator, RequestSigners);
 is(initiator, Request, NodeMsg) ->
@@ -432,9 +439,17 @@ is(initiator, Request, NodeMsg) ->
             false;
         [InitializationRequest | _] ->
             % Extract signature from first entry
-            InitializationRequestSigners = hb_message:signers(InitializationRequest, NodeMsg),
+            InitializationRequestSigners =
+                hb_message:signers(
+                    hb_message:signed(InitializationRequest, NodeMsg),
+                    NodeMsg
+                ),
             % Get request signers
-            RequestSigners = hb_message:signers(Request, NodeMsg),
+            RequestSigners =
+                hb_message:signers(
+                    hb_message:signed(Request, NodeMsg),
+                    NodeMsg
+                ),
             % Ensure all signers of the initalization request are present in the
             % request.
             AllSignersPresent =
@@ -538,7 +553,7 @@ permanent_node_message_test() ->
 	StoreOpts = hb_test_utils:test_store(),
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
-        Opts =#{
+        Opts = #{
             operator => <<"unclaimed">>,
             initialized => false,
             test_config_item => <<"test">>,

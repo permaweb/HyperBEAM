@@ -8,7 +8,7 @@
 %% ANS-104 data item that should be included in the base message.
 fields(Item, Prefix, Opts) ->
     lists:foldl(
-        fun hb_maps:merge/2,
+        fun hb_maps_raw:merge/2,
         #{},
         [
             target_field(Item, Prefix, Opts),
@@ -70,7 +70,7 @@ data(Item, Req, Tags, Opts) ->
             % If the data is a map, we need to recursively turn its children
             % into messages from their tx representations.
             hb_ao:normalize_keys(
-                hb_maps:map(
+                hb_maps_raw:map(
                     fun(_, InnerValue) ->
                         hb_util:ok(dev_codec_ans104:from(InnerValue, Req, Opts))
                     end,
@@ -99,9 +99,9 @@ committed(FieldKeys, Item, Fields, Tags, Data, Opts) ->
 field_keys(FieldKeys, BaseFields, Tags, Data, Opts) ->
     lists:filter(
         fun(Key) ->
-            hb_maps:is_key(Key, BaseFields, Opts) orelse
-            hb_maps:is_key(Key, Tags, Opts) orelse
-            hb_maps:is_key(Key, Data, Opts)
+            hb_maps_raw:is_key(Key, BaseFields, Opts) orelse
+            hb_maps_raw:is_key(Key, Tags, Opts) orelse
+            hb_maps_raw:is_key(Key, Data, Opts)
         end,
         FieldKeys
     ).
@@ -136,7 +136,7 @@ tag_keys(Item, _Opts) ->
 %% 2. Tags
 %% 3. Fields
 base(CommittedKeys, Fields, Tags, Data, Opts) ->
-    hb_maps:from_list(
+    hb_maps_raw:from_list(
         lists:map(
             fun(Key) ->
                 case dev_arweave_common:find_key(Key, Data, Opts) of
@@ -182,7 +182,7 @@ with_unsigned_commitment(
         <<"commitments">> => #{
             ID =>
                 filter_unset(
-                    hb_maps:merge(
+                    hb_maps_raw:merge(
                         CommittedFields,
                         #{
                             <<"commitment-device">> => Device,
@@ -205,14 +205,14 @@ with_signed_commitment(
         UncommittedMessage, CommittedKeys, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
     ID = hb_util:human_id(Item#tx.id),
-    ExtraCommitments = hb_maps:merge(
+    ExtraCommitments = hb_maps_raw:merge(
         FieldCommitments,
-        hb_maps:with(?BUNDLE_KEYS, Tags),
+        hb_maps_raw:with(?BUNDLE_KEYS, Tags),
         Opts
     ),
     Commitment =
         filter_unset(
-            hb_maps:merge(
+            hb_maps_raw:merge(
                 ExtraCommitments,
                 #{
                     <<"commitment-device">> => Device,
@@ -272,10 +272,11 @@ encoded_tags_to_map(Tags) ->
 
 %% @doc Remove all undefined values from a map.
 filter_unset(Map, Opts) ->
-    hb_maps:filter(
+    hb_maps_raw:filter(
         fun(_, Value) ->
             case Value of
                 unset -> false;
+                <<"unset">> -> false;
                 _ -> true
             end
         end,
@@ -291,12 +292,12 @@ deduplicating_from_list(Tags, Opts) ->
         lists:foldl(
             fun({Key, Value}, Acc) ->
                 NormKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
-                case hb_maps:get(NormKey, Acc, undefined, Opts) of
-                    undefined -> hb_maps:put(NormKey, Value, Acc, Opts);
+                case hb_maps_raw:get(NormKey, Acc, undefined, Opts) of
+                    undefined -> hb_maps_raw:put(NormKey, Value, Acc, Opts);
                     Existing when is_list(Existing) ->
-                        hb_maps:put(NormKey, Existing ++ [Value], Acc, Opts);
+                        hb_maps_raw:put(NormKey, Existing ++ [Value], Acc, Opts);
                     ExistingSingle ->
-                        hb_maps:put(NormKey, [ExistingSingle, Value], Acc, Opts)
+                        hb_maps_raw:put(NormKey, [ExistingSingle, Value], Acc, Opts)
                 end
             end,
             #{},
@@ -305,7 +306,7 @@ deduplicating_from_list(Tags, Opts) ->
     ?event({deduplicating_from_list, {aggregated, Aggregated}}),
     % Convert aggregated values into a structured-field list.
     Res =
-        hb_maps:map(
+        hb_maps_raw:map(
             fun(_Key, Values) when is_list(Values) ->
                 % Convert Erlang lists of binaries into a structured-field list.
                 iolist_to_binary(

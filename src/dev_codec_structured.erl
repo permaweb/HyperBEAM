@@ -44,7 +44,7 @@ from(List, Req, Opts) when is_list(List) ->
             Opts
         ),
     EncodingLists = lists:member(<<"list">>, find_encode_types(Req, Opts)),
-    EncodingHasAOTypes = hb_maps_raw:is_key(<<"ao-types">>, DecodedAsMap, Opts),
+    EncodingHasAOTypes = hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts),
     case EncodingLists orelse EncodingHasAOTypes of
         true ->
             AOTypes = decode_ao_types(DecodedAsMap, Opts),
@@ -162,7 +162,7 @@ type(Other) -> Other.
 
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
-    case hb_maps_raw:get(<<"bundle">>, Req, not_found, Opts) of
+    case hb_maps:get(<<"bundle">>, Req, not_found, Opts) of
         not_found -> hb_opts:get(linkify_mode, offload, Opts);
     	true ->
             % The request is asking for a bundle, so we should _not_ linkify.

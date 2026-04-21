@@ -88,7 +88,7 @@ ensure_initialized(Base, _Req, Opts) ->
 %% 3. A message containing a series of named Lua modules.
 find_modules(Base, Opts) ->
     MaybeBodyMod =
-        case hb_ao:get(<<"content-type">>, {as, <<"message@1.0">>, Base}, Opts) of
+        case hb_maps:get(<<"content-type">>, Base, not_found, Opts) of
             CT when ?IS_LUA_TYPE(CT) -> [Base];
             _ -> []
         end,
@@ -97,7 +97,7 @@ find_modules(Base, Opts) ->
         {finding_modules, {base, Base}, {body_mod, MaybeBodyMod}},
         Opts
     ),
-    case {hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts), MaybeBodyMod} of
+    case {hb_maps:get(<<"module">>, Base, not_found, Opts), MaybeBodyMod} of
         {not_found, []} ->
             {error, <<"No Lua modules found when preparing environment for call.">>};
         {not_found, _} ->
@@ -309,6 +309,9 @@ compute(Key, RawBase, RawReq, Opts) ->
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
     ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
+    % TODO: We expand params before sending them into the Lua,
+    % but perhaps we should refactor lua to handle this internally.
+    ExpandedParams = lists:map(fun(P) -> hb_maps:expand(P, Opts) end, ResolvedParams),
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
@@ -317,15 +320,18 @@ compute(Key, RawBase, RawReq, Opts) ->
             {req, Req}
         }
     ),
-    process_response(
+    Encoded = encode(ExpandedParams, Opts),
+    Response = 
         try luerl:call_function_dec(
             [Function],
-            encode(ResolvedParams, Opts),
+            Encoded,
             State
         )
         catch
             _:Reason:Stacktrace -> {error, Reason, Stacktrace}
         end,
+    process_response(
+        Response,
         OldPriv,
 		Opts
     ).
@@ -693,22 +699,27 @@ invoke_non_compute_key_test() ->
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
-    Node = hb_http_server:start_node(
-        #{
-            priv_wallet => ar_wallet:new(),
-            on => #{
-                <<"request">> =>
-                    #{
-                        <<"device">> => <<"lua@5.3a">>,
-                        <<"module">> => #{
-                            <<"content-type">> => <<"application/lua">>,
-                            <<"body">> => Module
+    Node = 
+        hb_http_server:start_node(
+            #{
+                priv_wallet => ar_wallet:new(),
+                on => #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => <<"lua@5.3a">>,
+                            <<"module">> => #{
+                                <<"content-type">> => <<"application/lua">>,
+                                <<"body">> => Module
+                            }
                         }
-                    }
+                }
             }
-        }),
+        ),
     {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
-    ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).
+    ?assertMatch(
+        <<"i like turtles">>,
+        hb_maps:get(<<"body">>, Res, #{})
+    ).
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_process_test() ->

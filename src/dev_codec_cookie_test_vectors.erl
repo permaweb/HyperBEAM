@@ -26,24 +26,28 @@ assert_set(TestSet, Fun) ->
 
 %% @doc Convert a cookie message to a string.
 to_string(CookieMsg) ->
-    {ok, BaseMsg} = dev_codec_cookie:store(#{}, CookieMsg, #{}),
+    to_string(CookieMsg, hb_private:opts(#{})).
+to_string(CookieMsg, Opts) ->
+    {ok, BaseMsg} = dev_codec_cookie:store(#{}, CookieMsg, Opts),
     {ok, Msg} =
         dev_codec_cookie:to(
             BaseMsg,
             #{ <<"format">> => <<"set-cookie">> },
-            #{}
+            Opts
         ),
-    hb_maps:get(<<"set-cookie">>, Msg, [], #{}).
+    hb_maps:get(<<"set-cookie">>, Msg, [], Opts).
 
 %% @doc Convert a string to a cookie message.
 from_string(String) ->
+    from_string(String, hb_private:opts(#{})).
+from_string(String, Opts) ->
     {ok, BaseMsg} =
         dev_codec_cookie:from(
             #{ <<"set-cookie">> => String },
             #{},
-            #{}
+            Opts
         ),
-    {ok, Cookie} = dev_codec_cookie:extract(BaseMsg, #{}, #{}),
+    {ok, Cookie} = dev_codec_cookie:extract(BaseMsg, #{}, Opts),
     Cookie.
 
 %%% Tests

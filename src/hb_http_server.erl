@@ -32,7 +32,7 @@ start() ->
                 #{}
         end,
     MergedConfig =
-        hb_maps:merge(
+        maps:merge(
             hb_opts:default_message_with_env(),
             Loaded
         ),
@@ -145,7 +145,7 @@ print_greeter(Config, PrivWallet) ->
 %% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
-        hb_maps:merge(
+        maps:merge(
             hb_opts:default_message_with_env(),
             RawNodeMsg#{ only => local }
         ),
@@ -179,7 +179,7 @@ new_server(RawNodeMsg) ->
         ),
     % Put server ID into node message so it's possible to update current server
     % params.
-    NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),
+    NodeMsgWithID = maps:put(http_server, ServerID, NodeMsg),
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
     ProtoOpts = #{
         env => #{ dispatch => Dispatcher, node_msg => NodeMsgWithID },
@@ -398,15 +398,23 @@ handle_request(RawReq, Body, ServerID) ->
         _ ->
             % The request is of normal AO-Core form, so we parse it and invoke
             % the meta@1.0 device to handle it.
-            ?event(http,
+            ?event(debug_handle_request,
                 {
                     http_inbound,
-                    {cowboy_req, {explicit, Req}, {body, {string, Body}}}
+                    {cowboy_req, {req, Req}, {body, {string, Body}}}
                 }
             ),
             % Parse the HTTP request into HyerBEAM's message format.
             try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg) of
                 ReqSingleton ->
+                    ?event(
+                        debug_handle_request,
+                        {handle_request,
+                            {req_singleton, ReqSingleton},
+                            {req_singleton_expl, {explicit, ReqSingleton}}
+                        },
+                        NodeMsg
+                    ),
                     try
                         CommitmentCodec =
                             hb_http:accept_to_codec(ReqSingleton, NodeMsg),
@@ -424,7 +432,22 @@ handle_request(RawReq, Body, ServerID) ->
                                 },
                                 ReqSingleton
                             ),
-                        hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                        ?event(dct, {handle_request, {res, Res}}),
+                        ExpandOpts = 
+                            hb_util:bin(
+                                hb_maps:get(
+                                    <<"expand-response">>,
+                                    ReqSingleton,
+                                    <<"false">>,
+                                    NodeMsg
+                                )
+                            ),
+                        MaybeExpandedOpts = 
+                            case ExpandOpts of
+                                <<"true">> -> NodeMsg#{ http_expand => true };
+                                _ -> NodeMsg
+                            end,
+                        hb_http:reply(Req, ReqSingleton, Res, MaybeExpandedOpts)
                     catch
                         Type:Details:Stacktrace ->
                             handle_error(
@@ -462,14 +485,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     ErrorBin = hb_format:error(ErrorMsg, NodeMsg),
     ?event(
         http_error,
-        {returning_500_error,
-            {string,
-                hb_format:indent_lines(
-                    <<"\n", ErrorBin/binary, "\n">>,
-                    1
-                )
-            }
-        },
+        {returning_500_error, {string, ErrorBin}},
         NodeMsg
     ),
     % Remove leading and trailing noise from the stacktrace and details.
@@ -499,7 +515,8 @@ set_opts(Opts) ->
         ServerRef ->
             ok = cowboy:set_env(ServerRef, node_msg, Opts)
     end.
-set_opts(Request, Opts) ->
+set_opts(RawRequest, Opts) ->
+    Request = hb_maps:expand(RawRequest, Opts),
     PreparedOpts =
         hb_opts:mimic_default_types(
             Opts,

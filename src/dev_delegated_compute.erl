@@ -133,6 +133,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
             <<"application/json">>,
             Opts
         ),
+    % TODO: Should we http expand here? Useful for relaying to non-HB nodes.
     hb_ao:resolve(
         #{
             <<"device">> => <<"relay@1.0">>,
@@ -149,7 +150,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
                     <<"content-type">> => ContentType
                 }
         },
-        Opts
+        Opts#{ http_expand => true }
     ).
 
 %% @doc Extract the JSON response from the delegated compute response.

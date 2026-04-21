@@ -47,6 +47,7 @@ patches(Base, Req, Opts) ->
 
 %% @doc Unified executor for the `all' and `patches' modes.
 move(Mode, Base, Req, Opts) ->
+    ?event(debug_patch_move, {move_start, {mode, Mode}, {base, Base}, {req, Req}}),
     maybe
         % Find the input paths.
         % For `from' we parse the path to see if it is relative to the request
@@ -77,13 +78,12 @@ move(Mode, Base, Req, Opts) ->
                 _ ->
                     {Base, RawPatchFrom}
             end,
-        ?event({patch_from_parts, {explicit, PatchFromParts}}),
+        ?event(debug_patch_move, {from_msg, FromMsg}),
         PatchFrom =
             case hb_path:to_binary(PatchFromParts) of
                 <<"">> -> <<"/">>;
                 Path -> Path
             end,
-        ?event({patch_from, PatchFrom}),
         PatchTo =
             hb_ao:get_first(
                 [
@@ -95,12 +95,12 @@ move(Mode, Base, Req, Opts) ->
                 <<"/">>,
                 Opts
             ),
-        ?event({patch_from, PatchFrom}),
-        ?event({patch_to, PatchTo}),
+        ?event(debug_patch_move, {patch_from, PatchFrom}),
+        ?event(debug_patch_move, {patch_to, PatchTo}),
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
         {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),
-        ?event({source, Source}),
+        ?event(debug_patch_move, {source, Source}),
         % Find all messages with the PATCH request.
         {ToWrite, NewSourceValue} =
             case Mode of
@@ -115,7 +115,7 @@ move(Mode, Base, Req, Opts) ->
                                 {
                                     PatchAcc#{
                                         Key =>
-                                            hb_maps:without(
+                                            hb_maps_raw:without(
                                                 [<<"commitments">>, <<"Tags">>],
                                                 Msg,
                                                 Opts
@@ -123,8 +123,10 @@ move(Mode, Base, Req, Opts) ->
                                     },
                                     NewSourceAcc
                                 };
+                            Key =/= <<"commitments">> ->
+                                {PatchAcc, NewSourceAcc#{ Key => Msg }};
                             true ->
-                                {PatchAcc, NewSourceAcc#{ Key => Msg }}
+                                {PatchAcc, NewSourceAcc}
                             end
                         end,
                         {#{}, #{}},
@@ -133,14 +135,13 @@ move(Mode, Base, Req, Opts) ->
                 all ->
                     {Source, unset}
             end,
-        ?event({source_data, ToWrite}),
-        ?event({new_data_for_source_path, NewSourceValue}),
+        ?event(debug_patch_move, {source_data, ToWrite}),
+        ?event(debug_patch_move, {new_data_for_source_path, NewSourceValue}),
         % Remove the source from the message and set the new source.
         FromMsgWithoutSource =
             hb_ao:set(
                 FromMsg,
-                PatchFrom,
-                <<"patch-error">>,
+                #{ PatchFrom => <<"patch-error">> },
                 Opts
             ),
         FromMsgWithNewSource =
@@ -157,21 +158,26 @@ move(Mode, Base, Req, Opts) ->
                 patches ->
                     maps:fold(
                         fun(_, Patch, MsgN) ->
-                            ?event({patching, {patch, Patch}, {before, MsgN}}),
                             Res =
                                 hb_ao:set(
                                     MsgN,
                                     maps:without([<<"method">>], Patch),
                                     Opts
                                 ),
-                            ?event({patched, {'after', Res}}),
+                            ?event(debug_patch_move, {patched, {'after', Res}}),
                             Res
                         end,
                         #{},
                         ToWrite
                     )
             end,
-        ?event({to_write, ToWriteMod}),
+        ?event(debug_patch_move,
+            {final_set,
+                {from_msg_with_new_source, FromMsgWithNewSource},
+                {patch_to, PatchTo},
+                {to_write_mod, ToWriteMod}
+            }
+        ),
         % Find the target to apply the patches to, and apply them.
         PatchedResult =
             hb_ao:set(
@@ -181,7 +187,7 @@ move(Mode, Base, Req, Opts) ->
                 Opts
             ),
         % Return the patched message and the source, less the patches.
-        ?event({patch_result, PatchedResult}),
+        ?event(debug_patch_move, {patch_result, PatchedResult}),
         {ok, PatchedResult}
     end.
 
@@ -217,7 +223,6 @@ uninitialized_patch_test() ->
             <<"compute">>,
             #{}
         ),
-    ?event({resolved_state, ResolvedState}),
     ?assertEqual(
         100,
         hb_ao:get(<<"prices/apple">>, ResolvedState, #{})
@@ -259,7 +264,9 @@ patch_to_submessage_test() ->
             <<"compute">>,
             #{}
         ),
-    ?event({resolved_state, ResolvedState}),
+    % TODO: Why does outbox in ResolvedState have an extra '...'?
+    ?event(debug_patch_to_submessage_test, {resolved_state, ResolvedState}),
+    ?assert(hb_message:verify(ResolvedState, all, #{})),
     ?assertEqual(
         100,
         hb_ao:get(<<"state/prices/apple">>, ResolvedState, #{})
@@ -355,6 +362,9 @@ req_prefix_test() ->
         hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
     ).
 
+custom_set_patch_test_() ->
+    {timeout, 10, fun custom_set_patch_test/0}.
+
 custom_set_patch_test() ->
     hb:init(),
     % Apply a patch from a message containing a device with a custom `set' key
@@ -384,25 +394,27 @@ custom_set_patch_test() ->
         <<"patch-from">> => <<"/results/outbox">>
     },
     {ok, State1} = hb_ao:resolve(State0, <<"compute">>, #{}),
-    ?event(debug_test, {resolved_state, State1}),
     ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State1, #{})),
     ?assertEqual(<<"250">>, hb_ao:get(<<"balances/", ID2/binary>>, State1, #{})),
     State2 =
-        State1#{
-            <<"results">> => #{
-                <<"outbox">> => #{
-                    <<"1">> => #{
-                        <<"device">> => <<"patch@1.0">>,
-                        <<"balances">> => #{
-                            ID1 => <<"1">>,
-                            ID2 => <<"500">>
+        hb_ao:set(
+            State1,
+            #{
+                <<"results">> => #{
+                    <<"outbox">> => #{
+                        <<"1">> => #{
+                            <<"device">> => <<"patch@1.0">>,
+                            <<"balances">> => #{
+                                ID1 => <<"1">>,
+                                ID2 => <<"500">>
+                            }
                         }
                     }
                 }
-            }
-        },
+            },
+            #{}
+        ),
     {ok, State3} = hb_ao:resolve(State2, <<"compute">>, #{}),
-    ?event(debug_test, {resolved_state, State3}),
     ?assertEqual(<<"1">>, hb_ao:get(<<"balances/", ID1/binary>>, State3, #{})),
     ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State3, #{})),
     ?assertEqual(<<"500">>, hb_ao:get(<<"balances/", ID2/binary>>, State3, #{})).

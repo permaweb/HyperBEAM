@@ -36,7 +36,13 @@ handle(<<"keys">>, M1, _M2, _Opts) ->
 handle(<<"set">>, M1, M2, Opts) ->
     dev_message:set(M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
-    ?event({dedup_handle, {key, Key}, {base, M1}, {req, M2}}),
+    ?event(
+        {dedup_handle,
+            {key, Key},
+            {base, {explicit, M1}},
+            {req, {explicit, M2}}
+        }
+    ),
     % Find the relevant parameters from the messages. We search for the
     % `dedup-key' key in the first message, and use that value as the key to
     % look for in the second message.
@@ -49,6 +55,7 @@ handle(Key, M1, M2, Opts) ->
             <<"body">>,
             Opts
         ),
+    ?event({dedup_handle, {subject_key, SubjectKey}}),
     % Get the subject of the second message.
     Subject =
         if SubjectKey == <<"request">> ->
@@ -65,8 +72,10 @@ handle(Key, M1, M2, Opts) ->
                 Opts
             )
         end,
+    ?event({dedup_handle, {subject, Subject}}),
     % Is this the first pass, if we are executing in a stack?
     FirstPass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts) == 1,
+    ?event({dedup_handle, {first_pass, FirstPass}}),
     % Get the trie of already seen subjects.
     DedupTrie =
         hb_ao:get(
@@ -75,13 +84,7 @@ handle(Key, M1, M2, Opts) ->
             #{ <<"device">> => <<"trie@1.0">> },
             Opts
         ),
-    ?event({dedup_handle,
-        {key, Key},
-        {base, M1},
-        {req, M2},
-        {subject_key, SubjectKey},
-        {subject, Subject}
-    }),
+    ?event({dedup_handle, {dedup_trie, DedupTrie}}),
     case {FirstPass, Subject} of
         {false, _} ->
             % If this is not the first pass, we can skip the deduplication
@@ -95,8 +98,10 @@ handle(Key, M1, M2, Opts) ->
             % If this is the first pass, we need to check if the subject has
             % already been seen.
             SubjectID = hb_message:id(Subject, signed, Opts),
-            ?event({dedup_checking, DedupTrie}),
-            case hb_ao:get(SubjectID, DedupTrie, Opts) of
+            ?event({dedup_checking, {subject_id, SubjectID}, {dedup_trie, DedupTrie}}),
+            GetResult = hb_ao:get(SubjectID, DedupTrie, Opts),
+            ?event({dedup_checking, {dedup_trie, GetResult}}),
+            case GetResult of
                 not_found ->
                     ?event({not_seen, SubjectID}),
                     Slot =
@@ -161,9 +166,10 @@ dedup_test() ->
     {ok, Msg5} = hb_ao:resolve(Msg4,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
+    Result = hb_ao:get(<<"result">>, Msg5, #{}),
     ?assertMatch(
-		#{ <<"result">> := <<"INIT+D2_+D3_+D2/+D3/">> },
-		Msg5
+		<<"INIT+D2_+D3_+D2/+D3/">>,
+		Result
 	).
 
 dedup_with_multipass_test() ->
@@ -191,7 +197,8 @@ dedup_with_multipass_test() ->
     {ok, Msg4} = hb_ao:resolve(Res, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     {ok, Msg5} = hb_ao:resolve(Msg4, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
+    Result = hb_ao:get(<<"result">>, Msg5, #{}),
     ?assertMatch(
-		#{ <<"result">> := <<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">> },
-		Msg5
+		<<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">>,
+		Result
 	).

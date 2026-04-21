@@ -53,7 +53,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     {
         ok,
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            hb_maps_raw:without([<<"commitments">>], Msg, Opts),
             <<"ans104@1.0">>,
             <<"structured@1.0">>,
             Opts
@@ -292,12 +292,12 @@ external_item_with_target_field_test() ->
     ?event({tx, TX}),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
-    ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
-    ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
+    ?assertEqual(EncodedTarget, hb_maps_raw:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(EncodedAnchor, hb_maps_raw:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
-    ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
-    ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(EncodedTarget, hb_maps_raw:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(EncodedAnchor, hb_maps_raw:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?assertEqual(TX#tx.target, Encoded#tx.target),
     ?assertEqual(TX#tx.anchor, Encoded#tx.anchor),
@@ -321,13 +321,13 @@ generate_item_with_target_tag_test() ->
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
     % The decoded message should have the `target' key set to the tag value.
-    ?assertEqual(Target, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
-    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
+    ?assertEqual(Target, hb_maps_raw:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps_raw:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
     % The target key should have been committed.
-    ?assertEqual(Target, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
-    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Target, hb_maps_raw:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps_raw:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
@@ -349,12 +349,12 @@ generate_item_with_target_field_test() ->
     ?assertEqual(Anchor, hb_util:encode(TX#tx.anchor)),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
-    ?assertEqual(Target, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
-    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
+    ?assertEqual(Target, hb_maps_raw:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps_raw:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
-    ?assertEqual(Target, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
-    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Target, hb_maps_raw:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps_raw:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
@@ -571,7 +571,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
     },
     ?assertEqual(
         ExpectedCommitment,
-        hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
+        hb_maps_raw:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
     {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
@@ -621,14 +621,14 @@ unsigned_mixedcase_bundle_map_tags_test() ->
     },
     ?assertEqual(
         ExpectedCommitment,
-        hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
+        hb_maps_raw:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
     {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
     ok.
 
 signed_lowercase_bundle_map_tags_test() ->
-    Wallet = ar_wallet:new(),
+    Wallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
     UnsignedTABM = #{
         <<"a1">> => <<"value1">>,
         <<"c1">> => <<"value2">>,
@@ -640,7 +640,7 @@ signed_lowercase_bundle_map_tags_test() ->
     },
     {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
     SignedTX = ar_bundles:sign_item(UnsignedTX, Wallet),
-    ?event({tx, SignedTX}),
+    ?assert(ar_bundles:verify_item(SignedTX)),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -664,7 +664,7 @@ signed_lowercase_bundle_map_tags_test() ->
     },
     ?assertEqual(
         ExpectedCommitment, 
-        hb_maps:with([
+        hb_maps_raw:with([
             <<"committed">>,
             <<"bundle-format">>,
             <<"bundle-version">>,
@@ -730,7 +730,7 @@ signed_mixedcase_bundle_map_tags_test() ->
     },
     ?assertEqual(
         ExpectedCommitment, 
-        hb_maps:with([
+        hb_maps_raw:with([
             <<"committed">>,
             <<"bundle-format">>,
             <<"bundle-version">>,
@@ -768,7 +768,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     {ok, _, CommittedCommitment} = hb_message:commitment(
         #{ <<"type">> => <<"rsa-pss-sha256">> }, Committed, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, CommittedCommitment, Opts),
+        [<<"list">>], hb_maps_raw:get(<<"committed">>, CommittedCommitment, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
@@ -791,7 +791,7 @@ test_bundle_commitment(Commit, Encode, Decode) ->
     {ok, _, DecodedCommitment} = hb_message:commitment(
         #{ <<"type">> => <<"rsa-pss-sha256">> }, Decoded, Opts),
     ?assertEqual(
-        [<<"list">>], hb_maps:get(<<"committed">>, DecodedCommitment, Opts),
+        [<<"list">>], hb_maps_raw:get(<<"committed">>, DecodedCommitment, Opts),
         Label),
     ?assertEqual(ToBool(Commit),
         hb_util:atom(hb_ao:get(<<"bundle">>, DecodedCommitment, false, Opts)),

@@ -94,7 +94,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
             maps:get(<<"signature">>, Commitment, hb_util:encode(?DEFAULT_SIG))
         ),
     Owner =
-        case hb_maps:find(<<"keyid">>, Commitment, Opts) of
+        case hb_maps_raw:find(<<"keyid">>, Commitment, Opts) of
             {ok, KeyID} ->
                 hb_util:decode(
                     dev_codec_httpsig_keyid:remove_scheme_prefix(KeyID)
@@ -102,7 +102,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
             error -> ?DEFAULT_OWNER
         end,
     Tags =
-        case hb_maps:find(<<"original-tags">>, Commitment, Opts) of
+        case hb_maps_raw:find(<<"original-tags">>, Commitment, Opts) of
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
@@ -131,7 +131,7 @@ original_tags_to_tags(TagMap) ->
 
 fields_to_tx(TX, Prefix, Map, Opts) ->
     Anchor =
-        case hb_maps:find(<<Prefix/binary, "anchor">>, Map, Opts) of
+        case hb_maps_raw:find(<<Prefix/binary, "anchor">>, Map, Opts) of
             {ok, EncodedAnchor} ->
                 case hb_util:safe_decode(EncodedAnchor) of
                     {ok, DecodedAnchor} when ?IS_ID(DecodedAnchor) ->
@@ -141,7 +141,7 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
             error -> ?DEFAULT_ANCHOR
         end,
     Target =
-        case hb_maps:find(<<Prefix/binary, "target">>, Map, Opts) of
+        case hb_maps_raw:find(<<Prefix/binary, "target">>, Map, Opts) of
             {ok, EncodedTarget} ->
                 case hb_util:safe_decode(EncodedTarget) of
                     {ok, DecodedTarget} when ?IS_ID(DecodedTarget) -> 
@@ -163,16 +163,16 @@ data(TABM, Req, Opts) ->
     % we recursively turn its children into messages.
     UnencodedNestedMsgs = data_messages(TABM, Opts),
     NestedMsgs =
-        hb_maps:map(
+        hb_maps_raw:map(
             fun(_, Msg) ->
                 hb_util:ok(dev_codec_ans104:to(Msg, Req, Opts))
             end,
             UnencodedNestedMsgs,
             Opts
         ),
-    DataVal = hb_maps:get(DataKey, TABM, ?DEFAULT_DATA),
+    DataVal = hb_maps_raw:get(DataKey, TABM, ?DEFAULT_DATA),
     ?event(debug_data, {data_val, DataVal}),
-    case {DataVal, hb_maps:size(NestedMsgs, Opts)} of
+    case {DataVal, hb_maps_raw:size(NestedMsgs, Opts)} of
         {Binary, 0} when is_binary(Binary) ->
             % There are no nested messages, so we return the binary alone.
             Binary;
@@ -191,7 +191,7 @@ data(TABM, Req, Opts) ->
 %% Presently, if we exceed these limits, we throw an error.
 data_messages(TABM, Opts) when is_map(TABM) ->
     UncommittedTABM =
-        hb_maps:without(
+        hb_maps_raw:without(
             [<<"commitments">>, <<"data">>, <<"target">>],
             hb_private:reset(TABM),
             Opts
@@ -199,7 +199,7 @@ data_messages(TABM, Opts) when is_map(TABM) ->
     
     % Find keys that are too large or are nested messages, they will be
     % encoded as data messages.
-    DataMessages = hb_maps:filter(
+    DataMessages = hb_maps_raw:filter(
         fun(Key, Value) ->
             case is_map(Value) of
                 true -> true;
@@ -256,7 +256,7 @@ committed_tag_keys({ok, _, Commitment}, TABM, Opts) ->
         end,
         hb_util:message_to_ordered_list(
             hb_util:ok(
-                hb_maps:find(<<"committed">>, Commitment, Opts)
+                hb_maps_raw:find(<<"committed">>, Commitment, Opts)
             )
         )
     );
@@ -281,7 +281,7 @@ excluded_tags(TX, TABM, Opts) ->
     exclude_anchor_tag(TX, TABM, Opts).
 
 exclude_target_tag(TX, TABM, Opts) ->
-    case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
+    case {TX#tx.target, hb_maps_raw:get(<<"target">>, TABM, undefined, Opts)} of
         {?DEFAULT_TARGET, _} -> [];
         {FieldTarget, TagTarget} when FieldTarget =/= TagTarget -> 
             [<<"target">>];
@@ -289,7 +289,7 @@ exclude_target_tag(TX, TABM, Opts) ->
     end.
 
 exclude_anchor_tag(TX, TABM, Opts) ->
-    case {TX#tx.anchor, hb_maps:get(<<"anchor">>, TABM, undefined, Opts)} of
+    case {TX#tx.anchor, hb_maps_raw:get(<<"anchor">>, TABM, undefined, Opts)} of
         {?DEFAULT_ANCHOR, _} -> [];
         {FieldAnchor, TagAnchor} when FieldAnchor =/= TagAnchor -> 
             [<<"anchor">>];
@@ -312,7 +312,7 @@ committed_tag_keys_to_tags(TABM, Committed, Opts) ->
     end ++
     lists:map(
         fun(Key) ->
-            case hb_maps:find(Key, TABM, Opts) of
+            case hb_maps_raw:find(Key, TABM, Opts) of
                 error -> throw({missing_committed_key, Key});
                 {ok, Value} -> {Key, Value}
             end
@@ -323,7 +323,7 @@ committed_tag_keys_to_tags(TABM, Committed, Opts) ->
 bundle_tags_to_tags({ok, _, Commitment}) ->
     lists:flatmap(
         fun(Key) ->
-            case hb_maps:find(Key, Commitment) of
+            case hb_maps_raw:find(Key, Commitment) of
                 {ok, Value} ->
                     [{Key, Value}];
                 error ->

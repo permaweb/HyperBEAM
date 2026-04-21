@@ -65,6 +65,7 @@ read(ID, Opts) ->
             }
         }
     end,
+    ?event(debug_gateway_read, {reading, {query, Query}, {variables, Variables}}),
     case query(Query, Variables, Opts) of
         {error, Reason} -> {error, Reason};
         {ok, GqlMsg} ->
@@ -108,7 +109,7 @@ data(ID, Opts) ->
         <<"path">> => <<"/arweave/raw/", ID/binary>>,
         <<"method">> => <<"GET">>
     },
-    case hb_http:request(Req, Opts) of
+    case hb_http:request(Req, Opts#{ http_expand => true }) of
         {ok, Res} ->
             ?event(gateway,
                 {data,
@@ -138,6 +139,7 @@ location(Address, Opts) ->
             "} ",
         "}">>,
     Variables = #{ <<"Addresses">> => [Address] },
+    ?event(debug_gateway_location, {reading, {query, Query}, {variables, Variables}}),
     case query(Query, Variables, Opts) of
         {error, Reason} ->
             ?event({scheduler_location, {query, Query}, {error, Reason}}),
@@ -215,8 +217,9 @@ query(Query, Variables, Node, Operation, Opts) ->
             <<"content-type">> => <<"application/json">>,
             <<"body">> => hb_json:encode(CombinedQuery)
         },
-        Opts
+        Opts#{ http_expand => true }
     ),
+    ?event(graphql, {gql_response, {explicit, Res}}),
     case Res of
         {ok, Msg} ->
             {ok, hb_json:decode(hb_ao:get(<<"body">>, Msg, <<>>, Opts))};
@@ -261,11 +264,18 @@ result_to_message(ExpectedID, Item, Opts) ->
             512 -> {rsa, 65537};
             _ -> unsupported_tx_signature_type
         end,
+    ItemAnchor =
+        normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
+    Anchor = 
+        case byte_size(ItemAnchor) of
+            0 -> <<>>;
+            43 when is_binary(ItemAnchor) -> hb_util:decode(ItemAnchor);
+            _ -> ItemAnchor
+        end,
     TX =
         dev_arweave_common:reset_ids(#tx {
             format = ans104,
-            anchor =
-                normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
+            anchor = Anchor,
             signature = Signature,
             signature_type = SignatureType,
             target =

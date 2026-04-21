@@ -37,6 +37,17 @@
 %%      /Stop-After: Should we stop after the required number of responses?
 %%      /Parallel: Should we run the requests in parallel?
 request(Config, Method, Path, Message, Opts) ->
+    % hb_singleton:expand_all(RawConfig),
+    ?event(
+        debug_multi,
+        {request,
+            {method, Method},
+            {path, Path},
+            {message, {explicit, Message}},
+            {config, Config},
+            {opts, Opts}
+        }
+    ),
     #{
         nodes := Nodes,
         responses := Responses,
@@ -45,22 +56,26 @@ request(Config, Method, Path, Message, Opts) ->
         admissible_status := Statuses,
         parallel := Parallel
     } = multirequest_opts(Config, Message, Opts),
+    % TODO: don't expand, dev_scheduler:http_get_legacy_schedule_as_aos2_test_
     MultirequestMsg =
         hb_message:without_unless_signed(
             lists:filter(
-                fun(<<"multirequest-", _/binary>>) -> true; (_) -> false end,
-                hb_maps:keys(Message)
+                fun(<<"multirequest-", _/binary>>) -> 
+                    true; (_) -> false end,
+                hb_maps:keys(hb_maps:expand(Message, Opts))
             ),
             Message,
             Opts
         ),
+    ?event(debug_multi, {multirequest_msg, {explicit, MultirequestMsg}}),
     ?event(debug_multi,
         {multirequest_opts_parsed,
             {config, Config},
             {method, Method},
             {path, Path},
             {raw_message, Message},
-            {message_to_send, MultirequestMsg}
+            {message_to_send, MultirequestMsg},
+            {parallel, Parallel}
         }),
     AllResults =
         if Parallel =/= false ->
@@ -149,7 +164,8 @@ is_admissible(_, _, _, _, _) -> false.
 %% allowed, according to the configuration.
 serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> [];
 serial_multirequest([], _, _Method, _Path, _Message, _Admissible, _Statuses, _Opts) -> [];
-serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Admissible, Statuses, Opts) ->
+serial_multirequest([Node|Nodes], Remaining, Method, Path, RawMessage, Admissible, Statuses, Opts) ->
+    Message = hb_maps:expand(RawMessage, Opts),
     {ErlStatus, Res} = hb_http:request(Method, Node, Path, Message, Opts),
     case is_admissible(ErlStatus, Res, Admissible, Statuses, Opts) of
         true ->

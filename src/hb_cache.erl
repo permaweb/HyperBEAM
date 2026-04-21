@@ -245,7 +245,7 @@ generate_binary_path(Bin, Opts) ->
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
     hb_message:paranoid_verify(cache_write, RawMsg, Opts),
-    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
+    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts#{ use_nested => false }),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     ?event(debug_cache, {writing_full_message, {msg, TABM}}),
     try
@@ -472,7 +472,7 @@ read_all_commitments(Msg, Opts) ->
                 []
     end,
     NewCommitments =
-        hb_maps:merge(
+        hb_maps_raw:merge(
             CurrentCommitments,
             maps:from_list(FoundCommitments)
         ),

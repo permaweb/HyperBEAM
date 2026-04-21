@@ -35,7 +35,7 @@ keys(Trie, Opts) ->
 collect_keys(TrieNode, Prefix, Opts, Acc) ->
     EdgeLabels = edges(TrieNode, Opts),
     IsLeafTerminal = length(EdgeLabels) =:= 0,
-    NodeValue = hb_maps:find(<<"node-value">>, TrieNode, Opts),
+    NodeValue = hb_maps_raw:find(<<"node-value">>, TrieNode, Opts),
     IsInteriorTerminal =
         case NodeValue of
             error -> false;
@@ -50,7 +50,7 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
     lists:foldl(
         fun(ChildEdgeLabel, ChildrenAcc) ->
             NewPrefix = <<Prefix/binary, ChildEdgeLabel/binary>>,
-            ChildNode = hb_maps:get(ChildEdgeLabel, TrieNode, undefined, Opts),
+            ChildNode = hb_maps_raw:get(ChildEdgeLabel, TrieNode, undefined, Opts),
             case is_map(ChildNode) of
                 true ->
                     collect_keys(ChildNode, NewPrefix, Opts, ChildrenAcc);
@@ -68,15 +68,19 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
 get(Key, Trie, Req, Opts) ->
     get(Trie, Req#{<<"key">> => Key}, Opts).
 get(TrieNode, Req, Opts) ->
-    case hb_maps:find(<<"key">>, Req, Opts) of
+    case hb_maps_raw:find(<<"key">>, Req, Opts) of
         error -> {error, <<"'key' parameter is required for trie lookup.">>};
         {ok, Key} -> retrieve(TrieNode, Key, Opts)
     end.
 
 %% @doc Set keys and their values in the trie.
 set(Trie, Req, Opts) ->
-    Insertable = hb_maps:without([<<"path">>], Req, Opts),
-    KeyVals = hb_maps:to_list(Insertable, Opts),
+    ?event(
+        debug_trie_set,
+        {trie_set_start, {trie, {explicit, Trie}}, {req, Req}}
+    ),
+    Insertable = hb_maps_raw:without([<<"path">>], Req, Opts),
+    KeyVals = hb_maps_raw:to_list(Insertable, Opts),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
     Uncommitted = hb_message:uncommitted_deep(Trie, Opts),
@@ -86,7 +90,8 @@ do_set(Trie, [], Opts) ->
             Opts,
             #{ <<"type">> => <<"hmac-sha256">> }
         ),
-    {ok, _} = hb_cache:write(CommittedTrie, Opts),
+    ?event({trie_do_set_done_commit, {trie, {explicit, CommittedTrie}}}),
+    {ok, _} = hb_cache:write(CommittedTrie, Opts#{ use_nested => false }),
     CommittedTrie;
 do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
     NewTrie = insert(Trie, Key, Val, Opts),
@@ -129,7 +134,7 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
         % terminal value for its key, and add to it an edge representing the
         % remaining key suffix which maps to a new implicit leaf node.
         {EdgeLabel, MatchSize} when MatchSize =:= bit_size(EdgeLabel) ->
-            SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
+            SubTrie = hb_maps_raw:get(EdgeLabel, TrieNode, undefined, Opts),
             case is_map(SubTrie) of
                 false ->
                     if
@@ -166,8 +171,8 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
         % the edge label and what remains to be matched in our key, and reattach
         % the new subtrie under a new child.
         {EdgeLabel, MatchSize} ->
-            SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
-            NewTrie = hb_maps:remove(EdgeLabel, TrieNode, Opts),
+            SubTrie = hb_maps_raw:get(EdgeLabel, TrieNode, undefined, Opts),
+            NewTrie = hb_maps_raw:remove(EdgeLabel, TrieNode, Opts),
             <<
                 EdgeLabelPrefix:MatchSize/bitstring,
                 EdgeLabelSuffix/bitstring
@@ -200,7 +205,7 @@ retrieve(TrieNode, Key, Opts) ->
 retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
     case KeyPrefixSizeAcc >= bit_size(Key) of
         true ->
-            hb_maps:get(<<"node-value">>, TrieNode, {error, not_found}, Opts);
+            hb_maps_raw:get(<<"node-value">>, TrieNode, {error, not_found}, Opts);
         false ->
             EdgeLabels = edges(TrieNode, Opts),
             <<_KeyPrefix:KeyPrefixSizeAcc/bitstring, KeySuffix/bitstring>> = Key,
@@ -209,7 +214,7 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
                 {_EdgeLabel, MatchSize} when MatchSize =:= 0 ->
                     {error, not_found};
                 {EdgeLabel, MatchSize} when MatchSize =:= bit_size(EdgeLabel) ->
-                    SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
+                    SubTrie = hb_maps_raw:get(EdgeLabel, TrieNode, undefined, Opts),
                     % Special case handling for implicit leaf nodes: if the
                     % child node corresponding to the edge label is not a map, and
                     % the edge label is *precisely* the same size as the remaining
@@ -242,7 +247,7 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
 %% @doc Get a list of edge labels for a given trie node.
 edges(TrieNode, Opts) when not is_map(TrieNode) -> [];
 edges(TrieNode, Opts) ->
-    Filtered = hb_maps:without(
+    Filtered = hb_maps_raw:without(
         [
             <<"node-value">>,
             <<"device">>,
@@ -253,7 +258,7 @@ edges(TrieNode, Opts) ->
         TrieNode,
         Opts
     ),
-    hb_maps:keys(Filtered).
+    hb_maps_raw:keys(Filtered).
 
 %% @doc Compute the longest common binary prefix of A and B, comparing chunks of
 %% N bits.
@@ -291,7 +296,7 @@ count_nodes(TrieNode, Opts) ->
     EdgeLabels = edges(TrieNode, Opts),
     CountsChildren =
         [
-            count_nodes(hb_maps:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
+            count_nodes(hb_maps_raw:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
         ||
             EdgeLabel <- EdgeLabels
         ],
@@ -303,7 +308,7 @@ verify_nodes(TrieNode, Opts) ->
     EdgeLabels = edges(TrieNode, Opts),
     ChildResults =
         [
-            verify_nodes(hb_maps:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
+            verify_nodes(hb_maps_raw:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
         ||
             EdgeLabel <- EdgeLabels
         ],
@@ -492,9 +497,12 @@ verify_test() ->
     ),
     ?assert(verify_nodes(Trie, Opts)).
 
+% TODO: This test is too slow because of the large amount of time the call to 
+% hb_cache:write is taking. When resolved, test should return to running in <2s.
 large_balance_table_test() ->
+    ?event(test_start, {starting_test}),
     Opts = test_opts(),
-    TotalBalances = 3_000,
+    TotalBalances = 3000,
     Balances =
         maps:from_list(
             [

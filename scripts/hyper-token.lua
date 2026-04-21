@@ -705,7 +705,8 @@ function transfer(base, assignment)
             from_user = request.from,
             to = direct_recipient,
             explicit_recipient = request.recipient,
-            quantity = quantity
+            quantity = quantity,
+            new_balance = base.balance
         })
     end
 

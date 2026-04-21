@@ -162,8 +162,14 @@ resolve({many, Msgs}, ExecState, ExecOpts) ->
 %% @doc A wrapper for `hb_ao''s `get' functionality.
 get([Key, Base], ExecState, ExecOpts) ->
     ?event({ao_core_get, {base, Base}, {key, Key}}),
-    NewRes = hb_ao:get(convert_as(Key), convert_as(Base), ExecOpts),
-    ?event({ao_core_get_result, {result, NewRes}}),
+    NewRes = 
+    try 
+        hb_maps:expand(hb_ao:get(convert_as(Key), convert_as(Base), ExecOpts), ExecOpts)
+    catch
+        Error ->
+            ?event(debug_ls, {ao_core_get_error, Error}),
+            throw(Error)
+    end,
     {[NewRes], ExecState}.
 
 %% @doc Converts any `as' terms from Lua to their HyperBEAM equivalents.

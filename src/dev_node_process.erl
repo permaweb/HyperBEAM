@@ -66,7 +66,7 @@ spawn_register(Name, Opts) ->
                     },
                     Opts
                 ),
-            ?event(node_process, {initialized, {name, Name}, {assignment, Assignment}}),
+            ?event(node_process, {initialized, {name, Name}}),
             RegResult =
                 dev_local_name:direct_register(
                     #{ <<"key">> => Name, <<"value">> => ID },
@@ -109,11 +109,11 @@ augment_definition(BaseDef, Opts) ->
     Authorities = (AuthoritiesFromBase -- [Address]) ++ [Address],
     % Normalize the scheduler and authority lists to binary strings.
     hb_ao:set(
+        BaseDef,
         #{
             <<"scheduler">> => Schedulers,
             <<"authority">> => Authorities
         },
-        BaseDef,
         Opts
     ).
 
@@ -151,22 +151,22 @@ lookup_no_spawn_test() ->
 
 lookup_spawn_test() ->
     Opts = generate_test_opts(),
-    Res1 = {_, Process1} =
+    {ok, Res1} = {_, Process1} =
         hb_ao:resolve(
             #{ <<"device">> => <<"node-process@1.0">> },
             ?TEST_NAME,
             Opts
         ),
     ?assertMatch(
-        {ok, #{ <<"device">> := <<"process@1.0">> }},
-        Res1
+        <<"process@1.0">>,
+        hb_ao:get(<<"device">>, Res1, Opts)
     ),
     {ok, Process2} = hb_ao:resolve(
         #{ <<"device">> => <<"node-process@1.0">> },
         ?TEST_NAME,
         Opts
     ),
-    LoadedProcess1 = 
+    LoadedProcess1 =
         hb_message:normalize_commitments(
             hb_cache:ensure_all_loaded(Process1, Opts),
             Opts

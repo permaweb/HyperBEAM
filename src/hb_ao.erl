@@ -144,6 +144,7 @@ resolve(Base, Req, Opts) ->
         {stage,
             1,
             prepare_multimessage_resolution,
+            {base, {explicit, Base}},
             {messages_to_exec, MessagesToExec}
         }
     ),
@@ -196,6 +197,7 @@ do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
 do_resolve_many([Res], Opts) ->
     ?event(ao_core, {stage, 11, resolve_complete, Res}),
+    ?event(ao_core, {stage, 11, resolve_complete, {expanded, Res}}),
     hb_cache:ensure_loaded(maybe_force_message(Res, Opts), Opts);
 do_resolve_many([Base, Req | MsgList], Opts) ->
     ?event(ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
@@ -206,8 +208,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
                     stage,
                     13,
                     resolved_step,
-                    {res, Res},
-                    {opts, Opts}
+                    {res, Res}
                 },
 				Opts
             ),
@@ -240,7 +241,7 @@ resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
 resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
     % If the first message is an `as' with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
-    ?event(ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
+    ?event(ao_core1, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
     RemBase = hb_maps_raw:without([<<"path">>], Raw, Opts),
     ?event(subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
     Baseb = ensure_message_loaded(ID, Opts),
@@ -470,24 +471,24 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
             UserOpts = hb_maps_raw:without(?TEMP_OPTS, Opts, Opts),
 			Key = hb_path:hd(Req, UserOpts),
 			% Try to load the device and get the function to call.
-            ?event(
+            ?event(ao_core,
                 {
                     resolving_key,
                     {key, Key},
-                    {base, Base},
-                    {req, Req},
-                    {opts, Opts}
+                    {base, {expanded, Base}},
+                    {req, {expanded, Req}},
+                    {base, {explicit, Base}},
+                    {req, {explicit, Req}}
                 }
             ),
 			{Status, Device, Func} = hb_ao_device:message_to_fun(Base, Key, UserOpts),
-			?event(
+			?event(ao_core,
 				{found_func_for_exec,
                     {key, Key},
                     {device, Device},
 					{func, Func},
 					{base, Base},
-					{req, Req},
-					{opts, Opts}
+					{req, Req}
 				}
 			),
             ?event(ao_short, {Key, Func}, Opts),
@@ -530,7 +531,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
 		end,
 	resolve_stage(6, ResolvedFunc, Base, Req, ExecName, NewOpts).
 resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
-    ?event(ao_core, {stage, 6, ExecName, execution}, Opts),
+    ?event(ao_core, {stage, 6, ExecName, Func, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
 	Args =
@@ -639,11 +640,12 @@ resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
     ?event(ao_core, {stage, 9, ExecName, generate_hashpath}, Opts),
     % Cryptographic linking. Now that we have generated the result, we
     % need to cryptographically link the output to its input via a hashpath.
+    HPOpt = hb_opts:get(hashpath, update, Opts#{ only => local }),
     resolve_stage(10, Base, Req,
-        case hb_opts:get(hashpath, update, Opts#{ only => local }) of
+        case HPOpt of
             update ->
                 NormRes = Res,
-                Priv = hb_private:from_message(NormRes),
+                Priv = hb_private:from_message(NormRes, Opts),
                 HP = hb_path:hashpath(Base, Req, Opts),
                 if not is_binary(HP) or not is_map(Priv) ->
                     throw({invalid_hashpath, {hp, HP}, {res, NormRes}});
@@ -651,10 +653,10 @@ resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
                     {ok, NormRes#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
                 end;
             reset ->
-                Priv = hb_private:from_message(Res),
+                Priv = hb_private:from_message(Res, Opts),
                 {ok, Res#{ <<"priv">> => hb_maps:without([<<"hashpath">>], Priv, Opts) }};
             ignore ->
-                Priv = hb_private:from_message(Res),
+                Priv = hb_private:from_message(Res, Opts),
                 if not is_map(Priv) ->
                     throw({invalid_private_message, {res, Res}});
                 true ->
@@ -668,7 +670,7 @@ resolve_stage(9, Base, Req, {Status, Res}, ExecName, Opts) when is_map(Res) ->
     ?event(ao_core, {stage, 9, ExecName, abnormal_status_reset_hashpath}, Opts),
     ?event(hashpath, {resetting_hashpath_res, {base, Base}, {req, Req}, {opts, Opts}}),
     % Skip cryptographic linking and reset the hashpath if the result is abnormal.
-    Priv = hb_private:from_message(Res),
+    Priv = hb_private:from_message(Res, Opts),
     resolve_stage(
         10, Base, Req,
         {Status, Res#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
@@ -724,31 +726,36 @@ subresolve(RawBase, DevID, Req, Opts) ->
         case DevID of
             undefined -> Base;
             _ ->
-                set(
-                    Base,
-                    <<"device">>,
-                    DevID,
-                    maps:without(?TEMP_OPTS, Opts)
-                )
+                #{<<"device">> => DevID, <<"...">> => Base}
+                % set(
+                %     Base,
+                %     <<"device">>,
+                %     DevID,
+                %     maps:without(?TEMP_OPTS, Opts)
+                % )
         end,
     % If there is no path but there are elements to the request, we set these on
     % the base message. If there is a path, we do not modify the base message 
     % and instead apply the request message directly.
-    case hb_path:from_message(request, Req, Opts) of
+    ?event(subresolution, {subresolve_req, {req, Req}}),
+    PathFromReq = hb_path:from_message(request, Req, Opts),
+    ?event(subresolution, {subresolve_req_from_msg, {path_from_req, PathFromReq}}),
+    case PathFromReq of
         undefined ->
+            % TODO: re-examine this
             % Base3 =
             %     case map_size(maps:without([<<"path">>], Req)) of
             %         0 -> Base2;
-            %         _ -> Base2
-            %             % set(
-			% 				% Base2,
-			% 				% set(Req, <<"path">>, unset, Opts),
-			% 				% Opts#{ force_message => false }
-			% 			% )
+            %         _ ->
+            %             set(
+			% 				Base2,
+			% 				set(Req, <<"path">>, unset, Opts),
+			% 				Opts#{ force_message => false }
+			% 			)
             %     end,
             % ?event(subresolution,
-            %     {subresolve_modified_base, Base3},
-            %     Opts
+                % {subresolve_modified_base, Base3},
+                % Opts
             % ),
             {ok, Base2};
         Path ->
@@ -940,16 +947,15 @@ get(Path, Msg, Opts) ->
 get(Path, {as, Device, Msg}, Default, Opts) ->
     get(
         Path,
-        set(
-            Msg,
-            #{ <<"device">> => Device },
-            internal_opts(Opts)
-        ),
+        set(Msg, #{ <<"device">> => Device }, internal_opts(Opts)),
         Default,
         Opts
     );
 get(Path, Msg, Default, Opts) ->
-	case resolve(Msg, #{ <<"path">> => Path }, Opts#{ spawn_worker => false }) of
+    Res = resolve(Msg, #{ <<"path">> => Path }, Opts#{ spawn_worker => false }),
+	case Res of
+        {ok, unset} -> Default;
+        {ok, <<"unset">>} -> Default;
 		{ok, Value} -> Value;
 		{error, _} -> Default
 	end.
@@ -1008,12 +1014,13 @@ keys(Msg, Opts, remove) ->
 %% `set' works with maps and recursive paths while maintaining the appropriate
 %% `HashPath' for each step.
 set(Base, Req, Opts) ->
+    ?event(debug_hb_ao_set, {set, {base, {expanded, Base}}, {req, Req}}),
     {ok, UnflattenedReq} = dev_codec_flat:from(Req, #{}, Opts),
     % Expand the request to ensure that it is deep set.
-    ExpandedUnflattenedReq = hb_maps:expand(UnflattenedReq, Opts),
+    ?event(debug_hb_ao_set, {unflattened_req, {unflattened, UnflattenedReq}}),
     device_set(
         Base,
-        ExpandedUnflattenedReq,
+        UnflattenedReq,
         Opts
     ).
 set(Base, Key, Value, Opts) ->
@@ -1036,20 +1043,13 @@ device_set(Base, Req, Mode, Opts) ->
         end,
     % Next, add the mode to the request if it is not already present and call
     % the message's device's `set' function with the request.
+    % 
+    % TODO: Mode is never used in hb_ao:set
     WithMode =
         case Mode of
             <<"deep">> -> Req;
             <<"explicit">> -> Req#{ <<"set-mode">> => Mode }
         end,
-    ?event(
-        debug_set,
-        {
-            calling_device_set,
-            {base, BaseWithPathSet},
-            {full_req, Req}
-        },
-        Opts
-    ),
     Res =
         hb_util:ok(
             resolve(
@@ -1060,7 +1060,7 @@ device_set(Base, Req, Mode, Opts) ->
             InternalOpts
         ),
     ?event(
-        debug_set,
+        debug_hb_ao_set,
         {device_set_result, Res},
         Opts
     ),
@@ -1069,6 +1069,7 @@ device_set(Base, Req, Mode, Opts) ->
 %% @doc Remove a key from a message, using its underlying device.
 remove(Msg, Key) -> remove(Msg, Key, #{}).
 remove(Msg, Key, Opts) ->
+    ?event(debug_hb_ao_remove, {remove, {msg, Msg}, {key, Key}}),
 	hb_util:ok(
         resolve(
             Msg,

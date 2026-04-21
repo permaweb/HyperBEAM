@@ -240,8 +240,18 @@ committers(Base = #{ <<"commitments">> := Commitments }, Req, NodeOpts) when is_
             end;
         _ -> {ok, BaseCommitters}
     end;
+% TODO: Make the more elegant? This is checking for commitments: unset. 
+% Perhaps the whole function should be refactored to not clause match and rather
+% Call hb_maps:get commmitments on Base.
+committers(#{ <<"commitments">> := Commitments }, Req, NodeOpts) when not is_map(Commitments) ->
+    {ok, []};
 committers(#{ <<"...">> := Nested }, _Req, NodeOpts) ->
-    committers(Nested, _Req, NodeOpts);
+    case hb_opts:get(use_nested, false, NodeOpts) of
+        true ->
+            committers(Nested, _Req, NodeOpts);
+        false ->
+            {ok, []}
+    end;
 committers(_, _, _) ->
     {ok, []}.
 
@@ -290,7 +300,8 @@ commit(Self, Req, Opts) ->
                 ]
             )
         ),
-    {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, Opts)}.
+    Converted = hb_message:convert(Committed, <<"structured@1.0">>, tabm, Opts),
+    {ok, Converted}.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
@@ -481,8 +492,10 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% may specify `all' or `none' for each group. If no specifiers are provided,
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
+    UseNested = hb_opts:get(use_nested, false, Opts),
+    % TODO: Improve
     Commitments = 
-        case hb_opts:get(use_nested, true, Opts) of
+        case UseNested of
             false ->
                 case maps:get(<<"commitments">>, Base, #{}) of
                     unset -> #{};
@@ -939,7 +952,6 @@ committed_nested_test() ->
         ),
     Msg3Committed =
         hb_message:commit(Msg3, Opts, #{ <<"type">> => <<"unsigned">> }),
-    ?event(debug_test1, {msg3_committed, {explicit, Msg3Committed}}),
 
     {ok, Committed1} = committed(Msg1, #{ <<"commitment-ids">> => <<"all">> }, Opts),
     ?assertEqual([<<"a">>], Committed1),
@@ -950,20 +962,14 @@ committed_nested_test() ->
     ?assertEqual(true, hb_message:verify(Msg2)),
 
     {ok, Committed3} = committed(Msg3, #{ <<"commitment-ids">> => <<"all">> }, Opts),
-    ?event(debug_test1, {msg3, {explicit, Msg3}}),
-    ?event(debug_test1, {committed3, Committed3}),
     ?assertEqual([<<"...">>,<<"a">>], Committed3),
     ?assertEqual(true, hb_message:verify(Msg3)),
     
     Signed3 = hb_message:commit(Msg3, Opts, #{ <<"type">> => <<"signed">> }),
-    ?event(debug_test1, {signed3, {explicit, Signed3}}),
     {ok, Committed3Signed} = committed(Signed3, #{ <<"commitment-ids">> => <<"all">> }, Opts),
-    ?event(debug_test1, {committed3_signed, Committed3Signed}),
     ?assertEqual([<<"...">>,<<"a">>], Committed3Signed),
     {ok, Committers3} = committers(Signed3, #{}, Opts),
-    ?event(debug_test1, {committers, Committers3}),
     ?assertEqual([WalletAddress], Committers3),
-    ?event(debug_test1, {verified, Signed3}),
     ?assertEqual(true, hb_message:verify(Signed3)),
     
     Msg4 = 
@@ -974,15 +980,81 @@ committed_nested_test() ->
             Opts,
             #{ <<"type">> => <<"unsigned">> }
         ),
-    ?event(debug_test1, {msg4, {explicit, Msg4}}),
     {ok, Committed4} = committed(Msg4, #{ <<"commitment-ids">> => <<"all">> }, Opts),
-    ?event(debug_test1, {committed4, Committed4}),
     ?assertEqual([<<"...">>,<<"new-key">>], Committed4),
     {ok, Committers4} = committers(Msg4, #{}, Opts),
-    ?event(debug_test1, {committers4, Committers4}),
-    ?event(debug_test1, {verified, Msg4}),
     ?assertEqual([WalletAddress], Committers4),
     ?assertEqual(true, hb_message:verify(Msg4)),
     WithoutCommitments = hb_maps:without([<<"commitments">>], Msg4, Opts),
-    ?event(debug_test1, {without_commitments, {WithoutCommitments}}, Opts),
     ?assertEqual(true, hb_message:verify(WithoutCommitments)).
+
+set_committed_test() ->
+    Wallet = hb:wallet(),
+    WalletAddress = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ priv_wallet => Wallet },
+    RawMsg1 = #{ <<"a">> => #{ <<"b">> => <<"2">> } },
+    Msg1 = 
+        hb_message:commit(RawMsg1, Opts, #{ <<"type">> => <<"signed">> }),
+    Msg2 = 
+        hb_message:commit(
+            hb_util:ok(set(Msg1, #{ <<"c">> => <<"3">> }, Opts#{ use_nested => false })),
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+        ),
+    SetMsg2 = hb_util:ok(set(Msg2, #{ <<"d">> => <<"4">> }, Opts#{ use_nested => false })),
+    ?assertEqual(true, hb_message:verify(SetMsg2)).
+
+deep_set_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    Base = 
+        #{
+            <<"routes">> => #{
+                <<"1">> => #{
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"performance">> => 30000,
+                                <<"prefix">> => <<"host1">>,<<"price">> => 5,
+                                <<"reference">> => <<"routes/1/nodes/1">>
+                            }
+                        ],
+                    <<"reference">> => <<"routes/1">>,
+                    <<"strategy">> => <<"By-Weight">>,
+                    <<"template">> => <<"/test-key">>
+                }
+            },
+            <<"other-key">> => <<"other-value">>
+        },
+    Req = 
+        #{
+            <<"routes">> => #{
+                <<"1">> => #{
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"performance">> => 30000,
+                                <<"prefix">> => <<"host1">>,<<"price">> => 5,
+                                <<"reference">> => <<"routes/1/nodes/1">>
+                            },
+                            #{
+                                <<"performance">> => 30000,
+                                <<"prefix">> => <<"host2">>,
+                                <<"price">> => 10,
+                                <<"priv">> => #{<<"last-phash2">> => 8981450},
+                                <<"reference">> => <<"routes/1/nodes/2">>
+                            }
+                        ]
+                }
+            }
+        },
+    {ok, Res} = set(Base, Req, Opts),
+    ?assertEqual(true, hb_message:verify(Res)),
+    Routes = hb_maps:get(<<"routes">>, Res, #{}, Opts),
+    ?event(debug_ls, {routes, Routes}),
+    FirstRoute = hb_maps:get(<<"1">>, Routes, #{}, Opts),
+    ?event(debug_ls, {first_route, FirstRoute}),
+    Nodes = hb_maps:get(<<"nodes">>, FirstRoute, [], Opts),
+    ?event(debug_ls, {nodes, Nodes}),
+    ?assertEqual(2, length(Nodes)),
+    ok.

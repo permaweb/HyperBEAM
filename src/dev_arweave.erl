@@ -357,7 +357,9 @@ to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
 
 %%% Tests
 
-post_ans104_tx_test() ->
+post_ans104_tx_test_() ->
+    {timeout, 60, fun post_ans104_tx/0}.
+post_ans104_tx() ->
     ServerOpts = #{ store => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
@@ -411,7 +413,7 @@ get_tx_basic_data_test() ->
     % Hash the data to make it easier to match
     StructuredWithHash = Structured#{
         <<"data">> => hb_util:encode(
-            crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
+            crypto:hash(sha256, (hb_maps:get(<<"data">>, Structured)))
         )
     },
     ExpectedMsg = #{

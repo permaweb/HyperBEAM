@@ -153,11 +153,7 @@ process_cache_suite_test_() ->
             {"write and read process outputs", fun test_write_and_read_output/1},
             {"find latest output (with path)", fun find_latest_outputs/1}
         ],
-        [
-            {Name, Opts}
-        ||
-            {Name, Opts} <- hb_store:test_stores()
-        ]
+        hb_store:test_stores()
     ).
 
 %% @doc Test for writing multiple computed outputs, then getting them by

@@ -45,13 +45,19 @@
 %% Note: This function uses the `dev_message:get/2' function, rather than 
 %% a generic call as the path should always be an explicit key in the message.
 hd(Req, Opts) ->
-    %?event({key_from_path, Req, Opts}),
+    % TODO: handle unset better
     case pop_request(Req, Opts) of
         undefined -> undefined;
+        {unset, _} -> undefined;
+        {<<"unset">>, _} -> undefined;
         {Head, _} ->
             % `term_to_path' returns the full path, so we need to take the
             % `hd' of our `Head'.
-            erlang:hd(term_to_path_parts(Head, Opts))
+            case erlang:hd(term_to_path_parts(Head, Opts)) of 
+                unset -> undefined;
+                <<"unset">> -> undefined;
+                H -> H
+            end
     end.
 
 %% @doc Return the message without its first path element. Note that this
@@ -137,7 +143,7 @@ hashpath(Base, Req, Opts) ->
 hashpath(Base, Req, HashpathAlg, Opts) when is_map(Req) ->
     ReqWithoutMeta = hb_maps:without(?AO_CORE_KEYS, Req, Opts),
     ReqPath = from_message(request, Req, Opts),
-    case {map_size(ReqWithoutMeta), ReqPath} of
+    case {map_size(hb_maps:expand(ReqWithoutMeta, Opts)), ReqPath} of
         {0, _} when ReqPath =/= undefined ->
             hashpath(Base, to_binary(hd(ReqPath)), HashpathAlg, Opts);
         _ ->
@@ -236,9 +242,20 @@ verify_hashpath([Base, Req, Res|Rest], Opts) ->
 from_message(Type, Link, Opts) when ?IS_LINK(Link) ->
     from_message(Type, hb_cache:ensure_loaded(Link, Opts), Opts);
 from_message(hashpath, Msg, Opts) -> hashpath(Msg, Opts);
-from_message(request, #{ path := Path }, Opts) -> term_to_path_parts(Path, Opts);
-from_message(request, #{ <<"path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
-from_message(request, #{ <<"Path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
+
+from_message(request, #{ <<"path">> := Path }, Opts) -> 
+    ?event(from_message, {request, {path, {explicit, Path}}}),
+    case Path of 
+        <<"unset">> -> undefined;
+        unset -> undefined;
+        _ -> term_to_path_parts(Path, Opts)
+    end;
+from_message(request, #{ path := Path }, Opts) ->
+    from_message(request, #{ <<"path">> => Path }, Opts);
+from_message(request, #{ <<"Path">> := Path }, Opts) ->
+    from_message(request, #{ <<"path">> => Path }, Opts);
+from_message(request, #{ <<"...">> := Nested }, Opts) ->
+    from_message(request, Nested, Opts);
 from_message(request, _, _Opts) -> undefined.
 
 %% @doc Convert a term into an executable path. Supports binaries, lists, and

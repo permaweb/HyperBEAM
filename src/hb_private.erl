@@ -15,53 +15,80 @@
 %%% and private elements of messages.
 -module(hb_private).
 -export([opts/1]).
--export([from_message/1, reset/1, is_private/1]).
+-export([from_message/1, from_message/2, reset/1, is_private/1]).
 -export([get/3, get/4, set/4, set/3, set_priv/2, merge/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc Return the `private' key from a message. If the key does not exist, an
 %% empty map is returned.
-from_message(Msg) when is_map(Msg) ->
+% TODO: Should priv just always be top level?
+from_message(Msg) -> from_message(Msg, #{}).
+from_message(Msg, Opts) when is_map(Msg) ->
     case maps:is_key(<<"priv">>, Msg) of
         true -> maps:get(<<"priv">>, Msg, #{});
-        false -> maps:get(priv, Msg, #{})
+        false -> 
+            case maps:is_key(<<"...">>, Msg) andalso not maps:is_key(priv, Msg) of
+                true -> from_message(hb_maps:get(<<"...">>, Msg, #{}));
+                false -> maps:get(priv, Msg, #{})
+            end
     end;
-from_message(_NonMapMessage) -> #{}.
+from_message(_NonMapMessage, _Opts) -> #{}.
 
 %% @doc Helper for getting a value from the private element of a message. Uses
 %% AO-Core resolve under-the-hood, removing the private specifier from the
 %% path if it exists.
 get(Key, Msg, Opts) ->
     get(Key, Msg, not_found, Opts).
-get(InputPath, Msg, Default, Opts) ->
+get(InputPath, Msg, Default, RawOpts) ->
     % Resolve the path against the private element of the message.
-    Resolved =
-        hb_util:deep_get(
-            remove_private_specifier(InputPath, Opts),
-            from_message(Msg),
-            opts(Opts)
-        ),
+    NoPrivInputPath = remove_private_specifier(InputPath, RawOpts),
+    FromMessage = from_message(Msg),
+    Opts = opts(RawOpts),
+    Resolved = hb_util:deep_get_raw(NoPrivInputPath, FromMessage, Opts),
     case Resolved of
-        not_found -> Default;
+        not_found -> 
+            case maps:is_key(<<"...">>, Msg) of
+                true -> 
+                    get(
+                        InputPath,
+                        hb_maps:get(<<"...">>, Msg, #{}, Opts),
+                        Default,
+                        Opts
+                    );
+                false -> Default
+            end;
+        unset -> Default;
+        <<"unset">> -> Default;
         Value -> Value
     end.
 
 %% @doc Helper function for setting a key in the private element of a message.
+set(Msg, InputPath, unset, Opts) ->
+    Path = remove_private_specifier(InputPath, Opts),
+    remove(Msg, Path, Opts);
 set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
     ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
-    NewPriv = hb_util:deep_set(Path, Value, Priv, opts(Opts)),
+    NewPriv = hb_util:deep_set_raw(Path, Value, Priv, opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 set(Msg, PrivMap, Opts) ->
     CurrentPriv = from_message(Msg),
     ?event({set_private, {in, PrivMap}, {opts, Opts}}),
-    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, opts(Opts)),
+    NewPriv = hb_util:deep_merge_raw(CurrentPriv, PrivMap, opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 
+%% @doc Remove a value from the private element of a message.
+remove(Msg, List, Opts) when is_list(List) ->
+    CurrentPriv = from_message(Msg),
+    NewPriv = hb_maps_raw:without(List, CurrentPriv, opts(Opts)),
+    set_priv(Msg, NewPriv);
+
+remove(Msg, Key, Opts) ->
+    remove(Msg, [Key], Opts).
 %% @doc Merge the private elements of two messages into one. The keys in the
 %% second message will override the keys in the first message. The base keys
 %% from the first message will be preserved, but the keys in the second message
@@ -69,7 +96,7 @@ set(Msg, PrivMap, Opts) ->
 merge(Base, Req, Opts) ->
     % Merge the private elements of the two messages.
     Merged =
-        hb_util:deep_merge(
+        hb_util:deep_merge_raw(
             from_message(Base),
             from_message(Req),
             opts(Opts)
@@ -211,9 +238,16 @@ priv_opts_cache_read_message_test() ->
     {ok, PubMsg} = hb_cache:read(ID, Opts),
     PubMsgWithCommitments = hb_cache:read_all_commitments(PubMsg, Opts),
     PubMsgLoaded = hb_cache:ensure_all_loaded(PubMsgWithCommitments, Opts),
-    ?assertEqual(Msg, PubMsgLoaded),
+    ?assert(hb_message:match(Msg, PubMsgLoaded)),
     % Read the message using the private store.
     {ok, PrivMsg} = hb_cache:read(ID, PrivOpts),
     PrivMsgWithCommitments = hb_cache:read_all_commitments(PrivMsg, PrivOpts),
     PrivMsgLoaded = hb_cache:ensure_all_loaded(PrivMsgWithCommitments, PrivOpts),
-    ?assertEqual(Msg, PrivMsgLoaded).
+    ?assert(hb_message:match(Msg, PrivMsgLoaded)).
+
+keep_priv_on_top_level_test() ->
+    Msg = #{<<"a">> => 1, <<"priv">> => #{<<"b">> => 0}},
+    ?assertEqual(0, get(<<"b">>, Msg, #{})),
+    Msg2 = hb_ao:set(Msg, #{<<"a">> => 2}, #{}),
+    ?event(debug_keep_priv_on_top_level_test, {msg2, {explicit, Msg2}}),
+    ?assertEqual(0, get(<<"b">>, Msg2, #{})).

@@ -79,11 +79,11 @@ finalize(Base, Request, Opts) ->
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, Cookies} = extract(Base, Req, Opts),
-    Key = hb_maps:get(<<"key">>, Req, undefined, Opts),
-    case hb_maps:get(Key, Cookies, undefined, Opts) of
+    Key = hb_maps_raw:get(<<"key">>, Req, undefined, Opts),
+    case hb_maps_raw:get(Key, Cookies, undefined, Opts) of
         undefined -> {error, not_found};
         Cookie ->
-            Format = hb_maps:get(<<"format">>, Req, <<"default">>, Opts),
+            Format = hb_maps_raw:get(<<"format">>, Req, <<"default">>, Opts),
             case Format of
                 <<"default">> -> {ok, Cookie};
                 <<"set-cookie">> -> {ok, normalize_cookie_value(Cookie)};
@@ -111,8 +111,10 @@ store(Base, Req, RawOpts) ->
         hb_maps:without(
             [
                 <<"path">>,
+                <<"accept">>,
                 <<"accept-bundle">>,
                 <<"ao-peer">>,
+                <<"ao-peer-port">>,
                 <<"host">>,
                 <<"method">>,
                 <<"body">>
@@ -121,8 +123,14 @@ store(Base, Req, RawOpts) ->
             Opts
         ),
     ?event({store, {msg_to_set, MsgToSet}}),
-    NewCookies = hb_maps:merge(ExistingCookies, MsgToSet, Opts),
-    NewBase = hb_private:set(ResetBase, <<"cookie">>, NewCookies, Opts),
+    NewCookies = hb_maps_raw:merge(ExistingCookies, MsgToSet, Opts),
+    NewBase =
+        hb_private:set(
+            ResetBase,
+            <<"cookie">>,
+            hb_maps:expand(NewCookies, Opts),
+            Opts
+        ),
     {ok, NewBase}.
 
 %% @doc Remove all cookie keys from the given message (including `cookie' and
@@ -130,7 +138,7 @@ store(Base, Req, RawOpts) ->
 reset(Base, RawOpts) ->
     Opts = opts(RawOpts),
     WithoutBaseCookieKeys =
-        hb_maps:without(
+        hb_maps_raw:without(
             [<<"cookie">>, <<"set-cookie">>],
             Base,
             Opts
@@ -174,18 +182,21 @@ do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) -
             )
         ),
     MsgWithSetCookie =
-        ResetBase#{
-            <<"set-cookie">> => SetCookieLines
-        },
+        hb_ao:set(
+            ResetBase,
+            <<"set-cookie">>,
+            SetCookieLines,
+            Opts
+        ),
     {ok, MsgWithSetCookie};
 do_to(Msg, Req = #{ <<"format">> := <<"cookie">> }, Opts) when is_map(Msg) ->
     ?event({to_cookie, {msg, Msg}, {req, Req}}),
     {ok, ExtractedParsedCookies} = extract(Msg, Req, Opts),
     {ok, ResetBase} = reset(Msg, Opts),
     CookieLines =
-        hb_maps:values(
-            hb_maps:map(
-            fun to_cookie_line/2,
+        hb_maps_raw:values(
+            hb_maps_raw:map(
+                fun to_cookie_line/2,
                 ExtractedParsedCookies,
                 Opts
             ),
@@ -252,7 +263,8 @@ to_set_cookie_line(Key, RawCookie) ->
 %% reuses the `to_set_cookie_line' function to generate the components, but
 %% unsets the `attributes' and `flags' keys first.
 to_cookie_line(Key, Cookie) ->
-    to_set_cookie_line(Key, value(Cookie)).
+    Value = value(Cookie),
+    to_set_cookie_line(Key, Value).
 
 %% @doc Normalize a message containing a `cookie', `set-cookie', and potentially
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
@@ -267,8 +279,8 @@ do_from(Msg, Req, Opts) when is_map(Msg) ->
     {ok, FromSetCookie} = from_set_cookie(Msg, Req, Opts),
     FromPriv = hb_private:get(<<"cookie">>, Msg, #{}, Opts),
     % Merge all found cookies into a single map.
-    MergedMsg = hb_maps:merge(FromCookie, FromSetCookie, Opts),
-    AllParsed = hb_maps:merge(MergedMsg, FromPriv, Opts),
+    MergedMsg = hb_maps_raw:merge(FromCookie, FromSetCookie, Opts),
+    AllParsed = hb_maps_raw:merge(MergedMsg, FromPriv, Opts),
     % Set the cookies in the private element of the message.
     {ok, hb_private:set(ResetBase, <<"cookie">>, AllParsed, Opts)};
 do_from(CookiesMsg, _Req, _Opts) ->
@@ -285,7 +297,7 @@ from_cookie(Cookies, Req, Opts) when is_list(Cookies) ->
         lists:foldl(
             fun(Cookie, Acc) ->
                 {ok, Parsed} = from_cookie(Cookie, Req, Opts),
-                hb_maps:merge(Acc, Parsed, Opts)
+                hb_maps_raw:merge(Acc, Parsed, Opts)
             end,
             #{},
             Cookies
@@ -321,7 +333,7 @@ from_set_cookie(Lines, Req, Opts) when is_list(Lines) ->
         lists:foldl(
             fun(Line, Acc) ->
                 {ok, Parsed} = from_set_cookie(Line, Req, Opts),
-                hb_maps:merge(Acc, Parsed)
+                hb_maps_raw:merge(Acc, Parsed)
             end,
             #{},
             Lines
@@ -381,7 +393,7 @@ from_set_cookie(Line, _Req, Opts) when is_binary(Line) ->
                 if length(UnquotedFlags) > 0 -> #{ <<"flags">> => UnquotedFlags };
                 true -> #{}
                 end,
-            MaybeAllAttributes = hb_maps:merge(MaybeAttributes, MaybeFlags, Opts),
+            MaybeAllAttributes = hb_maps_raw:merge(MaybeAttributes, MaybeFlags, Opts),
             {ok, #{ Key => MaybeAllAttributes#{ <<"value">> => ValueDecoded }}}
     end.
 

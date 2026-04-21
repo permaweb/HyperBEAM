@@ -85,7 +85,7 @@ do_compute(State, Req, Opts) ->
                 Opts
             ),
         ?event(dedup_short,
-            {continue,
+            {dedup_continue,
                 {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
                 {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
                 {state_slot, hb_maps:get(<<"at-slot">>, State, no_slot, Opts)},
@@ -189,6 +189,7 @@ ensure_started(Opts) ->
     ?event({ensure_started, genesis_wasm_server_dir, GenesisWasmServerDir}),
     ?event({ensure_started, genesis_wasm, self()}),
     IsRunning = is_genesis_wasm_server_running(Opts),
+    ?event(debug_status, {is_running, IsRunning}),
     IsCompiled = hb_features:genesis_wasm(),
     GenWASMProc = is_pid(hb_name:lookup(<<"genesis-wasm@1.0">>)),
     case IsRunning orelse (IsCompiled andalso GenWASMProc) of
@@ -344,6 +345,7 @@ ensure_started(Opts) ->
 %% checkpoint via GraphQL.
 import(Base, Req, Opts) ->
     PassedProcID = hb_maps:find(<<"process-id">>, Req, Opts),
+    ?event(debug_import, {passed_proc_id, PassedProcID}),
     ProcMsg =
         case PassedProcID of
             {ok, ProcessId} ->
@@ -443,10 +445,15 @@ do_import(Proc, CheckpointMessage, Opts) ->
         Slot = hb_util:int(SlotBin),
         InitializedProc = dev_process_lib:ensure_process_key(Proc, Opts),
         WithSnapshot =
-            InitializedProc#{
-                <<"at-slot">> => Slot,
-                <<"snapshot">> => CheckpointMessage
-            },
+            hb_ao:set(
+                InitializedProc,
+                #{
+                    <<"at-slot">> => Slot,
+                    <<"snapshot">> => CheckpointMessage
+                },
+                Opts
+            ),
+        ?event(debug_import, {with_snapshot, {with_snapshot, WithSnapshot}}),
         % Save the state snapshot into the store.
         {ok, _} ?= dev_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
         % Return the normalized process message.
@@ -519,7 +526,15 @@ status(Opts) ->
                 Opts
             )
         ),
-    try hb_http:get(<<"http://localhost:", ServerPort/binary, "/status">>, Opts) of
+    HTTPPath = <<"http://localhost:", ServerPort/binary, "/status">>,
+    ?event(
+        debug_status,
+        {making_http_call,
+            {http_path, HTTPPath}, {server_port, ServerPort}
+        }
+    ),
+    HTTPRes = hb_http:get(HTTPPath, Opts),
+    try HTTPRes of
         {ok, Res} ->
             ?event({genesis_wasm_status_check, {res, Res}}),
             true;
@@ -758,8 +773,8 @@ schedule_aos_call(Base, Code, Action, Opts) ->
     schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
 dedup_test_() -> 
-    {timeout, 9000, fun dedup_test/0}.
-dedup_test() ->
+    {timeout, 30, fun dedup/0}.
+dedup() ->
     application:ensure_all_started(hb),
     Opts = #{
         priv_wallet => hb:wallet(),
@@ -846,6 +861,7 @@ dedup_test() ->
     % Schedule twice to avoid nonce warning
     schedule_aos_call(Base, <<"return Number">>, <<"Eval">>, Opts),
     schedule_aos_call(Base, <<"return Number">>, <<"Eval">>, Opts),
+    ?event(debug_dedup_test, {scheduled_aos_call}),
     % Compute with dedup - initialize number to 1, then two increments,
     % but the second increment should be skipped for dedup - expected result is 2
     {ok, Result} = hb_ao:resolve(Base, <<"now">>, Opts),
@@ -853,7 +869,7 @@ dedup_test() ->
     Data = hb_ao:get(<<"results/data">>, Result),
     ?assertEqual(<<"2">>, Data).
 spawn_and_execute_slot_test_() ->
-    { timeout, 900, fun spawn_and_execute_slot/0 }.
+    { timeout, 30, fun spawn_and_execute_slot/0 }.
 spawn_and_execute_slot() ->
     application:ensure_all_started(hb),
     Opts = #{
@@ -898,7 +914,7 @@ spawn_and_execute_slot() ->
     ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Result)).
 
 compare_result_genesis_wasm_and_wasm_test_() ->
-    { timeout, 900, fun compare_result_genesis_wasm_and_wasm/0 }.
+    { timeout, 30, fun compare_result_genesis_wasm_and_wasm/0 }.
 compare_result_genesis_wasm_and_wasm() ->
     application:ensure_all_started(hb),
     Opts = #{
@@ -949,7 +965,6 @@ compare_result_genesis_wasm_and_wasm() ->
             #{ <<"path">> => <<"now">> },
             Opts
         ),
-    ?event(debug_test_1, {res1, {explicit, Res1}}),
     {ok, ResultGenesisWasm} = Res1,
     {ok, ResultWasm} = 
         hb_ao:resolve(
@@ -962,8 +977,9 @@ compare_result_genesis_wasm_and_wasm() ->
         hb_ao:get(<<"results/data">>, ResultWasm, Opts)
     ).
 
+% TODO: Timing out
 send_message_between_genesis_wasm_processes_test_() ->
-    { timeout, 900, fun send_message_between_genesis_wasm_processes/0 }.
+    { timeout, 30, fun send_message_between_genesis_wasm_processes/0 }.
 send_message_between_genesis_wasm_processes() ->
     application:ensure_all_started(hb),
     Opts = #{
@@ -1045,7 +1061,7 @@ send_message_between_genesis_wasm_processes() ->
     ).
 
 dryrun_genesis_wasm_test_() ->  
-    { timeout, 900, fun dryrun_genesis_wasm/0 }.
+    { timeout, 30, fun dryrun_genesis_wasm/0 }.
 dryrun_genesis_wasm() ->
     application:ensure_all_started(hb),
     Opts = #{

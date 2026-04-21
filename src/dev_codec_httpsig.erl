@@ -69,9 +69,9 @@ verify(Base, Req, RawOpts) ->
     ?event(debug_httpsig,
         {
             httpsig_verifying,
-            {signature, Signature},
-            {parsed_key_material, KeyRes},
-            {req, Req},
+            {signature, {explicit, Signature}},
+            {parsed_key_material, {explicit, KeyRes}},
+            {req, {explicit, Req}},
             {signature_base, {string, SigBase}}
         }
     ),
@@ -122,7 +122,11 @@ commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha512">> }, Opts);
 commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
     ?event(
-        {generating_rsa_pss_sha512_commitment, {msg, MsgToSign}, {req, Req}}
+        debug_httpsig_commit,
+        {signed_commit_start,
+            {msg, {explicit, MsgToSign}},
+            {req, {explicit, Req}}
+        }
     ),
     Opts = opts(RawOpts),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
@@ -139,7 +143,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         end,
     % Generate the unsigned commitment and signature base.
     ToCommit = hb_ao:normalize_keys(keys_to_commit(MsgToSign, Req, Opts)),
-    ?event({to_commit, ToCommit}),
+    ?event(debug_httpsig_commit, {to_commit, {to_commit, {explicit, ToCommit}}}),
     UnsignedCommitment =
         maybe_bundle_tag_commitment(
             MaybeTagMap#{
@@ -157,22 +161,34 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
             Req,
             Opts
         ),
+    ?event(
+        debug_httpsig_commit,
+        {unsigned_commitment,
+            {unsigned_commitment, {explicit, UnsignedCommitment}}
+        }
+    ),
     {ok, EncMsg, EncComm, ModCommittedKeys} =
         normalize_for_encoding(MsgToSign, UnsignedCommitment, Opts),
-    ?event({encoded_to_httpsig_for_commitment, MsgToSign}),
+    ?event(
+        debug_httpsig_commit,
+        {encoded_to_httpsig_for_commitment,
+            {encoded_to_httpsig_for_commitment, {explicit, EncMsg}}
+        }
+    ),
     % Generate the signature base
     SignatureBase = signature_base(EncMsg, EncComm, Opts),
     ?event({rsa_signature_base, {string, SignatureBase}}),
     ?event({mod_committed_keys, ModCommittedKeys}),
     % Sign the signature base
     Signature = ar_wallet:sign(Wallet, SignatureBase, sha512),
+    ?event(debug_httpsig_commit, {signature, {signature, {explicit, Signature}}}),
     % Generate the ID of the signature
     ID = hb_util:human_id(crypto:hash(sha256, Signature)),
     ?event({rsa_commit, {committed, ToCommit}}),
     % Calculate the ID and place the signature into the `commitments' key of the
     % message. After, we call `commit' again to add the hmac to the new
     % message.
-    commit(
+    SignedCommitment =
         MsgToSign#{
             <<"commitments">> =>
                 (maps:get(<<"commitments">>, MsgToSign, #{}))#{
@@ -183,10 +199,26 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
                         }
                 }
         },
+    ?event(
+        debug_httpsig_commit,
+        {signed_commit_intermediate,
+            {signed_commitment, {explicit, SignedCommitment}}
+        }
+    ),
+    % Generate the HMAC commitment
+    commit(
+        SignedCommitment,
         Req#{ <<"type">> => <<"hmac-sha256">> },
         Opts
     );
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
+    ?event(
+        debug_httpsig_commit, 
+        {unsigned_commit_start, 
+            {base, {explicit, BaseMsg}},
+            {req, {explicit, Req}}
+        }
+    ),
     % Extract the key material from the request.
     Opts = opts(RawOpts),
     ?event({req_to_key_material, {req, Req}}),
@@ -249,7 +281,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
             {hmac, HMac}
         }
     ),
-    Res =
+    CommittedRes =
         {
             ok,
             Msg#{
@@ -263,8 +295,11 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
                     }
             }
         },
-    ?event(debug_commitments, {hmac_generation_complete, Res}),
-    Res.
+    ?event(
+        debug_httpsig_commit, 
+        {unsigned_commit_complete, {committed_res, {explicit, CommittedRes}}}
+    ),
+    CommittedRes.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains
 %% it.
@@ -282,8 +317,15 @@ keys_to_commit(_Base, #{ <<"committed">> := Explicit}, _Opts) ->
     % their given keys to match the HTTPSig encoded TABM form.
     hb_util:list_to_numbered_message(Explicit);
 keys_to_commit(Base, _Req, Opts) ->
-    % Extract the set of committed keys from the message.
-    case hb_message:committed(Base, #{ <<"committers">> => <<"all">> }, opts(Opts)) of
+    % Extract the set of committed keys from the message. We only want to 
+    % commit on the top level keys.
+    Committed = 
+        hb_message:committed(
+            Base,
+            #{ <<"committers">> => <<"all">> },
+            opts(Opts#{ use_nested => false })
+        ),
+    case Committed of
         [] ->
             % Case 3: Default to all keys in the TABM-encoded message, aside
             % metadata.
@@ -323,6 +365,12 @@ add_content_digest(Msg, _Opts) ->
 %% @doc Given a base message and a commitment, derive the message and commitment
 %% normalized for encoding.
 normalize_for_encoding(Msg, Commitment, Opts) ->
+    ?event(debug_httpsig_normalize,
+        {normalize_for_encoding_start,
+            {msg, {explicit, Msg}},
+            {commitment, {explicit, Commitment}}
+        }
+    ),
     % Extract the requested keys to include in the signature base.
     RawInputs =
         hb_util:message_to_ordered_list(
@@ -345,14 +393,13 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             end,
             RawInputs
         ),
-    ?event({inputs, {list, Inputs}}),
+    ?event(debug_httpsig_normalize, {inputs, {inputs, {list, Inputs}}}),
     % Filter the message down to only the requested keys, then encode it.
     MsgWithOnlyInputs =
         maps:with(
             Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
             Msg
         ),
-    ?event({msg_with_only_inputs, maps:without([<<"commitments">>], MsgWithOnlyInputs)}),
     {ok, EncodedWithSigInfo} =
         to(
             maps:without([<<"commitments">>], MsgWithOnlyInputs),

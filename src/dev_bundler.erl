@@ -497,7 +497,7 @@ post_data_item(Node, Item, Opts) ->
             <<"content-type">> => <<"application/octet-stream">>,
             <<"body">> => Serialized
         },
-        Opts
+        Opts#{ http_expand => true }
     ).
 
 assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->

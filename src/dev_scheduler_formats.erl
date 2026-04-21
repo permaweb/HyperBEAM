@@ -151,8 +151,9 @@ aos2_to_assignment(A, RawOpts) ->
             aos2_normalize_data(AssignmentData),
             Opts
         ),
-        ?event({result_assignment, Assignment}),
-    NormalizedAssignment = aos2_normalize_types(Assignment),
+    ?event({result_assignment, Assignment}),
+    NormalizedAssignment = aos2_normalize_all_types(Assignment, Opts),
+    ?event({normalized_assignment, {explicit, NormalizedAssignment}}),
     {ok, Message} =
         case hb_maps:get(<<"message">>, Node, undefined, Opts) of
             null ->
@@ -174,7 +175,7 @@ aos2_to_assignment(A, RawOpts) ->
                 )
         end,
     ?event({message, Message}),
-    NormalizedAssignment#{ <<"body">> => Message }.
+    #{ <<"...">> => NormalizedAssignment, <<"body">> => Message }.
 
 %% @doc The `hb_gateway_client' module expects all JSON structures to at least
 %% have a `data' field. This function ensures that.
@@ -211,6 +212,41 @@ aos2_normalize_types(Msg) ->
         }
     ),
     Msg.
+
+aos2_normalize_all_types(Msg, Opts) ->
+    Mod1 = 
+        case hb_maps:get(<<"timestamp">>, Msg, undefined, Opts) of
+            TS when is_binary(TS) ->
+                #{ <<"timestamp">> => hb_util:int(TS) };
+            _ -> #{}
+        end,
+    Mod2 = 
+        case hb_maps:get(<<"nonce">>, Msg, undefined, Opts) of
+            Nonce when is_binary(Nonce) and not is_map_key(<<"slot">>, Msg) ->
+                Mod1#{ <<"slot">> => hb_util:int(Nonce) };
+            _ -> Mod1
+        end,
+    Mod3 = 
+        case hb_maps:get(<<"epoch">>, Msg, undefined, Opts) of
+            E when is_binary(E) ->
+                Mod2#{ <<"epoch">> => hb_util:int(E) };
+            _ -> Mod2
+        end,
+    Mod4 = 
+        case hb_maps:get(<<"slot">>, Msg, undefined, Opts) of
+            Slot when is_binary(Slot) ->
+                Mod3#{ <<"slot">> => hb_util:int(Slot) };
+            _ -> Mod3
+        end,
+    Mod5 = 
+        case hb_maps:get(<<"block-hash">>, Msg, not_found, Opts) of
+            not_found ->
+                Mod4#{ <<"block-hash">> => hb_util:encode(<<0:256>>) };
+            BH -> BH
+        end,
+    Merged = hb_maps:merge(Msg, Mod5, Opts#{ hashpath => ignore }),
+    ?event(d, {merge, {mod5, {explicit,Mod5}}, {msg, {explicit,Msg}}, {merged, {explicit, Merged}}}),
+    Merged.
 
 %% @doc For all scheduler format operations, we do not calculate hashpaths,
 %% perform cache lookups, or await inprogress results.

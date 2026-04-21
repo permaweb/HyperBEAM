@@ -108,7 +108,15 @@ node(Base, RawReq, RawOpts) ->
         end,
     Req = find_target(Base, RawReq, Opts),
     % Ensure that the request is signed by the operator.
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
+    ?event(debug_location_node, {req, {explicit, Req}}),
+    Signed = 
+        case hb_message:signed(Req, Opts) of
+            undefined ->
+                Req;
+            SignedReq ->
+                SignedReq
+        end,
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Signed, Opts),
     ?event(
         location,
         {scheduler_location_registration_request, OnlyCommitted},
@@ -124,6 +132,10 @@ node(Base, RawReq, RawOpts) ->
     IsOperator = lists:member(Self, Signers),
     ExistingNonce = latest_known_nonce(Self, Opts),
     RequestedNonce = hb_maps:get(<<"nonce">>, OnlyCommitted, not_found, Opts),
+    ?event(
+        debug_location_node,
+        {{is_operator, IsOperator}, {requested_nonce, RequestedNonce}}
+    ),
     case {IsOperator, RequestedNonce} of
         {false, not_found} ->
             % A non-operator has requested that we generate a new location record.
@@ -411,7 +423,8 @@ register_scheduler_test() ->
             Opts
         ),
     {ok, Res} = hb_http:post(Node, Base, Opts),
-    ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
+    ResLocation = hb_ao:get(<<"url">>, Res, not_found, #{}),
+    ?assert(is_binary(ResLocation)).
 
 %% @doc Test that unsigned GET calls to `node' return the same location record
 %% once one has been generated.
@@ -490,23 +503,17 @@ register_location_on_boot_test() ->
         ),
     CurrentBody = hb_ao:get(<<"body">>, CurrentLocation, CurrentLocation, #{}),
     ?event({current_location, CurrentLocation}),
-    ?assertMatch(
-        #{
-            <<"url">> := <<"https://hyperbeam-test-ignore.com">>,
-            <<"nonce">> := Nonce
-        } when Nonce > 0,
-        CurrentBody
-    ),
+    CurrentBodyUrl = hb_ao:get(<<"url">>, CurrentBody, not_found, #{}),
+    CurrentBodyNonce = hb_ao:get(<<"nonce">>, CurrentBody, -1, #{}),
+    ?assertEqual(<<"https://hyperbeam-test-ignore.com">>, CurrentBodyUrl),
+    ?assert(CurrentBodyNonce > 0),
     {ok, RemoteLocation} =
         hb_http:get(
             RegisteringNode,
             <<"/~location@1.0/", Address/binary>>,
             #{}
         ),
-    ?assertMatch(
-        #{
-            <<"url">> := <<"https://hyperbeam-test-ignore.com">>,
-            <<"nonce">> := Nonce
-        } when Nonce > 0,
-        RemoteLocation
-    ).
+    RemoteLocationUrl = hb_ao:get(<<"url">>, RemoteLocation, not_found, #{}),
+    RemoteLocationNonce = hb_ao:get(<<"nonce">>, RemoteLocation, -1, #{}),
+    ?assertEqual(<<"https://hyperbeam-test-ignore.com">>, RemoteLocationUrl),
+    ?assert(RemoteLocationNonce > 0).

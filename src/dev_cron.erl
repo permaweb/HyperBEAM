@@ -162,11 +162,12 @@ stop(_Base, Req, Opts) ->
 	end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
-    Req1 = Req#{<<"path">> => CronPath},
+    Req1 = hb_ao:set(Req, #{<<"path">> => CronPath}, Opts),
     ?event(
+        debug_cron_every_worker_loop,
         {cron_every_worker_executing,
             {path, CronPath},
-            {req_id, hb_message:id(Req, all, Opts)}
+            {req, Req1}
         }
     ),
     try
@@ -218,7 +219,8 @@ stop_once_test() ->
 	% Create a "once" task targeting the delay function
 	OnceUrlPath = <<"/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
 				 "&cron-path=/~test-device@1.0/delay">>,
-	{ok, #{ <<"body">> := OnceTaskID }} = hb_http:get(Node, OnceUrlPath, #{}),
+	{ok, OnceRes} = hb_http:get(Node, OnceUrlPath, #{}),
+    OnceTaskID = hb_ao:get(<<"body">>, OnceRes, #{}),
 	?event({cron_stop_once_test_created, {task_id, OnceTaskID}}),
 	% Give a short delay to ensure the task has started and called handle,
     % entering the sleep
@@ -256,8 +258,9 @@ stop_every_test() ->
 	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
 					   "&interval=200-milliseconds",
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
-	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
-	?event({cron_stop_every_test_created, CronTaskID}),
+	{ok, EveryRes} = hb_http:get(Node, EveryUrlPath, #{}),
+    CronTaskID = hb_ao:get(<<"body">>, EveryRes, #{}),
+	?event(debug_cron_stop_every_test, {cron_stop_every_test_created, CronTaskID}),
 	% Verify the cron worker process was registered and is alive
 	CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
 	?assert(is_pid(CronWorkerPid)),
@@ -279,7 +282,9 @@ stop_every_test() ->
 	% Check the counter in the original test worker was incremented
 	TestWorkerPid ! {get, self()},
 	receive
-		{state, State = #{count := Count}} ->
+		{state, State} ->
+            ?event(debug_cron_stop_every_test, {state, State}),
+            Count = hb_ao:get(<<"count">>, State, #{}),
 			?event({cron_stop_every_test_counter_state, State}),
 			?assert(Count > 0)
 	after 1000 ->
@@ -309,16 +314,19 @@ once_executed_test() ->
         >>,
 	% this should call the worker via the test device
 	% the test device should look up the worker via the id given 
-	{ok, #{ <<"body">> := _ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
+	{ok, OnceRes} = hb_http:get(Node, UrlPath, #{}),
+    OnceTaskID = hb_maps:get(<<"body">>, OnceRes, not_found, #{}),
+    ?assert(OnceTaskID =/= not_found),
 	% wait for the request to be processed
-		timer:sleep(400),
+    timer:sleep(400),
 	% send a message to the worker to get the state
 	PID ! {get, self()},
 	% receive the state from the worker
 	receive
 		{state, State} ->
 			?event({once_executed_test_received_state, State}),
-			?assertMatch(#{ <<"test-id">> := ID }, State)
+            TestID = hb_maps:get(<<"test-id">>, State, not_found, #{}),
+			?assertMatch(ID, TestID)
 	after 1000 ->
 		FinalLookup = hb_name:lookup({<<"test">>, ID}),
 		?event({timeout_waiting_for_worker, {pid, PID}, {lookup_result, FinalLookup}}),
@@ -339,18 +347,29 @@ every_worker_loop_test() ->
             ID/binary
         >>,
 	?event({cron_every_test_send_url, UrlPath}),
-	{ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
-	?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
-		timer:sleep(700),
+	{ok, EveryRes} = hb_http:get(Node, UrlPath, #{}),
+    ReqMsgId = hb_maps:get(<<"body">>, EveryRes, not_found, #{}),
+	?event(
+        debug_cron_every_worker_loop_test,
+        {cron_every_test_get_done, {req_id, ReqMsgId}}
+    ),
+    timer:sleep(700),
 	PID ! {get, self()},
 	% receive the state from the worker
 	receive
-		{state, State = #{count := C}} ->
-			?event({cron_every_test_received_state, State}),
-			?assert(C >= 3)
+		{state, State} ->
+            Count = hb_maps:get(count, State, 0, #{}),
+			?event(
+                debug_cron_every_worker_loop_test,
+                {cron_every_test_received_state, State}
+            ),
+			?assert(Count >= 3)
 	after 1000 ->
 		FinalLookup = hb_name:lookup({<<"test">>, ID}),
-		?event({cron_every_test_timeout, {pid, PID}, {lookup_result, FinalLookup}}),
+		?event(
+            debug_cron_every_worker_loop_test,
+            {cron_every_test_timeout, {pid, PID}, {lookup_result, FinalLookup}}
+        ),
 		throw({test_timeout_waiting_for_state, {id, ID}})
 	end.
 	

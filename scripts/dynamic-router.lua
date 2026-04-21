@@ -173,7 +173,8 @@ local function recalculate_scores(state, route, opts)
 end
 
 local function add_node(state, req, opts)
-    local route = current_route(state.routes, req.route.template, opts)
+    local routes = ao.get("routes", state)
+    local route = current_route(routes, req.route.template, opts)
     local reference = route.reference .. "/nodes/" .. tostring(#route.nodes + 1)
     table.insert(route.nodes, {
         prefix = req.route.prefix,
@@ -313,12 +314,14 @@ function register_test()
     _, state = register(state, { body = req }, {})
 
     -- We must now have exactly one route in state.routes.
-    if #state.routes ~= 1 then
-      error("Expected 1 route after register, got "..tostring(#state.routes))
+    local routes = ao.get("routes", state)
+    ao.event("debug_l", { "routes123:", routes })
+    if #routes ~= 1 then
+      error("Expected 1 route after register, got "..tostring(#routes))
     end
   
     -- Verify the node, price and default performance.
-    local r = state.routes[1]
+    local r = routes[1]
     ao.event("debug_router", { "route:", r })
     if r.nodes[1].prefix ~= "host1" then
         error("Expected node='host1', got "..tostring(r.nodes[1].node))
@@ -346,9 +349,12 @@ function register_test()
 
     ao.event("debug_router", {"state after second registration", state})
 
-    if #state.routes[1].nodes ~= 2 then
+    local new_routes = ao.get("routes", state)
+    local first_route = new_routes[1]
+    local first_route_nodes = ao.get("nodes", first_route)
+    if #first_route_nodes ~= 2 then
         error("Expected 2 nodes after second registration, got "
-            .. tostring(#state.routes[1].nodes))
+            .. tostring(#first_route_nodes))
     end
 
     return "ok"
@@ -378,8 +384,13 @@ function performance_test()
     _, state = register(state, { body = register_req }, {})
 
     -- Get the references for the nodes on the route and validate it.
-    local node1_ref = state.routes[1].nodes[1].reference
-    local node2_ref = state.routes[1].nodes[2].reference
+    local routes = ao.get("routes", state)
+    local first_route = routes[1]
+    local first_route_nodes = ao.get("nodes", first_route)
+    local node1 = first_route_nodes[1]
+    local node2 = first_route_nodes[2]
+    local node1_ref = ao.get("reference", node1)
+    local node2_ref = ao.get("reference", node2)
 
     if node1_ref ~= "routes/1/nodes/1" then
         error("Invalid reference. Received: " .. node1_ref)
@@ -389,8 +400,8 @@ function performance_test()
     end
 
     -- Record the starting scores for the nodes
-    local t0_node1_score = state.routes[1].nodes[1].weight
-    local t0_node2_score = state.routes[1].nodes[1].weight
+    local t0_node1_score = ao.get("weight", node1)
+    local t0_node2_score = ao.get("weight", node2)
 
     if t0_node1_score ~= t0_node2_score then
         error("Initial node scores should be equal. Received: "

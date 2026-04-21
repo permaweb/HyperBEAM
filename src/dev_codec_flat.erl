@@ -17,7 +17,7 @@ from(Map, Req, Opts) when is_map(Map) ->
     {ok,
         maps:fold(
             fun(Path, Value, Acc) ->
-                hb_util:deep_set(
+                hb_util:deep_set_raw(
                     hb_path:term_to_path_parts(Path, Opts),
                     hb_util:ok(from(Value, Req, Opts)),
                     Acc,
@@ -77,7 +77,8 @@ serialize(Map, Opts) when is_map(Map) ->
                         Acc,
                         hb_path:to_binary(Key),
                         <<": ">>,
-                        hb_maps:get(Key, Flattened, Opts), <<"\n">>
+                        hb_maps_raw:get(Key, Flattened, Opts),
+                        <<"\n">>
                     ]
                 end,
                 <<>>,

@@ -35,12 +35,12 @@ commit(Device, Secret, Base, Req, Opts) ->
         hb_message:commit(
             OnlyCommittedBase,
             Opts,
-            Req#{
+            hb_ao:set(Req, #{
                 <<"commitment-device">> => <<"httpsig@1.0">>,
                 <<"type">> => <<"hmac-sha256">>,
                 <<"scheme">> => <<"secret">>,
                 <<"secret">> => Secret
-            }
+            }, Opts)
         ),
     {ok, CommitmentID, Commitment} =
         hb_message:commitment(

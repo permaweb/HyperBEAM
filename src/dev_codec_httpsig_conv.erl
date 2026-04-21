@@ -41,7 +41,9 @@
 %% HTTP Structured Field is encoded into it's equivalent TABM encoding.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(Link, _Req, _Opts) when ?IS_LINK(Link) -> {ok, Link};
-from(HTTP, _Req, Opts) ->
+from(HTTPRaw, _Req, Opts) ->
+    % TODO: Maybe remove?
+    HTTP = hb_maps:expand(HTTPRaw, Opts),
     % First, parse all headers excluding the signature-related headers, as they
     % are handled separately.
     Headers = hb_maps_raw:without([<<"body">>], HTTP, Opts),
@@ -303,6 +305,11 @@ to(TABM, Req, Opts) -> to(TABM, Req, [], Opts).
 to(Bin, _Req, _FormatOpts, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(Link, _Req, _FormatOpts, _Opts) when ?IS_LINK(Link) -> {ok, Link};
 to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
+    % TODO: We could expand here to see if the original body is empty - 
+    % but do we want to do that?
+    % hb_http:index_test
+    % hb_http: index_request_test
+
     % If the caller has specified that an `index` page is requested, we:
     % 1. Convert the message to HTTPSig as usual.
     % 2. Check if the `body` and `content-type` keys are set. If either are,
@@ -368,7 +375,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
     % Ensure that the material for the message is loaded, if the request is
     % asking for a bundle.
     Msg =
-        case hb_util:atom(hb_maps_raw:get(<<"bundle">>, Req, false, Opts)) of
+        case hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, Opts)) of
             false -> encode_ids(TABM);
             true ->
                 % Convert back to the fully loaded structured@1.0 message, then
@@ -395,10 +402,9 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
             [
                 <<"commitments">>,
                 <<"signature">>,
-                <<"signature-input">>,
-                <<"priv">>
+                <<"signature-input">>
             ],
-            Msg
+            hb_private:reset(Msg)
         ),
     {InlineFieldHdrs, InlineKey} = inline_key(Stripped),
     Intermediate =
@@ -420,15 +426,9 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
                     Signature ->
                         MaybeBundleTag = hb_maps_raw:with([<<"bundle">>], Msg, Opts),
                         % TODO: Make this much better
-                        Committed =
-                        case hb_maps_raw:get(<<"committed">>, Msg, not_found, Opts) of
-                            not_found -> 
-                                case hb_maps_raw:get(<<"committed+link">>, Msg, not_found, Opts) of
-                                    not_found -> [];
-                                    CommittedLink -> hb_cache:ensure_loaded({link, CommittedLink, Opts}, Opts)
-                                end;
-                            C -> C
-                        end,
+                        ?event(debug_httpsig_conv_to, {pre_committed, {msg, {explicit, Msg}}}),
+                        Committed = maps:get(<<"committed">>, Msg, #{}),
+                        ?event(debug_httpsig_conv_to, {pre_post_committed, {msg, {explicit, Msg}}, {committed, {explicit, Committed}}}),
                         #{
                             Signature => MaybeBundleTag#{
                                 <<"signature">> => Signature,
@@ -436,7 +436,6 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
                                 <<"commitment-device">> => <<"httpsig@1.0">>,
                                 <<"type">> => hb_maps_raw:get(<<"type">>, Msg, <<>>, Opts),
                                 <<"committed">> => Committed
-                                    % hb_maps_raw:get(<<"committed">>, Msg, #{}, Opts)
                             }
                         }
                 end;
@@ -621,7 +620,30 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                                 Opts
                             );
                         true ->
-                            Value
+                            % Remove unsigned commitments
+                            WithOnlySignedCommits =
+                                hb_message:with_commitments(
+                                    #{ <<"committer">> => '_' },
+                                    Value,
+                                    Opts
+                                ),
+                            SignedCommitments =
+                                hb_maps_raw:get(
+                                    <<"commitments">>,
+                                    WithOnlySignedCommits,
+                                    #{},
+                                    Opts
+                                ),
+                            case hb_maps_raw:size(SignedCommitments, Opts) of
+                                0 ->
+                                    hb_maps_raw:without(
+                                        [<<"commitments">>],
+                                        WithOnlySignedCommits,
+                                        Opts
+                                    );
+                                _ ->
+                                    WithOnlySignedCommits
+                            end
                         end,
                     case hb_maps_raw:size(NormMsg, Opts) of
                         0 ->
@@ -922,7 +944,10 @@ encode_message_with_links_test() ->
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
-    ?assertMatch({link, _, _}, hb_maps_raw:get(<<"typed-key">>, Read, #{}, #{})),
+    ?assertMatch(
+        {link, _, _},
+        maps:get(<<"typed-key">>, Read, #{})
+    ),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),

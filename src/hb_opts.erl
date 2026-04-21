@@ -780,7 +780,10 @@ mimic_default_types(Map, Mode, Opts) ->
     Default = default_message_with_env(),
     hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
-            NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
+            NewKey = case Key == <<"...">> of 
+                true -> Key;
+                false -> try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end
+            end,
             NewValue = 
                 case hb_maps:get(NewKey, Default, not_found, Opts) of
                     not_found -> Value;

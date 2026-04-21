@@ -85,17 +85,21 @@ call(M1, RawM2, Opts) ->
         ),
     TargetMod1 =
         if RelayBody == not_found -> BaseTarget;
-        true -> BaseTarget#{<<"body">> => RelayBody}
+        true -> hb_ao:set(BaseTarget, <<"body">>, RelayBody, Opts)
         end,
     TargetMod2 =
-        TargetMod1#{
-            <<"method">> => RelayMethod,
-            <<"path">> => RelayPath
-        },
+        hb_ao:set(
+            TargetMod1, 
+            #{
+                <<"method">> => RelayMethod,
+                <<"path">> => RelayPath
+            },
+            Opts
+        ),
     TargetMod3 =
         case RelayDevice of
             not_found -> hb_maps:without([<<"device">>], TargetMod2);
-            _ -> TargetMod2#{<<"device">> => RelayDevice}
+            _ -> hb_ao:set(TargetMod2, <<"device">>, RelayDevice, Opts)
         end,
     TargetMod4 = 
         hb_maps:without(

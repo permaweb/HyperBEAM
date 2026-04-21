@@ -26,6 +26,7 @@ normalize(Msg, Opts) when is_map(Opts) ->
 normalize(Msg, false, _Opts) ->
     Msg;
 normalize(Msg, Mode, Opts) when is_map(Msg) ->
+    ?event(debug_cache_write, {normalizing_message, {msg, {explicit, Msg}}, {mode, Mode}, {opts, Opts}}),
     maps:merge(
         maps:with([<<"commitments">>, <<"priv">>], Msg),
             maps:from_list(
@@ -57,8 +58,9 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                             end,
                         ?event(debug_linkify, {link_normalized, Key, UnderlyingID}),
                         {<< NormKey/binary, "+link">>, UnderlyingID};
-                    ({Key, V}) when is_map(V) or is_list(V) ->
-                        ?event(debug_linkify, {linkifying_submessage, Key}),
+                    % TODO: Maybe linkify ... again?
+                    ({Key, V}) when ((is_map(V) or is_list(V)) andalso (Key =/= <<"...">>) andalso (Key =/= <<"device">>)) ->
+                    % ({Key, V}) when ((is_map(V) or is_list(V))) andalso (Key =/= <<"device">>) ->
                         % The value is a submessage that we have in local memory.
                         % We must offload it such that it is cached, and
                         % referenced by a link.
@@ -67,6 +69,7 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         NormChild = normalize(V, Mode, Opts),
                         NormKey = hb_util:bin(Key),
                         % Generate the ID of the normalized child message.
+                        ?event(debug_linkify1, {generating_id, {norm_child, {explicit, NormChild}}, {key, {explicit, Key}}, {value, {explicit, V}}}, Opts),
                         ID = hb_message:id(NormChild, all, Opts),
                         % If we are in `offload' mode, we write the message to the
                         % cache. If we are in `discard' mode, we simply drop the 
@@ -76,6 +79,7 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                             offload ->
                                 % Write the child to the store to ensure its
                                 % storage and availability.
+                                ?event(debug_cache_write, {writing_child, {norm_child, {explicit, NormChild}}, {opts, Opts}}),
                                 hb_cache:write(NormChild, Opts)
                         end,
                         ?event(debug_linkify, {generated_link, {key, Key}, {id, ID}}),

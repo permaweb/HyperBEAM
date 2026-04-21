@@ -7,7 +7,7 @@
 %% ANS-104 data item that should be included in the base message.
 fields(TX, Prefix, Opts) ->
     lists:foldl(
-        fun hb_maps:merge/2,
+        fun hb_maps_raw:merge/2,
         #{},
         [
             format_field(TX, Prefix, Opts),

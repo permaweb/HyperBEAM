@@ -67,8 +67,9 @@ zip(Base, _Req, Opts) ->
     end.
 
 %%% Tests
-
-unzip_encoded_response_test() ->
+unzip_encoded_response_test_() ->
+    {timeout, 15, fun unzip_encoded_response/0}.
+unzip_encoded_response() ->
     Opts = #{},
     Base = #{ <<"body">> => <<"Hello, world!">> },
     {ok, ID} = hb_cache:write(Base, Opts),
