@@ -381,7 +381,7 @@ post_schedule(Base, Req, Opts) ->
         ToSched ->
             do_post_schedule(Base, Req, ToSched, Opts)
     catch
-        error:{necessary_message_not_found, _, _} ->
+        throw:{necessary_message_not_found, _, _} ->
             {error,
                 #{
                     <<"status">> => 404,
@@ -811,50 +811,65 @@ get_schedule(Base, Req, Opts) ->
     From =
         case hb_ao:get(<<"from">>, Req, not_found, Opts) of
             not_found -> 0;
-            X when X < 0 -> 0;
-            FromRes -> hb_util:int(FromRes)
+            FromRes -> 
+                case hb_util:safe_int(FromRes) of
+                    {ok, FromInt} when FromInt < 0 -> 0;
+                    {ok, FromInt} -> FromInt;
+                    {error, _} -> {error, invalid_from}
+                end
         end,
     To =
         case hb_ao:get(<<"to">>, Req, not_found, Opts) of
             not_found -> undefined;
-            ToRes -> hb_util:int(ToRes)
+            ToRes -> 
+                case hb_util:safe_int(ToRes) of
+                    {ok, ToInt} -> ToInt;
+                    {error, _} -> {error, invalid_to}
+                end
         end,
-    Format = hb_ao:get(<<"accept">>, Req, <<"application/http">>, Opts),
-    ?event(
-        {parsed_get_schedule,
-            {process, ProcID},
-            {from, From},
-            {to, To},
-            {format, Format}
-        }
-    ),
-    case find_server(ProcID, Base, Opts) of
-        {local, _PID} ->
-            generate_local_schedule(Format, ProcID, From, To, Opts);
-        {redirect, Redirect} ->
-            ?event({redirect_received, {redirect, Redirect}}),
-            case hb_opts:get(scheduler_follow_redirects, true, Opts) of
-                true ->
-                    case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
-                        {ok, Res} ->
-                            case uri_string:percent_decode(Format) of
-                                <<"application/aos-2">> ->
-                                    dev_scheduler_formats:assignments_to_aos2(
-                                        ProcID,
-                                        hb_ao:get(
-                                            <<"assignments">>, Res, [], Opts),
-                                        hb_util:atom(hb_ao:get(
-                                            <<"continues">>, Res, false, Opts)),
-                                        Opts
-                                    );
-                                _ ->
-                                    {ok, Res}
+    case {From, To} of
+        {{error, invalid_from}, _} ->
+            {error, #{ <<"status">> => 400, <<"body">> => <<"invalid_from">> }};
+        {_, {error, invalid_to}} ->
+            {error, #{ <<"status">> => 400, <<"body">> => <<"invalid_to">> }};
+        _ ->
+            Format = hb_ao:get(<<"accept">>, Req, <<"application/http">>, Opts),
+            ?event(
+                {parsed_get_schedule,
+                    {process, ProcID},
+                    {from, From},
+                    {to, To},
+                    {format, Format}
+                }
+            ),
+            case find_server(ProcID, Base, Opts) of
+                {local, _PID} ->
+                    generate_local_schedule(Format, ProcID, From, To, Opts);
+                {redirect, Redirect} ->
+                    ?event({redirect_received, {redirect, Redirect}}),
+                    case hb_opts:get(scheduler_follow_redirects, true, Opts) of
+                        true ->
+                            case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
+                                {ok, Res} ->
+                                    case uri_string:percent_decode(Format) of
+                                        <<"application/aos-2">> ->
+                                            dev_scheduler_formats:assignments_to_aos2(
+                                                ProcID,
+                                                hb_ao:get(
+                                                    <<"assignments">>, Res, [], Opts),
+                                                hb_util:atom(hb_ao:get(
+                                                    <<"continues">>, Res, false, Opts)),
+                                                Opts
+                                            );
+                                        _ ->
+                                            {ok, Res}
+                                    end;
+                                {error, Res} ->
+                                    {error, Res}
                             end;
-                        {error, Res} ->
-                            {error, Res}
-                    end;
-                false ->
-                    {ok, Redirect}
+                        false ->
+                            {ok, Redirect}
+                    end
             end
     end.
 
