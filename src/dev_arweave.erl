@@ -173,7 +173,16 @@ head_raw(Base, Request, Opts) ->
                                 <<"tx@1.0">> -> fun head_raw_tx/4;
                                 _ -> throw({invalid_codec_device, CodecDevice})
                             end,
-                        CodecFun(TXID, StartOffset, Length, Opts);
+                        try CodecFun(TXID, StartOffset, Length, Opts)
+                        catch _:Reason:Stacktrace ->
+                            %% This can be prone to serialization error. 
+                            %% Catch and output as an error.
+                            ?event(store_error, {head_raw, 
+                                {txid, TXID},
+                                {reason, Reason},
+                                {stacktrace, Stacktrace}}),
+                            {error, Reason}
+                        end;
                 not_found ->
                     ?event(
                         arweave,
@@ -1547,6 +1556,40 @@ head_raw_ans104_test_parallel() ->
     ?assertEqual(
         {ok, 575},
         hb_maps:find(<<"content-length">>, Result, Opts)
+    ).
+
+%% @doc Interior Arweave offset returns bytes that are not a valid ANS-104
+%% header, so head_raw_ans104/4 throws inside do_head_raw_ans104/5. The
+%% try-catch added to head_raw/3 must convert that throw into {error, _}.
+head_raw_ans104_deserialize_throws_test_parallel() ->
+    TestStore = hb_test_utils:test_store(hb_store_volatile, <<"head-raw-throws">>),
+    IndexStore = #{
+        <<"module">> => hb_store_arweave,
+        <<"index-store">> => [TestStore]
+    },
+    Opts = #{
+        store => [TestStore],
+        arweave_index_ids => true,
+        arweave_index_store => IndexStore
+    },
+    FakeID = <<"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC">>,
+    %% Same interior offset as bundle_header_garbage_guard_test_parallel.
+    ProbeOffset = 376836336327208,
+    Size = 4096,
+    ok = hb_store_arweave:write_offset(
+        IndexStore, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size
+    ),
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"raw">>,
+                <<"raw">> => FakeID,
+                <<"method">> => <<"HEAD">>
+            },
+            Opts
+        )
     ).
 
 get_raw_range_tx_test_parallel() ->
