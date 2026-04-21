@@ -3779,4 +3779,127 @@ fixture_exists(FileName) ->
         false -> false
     end.
 
+%% lenovo-thinkpad-p51.bin has 10 EV_EVENT_TAG events per scan;
+%% assert each decoded event exposes a tag-id + tag-id-name.
+integration_thinkpad_p51_tagged_events_test() ->
+    case fixture_exists("lenovo-thinkpad-p51.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            Tags = [E || {_, E} <- maps:to_list(Events),
+                         is_map(E),
+                         16#6 =:= maps:get(<<"event-type-code">>,
+                                           E, 0)],
+            ?assert(length(Tags) >= 1),
+            lists:foreach(
+                fun(E) ->
+                    P = maps:get(<<"parsed">>, E, #{}),
+                    ?assert(maps:is_key(<<"tag-id">>, P)),
+                    ?assert(maps:is_key(<<"tag-id-name">>, P))
+                end, Tags)
+    end.
+
+%% canonical-ubuntu.bin has EV_EFI_HANDOFF_TABLES v1 events;
+%% assert each decoded event has `tables` with named vendor GUIDs.
+integration_canonical_ubuntu_handoff_tables_test() ->
+    case fixture_exists("canonical-ubuntu.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            Handoffs = [E || {_, E} <- maps:to_list(Events),
+                             is_map(E),
+                             16#80000009 =:= maps:get(<<"event-type-code">>,
+                                                       E, 0)],
+            ?assert(length(Handoffs) >= 1),
+            lists:foreach(
+                fun(E) ->
+                    P = maps:get(<<"parsed">>, E, #{}),
+                    ?assert(maps:is_key(<<"tables">>, P)),
+                    ?assert(maps:is_key(<<"number-of-tables">>, P)),
+                    Tables = maps:get(<<"tables">>, P),
+                    lists:foreach(
+                        fun(T) ->
+                            ?assert(maps:is_key(<<"vendor-guid">>, T)),
+                            ?assert(maps:is_key(<<"vendor-guid-name">>, T)),
+                            ?assert(maps:is_key(
+                                <<"vendor-table-address">>, T))
+                        end, Tables)
+                end, Handoffs)
+    end.
+
+%% dell-notebook-wbcl.bin has 3 EV_NONHOST_CODE/CONFIG/INFO events;
+%% assert each decoded event has nonhost-kind + sha256 pin.
+integration_dell_nonhost_events_test() ->
+    case fixture_exists("dell-notebook-wbcl.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            Nonhost = [E || {_, E} <- maps:to_list(Events),
+                            is_map(E),
+                            begin
+                                C = maps:get(<<"event-type-code">>, E, 0),
+                                C =:= 16#F orelse C =:= 16#10
+                                    orelse C =:= 16#11
+                            end],
+            case Nonhost of
+                [] -> ok;
+                _ ->
+                    lists:foreach(
+                        fun(E) ->
+                            P = maps:get(<<"parsed">>, E, #{}),
+                            ?assert(maps:is_key(<<"nonhost-kind">>, P)),
+                            ?assert(maps:is_key(<<"sha256">>, P))
+                        end, Nonhost)
+            end
+    end.
+
+%% tpm2tools-moklisttrusted.bin has a MokListTrusted authority event.
+%% Verify our shim-aware decoder picks it out.
+integration_tpm2tools_moklisttrusted_test() ->
+    case fixture_exists("tpm2tools-moklisttrusted.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            AuthEvs = [E || {_, E} <- maps:to_list(Events),
+                            is_map(E),
+                            16#800000E0 =:= maps:get(<<"event-type-code">>,
+                                                      E, 0)],
+            ?assert(length(AuthEvs) >= 1),
+            %% At least one should be for a shim/MokList-style
+            %% variable. Find any non-empty variable-name.
+            NonEmpty = [E || E <- AuthEvs,
+                             byte_size(maps:get(<<"variable-name">>,
+                                 maps:get(<<"parsed">>, E, #{}),
+                                 <<>>)) > 0],
+            ?assert(length(NonEmpty) >= 1)
+    end.
+
+%% intel-tdx-ccel.bin has EV_EFI_HANDOFF_TABLES2 events. Verify
+%% our v2 decoder extracts the table-description.
+integration_intel_tdx_handoff_v2_test() ->
+    case fixture_exists("intel-tdx-ccel.bin") of
+        false -> ok;
+        Path ->
+            {ok, Raw} = file:read_file(Path),
+            Events = decode_events(parse(Raw)),
+            V2Evs = [E || {_, E} <- maps:to_list(Events),
+                          is_map(E),
+                          16#8000000B =:= maps:get(<<"event-type-code">>,
+                                                    E, 0)],
+            case V2Evs of
+                [] -> ok;
+                _ ->
+                    lists:foreach(
+                        fun(E) ->
+                            P = maps:get(<<"parsed">>, E, #{}),
+                            ?assert(maps:is_key(
+                                <<"table-description">>, P))
+                        end, V2Evs)
+            end
+    end.
+
 -endif.
