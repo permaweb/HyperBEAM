@@ -212,6 +212,80 @@ do_decode(16#3, Event) -> decode_no_action(Event);
 %% EV_OMIT_BOOT_DEVICE_EVENTS (0x12) — ASCII.
 do_decode(16#12, Event) -> decode_ascii_action(Event);
 
+%% EV_EFI_HANDOFF_TABLES v1 (0x80000009) — deprecated in favour of
+%% v2, but still emitted by older firmware. Layout:
+%%   NumberOfTables  u64 LE
+%%   TableEntry[]    {VendorGuid:16B, VendorTable:u64 LE}
+do_decode(16#80000009, Event) -> decode_handoff_tables_v1(Event);
+
+%% EV_S_CRTM_CONTENTS (0x07) — measurement of the firmware blob that
+%% bootstrapped the CRTM. Vendor-specific format; most commonly
+%% the same UEFI_PLATFORM_FIRMWARE_BLOB shape as 0x80000008 (addr +
+%% length), so we try that first and fall back to opaque.
+do_decode(16#7, Event) -> decode_crtm_contents(Event);
+
+%% EV_PLATFORM_CONFIG_FLAGS (0x0A) — vendor-defined flag bits.
+%% We surface byte length + SHA-256 of the raw bytes so a policy
+%% engine can at least pin the value.
+do_decode(16#A, Event) -> decode_platform_config_flags(Event);
+
+%% EV_TABLE_OF_DEVICES (0x0B) — array of UEFI_DEVICE_PATH.
+%% Walk each path with our existing walker.
+do_decode(16#B, Event) -> decode_table_of_devices(Event);
+
+%% EV_COMPACT_HASH (0x0C) — rarely seen compact hash of external
+%% data. Pure opaque; surface length only.
+do_decode(16#C, Event) -> decode_opaque_with_length(Event);
+
+%% EV_IPL_PARTITION_DATA (0x0E) — GRUB legacy. Data is typically
+%% a NUL-terminated ASCII path like "/boot/grub/grub.cfg" followed
+%% by the file's content up to measurement.
+do_decode(16#E, Event) -> decode_ipl_partition_data(Event);
+
+%% EV_NONHOST_CODE (0x0F) / _CONFIG (0x10) / _INFO (0x11) — code /
+%% config / info for non-host processors (AMD PSP, Intel ME, etc.).
+%% Format is firmware-proprietary; surface the raw SHA-256 so a
+%% verifier can pin the value.
+do_decode(16#F, Event)  -> decode_nonhost(Event, <<"code">>);
+do_decode(16#10, Event) -> decode_nonhost(Event, <<"config">>);
+do_decode(16#11, Event) -> decode_nonhost(Event, <<"info">>);
+
+%% TCG PC Client PFP 1.06 additions.
+%% EV_POST_CODE2          (0x13) — UEFI_PLATFORM_FIRMWARE_BLOB2 shape
+%% EV_EFI_VARIABLE_BOOT2  (0x8000000C) — like EV_EFI_VARIABLE_BOOT
+%%                          but digest is over a PII-normalised view
+%% EV_EFI_GPT_EVENT2      (0x8000000D) — like EV_EFI_GPT_EVENT but
+%%                          digest is GUID/CRC-normalised
+do_decode(16#13, Event) -> decode_firmware_blob2(Event);
+do_decode(16#8000000C, Event) -> decode_uefi_variable_boot(Event);
+do_decode(16#8000000D, Event) -> decode_uefi_gpt(Event);
+
+%% UEFI 2.10 §32 / PFP 1.06 §10.5.6 SPDM device-firmware attestation.
+%% EV_EFI_SPDM_FIRMWARE_BLOB    (0x800000E1)
+%% EV_EFI_SPDM_FIRMWARE_CONFIG  (0x800000E2)
+%% EV_EFI_SPDM_DEVICE_POLICY    (0x800000E3)
+%% EV_EFI_SPDM_DEVICE_AUTHORITY (0x800000E4)
+%% EV_EFI_SPDM_DEVICE_BLOB      (0x800000E5) — post-1.06 draft
+%%
+%% SPDM event data is `TCG_DEVICE_SECURITY_EVENT_DATA2`: a header
+%% followed by an EFI_DEVICE_PATH (variable-length) followed by
+%% SPDM protocol data. We parse the embedded device path (if
+%% parseable) + surface the trailing payload length + SHA-256.
+do_decode(16#800000E1, Event) -> decode_spdm_event(Event, <<"firmware-blob">>);
+do_decode(16#800000E2, Event) -> decode_spdm_event(Event, <<"firmware-config">>);
+do_decode(16#800000E3, Event) -> decode_spdm_event(Event, <<"device-policy">>);
+do_decode(16#800000E4, Event) -> decode_spdm_event(Event, <<"device-authority">>);
+do_decode(16#800000E5, Event) -> decode_spdm_event(Event, <<"device-blob">>);
+
+%% Windows SIPA / WBCL event types (0x10000000 + *).
+%% These are used by Microsoft BitLocker / Measured Boot to pin
+%% Windows-specific state (secure-boot config, BitLocker PCRs,
+%% code integrity). 60+ types. We decode the common shape
+%% (each SIPA event has a fixed SIPA_EVENT_HEADER inside the
+%% TCG event data).
+do_decode(Code, Event) when Code >= 16#10000000, Code =< 16#10FFFFFF ->
+    decode_sipa_event(Code, Event);
+
 %% Anything else: no structured decode.
 do_decode(_Code, _Event) -> #{}.
 
@@ -377,26 +451,337 @@ decode_handoff_tables2(#{<<"event-data">> := Data})
     end;
 decode_handoff_tables2(_) -> #{}.
 
-%% EV_EVENT_TAG — 128-bit GUID + variable-length data. Usually carries
-%% firmware-boot-phase markers. We expose the GUID + data length;
-%% categorise a handful of commonly-seen tag GUIDs.
-decode_event_tag(#{<<"event-data">> := Data})
-  when byte_size(Data) >= 16 ->
-    <<GuidBin:16/binary, Payload/binary>> = Data,
+%% EV_EFI_HANDOFF_TABLES v1 — deprecated but still seen on older
+%% firmware. Layout (UEFI §8):
+%%   NumberOfTables  u64 LE
+%%   TableEntry[N]   {VendorGuid 16B, VendorTable u64 LE}
+%%
+%% VendorGuid is the well-known GUID for the table (ACPI 2.0 RSDP,
+%% SMBIOS 2.x entry point, HOB list, etc.); VendorTable is the
+%% physical pointer. We categorise the GUIDs so a caller can say
+%% "this boot's ACPI RSDP was at 0x7EFDE014".
+decode_handoff_tables_v1(#{<<"event-data">> := Data})
+  when byte_size(Data) >= 8 ->
+    <<N:64/little, Rest/binary>> = Data,
+    Entries = decode_handoff_v1_entries(Rest, N, []),
+    #{<<"number-of-tables">> => N,
+      <<"tables">>           => Entries};
+decode_handoff_tables_v1(_) -> #{}.
+
+decode_handoff_v1_entries(_, 0, Acc) -> lists:reverse(Acc);
+decode_handoff_v1_entries(<<GuidBin:16/binary, Addr:64/little,
+                             Rest/binary>>, N, Acc) ->
     Guid = format_guid(GuidBin),
-    Category = classify_event_tag_guid(Guid, byte_size(Payload)),
-    #{
-        <<"tag-guid">>          => Guid,
-        <<"tag-data-length">>   => byte_size(Payload),
-        <<"tag-category">>      => Category
-    };
+    Entry = #{
+        <<"vendor-guid">>      => Guid,
+        <<"vendor-guid-name">> => handoff_table_guid_name(Guid),
+        <<"vendor-table-address">> => Addr
+    },
+    decode_handoff_v1_entries(Rest, N - 1, [Entry | Acc]);
+decode_handoff_v1_entries(_, _, Acc) -> lists:reverse(Acc).
+
+%% Well-known vendor table GUIDs (UEFI spec Appendix A + ACPI 6.5).
+handoff_table_guid_name(<<"eb9d2d30-2d88-11d3-9a16-0090273fc14d">>) ->
+    <<"ACPI 1.0 RSDP">>;
+handoff_table_guid_name(<<"8868e871-e4f1-11d3-bc22-0080c73c8881">>) ->
+    <<"ACPI 2.0 RSDP">>;
+handoff_table_guid_name(<<"eb9d2d31-2d88-11d3-9a16-0090273fc14d">>) ->
+    <<"SMBIOS 2.x entry point">>;
+handoff_table_guid_name(<<"f2fd1544-9794-4a2c-992e-e5bbcf20e394">>) ->
+    <<"SMBIOS 3.x entry point">>;
+handoff_table_guid_name(<<"eb9d2d32-2d88-11d3-9a16-0090273fc14d">>) ->
+    <<"SAL System Table">>;
+handoff_table_guid_name(<<"eb9d2d2f-2d88-11d3-9a16-0090273fc14d">>) ->
+    <<"MPS Table">>;
+handoff_table_guid_name(<<"7739f24c-93d7-11d4-9a3a-0090273fc14d">>) ->
+    <<"HOB List">>;
+handoff_table_guid_name(<<"4c19049f-4137-4dd3-9c10-8b97a83ffdfa">>) ->
+    <<"Memory Type Information">>;
+handoff_table_guid_name(<<"49152e77-1ada-4764-b7a2-7afefed95e8b">>) ->
+    <<"Debug Image Info Table">>;
+handoff_table_guid_name(<<"060cc026-4c0d-4dda-8f41-595fef00a502">>) ->
+    <<"Memory Status Code Record">>;
+handoff_table_guid_name(_) -> <<"unknown">>.
+
+%% EV_S_CRTM_CONTENTS — most commonly a UEFI_PLATFORM_FIRMWARE_BLOB
+%% (v1 shape: 16 bytes). Fall back to opaque if shorter/longer.
+decode_crtm_contents(#{<<"event-data">> := <<Addr:64/little,
+                                                Len:64/little>>}) ->
+    #{<<"format">>               => <<"firmware-blob-v1">>,
+      <<"blob-physical-address">> => Addr,
+      <<"blob-length">>           => Len};
+decode_crtm_contents(#{<<"event-data">> := Data}) ->
+    #{<<"format">>     => <<"opaque">>,
+      <<"data-length">> => byte_size(Data),
+      <<"sha256">>     => hb_util:encode(crypto:hash(sha256, Data))}.
+
+%% EV_PLATFORM_CONFIG_FLAGS — vendor-specific flag bytes.
+decode_platform_config_flags(#{<<"event-data">> := Data}) ->
+    #{<<"data-length">> => byte_size(Data),
+      <<"sha256">>     => hb_util:encode(crypto:hash(sha256, Data))}.
+
+%% EV_TABLE_OF_DEVICES — array of UEFI_DEVICE_PATH instances.
+%% The array is NUL-terminated (0xFF end-entire) per the TCG spec.
+%% We split on the outermost end-entire terminator (0x7F 0xFF 04 00)
+%% and walk each path.
+decode_table_of_devices(#{<<"event-data">> := Data}) ->
+    Paths = split_on_end_entire(Data, <<>>, []),
+    Parsed = [begin
+                  {Nodes, Text} = parse_device_path(P),
+                  #{<<"nodes">> => Nodes,
+                    <<"text">>  => Text}
+              end || P <- Paths, P =/= <<>>],
+    #{<<"device-path-count">> => length(Parsed),
+      <<"device-paths">>      => Parsed}.
+
+split_on_end_entire(<<>>, Curr, Acc) ->
+    lists:reverse([Curr | Acc]);
+split_on_end_entire(<<16#7F, 16#FF, 16#04, 16#00, Rest/binary>>, Curr, Acc) ->
+    Completed = <<Curr/binary, 16#7F, 16#FF, 16#04, 16#00>>,
+    split_on_end_entire(Rest, <<>>, [Completed | Acc]);
+split_on_end_entire(<<B:1/binary, Rest/binary>>, Curr, Acc) ->
+    split_on_end_entire(Rest, <<Curr/binary, B/binary>>, Acc).
+
+%% Generic "just surface length + sha256" decoder for events whose
+%% internal structure we can't decode at this layer.
+decode_opaque_with_length(#{<<"event-data">> := Data}) ->
+    #{<<"data-length">> => byte_size(Data),
+      <<"sha256">>     => hb_util:encode(crypto:hash(sha256, Data))}.
+
+%% EV_IPL_PARTITION_DATA — GRUB legacy. Event data is typically
+%% an ASCII path string (e.g. "/boot/grub/grub.cfg") followed by
+%% the file content. We extract the path prefix + length.
+decode_ipl_partition_data(#{<<"event-data">> := Data}) ->
+    case binary:split(Data, <<0>>) of
+        [Path, Content] ->
+            case ascii_only(Path) of
+                true ->
+                    #{<<"format">>         => <<"grub-legacy">>,
+                      <<"path">>           => Path,
+                      <<"content-length">> => byte_size(Content),
+                      <<"content-sha256">> =>
+                          hb_util:encode(crypto:hash(sha256, Content))};
+                false ->
+                    decode_opaque_with_length(#{<<"event-data">> => Data})
+            end;
+        _ -> decode_opaque_with_length(#{<<"event-data">> => Data})
+    end.
+
+%% EV_NONHOST_* — AMD PSP / Intel ME / other co-processor firmware.
+%% Completely vendor-specific; we surface what every verifier wants:
+%% the SHA-256 so they can pin it against a known-good baseline.
+decode_nonhost(#{<<"event-data">> := Data}, Kind) ->
+    #{<<"nonhost-kind">>  => Kind,
+      <<"data-length">>   => byte_size(Data),
+      <<"sha256">>        => hb_util:encode(crypto:hash(sha256, Data)),
+      <<"note">>          =>
+          <<"EV_NONHOST_* event data is firmware-proprietary "
+            "(AMD PSP / Intel ME / similar). Verifiers should "
+            "compare the SHA-256 against a known-good baseline "
+            "from the silicon vendor.">>};
+decode_nonhost(_, _) -> #{}.
+
+%% EV_EFI_SPDM_* — UEFI 2.10 §32.5. Data starts with a device
+%% context that includes a UEFI_DEVICE_PATH (variable length),
+%% then protocol-specific payload. We parse the device path and
+%% surface the SPDM payload length + SHA-256.
+decode_spdm_event(#{<<"event-data">> := Data}, Kind) ->
+    %% Try to find an End-entire device-path terminator to delimit
+    %% the device-context prefix.
+    case binary:match(Data, <<16#7F, 16#FF, 16#04, 16#00>>) of
+        {Offset, 4} ->
+            PrefixLen = Offset + 4,
+            <<PathBin:PrefixLen/binary, Payload/binary>> = Data,
+            {Nodes, Text} = parse_device_path(PathBin),
+            #{<<"spdm-kind">>        => Kind,
+              <<"device-path-nodes">> => Nodes,
+              <<"device-path-text">>  => Text,
+              <<"payload-length">>   => byte_size(Payload),
+              <<"payload-sha256">>   =>
+                  hb_util:encode(crypto:hash(sha256, Payload))};
+        _ ->
+            %% No device-path terminator — just surface opaque.
+            #{<<"spdm-kind">>     => Kind,
+              <<"data-length">>   => byte_size(Data),
+              <<"sha256">>        =>
+                  hb_util:encode(crypto:hash(sha256, Data))}
+    end;
+decode_spdm_event(_, _) -> #{}.
+
+%% Windows SIPA / WBCL events (0x10000000 + subtype). Structure per
+%% `windows-ic-sipa.h` header in the Windows SDK and Microsoft's
+%% published TCGLogTools notes:
+%%   SIPA_EVENT_HEADER:
+%%     EventType  u32 LE
+%%     EventSize  u32 LE
+%%     EventData  [EventSize]
+%% The outer TCG event type uniquely identifies the SIPA category
+%% (e.g. 0x10000004 = SIPA_EVENTTYPE_TRUSTBOUNDARY). We surface a
+%% category name + SIPA sub-event-type + raw data length.
+decode_sipa_event(Code, #{<<"event-data">> := Data}) ->
+    Category = sipa_category(Code),
+    case Data of
+        <<SubType:32/little, SubSize:32/little, Rest/binary>>
+          when SubSize =< byte_size(Rest) + 0 ->  %% loose bounds
+            #{<<"sipa-category">>       => Category,
+              <<"sipa-category-code">>  => Code,
+              <<"sipa-subtype">>        => SubType,
+              <<"sipa-subtype-name">>   => sipa_subtype_name(SubType),
+              <<"sipa-data-length">>    => SubSize,
+              <<"sipa-sha256">>         =>
+                  hb_util:encode(crypto:hash(sha256, Data))};
+        _ ->
+            #{<<"sipa-category">>       => Category,
+              <<"sipa-category-code">>  => Code,
+              <<"data-length">>         => byte_size(Data),
+              <<"sha256">>              =>
+                  hb_util:encode(crypto:hash(sha256, Data))}
+    end;
+decode_sipa_event(_, _) -> #{}.
+
+%% SIPA outer category codes (Microsoft Windows boot-log schema).
+%% Source: TCGLogTools PowerShell module, Windows SDK headers.
+sipa_category(16#10000001) -> <<"SIPA_EVENTTYPE_TRUSTPOINT">>;
+sipa_category(16#10000002) -> <<"SIPA_EVENTTYPE_ERROR">>;
+sipa_category(16#10000003) -> <<"SIPA_EVENTTYPE_PREOSPARAMETER">>;
+sipa_category(16#10000004) -> <<"SIPA_EVENTTYPE_OSPARAMETER">>;
+sipa_category(16#10000005) -> <<"SIPA_EVENTTYPE_AUTHORITY">>;
+sipa_category(16#10000006) -> <<"SIPA_EVENTTYPE_LOADEDMODULE">>;
+sipa_category(16#10000007) -> <<"SIPA_EVENTTYPE_TRUSTBOUNDARY">>;
+sipa_category(16#10000008) -> <<"SIPA_EVENTTYPE_ELAMAGGREGATION">>;
+sipa_category(16#10000009) -> <<"SIPA_EVENTTYPE_LOADEDMODULEAGGREGATION">>;
+sipa_category(16#1000000A) -> <<"SIPA_EVENTTYPE_TRUSTPOINT_AGGREGATION">>;
+sipa_category(16#1000000B) -> <<"SIPA_EVENTTYPE_ELAM_CERTIFICATE">>;
+sipa_category(16#1000000C) -> <<"SIPA_EVENTTYPE_VBS_MEASUREMENTS">>;
+sipa_category(16#1000000D) -> <<"SIPA_EVENTTYPE_KSR_SIGNATURE">>;
+sipa_category(16#1000000E) -> <<"SIPA_EVENTTYPE_KSR_AGGREGATION">>;
+sipa_category(_) -> <<"SIPA_EVENTTYPE_UNKNOWN">>.
+
+%% SIPA sub-event-types (inner 32-bit header). Windows defines
+%% 60+ of these across PCR 11-14. Names per TCGLogTools.
+%% We cover the most-commonly-attacked / policy-relevant ones.
+sipa_subtype_name(16#00010000) -> <<"FirmwareDebug">>;
+sipa_subtype_name(16#00010001) -> <<"OsKernelDebug">>;
+sipa_subtype_name(16#00010002) -> <<"CodeIntegrity">>;
+sipa_subtype_name(16#00010003) -> <<"TestSigning">>;
+sipa_subtype_name(16#00010004) -> <<"DataExecutionPrevention">>;
+sipa_subtype_name(16#00010005) -> <<"SafeMode">>;
+sipa_subtype_name(16#00010006) -> <<"WinPE">>;
+sipa_subtype_name(16#00010007) -> <<"PhysicalPresence">>;
+sipa_subtype_name(16#00010008) -> <<"DevicePIDHash">>;
+sipa_subtype_name(16#00010009) -> <<"DevicePIDValue">>;
+sipa_subtype_name(16#0001000A) -> <<"BootCounter">>;
+sipa_subtype_name(16#0001000B) -> <<"BootRevocationList">>;
+sipa_subtype_name(16#0001000C) -> <<"OsKernelDebugPolicy">>;
+sipa_subtype_name(16#0001000D) -> <<"DriverLoadPolicy">>;
+sipa_subtype_name(16#0001000E) -> <<"BitLockerUnlock">>;
+sipa_subtype_name(16#0001000F) -> <<"LastBootSucceeded">>;
+sipa_subtype_name(16#00010010) -> <<"LastShutdownSucceeded">>;
+sipa_subtype_name(16#00010011) -> <<"EvAggregationKsr">>;
+sipa_subtype_name(16#00010012) -> <<"ImageValidated">>;
+sipa_subtype_name(16#00010020) -> <<"BitLockerDataVolumes">>;
+sipa_subtype_name(16#00010021) -> <<"BootDebugging">>;
+sipa_subtype_name(16#00010022) -> <<"BootRevocationsPublished">>;
+sipa_subtype_name(16#00010023) -> <<"BootRevocationsDisabled">>;
+sipa_subtype_name(16#00010024) -> <<"Vbs">>;
+sipa_subtype_name(16#00010025) -> <<"VbsVsmRequired">>;
+sipa_subtype_name(16#00010026) -> <<"VbsSecurebootRequired">>;
+sipa_subtype_name(16#00010027) -> <<"VbsIumEnabled">>;
+sipa_subtype_name(16#00010028) -> <<"VbsMmioNxSupported">>;
+sipa_subtype_name(16#00010029) -> <<"VbsApicVirtSupported">>;
+sipa_subtype_name(16#0001002A) -> <<"VbsTpmRequired">>;
+sipa_subtype_name(16#0001002B) -> <<"VbsHvciStrictMode">>;
+sipa_subtype_name(16#0001002C) -> <<"VbsDepLaunch">>;
+sipa_subtype_name(16#0001002D) -> <<"VbsMinProcessorVersion">>;
+sipa_subtype_name(16#0001002E) -> <<"HibrBoot">>;
+sipa_subtype_name(16#0001002F) -> <<"BitLocker">>;
+sipa_subtype_name(16#00010030) -> <<"CodeIntegrityBehaviour">>;
+sipa_subtype_name(16#00010031) -> <<"ElamEnabled">>;
+sipa_subtype_name(16#00010032) -> <<"ElamBootClean">>;
+sipa_subtype_name(16#00010033) -> <<"ElamInitialized">>;
+sipa_subtype_name(16#00010034) -> <<"DmaProtection">>;
+sipa_subtype_name(16#00010035) -> <<"SystemGuardBootEnabled">>;
+sipa_subtype_name(16#00020001) -> <<"ElamKeyname">>;
+sipa_subtype_name(16#00020002) -> <<"ElamConfigurationHash">>;
+sipa_subtype_name(16#00020003) -> <<"ElamPolicyHash">>;
+sipa_subtype_name(16#00020004) -> <<"ElamMeasuredSignatureHash">>;
+sipa_subtype_name(16#00030001) -> <<"LoadedModuleAggregation">>;
+sipa_subtype_name(16#00030002) -> <<"LoadedModuleName">>;
+sipa_subtype_name(16#00030003) -> <<"LoadedModuleHash">>;
+sipa_subtype_name(16#00030004) -> <<"LoadedModuleVersion">>;
+sipa_subtype_name(16#00030005) -> <<"LoadedModuleNtOsBoot">>;
+sipa_subtype_name(16#00040001) -> <<"TrustBoundaryAggregation">>;
+sipa_subtype_name(16#00040002) -> <<"SbcpHash">>;
+sipa_subtype_name(16#00040003) -> <<"CertSignerHash">>;
+sipa_subtype_name(16#00040004) -> <<"CertRootHash">>;
+sipa_subtype_name(16#00040005) -> <<"CertPolicy">>;
+sipa_subtype_name(16#00040006) -> <<"CertKeyAttributes">>;
+sipa_subtype_name(16#00050001) -> <<"KsrSignature">>;
+sipa_subtype_name(16#00050002) -> <<"KsrAggregation">>;
+sipa_subtype_name(_) -> <<"unknown-sipa-subtype">>.
+
+%% EV_EVENT_TAG — `TCG_PCClientTaggedEvent` per TCG PC Client PFP §5.
+%% Layout:
+%%   taggedEventID        u32 LE
+%%   taggedEventDataSize  u32 LE
+%%   taggedEventData      [taggedEventDataSize]
+%%
+%% systemd-stub (sd-stub) reserves 5 well-known tag IDs for its UKI
+%% measurement annotations on PCR 11/12; we recognise them inline so
+%% the derived surface is sd-stub-aware. Vendor firmware uses this
+%% mechanism for QEMU / Intel TXT / SMM init markers as well.
+decode_event_tag(#{<<"event-data">> := Data})
+  when byte_size(Data) >= 8 ->
+    <<TagId:32/little, TagSize:32/little, Rest/binary>> = Data,
+    Actual = case Rest of
+        <<Payload:TagSize/binary, _/binary>> -> Payload;
+        _ -> Rest
+    end,
+    Name = tagged_event_id_name(TagId),
+    Base = #{
+        <<"tag-id">>            => TagId,
+        <<"tag-id-hex">>        =>
+            iolist_to_binary(io_lib:format("0x~8.16.0B", [TagId])),
+        <<"tag-id-name">>       => Name,
+        <<"tag-data-length">>   => byte_size(Actual)
+    },
+    %% Decode systemd-stub tag payloads — they're UTF-16LE human-
+    %% readable strings describing what was measured.
+    case is_systemd_stub_tag(TagId) of
+        true ->
+            %% Strip trailing NULs and try UTF-16LE→UTF-8.
+            Descr = try
+                unicode:characters_to_binary(Actual,
+                                              {utf16, little}, utf8)
+            catch _:_ -> Actual end,
+            Base#{<<"tag-description">> =>
+                      case is_binary(Descr) of
+                          true -> strip_trailing_nulls(Descr);
+                          false -> Actual
+                      end};
+        false -> Base
+    end;
 decode_event_tag(_) -> #{}.
 
-classify_event_tag_guid(<<"d9dfa6d8-1d96-451e-9a9a-1b12e2a8e6f2">>, _) ->
-    <<"qemu-firmware-boot">>;
-classify_event_tag_guid(<<"00000000-", _/binary>>, _) ->
-    <<"null-guid">>;
-classify_event_tag_guid(_, _) -> <<"unknown">>.
+%% systemd-stub TCG_PCClientTaggedEvent IDs (src/boot/measure.h).
+is_systemd_stub_tag(16#f5bc582a) -> true;  % LOADER_CONF
+is_systemd_stub_tag(16#6c46f751) -> true;  % DEVICETREE_ADDON
+is_systemd_stub_tag(16#49dffe0f) -> true;  % INITRD_ADDON
+is_systemd_stub_tag(16#dac08e1a) -> true;  % UCODE_ADDON
+is_systemd_stub_tag(16#13aed6db) -> true;  % UKI_PROFILE
+is_systemd_stub_tag(_) -> false.
+
+tagged_event_id_name(16#f5bc582a) ->
+    <<"SYSTEMD_STUB_LOADER_CONF">>;
+tagged_event_id_name(16#6c46f751) ->
+    <<"SYSTEMD_STUB_DEVICETREE_ADDON">>;
+tagged_event_id_name(16#49dffe0f) ->
+    <<"SYSTEMD_STUB_INITRD_ADDON">>;
+tagged_event_id_name(16#dac08e1a) ->
+    <<"SYSTEMD_STUB_UCODE_ADDON">>;
+tagged_event_id_name(16#13aed6db) ->
+    <<"SYSTEMD_STUB_UKI_PROFILE">>;
+tagged_event_id_name(_) -> <<"unknown-tag-id">>.
 
 %% Format a 16-byte EFI_GUID as the canonical
 %% `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' lowercase string.
@@ -1285,27 +1670,161 @@ decode_firmware_blob2(_) -> #{}.
 %%   …reserved 12 bytes
 %%   data…
 %%
-%% AMD microcode layout differs — we return what we can read
-%% with a `format' tag so callers can try vendor-specific decoding.
+%% EV_CPU_MICROCODE — data is the signed microcode update header.
+%% Two shapes in the wild:
+%%   Intel: 48-byte header starting with HeaderVersion=1 and an
+%%          UpdateRevision / Date / ProcessorSignature (IA-32 IA
+%%          manuals, Intel SDM Vol 3A §9.11.1).
+%%   AMD:   64-byte `microcode_header_amd' from the Linux kernel
+%%          (arch/x86/kernel/cpu/microcode/amd.c). Starts with
+%%          data_code (u32 BCD date), patch_id (u32), then
+%%          mc_patch_data_id (u16), mc_patch_data_len (u8),
+%%          init_flag (u8), patch_data_checksum (u32),
+%%          nb_dev_id (u32), sb_dev_id (u32),
+%%          processor_rev_id (u16), nb_rev_id (u8), sb_rev_id (u8),
+%%          bios_api_rev (u8), 3 reserved bytes, 8×u32 match_reg.
+%%
+%% Both formats start with a 4-byte little-endian u32. Intel's
+%% HeaderVersion is always 0x00000001; AMD's data_code is a BCD
+%% date (e.g. 0x20250512 for 2025-05-12). We discriminate on that
+%% byte pattern.
 decode_cpu_microcode(#{<<"event-data">> := Data}) ->
-    case Data of
-        <<HV:32/little, UR:32/little, Date:32/little,
-          ProcSig:32/little, Checksum:32/little, LoaderRev:32/little,
-          ProcFlags:32/little, _/binary>> ->
-            #{
-                <<"format">>             => <<"intel-or-compatible">>,
-                <<"header-version">>     => HV,
-                <<"update-revision">>    => UR,
-                <<"date-bcd">>           => Date,
-                <<"processor-signature">> => ProcSig,
-                <<"checksum">>           => Checksum,
-                <<"loader-revision">>    => LoaderRev,
-                <<"processor-flags">>    => ProcFlags
-            };
-        _ ->
-            #{<<"error">> => <<"EV_CPU_MICROCODE too short for header">>}
+    case classify_microcode(Data) of
+        intel  -> decode_microcode_intel(Data);
+        amd    -> decode_microcode_amd(Data);
+        partial -> decode_microcode_partial(Data);
+        too_short -> #{<<"error">> =>
+                         <<"EV_CPU_MICROCODE too short for header">>}
     end;
 decode_cpu_microcode(_) -> #{}.
+
+%% Discriminator: Intel microcode headers always have HeaderVersion=1
+%% in bytes 0-3 (u32 LE). AMD's first 4 bytes are a BCD date
+%% 0x20YYMMDD, which is orders of magnitude larger than 1. So the
+%% first u32 LE cleanly picks one side when the byte count permits.
+classify_microcode(<<1:32/little, _:24/binary, _/binary>>) -> intel;
+classify_microcode(<<V:32/little, _/binary>>)
+  when V >= 16#20000101, V =< 16#20991231 ->
+    case bcd_date_ok(V) of
+        true  -> amd;
+        false -> partial
+    end;
+classify_microcode(Data) when byte_size(Data) >= 28 -> partial;
+classify_microcode(_) -> too_short.
+
+bcd_date_ok(V) when is_integer(V) ->
+    MM = (V bsr 8) band 16#FF,
+    DD = V band 16#FF,
+    bcd_ok(V bsr 24)
+        andalso bcd_ok((V bsr 16) band 16#FF)
+        andalso bcd_ok(MM) andalso bcd_ok(DD)
+        andalso MM >= 16#01 andalso MM =< 16#12
+        andalso DD >= 16#01 andalso DD =< 16#31.
+
+bcd_ok(Byte) ->
+    (Byte bsr 4) =< 9 andalso (Byte band 16#F) =< 9.
+
+decode_microcode_intel(<<1:32/little, UR:32/little, Date:32/little,
+                           ProcSig:32/little, Checksum:32/little,
+                           LoaderRev:32/little, ProcFlags:32/little,
+                           _Rest/binary>>) ->
+    #{
+        <<"format">>              => <<"intel">>,
+        <<"header-version">>      => 1,
+        <<"update-revision">>     => UR,
+        <<"date-bcd">>            => Date,
+        <<"date">>                => bcd_date(Date),
+        <<"processor-signature">> => ProcSig,
+        <<"cpu-family-model-stepping">> => format_intel_sig(ProcSig),
+        <<"checksum">>            => Checksum,
+        <<"loader-revision">>     => LoaderRev,
+        <<"processor-flags">>     => ProcFlags
+    }.
+
+decode_microcode_amd(<<DataCode:32/little, PatchId:32/little,
+                         McPatchDataId:16/little, McPatchDataLen:8,
+                         InitFlag:8,
+                         PatchDataChecksum:32/little, NbDevId:32/little,
+                         SbDevId:32/little, ProcessorRevId:16/little,
+                         NbRevId:8, SbRevId:8, BiosApiRev:8,
+                         _Reserved:3/binary, _MatchRegBin:32/binary,
+                         _Rest/binary>>) ->
+    #{
+        <<"format">>                    => <<"amd">>,
+        <<"data-code">>                 => DataCode,
+        <<"date">>                      => bcd_date(DataCode),
+        <<"patch-id">>                  => PatchId,
+        <<"mc-patch-data-id">>          => McPatchDataId,
+        <<"mc-patch-data-length">>      => McPatchDataLen,
+        <<"init-flag">>                 => InitFlag,
+        <<"mc-patch-data-checksum">>    => PatchDataChecksum,
+        <<"nb-dev-id">>                 => NbDevId,
+        <<"sb-dev-id">>                 => SbDevId,
+        <<"processor-rev-id">>          => ProcessorRevId,
+        <<"processor-rev-id-hex">>      =>
+            iolist_to_binary(io_lib:format("0x~4.16.0B",
+                                             [ProcessorRevId])),
+        <<"nb-rev-id">>                 => NbRevId,
+        <<"sb-rev-id">>                 => SbRevId,
+        <<"bios-api-rev">>              => BiosApiRev
+    };
+decode_microcode_amd(Data) ->
+    %% Shorter than expected AMD header; fall back to best-effort.
+    decode_microcode_partial(Data).
+
+decode_microcode_partial(<<HV:32/little, UR:32/little, Date:32/little,
+                             ProcSig:32/little, Checksum:32/little,
+                             LoaderRev:32/little, ProcFlags:32/little,
+                             _/binary>>) ->
+    #{
+        <<"format">>              => <<"unknown">>,
+        <<"header-version">>      => HV,
+        <<"update-revision">>     => UR,
+        <<"date-bcd">>            => Date,
+        <<"processor-signature">> => ProcSig,
+        <<"checksum">>            => Checksum,
+        <<"loader-revision">>     => LoaderRev,
+        <<"processor-flags">>     => ProcFlags
+    }.
+
+%% (is_bcd_date + bcd_ok helpers live earlier in the file, near
+%%  classify_microcode/1; they're not duplicated here.)
+
+bcd_date(V) when is_integer(V) ->
+    %% V is e.g. 0x20250512 → "2025-05-12".
+    YYYY = (V bsr 16) band 16#FFFF,
+    MM = (V bsr 8) band 16#FF,
+    DD = V band 16#FF,
+    iolist_to_binary(io_lib:format(
+        "~4.16.0B-~2.16.0B-~2.16.0B", [YYYY, MM, DD]));
+bcd_date(_) -> <<"">>.
+
+%% Format Intel's processor signature u32 (family/model/stepping).
+%% Layout per Intel SDM §9.11.1:
+%%   bits 0-3 Stepping
+%%   bits 4-7 Model
+%%   bits 8-11 Family
+%%   bits 12-13 Type
+%%   bits 16-19 ExtModel
+%%   bits 20-27 ExtFamily
+format_intel_sig(Sig) when is_integer(Sig) ->
+    Stepping   = Sig band 16#F,
+    Model      = (Sig bsr 4) band 16#F,
+    Family     = (Sig bsr 8) band 16#F,
+    ExtModel   = (Sig bsr 16) band 16#F,
+    ExtFamily  = (Sig bsr 20) band 16#FF,
+    FullFamily = case Family of
+        16#F -> Family + ExtFamily;
+        _    -> Family
+    end,
+    FullModel = case Family of
+        F when F =:= 16#6 orelse F =:= 16#F ->
+            (ExtModel bsl 4) bor Model;
+        _ -> Model
+    end,
+    iolist_to_binary(io_lib:format(
+        "family=~.10B model=~.10B stepping=~.10B",
+        [FullFamily, FullModel, Stepping])).
 
 decode_separator(#{<<"event-data">> := <<16#FF, 16#FF, 16#FF, 16#FF>>}) ->
     #{<<"separator">> => <<"firmware_error">>};
@@ -1902,9 +2421,45 @@ decode_cpu_microcode_header_test() ->
     Ev = #{<<"event-type-code">> => 16#9,
            <<"event-data">> => Data},
     P = maps:get(<<"parsed">>, decode_event(Ev)),
-    ?assertEqual(<<"intel-or-compatible">>, maps:get(<<"format">>, P)),
+    ?assertEqual(<<"intel">>, maps:get(<<"format">>, P)),
     ?assertEqual(16#12345, maps:get(<<"update-revision">>, P)),
-    ?assertEqual(16#20240101, maps:get(<<"date-bcd">>, P)).
+    ?assertEqual(16#20240101, maps:get(<<"date-bcd">>, P)),
+    ?assertEqual(<<"2024-01-01">>, maps:get(<<"date">>, P)).
+
+%% AMD microcode header — 64-byte `microcode_header_amd` layout per
+%% arch/x86/kernel/cpu/microcode/amd.c. Discriminator: first 4 bytes
+%% are a BCD date 0x20YYMMDD, not HeaderVersion=1.
+decode_amd_cpu_microcode_test() ->
+    %% AMD Ryzen 7040 (Phoenix): patch 0x0AA00212 from 2024-04-15.
+    DataCode          = 16#20240415,
+    PatchId           = 16#0AA00212,
+    McPatchDataId     = 16#0050,
+    McPatchDataLen    = 16,
+    InitFlag          = 0,
+    PatchDataChecksum = 16#DEADBEEF,
+    NbDevId           = 0,
+    SbDevId           = 0,
+    ProcessorRevId    = 16#AA50,  %% family/model indicator
+    NbRevId           = 0,
+    SbRevId           = 0,
+    BiosApiRev        = 1,
+    Reserved          = <<0, 0, 0>>,
+    MatchReg          = <<0:256>>,
+    Data = <<DataCode:32/little, PatchId:32/little,
+             McPatchDataId:16/little, McPatchDataLen:8, InitFlag:8,
+             PatchDataChecksum:32/little, NbDevId:32/little,
+             SbDevId:32/little, ProcessorRevId:16/little,
+             NbRevId:8, SbRevId:8, BiosApiRev:8,
+             Reserved/binary, MatchReg/binary>>,
+    Ev = #{<<"event-type-code">> => 16#9, <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"amd">>, maps:get(<<"format">>, P)),
+    ?assertEqual(DataCode, maps:get(<<"data-code">>, P)),
+    ?assertEqual(<<"2024-04-15">>, maps:get(<<"date">>, P)),
+    ?assertEqual(PatchId, maps:get(<<"patch-id">>, P)),
+    ?assertEqual(ProcessorRevId, maps:get(<<"processor-rev-id">>, P)),
+    ?assertEqual(<<"0xAA50">>,
+                 maps:get(<<"processor-rev-id-hex">>, P)).
 
 decode_malformed_uefi_variable_returns_error_test() ->
     Ev = #{<<"event-type-code">> => 16#80000001,
@@ -1985,21 +2540,40 @@ decode_handoff_tables2_test() ->
     ?assertEqual(Len,
                  maps:get(<<"table-description-length">>, P)).
 
-%% EV_EVENT_TAG — 128-bit GUID + data.
+%% EV_EVENT_TAG — TCG_PCClientTaggedEvent {taggedEventID u32,
+%% taggedEventDataSize u32, taggedEventData [size]}.
 decode_event_tag_test() ->
-    Guid = <<16#D8,16#A6,16#DF,16#D9,   %% u32-LE 0xD9DFA6D8
-             16#96,16#1D,               %% u16-LE 0x1D96
-             16#1E,16#45,               %% u16-LE 0x451E
-             16#9A,16#9A,               %% byte[2]
-             16#1B,16#12,16#E2,16#A8,16#E6,16#F2>>,
-    Data = <<Guid/binary, "some-tag-payload">>,
+    Payload = <<"some-tag-payload">>,
+    PayloadLen = byte_size(Payload),
+    %% Use a QEMU-style arbitrary TagID.
+    TagId = 16#d9dfa6d8,
+    Data = <<TagId:32/little, PayloadLen:32/little, Payload/binary>>,
     Ev = #{<<"event-type-code">> => 16#6,
            <<"event-data">> => Data},
     P = maps:get(<<"parsed">>, decode_event(Ev)),
-    ?assertEqual(<<"d9dfa6d8-1d96-451e-9a9a-1b12e2a8e6f2">>,
-                 maps:get(<<"tag-guid">>, P)),
-    ?assertEqual(byte_size(<<"some-tag-payload">>),
-                 maps:get(<<"tag-data-length">>, P)).
+    ?assertEqual(TagId, maps:get(<<"tag-id">>, P)),
+    ?assertEqual(<<"0xD9DFA6D8">>, maps:get(<<"tag-id-hex">>, P)),
+    ?assertEqual(PayloadLen, maps:get(<<"tag-data-length">>, P)).
+
+%% EV_EVENT_TAG — the systemd-stub UKI measurement annotations.
+%% sd-stub uses TagIDs 0xf5bc582a / 0x6c46f751 / 0x49dffe0f /
+%% 0xdac08e1a / 0x13aed6db (from src/boot/measure.h) with a
+%% UTF-16LE description of the measured blob.
+decode_event_tag_systemd_stub_test() ->
+    %% Kernel profile name — UKI_PROFILE_EVENT_TAG_ID = 0x13aed6db.
+    ProfileText = <<"default">>,
+    ProfileUtf16 = unicode:characters_to_binary(ProfileText, utf8,
+                                                  {utf16, little}),
+    Payload = <<ProfileUtf16/binary, 0, 0>>,  %% UTF-16 NUL-terminated
+    PayloadLen = byte_size(Payload),
+    Data = <<16#13aed6db:32/little, PayloadLen:32/little,
+             Payload/binary>>,
+    Ev = #{<<"event-type-code">> => 16#6, <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"SYSTEMD_STUB_UKI_PROFILE">>,
+                 maps:get(<<"tag-id-name">>, P)),
+    ?assertEqual(<<"default">>,
+                 maps:get(<<"tag-description">>, P)).
 
 %% UEFI device path walker — basic path, three nodes +
 %% end: PciRoot ACPI, PCI(0x0,0x1F), FilePath \EFI\BOOT\BOOTX64.EFI
