@@ -546,6 +546,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         {sent,
             {status, Status},
             {ip, {string, real_ip(Req, Opts)}},
+            {host, get_host(TABMReq, Opts)},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
@@ -1135,6 +1136,29 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
         IP -> IP
     end.
 
+get_host(TABMReq, Opts) ->
+    Host = hb_maps:get(<<"host">>, TABMReq, <<"no_host">>, Opts),
+    MsgNode = hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts),
+    case hb_device_load:reference(<<"name@1.0">>, Opts) of
+        {ok, NameMod} ->
+            case NameMod:name_from_host(Host, MsgNode) of
+                {ok, Name} -> decode_host(Name, Opts);
+                {skip, _} -> no_host
+            end;
+        {error, _} -> no_host
+    end.
+
+%% @doc Decode a base32 host name if its device is available.
+decode_host(Name, Opts) ->
+    case hb_device_load:reference(<<"b32-name@1.0">>, Opts) of
+        {ok, B32NameMod} ->
+            case B32NameMod:decode(Name) of
+                error -> Name;
+                TXID -> {decoded, {explicit, TXID}}
+            end;
+        {error, _} -> Name
+    end.
+
 %%% Metrics
 
 init_prometheus() ->
@@ -1193,6 +1217,29 @@ isolated_test_opts() ->
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ar_wallet:new()
     }.
+
+%% @doc Verify that request hosts are formatted appropriately for logging.
+get_host_test_parallel() ->
+    Opts = #{ <<"node-host">> => <<"example.com">> },
+    ?assertEqual(
+        <<"abc">>,
+        get_host(#{ <<"host">> => <<"abc.example.com">> }, Opts)
+    ),
+    ?assertEqual(
+        {decoded,
+            {explicit, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>}},
+        get_host(
+            #{
+                <<"host">> =>
+                    <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya.example.com">>
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(
+        no_host,
+        get_host(#{ <<"host">> => <<"example.com">> }, Opts)
+    ).
 
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
