@@ -62,7 +62,12 @@
 %%% went wrong."
 -module(dev_tpm_tcg).
 -export([parse/1, parse/2, event_type_name/1, event_type_name/2,
-         decode_event/1, decode_events/1]).
+         decode_event/1, decode_events/1,
+         %% UEFI structure helpers (also useful to callers):
+         parse_device_path/1, parse_smbios/1, parse_smbios_structure/1,
+         parse_acpi_table/1, parse_acpi_rsdp/1,
+         %% systemd-stub UKI section awareness:
+         systemd_stub_pe_section_pcr/1, is_systemd_stub_pe_section/1]).
 -include_lib("public_key/include/public_key.hrl").
 
 %%%============================================================================
@@ -450,6 +455,404 @@ decode_handoff_tables2(#{<<"event-data">> := Data})
         _ -> #{<<"error">> => <<"truncated handoff-tables2 description">>}
     end;
 decode_handoff_tables2(_) -> #{}.
+
+%%%============================================================================
+%%% SMBIOS + ACPI table metadata decoders
+%%%============================================================================
+%%%
+%%% Some firmware stacks measure the actual SMBIOS / ACPI table
+%%% content on PCR 1 (rather than just pointers via HANDOFF_TABLES).
+%%% These helpers recognise the table's shape so a caller can make
+%%% sense of `measurement-content-type: smbios' or `acpi' without
+%%% having to re-parse the bytes themselves.
+%%%
+%%% We don't invoke them from any specific event-type decoder
+%%% automatically — firmware stacks vary too much. Callers that
+%%% suspect a blob to be SMBIOS or ACPI can invoke `parse_smbios/1'
+%%% / `parse_acpi_table/1' directly; the results are a structured
+%%% message just like the event parsers above.
+
+%% SMBIOS entry point: anchor string "_SM_" (v2.x) or "_SM3_" (v3.x)
+%% at the start of the blob. Layout per DMTF DSP0134.
+%%
+%% v2.x entry (31 bytes):
+%%   Anchor                "_SM_"        (4B)
+%%   Checksum              u8
+%%   EntryPointLength      u8            (must be 31)
+%%   MajorVersion          u8
+%%   MinorVersion          u8
+%%   MaxStructureSize      u16 LE
+%%   EPRevision            u8
+%%   FormattedArea         [5 bytes]
+%%   IntermediateAnchor    "_DMI_"       (5B)
+%%   IntermediateChecksum  u8
+%%   StructureTableLength  u16 LE
+%%   StructureTableAddress u32 LE
+%%   NumberOfStructures    u16 LE
+%%   BCDRevision           u8
+%%
+%% v3.x entry (24 bytes):
+%%   Anchor                "_SM3_"       (5B)
+%%   Checksum              u8
+%%   EntryPointLength      u8
+%%   MajorVersion          u8
+%%   MinorVersion          u8
+%%   DocRev                u8
+%%   EPRevision            u8
+%%   Reserved              u8
+%%   StructureTableMaxSize u32 LE
+%%   StructureTableAddress u64 LE
+parse_smbios(<<"_SM_", Checksum:8, EPL:8, Major:8, Minor:8,
+               MaxStructSize:16/little, Rev:8, _Fmt:5/binary,
+               "_DMI_", _ImmCheck:8, TableLen:16/little,
+               TableAddr:32/little, NumStructs:16/little,
+               _Bcd:8, _/binary>>) ->
+    #{<<"anchor">>             => <<"_SM_">>,
+      <<"version">>            =>
+        iolist_to_binary(io_lib:format("~B.~B", [Major, Minor])),
+      <<"entry-point-length">> => EPL,
+      <<"entry-point-revision">> => Rev,
+      <<"entry-point-checksum">> => Checksum,
+      <<"table-length">>       => TableLen,
+      <<"table-address">>      => TableAddr,
+      <<"max-structure-size">> => MaxStructSize,
+      <<"number-of-structures">> => NumStructs};
+parse_smbios(<<"_SM3_", Checksum:8, EPL:8, Major:8, Minor:8,
+               DocRev:8, Rev:8, _Reserved:8,
+               MaxSize:32/little, TableAddr:64/little, _/binary>>) ->
+    #{<<"anchor">>                 => <<"_SM3_">>,
+      <<"version">>                =>
+        iolist_to_binary(io_lib:format("~B.~B", [Major, Minor])),
+      <<"doc-revision">>           => DocRev,
+      <<"entry-point-length">>     => EPL,
+      <<"entry-point-revision">>   => Rev,
+      <<"entry-point-checksum">>   => Checksum,
+      <<"structure-table-max-size">> => MaxSize,
+      <<"table-address">>          => TableAddr};
+parse_smbios(_) -> #{<<"error">> => <<"not an SMBIOS entry point">>}.
+
+%% SMBIOS structure decoder — decodes a single SMBIOS structure
+%% (the byte-shaped variant within a structure table). Covers the
+%% handful of types a verifier actually cares about; others report
+%% {type, length}.
+%%
+%% Common header (always present):
+%%   Type      u8
+%%   Length    u8        (bytes in the formatted fixed-size area)
+%%   Handle    u16 LE
+%% followed by type-specific fields then a double-NUL-terminated
+%% string table.
+parse_smbios_structure(<<Type:8, Length:8, Handle:16/little,
+                           Rest/binary>>) when byte_size(Rest) >= Length - 4 ->
+    FormattedLen = Length - 4,  %% subtract the 4 header bytes
+    <<FormattedArea:FormattedLen/binary, StringTable/binary>> = Rest,
+    Strings = smbios_strings(StringTable),
+    Fields = decode_smbios_fields(Type, FormattedArea, Strings),
+    maps:merge(
+        #{<<"smbios-type">>         => Type,
+          <<"smbios-type-name">>    => smbios_type_name(Type),
+          <<"smbios-length">>       => Length,
+          <<"smbios-handle">>       => Handle,
+          <<"smbios-strings">>      => Strings},
+        Fields);
+parse_smbios_structure(_) ->
+    #{<<"error">> => <<"malformed SMBIOS structure header">>}.
+
+smbios_strings(Bin) -> smbios_strings(Bin, []).
+smbios_strings(<<0, _/binary>>, Acc) -> lists:reverse(Acc);
+smbios_strings(<<>>, Acc) -> lists:reverse(Acc);
+smbios_strings(Bin, Acc) ->
+    case binary:split(Bin, <<0>>) of
+        [S, Rest] when byte_size(S) > 0 ->
+            smbios_strings(Rest, [S | Acc]);
+        _ -> lists:reverse(Acc)
+    end.
+
+%% Type 0: BIOS Information (fields at fixed offsets). Reference
+%% strings by 1-based index into the string table.
+decode_smbios_fields(0, <<VendorIdx:8, VersionIdx:8, _StartAddr:16/little,
+                            ReleaseDateIdx:8, RomSize:8, _/binary>>,
+                      Strings) ->
+    #{<<"bios-vendor">>       => smbios_str(Strings, VendorIdx),
+      <<"bios-version">>      => smbios_str(Strings, VersionIdx),
+      <<"bios-release-date">> => smbios_str(Strings, ReleaseDateIdx),
+      <<"bios-rom-size-code">> => RomSize};
+decode_smbios_fields(1, <<ManuIdx:8, ProdIdx:8, VersIdx:8, SerialIdx:8,
+                            Uuid:16/binary, WakeUp:8, SkuIdx:8,
+                            FamilyIdx:8, _/binary>>,
+                      Strings) ->
+    #{<<"system-manufacturer">> => smbios_str(Strings, ManuIdx),
+      <<"system-product-name">> => smbios_str(Strings, ProdIdx),
+      <<"system-version">>      => smbios_str(Strings, VersIdx),
+      <<"system-serial">>       => smbios_str(Strings, SerialIdx),
+      <<"system-uuid">>         => format_smbios_uuid(Uuid),
+      <<"system-wake-up-type">> => WakeUp,
+      <<"system-sku">>          => smbios_str(Strings, SkuIdx),
+      <<"system-family">>       => smbios_str(Strings, FamilyIdx)};
+decode_smbios_fields(2, <<ManuIdx:8, ProdIdx:8, VersIdx:8, SerialIdx:8,
+                            AssetIdx:8, _FeatFlags:8, LocIdx:8,
+                            _/binary>>, Strings) ->
+    #{<<"baseboard-manufacturer">> => smbios_str(Strings, ManuIdx),
+      <<"baseboard-product">>      => smbios_str(Strings, ProdIdx),
+      <<"baseboard-version">>      => smbios_str(Strings, VersIdx),
+      <<"baseboard-serial">>       => smbios_str(Strings, SerialIdx),
+      <<"baseboard-asset-tag">>    => smbios_str(Strings, AssetIdx),
+      <<"baseboard-location">>     => smbios_str(Strings, LocIdx)};
+decode_smbios_fields(3, <<ManuIdx:8, ChassisType:8, VersIdx:8,
+                            SerialIdx:8, AssetIdx:8, _/binary>>,
+                      Strings) ->
+    #{<<"chassis-manufacturer">> => smbios_str(Strings, ManuIdx),
+      <<"chassis-type">>         => ChassisType,
+      <<"chassis-type-name">>    => smbios_chassis_name(ChassisType),
+      <<"chassis-version">>      => smbios_str(Strings, VersIdx),
+      <<"chassis-serial">>       => smbios_str(Strings, SerialIdx),
+      <<"chassis-asset-tag">>    => smbios_str(Strings, AssetIdx)};
+decode_smbios_fields(_, _, _) -> #{}.
+
+smbios_str(Strings, Idx) when Idx >= 1, Idx =< length(Strings) ->
+    lists:nth(Idx, Strings);
+smbios_str(_, _) -> <<"">>.
+
+smbios_type_name(0)   -> <<"BIOS Information">>;
+smbios_type_name(1)   -> <<"System Information">>;
+smbios_type_name(2)   -> <<"Baseboard (or Module) Information">>;
+smbios_type_name(3)   -> <<"System Enclosure or Chassis">>;
+smbios_type_name(4)   -> <<"Processor Information">>;
+smbios_type_name(7)   -> <<"Cache Information">>;
+smbios_type_name(11)  -> <<"OEM Strings">>;
+smbios_type_name(16)  -> <<"Physical Memory Array">>;
+smbios_type_name(17)  -> <<"Memory Device">>;
+smbios_type_name(19)  -> <<"Memory Array Mapped Address">>;
+smbios_type_name(21)  -> <<"Built-in Pointing Device">>;
+smbios_type_name(32)  -> <<"System Boot Information">>;
+smbios_type_name(38)  -> <<"IPMI Device Information">>;
+smbios_type_name(41)  -> <<"Onboard Devices Extended Information">>;
+smbios_type_name(42)  -> <<"Management Controller Host Interface">>;
+smbios_type_name(43)  -> <<"TPM Device">>;
+smbios_type_name(44)  -> <<"Processor Additional Information">>;
+smbios_type_name(127) -> <<"End-of-Table">>;
+smbios_type_name(_)   -> <<"Other/OEM">>.
+
+smbios_chassis_name(1)  -> <<"Other">>;
+smbios_chassis_name(2)  -> <<"Unknown">>;
+smbios_chassis_name(3)  -> <<"Desktop">>;
+smbios_chassis_name(4)  -> <<"Low Profile Desktop">>;
+smbios_chassis_name(5)  -> <<"Pizza Box">>;
+smbios_chassis_name(6)  -> <<"Mini Tower">>;
+smbios_chassis_name(7)  -> <<"Tower">>;
+smbios_chassis_name(8)  -> <<"Portable">>;
+smbios_chassis_name(9)  -> <<"Laptop">>;
+smbios_chassis_name(10) -> <<"Notebook">>;
+smbios_chassis_name(11) -> <<"Hand Held">>;
+smbios_chassis_name(12) -> <<"Docking Station">>;
+smbios_chassis_name(13) -> <<"All in One">>;
+smbios_chassis_name(14) -> <<"Sub Notebook">>;
+smbios_chassis_name(15) -> <<"Space-saving">>;
+smbios_chassis_name(16) -> <<"Lunch Box">>;
+smbios_chassis_name(17) -> <<"Main Server Chassis">>;
+smbios_chassis_name(18) -> <<"Expansion Chassis">>;
+smbios_chassis_name(19) -> <<"SubChassis">>;
+smbios_chassis_name(20) -> <<"Bus Expansion Chassis">>;
+smbios_chassis_name(21) -> <<"Peripheral Chassis">>;
+smbios_chassis_name(22) -> <<"RAID Chassis">>;
+smbios_chassis_name(23) -> <<"Rack Mount Chassis">>;
+smbios_chassis_name(24) -> <<"Sealed-case PC">>;
+smbios_chassis_name(25) -> <<"Multi-system Chassis">>;
+smbios_chassis_name(26) -> <<"Compact PCI">>;
+smbios_chassis_name(27) -> <<"Advanced TCA">>;
+smbios_chassis_name(28) -> <<"Blade">>;
+smbios_chassis_name(29) -> <<"Blade Enclosure">>;
+smbios_chassis_name(30) -> <<"Tablet">>;
+smbios_chassis_name(31) -> <<"Convertible">>;
+smbios_chassis_name(32) -> <<"Detachable">>;
+smbios_chassis_name(33) -> <<"IoT Gateway">>;
+smbios_chassis_name(34) -> <<"Embedded PC">>;
+smbios_chassis_name(35) -> <<"Mini PC">>;
+smbios_chassis_name(36) -> <<"Stick PC">>;
+smbios_chassis_name(_)  -> <<"Unknown/OEM">>.
+
+%% SMBIOS stores UUIDs in the same mixed-endian pattern as EFI_GUID,
+%% EXCEPT SMBIOS pre-2.6 uses the reverse byte order. DMTF DSP0134
+%% §7.2.1 specifies the 2.6+ "proper" layout: first 3 fields are
+%% little-endian, last 8 bytes are byte-preserved.
+format_smbios_uuid(Uuid) -> format_guid(Uuid).
+
+%%%---- ACPI table header ---------------------------------------------
+%%% Every ACPI table (except the RSDP itself) starts with a 36-byte
+%%% header per ACPI 6.5 §5.2.6:
+%%%
+%%%   Signature        4 chars
+%%%   Length           u32 LE
+%%%   Revision         u8
+%%%   Checksum         u8
+%%%   OEMID            6 bytes ASCII
+%%%   OEMTableID       8 bytes ASCII
+%%%   OEMRevision      u32 LE
+%%%   CreatorID        4 bytes ASCII
+%%%   CreatorRevision  u32 LE
+parse_acpi_table(<<Sig:4/binary, Length:32/little, Rev:8, Checksum:8,
+                     OemId:6/binary, OemTableId:8/binary,
+                     OemRev:32/little, CreatorId:4/binary,
+                     CreatorRev:32/little, _Rest/binary>> = Bin)
+  when byte_size(Bin) >= 36 ->
+    #{<<"signature">>          => Sig,
+      <<"signature-name">>     => acpi_signature_name(Sig),
+      <<"length">>             => Length,
+      <<"revision">>           => Rev,
+      <<"checksum">>           => Checksum,
+      <<"oem-id">>             => strip_trailing_nulls(OemId),
+      <<"oem-table-id">>       => strip_trailing_nulls(OemTableId),
+      <<"oem-revision">>       => OemRev,
+      <<"creator-id">>         => strip_trailing_nulls(CreatorId),
+      <<"creator-revision">>   => CreatorRev};
+parse_acpi_table(_) ->
+    #{<<"error">> => <<"not an ACPI table header">>}.
+
+%% RSDP has a different layout (no common header).
+%% v1 (20 bytes):
+%%   Signature  "RSD PTR "  (8B, trailing space)
+%%   Checksum   u8
+%%   OEMID      6 bytes
+%%   Revision   u8
+%%   RsdtAddr   u32 LE
+%% v2 (36 bytes) adds:
+%%   Length     u32 LE
+%%   XsdtAddr   u64 LE
+%%   ExtChecksum u8
+%%   Reserved   3 bytes
+parse_acpi_rsdp(<<"RSD PTR ", Checksum:8, OemId:6/binary,
+                    Rev:8, RsdtAddr:32/little, Rest/binary>>) ->
+    Base = #{<<"signature">>  => <<"RSD PTR ">>,
+             <<"checksum">>   => Checksum,
+             <<"oem-id">>     => strip_trailing_nulls(OemId),
+             <<"revision">>   => Rev,
+             <<"rsdt-address">> => RsdtAddr},
+    case {Rev, Rest} of
+        {V, <<Length:32/little, XsdtAddr:64/little,
+              ExtChecksum:8, _Reserved:3/binary, _/binary>>}
+          when V >= 2 ->
+            Base#{<<"length">>         => Length,
+                  <<"xsdt-address">>   => XsdtAddr,
+                  <<"extended-checksum">> => ExtChecksum};
+        _ -> Base
+    end;
+parse_acpi_rsdp(_) ->
+    #{<<"error">> => <<"not an ACPI RSDP">>}.
+
+%% Known ACPI signatures a verifier is likely to care about.
+%% Reference: ACPI 6.5 Table 5.4 + TCG DICE spec §5.5.
+acpi_signature_name(<<"RSDT">>) -> <<"Root System Description Table">>;
+acpi_signature_name(<<"XSDT">>) -> <<"Extended System Description Table">>;
+acpi_signature_name(<<"FACP">>) -> <<"Fixed ACPI Description Table (FADT)">>;
+acpi_signature_name(<<"FACS">>) -> <<"Firmware ACPI Control Structure">>;
+acpi_signature_name(<<"DSDT">>) -> <<"Differentiated System Description Table">>;
+acpi_signature_name(<<"SSDT">>) -> <<"Secondary System Description Table">>;
+acpi_signature_name(<<"PSDT">>) -> <<"Persistent System Description Table">>;
+acpi_signature_name(<<"APIC">>) -> <<"Multiple APIC Description Table (MADT)">>;
+acpi_signature_name(<<"SBST">>) -> <<"Smart Battery Specification Table">>;
+acpi_signature_name(<<"ECDT">>) -> <<"Embedded Controller Boot Resources Table">>;
+acpi_signature_name(<<"SRAT">>) -> <<"System Resource Affinity Table">>;
+acpi_signature_name(<<"SLIT">>) -> <<"System Locality Distance Info Table">>;
+acpi_signature_name(<<"MCFG">>) -> <<"PCI Express memory-mapped config space">>;
+acpi_signature_name(<<"HPET">>) -> <<"High Precision Event Timer">>;
+acpi_signature_name(<<"BGRT">>) -> <<"Boot Graphics Resource Table">>;
+acpi_signature_name(<<"BERT">>) -> <<"Boot Error Record Table">>;
+acpi_signature_name(<<"EINJ">>) -> <<"Error Injection Table">>;
+acpi_signature_name(<<"ERST">>) -> <<"Error Record Serialization Table">>;
+acpi_signature_name(<<"HEST">>) -> <<"Hardware Error Source Table">>;
+acpi_signature_name(<<"TPM2">>) -> <<"Trusted Platform Module 2.0">>;
+acpi_signature_name(<<"TCPA">>) -> <<"Trusted Computing Platform Alliance (legacy TPM 1.2)">>;
+acpi_signature_name(<<"DMAR">>) -> <<"DMA Remapping Table (Intel VT-d)">>;
+acpi_signature_name(<<"IVRS">>) -> <<"I/O Virtualization Reporting Structure (AMD-Vi)">>;
+acpi_signature_name(<<"GTDT">>) -> <<"Generic Timer Description Table (ARM)">>;
+acpi_signature_name(<<"NFIT">>) -> <<"NVDIMM Firmware Interface Table">>;
+acpi_signature_name(<<"WSMT">>) -> <<"Windows SMM Security Mitigation Table">>;
+acpi_signature_name(<<"BATB">>) -> <<"Battery Bios Table">>;
+acpi_signature_name(<<"PCCT">>) -> <<"Platform Communications Channel Table">>;
+acpi_signature_name(<<"PMTT">>) -> <<"Platform Memory Topology Table">>;
+acpi_signature_name(<<"SLIC">>) -> <<"Software Licensing Description Table (Microsoft)">>;
+acpi_signature_name(<<"MSDM">>) -> <<"Microsoft Data Management Table">>;
+acpi_signature_name(<<"SPCR">>) -> <<"Serial Port Console Redirection Table">>;
+acpi_signature_name(<<"DBG2">>) -> <<"Debug Port Table 2">>;
+acpi_signature_name(<<"WAET">>) -> <<"Windows ACPI Emulated devices Table">>;
+acpi_signature_name(<<"WPBT">>) -> <<"Windows Platform Binary Table">>;
+acpi_signature_name(<<"CCEL">>) -> <<"Confidential Computing Event Log (TCG, Intel TDX)">>;
+acpi_signature_name(<<"SVKL">>) -> <<"Storage Volume Key Location Table">>;
+acpi_signature_name(_) -> <<"unknown-or-oem">>.
+
+%%%============================================================================
+%%% systemd-stub PE section awareness
+%%%============================================================================
+%%%
+%%% systemd-stub / systemd-boot assembles a Unified Kernel Image (UKI)
+%%% as a PE binary with well-known named sections, each of which is
+%%% measured into a specific TPM PCR at boot (src/boot/stub.c
+%%% `sections[]` table).
+%%%
+%%% Section              PCR   Notes
+%%%   .linux              11   kernel PE image
+%%%   .osrel              11   os-release identifier
+%%%   .cmdline            12   kernel cmdline (variable)
+%%%   .initrd             11   initrd image
+%%%   .ucode              11   microcode early-load blob
+%%%   .splash             11   splash image
+%%%   .dtb                11   device tree (ARM)
+%%%   .uname              11   kernel version string
+%%%   .sbat               11   SBAT / shim revocation metadata
+%%%   .pcrsig             (not measured — contains the TPM2_Sign of .pcrpkey)
+%%%   .pcrpkey            11   public signing key committed across PCRs
+%%%   .profile            12   active profile name
+%%%   .dtbauto            11   auto-selected device tree
+%%%   .hwids              11   hardware ID hints for matching DTs
+%%%   .efifw              11   in-UKI firmware update blob
+%%%
+%%% systemd-stub emits an EV_IPL event per measured section; the
+%%% event-data is `<section-name>=<measured-data-description>\0'
+%%% which our EV_IPL decoder splits into {key, value}. These helpers
+%%% tell a caller (a) whether a given key is a known systemd-stub
+%%% section, and (b) which PCR it's expected to be measured into.
+is_systemd_stub_pe_section(Key) ->
+    maps:is_key(Key, systemd_stub_pe_sections()).
+
+systemd_stub_pe_section_pcr(Key) ->
+    maps:get(Key, systemd_stub_pe_sections(), undefined).
+
+systemd_stub_pe_sections() ->
+    #{<<".linux">>    => 11,
+      <<"linux">>     => 11,  %% sd-stub post-v255 drops the leading "."
+      <<".osrel">>    => 11,
+      <<"osrel">>     => 11,
+      <<".cmdline">>  => 12,
+      <<"cmdline">>   => 12,
+      <<".initrd">>   => 11,
+      <<"initrd">>    => 11,
+      <<".ucode">>    => 11,
+      <<"ucode">>     => 11,
+      <<".splash">>   => 11,
+      <<"splash">>    => 11,
+      <<".dtb">>      => 11,
+      <<"dtb">>       => 11,
+      <<".uname">>    => 11,
+      <<"uname">>     => 11,
+      <<".sbat">>     => 11,
+      <<"sbat">>      => 11,
+      <<".pcrpkey">>  => 11,
+      <<"pcrpkey">>   => 11,
+      <<".profile">>  => 12,
+      <<"profile">>   => 12,
+      <<".dtbauto">>  => 11,
+      <<"dtbauto">>   => 11,
+      <<".hwids">>    => 11,
+      <<"hwids">>     => 11,
+      <<".efifw">>    => 11,
+      <<"efifw">>     => 11,
+      %% sd-stub also emits these for the kernel identity chain:
+      <<"kernel-name">>    => 11,
+      <<"kernel-version">> => 11,
+      <<"kernel-image">>   => 11,
+      <<"kernel-cmdline">> => 12,
+      %% sd-stub "initrd measurement" legacy key:
+      <<"initrd-image">>   => 11}.
 
 %% EV_EFI_HANDOFF_TABLES v1 — deprecated but still seen on older
 %% firmware. Layout (UEFI §8):
@@ -985,6 +1388,106 @@ decode_dp_node(16#03, 16#1F, <<IsIpv6:8, Rest/binary>>) ->
     dp_node(16#03, 16#1F, <<"dns">>,
         #{<<"is-ipv6">> => IsIpv6 == 1,
           <<"dns-data-length">> => byte_size(Rest)});
+decode_dp_node(16#03, 16#04,
+               <<_Reserved:32/little, Guid:8/binary>>) ->
+    %% IEEE 1394 (Firewire). Reserved u32 + GUID u64.
+    dp_node(16#03, 16#04, <<"firewire-1394">>,
+        #{<<"guid">> => format_hex(Guid)});
+decode_dp_node(16#03, 16#06, <<TargetId:32/little>>) ->
+    %% I2O.
+    dp_node(16#03, 16#06, <<"i2o">>,
+        #{<<"target-id">> => TargetId});
+decode_dp_node(16#03, 16#09,
+               <<ResFlags:32/little, PortGid:16/binary,
+                 IocGuid:8/binary, TargetPortIdGuid:8/binary,
+                 DeviceId:8/binary>>) ->
+    %% Infiniband.
+    dp_node(16#03, 16#09, <<"infiniband">>,
+        #{<<"resource-flags">> => ResFlags,
+          <<"port-gid">> => format_hex(PortGid),
+          <<"ioc-guid">> => format_hex(IocGuid),
+          <<"target-port-id-guid">> => format_hex(TargetPortIdGuid),
+          <<"device-id">> => format_hex(DeviceId)});
+decode_dp_node(16#03, 16#0F, <<VID:16/little, PID:16/little,
+                               Class:8, SubClass:8, Protocol:8>>) ->
+    %% USB Class.
+    dp_node(16#03, 16#0F, <<"usb-class">>,
+        #{<<"vendor-id">> => VID,
+          <<"product-id">> => PID,
+          <<"class">> => Class,
+          <<"subclass">> => SubClass,
+          <<"protocol">> => Protocol});
+decode_dp_node(16#03, 16#10, Data) ->
+    %% USB WWID — Interface u16, VID u16, PID u16, SerialNumber[].
+    case Data of
+        <<Iface:16/little, VID:16/little, PID:16/little,
+          SerialBin/binary>> ->
+            dp_node(16#03, 16#10, <<"usb-wwid">>,
+                #{<<"interface-number">> => Iface,
+                  <<"vendor-id">> => VID,
+                  <<"product-id">> => PID,
+                  <<"serial-number">> => ucs2_to_utf8(SerialBin)});
+        _ -> dp_node(16#03, 16#10, <<"usb-wwid">>, #{})
+    end;
+decode_dp_node(16#03, 16#11, <<LUN:8>>) ->
+    %% Logical Unit (a SCSI subchild).
+    dp_node(16#03, 16#11, <<"logical-unit">>,
+        #{<<"lun">> => LUN});
+decode_dp_node(16#03, 16#14, <<VlanId:16/little>>) ->
+    %% VLAN tag (UEFI §10.5.12).
+    dp_node(16#03, 16#14, <<"vlan">>,
+        #{<<"vlan-id">> => VlanId});
+decode_dp_node(16#03, 16#15,
+               <<_Reserved:32/little, WWN:8/binary, LUN:8/binary>>) ->
+    %% Fibre Channel Ex.
+    dp_node(16#03, 16#15, <<"fibre-channel-ex">>,
+        #{<<"wwn">> => format_hex(WWN),
+          <<"lun">> => format_hex(LUN)});
+decode_dp_node(16#03, 16#16,
+               <<SasAddr:8/binary, Lun:8/binary, DeviceTopology:16/little,
+                 RelativeTargetPort:16/little>>) ->
+    %% SAS Ex.
+    dp_node(16#03, 16#16, <<"sas-ex">>,
+        #{<<"sas-address">> => format_hex(SasAddr),
+          <<"lun">> => format_hex(Lun),
+          <<"device-topology">> => DeviceTopology,
+          <<"relative-target-port">> => RelativeTargetPort});
+decode_dp_node(16#03, 16#19, <<Target:8, Lun:8>>) ->
+    %% UFS.
+    dp_node(16#03, 16#19, <<"ufs">>,
+        #{<<"target-id">> => Target, <<"lun">> => Lun});
+decode_dp_node(16#03, 16#1A, <<Slot:8>>) ->
+    %% SD.
+    dp_node(16#03, 16#1A, <<"sd">>, #{<<"slot-number">> => Slot});
+decode_dp_node(16#03, 16#1B, BD) ->
+    %% Bluetooth BR/EDR — BD_ADDR 6 bytes.
+    dp_node(16#03, 16#1B, <<"bluetooth">>,
+        #{<<"bd-addr">> =>
+              case BD of
+                  <<B:6/binary, _/binary>> -> format_mac(B);
+                  _ -> <<"">>
+              end});
+decode_dp_node(16#03, 16#1C, Ssid) ->
+    %% WiFi — SSID 32 bytes.
+    Ssid0 = binary_part(Ssid, 0, min(32, byte_size(Ssid))),
+    dp_node(16#03, 16#1C, <<"wifi">>,
+        #{<<"ssid">> => strip_trailing_nulls(Ssid0)});
+decode_dp_node(16#03, 16#1D, <<Slot:8>>) ->
+    dp_node(16#03, 16#1D, <<"emmc">>, #{<<"slot-number">> => Slot});
+decode_dp_node(16#03, 16#1E, <<BdAddr:6/binary, AddrType:8>>) ->
+    dp_node(16#03, 16#1E, <<"bluetooth-le">>,
+        #{<<"bd-addr">> => format_mac(BdAddr),
+          <<"address-type">> => AddrType});
+decode_dp_node(16#03, 16#20, <<Uuid:16/binary>>) ->
+    dp_node(16#03, 16#20, <<"nvdimm-namespace">>,
+        #{<<"uuid">> => format_guid(Uuid)});
+decode_dp_node(16#03, 16#21, <<SvcType:8, AccessMode:8, VendorGuid:16/binary,
+                               Rest/binary>>) ->
+    dp_node(16#03, 16#21, <<"rest-service">>,
+        #{<<"service-type">> => SvcType,
+          <<"access-mode">> => AccessMode,
+          <<"vendor-guid">> => format_guid(VendorGuid),
+          <<"vendor-data-length">> => byte_size(Rest)});
 
 %%---- Media (Type 0x04) --------------------------------------------
 decode_dp_node(16#04, 16#01,
@@ -2783,6 +3286,102 @@ generate_test_self_signed_cert() ->
     %% for our caller.
     Cert = public_key:pkix_decode_cert(Signed, otp),
     {Cert, Key}.
+
+%% SMBIOS v2.x entry point — 31 bytes anchored at "_SM_".
+parse_smbios_v2_entry_point_test() ->
+    EP = <<"_SM_", 16#CC:8, 31:8, 3:8, 5:8, 16#1000:16/little,
+           0:8, 0:40,
+           "_DMI_", 16#DD:8, 16#1234:16/little, 16#80000000:32/little,
+           8:16/little, 16#25:8>>,
+    P = parse_smbios(EP),
+    ?assertEqual(<<"_SM_">>,    maps:get(<<"anchor">>, P)),
+    ?assertEqual(<<"3.5">>,     maps:get(<<"version">>, P)),
+    ?assertEqual(31,            maps:get(<<"entry-point-length">>, P)),
+    ?assertEqual(16#1234,       maps:get(<<"table-length">>, P)),
+    ?assertEqual(16#80000000,   maps:get(<<"table-address">>, P)),
+    ?assertEqual(8,             maps:get(<<"number-of-structures">>, P)).
+
+%% SMBIOS v3 entry point — 24 bytes anchored at "_SM3_".
+parse_smbios_v3_entry_point_test() ->
+    EP = <<"_SM3_", 16#AA:8, 24:8, 3:8, 6:8, 0:8, 16#01:8, 0:8,
+           16#20000:32/little, 16#F0000000:64/little>>,
+    P = parse_smbios(EP),
+    ?assertEqual(<<"_SM3_">>,    maps:get(<<"anchor">>, P)),
+    ?assertEqual(<<"3.6">>,      maps:get(<<"version">>, P)),
+    ?assertEqual(16#F0000000,    maps:get(<<"table-address">>, P)).
+
+%% SMBIOS structure — Type 1 (System Information) with UUID +
+%% manufacturer + product.
+parse_smbios_type1_test() ->
+    Fields = <<1:8, 2:8, 3:8, 4:8,
+               16#01020304050607080910111213141516:128,
+               1:8, 0:8, 0:8>>,
+    Strings = <<"Lenovo", 0,
+                "ThinkPad X1 Carbon Gen 11", 0,
+                "21HM006VUS", 0,
+                "PC12345", 0,
+                0>>,
+    Type1 = <<1:8, 27:8, 16#0100:16/little,
+              Fields/binary,
+              Strings/binary>>,
+    P = parse_smbios_structure(Type1),
+    ?assertEqual(1, maps:get(<<"smbios-type">>, P)),
+    ?assertEqual(<<"System Information">>,
+                 maps:get(<<"smbios-type-name">>, P)),
+    ?assertEqual(<<"Lenovo">>,
+                 maps:get(<<"system-manufacturer">>, P)),
+    ?assertEqual(<<"ThinkPad X1 Carbon Gen 11">>,
+                 maps:get(<<"system-product-name">>, P)),
+    ?assertEqual(<<"21HM006VUS">>,
+                 maps:get(<<"system-version">>, P)),
+    ?assertEqual(<<"PC12345">>,
+                 maps:get(<<"system-serial">>, P)).
+
+%% ACPI table header — pick the TPM2 ACPI table.
+parse_acpi_tpm2_header_test() ->
+    Hdr = <<"TPM2",
+            76:32/little,
+            4:8, 16#AB:8,
+            "LENOVO",
+            "TP-TPM2_",
+            16#00010000:32/little,
+            "LNVO",
+            16#0001:32/little,
+            0:4/unit:8>>,   %% 4 bytes padding after the 36-byte header
+    P = parse_acpi_table(Hdr),
+    ?assertEqual(<<"TPM2">>,                  maps:get(<<"signature">>, P)),
+    ?assertEqual(<<"Trusted Platform Module 2.0">>,
+                 maps:get(<<"signature-name">>, P)),
+    ?assertEqual(76,                          maps:get(<<"length">>, P)),
+    ?assertEqual(<<"LENOVO">>,                maps:get(<<"oem-id">>, P)),
+    ?assertEqual(<<"TP-TPM2_">>,              maps:get(<<"oem-table-id">>, P)).
+
+%% ACPI RSDP v2 (36 bytes).
+parse_acpi_rsdp_v2_test() ->
+    Rsdp = <<"RSD PTR ",
+             16#BB:8, "INTEL ", 2:8, 16#7FF00000:32/little,
+             36:32/little, 16#0000000080000000:64/little,
+             16#CC:8, 0, 0, 0>>,
+    P = parse_acpi_rsdp(Rsdp),
+    ?assertEqual(<<"RSD PTR ">>, maps:get(<<"signature">>, P)),
+    ?assertEqual(2,              maps:get(<<"revision">>, P)),
+    ?assertEqual(16#7FF00000,    maps:get(<<"rsdt-address">>, P)),
+    ?assertEqual(16#0000000080000000,
+                 maps:get(<<"xsdt-address">>, P)).
+
+%% systemd-stub PE section → PCR mapping.
+systemd_stub_pe_section_pcr_test() ->
+    ?assertEqual(11, systemd_stub_pe_section_pcr(<<".linux">>)),
+    ?assertEqual(11, systemd_stub_pe_section_pcr(<<"linux">>)),
+    ?assertEqual(12, systemd_stub_pe_section_pcr(<<"cmdline">>)),
+    ?assertEqual(12, systemd_stub_pe_section_pcr(<<"kernel-cmdline">>)),
+    ?assertEqual(11, systemd_stub_pe_section_pcr(<<".osrel">>)),
+    ?assertEqual(11, systemd_stub_pe_section_pcr(<<"initrd">>)),
+    ?assertEqual(undefined,
+                 systemd_stub_pe_section_pcr(<<"not-a-section">>)),
+    ?assert(is_systemd_stub_pe_section(<<".linux">>)),
+    ?assert(is_systemd_stub_pe_section(<<"kernel-cmdline">>)),
+    ?assertNot(is_systemd_stub_pe_section(<<"not-a-section">>)).
 
 %% Pipeline: parse a log, then decode_events to get the
 %% per-event `parsed' enrichment on every entry.
