@@ -1578,10 +1578,13 @@ derived_template_for_pcr(0) ->
     };
 derived_template_for_pcr(1) ->
     %% PCR 1 = platform configuration (CPU microcode, platform
-    %% config flags, UEFI boot variables).
+    %% config flags, UEFI boot variables, ACPI/SMBIOS handoff).
     #{
         <<"cpu-microcode">>       => <<"unknown">>,
         <<"uefi-boot-order">>     => [],
+        <<"boot-entries">>        => [],
+        <<"boot-current">>        => <<"unknown">>,
+        <<"handoff-tables">>      => [],
         <<"separator-seen">>      => false
     };
 derived_template_for_pcr(N) when N =:= 2; N =:= 3 ->
@@ -1601,14 +1604,26 @@ derived_template_for_pcr(5) ->
         <<"separator-seen">>        => false
     };
 derived_template_for_pcr(7) ->
-    %% PCR 7 = Secure Boot state + keyset.
+    %% PCR 7 = Secure Boot state + keyset + shim authority chain.
     #{
         <<"secure-boot-enabled">>       => <<"unknown">>,
+        <<"setup-mode">>                => <<"unknown">>,
+        <<"audit-mode">>                => <<"unknown">>,
+        <<"deployed-mode">>             => <<"unknown">>,
         <<"pk-entry-count">>            => <<"unknown">>,
+        <<"pk-x509-fingerprints">>      => [],
         <<"kek-entry-count">>           => <<"unknown">>,
+        <<"kek-x509-fingerprints">>     => [],
+        <<"kek-issuers">>               => [],
         <<"db-entry-count">>            => <<"unknown">>,
+        <<"db-x509-fingerprints">>      => [],
+        <<"db-issuers">>                => [],
         <<"dbx-entry-count">>           => <<"unknown">>,
         <<"authorities">>               => [],
+        %% shim-specific (when present in the authority chain):
+        <<"moklist-trusted">>           => <<"unknown">>,
+        <<"sbat-self-revision">>        => <<"unknown">>,
+        <<"sbat-entry-count">>          => <<"unknown">>,
         <<"separator-seen">>            => false
     };
 derived_template_for_pcr(8) -> #{<<"grub-cmdline">> => <<"unknown">>};
@@ -1684,20 +1699,39 @@ derive_from_event(0, 8, Parsed, _) ->
             #{<<"crtm-version">> => V};
         _ -> #{}
     end;
-%% EV_CPU_MICROCODE — PCR 1.
+%% EV_CPU_MICROCODE — PCR 1. Intel AND AMD layouts. The TCG parser
+%% emits `parsed.format' = "intel" or "amd" so we discriminate here.
 derive_from_event(1, 9, Parsed, _) ->
-    UpdRev = maps:get(<<"update-revision">>, Parsed, undefined),
-    ProcSig = maps:get(<<"processor-signature">>, Parsed, undefined),
-    Base = #{},
-    B1 = case UpdRev of
-             undefined -> Base;
-             _ -> Base#{<<"cpu-microcode">> =>
-                 iolist_to_binary(io_lib:format(
-                     "rev=0x~.16B sig=0x~.16B",
-                     [UpdRev, (ProcSig =/= undefined)
-                        andalso ProcSig orelse 0]))}
-         end,
-    B1;
+    Format = maps:get(<<"format">>, Parsed, <<"unknown">>),
+    case Format of
+        <<"intel">> ->
+            Rev = maps:get(<<"update-revision">>, Parsed, 0),
+            Sig = maps:get(<<"processor-signature">>, Parsed, 0),
+            FMS = maps:get(<<"cpu-family-model-stepping">>, Parsed,
+                           <<"">>),
+            #{<<"cpu-microcode">> =>
+                iolist_to_binary(io_lib:format(
+                    "intel rev=0x~.16B sig=0x~.16B ~s",
+                    [Rev, Sig, FMS])),
+              <<"cpu-vendor">> => <<"intel">>};
+        <<"amd">> ->
+            Patch = maps:get(<<"patch-id">>, Parsed, 0),
+            ProcRev = maps:get(<<"processor-rev-id">>, Parsed, 0),
+            Date = maps:get(<<"date">>, Parsed, <<"">>),
+            #{<<"cpu-microcode">> =>
+                iolist_to_binary(io_lib:format(
+                    "amd patch-id=0x~.16B proc-rev=0x~4.16.0B ~s",
+                    [Patch, ProcRev, Date])),
+              <<"cpu-vendor">> => <<"amd">>};
+        _ ->
+            Rev = maps:get(<<"update-revision">>, Parsed, 0),
+            case Rev of
+                0 -> #{};
+                _ -> #{<<"cpu-microcode">> =>
+                          iolist_to_binary(io_lib:format(
+                              "unknown rev=0x~.16B", [Rev]))}
+            end
+    end;
 %% EV_POST_CODE — PCR 0.
 derive_from_event(0, 1, Parsed, _) ->
     case maps:get(<<"post-code">>, Parsed, undefined) of
@@ -1728,18 +1762,62 @@ derive_from_event(7, 16#80000001, Parsed, Semantic) ->
                 false -> #{<<"secure-boot-enabled">> => false};
                 _ -> #{}
             end;
+        <<"SetupMode">> ->
+            case maps:get(<<"setup-mode">>, Semantic, undefined) of
+                T when is_boolean(T) -> #{<<"setup-mode">> => T};
+                _ -> #{}
+            end;
+        <<"AuditMode">> ->
+            case maps:get(<<"audit-mode">>, Semantic, undefined) of
+                T when is_boolean(T) -> #{<<"audit-mode">> => T};
+                _ -> #{}
+            end;
+        <<"DeployedMode">> ->
+            case maps:get(<<"deployed-mode">>, Semantic, undefined) of
+                T when is_boolean(T) -> #{<<"deployed-mode">> => T};
+                _ -> #{}
+            end;
         <<"PK">> ->
             SL = maps:get(<<"signature-list">>, Semantic, []),
+            Entries = lists:flatten(
+                [maps:get(<<"entries">>, L, []) || L <- SL]),
+            Fingerprints = [maps:get(<<"x509-sha256-fingerprint">>, E,
+                                      <<"">>)
+                            || E <- Entries, is_map(E),
+                               maps:is_key(<<"x509-sha256-fingerprint">>, E)],
             #{<<"pk-entry-count">> =>
-                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL]),
+              <<"pk-x509-fingerprints">> => Fingerprints};
         <<"KEK">> ->
             SL = maps:get(<<"signature-list">>, Semantic, []),
+            Entries = lists:flatten(
+                [maps:get(<<"entries">>, L, []) || L <- SL]),
+            Fingerprints = [maps:get(<<"x509-sha256-fingerprint">>, E,
+                                      <<"">>)
+                            || E <- Entries, is_map(E),
+                               maps:is_key(<<"x509-sha256-fingerprint">>, E)],
+            Issuers = [maps:get(<<"x509-issuer">>, E, <<"">>)
+                       || E <- Entries, is_map(E),
+                          maps:is_key(<<"x509-issuer">>, E)],
             #{<<"kek-entry-count">> =>
-                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL]),
+              <<"kek-x509-fingerprints">> => Fingerprints,
+              <<"kek-issuers">> => Issuers};
         <<"db">> ->
             SL = maps:get(<<"signature-list">>, Semantic, []),
+            Entries = lists:flatten(
+                [maps:get(<<"entries">>, L, []) || L <- SL]),
+            DbFingerprints = [maps:get(<<"x509-sha256-fingerprint">>, E,
+                                        <<"">>)
+                              || E <- Entries, is_map(E),
+                                 maps:is_key(<<"x509-sha256-fingerprint">>, E)],
+            DbIssuers = [maps:get(<<"x509-issuer">>, E, <<"">>)
+                         || E <- Entries, is_map(E),
+                            maps:is_key(<<"x509-issuer">>, E)],
             #{<<"db-entry-count">> =>
-                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
+                lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL]),
+              <<"db-x509-fingerprints">> => DbFingerprints,
+              <<"db-issuers">> => DbIssuers};
         <<"dbx">> ->
             SL = maps:get(<<"signature-list">>, Semantic, []),
             #{<<"dbx-entry-count">> =>
@@ -1747,10 +1825,65 @@ derive_from_event(7, 16#80000001, Parsed, Semantic) ->
         _ -> #{}
     end;
 %% EV_EFI_VARIABLE_AUTHORITY — PCR 7.
-derive_from_event(7, 16#800000E0, Parsed, _) ->
-    case maps:get(<<"variable-name">>, Parsed, undefined) of
-        V when is_binary(V), byte_size(V) > 0 ->
-            #{<<"authorities">> => [V]};
+derive_from_event(7, 16#800000E0, Parsed, Semantic) ->
+    Name = maps:get(<<"variable-name">>, Parsed, <<>>),
+    Base = case Name of
+        <<>> -> #{};
+        _    -> #{<<"authorities">> => [Name]}
+    end,
+    %% Enrich based on the specific authority variable.
+    case Name of
+        <<"MokListTrusted">> ->
+            case maps:get(<<"moklist-trusted">>, Semantic, undefined) of
+                T when is_boolean(T) ->
+                    Base#{<<"moklist-trusted">> => T};
+                _ -> Base
+            end;
+        <<"SbatLevel">> ->
+            case maps:get(<<"sbat-entries">>, Semantic, undefined) of
+                undefined -> Base;
+                SbatList when is_list(SbatList) ->
+                    %% Pull the SBAT self-revision from the first entry;
+                    %% its second column is a date-stamped revision int.
+                    case SbatList of
+                        [#{<<"component">> := <<"sbat">>,
+                           <<"revision">> := Rev} | _] ->
+                            Base#{<<"sbat-self-revision">> => Rev,
+                                  <<"sbat-entry-count">> =>
+                                      maps:get(<<"sbat-entry-count">>,
+                                               Semantic, 0)};
+                        _ -> Base
+                    end
+            end;
+        _ -> Base
+    end;
+
+%% EV_EFI_VARIABLE_BOOT / _BOOT2 on PCR 1: BootOrder + Boot####.
+derive_from_event(1, Code, Parsed, Semantic)
+  when Code =:= 16#80000002; Code =:= 16#8000000C ->
+    Name = maps:get(<<"variable-name">>, Parsed, <<>>),
+    case Name of
+        <<"BootOrder">> ->
+            #{<<"uefi-boot-order">> =>
+                maps:get(<<"boot-order">>, Semantic, [])};
+        <<"Boot", _/binary>> ->
+            case maps:get(<<"load-option-description">>,
+                            Semantic, undefined) of
+                D when is_binary(D) ->
+                    #{<<"boot-entries">> =>
+                        [#{<<"name">>        => Name,
+                           <<"description">> => D,
+                           <<"active">> =>
+                               maps:get(<<"load-option-active">>,
+                                        Semantic, false)}]};
+                _ -> #{}
+            end;
+        <<"BootCurrent">> ->
+            case maps:get(<<"boot-current">>, Semantic, undefined) of
+                BC when is_binary(BC) ->
+                    #{<<"boot-current">> => BC};
+                _ -> #{}
+            end;
         _ -> #{}
     end;
 %% EV_ACTION — PCR 2/4, contributions to the boot action list.
