@@ -58,6 +58,20 @@ item(_Base, Req, Opts) ->
                         <<"id">> => ItemID,
                         <<"timestamp">> => erlang:system_time(millisecond)
                     }};
+                not_found ->
+                    Reason = <<"No writable store available">>,
+                    ?event(
+                        bundler_short,
+                        {cache_write_failed,
+                            {id, {explicit, ItemID}},
+                            {reason, Reason}
+                        }
+                    ),
+                    {error, #{
+                        <<"status">> => 500,
+                        <<"error">> => Reason,
+                        <<"details">> => error_to_bin(Reason)
+                    }};
                 {error, Reason} ->
                     ?event(
                         bundler_short,
