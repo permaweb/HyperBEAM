@@ -193,9 +193,7 @@ start([StoreOpts | Rest], Req, Opts) ->
         ok -> start(Rest, Req, Opts);
         {ok, _} -> start(Rest, Req, Opts);
         {error, not_found} -> start(Rest, Req, Opts);
-        {composite, _} = Result -> Result;
-        {error, _} = Result -> Result;
-        {failure, _} = Result -> Result
+        Result -> Result
     end.
 
 stop(StoreOrOpts) ->

@@ -102,9 +102,8 @@ read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
             {ok, Message};
         {error, not_found} ->
             case do_read(StoreOpts, ID) of
-                {ok, Message} -> {ok, Message};
                 not_found -> {error, not_found};
-                {error, _} = Error -> Error
+                Result -> Result
             end;
         {failure, _} = Failure ->
             Failure;
@@ -286,14 +285,11 @@ write_offset(
             {value, {explicit, Value}}
         }
     ),
-    case hb_store:write(
+    hb_store:write(
         IndexStore,
         #{ hb_store_arweave_offset:path(ID) => Value },
         StoreOpts
-    ) of
-        ok -> ok;
-        Error -> Error
-    end.
+    ).
 
 %% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset, Result) when is_integer(Offset) ->

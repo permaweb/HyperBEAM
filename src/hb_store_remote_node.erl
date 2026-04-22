@@ -43,7 +43,7 @@ type(Opts = #{ <<"node">> := Node }, #{ <<"type">> := Key }, _NodeOpts) ->
     case read_request(Opts, Key) of
         {composite, _} -> {ok, composite};
         {ok, _} -> {ok, simple};
-        {error, _} = Error -> Error
+        Other -> Other
     end.
 
 %% @doc Read a key from the remote node.

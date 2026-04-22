@@ -206,10 +206,7 @@ link_path(Opts, Existing, New) ->
                     {result, R}
                 }
             ),
-            case R of
-                ok -> ok;
-                {error, Reason} -> {error, Reason}
-            end;
+            R;
         {error, Reason} ->
             {error, Reason}
     end.

@@ -59,9 +59,8 @@ start_link(_Opts) -> ignore.
 
 start(Opts, _Req, _NodeOpts) ->
     case start_link(Opts) of
-        {ok, _} = Result -> Result;
-        {error, _} = Error -> Error;
-        ignore -> ok
+        ignore -> ok;
+        Result -> Result
     end.
 
 -spec stop_store(any()) -> ok.
@@ -122,10 +121,7 @@ write_path(Opts, RawKey, Value) ->
     Key = hb_path:to_binary(RawKey),
     EncodedValue = encode_value(raw, Value),
     ?event({writing, Key, byte_size(EncodedValue)}),
-    case do_write(Opts, Key, EncodedValue) of
-        ok -> ok;
-        {error, _} = Error -> Error
-    end.
+    do_write(Opts, Key, EncodedValue).
 
 %% @doc Returns the full list of items stored under the given path. Where the path
 %% child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
@@ -232,10 +228,7 @@ link_path(Opts, Existing, New) ->
     % Create: NewValue -> ExistingBin
     case do_read(Opts, NewBin) of
         not_found ->
-            case do_write(Opts, NewBin, encode_value(link, ExistingBin)) of
-                ok -> ok;
-                {error, _} = Error -> Error
-            end;
+            do_write(Opts, NewBin, encode_value(link, ExistingBin));
         _ ->
             ok
     end.

@@ -259,10 +259,7 @@ write_missing_item_bundle(ItemID, TX, Opts) ->
         ItemID,
         <<"bundle">>
     ]),
-    case hb_store:write(Store, #{ Path => hb_message:id(TX, signed, Opts) }, Opts) of
-        ok -> ok;
-        Error -> Error
-    end.
+    hb_store:write(Store, #{ Path => hb_message:id(TX, signed, Opts) }, Opts).
 
 new_data_item(Index, Size, Opts) ->
     Tag = <<"tag", (integer_to_binary(Index))/binary>>,

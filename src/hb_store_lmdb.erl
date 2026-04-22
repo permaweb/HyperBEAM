@@ -94,6 +94,20 @@ ensure_dir(DataDirPath) ->
     % dummy one, else the final directory will not be created.
     filelib:ensure_dir(filename:join(DataDirPath, "dummy.mdb")).
 
+%% @doc Determine whether a key represents a simple value or composite group.
+%%
+%% This function reads the value associated with a key and examines its content
+%% to classify the entry type. Keys storing the literal binary "group" are
+%% considered composite (directory-like) entries, while all other values are
+%% treated as simple key-value pairs.
+%%
+%% This classification is used by higher-level HyperBeam components to understand
+%% the structure of stored data and provide appropriate navigation interfaces.
+%%
+%% @param Opts Database configuration map
+%% @param KeyReq Request of the form `#{<<"type">> => Key}`.
+%% @returns `{ok, composite}` for group entries, `{ok, simple}` for regular
+%%          values, or `{error, not_found}`.
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
     case read_resolved(Opts, hb_path:to_binary(Key)) of
         {ok, _ResolvedKey, <<"group">>} -> {ok, composite};
@@ -101,6 +115,22 @@ type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
         not_found -> {error, not_found}
     end.
 
+%% @doc Write a key-value pair to the database asynchronously.
+%%
+%% Request maps are folded into individual writes and each entry is sent to the
+%% database server process immediately without waiting for the write to be
+%% committed to disk. The server accumulates writes in a transaction that is
+%% periodically flushed based on timing constraints or explicit flush requests.
+%%
+%% The asynchronous nature provides better performance for write-heavy workloads
+%% while the batching strategy ensures data consistency and reduces I/O overhead.
+%% However, recent writes may not be immediately visible to readers until the
+%% next flush occurs.
+%%
+%% @param Opts Database configuration map
+%% @param Req Either a request map of `Path => Value` pairs or an internal
+%%            `Path, Value` pair used while folding that map.
+%% @returns `ok` immediately on success, or an error tuple on failure
 write(#{ <<"read-only">> := true }, _Req, _NodeOpts) when is_map(_Req) ->
     {error, not_found};
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
@@ -133,6 +163,24 @@ write(Opts, Path, Value) ->
             retry
     end.
 
+%% @doc Read a value from the database by key, with automatic link resolution.
+%%
+%% This function attempts to read a value directly from the committed database.
+%% If the key is not found, it resolves links in the path and retries the read.
+%%
+%% The function automatically handles link resolution: if a stored value begins
+%% with the "link:" prefix, it extracts the target key and recursively reads
+%% from that location instead. This creates a symbolic link mechanism that
+%% allows multiple keys to reference the same underlying data.
+%%
+%% Link resolution is transparent to the caller and can chain through multiple
+%% levels of indirection, though care should be taken to avoid circular
+%% references.
+%%
+%% @param Opts Database configuration map
+%% @param PathReq Request of the form `#{<<"read">> => Path}`.
+%% @returns `{ok, Value}` on success, `{composite, Keys}` for groups, or
+%%          `{error, not_found}` on failure
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
     case read_resolved(Opts, hb_path:to_binary(Path)) of
         {ok, ResolvedPath, <<"group">>} ->
@@ -203,6 +251,10 @@ is_link(Value) ->
 to_path(PathParts) ->
     hb_util:bin(lists:join(<<"/">>, PathParts)).
 
+%% @doc Unified read function that handles LMDB reads with fallback to the
+%% in-process pending writes, if necessary.
+%%
+%% Returns `{ok, Value}` or `not_found`.
 read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
@@ -225,6 +277,8 @@ read_direct(#{<<"name">> := Name} = Opts, Path) ->
             Err
     end.
 
+%% @doc Read a value directly from the database with link resolution.
+%% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
     case read_direct(Opts, Path) of
         {ok, Value} ->
