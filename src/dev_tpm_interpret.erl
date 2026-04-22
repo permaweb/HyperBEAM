@@ -1221,6 +1221,18 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
         <<"tpm">>                => claim_tpm(E, Db),
+        %% Structured decode of the Endorsement Key certificate
+        %% (algorithm, key size, public exponent / curve, chain
+        %% validation against the loaded root-cas/), projected
+        %% onto the flat claim surface so a policy engine can
+        %% answer "is this EK signed by a known TPM CA?" in one
+        %% lookup.
+        <<"ek">>                 => claim_ek(E, Db),
+        %% Structured decode of the Attestation Key (AK) public
+        %% blob — algorithm, size, public exponent / curve,
+        %% DER SHA-256 fingerprint so a verifier can pin the
+        %% exact AK that signed the quote.
+        <<"ak">>                 => claim_ak(E),
         %% Confidential-compute context: Intel TDX CCEL / AMD SEV-
         %% SNP. When detected it's tier-5 evidence for claim.tme.
         <<"context">>            => Context,
@@ -1336,6 +1348,315 @@ claim_tpm(E, Db) ->
         <<"trust-tier">>         => TrustTier,
         <<"known-cves">>         => Cves,
         <<"evidence">>           => CertEv
+    }.
+
+%% @doc Structured decode of the Endorsement Key certificate,
+%% projected onto the flat `claim' surface.
+%%
+%% The EK certificate is the root of the TPM's cryptographic
+%% identity: it's signed by the TPM vendor's CA when the chip
+%% is manufactured and carries (via TCG-registered OIDs in the
+%% SubjectAltName) the TPM manufacturer, model, and firmware
+%% version. `claim.tpm' already surfaces those TCG-OID fields;
+%% `claim.ek' adds the certificate's cryptographic properties
+%% (key algorithm + size + public-exponent / curve), validity
+%% window, and a chain-validation verdict against any root
+%% CAs shipped under `priv/tpm-interpret/root-cas/'.
+%%
+%% Output fields:
+%%   present             bool — an EK cert PEM was on the envelope
+%%   subject             X.500 subject (string form)
+%%   issuer              X.500 issuer (string form)
+%%   serial-hex          cert serial (big-endian hex)
+%%   valid-from          RFC 5280 notBefore (ISO-ish string)
+%%   valid-to            RFC 5280 notAfter
+%%   is-currently-valid  true iff now is inside the window
+%%   key-alg             "rsa" | "ecdsa" | "ed25519" | "ed448" |
+%%                       "dsa" | "unknown"
+%%   key-size-bits       integer
+%%   rsa-public-exponent integer (RSA only)
+%%   public-key-sha256   base64url SHA-256 of the DER-encoded
+%%                       SubjectPublicKeyInfo — a pin-able key ID
+%%   chain-validation    map of:
+%%     validated-by-root-ca  name of the matching root CA,
+%%                            or null / "no-roots-loaded"
+%%     root-ca-count        number of root CAs in the DB
+%%     chain-valid          true | false | "unknown"
+%%     reason               free-form explanation
+%%   evidence            provenance list
+claim_ek(E, Db) ->
+    Pem = hb_maps:get(<<"ek-cert-pem">>, E, <<>>, #{}),
+    case decode_cert(Pem) of
+        {error, _} -> unknown_ek_claim();
+        {ok, Cert} ->
+            Attrs = tpm_attrs_from_cert(Cert),
+            {KeyAlg, KeyBits, RsaExp, PubDerSha256} =
+                cert_public_key_summary(Cert),
+            Roots = maps:get(<<"cert-roots">>, Db, []),
+            Chain = validate_ek_chain(Cert, Roots),
+            From = maps:get(valid_from, Attrs, undefined),
+            To   = maps:get(valid_to, Attrs, undefined),
+            #{
+                <<"present">>            => true,
+                <<"subject">>            =>
+                    or_null(maps:get(subject_rdn, Attrs,
+                                       undefined)),
+                <<"issuer">>             =>
+                    or_null(maps:get(issuer_rdn, Attrs,
+                                       undefined)),
+                <<"serial-hex">>         =>
+                    or_null(maps:get(serial_b64url, Attrs,
+                                       undefined)),
+                <<"valid-from">>         => or_null(From),
+                <<"valid-to">>           => or_null(To),
+                <<"is-currently-valid">> => currently_valid(From, To),
+                <<"key-alg">>            => KeyAlg,
+                <<"key-size-bits">>      => KeyBits,
+                <<"rsa-public-exponent">> => RsaExp,
+                <<"public-key-sha256">>  => PubDerSha256,
+                <<"chain-validation">>   => Chain,
+                <<"evidence">>           =>
+                    [{<<"tier">>, 1},
+                     {<<"source">>, <<"ek-cert-der">>}]
+            }
+    end.
+
+unknown_ek_claim() ->
+    #{
+        <<"present">>             => false,
+        <<"subject">>             => null,
+        <<"issuer">>              => null,
+        <<"serial-hex">>          => null,
+        <<"valid-from">>          => null,
+        <<"valid-to">>            => null,
+        <<"is-currently-valid">>  => <<"unknown">>,
+        <<"key-alg">>             => <<"unknown">>,
+        <<"key-size-bits">>       => 0,
+        <<"rsa-public-exponent">> => null,
+        <<"public-key-sha256">>   => <<"">>,
+        <<"chain-validation">>    => unknown_ek_chain(),
+        <<"evidence">>            => []
+    }.
+
+unknown_ek_chain() ->
+    #{
+        <<"validated-by-root-ca">> => null,
+        <<"root-ca-count">>        => 0,
+        <<"chain-valid">>          => <<"unknown">>,
+        <<"reason">>               => <<"no ek-cert-pem on envelope">>
+    }.
+
+%% Pull the public-key alg + size + (RSA) exponent + SHA-256
+%% fingerprint out of a decoded cert's SubjectPublicKeyInfo.
+cert_public_key_summary(#'OTPCertificate'{tbsCertificate = Tbs}) ->
+    case Tbs#'OTPTBSCertificate'.subjectPublicKeyInfo of
+        #'OTPSubjectPublicKeyInfo'{
+            algorithm = #'PublicKeyAlgorithm'{algorithm = AlgOid},
+            subjectPublicKey = PubKey} ->
+            {Alg, Bits, RsaExp} =
+                spki_alg_bits_exp(AlgOid, PubKey),
+            DerBytes = der_encode_spki(AlgOid, PubKey),
+            Sha = case DerBytes of
+                <<>> -> <<"">>;
+                _    -> hb_util:encode(crypto:hash(sha256, DerBytes))
+            end,
+            {Alg, Bits, RsaExp, Sha};
+        _ ->
+            {<<"unknown">>, 0, null, <<"">>}
+    end;
+cert_public_key_summary(_) ->
+    {<<"unknown">>, 0, null, <<"">>}.
+
+spki_alg_bits_exp(?rsaEncryption,
+                    #'RSAPublicKey'{modulus = N,
+                                     publicExponent = Exp})
+    when is_integer(N), is_integer(Exp) ->
+    Bits = byte_size(binary:encode_unsigned(N)) * 8,
+    {<<"rsa">>, Bits, Exp};
+spki_alg_bits_exp(?'id-ecPublicKey', PubKey) when is_binary(PubKey) ->
+    %% Uncompressed EC point: 1 + 2*curve-byte-size bytes.
+    %% Derive approximate bit size from the point length.
+    Bits = case byte_size(PubKey) of
+        65 -> 256;  %% P-256
+        97 -> 384;  %% P-384
+        133 -> 521; %% P-521
+        _ -> byte_size(PubKey) * 4
+    end,
+    {<<"ecdsa">>, Bits, null};
+spki_alg_bits_exp(?'id-Ed25519', PubKey) when is_binary(PubKey) ->
+    {<<"ed25519">>, byte_size(PubKey) * 8, null};
+spki_alg_bits_exp(?'id-Ed448', PubKey) when is_binary(PubKey) ->
+    {<<"ed448">>, byte_size(PubKey) * 8, null};
+spki_alg_bits_exp(?'id-dsa', _) ->
+    {<<"dsa">>, 0, null};
+spki_alg_bits_exp(_, _) ->
+    {<<"unknown">>, 0, null}.
+
+%% DER-encode the subjectPublicKeyInfo for fingerprinting. RSA
+%% is the common case; other algs re-encode the raw point.
+der_encode_spki(?rsaEncryption, #'RSAPublicKey'{} = Rsa) ->
+    try public_key:der_encode('RSAPublicKey', Rsa)
+    catch _:_ -> <<>>
+    end;
+der_encode_spki(_, PubKey) when is_binary(PubKey) -> PubKey;
+der_encode_spki(_, _) -> <<>>.
+
+%% Is `now' inside [From, To]? Uses the raw binary form (ISO-ish
+%% string we emit from `x509_time/1').
+currently_valid(undefined, _) -> <<"unknown">>;
+currently_valid(_, undefined) -> <<"unknown">>;
+currently_valid(FromBin, ToBin) ->
+    Now = x509_now_iso(),
+    case {is_binary(FromBin), is_binary(ToBin)} of
+        {true, true} ->
+            FromBin =< Now andalso Now =< ToBin;
+        _ -> <<"unknown">>
+    end.
+
+%% Emit the current time in a form that lexicographically
+%% compares to the cert-validity strings emitted by
+%% `x509_time/1' (which renders utcTime / generalTime in their
+%% raw 13-or-15 char ASCII shapes, e.g. "230123045959Z").
+x509_now_iso() ->
+    {{Y, Mo, D}, {H, Mi, S}} = calendar:universal_time(),
+    iolist_to_binary(io_lib:format(
+        "~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
+        [Y, Mo, D, H, Mi, S])).
+
+%% Validate the EK cert chain against shipped root CAs.
+%% When no roots are loaded we return an `unknown' verdict
+%% (not a failure) since the caller may be operating in a dev
+%% environment without the vendor's CA PEMs.
+validate_ek_chain(_Cert, []) ->
+    #{
+        <<"validated-by-root-ca">> => null,
+        <<"root-ca-count">>        => 0,
+        <<"chain-valid">>          => <<"unknown">>,
+        <<"reason">>               =>
+            <<"no root-cas loaded in priv/tpm-interpret/root-cas/">>
+    };
+validate_ek_chain(Cert, Roots) ->
+    DerCert = try
+        public_key:pkix_encode('OTPCertificate', Cert, otp)
+    catch _:_ -> <<>>
+    end,
+    case DerCert of
+        <<>> ->
+            #{
+                <<"validated-by-root-ca">> => null,
+                <<"root-ca-count">>        => length(Roots),
+                <<"chain-valid">>          => <<"unknown">>,
+                <<"reason">>               => <<"cert re-encode failed">>
+            };
+        _ ->
+            try_validate_against_roots(DerCert, Roots, 0)
+    end.
+
+try_validate_against_roots(_DerCert, [], Count) ->
+    #{
+        <<"validated-by-root-ca">> => null,
+        <<"root-ca-count">>        => Count,
+        <<"chain-valid">>          => false,
+        <<"reason">>               =>
+            <<"no root CA in priv/tpm-interpret/root-cas/ issued "
+              "this certificate">>
+    };
+try_validate_against_roots(DerCert, [Root | Rest], Count) ->
+    Name = maps:get(<<"name">>, Root, <<"unknown-root">>),
+    RootPem = maps:get(<<"pem">>, Root, <<>>),
+    case decode_cert(RootPem) of
+        {ok, RootCert} ->
+            case validate_against_one_root(DerCert, RootCert) of
+                true ->
+                    #{
+                        <<"validated-by-root-ca">> => Name,
+                        <<"root-ca-count">>        => Count + 1
+                            + length(Rest),
+                        <<"chain-valid">>          => true,
+                        <<"reason">>               =>
+                            <<"chain validates against ", Name/binary>>
+                    };
+                false ->
+                    try_validate_against_roots(
+                      DerCert, Rest, Count + 1)
+            end;
+        _ ->
+            try_validate_against_roots(
+              DerCert, Rest, Count + 1)
+    end.
+
+validate_against_one_root(DerCert, RootCert) ->
+    try
+        RootDer = public_key:pkix_encode(
+                    'OTPCertificate', RootCert, otp),
+        case public_key:pkix_path_validation(
+               RootDer, [DerCert], []) of
+            {ok, _} -> true;
+            _ -> false
+        end
+    catch _:_ -> false
+    end.
+
+%% @doc Structured decode of the Attestation Key public blob on
+%% the flat claim surface. AK is an RSA-2048 or RSA-3072 key
+%% generated INSIDE the TPM with signing-only attributes; a
+%% verifier pins the specific AK by SHA-256 fingerprint of its
+%% DER SubjectPublicKeyInfo.
+%%
+%% Output fields:
+%%   present                bool — the envelope had an ak-pub-pem
+%%   key-alg                "rsa" | "ecdsa" | "ed25519" | ...
+%%   key-size-bits          integer
+%%   rsa-public-exponent    integer (RSA only)
+%%   public-key-sha256      base64url SHA-256 of the DER SPKI
+%%   evidence               provenance
+claim_ak(E) ->
+    Pem = hb_maps:get(<<"ak-pub-pem">>, E, <<>>, #{}),
+    case decode_pub_key(Pem) of
+        {error, _} -> unknown_ak_claim();
+        {ok, #'RSAPublicKey'{modulus = N,
+                             publicExponent = Exp} = Rsa} ->
+            Bits = byte_size(binary:encode_unsigned(N)) * 8,
+            Der = try public_key:der_encode('RSAPublicKey', Rsa)
+                  catch _:_ -> <<>>
+                  end,
+            Sha = case Der of
+                <<>> -> <<"">>;
+                _    -> hb_util:encode(crypto:hash(sha256, Der))
+            end,
+            #{
+                <<"present">>             => true,
+                <<"key-alg">>             => <<"rsa">>,
+                <<"key-size-bits">>       => Bits,
+                <<"rsa-public-exponent">> => Exp,
+                <<"public-key-sha256">>   => Sha,
+                <<"evidence">>            =>
+                    [{<<"tier">>, 1},
+                     {<<"source">>, <<"ak-pub-pem">>}]
+            };
+        {ok, Other} ->
+            #{
+                <<"present">>             => true,
+                <<"key-alg">>             =>
+                    iolist_to_binary(io_lib:format(
+                        "~p", [element(1, Other)])),
+                <<"key-size-bits">>       => 0,
+                <<"rsa-public-exponent">> => null,
+                <<"public-key-sha256">>   => <<"">>,
+                <<"evidence">>            =>
+                    [{<<"tier">>, 1},
+                     {<<"source">>, <<"ak-pub-pem">>}]
+            }
+    end.
+
+unknown_ak_claim() ->
+    #{
+        <<"present">>             => false,
+        <<"key-alg">>             => <<"unknown">>,
+        <<"key-size-bits">>       => 0,
+        <<"rsa-public-exponent">> => null,
+        <<"public-key-sha256">>   => <<"">>,
+        <<"evidence">>            => []
     }.
 
 %% Trust tier ordering per paper §Hardware-Availability:
@@ -1918,6 +2239,9 @@ collect_policy_signals(Claim) ->
     SBP = maps:get(<<"secure-boot-policy">>, Claim, #{}),
     BC = maps:get(<<"boot-chain">>, Claim, #{}),
     Lockdown = maps:get(<<"lockdown">>, Claim, #{}),
+    EK = maps:get(<<"ek">>, Claim, #{}),
+    AK = maps:get(<<"ak">>, Claim, #{}),
+    EkChain = maps:get(<<"chain-validation">>, EK, #{}),
     #{
         <<"secure-boot-enabled">>  =>
             maps:get(<<"enabled">>, SB, <<"unknown">>),
@@ -1953,7 +2277,17 @@ collect_policy_signals(Claim) ->
         <<"has-runtime-driver">> =>
             maps:get(<<"has-runtime-driver">>, BC, false),
         <<"lockdown-level">> =>
-            maps:get(<<"level">>, Lockdown, <<"unknown">>)
+            maps:get(<<"level">>, Lockdown, <<"unknown">>),
+        <<"ek-present">> =>
+            maps:get(<<"present">>, EK, false),
+        <<"ek-currently-valid">> =>
+            maps:get(<<"is-currently-valid">>, EK, <<"unknown">>),
+        <<"ek-chain-valid">> =>
+            maps:get(<<"chain-valid">>, EkChain, <<"unknown">>),
+        <<"ak-present">> =>
+            maps:get(<<"present">>, AK, false),
+        <<"ak-key-size-bits">> =>
+            maps:get(<<"key-size-bits">>, AK, 0)
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -1965,6 +2299,8 @@ classify_policy_findings(S) ->
          quote_integrity_finding(S),
          pcr_replay_finding(S),
          freshness_finding(S),
+         ek_finding(S),
+         ak_finding(S),
          ima_policy_finding(S),
          tpm_trust_finding(S),
          tme_finding(S),
@@ -2114,6 +2450,39 @@ lockdown_finding(
             <<"Kernel lockdown is in `integrity' mode; paper "
               "§Arch recommends `confidentiality'.">>);
 lockdown_finding(_) -> ok.
+
+ek_finding(#{<<"ek-present">> := false}) ->
+    finding(warn, <<"ek-cert-missing">>,
+            <<"ek">>,
+            <<"Envelope carries no EK certificate; TPM "
+              "cryptographic identity cannot be anchored to a "
+              "vendor CA.">>);
+ek_finding(#{<<"ek-currently-valid">> := false}) ->
+    finding(critical, <<"ek-cert-expired-or-not-yet-valid">>,
+            <<"ek">>,
+            <<"EK certificate is outside its validity window "
+              "(expired or not-yet-valid).">>);
+ek_finding(#{<<"ek-chain-valid">> := false}) ->
+    finding(critical, <<"ek-chain-invalid">>,
+            <<"ek">>,
+            <<"EK certificate does not chain to any root CA "
+              "in priv/tpm-interpret/root-cas/ — cryptographic "
+              "identity cannot be verified.">>);
+ek_finding(_) -> ok.
+
+ak_finding(#{<<"ak-present">> := false}) ->
+    finding(warn, <<"ak-pub-missing">>,
+            <<"ak">>,
+            <<"Envelope carries no Attestation Key public "
+              "blob; verifier cannot pin which AK signed the "
+              "quote.">>);
+ak_finding(#{<<"ak-key-size-bits">> := N}) when N < 2048 ->
+    finding(warn, <<"ak-key-too-small">>,
+            <<"ak">>,
+            iolist_to_binary(io_lib:format(
+              "AK key size ~p bits is below the 2048-bit "
+              "minimum recommended by NIST SP 800-57.", [N])));
+ak_finding(_) -> ok.
 
 %% Heuristic scoring:
 %%   Start at 100. Every critical costs 40 points, every
@@ -7648,6 +8017,80 @@ claim_surface_hour15_log_format_empty_test() ->
     {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
     PC = maps:get(<<"platform-config">>, Claim),
     ?assertEqual(<<"empty">>, maps:get(<<"log-format">>, PC)),
+    ok.
+
+%% claim.ak on a synthetic RSA-2048 AK decodes algorithm,
+%% size, exponent, and SHA-256 fingerprint.
+claim_surface_ak_rsa_decode_test() ->
+    {PubKey, _} = crypto:generate_key(rsa, {2048, 65537}),
+    [EBin, NBin] = PubKey,
+    N = binary:decode_unsigned(NBin),
+    Exp = binary:decode_unsigned(EBin),
+    Rsa = #'RSAPublicKey'{modulus = N, publicExponent = Exp},
+    AkPem = public_key:pem_encode(
+        [public_key:pem_entry_encode('RSAPublicKey', Rsa)]),
+    Envelope = #{<<"ak-pub-pem">> => AkPem},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    AK = maps:get(<<"ak">>, Claim),
+    ?assertEqual(true,       maps:get(<<"present">>, AK)),
+    ?assertEqual(<<"rsa">>,  maps:get(<<"key-alg">>, AK)),
+    ?assertEqual(2048,       maps:get(<<"key-size-bits">>, AK)),
+    ?assertEqual(65537,      maps:get(<<"rsa-public-exponent">>, AK)),
+    Sha = maps:get(<<"public-key-sha256">>, AK),
+    ?assertEqual(43, byte_size(Sha)),  %% base64url 32 bytes
+    ok.
+
+%% claim.ak on an empty envelope returns shape-stable nulls.
+claim_surface_ak_missing_test() ->
+    Envelope = #{},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    AK = maps:get(<<"ak">>, Claim),
+    ?assertEqual(false,       maps:get(<<"present">>, AK)),
+    ?assertEqual(<<"unknown">>, maps:get(<<"key-alg">>, AK)),
+    ?assertEqual(0,           maps:get(<<"key-size-bits">>, AK)),
+    ?assertEqual(null,        maps:get(<<"rsa-public-exponent">>, AK)),
+    %% Policy verdict should flag ak-pub-missing as a warning.
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    AllFindings = maps:get(<<"warnings">>, PV, []) ++
+                  maps:get(<<"critical-failures">>, PV, []),
+    Codes = [maps:get(<<"code">>, F) || F <- AllFindings],
+    ?assert(lists:member(<<"ak-pub-missing">>, Codes)),
+    ok.
+
+%% claim.ek on an empty envelope returns shape-stable nulls +
+%% surfaces an "ek-cert-missing" warning.
+claim_surface_ek_missing_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    EK = maps:get(<<"ek">>, Claim),
+    ?assertEqual(false, maps:get(<<"present">>, EK)),
+    ?assertEqual(null,  maps:get(<<"subject">>, EK)),
+    ?assertEqual(<<"unknown">>,
+                 maps:get(<<"key-alg">>, EK)),
+    Chain = maps:get(<<"chain-validation">>, EK),
+    ?assertEqual(<<"unknown">>,
+                 maps:get(<<"chain-valid">>, Chain)),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    AllFindings = maps:get(<<"warnings">>, PV, []) ++
+                  maps:get(<<"critical-failures">>, PV, []),
+    Codes = [maps:get(<<"code">>, F) || F <- AllFindings],
+    ?assert(lists:member(<<"ek-cert-missing">>, Codes)),
+    ok.
+
+%% policy-verdict.signals map surfaces ek + ak facts so policy
+%% engines can match without re-walking the tree.
+claim_surface_ek_ak_signals_test() ->
+    Envelope = #{},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    Sig = maps:get(<<"signals">>, PV),
+    ?assert(maps:is_key(<<"ek-present">>, Sig)),
+    ?assert(maps:is_key(<<"ek-currently-valid">>, Sig)),
+    ?assert(maps:is_key(<<"ek-chain-valid">>, Sig)),
+    ?assert(maps:is_key(<<"ak-present">>, Sig)),
+    ?assert(maps:is_key(<<"ak-key-size-bits">>, Sig)),
+    ?assertEqual(false, maps:get(<<"ek-present">>, Sig)),
+    ?assertEqual(false, maps:get(<<"ak-present">>, Sig)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
