@@ -2936,5 +2936,49 @@ tree:
    naming the concrete format (crypto-agile / legacy-
    sha1 / TDX-CCEL / vendor-extension).
 
-Iteration 15 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 15 — commit `74eb3d5c6`
+
+Two depth improvements along the "widest coverage" axis:
+
+1. **All 7 TPMS_ATTEST body types decoded** — hour 5 did
+   QUOTE (0x8018) only; the other 6 defined types fell
+   through to a length+sha256 stub. Now each switches into
+   its spec-defined structure per TPM 2.0 Part 2 §10.12:
+   CERTIFY_INFO (name+qualifiedName), COMMAND_AUDIT_INFO
+   (auditCounter+digestAlg+2×TPM2B_DIGEST), SESSION_AUDIT_
+   INFO (exclusive+sessionDigest), CREATION_INFO (object-
+   name+creationHash), TIME_ATTEST_INFO (time + inner
+   clockInfo+fwVer for tamper-detection cross-check),
+   NV_CERTIFY_INFO (indexName+offset+contents), NV_DIGEST_
+   CERTIFY_INFO (indexName+digest). Every body map also
+   carries an `attest-body-type` string so policy engines
+   can dispatch.
+
+2. **`claim.platform-config.log-format`** — self-detecting
+   heuristic classifying each envelope as `crypto-agile`
+   (TCG PC Client PFP 1.05) / `legacy-sha1` (pre-1.05
+   single-bank) / `tdx-ccel` (Intel TDX Confidential
+   Computing Event Log — first record on PCR != 0) /
+   `empty` / `unknown`. Verified live across the fixture
+   corpus: 28 crypto-agile, 1 legacy-sha1, 1 tdx-ccel.
+
+10 new eunit tests. All 168 tests pass (98 tcg + 70 interpret).
+
+### Candidate priority list for hour 16
+
+1. **TPM2_ActivateCredential decode** — still the top AK-EK
+   binding gap.
+2. **TPMT_PUBLIC / AK public-key structured decode** —
+   parse the TPM2B_PUBLIC shape (algorithm, parameters,
+   objectAttributes, name-alg, unique.rsa|ecc|hmac|keyedHash)
+   when the envelope carries a raw AK public blob.
+3. **Canonical CBOR evidence-digest** — cross-language
+   alternative to today's Erlang-ext form.
+4. **`claim.match-profile` catalogue** — canonical
+   "expected machine state" profiles like
+   `lapee-os-production-ready`.
+5. **EK-cert chain validation** — walk PEM shipped in
+   envelope, verify against priv/tpm-interpret/root-cas/.
+
+Iteration 16 fires automatically at `:23`. Loop state: `b5d87b84`.
 
