@@ -136,7 +136,7 @@ hb-boot:
 # make command line.
 KERNEL     ?= build-alpine/vmlinuz-lapee
 INITRAMFS  ?= work/initramfs-hb.cpio.gz
-CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init
+CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
 hb-usb-image:

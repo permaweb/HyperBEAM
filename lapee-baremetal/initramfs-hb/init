@@ -86,7 +86,7 @@ for iface in /sys/class/net/*; do
 done
 
 if [ -z "$GUEST_IFACE" ]; then
-    echo "[init] net: WARNING — no interface got DHCP. HTTP access "
+    echo "[init] net: WARNING - no interface got DHCP. HTTP access "
     echo "[init] net: to this node will only work via loopback."
     GUEST_IFACE="<none-leased>"
 fi
@@ -95,6 +95,46 @@ echo "[init] net: ip addr:"
 ip addr show 2>/dev/null | sed 's/^/[init]   /' || true
 echo "[init] net: routes:"
 ip route show 2>/dev/null | sed 's/^/[init]   /' || true
+
+# --- prominent on-screen banner ------------------------------------
+# Print the leased address as large as the tty will make it so an
+# operator with nothing but the laptop screen (no serial cable, no
+# Ethernet) can read the address off the LCD and aim a verifier
+# at http://<ip>:8734 from their host.
+LEASED_IP=""
+if [ "$GUEST_IFACE" != "<none-leased>" ]; then
+    LEASED_IP=$(ip -4 -o addr show dev "$GUEST_IFACE" 2>/dev/null \
+                | awk '{print $4}' | cut -d/ -f1 | head -1)
+fi
+
+echo ""
+echo "###################################################"
+echo "#                                                 #"
+echo "#            LapEE node is online.                #"
+echo "#                                                 #"
+if [ -n "$LEASED_IP" ]; then
+    printf '#   http://%-34s   #\n' "${LEASED_IP}:8734"
+else
+    echo "#   no network lease - loopback only             #"
+fi
+echo "#                                                 #"
+echo "#   From your verifier host:                      #"
+echo "#   ./scripts/interpret-local-capture.sh \\         #"
+if [ -n "$LEASED_IP" ]; then
+    printf '#       --url http://%-25s   #\n' "${LEASED_IP}:8734"
+else
+    echo "#       --url http://<FRAMEWORK-IP>:8734         #"
+fi
+echo "#                                                 #"
+echo "###################################################"
+echo ""
+
+# Persist the address so the LAPEE_WRITEBACK flow can also record it
+# on the ESP partition alongside the attestation JSON.
+if [ -n "$LEASED_IP" ]; then
+    mkdir -p /run/lapee
+    echo "$LEASED_IP" > /run/lapee/ipv4-address
+fi
 
 # Default config files (shipped with image).
 ENFORCED_CFG=/etc/lapee/lapee-enforced.flat
@@ -209,6 +249,118 @@ if grep -q 'LAPEE_HB_DIAG=1' /proc/cmdline 2>/dev/null; then
 fi
 
 cd /usr/lib/hyperbeam
-echo "[init] exec hyperbeam"
+echo "[init] launching hyperbeam (background)"
 echo "-----------------------------------------------"
-exec /usr/lib/hyperbeam/bin/hb foreground
+# When LAPEE_WRITEBACK=1 is set on the kernel cmdline we run
+# HyperBEAM in the background, wait for it to be ready, curl the
+# attested envelope over localhost, write the result to the ESP
+# partition we booted from, and then surrender PID 1 to HB's
+# foreground loop. This is the zero-network validation path: you
+# boot the USB stick on target hardware, wait for the LAPEE-
+# WRITEBACK-OK banner, power off, plug the stick into your
+# verifier host, and feed the JSON to ~tpm-interpret@1.0.
+if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
+    /usr/lib/hyperbeam/bin/hb foreground \
+        > /run/lapee/hb.log 2>&1 &
+    HB_PID=$!
+    echo "[writeback] hyperbeam pid=$HB_PID; waiting for :8734..."
+
+    # USB storage drivers (xhci_hcd is usually built-in;
+    # usb_storage + vfat + sd_mod + nls_iso8859_1 are common
+    # modules on Debian's stock kernel).
+    for mod in xhci_pci xhci_hcd usb_storage sd_mod vfat \
+               nls_cp437 nls_iso8859_1; do
+        modprobe_if_present "$mod" >/dev/null 2>&1 || true
+    done
+
+    # Wait up to 60s for HB to answer HTTP. busybox wget is
+    # the lowest-dep HTTP client we already ship.
+    ready=0
+    for i in $(seq 1 60); do
+        if wget -q -O- --timeout=2 \
+                http://127.0.0.1:8734/ >/dev/null 2>&1; then
+            ready=1; break
+        fi
+        sleep 1
+    done
+    if [ $ready -ne 1 ]; then
+        echo "[writeback] FAIL - hyperbeam didn't answer :8734 in 60s"
+        echo "[writeback] tail of /run/lapee/hb.log:"
+        tail -40 /run/lapee/hb.log 2>/dev/null
+    else
+        echo "[writeback] hyperbeam is up; calling /attestation..."
+        mkdir -p /mnt/esp
+        # Find the ESP we booted from by filesystem label.
+        ESP_DEV=""
+        for i in $(seq 1 20); do
+            ESP_DEV=$(blkid -L LAPEE_ESP 2>/dev/null || true)
+            [ -n "$ESP_DEV" ] && break
+            sleep 1
+        done
+        if [ -z "$ESP_DEV" ]; then
+            echo "[writeback] FAIL - no partition labelled LAPEE_ESP"
+            echo "[writeback] /dev/sd* = $(ls /dev/sd* 2>/dev/null)"
+        else
+            echo "[writeback] ESP = $ESP_DEV"
+            if mount -t vfat -o rw,noatime "$ESP_DEV" /mnt/esp; then
+                STAMP=$(date +%Y%m%dT%H%M%SZ 2>/dev/null || echo run)
+                OUT=/mnt/esp/attestation-$STAMP.json
+                LINK=/mnt/esp/attestation-latest.json
+                wget -q -O "$OUT" \
+                    --header='accept: application/json@1.0' \
+                    --header='accept-bundle: true' \
+                    "http://127.0.0.1:8734/~tpm2@2.0a/attestation" \
+                    && ATT_OK=1 || ATT_OK=0
+                if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
+                    rm -f "$LINK"
+                    # FAT32 doesn't support symlinks - copy the
+                    # timestamped file under a stable name too.
+                    cp "$OUT" "$LINK"
+                    cp /etc/lapee/tpm-ca.crt \
+                       /mnt/esp/tpm-ca.crt 2>/dev/null || true
+                    cp /run/lapee/ipv4-address \
+                       /mnt/esp/ipv4-address 2>/dev/null || true
+                    cat > /mnt/esp/README-VALIDATOR.txt <<RV
+LapEE attestation written on boot $STAMP.
+
+On your Mac:
+
+    ./lapee-baremetal/scripts/interpret-local-capture.sh \\
+        --label "Framework 13 (USB roundtrip)" \\
+        /Volumes/LAPEE_ESP/attestation-latest.json
+
+The JSON is the full envelope from
+\`~tpm2@2.0a/attestation\`. tpm-ca.crt is the test-TPM root
+CA this LapEE node minted so the verifier chain check
+accepts the EK.
+
+HTTP bytes on the wire:
+  GET http://127.0.0.1:8734/~tpm2@2.0a/attestation
+  accept: application/json@1.0
+  accept-bundle: true
+RV
+                    sync
+                    SZ=$(stat -c %s "$OUT" 2>/dev/null || \
+                           stat -f %z "$OUT" 2>/dev/null || echo ?)
+                    echo "==============================================="
+                    echo "   LAPEE-WRITEBACK-OK: $OUT ($SZ bytes)"
+                    echo "   ALSO: $LINK"
+                    echo "   SAFE TO POWER OFF + REMOVE USB STICK"
+                    echo "==============================================="
+                else
+                    echo "[writeback] FAIL - wget couldn't fetch /attestation"
+                fi
+                umount /mnt/esp || true
+            else
+                echo "[writeback] FAIL - mount -o rw on $ESP_DEV"
+            fi
+        fi
+    fi
+
+    # Hand PID 1 over to HB so the node keeps serving for any
+    # interactive testing (serial console) after write-back.
+    wait $HB_PID
+else
+    echo "[init] exec hyperbeam"
+    exec /usr/lib/hyperbeam/bin/hb foreground
+fi
