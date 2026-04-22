@@ -22,10 +22,7 @@ fi
 docker rm -f lapee-hb-mini 2>/dev/null || true
 docker run -d --platform=linux/amd64 --name lapee-hb-mini \
     lapee-hyperbeam-builder:latest sleep infinity >/dev/null
-# busybox-static gives us udhcpc + `ip' handling; iproute2 provides
-# the full `ip' binary; linux-image-amd64 is the source of the
-# USB-Ethernet kernel modules we copy into the initramfs below.
-docker exec lapee-hb-mini bash -c "apt-get update -qq 2>&1 | tail -1 && apt-get install -y -qq busybox-static iproute2 linux-image-amd64 kmod 2>&1 | tail -1"
+docker exec lapee-hb-mini bash -c "apt-get update -qq 2>&1 | tail -1 && apt-get install -y -qq busybox-static iproute2 2>&1 | tail -1"
 
 # Copy HB release into the container.
 docker cp "$HB_REL" lapee-hb-mini:/opt/hb
@@ -34,10 +31,8 @@ docker cp "$LAPEE/../../lapee-dev-tpm2/config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat 2>/dev/null || \
     docker cp "$(git -C /Users/sam/src/hyperbeam/.claude/worktrees/lapee-dev-tpm2 rev-parse --show-toplevel)/config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat
-# Copy our init + DHCP hook.
+# Copy our init.
 docker cp "$LAPEE/initramfs-hb/init" lapee-hb-mini:/init-hb
-docker cp "$LAPEE/initramfs-hb/udhcpc.script" \
-    lapee-hb-mini:/etc-udhcpc.script
 
 docker exec -i lapee-hb-mini bash <<'SH'
 set -e
@@ -46,67 +41,18 @@ mkdir -p /ramfs/bin /ramfs/sbin /ramfs/etc/lapee /ramfs/lib/x86_64-linux-gnu /ra
     /ramfs/usr/lib/ssl /ramfs/usr/lib/hyperbeam \
     /ramfs/proc /ramfs/sys /ramfs/dev /ramfs/tmp /ramfs/run /ramfs/out /ramfs/mnt
 
-# busybox — includes udhcpc + insmod/modprobe/depmod applets we
-# rely on for real-hardware network + kernel-module loading.
+# busybox
 cp /usr/bin/busybox /ramfs/bin/busybox
 cd /ramfs/bin
 for cmd in sh mount umount ls cat cp mv rm mkdir ln chmod chown echo grep sed awk find hostname \
            ifconfig dmesg ps head tail wc tar gzip sleep stat uname date touch test mknod reboot poweroff \
-           vi env printf sync tee base64 udhcpc insmod modprobe rmmod lsmod depmod tr; do
+           vi env printf sync tee base64; do
     ln -sf busybox $cmd
 done
 cd /
 
 # iproute2
 cp /usr/sbin/ip /ramfs/sbin/ip
-
-# DHCP hook (called by udhcpc on `bound' / `renew' / etc).
-mkdir -p /ramfs/etc
-cp /etc-udhcpc.script /ramfs/etc/udhcpc.script
-chmod +x /ramfs/etc/udhcpc.script
-
-# Kernel modules for USB-Ethernet + common Ethernet PHYs. On
-# real Framework hardware plugging a USB-C Ethernet dongle is
-# the simplest path to DHCP; these modules cover the common
-# chipsets. The full Debian linux-image-amd64 package is ~80 MB
-# of modules; we only copy the ~2 MB net-module subset.
-KVER=$(ls /lib/modules | head -1)
-if [ -n "$KVER" ]; then
-    mkdir -p /ramfs/lib/modules/$KVER/kernel/drivers/net
-    for subdir in usb ethernet; do
-        src=/lib/modules/$KVER/kernel/drivers/net/$subdir
-        if [ -d "$src" ]; then
-            mkdir -p /ramfs/lib/modules/$KVER/kernel/drivers/net/$subdir
-            # Prune to chipsets we care about to keep the initramfs
-            # small. (Full USB-net dir is ~500KB; all ethernet PHYs
-            # together are ~8MB — the second is worth pruning.)
-            case $subdir in
-                usb)
-                    cp -r $src/* \
-                        /ramfs/lib/modules/$KVER/kernel/drivers/net/$subdir/
-                    ;;
-                ethernet)
-                    # Intel + Realtek cover ~90% of laptop wired NICs.
-                    for vendor in intel realtek; do
-                        [ -d "$src/$vendor" ] && \
-                            cp -r "$src/$vendor" \
-                            /ramfs/lib/modules/$KVER/kernel/drivers/net/$subdir/
-                    done
-                    ;;
-            esac
-        fi
-    done
-    # Copy module metadata so modprobe works (depmod output).
-    cp /lib/modules/$KVER/modules.dep \
-       /lib/modules/$KVER/modules.alias \
-       /lib/modules/$KVER/modules.symbols \
-       /lib/modules/$KVER/modules.builtin \
-       /lib/modules/$KVER/modules.order \
-        /ramfs/lib/modules/$KVER/ 2>/dev/null || true
-    # Rebuild modules.dep against our pruned tree so the
-    # busybox modprobe we ship can resolve aliases.
-    depmod -b /ramfs $KVER 2>/dev/null || true
-fi
 
 # Shared libraries needed by HB (OTP + libtss2 + libcrypto + libssl + ...).
 LIB=/ramfs/lib/x86_64-linux-gnu

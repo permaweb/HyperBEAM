@@ -131,9 +131,15 @@ hb-boot:
 	./scripts/boot-hb.sh
 
 # hb-usb-image: produce a UEFI-bootable .img combining the
-# Debian kernel + our HB initramfs + a default LapEE cmdline.
+# Buildroot kernel + our HB initramfs + a default LapEE cmdline.
 # Override KERNEL / INITRAMFS / CMDLINE / SIZE_MIB / OUT on the
 # make command line.
+#
+# The default KERNEL is the Buildroot-built kernel at
+# build-alpine/vmlinuz-lapee. It has CONFIG_TCG_TPM + USB
+# storage + VFAT all built-in, which is everything the USB-
+# stick round-trip path (LAPEE_WRITEBACK=1) needs — no network,
+# no kernel-module side-loading.
 KERNEL     ?= build-alpine/vmlinuz-lapee
 INITRAMFS  ?= work/initramfs-hb.cpio.gz
 CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
