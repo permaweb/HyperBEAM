@@ -842,11 +842,11 @@ test_push_as_identity() ->
     Opts = #{
         <<"priv-wallet">> => DefaultWallet,
         <<"cache-control">> => <<"always">>,
-        store => TestStore,
+        <<"store">> => TestStore,
         <<"identities">> => #{
             SchedulingID => #{
                 <<"priv-wallet">> => SchedulingWallet,
-                store => [hb_test_utils:test_store(hb_store_lmdb)]
+                <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
             },
             ComputeID => #{
                 <<"priv-wallet">> => ComputeWallet
@@ -858,8 +858,8 @@ test_push_as_identity() ->
     Base =
         dev_process_test_vectors:aos_process(
             Opts#{
-                authority => ComputeID,
-                scheduler => [SchedulingID, ComputeID]
+                <<"authority">> => ComputeID,
+                <<"scheduler">> => [SchedulingID, ComputeID]
             }
         ),
     ?event({base, Base}),

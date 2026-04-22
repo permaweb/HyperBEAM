@@ -39,38 +39,20 @@
 %% what the generator will run, which is the primary debugging hook if a
 %% test unexpectedly does or does not appear in the parallel batch.
 all(Module) ->
-    Funs =
-        lists:sort(
-            [
-                F
-            ||
-                {F, 0} <- Module:module_info(exports),
-                    is_parallel_test_name(F)
-            ]
-        ),
     {inparallel,
         [
             {atom_to_list(F), fun Module:F/0}
         ||
-            F <- Funs
+            F <- parallel_test_funs(Module)
         ]
     }.
 
 all(Module, Timeout) ->
-    Funs =
-        lists:sort(
-            [
-                F
-            ||
-                {F, 0} <- Module:module_info(exports),
-                    is_parallel_test_name(F)
-            ]
-        ),
     {inparallel,
         [
             {atom_to_list(F), {timeout, Timeout, fun Module:F/0}}
         ||
-            F <- Funs
+            F <- parallel_test_funs(Module)
         ]
     }.
 
@@ -117,6 +99,18 @@ scan(Forms) ->
         end,
         {[], false},
         Forms
+    ).
+
+%% @doc Return the sorted list of 0-arity parallel test function names
+%% exported by `Module'.
+parallel_test_funs(Module) ->
+    lists:sort(
+        [
+            F
+        ||
+            {F, 0} <- Module:module_info(exports),
+                is_parallel_test_name(F)
+        ]
     ).
 
 %% @doc True when `Name' ends in `_test_parallel' or `_test_parallel_'.

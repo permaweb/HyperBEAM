@@ -144,6 +144,7 @@ generate_test_opts() ->
 generate_test_opts(Name, Def) ->
     #{
         node_processes => #{ Name => Def },
+        store => [hb_test_utils:test_store(hb_store_lmdb)],
         priv_wallet => ar_wallet:new()
     }.
 

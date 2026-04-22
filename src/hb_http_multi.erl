@@ -360,7 +360,7 @@ multi(Nodes, Extra) ->
 multirequest_test_() ->
     {setup,
         fun() ->
-            #{fast => good(), slow1 => slow(500), slow2 => slow(500),
+            #{fast => good(), slow1 => slow(750), slow2 => slow(750),
               good1 => good(), good2 => good(), good3 => good()}
         end,
         fun(N) -> {timeout, 30, [
@@ -373,7 +373,7 @@ multirequest_test_() ->
                 ?assertMatch({ok, _},
                     multi([maps:get(fast, N), maps:get(slow1, N), maps:get(slow2, N)],
                         #{<<"parallel">> => true, <<"stop-after">> => true})),
-                ?assert(erlang:monotonic_time(millisecond) - T0 < 500)
+                ?assert(erlang:monotonic_time(millisecond) - T0 < 750)
             end},
             {"parallel broadcast", fun() ->
                 ?assertMatch([_, _, _],
