@@ -1028,13 +1028,19 @@ decode_sipa_event(Code, #{<<"event-data">> := Data}) ->
     case Data of
         <<SubType:32/little, SubSize:32/little, Rest/binary>>
           when SubSize =< byte_size(Rest) + 0 ->  %% loose bounds
-            #{<<"sipa-category">>       => Category,
-              <<"sipa-category-code">>  => Code,
-              <<"sipa-subtype">>        => SubType,
-              <<"sipa-subtype-name">>   => sipa_subtype_name(SubType),
-              <<"sipa-data-length">>    => SubSize,
-              <<"sipa-sha256">>         =>
-                  hb_util:encode(crypto:hash(sha256, Data))};
+            Payload = case Rest of
+                <<P:SubSize/binary, _/binary>> -> P;
+                _ -> Rest
+            end,
+            Base = #{<<"sipa-category">>       => Category,
+                     <<"sipa-category-code">>  => Code,
+                     <<"sipa-subtype">>        => SubType,
+                     <<"sipa-subtype-name">>   => sipa_subtype_name(SubType),
+                     <<"sipa-data-length">>    => SubSize,
+                     <<"sipa-sha256">>         =>
+                         hb_util:encode(crypto:hash(sha256, Data))},
+            PayloadMap = decode_sipa_payload(SubType, Payload),
+            maps:merge(Base, PayloadMap);
         _ ->
             #{<<"sipa-category">>       => Category,
               <<"sipa-category-code">>  => Code,
@@ -1043,6 +1049,141 @@ decode_sipa_event(Code, #{<<"event-data">> := Data}) ->
                   hb_util:encode(crypto:hash(sha256, Data))}
     end;
 decode_sipa_event(_, _) -> #{}.
+
+%% @doc Decode the per-subtype SIPA payload. Returns a map that
+%% the caller merges into the SIPA base record.
+%%
+%% Each subtype has a fixed payload shape per Microsoft's SIPA
+%% specification (see `windows-ic-sipa.h' + TCGLogTools source).
+%% We classify by `sipa_subtype_payload_type/1` and decode
+%% structurally; unclassified / malformed payloads return a
+%% base64url hex dump so the information is preserved.
+decode_sipa_payload(SubType, Payload) ->
+    Type = sipa_subtype_payload_type(SubType),
+    Base = #{<<"sipa-payload-type">> => Type},
+    maps:merge(Base, decode_sipa_payload_body(Type, Payload)).
+
+decode_sipa_payload_body(<<"bool">>, <<B:8, _/binary>>) ->
+    #{<<"sipa-value-bool">> => B =/= 0};
+decode_sipa_payload_body(<<"u32">>, <<V:32/little, _/binary>>) ->
+    #{<<"sipa-value-u32">> => V,
+      <<"sipa-value-u32-hex">> =>
+          iolist_to_binary(io_lib:format("0x~8.16.0B", [V]))};
+decode_sipa_payload_body(<<"u64">>, <<V:64/little, _/binary>>) ->
+    #{<<"sipa-value-u64">> => V,
+      <<"sipa-value-u64-hex">> =>
+          iolist_to_binary(io_lib:format("0x~16.16.0B", [V]))};
+decode_sipa_payload_body(<<"digest">>, Payload)
+    when byte_size(Payload) >= 20 ->
+    Size = byte_size(Payload),
+    Alg = case Size of
+        20 -> <<"sha1">>;
+        32 -> <<"sha256">>;
+        48 -> <<"sha384">>;
+        64 -> <<"sha512">>;
+        _  -> <<"unknown">>
+    end,
+    #{<<"sipa-value-digest">>      => hb_util:encode(Payload),
+      <<"sipa-value-digest-alg">>  => Alg,
+      <<"sipa-value-digest-size">> => Size};
+decode_sipa_payload_body(<<"utf16-string">>, Payload) ->
+    Trimmed = strip_trailing_utf16_nulls(Payload),
+    Decoded = try
+        unicode:characters_to_binary(Trimmed, {utf16, little}, utf8)
+    catch _:_ -> Trimmed end,
+    case is_binary(Decoded) of
+        true  -> #{<<"sipa-value-string">> => Decoded};
+        false -> #{<<"sipa-value-string">> => Trimmed,
+                   <<"sipa-value-string-error">> =>
+                       <<"utf16-decode-failed">>}
+    end;
+decode_sipa_payload_body(<<"aggregation">>, Payload) ->
+    %% Aggregations carry nested SIPA events. Surface the
+    %% payload length + sha256 so a verifier can pin the whole
+    %% blob; a future iteration can recurse in.
+    #{<<"sipa-aggregation-length">>  => byte_size(Payload),
+      <<"sipa-aggregation-sha256">>  =>
+          hb_util:encode(crypto:hash(sha256, Payload))};
+decode_sipa_payload_body(_, Payload) ->
+    #{<<"sipa-payload-bytes">> => byte_size(Payload),
+      <<"sipa-payload-base64url">> => hb_util:encode(Payload)}.
+
+%% Strip trailing UTF-16LE NUL pairs (0x00 0x00).
+strip_trailing_utf16_nulls(Bin) ->
+    strip_trailing_utf16_nulls_(Bin).
+
+strip_trailing_utf16_nulls_(B) when byte_size(B) >= 2 ->
+    Sz = byte_size(B),
+    case binary:part(B, Sz - 2, 2) of
+        <<0, 0>> -> strip_trailing_utf16_nulls_(
+                      binary:part(B, 0, Sz - 2));
+        _        -> B
+    end;
+strip_trailing_utf16_nulls_(B) -> B.
+
+%% @doc Classify a SIPA sub-event-type by its expected payload
+%% shape. Authoritative source: Microsoft's `windows-ic-sipa.h'
+%% (Windows SDK) + TCGLogTools' per-subtype decode tables.
+%% Any subtype not explicitly listed falls back to "opaque".
+sipa_subtype_payload_type(16#00010000) -> <<"bool">>;      % FirmwareDebug
+sipa_subtype_payload_type(16#00010001) -> <<"bool">>;      % OsKernelDebug
+sipa_subtype_payload_type(16#00010002) -> <<"bool">>;      % CodeIntegrity
+sipa_subtype_payload_type(16#00010003) -> <<"bool">>;      % TestSigning
+sipa_subtype_payload_type(16#00010004) -> <<"bool">>;      % DataExecutionPrevention
+sipa_subtype_payload_type(16#00010005) -> <<"bool">>;      % SafeMode
+sipa_subtype_payload_type(16#00010006) -> <<"bool">>;      % WinPE
+sipa_subtype_payload_type(16#00010007) -> <<"bool">>;      % PhysicalPresence
+sipa_subtype_payload_type(16#00010008) -> <<"digest">>;    % DevicePIDHash
+sipa_subtype_payload_type(16#00010009) -> <<"u64">>;       % DevicePIDValue
+sipa_subtype_payload_type(16#0001000A) -> <<"u32">>;       % BootCounter
+sipa_subtype_payload_type(16#0001000B) -> <<"aggregation">>;% BootRevocationList
+sipa_subtype_payload_type(16#0001000C) -> <<"bool">>;      % OsKernelDebugPolicy
+sipa_subtype_payload_type(16#0001000D) -> <<"u32">>;       % DriverLoadPolicy
+sipa_subtype_payload_type(16#0001000E) -> <<"bool">>;      % BitLockerUnlock
+sipa_subtype_payload_type(16#0001000F) -> <<"bool">>;      % LastBootSucceeded
+sipa_subtype_payload_type(16#00010010) -> <<"bool">>;      % LastShutdownSucceeded
+sipa_subtype_payload_type(16#00010011) -> <<"aggregation">>;% EvAggregationKsr
+sipa_subtype_payload_type(16#00010012) -> <<"bool">>;      % ImageValidated
+sipa_subtype_payload_type(16#00010020) -> <<"bool">>;      % BitLockerDataVolumes
+sipa_subtype_payload_type(16#00010021) -> <<"bool">>;      % BootDebugging
+sipa_subtype_payload_type(16#00010022) -> <<"bool">>;      % BootRevocationsPublished
+sipa_subtype_payload_type(16#00010023) -> <<"bool">>;      % BootRevocationsDisabled
+sipa_subtype_payload_type(16#00010024) -> <<"bool">>;      % Vbs
+sipa_subtype_payload_type(16#00010025) -> <<"bool">>;      % VbsVsmRequired
+sipa_subtype_payload_type(16#00010026) -> <<"bool">>;      % VbsSecurebootRequired
+sipa_subtype_payload_type(16#00010027) -> <<"bool">>;      % VbsIumEnabled
+sipa_subtype_payload_type(16#00010028) -> <<"bool">>;      % VbsMmioNxSupported
+sipa_subtype_payload_type(16#00010029) -> <<"bool">>;      % VbsApicVirtSupported
+sipa_subtype_payload_type(16#0001002A) -> <<"bool">>;      % VbsTpmRequired
+sipa_subtype_payload_type(16#0001002B) -> <<"bool">>;      % VbsHvciStrictMode
+sipa_subtype_payload_type(16#0001002C) -> <<"bool">>;      % VbsDepLaunch
+sipa_subtype_payload_type(16#0001002D) -> <<"u32">>;       % VbsMinProcessorVersion
+sipa_subtype_payload_type(16#0001002E) -> <<"bool">>;      % HibrBoot
+sipa_subtype_payload_type(16#0001002F) -> <<"bool">>;      % BitLocker
+sipa_subtype_payload_type(16#00010030) -> <<"u32">>;       % CodeIntegrityBehaviour
+sipa_subtype_payload_type(16#00010031) -> <<"bool">>;      % ElamEnabled
+sipa_subtype_payload_type(16#00010032) -> <<"bool">>;      % ElamBootClean
+sipa_subtype_payload_type(16#00010033) -> <<"bool">>;      % ElamInitialized
+sipa_subtype_payload_type(16#00010034) -> <<"bool">>;      % DmaProtection
+sipa_subtype_payload_type(16#00010035) -> <<"bool">>;      % SystemGuardBootEnabled
+sipa_subtype_payload_type(16#00020001) -> <<"utf16-string">>;% ElamKeyname
+sipa_subtype_payload_type(16#00020002) -> <<"digest">>;    % ElamConfigurationHash
+sipa_subtype_payload_type(16#00020003) -> <<"digest">>;    % ElamPolicyHash
+sipa_subtype_payload_type(16#00020004) -> <<"digest">>;    % ElamMeasuredSignatureHash
+sipa_subtype_payload_type(16#00030001) -> <<"aggregation">>;% LoadedModuleAggregation
+sipa_subtype_payload_type(16#00030002) -> <<"utf16-string">>;% LoadedModuleName
+sipa_subtype_payload_type(16#00030003) -> <<"digest">>;    % LoadedModuleHash
+sipa_subtype_payload_type(16#00030004) -> <<"utf16-string">>;% LoadedModuleVersion
+sipa_subtype_payload_type(16#00030005) -> <<"bool">>;      % LoadedModuleNtOsBoot
+sipa_subtype_payload_type(16#00040001) -> <<"aggregation">>;% TrustBoundaryAggregation
+sipa_subtype_payload_type(16#00040002) -> <<"digest">>;    % SbcpHash
+sipa_subtype_payload_type(16#00040003) -> <<"digest">>;    % CertSignerHash
+sipa_subtype_payload_type(16#00040004) -> <<"digest">>;    % CertRootHash
+sipa_subtype_payload_type(16#00040005) -> <<"utf16-string">>;% CertPolicy
+sipa_subtype_payload_type(16#00040006) -> <<"u32">>;       % CertKeyAttributes
+sipa_subtype_payload_type(16#00050001) -> <<"digest">>;    % KsrSignature
+sipa_subtype_payload_type(16#00050002) -> <<"aggregation">>;% KsrAggregation
+sipa_subtype_payload_type(_) -> <<"opaque">>.
 
 %% SIPA outer category codes (Microsoft Windows boot-log schema).
 %% Source: TCGLogTools PowerShell module, Windows SDK headers.
@@ -3191,6 +3332,93 @@ decode_ev_ipl_opaque_test() ->
     %% Not key=value ASCII → format=opaque
     ?assertEqual(<<"opaque">>, maps:get(<<"format">>, P)),
     ?assertEqual(6, maps:get(<<"length">>, P)).
+
+%% Hour-4: SIPA per-subtype payload decode.
+%% Build a SIPA event for `Vbs` (0x00010024 = bool) whose
+%% SIPA_EVENT_HEADER carries a single 0x01 payload byte.
+decode_sipa_bool_vbs_test() ->
+    %% Outer category: SIPA_EVENTTYPE_OSPARAMETER = 0x10000004
+    Payload = <<1:8>>,
+    SubType = 16#00010024,
+    SubSize = byte_size(Payload),
+    Data = <<SubType:32/little, SubSize:32/little, Payload/binary>>,
+    Ev = #{<<"event-type-code">> => 16#10000004,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"SIPA_EVENTTYPE_OSPARAMETER">>,
+                 maps:get(<<"sipa-category">>, P)),
+    ?assertEqual(<<"Vbs">>, maps:get(<<"sipa-subtype-name">>, P)),
+    ?assertEqual(<<"bool">>, maps:get(<<"sipa-payload-type">>, P)),
+    ?assertEqual(true, maps:get(<<"sipa-value-bool">>, P)).
+
+%% SIPA u32 payload: `BootCounter' (0x0001000A) is a u32.
+decode_sipa_u32_boot_counter_test() ->
+    Payload = <<16#A1B2C3D4:32/little>>,
+    SubType = 16#0001000A,
+    SubSize = byte_size(Payload),
+    Data = <<SubType:32/little, SubSize:32/little, Payload/binary>>,
+    Ev = #{<<"event-type-code">> => 16#10000004,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"BootCounter">>,
+                 maps:get(<<"sipa-subtype-name">>, P)),
+    ?assertEqual(<<"u32">>, maps:get(<<"sipa-payload-type">>, P)),
+    ?assertEqual(16#A1B2C3D4, maps:get(<<"sipa-value-u32">>, P)).
+
+%% SIPA digest payload: `CertRootHash' (0x00040004) is a digest.
+%% Feed a 32-byte SHA-256 digest and assert the decoded alg.
+decode_sipa_digest_cert_root_hash_test() ->
+    Digest = crypto:hash(sha256, <<"test cert">>),
+    SubType = 16#00040004,
+    SubSize = byte_size(Digest),
+    Data = <<SubType:32/little, SubSize:32/little, Digest/binary>>,
+    Ev = #{<<"event-type-code">> => 16#10000005,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"CertRootHash">>,
+                 maps:get(<<"sipa-subtype-name">>, P)),
+    ?assertEqual(<<"digest">>,
+                 maps:get(<<"sipa-payload-type">>, P)),
+    ?assertEqual(<<"sha256">>,
+                 maps:get(<<"sipa-value-digest-alg">>, P)),
+    ?assertEqual(32, maps:get(<<"sipa-value-digest-size">>, P)),
+    ?assertEqual(hb_util:encode(Digest),
+                 maps:get(<<"sipa-value-digest">>, P)).
+
+%% SIPA UTF-16LE string payload: `LoadedModuleName' (0x00030002).
+decode_sipa_utf16_module_name_test() ->
+    Name16 = unicode:characters_to_binary(
+               <<"ntoskrnl.exe">>, utf8, {utf16, little}),
+    Payload = <<Name16/binary, 0, 0>>, % NUL-terminated UTF-16
+    SubType = 16#00030002,
+    SubSize = byte_size(Payload),
+    Data = <<SubType:32/little, SubSize:32/little, Payload/binary>>,
+    Ev = #{<<"event-type-code">> => 16#10000006,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"LoadedModuleName">>,
+                 maps:get(<<"sipa-subtype-name">>, P)),
+    ?assertEqual(<<"utf16-string">>,
+                 maps:get(<<"sipa-payload-type">>, P)),
+    ?assertEqual(<<"ntoskrnl.exe">>,
+                 maps:get(<<"sipa-value-string">>, P)).
+
+%% Aggregation subtypes surface length + SHA-256; the recursion
+%% into nested events is a future iteration's work.
+decode_sipa_aggregation_test() ->
+    Payload = <<0:128>>,  %% 16 bytes of sub-event noise
+    SubType = 16#00030001,
+    SubSize = byte_size(Payload),
+    Data = <<SubType:32/little, SubSize:32/little, Payload/binary>>,
+    Ev = #{<<"event-type-code">> => 16#10000006,
+           <<"event-data">> => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"LoadedModuleAggregation">>,
+                 maps:get(<<"sipa-subtype-name">>, P)),
+    ?assertEqual(<<"aggregation">>,
+                 maps:get(<<"sipa-payload-type">>, P)),
+    ?assertEqual(16,
+                 maps:get(<<"sipa-aggregation-length">>, P)).
 
 decode_firmware_blob_test() ->
     Ev = #{<<"event-type-code">> => 16#80000008,

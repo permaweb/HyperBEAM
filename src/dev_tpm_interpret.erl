@@ -1135,6 +1135,7 @@ interpret_claim(Events, E, Db) ->
         <<"secure-boot">>        => claim_secure_boot(EvList),
         <<"firmware">>           => claim_firmware(EvList, Db),
         <<"boot-loader">>        => claim_boot_loader(EvList),
+        <<"boot-chain">>         => claim_boot_chain(EvList),
         <<"kernel">>             => claim_kernel(EvList, E),
         <<"cpu">>                => claim_cpu(EvList, Db),
         <<"shim">>               => claim_shim(EvList),
@@ -1671,6 +1672,106 @@ claim_boot_loader(Events) ->
               <<"image-hash-provenance">> =>
                   [event_provenance(Ev0)]}
     end.
+
+%% @doc Full boot-chain enumeration. Returns every
+%% EV_EFI_BOOT_SERVICES_APPLICATION (0x80000003),
+%% EV_EFI_BOOT_SERVICES_DRIVER (0x80000004) and
+%% EV_EFI_RUNTIME_SERVICES_DRIVER (0x80000005) event, in measurement
+%% order, with the full decoded UEFI_IMAGE_LOAD_EVENT struct: image
+%% SHA-256, image length, link-time address, parsed device path
+%% (text form + structured node list), and per-event role.
+%%
+%% A policy engine can:
+%%   * match the last-application's hash against a known OS-loader /
+%%     UKI digest to prove the right kernel was chained in,
+%%   * inspect the device-path nodes to see which ESP partition
+%%     (GUID + PARTNR) each image came off,
+%%   * detect runtime-service drivers loaded outside the normal
+%%     chain (potential supply-chain surface).
+claim_boot_chain(Events) ->
+    Codes = [16#80000003, 16#80000004, 16#80000005],
+    Sorted = lists:sort(
+        fun(A, B) ->
+            maps:get(<<"seq">>, A, 0) =< maps:get(<<"seq">>, B, 0)
+        end,
+        [Ev || Ev <- Events,
+               lists:member(maps:get(<<"event-type-code">>, Ev, 0),
+                            Codes)]),
+    Rows = lists:map(fun project_boot_row/1,
+                     lists:zip(lists:seq(0, length(Sorted) - 1),
+                               Sorted)),
+    %% Summary: indices of first/last "application" (role =
+    %% application implies it's the thing that ran next; the LAST
+    %% application typically IS the OS loader / UKI).
+    Apps = [R || R <- Rows,
+                 maps:get(<<"role">>, R) =:= <<"application">>],
+    %% First/last hashes already safely encoded by project_boot_row.
+    First = case Apps of [] -> <<"unknown">>;
+                          [F | _] -> maps:get(<<"image-hash">>, F,
+                                               <<"unknown">>)
+            end,
+    Last = case Apps of [] -> <<"unknown">>;
+                        _  -> maps:get(<<"image-hash">>,
+                                        lists:last(Apps),
+                                        <<"unknown">>)
+           end,
+    HasRuntime = lists:any(
+                   fun(R) ->
+                       maps:get(<<"role">>, R) =:= <<"runtime-driver">>
+                   end, Rows),
+    #{
+        <<"length">>               => length(Rows),
+        <<"application-count">>    => length(Apps),
+        <<"first-application-hash">>  => First,
+        <<"last-application-hash">>   => Last,
+        <<"has-runtime-driver">>      => HasRuntime,
+        <<"chain">>                   => Rows
+    }.
+
+%% Build one boot-chain row. `Index' is the 0-based chain position.
+%% Raw SHA-256 digest is base64url-encoded here because the
+%% claim pipeline deliberately bypasses the events wire-encode
+%% layer (see claim/3 comment). Everything in this row must be
+%% UTF-8-safe by construction.
+project_boot_row({Index, Ev}) ->
+    Code = maps:get(<<"event-type-code">>, Ev, 0),
+    P = maps:get(<<"parsed">>, Ev, #{}),
+    #{
+        <<"chain-index">>          => Index,
+        <<"role">>                 => boot_role(Code),
+        <<"event-type-code">>      => Code,
+        <<"seq">>                  => maps:get(<<"seq">>, Ev, 0),
+        <<"pcr">>                  => maps:get(<<"pcr">>, Ev, 0),
+        <<"image-hash">>           => safe_encode_hash(
+            nested(Ev, [<<"digests">>, <<"sha256">>], undefined)),
+        <<"image-length-in-memory">> =>
+            maps:get(<<"image-length-in-memory">>, P, null),
+        <<"image-link-time-address">> =>
+            maps:get(<<"image-link-time-address">>, P, null),
+        <<"device-path-text">>     =>
+            maps:get(<<"device-path-text">>, P, <<"">>),
+        <<"device-path-node-count">> =>
+            length(maps:get(<<"device-path-nodes">>, P, [])),
+        <<"provenance">>           => [event_provenance(Ev)]
+    }.
+
+%% Base64url-encode a raw binary hash, tolerating undefined +
+%% already-encoded strings (`"unknown"', etc.).
+safe_encode_hash(undefined) -> <<"unknown">>;
+safe_encode_hash(H) when is_binary(H) ->
+    %% If it's already ASCII (e.g. "unknown" or already-encoded),
+    %% leave it; else base64url-encode.
+    case lists:all(fun(B) -> B >= 32 andalso B < 128 end,
+                    binary_to_list(H)) of
+        true  -> H;
+        false -> hb_util:encode(H)
+    end;
+safe_encode_hash(_) -> <<"unknown">>.
+
+boot_role(16#80000003) -> <<"application">>;
+boot_role(16#80000004) -> <<"driver">>;
+boot_role(16#80000005) -> <<"runtime-driver">>;
+boot_role(_)           -> <<"unknown">>.
 
 %% Kernel / UKI identity. systemd-stub emits key=value EV_IPL events
 %% on PCR 11/12/13 whose keys include `kernel_name', `kernel_
@@ -3723,6 +3824,60 @@ claim_surface_hour3_firmware_family_match_test() ->
         fun({<<"source">>, <<"firmware-versions.json">>}) -> true;
            (_) -> false
         end, Prov)).
+
+%% Hour-4: `claim.boot-chain' enumerates every EFI boot-services
+%% / runtime-services image in seq order, with role labelling and
+%% per-row device-path text. Build a synthetic log with one
+%% driver (0x80000004) then one application (0x80000003); the
+%% chain should be length 2, application-count 1, and the last-
+%% application hash should equal the application event's
+%% digests.sha256.
+claim_surface_hour4_boot_chain_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% Two UEFI_IMAGE_LOAD_EVENT payloads — with empty device
+    %% path (len=0) so the parser takes the fast path.
+    MkImage = fun(Addr, Len) ->
+        <<Addr:64/little, Len:64/little, 0:64/little, 0:64/little>>
+    end,
+    DrvData = MkImage(16#1000, 16#2000),
+    AppData = MkImage(16#8000, 16#10000),
+    MkRec = fun(Pcr, Code, Data) ->
+        S1 = crypto:hash(sha, Data),
+        S2 = crypto:hash(sha256, Data),
+        Sz = byte_size(Data),
+        <<Pcr:32/little, Code:32/little, 2:32/little,
+          16#04:16/little, S1/binary,
+          16#0B:16/little, S2/binary,
+          Sz:32/little, Data/binary>>
+    end,
+    DrvRec = MkRec(2, 16#80000004, DrvData),   %% driver
+    AppRec = MkRec(4, 16#80000003, AppData),   %% application
+    Raw = <<FirstRec/binary, DrvRec/binary, AppRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    BC = maps:get(<<"boot-chain">>, Claim),
+    ?assertEqual(2,     maps:get(<<"length">>, BC)),
+    ?assertEqual(1,     maps:get(<<"application-count">>, BC)),
+    ?assertEqual(false, maps:get(<<"has-runtime-driver">>, BC)),
+    Chain = maps:get(<<"chain">>, BC),
+    ?assertEqual(2, length(Chain)),
+    [Row0, Row1] = Chain,
+    ?assertEqual(<<"driver">>,      maps:get(<<"role">>, Row0)),
+    ?assertEqual(<<"application">>, maps:get(<<"role">>, Row1)),
+    ?assertEqual(0, maps:get(<<"chain-index">>, Row0)),
+    ?assertEqual(1, maps:get(<<"chain-index">>, Row1)),
+    ?assertEqual(maps:get(<<"image-hash">>, Row1),
+                 maps:get(<<"last-application-hash">>, BC)),
+    ?assertEqual(16#2000, maps:get(<<"image-length-in-memory">>, Row0)),
+    ?assertEqual(16#10000, maps:get(<<"image-length-in-memory">>, Row1)),
+    ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
 %% DB entries.
