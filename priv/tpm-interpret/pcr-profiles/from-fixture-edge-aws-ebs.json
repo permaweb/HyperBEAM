@@ -1,0 +1,25 @@
+{
+  "schema-version": 1,
+  "name": "AWS \u2014 fixture edge-aws-ebs.bin",
+  "match-pcrs": {
+    "sha1": {
+      "0": "tHZsFU_qrK79YbSMZh_BwpR2L0w",
+      "1": "OHzoZCnauzzvtcDIeXICERlTfbM",
+      "2": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "fu-5_RXgiFh6DFDi7PsrMB6WPcI",
+      "5": "5XgaL9ScI6M7Fr8LpfEO-hql1Dw",
+      "7": "xriWNLHRGgCDKYwXrOyP2asmbbY"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "AWS",
+    "fixture": "edge-aws-ebs.bin",
+    "record-count": 38,
+    "log-format": "tpm12-legacy",
+    "crtm-version": "4d3630000000000000000000000000000200320000000000be80f7cce22e47e1aa61f624eb5e34347e30b8a962d6346c728f9919b8d7a2f5cac209198ba683edb9fb0861484837241e5b9e9a3290e8807464f9b25f27aaa31cd68ca869efe5999105c048caaa515c85ac207664c984982b8b8aaf2e9e499104fde4d1694ba387c17e50004a84bb66d9aaf6312b70c1070468baedbc01f1556fa93039822fe9bad5f514495b6e19c6c252fee7d065015ada508ba43a1e22dd2578683f5ae9c5eb414150d7d0a73ece9f936038d0d3d0d28f77e76ef33ffa13e8088f5b31a66a7f8604566c4ae1e04291e5a1ad043d63433e333722541ae2d0d3bee71a91d7968eba39778329ebb11a583e734939384901d786b6b9d7820b18",
+    "secure-boot-enabled": false,
+    "trust-tier": "cloud-vtpm"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/edge-aws-ebs.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

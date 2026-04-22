@@ -1,0 +1,33 @@
+{
+  "schema-version": 1,
+  "name": "unknown \u2014 fixture tpm2tools-postcode.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "1gwwd36pytCsiGjtoRoAYIom8KL5tdX73UqE14hOqUY",
+      "1": "ZUVzGElbUvLUEAyvoA17V4gOsgNh5ejo0pFmzGfAiQw",
+      "2": "FdYIBrYPcVzdlOYk8nhU9gi7zSYADzn6fw7A23qLpcg",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "In2LO4KUIj9tAGVYKwFawxxdot05EADYcUHjjsA-d6g",
+      "5": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "7": "zqC3R1hnqyztT2onhTDApX4Pgmz-_fdHwOZwygkUDqU"
+    },
+    "sha1": {
+      "0": "YIBKcoygrxPhT-qOee_-M-o-7Hs",
+      "1": "XVp7iEA_s48cvPmOQMrlZrvQugI",
+      "2": "NxDUwA7VbSGTV37pTpiM2GV6d88",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "fJN1d7WMILc790Sbpnlj3yb9JkQ",
+      "5": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "7": "6BRfalU3IVjYf1XDOxer58NZh-8"
+    }
+  },
+  "attributes": {
+    "fixture": "tpm2tools-postcode.bin",
+    "record-count": 58,
+    "log-format": "crypto-agile",
+    "crtm-version": "1efb6b540c1d5540a4ad4ef4bf17b83a",
+    "secure-boot-enabled": true,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/tpm2tools-postcode.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

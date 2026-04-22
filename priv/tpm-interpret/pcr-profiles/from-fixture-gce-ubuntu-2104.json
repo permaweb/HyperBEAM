@@ -1,0 +1,36 @@
+{
+  "schema-version": 1,
+  "name": "Google (GCE) \u2014 fixture gce-ubuntu-2104.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "JK9SpPQptxoxhKbWTN2tF-VOoDDiqmV2vzpaPYvTMo8",
+      "1": "99q1_aawguDsGhLEPdmW7kCREUIs2nUqeEYgMTA52xk",
+      "2": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "KVrq6srR1QeTC6sYQY-QXu2mM-pnsquUxeX9Ok1HrFg",
+      "5": "5PE1msz-SLGa99OOmKPzcxFrVbf3pvWPgm9AmpHZ_Sg",
+      "7": "yjcyTu_6vTGNMKIPFb8nziXcM-LJhWJ5_2ws7ViwLvo",
+      "14": "g1HGVIPFQZB56MlnWN0hML7gddcf6iJvaOxOtb_HGYM"
+    },
+    "sha1": {
+      "0": "Dy06KhrapHmu7Kj133aq3EG4Yuo",
+      "1": "Nsa3Q2w3JDxfZ0S3PO1N8Sh80Wo",
+      "2": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "jZhotmr89AOer471IoVW2fMTZZ8",
+      "5": "sOqkWkluDZM_Y-l_0jYhkt1I42k",
+      "7": "d3eVy97KZ593SdjQn8EpQdzJkSo",
+      "14": "zTc00r38-6nkQ6wCwDyBL_zOslU"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Google (GCE)",
+    "fixture": "gce-ubuntu-2104.bin",
+    "record-count": 111,
+    "log-format": "crypto-agile",
+    "crtm-version": "GCE Virtual Firmware v1",
+    "secure-boot-enabled": false,
+    "trust-tier": "cloud-vtpm"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/gce-ubuntu-2104.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

@@ -1,0 +1,26 @@
+{
+  "schema-version": 1,
+  "name": "Dell \u2014 fixture dell-notebook-wbcl.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "uZ7Ax7XOznyCwec0Td2tmXAyYfipzlMUE76vXDymKrY",
+      "1": "hUl5eX8WSS-E7dNyyEzCvpQXt6fTa4i6dS-fuED-1ic",
+      "2": "7Db84B3k3pGpvQvFChtrsquw9auoUUAwVbKfYId8G8U",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "j13IXfNF7yWs3w14n3QGqMkXhtlL30j9IlsA2NmF_I0",
+      "5": "3XbqHTt8c16BsrrBsO2tUKFh3Cb5Vnzs035sD072i9w",
+      "7": "XsJHI2oUfSFgGApOaHcnLyeZ7WJ27BN3N-3_W3EeYF4",
+      "11": "D-bo8hENXVOTXJ59b2v3IlmLVQWVqr3G5P0uzfMQ-YA",
+      "14": "89WW8-QV75jKIpgTpQL9H878NAfP-PXMFACPvr1W7fQ"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Dell",
+    "fixture": "dell-notebook-wbcl.bin",
+    "record-count": 61,
+    "log-format": "crypto-agile",
+    "secure-boot-enabled": false,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/dell-notebook-wbcl.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

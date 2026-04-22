@@ -1,0 +1,26 @@
+{
+  "schema-version": 1,
+  "name": "unknown \u2014 fixture edge-option-rom.bin",
+  "match-pcrs": {
+    "sha1": {
+      "0": "AVGK7ch6DvUF0nJh74NYCefaAIY",
+      "1": "vr_0wIpmd0c6tgTO3vuC-FDN6IM",
+      "2": "NmoxoMB1No8OEIVzM-ou1uigD9M",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "OfOIw5WekEaUcm9MAVttzq4GgKE",
+      "5": "cjoFIM9_KXhUh0K9FUFwayRGRZ4",
+      "7": "IN59-6a838ytrX4-sJnJHU2Xxa0",
+      "11": "67mN92YTKA8g3DgiEUOp5yc5lIY",
+      "14": "aK9QQ3i-qr3INtcZYZmqlsBZ0rI"
+    }
+  },
+  "attributes": {
+    "fixture": "edge-option-rom.bin",
+    "record-count": 60,
+    "log-format": "tpm12-legacy",
+    "crtm-version": "4d36300000000000000000000000000002001700000000006a4717cd11cac370baba0f56e8e951c892de63ecb35b1792f25fea26300f078aad9fb36fc1021af52e8a81245ba2c14f760941128289b7ec98909e39bf55a6fbc948c6ae3661d4c73bfd0b75bbb51eb8eae6b1798d5bc7af5769f60727eef2052e843663f4bbe1916d4d799cf55df9222e743b053a5f26a3e02dea2b6e044d6c23a576b025eba20dee1cb97d65c4f1bb9dfb2996c4eb3caed0e0acdbbd8eb5f6baa3c7fe73b737a3396c167a1f9ab8de4f7953b7e7a0c7698c16250c909b7a4cbefbf17b12718e9284507a7279589c3cf68d9e00fb79fb2d498c322573fb722b0652b3c0e61cd28352a5ff7f67c5a56b6a182cf83eb26b400a8d85fa2183fc4e",
+    "secure-boot-enabled": true,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/edge-option-rom.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

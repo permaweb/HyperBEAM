@@ -1,0 +1,23 @@
+{
+  "schema-version": 1,
+  "name": "generic-linux-distro-testing \u2014 fixture fedora37-sd-boot.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "RkqBKvo_iNil8f5-cd9BlRQ169Be23QtuMLA1n1iwNE",
+      "1": "8sOlqx_N7Hxw0OavRzBOnSpKqTmHSmn7uE94b_Sy9j8",
+      "2": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "epT_6KdymlZtPTxXf8tLax5nHzFUA3X4Dq5jgqt4XjU",
+      "5": "pc63VdBD8yQx1j459RYUZGIKNDcoBJS1hQ3BtHzAdOA",
+      "7": "tXEL9X0lYj5AGQJ9oRaCH6mfXIHp44uHZxzFdPkoFDk"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "generic-linux-distro-testing",
+    "fixture": "fedora37-sd-boot.bin",
+    "record-count": 27,
+    "log-format": "crypto-agile",
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/fedora37-sd-boot.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

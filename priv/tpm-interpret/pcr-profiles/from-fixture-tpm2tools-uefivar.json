@@ -1,0 +1,20 @@
+{
+  "schema-version": 1,
+  "name": "unknown \u2014 fixture tpm2tools-uefivar.bin",
+  "match-pcrs": {
+    "sha256": {
+      "7": "5YraG6dfLkcitTmCRZitXhDFXy5K6rIDPzsKjuPz7KY"
+    },
+    "sha1": {
+      "7": "Oh6iALj6_mDCkOkDxeZEPP72fwQ"
+    }
+  },
+  "attributes": {
+    "fixture": "tpm2tools-uefivar.bin",
+    "record-count": 1,
+    "log-format": "crypto-agile",
+    "secure-boot-enabled": true,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/tpm2tools-uefivar.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

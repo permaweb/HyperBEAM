@@ -1,0 +1,20 @@
+{
+  "schema-version": 1,
+  "name": "QEMU \u2014 fixture qemu-swtpm.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "EYvcQENZb41reBNDgTGVmWH2q7opurAHXRbKOWZPWGI"
+    },
+    "sha1": {
+      "0": "VDwxQGapzXpraqU_VrOOgUp27-c"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "QEMU",
+    "fixture": "qemu-swtpm.bin",
+    "record-count": 1,
+    "log-format": "crypto-agile",
+    "trust-tier": "development-only"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/qemu-swtpm.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

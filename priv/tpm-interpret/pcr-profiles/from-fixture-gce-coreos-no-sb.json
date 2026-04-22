@@ -1,0 +1,36 @@
+{
+  "schema-version": 1,
+  "name": "Google (GCE) \u2014 fixture gce-coreos-no-sb.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "DzXCFGCNk8em5ornNZtKi-Wg6Z7qkQfs5CfE3qTkOc8",
+      "1": "EaYIfYMzGqV_uAsZ0f4vJ5NnS0JBF4HA3t6jclVsAXg",
+      "2": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "tGUlQ1W3Imktgv89RlANc_Bc1W-w1kPTLNnfEAx4q7M",
+      "5": "EUNCTUiTgfwmYaWRQNL5FhBi_0zX30MNZchzhSbBSDs",
+      "7": "k0BVFChHLEgg1B9RNoQn9dFiCz59IIHPiFnn4iBVS80",
+      "14": "18TMf_eTMCLwE-A73uh1uRcgtbhs8XU8rYMPleeRkm8"
+    },
+    "sha1": {
+      "0": "wDLDtR27b5awR0IVEv1LTf3klvM",
+      "1": "nYBcsJC2Umo4f_O1-u-U6jrzno8",
+      "2": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "n27np6OolX_ERgfRjU25LCdMxe0",
+      "5": "_2DhFFBBQUmz6pXj7FsHby-V-zY",
+      "7": "YQaDDHcYfcKCmoMFzjfDsv1HhxM",
+      "14": "awO95V3Ck4-5QxfrIWm8-IIEpLE"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Google (GCE)",
+    "fixture": "gce-coreos-no-sb.bin",
+    "record-count": 75,
+    "log-format": "crypto-agile",
+    "crtm-version": "GCE Virtual Firmware v1",
+    "secure-boot-enabled": false,
+    "trust-tier": "cloud-vtpm"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/gce-coreos-no-sb.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

@@ -1,0 +1,36 @@
+{
+  "schema-version": 1,
+  "name": "Supermicro \u2014 fixture supermicro-h12ssl.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "Qmpc8PzjbCjlrxYqFlh5xV4QwOeKMBszABcLWZ8i6SY",
+      "1": "rg6y-bwz5KhzuyNTMoNPybwCZr6FlDxqGGb3NJyeg_o",
+      "2": "TXXujo6xFIReRG8ffjS4BXlQbFGZ65yLA-a9g1SdPD0",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "Xm9SDYQKnhLI8Z-soY4zYXSUAwuuZX4ND7QrGNxhexQ",
+      "5": "MrUFuTiCsZHJbMDvwHnJqgLM9XoKy6205NtAumO-fJ0",
+      "7": "s6nQCH7UxMT3ODEPkp91-H9Vwa7wnE3IYWn8xCI4tR4",
+      "14": "45kbfd1Hvn6ScmqDLWh0xTSbUreJ-g24tVjGn-opV04"
+    },
+    "sha1": {
+      "0": "Zcvf8o31j0p1UzFmU5uOCkYIgyc",
+      "1": "MZNPBmi4v2sWFJJeBcXBq1TixOA",
+      "2": "CGnkmdCRyklvdkimE9hOreKZL0E",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "SaguKuH6V2mWxWzVib6ZziKO49g",
+      "5": "YS_ofoxD0i7Fy1vEG9oBpDai3_k",
+      "7": "cnb6Yxlyb1UDsFpNGz3EkeE5M8w",
+      "14": "d9tm1gqgws0c6mw0_tTyqgFL8oU"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Supermicro",
+    "fixture": "supermicro-h12ssl.bin",
+    "record-count": 113,
+    "log-format": "crypto-agile",
+    "crtm-version": "1efb6b540c1d5540a4ad4ef4bf17b83a",
+    "secure-boot-enabled": false,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/supermicro-h12ssl.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}

@@ -1,0 +1,34 @@
+{
+  "schema-version": 1,
+  "name": "Inspur \u2014 fixture inspur-server.bin",
+  "match-pcrs": {
+    "sha256": {
+      "0": "n84tloDB3llrYq5r165Xh2CpWLmLcqzpVdW_W435kfo",
+      "1": "W03jmX3Uz_L8yTQiJu3_LwV7NNNx17Km1mYfI2_iTCQ",
+      "2": "T5B2ENTyWsDAqSdgY5xFeYTInkJGHRn5okfzGMAXzU4",
+      "3": "PUWM_lXMA-ofRD8VYr7sjfUcdeFKn8-acjShPxmOeWk",
+      "4": "pcfpKGOj3VPrQmhYK_GRpTKhEGVU3C9W_DKUxuGVqKU",
+      "5": "C3Ib2BrOqBls5HOD45JlLG-gsUOAnqMuW6iJPssg7vs",
+      "7": "Zcr43R4Op6Y0e2NdKzeck7mhNR7cKvw-zacA5TTrMGg"
+    },
+    "sha1": {
+      "0": "S4eH9AnVS-Nosjh2B6jfnKMHWdI",
+      "1": "iw7wmew8lM3QuA7359iXlQ_tuz8",
+      "2": "4MnYqG_qOm-uAtLbFPs1p2dB2jE",
+      "3": "sqg7Dr8vg3Qpmlsr38MeqVWtcjY",
+      "4": "fMGwEIoJDNCOg-wCrlFM6NGcahQ",
+      "5": "UDpajPGi0mdKmYLyTWHKWVihiD4",
+      "7": "UYvRZycfu2RYnGHkPYwBZYYUMdg"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Inspur",
+    "fixture": "inspur-server.bin",
+    "record-count": 100,
+    "log-format": "crypto-agile",
+    "crtm-version": "1efb6b540c1d5540a4ad4ef4bf17b83a",
+    "secure-boot-enabled": false,
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Derived by replaying every event in priv/tpm-interpret/fixtures/inspur-server.bin into its declared PCR (SHA-1 + SHA-256, starting from all-zero state, folding per TCG PC Client spec). These are the expected PCR fingerprints a TPM quote from this exact firmware + boot sequence would produce. Source: public test-vector corpus collected from tpm2-tools, go-attestation, keylime, immune-guard, fwupd, and others (see fixtures/ history)."
+}
