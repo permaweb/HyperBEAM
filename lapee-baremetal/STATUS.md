@@ -2259,3 +2259,93 @@ CA PEMs, UKI measurement catalogue) are deployer-specific
 data-collection tasks, not decoder work.
 
 Stopping overnight mode. All 7 phases of the plan complete.
+
+---
+
+## /loop 60m — hourly improvement pass (2026-04-22)
+
+Sam requested an hourly self-pacing loop to keep improving the parser
+overnight. CronCreate `b5d87b84` fires at `:23` each hour; each
+iteration picks 1-3 areas from a running priority list, implements
+them, commits, and hands back to cron.
+
+### Hour 1 — commit `34c1e2158`
+`parse_kernel_cmdline/1` tokeniser in `dev_tpm_tcg` + tier-2 claim
+evidence for `claim.tme` / `claim.iommu` / `claim.lockdown` /
+`claim.kernel-integrity` / `claim.verity`. 26-entry cmdline-flag
+map; bool normalisation ("on"/"1"/"yes" → true). 122/122 tests.
+
+### Hour 2 — commit `c9a28fd68`
+`claim.tpm` flat section (paper field #2: vendor + kind + model +
+spec + CVEs + trust-tier, from EK cert TCG OIDs) + `detect_context/2`
+(TDX CCEL / SEV-SNP detection) + `claim_tme/4` with tier-5 evidence
+(TDX requires TME, SEV-SNP requires SME). Live-verified on
+`intel-tdx-ccel.bin` fixture: `context.kind=intel-tdx-ccel`,
+`tme.enabled=true` via tier-5 alone. 124/124 tests.
+
+### Hour 3 — commit `dde187d4f`
+Three coupled DB enrichments that turn `priv/tpm-interpret/` from
+a placeholder into a data-bearing tier-3 source and add human-
+readable identity fields to every claim:
+
+1. **UKI-measurement DB seeded** with 5 canonical baselines
+   (fedora, debian, ubuntu, arch, lapee-os). Each entry declares
+   claims a UKI in that family guarantees (`checks-tme',
+   `lockdown-confidentiality', `ima-enabled', `init-on-alloc-
+   default', `module-sig-enforce-default', ...). Multi-criteria
+   matching: exact `uki-hash' | `known-uki-hashes' | `match.
+   kernel-name-prefix' | `match.stub-name'. All-rules-must-be-
+   compatible + at-least-one-must-fire semantics so a generic
+   `stub-name=systemd-stub' can't clobber a more specific kernel-
+   name mismatch.
+
+2. **CPU brand-string lookup** via new `cpu-models.json`
+   catalogue: 25 Intel family-6 model entries (Haswell → Lunar
+   Lake) + 18 AMD Zen entries (Zen 1 → Zen 5). Each entry:
+   `codename', `brand-range', `micro-arch', `year', `tee-support'
+   list (SME/SEV/SEV-SNP/TME/TME-MK/TDX/SGX/CET/AMX/TXT/...).
+   `claim.cpu' now reports `codename=Sapphire Rapids' with
+   `tee-support=[SGX, TDX, TME-MK, CET, AMX]' for a family=6
+   model=143 quote instead of just raw numbers.
+
+3. **Firmware-family cross-reference** on CRTM prefix match.
+   `claim.firmware' projects `family-name', `family-vendor',
+   `family-trust-tier', `family-secure-boot-default', `family-
+   tpm-vendor-id', `family-virtualization-platform', `family-ek-
+   root-ca-source', `family-platform', with provenance citing
+   matched manifest-key + matched-prefix. Verified on
+   `lenovo-thinkpad-p51.bin' fixture → `family-vendor=Lenovo'
+   via `manifest-key=lenovo-thinkpad' + `matched-prefix=N'.
+
+Threaded `Db' through `claim_firmware/2' and `claim_cpu/2` in
+`interpret_claim/3`. `hb_db_tpm:load_fresh/0` now also loads
+`cpu-models.json` as a top-level DB slot. Three new eunit tests
+(`claim_surface_hour3_db_cross_reference_test`,
+`claim_surface_hour3_firmware_family_match_test`,
+`uki_db_lookup_handles_empty_and_malformed_test`). 111 total
+tests pass (90 tcg + 21 interpret).
+
+### Candidate priority list for next hour
+
+1. **Windows SIPA per-subtype full decode** — TCGLogTools parity
+   for 60+ WBCL event subtypes (0x10000000+). Today only the
+   event-type name is surfaced; the per-subtype payload is still
+   `opaque`. Biggest coverage gap against TCGLogTools.
+2. **Richer PE image measurement** for EV_EFI_BOOT_SERVICES_
+   APPLICATION / EV_EFI_BOOT_SERVICES_DRIVER — decode the
+   UEFI_IMAGE_LOAD_EVENT struct (LoadAddr, LengthOfImage, LinkT
+   imeAddr, LengthOfDevicePath) + follow the device path.
+3. **IMA per-file event log decode** — `ima-ng' / `ima-sig' /
+   `ima-buf' template parse. Currently transported raw; unlocks
+   per-file hash chain in the claim.
+4. **Per-platform PCR profiles** — seed 5-10 known-good PCR 0/1/
+   7 values for specific BIOS versions (Lenovo N1UET79W, Dell
+   2.8.0, etc.) so a quote can assert "this exact firmware
+   version booted".
+5. **CPU brand matrix expansion** — seed AMD EPYC-specific
+   entries (Milan family=25 model=1 vs Genoa family=25 model=17
+   have different TDX/SEV-SNP behavior); add Xeon SP 6th-gen
+   Sierra Forest (family=6 model=175).
+
+Iteration 4 fires automatically at `:23`. Loop state: `b5d87b84`.
+
