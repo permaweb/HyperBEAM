@@ -1,0 +1,33 @@
+{
+    "schema-version": 1,
+    "name": "Ubuntu 24.04+ systemd-stub UKI baseline",
+    "description": "Ubuntu 24.04 LTS `Noble Numbat' ships systemd 255+ with ukify(1) support. UKIs built via `ukify build' measure into PCR 11 (PE image) + PCR 12 (key=value EV_IPLs). Ubuntu's shipped 6.8 kernel uses CONFIG_SECURITY_LOCKDOWN_LSM=y with default `integrity' in Secure-Boot mode and CONFIG_IMA=y.",
+    "vendor": "Canonical",
+    "distribution": "Ubuntu",
+    "match": {
+        "kernel-name-prefix": ["Ubuntu", "ubuntu-"],
+        "stub-name": ["systemd-stub"],
+        "pe-section-name": [".linux", ".initrd", ".cmdline", ".osrel", ".uname"]
+    },
+    "claims": {
+        "checks-tme": true,
+        "lockdown-confidentiality": false,
+        "lockdown-integrity": true,
+        "ima-enabled": true,
+        "init-on-alloc-default": false,
+        "init-on-free-default": false,
+        "module-sig-enforce-default": true,
+        "slab-nomerge-default": false,
+        "kernel-cmdline-sealed-in-uki": true
+    },
+    "shim-authority": [
+        "Canonical Ltd. Secure Boot Signing",
+        "Canonical Ltd. Master Certificate Authority"
+    ],
+    "pcr-extension-order": [
+        "pcr-11: UKI PE image",
+        "pcr-12: EV_IPL key=value for each systemd-stub parameter"
+    ],
+    "notes": "Ubuntu's fips-validated variants enable CONFIG_FIPS=y; those are distinct UKIs and will have their own entry once onboarded. Azure-Ubuntu and GCP-Ubuntu are further variants with cloud-specific initramfs modules.",
+    "source": "Canonical kernel source tree + https://ubuntu.com/security/certifications/docs/fips"
+}

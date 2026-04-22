@@ -1,0 +1,41 @@
+{
+    "schema-version": 1,
+    "name": "LapEE OS reference UKI baseline",
+    "description": "The LapEE reference OS (lapee-baremetal) boots a systemd-stub UKI built from an immutable kernel image pinned against a verified source hash. The kernel is built with CONFIG_SECURITY_LOCKDOWN_LSM=y + CONFIG_LOCKDOWN_CONFIDENTIALITY=y, CONFIG_IMA=y with a mandatory appraisal policy, CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y, CONFIG_INIT_ON_FREE_DEFAULT_ON=y, CONFIG_SLAB_MERGE_DEFAULT=n, and halts in head_64.S if TME-MK init returns failure.",
+    "vendor": "LapEE",
+    "distribution": "lapee-baremetal",
+    "match": {
+        "kernel-name-prefix": ["lapee-", "LapEE-", "LapeeOS-"],
+        "stub-name": ["systemd-stub"],
+        "pe-section-name": [".linux", ".initrd", ".cmdline", ".osrel", ".uname",
+                            ".lapee-sbat"]
+    },
+    "claims": {
+        "checks-tme": true,
+        "lockdown-confidentiality": true,
+        "ima-enabled": true,
+        "ima-appraisal-policy-enforced": true,
+        "init-on-alloc-default": true,
+        "init-on-free-default": true,
+        "module-sig-enforce-default": true,
+        "slab-nomerge-default": true,
+        "kernel-cmdline-sealed-in-uki": true,
+        "runtime-pcr-15-sealed": true,
+        "node-key-ephemeral": true
+    },
+    "shim-authority": [
+        "LapEE OS Kernel Signing CA",
+        "LapEE OS Shim CA"
+    ],
+    "pcr-extension-order": [
+        "pcr-0: CRTM measured by firmware",
+        "pcr-7: Secure Boot policy",
+        "pcr-11: UKI PE image (the kernel-integrity boundary)",
+        "pcr-12: EV_IPL key=value for each systemd-stub parameter",
+        "pcr-13: systemd credentials",
+        "pcr-15: runtime-extended by lapee-node on successful boot"
+    ],
+    "notes": "Tier-3 evidence for claim.tme.enabled, claim.lockdown.confidentiality, and claim.kernel-integrity fires automatically when a quote's PCR 11 value matches any hash in `known-uki-hashes' below, OR when the event log contains an EV_IPL `kernel_name=lapee-*'. The hash list is empty here; real deployment populates it at release time from the UKI ESP entry's SHA-256.",
+    "known-uki-hashes": [],
+    "source": "lapee-baremetal/kernel-config + lapee-baremetal/uki-build.nix"
+}

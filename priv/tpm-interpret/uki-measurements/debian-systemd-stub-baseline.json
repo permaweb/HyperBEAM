@@ -1,0 +1,33 @@
+{
+    "schema-version": 1,
+    "name": "Debian 12+ systemd-stub UKI baseline",
+    "description": "Debian's systemd-stub-based UKIs (Debian 12 bookworm-backports, Debian 13 trixie) emit key=value EV_IPL events on PCR 12 declaring `kernel_name' prefixed with `Debian GNU/Linux' or `linux-image-'. Debian ships the upstream kernel with CONFIG_SECURITY_LOCKDOWN_LSM=y but the default level in Secure-Boot mode is `integrity', not `confidentiality' — so tier-3 evidence will say lockdown-confidentiality=false here unless the admin overrides via cmdline.",
+    "vendor": "Debian Project",
+    "distribution": "Debian GNU/Linux",
+    "match": {
+        "kernel-name-prefix": ["Debian", "debian-"],
+        "stub-name": ["systemd-stub"],
+        "pe-section-name": [".linux", ".initrd", ".cmdline", ".osrel", ".uname"]
+    },
+    "claims": {
+        "checks-tme": true,
+        "lockdown-confidentiality": false,
+        "lockdown-integrity": true,
+        "ima-enabled": false,
+        "init-on-alloc-default": false,
+        "init-on-free-default": false,
+        "module-sig-enforce-default": true,
+        "slab-nomerge-default": false,
+        "kernel-cmdline-sealed-in-uki": true
+    },
+    "shim-authority": [
+        "Debian Secure Boot CA",
+        "Debian Secure Boot Signer 2022"
+    ],
+    "pcr-extension-order": [
+        "pcr-11: UKI PE image",
+        "pcr-12: EV_IPL key=value for each systemd-stub parameter"
+    ],
+    "notes": "Debian's ukify-produced UKIs are signed with Debian's Secure Boot signing key which chains to Microsoft's UEFI CA via shim. Per-UKI hashes should be contributed upstream to this DB as they appear in `apt' repos. lockdown=confidentiality requires explicit cmdline override; default is `integrity'.",
+    "source": "Debian kernel source package + https://wiki.debian.org/SecureBoot"
+}

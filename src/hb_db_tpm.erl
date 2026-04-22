@@ -10,18 +10,28 @@
 %%% File formats
 %%%
 %%%     manufacturers.json          {"vendors": {"49465800": {...}, ...}}
+%%%     event-types.json            {"types": {"0x8": {...}, ...}}
 %%%     pcr-profiles/*.json         {"name":..., "pcrs": {"0":"<hex>", ...},
 %%%                                  "notes":..., "source":...}
-%%%     uki-measurements/*.json     {"name":..., "pcrs": {"11":"<hex>",
-%%%                                  "12":"<hex>", ...}, ...}
+%%%     uki-measurements/*.json     {"name":..., "match": {...},
+%%%                                  "claims": {...}, ...}
+%%%     firmware-versions/*.json    {"name":..., "match": {...},
+%%%                                  "vendor":..., "trust-tier":..., ...}
+%%%     cpu-models.json             {"intel": {"<fam>-<model>": {...}, ...},
+%%%                                  "amd":   {"<fam>-<model>": {...}, ...}}
+%%%     root-cas/*.pem              per-vendor EK root CA PEMs.
 %%%
-%%% The public contract is a single map:
+%%% The public contract is a single map (kebab-case keys on the wire):
 %%%
 %%%     #{
-%%%         vendors       => #{ <<"HEXID">> => VendorEntry, ... },
-%%%         pcr_profiles  => #{ <<"file-name">> => ProfileEntry, ... },
-%%%         uki_profiles  => #{ <<"file-name">> => UkiEntry, ... },
-%%%         cert_roots    => [ #{name, pem, ...}, ... ]
+%%%         <<"vendors">>            => #{ <<"HEXID">> => VendorEntry, ... },
+%%%         <<"event-types">>        => #{ ... },
+%%%         <<"pcr-profiles">>       => #{ <<"file-name">> => ProfileEntry, ... },
+%%%         <<"uki-profiles">>       => #{ <<"file-name">> => UkiEntry, ... },
+%%%         <<"firmware-versions">>  => #{ <<"file-name">> => FwEntry, ... },
+%%%         <<"cpu-models">>         => #{ <<"intel">> => #{...},
+%%%                                         <<"amd">> => #{...}, ... },
+%%%         <<"cert-roots">>         => [ #{name, pem, ...}, ... ]
 %%%     }
 -module(hb_db_tpm).
 -export([load/1, priv_dir/0]).
@@ -74,6 +84,8 @@ load_fresh() ->
             read_dir_of_json(filename:join(Root, "uki-measurements")),
         <<"firmware-versions">> =>
             read_dir_of_json(filename:join(Root, "firmware-versions")),
+        <<"cpu-models">> =>
+            read_json(filename:join(Root, "cpu-models.json")),
         <<"cert-roots">> =>
             read_cert_roots(filename:join(Root, "root-cas"))
     }.

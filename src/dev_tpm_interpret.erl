@@ -1133,10 +1133,10 @@ interpret_claim(Events, E, Db) ->
     Context = detect_context(Events, EvList),
     #{
         <<"secure-boot">>        => claim_secure_boot(EvList),
-        <<"firmware">>           => claim_firmware(EvList),
+        <<"firmware">>           => claim_firmware(EvList, Db),
         <<"boot-loader">>        => claim_boot_loader(EvList),
         <<"kernel">>             => claim_kernel(EvList, E),
-        <<"cpu">>                => claim_cpu(EvList),
+        <<"cpu">>                => claim_cpu(EvList, Db),
         <<"shim">>               => claim_shim(EvList),
         %% Paper field #2 — TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
@@ -1276,41 +1276,167 @@ tpm_trust_tier(_)                     -> <<"unknown">>.
 
 %% CPU microcode identity — from EV_CPU_MICROCODE on PCR 1.
 %% Discriminates Intel vs AMD vs unknown via `parsed.format'.
-claim_cpu(Events) ->
+%% The 2-arg form additionally cross-references
+%% `priv/tpm-interpret/cpu-models.json' to attach a human-readable
+%% `codename', `brand-range', `micro-arch', `year' and the
+%% supported TEE/hardening feature set.
+claim_cpu(Events) -> claim_cpu(Events, #{}).
+
+claim_cpu(Events, Db) ->
     UcodeEvs = [Ev || Ev <- Events,
                       maps:get(<<"event-type-code">>, Ev, 0) =:= 16#09],
     case UcodeEvs of
         [] ->
-            #{<<"vendor">>              => <<"unknown">>,
-              <<"vendor-provenance">>   => [],
-              <<"microcode-description">>           => <<"unknown">>,
-              <<"microcode-description-provenance">>=> []};
+            unknown_cpu_claim();
         [Ev | _] ->
             P = nested(Ev, [<<"parsed">>], #{}),
             Vendor = maps:get(<<"format">>, P, <<"unknown">>),
-            Desc =
-                case Vendor of
-                    <<"intel">> ->
-                        iolist_to_binary(io_lib:format(
-                            "intel rev=0x~.16B sig=0x~.16B ~s",
-                            [maps:get(<<"update-revision">>, P, 0),
-                             maps:get(<<"processor-signature">>, P, 0),
-                             maps:get(<<"cpu-family-model-stepping">>, P,
-                                       <<"">>)]));
-                    <<"amd">> ->
-                        iolist_to_binary(io_lib:format(
-                            "amd patch-id=0x~.16B proc-rev=0x~4.16.0B ~s",
-                            [maps:get(<<"patch-id">>, P, 0),
-                             maps:get(<<"processor-rev-id">>, P, 0),
-                             maps:get(<<"date">>, P, <<"">>)]));
-                    _ -> <<"unknown">>
-                end,
-            #{<<"vendor">>              => Vendor,
-              <<"vendor-provenance">>   => [event_provenance(Ev)],
-              <<"microcode-description">>           => Desc,
-              <<"microcode-description-provenance">>=>
-                  [event_provenance(Ev)]}
+            Desc = format_microcode_desc(Vendor, P),
+            {Family, Model, Stepping} = extract_cpu_fms(Vendor, P),
+            Lookup = cpu_model_lookup(Vendor, Family, Model, Db),
+            Base = #{
+                <<"vendor">>              => Vendor,
+                <<"vendor-provenance">>   => [event_provenance(Ev)],
+                <<"microcode-description">>           => Desc,
+                <<"microcode-description-provenance">>=>
+                    [event_provenance(Ev)],
+                <<"cpu-family">>          => to_int_or_null(Family),
+                <<"cpu-model">>           => to_int_or_null(Model),
+                <<"cpu-stepping">>        => to_int_or_null(Stepping),
+                <<"cpu-family-model-key">> =>
+                    family_model_key(Family, Model)
+            },
+            merge_cpu_lookup(Base, Lookup, Ev)
     end.
+
+unknown_cpu_claim() ->
+    #{<<"vendor">>              => <<"unknown">>,
+      <<"vendor-provenance">>   => [],
+      <<"microcode-description">>           => <<"unknown">>,
+      <<"microcode-description-provenance">>=> [],
+      <<"cpu-family">>          => null,
+      <<"cpu-model">>           => null,
+      <<"cpu-stepping">>        => null,
+      <<"cpu-family-model-key">>=> null,
+      <<"codename">>            => null,
+      <<"brand-range">>         => null,
+      <<"micro-arch">>          => null,
+      <<"year">>                => null,
+      <<"tee-support">>         => [],
+      <<"codename-provenance">> => []}.
+
+format_microcode_desc(<<"intel">>, P) ->
+    iolist_to_binary(io_lib:format(
+        "intel rev=0x~.16B sig=0x~.16B ~s",
+        [maps:get(<<"update-revision">>, P, 0),
+         maps:get(<<"processor-signature">>, P, 0),
+         maps:get(<<"cpu-family-model-stepping">>, P, <<"">>)]));
+format_microcode_desc(<<"amd">>, P) ->
+    iolist_to_binary(io_lib:format(
+        "amd patch-id=0x~.16B proc-rev=0x~4.16.0B ~s",
+        [maps:get(<<"patch-id">>, P, 0),
+         maps:get(<<"processor-rev-id">>, P, 0),
+         maps:get(<<"date">>, P, <<"">>)]));
+format_microcode_desc(_, _) -> <<"unknown">>.
+
+%% Extract family/model/stepping from the format-specific parse.
+%% Intel: `cpu-family-model-stepping' string has "family=N model=N
+%%        stepping=N" (set by dev_tpm_tcg:format_intel_sig/1).
+%% AMD:   `processor-rev-id' is a u16 (BaseModel-in-low, ExtendedModel
+%%        middle, Family in high bits per AMD PPR).
+extract_cpu_fms(<<"intel">>, P) ->
+    S = maps:get(<<"cpu-family-model-stepping">>, P, <<>>),
+    parse_fms_string(S);
+extract_cpu_fms(<<"amd">>, P) ->
+    Rev = maps:get(<<"processor-rev-id">>, P, 0),
+    %% AMD ProcessorRevId (u16): bits 0-3 stepping, 4-11 combined
+    %% model (low-nibble = BaseModel, high-byte bits 8-11 = ExtModel
+    %% shifted), 12-15 family low-nibble; BaseFamily + ExtFamily per
+    %% AMD PPR section "Processor Revision Identifier".
+    %% Pragmatic approximation matching the Linux kernel's ucode
+    %% parser in arch/x86/kernel/cpu/microcode/amd.c:
+    Stepping = Rev band 16#F,
+    Model    = (Rev bsr 4) band 16#FF,
+    Family   = (Rev bsr 12) band 16#F,
+    FullFamily =
+        case Family of
+            16#F -> Family + ((Rev bsr 20) band 16#FF);
+            _    -> Family
+        end,
+    {FullFamily, Model, Stepping};
+extract_cpu_fms(_, _) ->
+    {undefined, undefined, undefined}.
+
+%% Parse "family=6 model=151 stepping=2" → {6, 151, 2}.
+parse_fms_string(<<>>) -> {undefined, undefined, undefined};
+parse_fms_string(S) when is_binary(S) ->
+    {find_fms(S, <<"family=">>),
+     find_fms(S, <<"model=">>),
+     find_fms(S, <<"stepping=">>)}.
+
+find_fms(S, Prefix) ->
+    case binary:split(S, Prefix) of
+        [_, Rest] ->
+            case binary:split(Rest, <<" ">>) of
+                [NumBin | _] -> safe_int(NumBin);
+                _            -> safe_int(Rest)
+            end;
+        _ -> undefined
+    end.
+
+safe_int(B) when is_binary(B) ->
+    try binary_to_integer(B) catch _:_ -> undefined end;
+safe_int(_) -> undefined.
+
+to_int_or_null(undefined) -> null;
+to_int_or_null(N) when is_integer(N) -> N;
+to_int_or_null(_) -> null.
+
+family_model_key(Family, Model)
+    when is_integer(Family), is_integer(Model) ->
+    iolist_to_binary(io_lib:format("~B-~B", [Family, Model]));
+family_model_key(_, _) -> null.
+
+%% Look up the given family/model in the CPU models DB. Vendor is
+%% dispatched to "intel" | "amd" sub-maps of the top-level doc.
+cpu_model_lookup(<<"intel">>, F, M, Db) ->
+    cpu_model_lookup_in(<<"intel">>, F, M, Db);
+cpu_model_lookup(<<"amd">>, F, M, Db) ->
+    cpu_model_lookup_in(<<"amd">>, F, M, Db);
+cpu_model_lookup(_, _, _, _) -> undefined.
+
+cpu_model_lookup_in(VendorKey, F, M, Db)
+    when is_integer(F), is_integer(M) ->
+    VendorMap =
+        maps:get(VendorKey,
+                 maps:get(<<"cpu-models">>, Db, #{}), #{}),
+    Key = iolist_to_binary(io_lib:format("~B-~B", [F, M])),
+    case maps:get(Key, VendorMap, undefined) of
+        M0 when is_map(M0) -> M0;
+        _ -> undefined
+    end;
+cpu_model_lookup_in(_, _, _, _) -> undefined.
+
+merge_cpu_lookup(Base, undefined, _Ev) ->
+    Base#{
+        <<"codename">>         => null,
+        <<"brand-range">>      => null,
+        <<"micro-arch">>       => null,
+        <<"year">>             => null,
+        <<"tee-support">>      => [],
+        <<"codename-provenance">> => []
+    };
+merge_cpu_lookup(Base, Lookup, Ev) ->
+    Base#{
+        <<"codename">>         => maps:get(<<"codename">>, Lookup, null),
+        <<"brand-range">>      => maps:get(<<"brand-range">>, Lookup, null),
+        <<"micro-arch">>       => maps:get(<<"micro-arch">>, Lookup, null),
+        <<"year">>             => maps:get(<<"year">>, Lookup, null),
+        <<"tee-support">>      => maps:get(<<"tee-support">>, Lookup, []),
+        <<"codename-provenance">> =>
+            [event_provenance(Ev),
+             {<<"source">>, <<"cpu-models.json">>}]
+    }.
 
 %% Shim-specific: the SBAT revocation policy + MokListTrusted
 %% state. Found in EV_EFI_VARIABLE_AUTHORITY events.
@@ -1403,20 +1529,131 @@ sem_var_name(Ev) ->
     nested(Ev, [<<"parsed">>, <<"variable-name">>], <<>>).
 
 %% Firmware identity from EV_S_CRTM_VERSION.
-claim_firmware(Events) ->
+%% The 2-arg form additionally cross-references the shipped
+%% firmware-versions DB; when the CRTM string starts with a
+%% known vendor prefix we project the manifest's full attribute
+%% set (vendor, trust-tier, secure-boot-default, ek-root-ca-
+%% source, virtualization-platform, tpm-vendor-id, platforms)
+%% back onto the claim alongside the raw CRTM string.
+claim_firmware(Events) -> claim_firmware(Events, #{}).
+
+claim_firmware(Events, Db) ->
     Matches = [Ev || Ev <- Events,
                      maps:get(<<"event-type-code">>, Ev, 0) =:= 16#8],
     case Matches of
-        [] ->
-            #{<<"crtm-version">> => <<"unknown">>,
-              <<"crtm-version-provenance">> => []};
+        [] -> unknown_firmware_claim();
         [Ev0 | _] ->
             Version = nested(Ev0, [<<"parsed">>, <<"crtm-version">>],
                              <<"unknown">>),
-            #{<<"crtm-version">> => Version,
-              <<"crtm-version-provenance">> =>
-                  [event_provenance(Ev0)]}
+            Base = #{
+                <<"crtm-version">> => Version,
+                <<"crtm-version-provenance">> =>
+                    [event_provenance(Ev0)]},
+            enrich_firmware_with_db(Base, Version, Db, Ev0)
     end.
+
+unknown_firmware_claim() ->
+    #{<<"crtm-version">> => <<"unknown">>,
+      <<"crtm-version-provenance">> => [],
+      <<"family-name">> => null,
+      <<"family-vendor">> => null,
+      <<"family-trust-tier">> => null,
+      <<"family-secure-boot-default">> => null,
+      <<"family-tpm-vendor-id">> => null,
+      <<"family-virtualization-platform">> => null,
+      <<"family-ek-root-ca-source">> => null,
+      <<"family-platform">> => null,
+      <<"family-provenance">> => []}.
+
+%% Enrich a base firmware claim with cross-referenced attributes
+%% from priv/tpm-interpret/firmware-versions/*.json (if the CRTM
+%% string matches any manifest's prefix-list).
+enrich_firmware_with_db(Base, Version, Db, Ev0) ->
+    Manifests = maps:get(<<"firmware-versions">>, Db, #{}),
+    case first_firmware_match(Version, Manifests) of
+        undefined ->
+            Base#{
+                <<"family-name">> => null,
+                <<"family-vendor">> => null,
+                <<"family-trust-tier">> => null,
+                <<"family-secure-boot-default">> => null,
+                <<"family-tpm-vendor-id">> => null,
+                <<"family-virtualization-platform">> => null,
+                <<"family-ek-root-ca-source">> => null,
+                <<"family-platform">> => null,
+                <<"family-provenance">> => []};
+        {MatchedKey, M, MatchedPrefix} ->
+            %% If the manifest has a per-platform model map, try to
+            %% identify which specific platform this CRTM belongs to.
+            Platform = pick_platform(M, Version),
+            Base#{
+                <<"family-name">>           =>
+                    maps:get(<<"name">>, M, null),
+                <<"family-vendor">>         =>
+                    maps:get(<<"vendor">>, M, null),
+                <<"family-trust-tier">>     =>
+                    maps:get(<<"trust-tier">>, M, null),
+                <<"family-secure-boot-default">> =>
+                    maps:get(<<"secure-boot-default">>, M, null),
+                <<"family-tpm-vendor-id">> =>
+                    maps:get(<<"tpm-vendor-id">>, M, null),
+                <<"family-virtualization-platform">> =>
+                    maps:get(<<"virtualization-platform">>, M, null),
+                <<"family-ek-root-ca-source">> =>
+                    maps:get(<<"ek-root-ca-source">>, M, null),
+                <<"family-platform">>       => Platform,
+                <<"family-provenance">>     =>
+                    [event_provenance(Ev0),
+                     {<<"source">>, <<"firmware-versions.json">>},
+                     {<<"manifest-key">>, MatchedKey},
+                     {<<"matched-prefix">>, MatchedPrefix}]}
+    end.
+
+%% Find the first manifest whose `match.crtm-version-prefix' list
+%% contains a prefix of the given CRTM string. Returns
+%% `{ManifestKey, ManifestMap, MatchedPrefix}' or `undefined'.
+first_firmware_match(<<"unknown">>, _) -> undefined;
+first_firmware_match(Version, Manifests) when is_binary(Version) ->
+    Entries = maps:to_list(Manifests),
+    find_firmware_match_in(Version, Entries);
+first_firmware_match(_, _) -> undefined.
+
+find_firmware_match_in(_Version, []) -> undefined;
+find_firmware_match_in(Version, [{Key, M} | Rest]) ->
+    Prefixes =
+        maps:get(<<"crtm-version-prefix">>,
+                 maps:get(<<"match">>, M, #{}), []),
+    case matching_prefix(Version, Prefixes) of
+        undefined -> find_firmware_match_in(Version, Rest);
+        MatchedPrefix -> {Key, M, MatchedPrefix}
+    end.
+
+matching_prefix(_Version, []) -> undefined;
+matching_prefix(Version, [Prefix | Rest]) when is_binary(Prefix) ->
+    case binary:match(Version, Prefix) of
+        {0, _} -> Prefix;
+        _      -> matching_prefix(Version, Rest)
+    end;
+matching_prefix(Version, [_ | Rest]) ->
+    matching_prefix(Version, Rest).
+
+%% If the manifest declares a `platforms' map (model-prefix → text),
+%% pick the first entry whose key is a prefix of the CRTM string.
+pick_platform(M, Version) ->
+    Platforms = maps:get(<<"platforms">>, M, #{}),
+    case is_map(Platforms) andalso maps:size(Platforms) > 0 of
+        true -> pick_platform_entry(maps:to_list(Platforms), Version);
+        false -> null
+    end.
+
+pick_platform_entry([], _) -> null;
+pick_platform_entry([{K, V} | Rest], Version) when is_binary(K) ->
+    case binary:match(Version, K) of
+        {0, _} -> V;
+        _      -> pick_platform_entry(Rest, Version)
+    end;
+pick_platform_entry([_ | Rest], Version) ->
+    pick_platform_entry(Rest, Version).
 
 %% Bootloader: the first EV_EFI_BOOT_SERVICES_APPLICATION on PCR 4.
 %% SHA-256 of the image is in digests.sha256.
@@ -1521,16 +1758,22 @@ claim_tme(Events, E, Db, Context) ->
                      orelse (Tdx =:= true),
             {Intent, [{<<"tier">>, 2} | CmdlineProv]}
     end,
-    %% Tier 3: UKI-hash claim DB lookup.
+    %% Tier 3: UKI-hash / kernel-name / stub DB lookup.
     UkiHash = hb_maps:get(
                 <<"11">>,
                 nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
     UkiProfiles = maps:get(<<"uki-profiles">>, Db, #{}),
-    Tier3 = case uki_db_lookup(UkiProfiles, UkiHash, <<"checks-tme">>) of
-        true  -> {true, [{<<"tier">>, 3},
-                         {<<"uki-hash">>, UkiHash}]};
-        _     -> {<<"unknown">>, []}
+    Tier3 = case uki_db_lookup(UkiProfiles, UkiHash, Events,
+                                <<"checks-tme">>) of
+        {true, MatchTme} ->
+            {true, [{<<"tier">>, 3},
+                    {<<"uki-hash">>, UkiHash},
+                    {<<"matched-profile">>,
+                     maps:get(<<"name">>, MatchTme, <<"unknown">>)},
+                    {<<"match-rule">>,
+                     maps:get(<<"-rule">>, MatchTme, <<"unknown">>)}]};
+        _ -> {<<"unknown">>, []}
     end,
     %% Tier 4: boot-reached-PCR-15 — we always have this if the
     %% quote verified. Surface it as supporting evidence.
@@ -1569,16 +1812,155 @@ claim_tme(Events, E, Db, Context) ->
     end,
     compose_claim(<<"enabled">>, [Tier2, Tier3, Tier4, Tier5]).
 
-uki_db_lookup(Profiles, UkiHash, Key) when is_map(Profiles) ->
-    Found = lists:filter(
-        fun(P) when is_map(P) ->
-            H = maps:get(<<"uki-hash">>, P, undefined),
-            V = maps:get(Key, P, false),
-            H =:= UkiHash andalso V =:= true;
-           (_) -> false
-        end, maps:values(Profiles)),
-    Found =/= [];
-uki_db_lookup(_, _, _) -> false.
+%% @doc Determine whether any UKI-measurement profile in the DB
+%% matches this attestation AND asserts the requested claim.
+%%
+%% Matches fire on ANY of:
+%%
+%%   * exact `uki-hash' equality (legacy top-level key), OR
+%%   * `known-uki-hashes' list contains the PCR 11 hash, OR
+%%   * `match.kernel-name-prefix' list has any prefix of an EV_IPL
+%%     `kernel_name=<value>' event's value, OR
+%%   * `match.stub-name' list contains an EV_IPL `stub_name=<value>'
+%%     event's value.
+%%
+%% Returns `{true, MatchedProfile}' on success (with a synthetic
+%% `-rule' key naming WHY it matched), else `false'.
+%%
+%% Claim tests look at either the top-level `<Key>: true' (legacy
+%% schema) or `claims.<Key>: true' (schema v1+).
+uki_db_lookup(Profiles, UkiHash, Events, Key) when is_map(Profiles) ->
+    Matches = uki_db_matches(Profiles, UkiHash, Events),
+    Hits = [P || P <- Matches, uki_profile_asserts(P, Key)],
+    case Hits of
+        [] -> false;
+        [First | _] -> {true, First}
+    end;
+uki_db_lookup(_, _, _, _) -> false.
+
+%% Backward-compat 3-arg form (used by tests that predate the
+%% Events-aware matcher).
+uki_db_lookup(Profiles, UkiHash, Key) ->
+    case uki_db_lookup(Profiles, UkiHash, [], Key) of
+        {true, _} -> true;
+        _         -> false
+    end.
+
+%% Iterate all profiles, return those that match this envelope.
+%% Each returned map is the profile with an extra `-rule' key
+%% naming the matched rule ("uki-hash" | "known-uki-hashes" |
+%% "kernel-name-prefix" | "stub-name").
+uki_db_matches(Profiles, UkiHash, Events) when is_map(Profiles) ->
+    %% dev_tpm_tcg:decode_ev_ipl/1 kebab-cases keys at parse time
+    %% (`kernel_name' → `kernel-name'), so look up with the kebab
+    %% form. We also probe both forms to keep the lookup robust
+    %% against future changes to the parse side.
+    KernelName =
+        first_defined([ipl_kv_value(Events, <<"kernel-name">>),
+                       ipl_kv_value(Events, <<"kernel_name">>)]),
+    StubName =
+        first_defined([ipl_kv_value(Events, <<"stub-name">>),
+                       ipl_kv_value(Events, <<"stub_name">>)]),
+    lists:filtermap(
+      fun({_, P}) when is_map(P) ->
+          uki_profile_match(P, UkiHash, KernelName, StubName);
+         (_) -> false
+      end,
+      maps:to_list(Profiles));
+uki_db_matches(_, _, _) -> [].
+
+uki_profile_match(P, UkiHash, KernelName, StubName) ->
+    %% Rule 1: exact top-level uki-hash.
+    case maps:get(<<"uki-hash">>, P, undefined) of
+        H when is_binary(H), H =:= UkiHash ->
+            {true, P#{<<"-rule">> => <<"uki-hash">>}};
+        _ ->
+            %% Rule 2: known-uki-hashes list.
+            case lists:member(UkiHash,
+                              maps:get(<<"known-uki-hashes">>, P, [])) of
+                true ->
+                    {true, P#{<<"-rule">> => <<"known-uki-hashes">>}};
+                false ->
+                    uki_profile_match_by_match(P, KernelName, StubName)
+            end
+    end.
+
+%% Match semantics (all-rules-must-be-compatible, ≥1-must-fire):
+%%
+%%   * If the profile declares `kernel-name-prefix', that list
+%%     MUST contain a prefix of the observed kernel_name.
+%%   * If the profile declares `stub-name', that list MUST
+%%     contain the observed stub_name.
+%%   * If the profile declares neither, no match (only the
+%%     uki-hash / known-uki-hashes paths can match).
+%%   * At least one of the declared rules must actually fire
+%%     (i.e. the corresponding event must be present).
+%%
+%% This way `stub-name=systemd-stub' (generic to every systemd-
+%% stub UKI) never overrides a more specific kernel-name-prefix
+%% mismatch.
+uki_profile_match_by_match(P, KernelName, StubName) ->
+    M = maps:get(<<"match">>, P, #{}),
+    PrefixList = maps:get(<<"kernel-name-prefix">>, M, []),
+    StubList   = maps:get(<<"stub-name">>, M, []),
+    HasKnp = PrefixList =/= [],
+    HasStub = StubList =/= [],
+    KnpFires = KernelName =/= undefined
+               andalso any_prefix_match(KernelName, PrefixList),
+    StubFires = StubName =/= undefined
+                andalso lists:member(StubName, StubList),
+    CompatKnp  = (not HasKnp) orelse KnpFires,
+    CompatStub = (not HasStub) orelse StubFires,
+    AtLeastOne = KnpFires orelse StubFires,
+    case CompatKnp andalso CompatStub andalso AtLeastOne of
+        true ->
+            Rule =
+                case KnpFires of
+                    true  -> <<"kernel-name-prefix">>;
+                    false -> <<"stub-name">>
+                end,
+            {true, P#{<<"-rule">> => Rule}};
+        false -> false
+    end.
+
+%% @doc Find the first EV_IPL (0x0D) event whose parsed.key equals
+%% `Key' and return its parsed.value, or `undefined'.
+ipl_kv_value(Events, Key) ->
+    case ipl_kv_matches(Events, Key) of
+        [] -> undefined;
+        [Ev | _] ->
+            case nested(Ev, [<<"parsed">>, <<"value">>], undefined) of
+                V when is_binary(V) -> V;
+                _ -> undefined
+            end
+    end.
+
+%% @doc Return the first `defined' entry in the list (undefined is
+%% falsy). Used to probe multiple key spellings in the DB match
+%% logic while tolerating encoder drift.
+first_defined([]) -> undefined;
+first_defined([undefined | Rest]) -> first_defined(Rest);
+first_defined([V | _]) -> V.
+
+%% @doc Case-sensitive prefix test against a list of candidate
+%% prefixes.
+any_prefix_match(_Val, []) -> false;
+any_prefix_match(Val, [Prefix | Rest]) ->
+    case binary:match(Val, Prefix) of
+        {0, _} -> true;
+        _      -> any_prefix_match(Val, Rest)
+    end.
+
+%% Does a matched profile assert `<Key>: true'? Accepts both the
+%% legacy top-level shape and the schema-v1 `claims' sub-map shape.
+uki_profile_asserts(P, Key) ->
+    TopLevel = maps:get(Key, P, undefined),
+    case TopLevel of
+        true -> true;
+        _ ->
+            Claims = maps:get(<<"claims">>, P, #{}),
+            maps:get(Key, Claims, false) =:= true
+    end.
 
 %% Compose a claim from multiple tiers. Rules:
 %%   * Any tier giving `true' → claim is true (with all supporting
@@ -1629,24 +2011,31 @@ claim_lockdown(Events, E, Db) ->
         <<"unknown">> -> [];
         _             -> [{<<"tier">>, 2} | CmdlineProv]
     end,
-    %% Tier 3: did a matching UKI-hash claim lockdown-confidentiality?
+    %% Tier 3: did a matching UKI-hash (or kernel-name / stub-name)
+    %% claim lockdown-confidentiality?
     UkiHash = hb_maps:get(
                 <<"11">>,
                 nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
     UkiProfiles = maps:get(<<"uki-profiles">>, Db, #{}),
-    Tier3Confirm =
-        uki_db_lookup(UkiProfiles, UkiHash,
-                       <<"lockdown-confidentiality">>),
+    {Tier3Confirm, Tier3Evidence} =
+        case uki_db_lookup(UkiProfiles, UkiHash, Events,
+                            <<"lockdown-confidentiality">>) of
+            {true, P} ->
+                {true,
+                 [{<<"tier">>, 3},
+                  {<<"uki-hash">>, UkiHash},
+                  {<<"matched-profile">>,
+                   maps:get(<<"name">>, P, <<"unknown">>)},
+                  {<<"match-rule">>,
+                   maps:get(<<"-rule">>, P, <<"unknown">>)}]};
+            _ -> {false, []}
+        end,
     #{
         <<"level">>             => Level,
         <<"level-evidence">>    => LevelProv,
         <<"confidentiality-confirmed">>           => Tier3Confirm,
-        <<"confidentiality-confirmed-evidence">>  =>
-            case Tier3Confirm of
-                true -> [{<<"tier">>, 3}, {<<"uki-hash">>, UkiHash}];
-                false -> []
-            end
+        <<"confidentiality-confirmed-evidence">>  => Tier3Evidence
     }.
 
 %% IOMMU state (paper §Arch line 223:
@@ -3208,6 +3597,146 @@ claim_surface_full_cmdline_pipeline_test() ->
     Verity = maps:get(<<"verity">>, Claim),
     ?assertEqual(<<"deadbeef01">>,
                  maps:get(<<"root-hash">>, Verity)),
+    ok.
+
+%% Hour-3: tier-3 evidence via kernel-name-prefix match against
+%% the shipped Fedora UKI profile. Build an event log with an
+%% EV_IPL `kernel_name=Fedora-Linux-6.8.7-300' on PCR 12 and
+%% another EV_IPL `stub_name=systemd-stub', plus a recognisable
+%% Intel Raptor Lake microcode event on PCR 1. The claim
+%% pipeline should:
+%%   * enrich `claim.cpu' with codename=Raptor Lake + tee-support,
+%%   * match `claim.tme.enabled-evidence' with a tier-3 hit whose
+%%     matched-profile names the Fedora UKI baseline,
+%%   * match `claim.lockdown.confidentiality-confirmed = true'
+%%     with tier-3 evidence pointing at the Fedora profile.
+claim_surface_hour3_db_cross_reference_test() ->
+    %% Intel Sapphire Rapids sig → family=6 model=143 stepping=2
+    %% (packed per Intel SDM §9.11.1). Encoded u32 LE:
+    %%   family=6 base, model low=F, ExtModel=8, stepping=2
+    %%   → raw sig = 0x000806F2
+    ProcSig = 16#000806F2,
+    %% Intel microcode header (48 bytes): HeaderVersion=1, rev=0x01,
+    %% date=2024-01-15 (BCD), proc-sig, checksum=0, loader-rev=1,
+    %% proc-flags=1, reserved, then padding.
+    IntelHdr = <<1:32/little, 16#01:32/little,
+                 16#20240115:32/little,
+                 ProcSig:32/little,
+                 0:32/little, 1:32/little,
+                 1:32/little, 0:32/little,
+                 0:(48*8 - 8*32)>>,
+    %% EV_CPU_MICROCODE on PCR 1.
+    UcodeSha1   = crypto:hash(sha,    IntelHdr),
+    UcodeSha256 = crypto:hash(sha256, IntelHdr),
+    UcodeRec = <<1:32/little, 16#09:32/little, 2:32/little,
+                 16#04:16/little, UcodeSha1/binary,
+                 16#0B:16/little, UcodeSha256/binary,
+                 (byte_size(IntelHdr)):32/little, IntelHdr/binary>>,
+    %% SpecID first record (crypto-agile log header).
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% EV_IPL kernel_name on PCR 12.
+    Kname = <<"kernel_name=Fedora-Linux-6.8.7-300.fc40.x86_64", 0>>,
+    KnSha1 = crypto:hash(sha, Kname),
+    KnSha256 = crypto:hash(sha256, Kname),
+    KnRec = <<12:32/little, 16#D:32/little, 2:32/little,
+              16#04:16/little, KnSha1/binary,
+              16#0B:16/little, KnSha256/binary,
+              (byte_size(Kname)):32/little, Kname/binary>>,
+    %% EV_IPL stub_name on PCR 12.
+    Stub = <<"stub_name=systemd-stub", 0>>,
+    StSha1 = crypto:hash(sha, Stub),
+    StSha256 = crypto:hash(sha256, Stub),
+    StRec = <<12:32/little, 16#D:32/little, 2:32/little,
+              16#04:16/little, StSha1/binary,
+              16#0B:16/little, StSha256/binary,
+              (byte_size(Stub)):32/little, Stub/binary>>,
+    Raw = <<FirstRec/binary, UcodeRec/binary,
+            KnRec/binary, StRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    %% claim.cpu enrichment: Sapphire Rapids was labeled as 6-143.
+    Cpu = maps:get(<<"cpu">>, Claim),
+    ?assertEqual(<<"intel">>, maps:get(<<"vendor">>, Cpu)),
+    ?assertEqual(6,           maps:get(<<"cpu-family">>, Cpu)),
+    ?assertEqual(143,         maps:get(<<"cpu-model">>, Cpu)),
+    ?assertEqual(<<"Sapphire Rapids">>,
+                 maps:get(<<"codename">>, Cpu)),
+    ?assert(lists:member(<<"TDX">>,
+                         maps:get(<<"tee-support">>, Cpu))),
+    %% claim.tme — tier-3 evidence from kernel-name-prefix match
+    %% against Fedora baseline.
+    TME = maps:get(<<"tme">>, Claim),
+    ?assertEqual(true, maps:get(<<"enabled">>, TME)),
+    TmeEv = maps:get(<<"enabled-evidence">>, TME),
+    ?assert(lists:any(
+        fun({<<"tier">>, 3}) -> true; (_) -> false end, TmeEv)),
+    ?assert(lists:any(
+        fun({<<"match-rule">>, <<"kernel-name-prefix">>}) -> true;
+           (_) -> false
+        end, TmeEv)),
+    %% claim.lockdown — tier-3 confidentiality-confirmed = true
+    %% because the Fedora profile asserts lockdown-confidentiality.
+    Lockdown = maps:get(<<"lockdown">>, Claim),
+    ?assertEqual(true,
+                 maps:get(<<"confidentiality-confirmed">>, Lockdown)),
+    ok.
+
+%% Hour-3: firmware-versions cross-reference. A CRTM starting
+%% with "N1UET78W" (real ThinkPad P51 firmware) should match the
+%% lenovo-thinkpad.json manifest and surface family-vendor=Lenovo.
+claim_surface_hour3_firmware_family_match_test() ->
+    %% SpecID first record.
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% EV_S_CRTM_VERSION on PCR 0: UTF-16LE "N1UET78W ".
+    Crtm16 = unicode:characters_to_binary(
+               <<"N1UET78W ">>, utf8, {utf16, little}),
+    CrtmSha1 = crypto:hash(sha, Crtm16),
+    CrtmSha256 = crypto:hash(sha256, Crtm16),
+    CrtmRec = <<0:32/little, 16#8:32/little, 2:32/little,
+                16#04:16/little, CrtmSha1/binary,
+                16#0B:16/little, CrtmSha256/binary,
+                (byte_size(Crtm16)):32/little, Crtm16/binary>>,
+    Raw = <<FirstRec/binary, CrtmRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    FW = maps:get(<<"firmware">>, Claim),
+    ?assertEqual(<<"N1UET78W ">>,
+                 maps:get(<<"crtm-version">>, FW)),
+    ?assertEqual(<<"Lenovo">>, maps:get(<<"family-vendor">>, FW)),
+    %% Provenance includes the source (firmware-versions.json)
+    Prov = maps:get(<<"family-provenance">>, FW),
+    ?assert(lists:any(
+        fun({<<"source">>, <<"firmware-versions.json">>}) -> true;
+           (_) -> false
+        end, Prov)).
+
+%% Hour-3: UKI lookup helpers are resilient against malformed
+%% DB entries.
+uki_db_lookup_handles_empty_and_malformed_test() ->
+    ?assertEqual(false, uki_db_lookup(#{}, <<"x">>, [], <<"k">>)),
+    ?assertEqual(false, uki_db_lookup(not_a_map, <<"x">>, [], <<"k">>)),
+    %% Profile that declares kernel-name-prefix but the events
+    %% have no IPL event at all — no match.
+    P = #{<<"name">> => <<"t">>,
+          <<"match">> => #{<<"kernel-name-prefix">> => [<<"X-">>]},
+          <<"claims">> => #{<<"checks-tme">> => true}},
+    ?assertEqual(false,
+                 uki_db_lookup(#{<<"t">> => P}, <<"y">>, [],
+                                <<"checks-tme">>)),
     ok.
 
 %% Helper: same fixture dev_tpm_tcg uses for its own tests.

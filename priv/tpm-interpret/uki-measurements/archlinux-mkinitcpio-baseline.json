@@ -1,0 +1,33 @@
+{
+    "schema-version": 1,
+    "name": "Arch Linux mkinitcpio UKI baseline",
+    "description": "Arch Linux supports building UKIs via mkinitcpio preset `default_uki=/efi/EFI/Linux/arch-linux.efi' or via `ukify build'. The stock linux 6.x kernel in the [core] repo is built with CONFIG_SECURITY_LOCKDOWN_LSM=y (default `integrity' under Secure Boot) and CONFIG_IMA=y but without a default distro-wide IMA policy. The linux-hardened variant enables extra hardening including CONFIG_FORTIFY_SOURCE.",
+    "vendor": "Arch Linux",
+    "distribution": "Arch Linux",
+    "match": {
+        "kernel-name-prefix": ["Arch", "arch-linux"],
+        "stub-name": ["systemd-stub"],
+        "pe-section-name": [".linux", ".initrd", ".cmdline", ".osrel", ".uname"]
+    },
+    "claims": {
+        "checks-tme": true,
+        "lockdown-confidentiality": false,
+        "lockdown-integrity": true,
+        "ima-enabled": true,
+        "init-on-alloc-default": false,
+        "init-on-free-default": false,
+        "module-sig-enforce-default": false,
+        "slab-nomerge-default": false,
+        "kernel-cmdline-sealed-in-uki": true
+    },
+    "shim-authority": [],
+    "variants": {
+        "linux":          {"hardened": false},
+        "linux-hardened": {"hardened": true,
+                           "slab-nomerge-default": true,
+                           "init-on-alloc-default": true,
+                           "init-on-free-default": true}
+    },
+    "notes": "Arch does not ship a signed shim by default; users typically self-enroll their own Machine Owner Key. For LapEE-on-Arch, attestation requires MOK enrollment + signed UKIs + a custom shim.",
+    "source": "https://wiki.archlinux.org/title/Unified_kernel_image + mkinitcpio docs"
+}

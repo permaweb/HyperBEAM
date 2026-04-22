@@ -1,0 +1,33 @@
+{
+    "schema-version": 1,
+    "name": "Fedora 40+ systemd-stub UKI baseline",
+    "description": "Fedora's systemd-stub-based Unified Kernel Images, as shipped from Fedora 40 onward, emit key=value EV_IPL events on PCR 12 declaring `kernel_name' prefixed with `Fedora-Linux-'. Fedora's shipped kernels enable CONFIG_SECURITY_LOCKDOWN_LSM=y with default level `confidentiality' in Secure-Boot mode, CONFIG_IMA=y with evm-policy, and halt early in head_64.S if `mem_encrypt=on' is requested but the CPU reports TME-MK init failure.",
+    "vendor": "Fedora",
+    "distribution": "Fedora Linux",
+    "match": {
+        "kernel-name-prefix": ["Fedora-Linux-", "Fedora-"],
+        "stub-name": ["systemd-stub"],
+        "pe-section-name": [".linux", ".initrd", ".cmdline", ".osrel", ".uname"]
+    },
+    "claims": {
+        "checks-tme": true,
+        "lockdown-confidentiality": true,
+        "ima-enabled": true,
+        "init-on-alloc-default": true,
+        "init-on-free-default": false,
+        "module-sig-enforce-default": true,
+        "slab-nomerge-default": false,
+        "kernel-cmdline-sealed-in-uki": true
+    },
+    "shim-authority": [
+        "Fedora Secure Boot CA 2",
+        "Fedora Secure Boot CA 1"
+    ],
+    "pcr-extension-order": [
+        "pcr-11: UKI PE image",
+        "pcr-12: EV_IPL key=value for each systemd-stub parameter",
+        "pcr-13: systemd credentials (if any)"
+    ],
+    "notes": "Fedora 40's kernel 6.8+ halts boot with `TME: Couldn't enable MKTME' panic if mem_encrypt=on is passed but the hardware refuses — so presence of a successful boot under this profile implies TME is live (tier 3 evidence for claim.tme.enabled).",
+    "source": "Fedora kernel source tree (arch/x86/mm/mem_encrypt_identity.c) + systemd-stub(7) + https://www.freedesktop.org/software/systemd/man/latest/systemd-stub.html"
+}
