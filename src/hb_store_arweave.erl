@@ -2,9 +2,9 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/2, type/3, read/2, read/3, start/1, start/3]).
+-export([scope/0, scope/1, type/3, read/3, start/1, start/3]).
 %%% Unused Store API:
--export([resolve/2, resolve/3, write/3, link/3, group/3]).
+-export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
@@ -48,13 +48,10 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 %% @doc Resolve a key path in the Arweave store, ignoring other paths.
-resolve(_, ID) when ?IS_ID(ID) -> ID;
-resolve(_, _) -> not_found.
-resolve(Store, #{ <<"resolve">> := ID }, _NodeOpts) ->
-    case resolve(Store, ID) of
-        not_found -> {error, not_found};
-        Resolved -> {ok, Resolved}
-    end.
+resolve(_Store, #{ <<"resolve">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+    {ok, ID};
+resolve(_Store, #{ <<"resolve">> := _ID }, _NodeOpts) ->
+    {error, not_found}.
 
 %% @doc Unsupported.
 write(_, _, _) -> {error, not_found}.
@@ -68,18 +65,19 @@ group(_, _, _) -> {error, not_found}.
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
+type_id(#{ <<"index-store">> := IndexStore }, ID) ->
     case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), #{}) of
         {ok, _Offset} -> simple;
         _ -> not_found
-    end;
-type(_, _) -> not_found.
-type(Store, #{ <<"type">> := ID }, _NodeOpts) ->
-    case type(Store, ID) of
+    end.
+type(Store, #{ <<"type">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+    case type_id(Store, ID) of
         simple -> {ok, simple};
         composite -> {ok, composite};
         not_found -> {error, not_found}
-    end.
+    end;
+type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
+    {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
 read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
@@ -107,18 +105,19 @@ read_offset(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, ID) when ?IS_ID(ID) ->
+read_id(StoreOpts, ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
         not_found -> do_read(StoreOpts, ID)
-    end;
-read(_, _) -> not_found.
-read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) ->
-    case read(StoreOpts, ID) of
+    end.
+read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+    case read_id(StoreOpts, ID) of
         {ok, Message} -> {ok, Message};
         not_found -> {error, not_found};
         {error, _} = Error -> Error
-    end.
+    end;
+read(_StoreOpts, #{ <<"read">> := _ID }, _NodeOpts) ->
+    {error, not_found}.
 
 %% @doc Read the data at the given key, reading the provided Arweave index store
 %% as a source of offsets. After offsets have been found, the data is loaded
@@ -356,7 +355,7 @@ write_read_tx_test() ->
     Size = 8387,
     StartOffset = EndOffset - Size,
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
-    {ok, Bundle} = read(Opts, ID),
+    {ok, Bundle} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(Bundle, all, #{})),
     {ok, Child} =
         hb_ao:resolve(
@@ -397,7 +396,7 @@ stale_ans104_offset_returns_error_test() ->
     RealSize = 8387,
     RealStartOffset = RealEndOffset - RealSize,
     ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, RealStartOffset, RealSize),
-    Result = read(Opts, FakeID),
+    Result = read(Opts, #{ <<"read">> => FakeID }, Opts),
     ?assertMatch({error, {id_mismatch, _, _}}, Result).
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
@@ -410,6 +409,6 @@ write_read_fake_bundle_tx_test() ->
     Size = 2,
     StartOffset = 155309918167286,
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
-    {ok, TX} = read(Opts, ID),
+    {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.

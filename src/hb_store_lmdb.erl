@@ -21,8 +21,8 @@
 
 %% Public API exports
 -export([start/1, start/3, stop/1, stop/3, scope/0, scope/1, reset/1, reset/3]).
--export([read/2, read/3, write/3, list/2, list/3, match/2, match/3]).
--export([group/3, link/3, type/2, type/3, resolve/2, resolve/3]).
+-export([read/3, write/3, list/3, match/3]).
+-export([group/3, link/3, type/3, resolve/3]).
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
@@ -113,14 +113,14 @@ ensure_dir(DataDirPath) ->
 %% @param Opts Database configuration map
 %% @param Key The key to examine
 %% @returns 'composite' for group entries, 'simple' for regular values
--spec type(map(), binary()) -> composite | simple | not_found.
-type(Opts, Key) ->
+-spec type_path(map(), binary()) -> composite | simple | not_found.
+type_path(Opts, Key) ->
     case read_direct(Opts, Key) of
         {ok, Value} ->
             case is_link(Value) of
                 {true, Link} ->
                     % This is a link, check the target's type
-                    type(Opts, Link);
+                    type_path(Opts, Link);
                 false ->
                     case Value of
                         <<"group">> -> composite;
@@ -130,7 +130,7 @@ type(Opts, Key) ->
         not_found -> not_found
     end.
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
-    case type(Opts, hb_path:to_binary(Key)) of
+    case type_path(Opts, hb_path:to_binary(Key)) of
         simple -> {ok, simple};
         composite -> {ok, composite};
         not_found -> {error, not_found}
@@ -225,10 +225,10 @@ write_path(Opts, Path, Value) ->
 %% @param Opts Database configuration map  
 %% @param Path Binary key or list of path segments to read
 %% @returns {ok, Value} on success, {error, Reason} on failure
--spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
-read(Opts, PathParts) when is_list(PathParts) ->
-    read(Opts, to_path(PathParts));
-read(#{<<"name">> := Name} = Opts, Path) ->
+-spec read_path(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
+read_path(Opts, PathParts) when is_list(PathParts) ->
+    read_path(Opts, to_path(PathParts));
+read_path(#{<<"name">> := Name} = Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
     StartTime = erlang:monotonic_time(),
     ReadRes = read_with_links(Opts, Path),
@@ -264,14 +264,14 @@ read(#{<<"name">> := Name} = Opts, Path) ->
     end.
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
     PathBin = hb_path:to_binary(Path),
-    case type(Opts, PathBin) of
+    case type_path(Opts, PathBin) of
         composite ->
-            case list(Opts, PathBin) of
+            case list_path(Opts, PathBin) of
                 {ok, Keys} -> {composite, Keys};
                 {error, _} = Error -> Error
             end;
         _ ->
-            case read(Opts, PathBin) of
+            case read_path(Opts, PathBin) of
                 {ok, Value} -> {ok, Value};
                 not_found -> {error, not_found};
                 {error, _} = Error -> Error
@@ -431,16 +431,16 @@ scope(_) -> scope().
 %% @param StoreOpts Database configuration map
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
--spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
-list(Opts, Path) ->
-    case type(Opts, hb_path:to_binary(Path)) of
+-spec list_path(map(), binary()) -> {ok, [binary()]} | {error, term()}.
+list_path(Opts, Path) ->
+    case type_path(Opts, hb_path:to_binary(Path)) of
         composite ->
             do_list(Opts, hb_path:to_binary(Path));
         _ ->
             {error, not_found}
     end.
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
-    list(Opts, hb_path:to_binary(Path)).
+    list_path(Opts, hb_path:to_binary(Path)).
 
 do_list(Opts, Path) ->
     % Check if Path is a link and resolve it if necessary
@@ -480,9 +480,9 @@ do_list(Opts, Path) ->
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
 %% messages in the store that feature all of the given key-value pairs. `Matches'
 %% is given as a list of IDs.
-match(Opts, MatchMap) when is_map(MatchMap) ->
-    match(Opts, maps:to_list(MatchMap));
-match(Opts, MatchKVs) ->
+match_spec(Opts, MatchMap) when is_map(MatchMap) ->
+    match_spec(Opts, maps:to_list(MatchMap));
+match_spec(Opts, MatchKVs) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     WithPrefixes =
         lists:map(
@@ -500,7 +500,7 @@ match(Opts, MatchKVs) ->
         not_found -> not_found
     end.
 match(Opts, MatchSpec, _NodeOpts) ->
-    case match(Opts, MatchSpec) of
+    case match_spec(Opts, MatchSpec) of
         {ok, Matches} -> {ok, Matches};
         not_found -> {error, not_found}
     end.
@@ -516,13 +516,13 @@ match(Opts, MatchSpec, _NodeOpts) ->
 %% provides semantic meaning that can be used by navigation and visualization
 %% tools to present appropriate user interfaces.
 %%
-%% Groups can be identified later using the type/2 function, which will return
+%% Groups can be identified later using `type_path/2', which will return
 %% 'composite' for group entries versus 'simple' for regular key-value pairs.
 %%
 %% @param Opts Database configuration map
 %% @param GroupName Binary name for the group
 %% @returns Result of the write operation
--spec group_direct(map(), binary()) -> ok | {error, term()}.
+-spec group_direct(map(), binary()) -> ok | retry | {error, term()}.
 group_direct(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
     write_path(Opts, GroupName, <<"group">>);
 group_direct(_,_) ->
@@ -592,7 +592,8 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
 %% @param Existing The key that already exists and contains the target value
 %% @param New The new key that should link to the existing key
 %% @returns Result of the write operation
--spec link_direct(map(), binary() | list(), binary()) -> ok | not_found.
+-spec link_direct(map(), binary() | list(), binary()) ->
+    ok | retry | {error, not_found}.
 link_direct(#{ <<"read-only">> := true }, _Existing, _New) ->
     {error, not_found};
 link_direct(Opts, Existing, New) when is_list(Existing) ->
@@ -623,10 +624,10 @@ link(Opts, Req, _NodeOpts) when is_map(Req) ->
 %% @param StoreOpts Database configuration map
 %% @param Path The path to resolve (binary or list)
 %% @returns The resolved path as a binary
--spec resolve(map(), binary() | list()) -> binary().
-resolve(Opts, Path) when is_binary(Path) ->
-    resolve(Opts, binary:split(Path, <<"/">>, [global]));
-resolve(Opts, PathParts) when is_list(PathParts) ->
+-spec resolve_path(map(), binary() | list()) -> binary() | not_found.
+resolve_path(Opts, Path) when is_binary(Path) ->
+    resolve_path(Opts, binary:split(Path, <<"/">>, [global]));
+resolve_path(Opts, PathParts) when is_list(PathParts) ->
     % Handle list paths by resolving directly and converting to binary
     case resolve_path_links(Opts, PathParts) of
         {ok, ResolvedParts} ->
@@ -635,9 +636,9 @@ resolve(Opts, PathParts) when is_list(PathParts) ->
             % If resolution fails, return original path as binary
             to_path(PathParts)
     end;
-resolve(_,_) -> not_found.
+resolve_path(_,_) -> not_found.
 resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
-    case resolve(Opts, hb_path:to_binary(Path)) of
+    case resolve_path(Opts, hb_path:to_binary(Path)) of
         not_found -> {error, not_found};
         Resolved -> {ok, Resolved}
     end.
@@ -733,7 +734,7 @@ basic_test() ->
     reset(StoreOpts),
     Res = test_write(StoreOpts, <<"Hello">>, <<"World2">>),
     ?assertEqual(ok, Res),
-    {ok, Value} = read(StoreOpts, <<"Hello">>),
+    {ok, Value} = read_path(StoreOpts, <<"Hello">>),
     ?assertEqual(Value, <<"World2">>),
     ok = stop(StoreOpts).
 
@@ -749,7 +750,7 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    ?assertEqual({error, not_found}, list(StoreOpts, <<"colors">>)),
+    ?assertEqual({error, not_found}, list_path(StoreOpts, <<"colors">>)),
     % Create immediate children under colors/
     test_write(StoreOpts, <<"colors/red">>, <<"1">>),
     test_write(StoreOpts, <<"colors/blue">>, <<"2">>),
@@ -763,21 +764,21 @@ list_test() ->
     % Create other top-level directories
     test_write(StoreOpts, <<"foo/bar">>, <<"baz">>),
     test_write(StoreOpts, <<"beep/boop">>, <<"bam">>),
-    read(StoreOpts, <<"colors">>), 
+    read_path(StoreOpts, <<"colors">>),
     % Test listing colors/ - should return immediate children only
-    {ok, ListResult} = list(StoreOpts, <<"colors">>),
+    {ok, ListResult} = list_path(StoreOpts, <<"colors">>),
     ?event({list_result, ListResult}),
     % Expected: red, blue, green (files) + multi, primary, nested (directories)
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
     % Test listing a nested directory - should only show immediate children
-    {ok, NestedListResult} = list(StoreOpts, <<"colors/multi">>),
+    {ok, NestedListResult} = list_path(StoreOpts, <<"colors/multi">>),
     ?event({nested_list_result, NestedListResult}),
     ExpectedNestedChildren = [<<"bar">>, <<"foo">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedNestedChildren) end, NestedListResult)),
     % Test listing a deeper nested directory
-    {ok, DeepListResult} = list(StoreOpts, <<"colors/nested">>),
+    {ok, DeepListResult} = list_path(StoreOpts, <<"colors/nested">>),
     ?event({deep_list_result, DeepListResult}),
     ExpectedDeepChildren = [<<"deep">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedDeepChildren) end, DeepListResult)),
@@ -796,9 +797,9 @@ group_test() ->
     reset(StoreOpts),
     group_direct(StoreOpts, <<"colors">>),
     % Groups should be detected as composite types
-    ?assertEqual(composite, type(StoreOpts, <<"colors">>)),
+    ?assertEqual(composite, type_path(StoreOpts, <<"colors">>)),
     % Groups should not be readable directly (like directories in filesystem)
-    ?assertEqual(not_found, read(StoreOpts, <<"colors">>)).
+    ?assertEqual(not_found, read_path(StoreOpts, <<"colors">>)).
 
 %% @doc Link test - verifies symbolic link creation and resolution.
 %%
@@ -810,7 +811,7 @@ link_test() ->
     reset(StoreOpts),
     test_write(StoreOpts, <<"foo/bar/baz">>, <<"Bam">>),
     link_direct(StoreOpts, <<"foo/bar/baz">>, <<"foo/beep/baz">>),
-    {ok, Result} = read(StoreOpts, <<"foo/beep/baz">>),
+    {ok, Result} = read_path(StoreOpts, <<"foo/beep/baz">>),
     ?event({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
@@ -819,7 +820,7 @@ link_fragment_test() ->
     reset(StoreOpts),
     test_write(StoreOpts, [<<"data">>, <<"bar">>, <<"baz">>], <<"Bam">>),
     link_direct(StoreOpts, [<<"data">>, <<"bar">>], <<"my-link">>),
-    {ok, Result} = read(StoreOpts, [<<"my-link">>, <<"baz">>]),
+    {ok, Result} = read_path(StoreOpts, [<<"my-link">>, <<"baz">>]),
     ?event({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
@@ -832,11 +833,11 @@ type_test() ->
     StoreOpts = hb_test_utils:test_store(?MODULE),
     reset(StoreOpts),
     group_direct(StoreOpts, <<"assets">>),
-    Type = type(StoreOpts, <<"assets">>),
+    Type = type_path(StoreOpts, <<"assets">>),
     ?event({type, Type}),
     ?assertEqual(composite, Type),
     test_write(StoreOpts, <<"assets/1">>, <<"bam">>),
-    Type2 = type(StoreOpts, <<"assets/1">>),
+    Type2 = type_path(StoreOpts, <<"assets/1">>),
     ?event({type2, Type2}),
     ?assertEqual(simple, Type2).
 
@@ -860,7 +861,7 @@ link_key_list_test() ->
     reset(StoreOpts),
     test_write(StoreOpts, [ <<"parent">>, <<"key">> ], <<"value">>),
     link_direct(StoreOpts, [ <<"parent">>, <<"key">> ], <<"my-link">>),
-    {ok, Result} = read(StoreOpts, <<"my-link">>),
+    {ok, Result} = read_path(StoreOpts, <<"my-link">>),
     ?event({result, Result}),
     ?assertEqual(<<"value">>, Result).
 
@@ -882,7 +883,7 @@ path_traversal_link_test() ->
     % Create a link from "link" to "group"
     link_direct(StoreOpts, <<"group">>, <<"link">>),
     % Reading via the link path should resolve to the target value
-    {ok, Result} = read(StoreOpts, [<<"link">>, <<"key">>]),
+    {ok, Result} = read_path(StoreOpts, [<<"link">>, <<"key">>]),
     ?event({path_traversal_result, Result}),
     ?assertEqual(<<"target-value">>, Result),
     ok = stop(StoreOpts).
@@ -899,17 +900,17 @@ exact_hb_store_test() ->
     link_direct(StoreOpts, [<<"test-dir1">>], <<"test-link">>),
     % Debug: test that the link behaves like the target (groups are unreadable)
     ?event(step4_check_link),
-    LinkResult = read(StoreOpts, <<"test-link">>),
+    LinkResult = read_path(StoreOpts, <<"test-link">>),
     ?event({link_result, LinkResult}),
     % Since test-dir1 is a group and groups are unreadable, the link should also be unreadable
     ?assertEqual(not_found, LinkResult),
     % Debug: test intermediate steps
     ?event(step5_test_direct_read),
-    DirectResult = read(StoreOpts, <<"test-dir1/test-file">>),
+    DirectResult = read_path(StoreOpts, <<"test-dir1/test-file">>),
     ?event({direct_result, DirectResult}),
     % This should work: reading via the link path  
     ?event(step6_test_link_read),
-    Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
+    Result = read_path(StoreOpts, [<<"test-link">>, <<"test-file">>]),
     ?event({final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
     ok = stop(StoreOpts).
@@ -996,19 +997,19 @@ nested_map_cache_test() ->
     link_direct(StoreOpts, <<"data/", OtherKeyHash/binary>>, <<"root/other-key/other-key-key">>),
     % Step 3: Test reading the structure back
     % Verify the root is a composite
-    ?assertEqual(composite, type(StoreOpts, <<"root">>)),
+    ?assertEqual(composite, type_path(StoreOpts, <<"root">>)),
     % List the root contents
-    {ok, RootKeys} = list(StoreOpts, <<"root">>),
+    {ok, RootKeys} = list_path(StoreOpts, <<"root">>),
     ?event({root_keys, RootKeys}),
     ExpectedRootKeys = [<<"commitments">>, <<"other-key">>, <<"target">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedRootKeys) end, RootKeys)),
     % Read the target directly
-    {ok, TargetValueRead} = read(StoreOpts, <<"root/target">>),
+    {ok, TargetValueRead} = read_path(StoreOpts, <<"root/target">>),
     ?assertEqual(<<"Foo">>, TargetValueRead),
     % Verify commitments is a composite
-    ?assertEqual(composite, type(StoreOpts, <<"root/commitments">>)),
+    ?assertEqual(composite, type_path(StoreOpts, <<"root/commitments">>)),
     % Verify other-key is a composite  
-    ?assertEqual(composite, type(StoreOpts, <<"root/other-key">>)),
+    ?assertEqual(composite, type_path(StoreOpts, <<"root/other-key">>)),
     % Step 4: Test programmatic reconstruction of the nested map
     ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
     ?event({reconstructed_map, ReconstructedMap}),
@@ -1018,10 +1019,10 @@ nested_map_cache_test() ->
 
 %% Helper function to recursively reconstruct a map from the store
 reconstruct_map(StoreOpts, Path) ->
-    case type(StoreOpts, Path) of
+    case type_path(StoreOpts, Path) of
         composite ->
             % This is a group, reconstruct it as a map
-            {ok, ImmediateChildren} = list(StoreOpts, Path),
+            {ok, ImmediateChildren} = list_path(StoreOpts, Path),
             % The list function now correctly returns only immediate children
             ?event({path, Path, immediate_children, ImmediateChildren}),
             maps:from_list([
@@ -1030,7 +1031,7 @@ reconstruct_map(StoreOpts, Path) ->
             ]);
         simple ->
             % This is a simple value, read it directly
-            {ok, Value} = read(StoreOpts, Path),
+            {ok, Value} = read_path(StoreOpts, Path),
             Value;
         not_found ->
             % Path doesn't exist
@@ -1056,18 +1057,18 @@ cache_debug_test() ->
     link_direct(StoreOpts, DataPath, KeyHashPath),
     % 5. Test what the cache would see:
     ?event(debug_cache_test, {step, check_message_type}),
-    MsgType = type(StoreOpts, MessageID),
+    MsgType = type_path(StoreOpts, MessageID),
     ?event(debug_cache_test, {message_type, MsgType}),
     ?event(debug_cache_test, {step, list_message_contents}),
-    {ok, Subkeys} = list(StoreOpts, MessageID),
+    {ok, Subkeys} = list_path(StoreOpts, MessageID),
     ?event(debug_cache_test, {message_subkeys, Subkeys}),
     ?event(debug_cache_test, {step, read_key_hashpath}),
-    KeyHashResult = read(StoreOpts, KeyHashPath),
+    KeyHashResult = read_path(StoreOpts, KeyHashPath),
     ?event(debug_cache_test, {key_hash_read_result, KeyHashResult}),
     % 6. Test with path as list (what cache does):
     ?event(debug_cache_test, {step, read_path_as_list}),
     PathAsList = [MessageID, <<"key_hash_abc">>],
-    PathAsListResult = read(StoreOpts, PathAsList),
+    PathAsListResult = read_path(StoreOpts, PathAsList),
     ?event(debug_cache_test, {path_as_list_result, PathAsListResult}),
     stop(StoreOpts).
 
@@ -1090,20 +1091,20 @@ isolated_type_debug_test() ->
     test_write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
     % 4. Test type detection on the nested paths
     ?event(debug_isolated, {testing_main_message_type}),
-    MainType = type(StoreOpts, MessageID),
+    MainType = type_path(StoreOpts, MessageID),
     ?event(debug_isolated, {main_message_type, MainType}),
     ?event(debug_isolated, {testing_commitments_type}),
-    CommitmentsType = type(StoreOpts, CommitmentsPath),
+    CommitmentsType = type_path(StoreOpts, CommitmentsPath),
     ?event(debug_isolated, {commitments_type, CommitmentsType}),
     ?event(debug_isolated, {testing_other_key_type}),
-    OtherKeyType = type(StoreOpts, OtherKeyPath),
+    OtherKeyType = type_path(StoreOpts, OtherKeyPath),
     ?event(debug_isolated, {other_key_type, OtherKeyType}),
     % 5. Test what happens when reading these nested paths
     ?event(debug_isolated, {reading_commitments_directly}),
-    CommitmentsResult = read(StoreOpts, CommitmentsPath),
+    CommitmentsResult = read_path(StoreOpts, CommitmentsPath),
     ?event(debug_isolated, {commitments_read_result, CommitmentsResult}),
     ?event(debug_isolated, {reading_other_key_directly}),
-    OtherKeyResult = read(StoreOpts, OtherKeyPath),
+    OtherKeyResult = read_path(StoreOpts, OtherKeyPath),
     ?event(debug_isolated, {other_key_read_result, OtherKeyResult}),
     stop(StoreOpts).
 
@@ -1119,12 +1120,12 @@ list_with_link_test() ->
     % Create a link to the group
     link_direct(StoreOpts, <<"real-group">>, <<"link-to-group">>),
     % List the real group to verify expected children
-    {ok, RealGroupChildren} = list(StoreOpts, <<"real-group">>),
+    {ok, RealGroupChildren} = list_path(StoreOpts, <<"real-group">>),
     ?event({real_group_children, RealGroupChildren}),
     ExpectedChildren = [<<"child1">>, <<"child2">>, <<"child3">>],
     ?assertEqual(ExpectedChildren, lists:sort(RealGroupChildren)),
     % List via the link - should return the same children
-    {ok, LinkChildren} = list(StoreOpts, <<"link-to-group">>),
+    {ok, LinkChildren} = list_path(StoreOpts, <<"link-to-group">>),
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     stop(StoreOpts).

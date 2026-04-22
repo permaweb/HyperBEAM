@@ -7,26 +7,26 @@
 
 %% @doc The scope of a GraphQL store is always remote, due to performance.
 scope(_) -> remote.
-resolve(_, Key) -> Key.
+resolve_key(_StoreOpts, Key) -> Key.
 resolve(StoreOpts, #{ <<"resolve">> := Key }, _NodeOpts) ->
-    {ok, resolve(StoreOpts, Key)}.
+    {ok, resolve_key(StoreOpts, Key)}.
 
-list(StoreOpts, Key) ->
+list_key(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
-    case read(StoreOpts, Key) of
+    case read_key(StoreOpts, Key) of
         not_found -> {error, not_found};
         failure -> {failure, failure};
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
     end.
 list(StoreOpts, #{ <<"list">> := Key }, _NodeOpts) ->
-    list(StoreOpts, Key).
+    list_key(StoreOpts, Key).
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(StoreOpts, Key) ->
+type_key(StoreOpts, Key) ->
     ?event(store_gateway, executing_type),
-    case read(StoreOpts, Key) of
+    case read_key(StoreOpts, Key) of
         not_found -> {error, not_found};
         failure -> {failure, failure};
         {ok, Data} ->
@@ -46,7 +46,7 @@ type(StoreOpts, Key) ->
             end
     end.
 type(StoreOpts, #{ <<"type">> := Key }, _NodeOpts) ->
-    type(StoreOpts, Key).
+    type_key(StoreOpts, Key).
 
 %% @doc Extract a value from a message, handling sub-paths.
 extract_path_value(Message, Rest, StoreOpts) ->
@@ -61,7 +61,7 @@ extract_path_value(Message, Rest, StoreOpts) ->
 
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
-read(BaseStoreOpts, Key) ->
+read_key(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
     GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
@@ -96,7 +96,7 @@ read(BaseStoreOpts, Key) ->
             not_found
     end.
 read(StoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
-    case read(StoreOpts, Key) of
+    case read_key(StoreOpts, Key) of
         {ok, Data} -> {ok, Data};
         not_found -> {error, not_found};
         failure -> {failure, failure};

@@ -26,11 +26,11 @@ scope(_StoreOpts) ->
 %% @param Data A map containing node configuration.
 %% @param Key The key to resolve.
 %% @returns The resolved key.
-resolve(#{ <<"node">> := Node }, Key) ->
+resolve_key(#{ <<"node">> := Node }, Key) ->
     ?event({remote_resolve, {node, Node}, {key, Key}}),
     Key.
 resolve(Store, #{ <<"resolve">> := Key }, _NodeOpts) ->
-    {ok, resolve(Store, Key)}.
+    {ok, resolve_key(Store, Key)}.
 
 %% @doc Determine the type of value at a given key.
 %%
@@ -40,7 +40,7 @@ resolve(Store, #{ <<"resolve">> := Key }, _NodeOpts) ->
 %% @param Key The key whose value type is determined.
 %% @returns `{ok, simple}' or `{ok, composite}' if found, or
 %%          `{error, not_found}' otherwise.
-type(Opts = #{ <<"node">> := Node }, Key) ->
+type_key(Opts = #{ <<"node">> := Node }, Key) ->
     ?event({remote_type, {node, Node}, {key, Key}}),
     case read_request(Opts, Key) of
         {composite, _} -> {ok, composite};
@@ -48,7 +48,7 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
         {error, _} = Error -> Error
     end.
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
-    type(Opts, Key).
+    type_key(Opts, Key).
 
 %% @doc Read a key from the remote node.
 %%
