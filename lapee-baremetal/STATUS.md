@@ -2873,5 +2873,68 @@ value handles for high-level comparison:
    list at attestation time (online) or at release-build
    time (offline snapshot).
 
-Iteration 14 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 14 — commit `915e122da`
+
+Two TL;DR layers riding on top of the full ~25-section claim
+tree:
+
+1. **`claim.policy-verdict`** (prescriptive) — aggregates
+   every claim section into a single policy answer. 11
+   finding codes cover Secure-Boot state, quote-integrity,
+   pcr-replay consistency, freshness (nonce/safe/clock),
+   IMA-policy violations, TPM trust-tier, TME, boot-chain
+   runtime-driver, known-CVEs, Secure-Boot policy posture
+   /strength, lockdown level. Output:
+   `verdict` ("trusted" / "attested-with-warnings" /
+   "untrusted" / "unknown"), `score` 0-100,
+   `critical-failures`, `warnings`, `signals` map (flat
+   fact-map for policy engines).
+
+   Scoring: base 100, -40/critical, -8/warning, +5 for
+   confidential-compute context, clamped 0..100.
+
+2. **`claim.attestation-summary`** (descriptive) —
+   human-readable one-glance summary:
+   `machine-identity`, `firmware-identity`, `boot-identity`,
+   `tpm-identity`, `security-posture`, `context`,
+   `top-concerns` (up to 5 policy findings), echoed
+   `verdict` + `score`. All iolist-safe (ASCII-only),
+   null-safe composition.
+
+   Live-verified on dell-notebook-wbcl.bin:
+   `verdict=attested-with-warnings, score=76`, warnings:
+   secure-boot-disabled, pcr-replay-multi-mismatch (12 PCRs),
+   tme-unknown.
+
+`interpret_claim/3` wire-ordering strict:
+  1. BaseClaim
+  2. + timeline
+  3. + policy-verdict (reads BaseClaim + timeline)
+  4. + attestation-summary (reads policy-verdict)
+  5. + evidence-digest (hashes everything above)
+
+4 new eunit tests. All 158 tests pass (98 tcg + 60 interpret).
+
+### Candidate priority list for hour 15
+
+1. **TPM2_ActivateCredential decode** — remaining from
+   hour 14's list; unlocks AK-EK binding proof.
+2. **Canonical CBOR serialisation** — cross-language
+   evidence-digest form via RFC 8949 deterministic CBOR.
+3. **`claim.match-profile`** — ship a
+   `priv/tpm-interpret/match-profiles/*.json' catalogue
+   describing canonical "expected machine states" (e.g.,
+   `lapee-os-production-ready` = SB-on + lockdown=conf +
+   tier-3 UKI match + policy-verdict=trusted). Cross-ref
+   on top of the flat claim.
+4. **EK-cert chain validation** — decode any shipped EK
+   cert bytes + check issuer chain against `priv/tpm-
+   interpret/root-cas/`.
+5. **Event-log binary-format version** — currently the TCG
+   parser assumes crypto-agile or legacy SHA-1; add a
+   `log-format-detected` field on `claim.platform-config`
+   naming the concrete format (crypto-agile / legacy-
+   sha1 / TDX-CCEL / vendor-extension).
+
+Iteration 15 fires automatically at `:23`. Loop state: `b5d87b84`.
 
