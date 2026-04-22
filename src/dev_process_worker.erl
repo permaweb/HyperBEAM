@@ -9,7 +9,13 @@
 
 %% @doc Returns a group name for a request. The worker is responsible for all
 %% computation work on the same process on a single node, so we use the
-%% process ID as the group name.
+%% process ID as the group name -- but only when the request is one that
+%% actually needs the worker to compute. `compute' requests whose result
+%% is already available in the local cache return `ungrouped_exec' so
+%% that `hb_persistent:find_or_register/3' short-circuits the wait and
+%% the device's `compute/3' can serve the cached message immediately.
+%% This keeps the dedup invariants for genuine compute work while
+%% letting concurrent cache-hit reads run in parallel.
 group(Base, undefined, Opts) ->
     hb_persistent:default_grouper(Base, undefined, Opts);
 group(Base, Req, Opts) ->
@@ -23,10 +29,81 @@ group(Base, Req, Opts) ->
                 _ ->
                     case hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)) of
                         true ->
-                            process_to_group_name(Base, Opts);
+                            compute_group(Base, Req, Opts);
                         _ ->
                             hb_persistent:default_grouper(Base, Req, Opts)
                     end
+            end
+    end.
+
+%% @doc Decide which group to enrol a `compute' request into. Cache-hit
+%% reads bypass the per-process queue via `ungrouped_exec'; everything
+%% else is serialised through the worker keyed on the process ID.
+compute_group(Base, Req, Opts) ->
+    ProcID = process_to_group_name(Base, Opts),
+    case requested_compute_already_cached(ProcID, Req, Opts) of
+        true ->
+            ?event(worker,
+                {compute_cache_hit_bypassing_queue,
+                    {proc_id, ProcID},
+                    {req, Req}
+                },
+                Opts
+            ),
+            ungrouped_exec;
+        false ->
+            ProcID
+    end.
+
+%% @doc Returns `true' iff `dev_process:compute/3' will resolve the
+%% request from the local cache without spawning or awaiting work.
+%% Mirrors the lookup rules in `dev_process:compute/3':
+%%
+%%   * Explicit `compute' or `slot' key -- cached iff that slot number
+%%     is already written.
+%%   * No slot -- the device falls into the cache-only branch of
+%%     `now/3', so cached iff at least one slot exists for the process.
+%%
+%% Any error on the cache lookup falls back to `false', so the caller
+%% defaults to the existing per-process group and behaviour is, at
+%% worst, unchanged.
+requested_compute_already_cached(ProcID, Req, Opts) ->
+    try
+        case dev_process_cache:latest_slot(ProcID, Opts) of
+            {ok, LatestCached} ->
+                case requested_slot(Req, Opts) of
+                    undefined -> true;
+                    Slot -> Slot =< LatestCached
+                end;
+            _ ->
+                false
+        end
+    catch
+        _:_ -> false
+    end.
+
+%% @doc Extract the requested slot number from a `compute' request, if
+%% any. Mirrors `dev_process:compute/3''s lookup order: an explicit
+%% `compute' key first, then `slot'. Returns `undefined' when neither
+%% is present, or when the value cannot be parsed as a non-negative
+%% integer.
+requested_slot(Req, Opts) ->
+    Raw =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Req}, <<"compute">>},
+                {{as, <<"message@1.0">>, Req}, <<"slot">>}
+            ],
+            Opts
+        ),
+    case Raw of
+        not_found -> undefined;
+        _ ->
+            try hb_util:int(Raw) of
+                Int when is_integer(Int), Int >= 0 -> Int;
+                _ -> undefined
+            catch
+                _:_ -> undefined
             end
     end.
 
@@ -187,3 +264,49 @@ grouper_test() ->
     ?event({group_samples, {g1, G1}, {g2, G2}, {g3, G3}}),
     ?assertEqual(G1, G2),
     ?assertNotEqual(G1, G3).
+
+%% @doc `compute' requests whose result is already in the local cache
+%% should bypass the per-process worker queue (returning the
+%% `ungrouped_exec' sentinel that `hb_persistent:find_or_register/3'
+%% short-circuits). Requests that still need work, and requests for a
+%% slot beyond what is cached, must continue to serialise through the
+%% process group.
+grouper_skips_when_slot_cached_test() ->
+    test_init(),
+    Opts =
+        #{
+            store => hb_test_utils:test_store(hb_store_lmdb),
+            priv_wallet => ar_wallet:new()
+        },
+    M1 = dev_process_test_vectors:aos_process(Opts),
+    POpts = Opts#{ process_workers => true },
+    %% With the cache empty, every compute request must group by
+    %% process so that the worker can do the actual work.
+    Uncached = #{ <<"path">> => <<"compute">>, <<"slot">> => 5 },
+    ProcessGroup = hb_persistent:group(M1, Uncached, POpts),
+    ?assertNotEqual(ungrouped_exec, ProcessGroup),
+    %% Write slot 5 into the cache. The same request now has a result
+    %% available and the grouper should step out of the queue.
+    {ok, _} =
+        dev_process_cache:write(
+            ProcessGroup,
+            5,
+            #{ <<"hello">> => <<"cached">> },
+            Opts
+        ),
+    ?assertEqual(
+        ungrouped_exec,
+        hb_persistent:group(M1, Uncached, POpts)
+    ),
+    %% A request for a slot beyond what we cached must still be
+    %% serialised through the worker.
+    Beyond = #{ <<"path">> => <<"compute">>, <<"slot">> => 999 },
+    ?assertEqual(ProcessGroup, hb_persistent:group(M1, Beyond, POpts)),
+    %% A `compute' request without a slot resolves via the cache-only
+    %% branch of `now/3' once any slot exists, so it also bypasses the
+    %% queue.
+    NoSlot = #{ <<"path">> => <<"compute">> },
+    ?assertEqual(
+        ungrouped_exec,
+        hb_persistent:group(M1, NoSlot, POpts)
+    ).
