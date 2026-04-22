@@ -3,7 +3,7 @@
 %%% convenient interface for reading the result of a process at a given slot or
 %%% message ID.
 -module(dev_process_cache).
--export([latest/2, latest/3, latest/4, read/2, read/3, write/4]).
+-export([latest/2, latest/3, latest/4, latest_slot/2, read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -57,6 +57,28 @@ path(ProcID, Ref, PathSuffix, Opts) ->
             _ -> [Ref]
         end ++ PathSuffix
     ).
+
+%% @doc Return the highest slot number that has been written into the
+%% local cache for a process, without reading the slot's contents.
+%% Returns `not_found' when the cache holds no slots for the process.
+%%
+%% Cheaper than `latest/2,3,4' when the caller only needs to know
+%% whether a particular slot is already computed (for example, the
+%% `~process@1.0' worker grouper deciding whether to bypass the worker
+%% queue for a cache-resolvable read).
+latest_slot(ProcID, Opts) ->
+    Scope = hb_opts:get(process_cache_scope, local, Opts),
+    UnscopedStore =
+        case hb_opts:get(store, no_viable_store, Opts) of
+            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
+            Other -> Other
+        end,
+    ScopedOpts = Opts#{ store => hb_store:scope(UnscopedStore, Scope) },
+    Path = path(ProcID, slot_root, ScopedOpts),
+    case hb_cache:list_numbered(Path, ScopedOpts) of
+        [] -> not_found;
+        Slots -> {ok, lists:max(Slots)}
+    end.
 
 %% @doc Retrieve the latest slot for a given process. Optionally state a limit
 %% on the slot number to search for, as well as a required path that the slot
