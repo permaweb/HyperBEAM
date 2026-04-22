@@ -118,7 +118,7 @@ install(Base, State, Opts) ->
         ),
     % Install a type-level metatable for all luerl tables so that any table
     % created in Lua routes reads through hb_ao:get and writes through hb_ao:set.
-    % Per-table metatables (set by encode_proxy) take precedence.
+    % Per-table metatables (set by encode_table) take precedence.
     GetFun =
         fun([RawTable, Key], S) ->
             Table = dev_lua:decode(luerl:decode(RawTable, S), Opts),
@@ -135,7 +135,8 @@ install(Base, State, Opts) ->
                         debug_lua_getindex,
                         {global_get_found, {key, Key}, {result, R}}
                     ),
-                    {Encoded, S2} = dev_lua:encode_value(R, S, Opts),
+                    Encodable = if is_map(R) -> hb_private:reset(R); true -> R end,
+                    {Encoded, S2} = dev_lua:encode_value(Encodable, S, Opts),
                     {[Encoded], S2}
             end
         end,
@@ -219,7 +220,8 @@ make_table_meta(St0, Opts) ->
                 not_found ->
                     {[nil], S};
                 R ->
-                    {Encoded, S2} = dev_lua:encode_value(R, S, Opts),
+                    Encodable = if is_map(R) -> hb_private:reset(R); true -> R end,
+                    {Encoded, S2} = dev_lua:encode_value(Encodable, S, Opts),
                     {[Encoded], S2}
             end
         end,

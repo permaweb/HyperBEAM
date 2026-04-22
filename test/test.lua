@@ -162,12 +162,22 @@ function inc(base, req, opts)
     return base
 end
 
---- @function trie_proxy_test
---- @tparam table base A trie@1.0 message passed as the first argument.
---- Reads "toronto" via trie traversal (__index -> dev_trie:get), then
---- writes its value to "to" (an overlapping prefix key) via __newindex.
-function trie_proxy_test(base, req, opts)
+function trie_metatable_test(base, req, opts)
     local fetched = base["toronto"]
     base["toro"] = fetched
+    base["toronto"] = 100
+    return base
+end
+
+function map_metatable_overwrite_test(base, req, opts)
+    base["a"] = 100
+    base["d"] = 4
+    return base
+end
+
+function get_now_test(base, req, opts)
+    local now = base.now
+    base.found_now = now
+    base.executed_now = true
     return base
 end

@@ -495,6 +495,8 @@ do_decode(Msg, Opts) when is_map(Msg) ->
         false ->
             Msg
     end;
+do_decode(<<"__erl_pid__:", Rest/binary>>, _Opts) ->
+    list_to_pid(binary_to_list(Rest));
 do_decode(Other, _Opts) ->
     Other.
 
@@ -514,6 +516,8 @@ do_encode(List, Opts) when is_list(List) ->
         lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
+do_encode(Pid, _Opts) when is_pid(Pid) ->
+    <<"__erl_pid__:", (hb_util:bin(erlang:pid_to_list(Pid)))/binary>>;
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
 do_encode(Other, _Opts) ->
@@ -747,24 +751,100 @@ lua_trie_metatable_test() ->
             [
                 LuaMsg,
                 #{
-                    <<"path">> => <<"trie_proxy_test">>,
+                    <<"path">> => <<"trie_metatable_test">>,
                     <<"parameters">> => [Trie, #{}, #{}]
                 }
             ],
             Opts
         ),
-    % "toronto" was only reachable via trie traversal; must survive the round-trip.
-    ?assertEqual(42, hb_ao:get(<<"toronto">>, Res, Opts)),
-    % "to" was set to the fetched toronto value (42), overwriting the original (1).
     ?assertEqual(1, hb_ao:get(<<"to">>, Res, Opts)),
-    % "toro" was set to the fetched toronto value (42), overwriting the original (2).
-    % Unrelated trie keys must be untouched.
     ?assertEqual(2, hb_ao:get(<<"tor">>, Res, Opts)),
-    ?assertEqual(42, hb_ao:get(<<"toro">>, Res, Opts)),
     ?assertEqual(3, hb_ao:get(<<"torrent">>, Res, Opts)),
+    % "toro" was set to the fetched toronto value (42).
+    ?assertEqual(42, hb_ao:get(<<"toro">>, Res, Opts)),
+    % "toronto" was set to 100, overwriting the original (42).
+    ?assertEqual(100, hb_ao:get(<<"toronto">>, Res, Opts)),
     % Assert that the table is still in trie form. Toro will be nested.
     ?assertNot(maps:is_key(<<"toro">>, Res)).
 
+lua_map_metatable_overwrite_test() ->
+    Opts = #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    },
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base =
+        #{
+            <<"device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        },
+    Params =
+        [
+            #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 3 },
+            #{},
+            #{}
+        ],
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                #{
+                    <<"path">> => <<"map_metatable_overwrite_test">>,
+                    <<"parameters">> => Params
+                }
+            ],
+            Opts
+        ),
+    ?assertEqual(100, hb_ao:get(<<"a">>, Res, Opts)),
+    ?assertEqual(2, hb_ao:get(<<"b">>, Res, Opts)),
+    ?assertEqual(3, hb_ao:get(<<"c">>, Res, Opts)),
+    ?assertEqual(4, hb_ao:get(<<"d">>, Res, Opts)).
+
+lua_metatable_get_now_test() ->
+    Process = generate_lua_process("test/test.lua", #{}),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_test_message(Process, #{}, <<"return 1+1">>),
+    lists:foreach(
+        fun(_) -> hb_ao:resolve(Process, Message, #{}) end,
+        lists:seq(1, 15)
+    ),
+    NowFromCacheBefore =
+        hb_ao:resolve(
+            Process,
+            <<"now">>,
+            #{ process_now_from_cache => always }
+        ),
+    ?assertMatch(
+        {failure, <<"No cached state available.">>},
+        NowFromCacheBefore
+    ),
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                Process#{ <<"device">> => <<"lua@5.3a">> },
+                #{
+                    <<"path">> => <<"get_now_test">>,
+                    <<"parameters">> => [Process, #{}, #{}]
+                }
+            ],
+            #{}
+        ),
+    ?assert(hb_ao:get(<<"executed_now">>, Res, #{})),
+    ?assertMatch(14, hb_ao:get(<<"found_now/at-slot">>, Res, #{})),
+    % TODO: Possible bug in dev_process_cache, needs 100ms to catch up
+    % (otherwise serving slot 11,12,13,etc.)
+    timer:sleep(100),
+    {ok, NowFromCacheAfter} =
+        hb_ao:resolve(
+            Process,
+            <<"now/at-slot">>,
+            #{ process_now_from_cache => always }
+        ),
+    ?assertMatch(14, NowFromCacheAfter).
+    
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.
 invoke_non_compute_key_test() ->
