@@ -2456,5 +2456,56 @@ and activating the previously-passive pcr-profiles catalogue:
    path + payload-sha256; unpack the SPDM measurement block
    structure.
 
-Iteration 6 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 6 — commit `00bacd462`
+
+Two follow-on claims that close the "pre-verified quote but
+tampered PCR values" attack surface and give verifiers a
+policy-ready freshness composite:
+
+1. **`claim.quote-integrity`** — fundamental internal-
+   consistency check. Recomputes SHA-XX(concat of selected
+   PCRs) from the envelope and compares to the pcrDigest
+   declared in TPMS_QUOTE_INFO. Digest algorithm inferred
+   from pcr-digest-length (20 → SHA-1, 32 → SHA-256,
+   48 → SHA-384, 64 → SHA-512). Missing PCRs (selected but
+   not in envelope) are listed and flip `verifiable=false`.
+   Evidence tuples back the verdict. Live-verified both
+   directions: consistent envelope → match=true; tampered
+   PCR → match=false with identical verifiable=true.
+
+2. **`claim.freshness`** — aggregates nonce / reset-count /
+   restart-count / clock-ms / safe from the quote into a
+   single `freshness-indicator`:
+     - "ok"           nonce present, safe=true, clock>0
+     - "safe-false"   TPM clock tampered (red flag)
+     - "no-nonce"     challenge wasn't bound (replayable)
+     - "no-clock"     dry-run quote
+     - "unknown"      no quote in envelope
+   Granular `evidence` list lets policy engines require
+   specific sub-conditions (e.g., reset-count ≥ last-seen).
+
+6 new eunit tests. All 128 tests pass (95 tcg + 33 interpret).
+
+### Candidate priority list for hour 7
+
+1. **IMA per-file event log decode** — still the biggest un-
+   parsed Linux measurement surface (PCR 10 + runtime stream).
+   Templates: ima, ima-ng, ima-sig, ima-buf, ima-modsig.
+2. **Boot-chain image-identity DB** — `priv/tpm-interpret/
+   boot-images/*.json' mapping known shim / grub / UKI
+   SHA-256 hashes → {publisher, version, cve-free-since,
+   revoked-as-of} — wire into `claim.boot-chain`.
+3. **SPDM device-authority decode** — unpack SPDM measurement
+   block (BlockID + Measurement index + Measurement value) in
+   events 0x800000E1-E5.
+4. **PCR chain-of-events "derived" rollup** — each PCR's
+   final value should equal a SHA-XX fold of its events. We
+   already fold per-hour-1 but don't expose the rolled-up
+   derivation chain as a claim section.
+5. **TPM2_CertifyX509 / TCG_CANONICALIZATION** — encode the
+   claim set into the TCG-canonical wire form so it can be
+   signed/countersigned by downstream attestation policy
+   verifiers.
+
+Iteration 7 fires automatically at `:23`. Loop state: `b5d87b84`.
 
