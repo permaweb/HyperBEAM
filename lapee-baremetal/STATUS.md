@@ -2776,5 +2776,58 @@ Two additions closing high-value claim-surface gaps:
    blocked hashes, policy posture (setup-mode / user-mode
    / audit-mode).
 
-Iteration 12 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 12 — commit `caff877d8`
+
+Two additions closing the top items from hour-11's list:
+
+1. **`claim.secure-boot-policy`** — folds PK/KEK/db/dbx
+   into a single policy-ready stanza. Surfaces per-bucket
+   entry counts, a trusted-signers list (subject / issuer /
+   SHA-256 fingerprint / validity / pubkey alg), a blocked-
+   hashes list, and a composite `policy-posture` verdict
+   ("setup-mode" / "deployed-production" / "user-managed" /
+   "audit-only" / "disabled" / "unknown") plus a
+   `policy-strength` heuristic based on dbx population
+   ("latest-revocations" / "moderate-revocations" /
+   "minimal-revocations" / "no-revocations").
+
+   Live-verified on `dell-notebook-wbcl.bin` (real Dell
+   fixture): PK=1, KEK=2, db=4, dbx=267, policy-posture=
+   "audit-only", policy-strength="latest-revocations",
+   4 trusted signers all with full Dell-Inc. X.509 subject
+   names + SHA-256 fingerprints.
+
+2. **Kernel-module pathname decode** — every IMA entry
+   matching the canonical `/lib/modules/<kver>/kernel/
+   <subsystem>/<name>.ko[.xz|.gz|.zst]' layout is enriched
+   with structured fields (`module-name`,
+   `module-kernel-version`, `module-subsystem`,
+   `module-compression`). `claim.kernel-integrity.modules`
+   projects the loaded-module set as a navigable summary:
+   loaded-count, signed-count, unsigned-count, sorted
+   unique kernel-versions, histogram by subsystem, plus a
+   per-module row list. Live-verified on a synthetic IMA
+   log with 3 modules (.ko / .ko.xz / .ko.gz) + 2 non-
+   module paths correctly excluded.
+
+4 new eunit tests. All 150 tests pass (98 tcg + 52 interpret).
+
+### Candidate priority list for hour 13
+
+1. **TPM2_ActivateCredential decode** — AK-EK binding
+   proof extension.
+2. **Real boot-image hashes from dbx** — populate `image-
+   hash-sha256` arrays with actual revoked hashes from
+   the UEFI Revocation List + Fedora/Canonical shim
+   release publications.
+3. **Canonical claim-set serialisation** — deterministic
+   CBOR encoding for downstream signing.
+4. **`claim.evidence-digest`** — produce a single
+   aggregated SHA-256 over the entire flat claim map so
+   a verifier can pin the exact decoded state.
+5. **`claim.timeline`** — surface the TPM clock + event-
+   log sequence + IMA timestamps as a unified temporal
+   chain, letting a policy engine detect drift.
+
+Iteration 13 fires automatically at `:23`. Loop state: `b5d87b84`.
 
