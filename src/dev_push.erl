@@ -840,16 +840,16 @@ test_push_as_identity() ->
     ComputeID = hb_util:human_id(ComputeWallet),
     TestStore = [hb_test_utils:test_store(hb_store_lmdb)],
     Opts = #{
-        priv_wallet => DefaultWallet,
-        cache_control => <<"always">>,
+        <<"priv-wallet">> => DefaultWallet,
+        <<"cache-control">> => <<"always">>,
         store => TestStore,
-        identities => #{
+        <<"identities">> => #{
             SchedulingID => #{
-                priv_wallet => SchedulingWallet,
+                <<"priv-wallet">> => SchedulingWallet,
                 store => [hb_test_utils:test_store(hb_store_lmdb)]
             },
             ComputeID => #{
-                priv_wallet => ComputeWallet
+                <<"priv-wallet">> => ComputeWallet
             }
         }
     },

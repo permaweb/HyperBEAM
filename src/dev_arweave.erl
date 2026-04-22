@@ -15,6 +15,9 @@
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
+all_parallel_test_() ->
+    hb_test_parallel:all(?MODULE, 15).
+
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
 info() ->

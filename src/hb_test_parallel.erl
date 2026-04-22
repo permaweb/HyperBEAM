@@ -25,7 +25,7 @@
 %%% That is the whole contract. No manual exports, no hand-written
 %%% generator, and nothing renamed.
 -module(hb_test_parallel).
--export([parse_transform/2, all/1]).
+-export([parse_transform/2, all/1, all/2]).
 
 -define(SIMPLE_SUFFIX, "_test_parallel").
 -define(GENERATOR_SUFFIX, "_test_parallel_").
@@ -51,6 +51,24 @@ all(Module) ->
     {inparallel,
         [
             {atom_to_list(F), fun Module:F/0}
+        ||
+            F <- Funs
+        ]
+    }.
+
+all(Module, Timeout) ->
+    Funs =
+        lists:sort(
+            [
+                F
+            ||
+                {F, 0} <- Module:module_info(exports),
+                    is_parallel_test_name(F)
+            ]
+        ),
+    {inparallel,
+        [
+            {atom_to_list(F), {timeout, Timeout, fun Module:F/0}}
         ||
             F <- Funs
         ]

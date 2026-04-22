@@ -1033,32 +1033,77 @@ negative_from_index_test_parallel() ->
     OffsetFromTip = Tip - StartBlock,
     ?assert(OffsetFromTip > 0),
     NegativeFrom = <<"-", (hb_util:bin(OffsetFromTip))/binary>>,
-    {ok, StopBlock} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(StopBlock))/binary, "&"
-                "to=", (hb_util:bin(StopBlock))/binary, "&"
-                "mode=write"
-            >>,
-            Opts
-        ),
-    {ok, StopBlock} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", NegativeFrom/binary, "&"
-                "mode=write"
-            >>,
-            Opts
-        ),
-    ?assert(has_any_indexed_tx(StartBlock, Opts)),
-    NextBlock = highest_contiguous_indexed_block(StopBlock, 50, Opts),
-    ?assertEqual(StartBlock, NextBlock),
-    assert_indexed_range(NextBlock, StopBlock, Opts),
-    ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
-    ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
-    ok.
+    {ok, MockURL, MockHandle} = hb_mock_server:start([
+        {"/block/current", block_current,
+            {200, <<"{\"height\": ", (hb_util:bin(Tip))/binary, "}">>}}
+    ]),
+    StableOpts =
+        Opts#{
+            arweave_index_blocks => false,
+            routes => [
+                #{
+                    <<"template">> => <<"^/arweave/block/current$">>,
+                    <<"nodes">> => [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => MockURL,
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                    <<"parallel">> => true,
+                    <<"stop-after">> => true,
+                    <<"admissible-status">> => 200
+                },
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"nodes">> => [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> =>
+                                hb_opts:get(
+                                    gateway,
+                                    <<"https://arweave.net">>,
+                                    Opts
+                                ),
+                            <<"opts">> => #{ http_client => httpc }
+                        }
+                    ],
+                    <<"parallel">> => true,
+                    <<"stop-after">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ]
+        },
+    try
+        {ok, StopBlock} =
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&"
+                    "from=", (hb_util:bin(StopBlock))/binary, "&"
+                    "to=", (hb_util:bin(StopBlock))/binary, "&"
+                    "mode=write"
+                >>,
+                StableOpts
+            ),
+        {ok, StopBlock} =
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&"
+                    "from=", NegativeFrom/binary, "&"
+                    "mode=write"
+                >>,
+                StableOpts
+            ),
+        ?assert(has_any_indexed_tx(StartBlock, StableOpts)),
+        NextBlock = highest_contiguous_indexed_block(StopBlock, 50, StableOpts),
+        ?assertEqual(StartBlock, NextBlock),
+        assert_indexed_range(NextBlock, StopBlock, StableOpts),
+        ?assertNot(has_any_indexed_tx(StopBlock - 1, StableOpts)),
+        ?assertNot(has_any_indexed_tx(NextBlock + 1, StableOpts)),
+        ok
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
 
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
