@@ -560,38 +560,33 @@ commitment_id_to_base_id(ID, Opts) ->
 %% by resolving the given ID, recursing through its links, then returning all
 %% of the IDs found in that `BaseID/commitments' key.
 all_signed_ids(ID, Store, Opts) ->
-    maybe
-        {ok, ResolvedID} ?= hb_store:resolve(Store, ID, Opts),
-        {composite, CommitmentIDs} ?=
-            hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts),
-        lists:filter(
-            fun(CommitmentID) ->
-                commitment_is_signed(ResolvedID, CommitmentID, Store, Opts)
-            end,
-            CommitmentIDs
-        )
-    else
+    ResolvedID = hb_util:ok_or(hb_store:resolve(Store, ID, Opts), ID),
+    case hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts) of
+        {composite, CommitmentIDs} ->
+            lists:filter(
+                fun(CommitmentID) ->
+                    CommitmentPath =
+                        <<
+                            ResolvedID/binary,
+                            "/commitments/",
+                            CommitmentID/binary,
+                            "/committer"
+                        >>,
+                    CommitmentMsgID =
+                        hb_util:ok_or(
+                            hb_store:resolve(Store, CommitmentPath, Opts),
+                            CommitmentPath
+                        ),
+                    case hb_store:read(Store, CommitmentMsgID, Opts) of
+                        {ok, _} -> true;
+                        _ ->
+                            false
+                    end
+                end,
+                CommitmentIDs
+            );
         _ ->
             [ID]
-    end.
-
-commitment_is_signed(ResolvedID, CommitmentID, Store, Opts) ->
-    maybe
-        {ok, ResolvedCommitmentMsgID} ?=
-            hb_store:resolve(
-                Store,
-                <<
-                    ResolvedID/binary,
-                    "/commitments/",
-                    CommitmentID/binary,
-                    "/committer"
-                >>,
-                Opts
-            ),
-        {ok, _} ?= hb_store:read(Store, ResolvedCommitmentMsgID, Opts),
-        true
-    else
-        _ -> false
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be
