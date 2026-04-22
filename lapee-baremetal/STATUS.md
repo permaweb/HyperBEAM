@@ -2611,5 +2611,50 @@ Two improvements building on hour 7:
    so a downstream verifier can sign/countersign without
    re-parsing.
 
-Iteration 9 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 9 — commit `6072b29ad`
+
+New `priv/tpm-interpret/boot-images/*.json' catalogue + full
+wiring into `claim.boot-chain`. 9 seed entries cover the
+production UEFI boot surface: Microsoft Windows Boot Manager,
+Fedora/Red Hat shim, Ubuntu shim, Debian shim, systemd-boot,
+GRUB2, UEFI fallback-bootx64, LapEE OS UKI, iPXE.
+
+Each entry matches on EITHER exact `image-hash-sha256' (most
+specific) OR `device-path-suffix' (robust across builds —
+EFI filesystems are case-insensitive so matching is too). On
+match, every chain row gets augmented with:
+
+    publisher, product, category, signed-by (CA names),
+    cve-status, cve-notes, recommended-min-version,
+    matched-by, matched-pattern, matched-profile-key, notes
+
+Live-verified on `dell-notebook-wbcl.bin': the fixture's second
+boot-services application (`Acpi(...)/NVMe(...)/\EFI\Boot\
+BootX64.efi`) correctly attributes to the fallback-bootx64
+entry with `publisher="multi-vendor"`, `category="fallback"`,
+`matched-by="device-path-suffix"`. The first row (firmware-
+volume-local entry) is `unmatched` — correct behaviour since
+Fv/FvFile paths are platform-internal with no public hash DB.
+
+3 new eunit tests. All 138 tests pass (95 tcg + 43 interpret).
+
+### Candidate priority list for hour 10
+
+1. **Real boot-image SHA-256 seeds** — populate the `image-
+   hash-sha256` arrays in each `boot-images/*.json' entry
+   with published hashes (e.g., from `dbx` revocation list,
+   Fedora RPMs, Canonical shim-signed packages).
+2. **SPDM measurement block decode** — unpack
+   `TCG_DEVICE_SECURITY_EVENT_DATA2` + embedded SPDM record.
+3. **`claim.ima-policy` cross-reference** — seed a minimal
+   per-distro IMA-appraisal policy manifest + flag
+   unexpected files.
+4. **Per-PCR bank selection from pcrSelect** — hour 8
+   auto-detects from digest size; hour 10 should use the
+   quote's own pcrSelect to choose the right bank when
+   available, so a mixed-bank quote validates correctly.
+5. **Canonical claim-set serialisation** — TCG canonical
+   wire form for downstream signing.
+
+Iteration 10 fires automatically at `:23`. Loop state: `b5d87b84`.
 
