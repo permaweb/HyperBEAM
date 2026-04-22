@@ -27,8 +27,7 @@
 %%% `(Base, Req, Opts)', exports map), standard error returns, and
 %%% integration with AO-Core hook dispatch.
 -module(dev_tpm2).
--export([info/1, info/3, extend/3, quote/3, pcr_read/3, attestation/3,
-         tcg_event_log/3]).
+-export([info/1, info/3, extend/3, quote/3, pcr_read/3, attestation/3]).
 -export([verify/3]).
 -export([event_log/1]).
 -include("include/hb.hrl").
@@ -54,8 +53,7 @@ info(_) ->
                 <<"quote">>,
                 <<"pcr-read">>,
                 <<"attestation">>,
-                <<"verify">>,
-                <<"tcg-event-log">>
+                <<"verify">>
             ]
     }.
 
@@ -126,36 +124,6 @@ info(_Base, _Req, _Opts) ->
                     <<"nonce">> =>
                         <<"Optional nonce. Typical usage: consumer provides "
                           "a random nonce to prove freshness.">>
-                }
-            },
-            <<"tcg-event-log">> => #{
-                <<"description">> =>
-                    <<"Serve the firmware TCG event log as a standalone "
-                      "AO-Core message (no TPM_Quote triggered). The bytes "
-                      "come from the kernel TPM driver at "
-                      "/sys/kernel/security/tpm0/binary_bios_measurements "
-                      "(with tpm1 fallback). The log is publicly readable by "
-                      "design -- it's the same bytes every verifier needs to "
-                      "replay a quote. Pipe directly into "
-                      "`~tpm-interpret@1.0/claim' or `/interpret' to extract "
-                      "firmware + boot + Secure Boot + CPU + platform "
-                      "configuration without needing an AK.">>,
-                <<"response">> => #{
-                    <<"tcg-event-log">> =>
-                        <<"base64url(raw event log bytes).">>,
-                    <<"length-bytes">> =>
-                        <<"Integer byte count of the raw log.">>,
-                    <<"available">> =>
-                        <<"true if at least one /sys path yielded a "
-                          "non-empty log; false otherwise.">>,
-                    <<"source-path">> =>
-                        <<"Which /sys path served the bytes, or "
-                          "\"unavailable\".">>,
-                    <<"log-format">> =>
-                        <<"Heuristic classification: crypto-agile | "
-                          "legacy-sha1 | tdx-ccel | empty | unknown.">>,
-                    <<"issued-at-unix">> =>
-                        <<"Read timestamp (epoch seconds).">>
                 }
             }
         }
@@ -1052,62 +1020,19 @@ read_first_available_with_source([Path | Rest]) ->
             read_first_available_with_source(Rest)
     end.
 
-%% @doc Serve the firmware TCG event log as a standalone
-%% AO-Core message. Useful for clients that want to interpret
-%% the boot state WITHOUT triggering a TPM_Quote operation
-%% (which requires an AK and signature).
-%%
-%% The event log is the same bytes the kernel exposes at
-%% `/sys/kernel/security/tpm0/binary_bios_measurements'; they
-%% are publicly readable by design (every verifier needs the
-%% log to replay a quote), so this endpoint carries no
-%% secrets.
-%%
-%% Invocation (HTTP, remote):
-%%   GET http://NODE:8734/~tpm2@2.0a/tcg-event-log
-%% Example pipe into the interpret device:
-%%   curl http://NODE:8734/~tpm2@2.0a/tcg-event-log \\
-%%     | jq -r '.body."tcg-event-log"' \\
-%%     | base64 -D > node-eventlog.bin
-%%
-%% Response body:
-%%   tcg-event-log      base64url(raw bytes)
-%%   length-bytes       integer byte count
-%%   available          bool (false when no /sys path yielded
-%%                      a non-empty log)
-%%   source-path        the /sys path that served the bytes,
-%%                      or "unavailable"
-%%   issued-at-unix     epoch seconds at read time
-%%   log-format         inferred format ("crypto-agile" /
-%%                      "legacy-sha1" / "tdx-ccel" / "empty")
-%%                      — same heuristic as `claim.platform-
-%%                      config.log-format`.
-tcg_event_log(_Base, _Req, _Opts) ->
-    {Bin, Source} = read_tcg_event_log_with_source(),
-    LogFormat = infer_log_format(Bin),
-    Body = #{
-        <<"tcg-event-log">>  => hb_util:encode(Bin),
-        <<"length-bytes">>   => byte_size(Bin),
-        <<"available">>      => byte_size(Bin) > 0,
-        <<"source-path">>    => Source,
-        <<"issued-at-unix">> => erlang:system_time(second),
-        <<"log-format">>     => LogFormat
-    },
-    {ok, #{<<"status">> => 200, <<"body">> => Body}}.
-
-%% Mini-version of the same heuristic we use in
-%% `dev_tpm_interpret:detect_log_format/1', done directly on the
-%% raw bytes so this endpoint stays cheap (no full event-log
-%% parse needed when the caller only wants to proxy the bytes).
-%% The interpret device does the full version when a caller
-%% feeds these bytes back into it.
+%% Classify the raw TCG event log bytes without a full parse.
+%% Used to stamp `tcg-event-log-format' on the attestation
+%% envelope so a verifier can branch without re-walking the
+%% whole log. The same heuristic is mirrored in
+%% `dev_tpm_interpret:detect_log_format/1' for the post-parse
+%% path.
 infer_log_format(<<>>) -> <<"empty">>;
 infer_log_format(Bin) when byte_size(Bin) < 32 ->
     <<"unknown">>;
 infer_log_format(Bin) ->
     %% Crypto-agile logs begin with a TCG_PCR_EVENT (legacy
-    %% 1.2 shape: pcr u32 + event-type u32 + 20-byte SHA-1 + 4
-    %% byte event-data-size + event-data), where:
+    %% 1.2 shape: pcr u32 + event-type u32 + 20-byte SHA-1 +
+    %% 4-byte event-data-size + event-data), where:
     %%   * event-type = 3 (EV_NO_ACTION)
     %%   * event-data starts with ASCII "Spec ID Event03".
     %% TDX CCEL logs differ in that the first record is on
@@ -1125,6 +1050,7 @@ infer_log_format(Bin) ->
         true                        -> <<"legacy-sha1">>
     end.
 
+
 attestation(_Base, Req, Opts) ->
     Pcrs = resolve_pcr_list(Req, ?DEFAULT_QUOTE_PCRS, Opts),
     Nonce = resolve_nonce(Req),
@@ -1135,6 +1061,9 @@ attestation(_Base, Req, Opts) ->
                     {EKCertPem, AKPubPem} =
                         {ek_cert_pem(Opts), ak_pub_pem(Opts)},
                     EventLog = event_log(Opts),
+                    {TcgLogBin, TcgLogSource} =
+                        read_tcg_event_log_with_source(),
+                    TcgLogFormat = infer_log_format(TcgLogBin),
                     NodeMsg = get_node_msg(Opts),
                     NodeMsgId =
                         case NodeMsg of
@@ -1175,7 +1104,13 @@ attestation(_Base, Req, Opts) ->
                         %% §Architecture "every field is a named
                         %% event-log entry" requirement.
                         <<"tcg-event-log">> =>
-                            hb_util:encode(read_tcg_event_log()),
+                            hb_util:encode(TcgLogBin),
+                        <<"tcg-event-log-source-path">>  =>
+                            TcgLogSource,
+                        <<"tcg-event-log-length-bytes">> =>
+                            byte_size(TcgLogBin),
+                        <<"tcg-event-log-format">>       =>
+                            TcgLogFormat,
                         <<"node-message">> => NodeMsg,
                         <<"node-message-id">> => NodeMsgId,
                         <<"wallet-address">> =>
@@ -1469,7 +1404,12 @@ info_shape_test() ->
     ?assert(lists:member(<<"quote">>, Exports)),
     ?assert(lists:member(<<"pcr-read">>, Exports)),
     ?assert(lists:member(<<"attestation">>, Exports)),
-    ?assert(lists:member(<<"tcg-event-log">>, Exports)).
+    %% No standalone tcg-event-log endpoint — the log travels
+    %% INSIDE the attested attestation envelope. A standalone
+    %% un-attested path would let a malicious node serve one
+    %% log via /tcg-event-log and a different one via
+    %% /attestation.
+    ?assertNot(lists:member(<<"tcg-event-log">>, Exports)).
 
 info_docs_test() ->
     {ok, #{<<"status">> := 200, <<"body">> := Body}} = info(#{}, #{}, #{}),
@@ -1477,21 +1417,18 @@ info_docs_test() ->
     ?assert(maps:is_key(<<"api">>, Body)),
     Api = maps:get(<<"api">>, Body),
     ?assert(maps:is_key(<<"extend">>, Api)),
-    ?assert(maps:is_key(<<"attestation">>, Api)),
-    ?assert(maps:is_key(<<"tcg-event-log">>, Api)).
+    ?assert(maps:is_key(<<"attestation">>, Api)).
 
-%% tcg_event_log/3 returns a well-formed envelope on a host
-%% that has no /sys TPM path (e.g. a Mac dev box). Reports
-%% `available=false' + empty bytes rather than erroring.
-tcg_event_log_endpoint_unavailable_test() ->
-    {ok, #{<<"status">> := 200, <<"body">> := B}} =
-        tcg_event_log(#{}, #{}, #{}),
-    ?assertEqual(false, maps:get(<<"available">>, B)),
-    ?assertEqual(0,     maps:get(<<"length-bytes">>, B)),
-    ?assertEqual(<<"unavailable">>,
-                 maps:get(<<"source-path">>, B)),
-    ?assertEqual(<<"empty">>, maps:get(<<"log-format">>, B)),
-    ?assert(is_integer(maps:get(<<"issued-at-unix">>, B))),
+%% The TCG event log source-path + length + format fields
+%% travel attested alongside tcg-event-log itself, so a
+%% verifier can see at a glance where the bytes came from
+%% without re-reading them.
+read_tcg_event_log_with_source_shape_test() ->
+    %% On a Mac dev box there's no /sys TPM; expect
+    %% `{<<>>, <<"unavailable">>}'.
+    {Bin, Src} = read_tcg_event_log_with_source(),
+    ?assertEqual(<<>>, Bin),
+    ?assertEqual(<<"unavailable">>, Src),
     ok.
 
 %% infer_log_format/1 classifies a crypto-agile header

@@ -49,14 +49,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --url NODE  fetches the TCG event log over HTTP via the node's
-# ~tpm2@2.0a/tcg-event-log endpoint. Typical: `./interpret-local-
-# capture.sh --url http://framework.local:8734 --label Framework`.
+# --url NODE  pulls the FULL attestation envelope over HTTP
+# via `~tpm2@2.0a/attestation' and extracts `tcg-event-log'
+# from the attested payload. This is the ONLY legitimate over-
+# the-wire capture path — the envelope binds the TPM quote,
+# the event log, the runtime log, and the node message into
+# one attested message. Typical:
+#   ./interpret-local-capture.sh --url http://framework.local:8734 \\
+#                                 --label Framework
 if [[ -n "$URL" && -z "$INPUT" ]]; then
     URL="${URL%/}"
-    TMP="$(mktemp -t fw-eventlog.XXXXXX)"
-    echo ">> fetching ${URL}/~tpm2@2.0a/tcg-event-log"
-    if ! curl -fsSL "${URL}/~tpm2@2.0a/tcg-event-log" \
+    TMP="$(mktemp -t fw-attestation.XXXXXX)"
+    echo ">> fetching ${URL}/~tpm2@2.0a/attestation"
+    if ! curl -fsSL "${URL}/~tpm2@2.0a/attestation" \
            -H "accept: application/json@1.0" \
            -H "accept-bundle: true" \
            -o "$TMP.json"; then
@@ -71,18 +76,28 @@ while isinstance(body, dict) and 'body' in body and \
        isinstance(body['body'], dict):
     body = body['body']
 raw = base64.urlsafe_b64decode(
-    body['tcg-event-log'] + '==')
+    body.get('tcg-event-log', '') + '==')
 sys.stdout.buffer.write(raw)
+src = body.get('tcg-event-log-source-path', 'unknown')
+fmt = body.get('tcg-event-log-format', 'unknown')
+nbytes = body.get('tcg-event-log-length-bytes', len(raw))
+print(f'>> attested tcg-event-log: {nbytes} bytes '
+      f'from {src} (format={fmt})',
+      file=sys.stderr)
 " > "$TMP.bin"
     if [[ ! -s "$TMP.bin" ]]; then
-        echo "error: fetched event log is empty (is a TPM driver "
-        echo "       loaded on that host? try sshing in and running "
-        echo "       'sudo cat /sys/kernel/security/tpm0/binary_bios_measurements')" >&2
+        echo "error: attested event log is empty or missing" >&2
+        echo "       (is a TPM driver loaded on that host? "
+        echo "        this mode requires a working TPM+AK for "
+        echo "        the /attestation call to succeed. ssh in "
+        echo "        and run 'sudo cat /sys/kernel/security/"
+        echo "        tpm0/binary_bios_measurements' to see the "
+        echo "        raw log)" >&2
         exit 3
     fi
     INPUT="$TMP.bin"
-    echo ">> pulled $(stat -f %z "$TMP.bin" 2>/dev/null || \
-                        stat -c %s "$TMP.bin") bytes"
+    echo ">> captured $(stat -f %z "$TMP.bin" 2>/dev/null || \
+                          stat -c %s "$TMP.bin") bytes"
 fi
 
 if [[ -z "$INPUT" ]]; then
