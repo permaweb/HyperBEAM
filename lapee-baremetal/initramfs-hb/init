@@ -27,31 +27,74 @@ echo "==============================================="
 echo "LapEE — kernel $(uname -r), HyperBEAM as PID 2"
 echo "==============================================="
 
-# Bring up loopback and whichever Ethernet-ish interface QEMU/Linux
-# enumerated for the virtio-net-pci device. Debian's kernel uses
-# systemd-style predictable naming (enpXsY / ensN), not eth0, so we
-# walk /sys/class/net/ and pick the first interface whose name is
-# neither `lo' nor a virtual device.
+# Load kernel modules for the common USB-Ethernet chipsets that
+# show up on Framework laptops with a USB-C Ethernet dongle (or
+# wired via a dock). Modules ship in /lib/modules/ inside the
+# initramfs; builtins are no-ops. Failures are non-fatal — on
+# QEMU the virtio-net-pci driver is already resident.
+modprobe_if_present() {
+    # Try modprobe first; if it's not installed (initramfs has
+    # no full depmod tree), fall back to insmod-by-path.
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe "$1" 2>/dev/null && return 0
+    fi
+    for f in /lib/modules/*/kernel/drivers/net/usb/"$1".ko* \
+             /lib/modules/*/kernel/drivers/net/ethernet/**/"$1".ko*; do
+        [ -e "$f" ] || continue
+        insmod "$f" 2>/dev/null && return 0
+    done
+    return 1
+}
+for mod in usbnet mii cdc_ether cdc_ncm cdc_mbim \
+           rndis_host ax88179_178a r8152 asix r8169 \
+           e1000e igb igc; do
+    modprobe_if_present "$mod" || true
+done
+# Give USB enumeration a beat to settle after the hub drivers
+# bring up downstream devices.
+sleep 1
+
+# Bring up loopback + every real NIC the kernel enumerated. Walk
+# /sys/class/net/ and skip `lo' / virtual devices (no `device'
+# symlink). DHCP on each (QEMU slirp is also a DHCP server, so
+# this codepath works identically under QEMU and real hardware).
 ip link set lo up 2>/dev/null || true
+
+GUEST_IFACE=""
 for iface in /sys/class/net/*; do
     name=$(basename "$iface")
     case "$name" in
         lo|bonding_masters) continue ;;
     esac
-    # Skip anything that is not a real NIC (no `device' symlink).
     [ -e "$iface/device" ] || continue
     echo "[init] net: bringing up $name"
     ip link set "$name" up 2>/dev/null || true
-    # Slirp's default guest network is 10.0.2.0/24 with gateway
-    # 10.0.2.2. DHCP would also work, but we hard-code to avoid
-    # pulling udhcpc / dhclient into the initramfs.
-    ip addr add 10.0.2.15/24 dev "$name" 2>/dev/null || true
-    ip route add default via 10.0.2.2 dev "$name" 2>/dev/null || true
-    GUEST_IFACE=$name
-    break
+
+    # BusyBox udhcpc: one-shot, 5-retry, 3-second timeout per try.
+    # The -s hook (/etc/udhcpc.script) runs `ip addr add' /
+    # `ip route add default via' when the server responds.
+    if command -v udhcpc >/dev/null 2>&1 && [ -x /etc/udhcpc.script ]; then
+        echo "[init] net: DHCP on $name"
+        if udhcpc -i "$name" -t 5 -T 3 -n -q \
+                  -s /etc/udhcpc.script 2>&1 \
+                | sed 's/^/[udhcpc] /'; then
+            GUEST_IFACE=$name
+            break
+        fi
+        echo "[init] net: DHCP on $name failed"
+    fi
 done
-: "${GUEST_IFACE:=<none-found>}"
+
+if [ -z "$GUEST_IFACE" ]; then
+    echo "[init] net: WARNING — no interface got DHCP. HTTP access "
+    echo "[init] net: to this node will only work via loopback."
+    GUEST_IFACE="<none-leased>"
+fi
 echo "[init] net: primary interface = $GUEST_IFACE"
+echo "[init] net: ip addr:"
+ip addr show 2>/dev/null | sed 's/^/[init]   /' || true
+echo "[init] net: routes:"
+ip route show 2>/dev/null | sed 's/^/[init]   /' || true
 
 # Default config files (shipped with image).
 ENFORCED_CFG=/etc/lapee/lapee-enforced.flat

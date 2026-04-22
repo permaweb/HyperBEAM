@@ -1,0 +1,88 @@
+#!/bin/sh
+# udhcpc.script — minimal hook called by BusyBox udhcpc on DHCP
+# events. Configures the interface for `bound' and `renew'
+# events; logs others and exits.
+#
+# BusyBox docs: docs/udhcpc.txt. Environment variables set by
+# udhcpc before invoking this script:
+#
+#   $1          the event name: deconfig | leasefail | nak |
+#               bound | renew
+#   $interface  the NIC name (e.g. `enp0s31f6')
+#   $ip         IPv4 address leased
+#   $subnet     subnet mask (dotted-quad)
+#   $router     space-separated gateway list
+#   $dns        space-separated DNS server list
+#   $domain     resolver search domain
+#   $mtu        link MTU
+#
+# Kept minimal on purpose — no hostname/timezone tricks, just
+# the lines a LapEE guest needs so its HB node binds 0.0.0.0
+# and talks back over the default route.
+
+set -eu
+
+log() { printf '[udhcpc.hook] %s\n' "$*"; }
+
+case "$1" in
+    deconfig)
+        log "deconfig $interface"
+        ip addr flush dev "$interface" 2>/dev/null || true
+        ip link set "$interface" up 2>/dev/null || true
+        ;;
+
+    leasefail|nak)
+        log "$1 on $interface - no lease"
+        ;;
+
+    bound|renew)
+        log "$1 $interface  ip=$ip/$subnet  router=${router:-none}"
+
+        ip addr flush dev "$interface" 2>/dev/null || true
+        # Convert dotted-quad subnet mask to a prefix length.
+        plen=0
+        for octet in $(echo "$subnet" | tr '.' ' '); do
+            case $octet in
+                255) plen=$((plen+8));;
+                254) plen=$((plen+7));;
+                252) plen=$((plen+6));;
+                248) plen=$((plen+5));;
+                240) plen=$((plen+4));;
+                224) plen=$((plen+3));;
+                192) plen=$((plen+2));;
+                128) plen=$((plen+1));;
+                0)   plen=$((plen+0));;
+            esac
+        done
+        [ "$plen" -eq 0 ] && plen=24
+        ip addr add "$ip/$plen" dev "$interface"
+
+        # Default route via the first gateway, if any.
+        if [ -n "${router:-}" ]; then
+            for gw in $router; do
+                ip route add default via "$gw" dev "$interface" \
+                    2>/dev/null && break
+            done
+        fi
+
+        # Resolver config - MSS for outbound HTTP, nothing fancy.
+        if [ -n "${dns:-}" ]; then
+            mkdir -p /etc
+            {
+                [ -n "${domain:-}" ] && echo "search $domain"
+                for s in $dns; do echo "nameserver $s"; done
+            } > /etc/resolv.conf
+        fi
+
+        # MTU if the server sent one.
+        if [ -n "${mtu:-}" ]; then
+            ip link set dev "$interface" mtu "$mtu" \
+                2>/dev/null || true
+        fi
+        ;;
+
+    *)
+        log "unknown event: $1"
+        exit 1
+        ;;
+esac

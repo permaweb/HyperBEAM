@@ -130,6 +130,35 @@ hb-initramfs:
 hb-boot:
 	./scripts/boot-hb.sh
 
+# hb-usb-image: produce a UEFI-bootable .img combining the
+# Debian kernel + our HB initramfs + a default LapEE cmdline.
+# Override KERNEL / INITRAMFS / CMDLINE / SIZE_MIB / OUT on the
+# make command line.
+KERNEL     ?= build-alpine/vmlinuz-lapee
+INITRAMFS  ?= work/initramfs-hb.cpio.gz
+CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init
+SIZE_MIB   ?= 1024
+OUT        ?= work/lapee-usb.img
+hb-usb-image:
+	./scripts/build-usb-image.sh \
+	    --kernel     "$(KERNEL)" \
+	    --initramfs  "$(INITRAMFS)" \
+	    --cmdline    "$(CMDLINE)" \
+	    --size       "$(SIZE_MIB)" \
+	    --image      "$(OUT)"
+
+# hb-usb-write DEV=/dev/diskN — build and write directly to a
+# USB stick. Prompts before writing.
+hb-usb-write:
+	@test -n "$(DEV)" || { \
+	    echo "usage: make hb-usb-write DEV=/dev/diskN"; exit 1; }
+	./scripts/build-usb-image.sh \
+	    --kernel     "$(KERNEL)" \
+	    --initramfs  "$(INITRAMFS)" \
+	    --cmdline    "$(CMDLINE)" \
+	    --size       "$(SIZE_MIB)" \
+	    --device     "$(DEV)"
+
 hb-verify:
 	python3 reference-demo/verifier/verifier_hb.py \
 		out/attestation.json out/test-tpm-ca.crt
