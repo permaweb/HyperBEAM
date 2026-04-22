@@ -45,8 +45,8 @@ reset(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     ?event({reset_store, {path, DataDir}}).
 
 %% @doc Read a key from the store, following symlinks as needed.
-read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
-    case resolve_path(Opts, Key) of
+read(Opts, #{ <<"read">> := Key }, NodeOpts) ->
+    case resolve(Opts, #{ <<"resolve">> => Key }, NodeOpts) of
         {ok, ResolvedPath} ->
             read_path(add_prefix(Opts, ResolvedPath));
         {error, _} = Error ->
@@ -110,23 +110,17 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
 %%
 %% will resolve "a/b/c" to "Correct data".
 resolve(Opts, #{ <<"resolve">> := RawPath }, _NodeOpts) ->
-    resolve_path(Opts, RawPath).
-resolve_path(Opts, RawPath) ->
-    try
-        Res = resolve_path(
+    Result =
+        resolve_parts(
             Opts,
             <<>>,
             hb_path:term_to_path_parts(hb_path:to_binary(RawPath), Opts)
         ),
-        ?event({resolved, RawPath, Res}),
-        {ok, Res}
-    catch
-        throw:{error, _} = Error ->
-            Error
-    end.
-resolve_path(_, CurrPath, []) ->
-    hb_path:to_binary(CurrPath);
-resolve_path(Opts, CurrPath, [Next|Rest]) ->
+    ?event({resolved, RawPath, Result}),
+    Result.
+resolve_parts(_, CurrPath, []) ->
+    {ok, hb_path:to_binary(CurrPath)};
+resolve_parts(Opts, CurrPath, [Next|Rest]) ->
     PathPart = hb_path:to_binary([CurrPath, Next]),
     ?event(
         {resolving,
@@ -138,11 +132,11 @@ resolve_path(Opts, CurrPath, [Next|Rest]) ->
     case file:read_link(add_prefix(Opts, PathPart)) of
         {ok, RawLink} ->
             Link = remove_prefix(Opts, RawLink),
-            resolve_path(Opts, Link, Rest);
+            resolve_parts(Opts, Link, Rest);
         {error, enoent} ->
-            throw({error, not_found});
+            {error, not_found};
         _ ->
-            resolve_path(Opts, PathPart, Rest)
+            resolve_parts(Opts, PathPart, Rest)
     end.
 
 %% @doc Determine the type of a key in the store.
