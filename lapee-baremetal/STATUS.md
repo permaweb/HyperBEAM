@@ -2717,5 +2717,64 @@ Two correctness + coverage improvements:
    the MakeCredential blob when carried alongside a quote,
    enabling end-to-end AK provenance.
 
-Iteration 11 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 11 — commit `97b8d5382`
+
+Two additions closing high-value claim-surface gaps:
+
+1. **`claim.ima-policy`** — per-distribution IMA appraisal
+   policies now live under
+   `priv/tpm-interpret/ima-policies/*.json` (4 seed files:
+   lapee-os-baseline, fedora-baseline, debian-baseline,
+   ubuntu-baseline). Each declares `expected-files` with
+   pathname (exact / prefix / suffix), signature-required,
+   hash-alg, and category. Routing via `applies-to.kernel-
+   name-prefix' + `applies-to.uki-profile-key' (same pattern
+   as the UKI catalogue).
+
+   `claim_ima_policy/3` picks the best-matching policy for
+   the envelope's `kernel_name` EV_IPL, then classifies
+   every parsed IMA entry:
+
+     matched             → hits an expected rule
+     unexpected          → no rule matches
+     signature-missing   → policy required sig, none present
+     hash-alg-downgrade  → entry uses weaker alg than
+                           policy's minimum
+
+   Live-verified on a synthetic Fedora envelope: /usr/bin/
+   bash → matched; /tmp/evil-binary → unexpected;
+   /usr/lib/modules/.../.ko without signature → signature-
+   missing. Violations surfaced with full reason text.
+
+2. **`claim.platform-config.digest-bank-coverage`** — the
+   TCG event log can carry concurrent SHA-1/256/384/512/SM3
+   digests per event. New map reports `{alg → event-count-
+   with-that-bank}` so policy engines can decide which PCR
+   banks are replayable. `digest-banks-present` exposes the
+   sorted alg list for quick policy checks. Covers 5 bank
+   algorithms.
+
+3 new eunit tests. All 146 tests pass (98 tcg + 48 interpret).
+
+### Candidate priority list for hour 12
+
+1. **TPM2_ActivateCredential / MakeCredential blob decode** —
+   parse TPM2B_ID_OBJECT + TPM2B_ENCRYPTED_SECRET when
+   carried alongside the quote; unlocks end-to-end AK-EK
+   binding proof.
+2. **Real boot-image / UKI hash seeds from dbx** — populate
+   `image-hash-sha256` arrays with real revoked-binary
+   hashes from the UEFI Revocation List.
+3. **Canonical claim-set serialisation** — deterministic
+   CBOR encoding (RFC 8949) of the flat claim so a
+   downstream verifier can countersign without re-parsing.
+4. **Richer kernel module decode** — parse the
+   IMA-entry `/lib/modules/…/.ko` path into `module-name`
+   + `kernel-version`, wire into `claim.kernel-integrity`.
+5. **`claim.secure-boot-policy`** — fold the PK/KEK/db/dbx
+   contents into a single policy stanza: expected signers,
+   blocked hashes, policy posture (setup-mode / user-mode
+   / audit-mode).
+
+Iteration 12 fires automatically at `:23`. Loop state: `b5d87b84`.
 
