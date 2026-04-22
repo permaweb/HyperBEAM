@@ -30,7 +30,7 @@ start(StoreOpts = #{ <<"name">> := Name }) ->
                 {write_concurrency, true}
             ]),
             ChildrenTable = ets:new(hb_store_volatile_children, [
-                bag,
+                ordered_set,
                 public,
                 {read_concurrency, true},
                 {write_concurrency, true}
@@ -50,6 +50,8 @@ start(StoreOpts = #{ <<"name">> := Name }) ->
     receive
         {ok, InstanceMessage} ->
             {ok, InstanceMessage}
+    after 5000 ->
+        {error, start_timeout}
     end.
 
 %% @doc Owner loop for the ETS store. Simply waits for a stop message and exits.
@@ -95,10 +97,7 @@ scope(_) -> scope().
 
 %% @doc Remove all entries from the ETS table.
 reset(Opts) ->
-    #{
-        <<"ets-table">> := Table,
-        <<"ets-children-table">> := ChildrenTable
-    } = hb_store:find(Opts),
+    {Table, ChildrenTable} = tables(Opts),
     ets:delete_all_objects(Table),
     ets:delete_all_objects(ChildrenTable),
     ?event(store_volatile, {reset, {table, Table}}),
@@ -106,22 +105,7 @@ reset(Opts) ->
 
 %% @doc Write a value at the key path.
 write(Opts, RawKey, Value) ->
-    Key = hb_store:join(RawKey),
-    #{
-        <<"ets-table">> := Table,
-        <<"ets-children-table">> := ChildrenTable
-    } = hb_store:find(Opts),
-    ?event(store_volatile, {write, {key, Key}}),
-    case lookup_entry(Table, Key) of
-        nil ->
-            ensure_parent_groups(Table, ChildrenTable, Key);
-        {group, true} ->
-            delete_group_children(Table, ChildrenTable, Key);
-        _ ->
-            ok
-    end,
-    ets:insert(Table, {Key, {raw, Value}}),
-    ok.
+    put_entry(Opts, RawKey, {raw, Value}).
 
 %% @doc Read a value, following links when needed.
 read(Opts, RawKey) ->
@@ -195,34 +179,36 @@ type(Opts, RawKey) ->
 
 %% @doc Ensure a group exists at the given path.
 make_group(Opts, RawKey) ->
-    Key = hb_store:join(RawKey),
-    #{
-        <<"ets-table">> := Table,
-        <<"ets-children-table">> := ChildrenTable
-    } = hb_store:find(Opts),
-    ensure_dir(Table, ChildrenTable, Key),
+    {Table, ChildrenTable} = tables(Opts),
+    ensure_dir(Table, ChildrenTable, hb_store:join(RawKey)),
     ok.
 
 %% @doc Create or replace a link from New to Existing.
 make_link(_, Link, Link) ->
     ok;
 make_link(Opts, RawExisting, RawNew) ->
-    Existing = hb_store:join(RawExisting),
-    New = hb_store:join(RawNew),
+    put_entry(Opts, RawNew, {link, hb_store:join(RawExisting)}).
+
+%% @doc Install an entry at Key, running parent-index maintenance or
+%% overwrite cleanup as needed.
+put_entry(Opts, RawKey, Entry) ->
+    Key = hb_store:join(RawKey),
+    {Table, ChildrenTable} = tables(Opts),
+    ?event(store_volatile, {put, {key, Key}}),
+    case lookup_entry(Table, Key) of
+        nil -> ensure_parent_groups(Table, ChildrenTable, Key);
+        {group, true} -> delete_group_children(Table, ChildrenTable, Key);
+        _ -> ok
+    end,
+    ets:insert(Table, {Key, Entry}),
+    ok.
+
+tables(Opts) ->
     #{
         <<"ets-table">> := Table,
         <<"ets-children-table">> := ChildrenTable
     } = hb_store:find(Opts),
-    case lookup_entry(Table, New) of
-        nil ->
-            ensure_parent_groups(Table, ChildrenTable, New);
-        {group, true} ->
-            delete_group_children(Table, ChildrenTable, New);
-        _ ->
-            ok
-    end,
-    ets:insert(Table, {New, {link, Existing}}),
-    ok.
+    {Table, ChildrenTable}.
 
 join_path(<<>>, Next) ->
     hb_store:join(Next);
@@ -241,21 +227,22 @@ lookup_entry(Table, Key) ->
     end.
 
 list_group_children(Opts, GroupPath) ->
-    #{ <<"ets-children-table">> := ChildrenTable } = hb_store:find(Opts),
-    [Child || {_, Child} <- ets:lookup(ChildrenTable, GroupPath)].
+    {_, ChildrenTable} = tables(Opts),
+    ets:select(ChildrenTable, [{{{GroupPath, '$1'}, '_'}, [], ['$1']}]).
 
 delete_group_children(Table, ChildrenTable, GroupPath) ->
+    Children = ets:select(ChildrenTable, [{{{GroupPath, '$1'}, '_'}, [], ['$1']}]),
     lists:foreach(
-        fun({_, Child}) ->
+        fun(Child) ->
             delete_tree(
                 Table,
                 ChildrenTable,
                 next_group_path(GroupPath, Child)
             )
         end,
-        ets:lookup(ChildrenTable, GroupPath)
+        Children
     ),
-    ets:delete(ChildrenTable, GroupPath).
+    ets:select_delete(ChildrenTable, [{{{GroupPath, '_'}, '_'}, [], [true]}]).
 
 delete_tree(Table, ChildrenTable, Path) ->
     case lookup_entry(Table, Path) of
@@ -302,7 +289,7 @@ ensure_group(Table, GroupPath) ->
 
 add_group_child(Table, ChildrenTable, GroupPath, Child) ->
     ensure_group(Table, GroupPath),
-    ets:insert(ChildrenTable, {GroupPath, Child}),
+    ets:insert(ChildrenTable, {{GroupPath, Child}, true}),
     ok.
 
 %%% Tests
@@ -393,7 +380,7 @@ overwrite_group_to_raw_test() ->
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"colors/red">>)),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"colors/blue">>)),
     #{ <<"ets-children-table">> := CT } = hb_store:find(StoreOpts),
-    ?assertEqual([], ets:lookup(CT, <<"colors">>)),
+    ?assertEqual([], ets:select(CT, [{{{<<"colors">>, '_'}, '_'}, [], [true]}])),
     ok = hb_store:make_group(StoreOpts, <<"colors">>),
     ?assertEqual({ok, []}, hb_store:list(StoreOpts, <<"colors">>)),
     ok = hb_store:stop(StoreOpts).
@@ -409,7 +396,7 @@ overwrite_group_to_link_test() ->
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"colors/red">>)),
     ?assertEqual(not_found, hb_store:read(StoreOpts, <<"colors/blue">>)),
     #{ <<"ets-children-table">> := CT } = hb_store:find(StoreOpts),
-    ?assertEqual([], ets:lookup(CT, <<"colors">>)),
+    ?assertEqual([], ets:select(CT, [{{{<<"colors">>, '_'}, '_'}, [], [true]}])),
     {ok, Children} = hb_store:list(StoreOpts, <<"colors">>),
     ?assertEqual([<<"val">>], Children),
     ok = hb_store:stop(StoreOpts).
