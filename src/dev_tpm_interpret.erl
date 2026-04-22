@@ -1173,6 +1173,14 @@ interpret_claim(Events, E, Db) ->
         %% config file and extends PCR 10. We parse the ASCII
         %% IMA template into a navigable per-file list.
         <<"ima">>                => claim_ima(E),
+        %% Hour-8: platform-configuration snapshot aggregating
+        %% every platform-identifying fact the event log
+        %% carries: UEFI handoff tables (ACPI/SMBIOS/HOB
+        %% presence), POST codes, option-ROM scans, measured
+        %% UEFI variable count, boot-order / boot-current,
+        %% per-PCR event histogram. Gives a verifier a single
+        %% "what kind of machine is this?" stanza.
+        <<"platform-config">>    => claim_platform_config(EvList),
         %% Paper field #2 — TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
@@ -2213,13 +2221,177 @@ replay_one_pcr(Pcr, EventsByPcr, PcrVals) ->
     case Replay of
         undefined ->
             Base#{<<"replayed-digest">> => <<"">>,
-                  <<"matches">>         => PcrIsZero};
+                  <<"matches">>         => PcrIsZero,
+                  <<"alg">>             =>
+                      alg_from_digest_size(Quoted)};
         _ when is_map(Replay) ->
             Base#{<<"replayed-digest">> =>
                       maps:get(<<"replayed-digest">>, Replay, <<"">>),
                   <<"matches">>         =>
-                      maps:get(<<"matches-quoted">>, Replay, false)}
+                      maps:get(<<"matches-quoted">>, Replay, false),
+                  <<"alg">>             =>
+                      maps:get(<<"alg">>, Replay, <<"sha256">>)}
     end.
+
+%% @doc Aggregate platform-identifying facts from the event log
+%% into a single snapshot. Everything here is derived from the
+%% same events other claims use, but projected into a compact
+%% "what kind of machine is this?" view a policy engine can
+%% consume in one lookup.
+%%
+%% Fields:
+%%   handoff-tables-v1        list of {vendor-guid, vendor-guid-
+%%                            name, vendor-table-address} rows
+%%                            (UEFI configuration tables on this
+%%                            system — SMBIOS entry point, ACPI
+%%                            RSDP, HOB list, SAL, MPS, …)
+%%   handoff-tables-v2        list of {table-description} rows
+%%                            for the named HANDOFF_TABLES2 form
+%%   handoff-tables-count     total count across v1+v2
+%%   acpi-present             bool — an ACPI RSDP table showed up
+%%   smbios-present           bool — an SMBIOS entry point showed up
+%%   hob-list-present         bool — HOB List GUID seen (pre-OS
+%%                            hand-off marker)
+%%   post-codes               list of ASCII post-code strings
+%%   option-rom-count         number of EV_EFI_ACTION events
+%%                            naming an option ROM scan
+%%   boot-order               from EV_EFI_VARIABLE_BOOT BootOrder
+%%   boot-current             active boot entry index
+%%   uefi-variable-count      distinct variable names measured
+%%   measured-uefi-variables  sorted unique variable names
+%%   event-count-per-pcr      histogram PCR → event-count
+%%   event-type-count         histogram event-type-name → count
+claim_platform_config(EvList) ->
+    #{
+        <<"handoff-tables-v1">>      => ht_v1_entries(EvList),
+        <<"handoff-tables-v2">>      => ht_v2_entries(EvList),
+        <<"handoff-tables-count">>   =>
+            length(ht_v1_entries(EvList)) + length(ht_v2_entries(EvList)),
+        <<"acpi-present">>           => has_handoff_table(EvList, <<"ACPI">>),
+        <<"smbios-present">>         => has_handoff_table(EvList, <<"SMBIOS">>),
+        <<"hob-list-present">>       => has_handoff_table(EvList, <<"HOB List">>),
+        <<"post-codes">>             => post_code_strings(EvList),
+        <<"option-rom-count">>       => option_rom_scan_count(EvList),
+        <<"boot-order">>             => platform_boot_order(EvList),
+        <<"boot-current">>           => platform_boot_current(EvList),
+        <<"uefi-variable-count">>    => length(measured_uefi_vars(EvList)),
+        <<"measured-uefi-variables">> => measured_uefi_vars(EvList),
+        <<"event-count-per-pcr">>    => events_by_pcr_histogram(EvList),
+        <<"event-type-count">>       => events_by_type_histogram(EvList)
+    }.
+
+%% All EV_EFI_HANDOFF_TABLES (v1, 0x80000009) rows across the log.
+ht_v1_entries(EvList) ->
+    lists:flatten(
+      [maps:get(<<"tables">>,
+                maps:get(<<"parsed">>, Ev, #{}), [])
+       || Ev <- EvList,
+          maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000009]).
+
+%% All EV_EFI_HANDOFF_TABLES2 (0x8000000B) named descriptions.
+ht_v2_entries(EvList) ->
+    lists:filtermap(
+      fun(Ev) ->
+          case maps:get(<<"event-type-code">>, Ev, 0) of
+              16#8000000B ->
+                  P = maps:get(<<"parsed">>, Ev, #{}),
+                  case maps:get(<<"table-description">>, P, <<>>) of
+                      <<>> -> false;
+                      D    -> {true, #{<<"table-description">> => D}}
+                  end;
+              _ -> false
+          end
+      end, EvList).
+
+%% Does any handoff-table row carry a vendor-guid-name containing
+%% the given prefix substring? Used for has-acpi / has-smbios /
+%% has-hob-list booleans.
+has_handoff_table(EvList, Needle) ->
+    lists:any(
+      fun(Entry) ->
+          Name = maps:get(<<"vendor-guid-name">>, Entry, <<>>),
+          binary:match(Name, Needle) =/= nomatch
+      end, ht_v1_entries(EvList)).
+
+%% Collect ASCII post-code strings from all EV_POST_CODE (0x01)
+%% events. Deduplicated and sorted.
+post_code_strings(EvList) ->
+    lists:usort(
+      lists:filtermap(
+        fun(Ev) ->
+            case maps:get(<<"event-type-code">>, Ev, 0) of
+                16#1 ->
+                    P = maps:get(<<"parsed">>, Ev, #{}),
+                    case maps:get(<<"post-code">>, P, undefined) of
+                        C when is_binary(C), byte_size(C) > 0 -> {true, C};
+                        _ -> false
+                    end;
+                _ -> false
+            end
+        end, EvList)).
+
+%% Count EV_EFI_ACTION (0x80000007) events whose action names an
+%% option-ROM scan / execution.
+option_rom_scan_count(EvList) ->
+    length([Ev || Ev <- EvList,
+                  maps:get(<<"event-type-code">>, Ev, 0)
+                      =:= 16#80000007,
+                  Action <- [nested(Ev, [<<"parsed">>, <<"action">>],
+                                      <<>>)],
+                  is_binary(Action),
+                  binary:match(Action, <<"Option">>) =/= nomatch
+                  orelse binary:match(Action, <<"ROM">>) =/= nomatch]).
+
+%% BootOrder variable (EV_EFI_VARIABLE_BOOT) content.
+platform_boot_order(EvList) ->
+    case [Ev || Ev <- EvList,
+                maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000002,
+                sem_var_name(Ev) =:= <<"BootOrder">>] of
+        [] -> [];
+        [Ev | _] ->
+            nested(Ev, [<<"parsed">>, <<"semantic">>,
+                        <<"boot-order">>], [])
+    end.
+
+%% Active boot entry (BootCurrent) if measured.
+platform_boot_current(EvList) ->
+    case [Ev || Ev <- EvList,
+                maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000002,
+                sem_var_name(Ev) =:= <<"BootCurrent">>] of
+        [] -> <<"unknown">>;
+        [Ev | _] ->
+            nested(Ev, [<<"parsed">>, <<"semantic">>,
+                        <<"boot-current">>], <<"unknown">>)
+    end.
+
+%% Unique UEFI variable names measured (across EV_EFI_VARIABLE_*).
+measured_uefi_vars(EvList) ->
+    Codes = [16#80000001, 16#80000002, 16#80000006, 16#800000E0,
+             16#8000000C],
+    lists:usort(
+      [sem_var_name(Ev) ||
+        Ev <- EvList,
+        lists:member(maps:get(<<"event-type-code">>, Ev, 0), Codes),
+        sem_var_name(Ev) =/= <<>>]).
+
+%% Event-count histogram by PCR index (sorted key).
+events_by_pcr_histogram(EvList) ->
+    L = lists:foldl(
+          fun(Ev, Acc) ->
+              P = maps:get(<<"pcr">>, Ev, -1),
+              maps:update_with(P, fun(N) -> N + 1 end, 1, Acc)
+          end, #{}, EvList),
+    %% Render map with string keys for JSON friendliness.
+    maps:from_list(
+      [{integer_to_binary(K), V} || {K, V} <- maps:to_list(L)]).
+
+%% Event-count histogram by event-type name.
+events_by_type_histogram(EvList) ->
+    lists:foldl(
+      fun(Ev, Acc) ->
+          T = maps:get(<<"event-type">>, Ev, <<"unknown">>),
+          maps:update_with(T, fun(N) -> N + 1 end, 1, Acc)
+      end, #{}, EvList).
 
 %% Group an event list by PCR index (integer).
 group_events_list_by_pcr(EvList) ->
@@ -3306,32 +3478,70 @@ events_list_to_seq_map(EvList) ->
         [{integer_to_binary(maps:get(<<"seq">>, Ev, 0)), Ev}
          || Ev <- EvList]).
 
-%% Replay every event's SHA-256 digest into its PCR and compare
-%% against the quoted value. `undefined' when there are no events
-%% in this PCR (nothing to reconstruct from).
+%% @doc Replay a PCR's events and compare to the quoted value.
+%% The hash algorithm is inferred from the size of `Quoted' (20 =
+%% SHA-1, 32 = SHA-256, 48 = SHA-384, 64 = SHA-512); the fold
+%% starts from the algorithm's zero-seed, reads each event's
+%% matching digest from `event.digests.<alg>', concatenates with
+%% the accumulator, and rehashes. EV_NO_ACTION (code 3) is
+%% skipped per TCG PFP §5.3. If the quoted value has a size we
+%% don't know, we default to SHA-256.
+%%
+%% Returns `undefined' when the event list is empty (nothing to
+%% fold); else a map with replayed-digest + matches-quoted +
+%% replayed-from-events + alg.
 reconstruct_pcr([], _Quoted) -> undefined;
 reconstruct_pcr(EvList, Quoted) ->
+    reconstruct_pcr(EvList, Quoted, alg_from_digest_size(Quoted)).
+
+%% Explicit-alg variant (lets callers force a bank).
+reconstruct_pcr([], _Quoted, _Alg) -> undefined;
+reconstruct_pcr(EvList, Quoted, Alg) ->
+    {AlgName, HashAtom, Size} = pcr_alg_triple(Alg),
+    Seed = <<0:(Size*8)>>,
     Replayed = lists:foldl(
         fun(Ev, Acc) ->
             case maps:get(<<"event-type-code">>, Ev, 0) of
-                3 -> Acc;  %% EV_NO_ACTION — per TCG spec, not extended
+                3 -> Acc;
                 _ ->
                     Digests = maps:get(<<"digests">>, Ev, #{}),
-                    case maps:get(<<"sha256">>, Digests, undefined) of
-                        D when is_binary(D), byte_size(D) =:= 32 ->
-                            crypto:hash(sha256, <<Acc/binary, D/binary>>);
+                    case maps:get(AlgName, Digests, undefined) of
+                        D when is_binary(D), byte_size(D) =:= Size ->
+                            crypto:hash(HashAtom,
+                                         <<Acc/binary, D/binary>>);
                         _ -> Acc
                     end
             end
-        end,
-        <<0:256>>,
-        EvList),
-    Matches = (Replayed =:= Quoted),
+        end, Seed, EvList),
+    Matches = case Quoted of
+        <<>>      -> false;
+        undefined -> false;
+        _         -> Replayed =:= Quoted
+    end,
     #{
-        <<"replayed-digest">> => hb_util:encode(Replayed),
-        <<"matches-quoted">>  => Matches,
-        <<"replayed-from-events">> => length(EvList)
+        <<"replayed-digest">>      => hb_util:encode(Replayed),
+        <<"matches-quoted">>       => Matches,
+        <<"replayed-from-events">> => length(EvList),
+        <<"alg">>                  => AlgName
     }.
+
+%% Infer bank-alg name from the size of a raw digest. Defaults
+%% to sha256 for the all-zero / empty / unknown cases.
+alg_from_digest_size(Quoted) when is_binary(Quoted) ->
+    case byte_size(Quoted) of
+        20 -> <<"sha1">>;
+        32 -> <<"sha256">>;
+        48 -> <<"sha384">>;
+        64 -> <<"sha512">>;
+        _  -> <<"sha256">>
+    end;
+alg_from_digest_size(_) -> <<"sha256">>.
+
+pcr_alg_triple(<<"sha1">>)   -> {<<"sha1">>,   sha,    20};
+pcr_alg_triple(<<"sha256">>) -> {<<"sha256">>, sha256, 32};
+pcr_alg_triple(<<"sha384">>) -> {<<"sha384">>, sha384, 48};
+pcr_alg_triple(<<"sha512">>) -> {<<"sha512">>, sha512, 64};
+pcr_alg_triple(_)            -> {<<"sha256">>, sha256, 32}.
 
 %% Derive named-field values from a PCR's events. The idea is that
 %% *every property we can parse out of the firmware/OS events should
@@ -5137,6 +5347,124 @@ claim_surface_hour7_ima_absent_test() ->
     ?assertEqual(0, maps:get(<<"event-count">>, I)),
     ?assertEqual([], maps:get(<<"entries">>, I)),
     ok.
+
+%% Hour-8: multi-bank PCR replay auto-detects the hash algorithm
+%% from the declared digest size (20 = SHA-1, 32 = SHA-256,
+%% 48 = SHA-384, 64 = SHA-512).
+reconstruct_pcr_alg_detection_test() ->
+    %% Two no-op events so only the seed is used.
+    MkEv = fun(Alg, Size) ->
+        #{<<"event-type-code">> => 16#8,
+          <<"digests">> =>
+              #{Alg => <<0:(Size*8)>>}}
+    end,
+    %% SHA-1 replay: seed = 20 zero bytes, fold one sha1 = 0 gives
+    %% SHA-1(zero20 || zero20).
+    Expected1 = crypto:hash(sha, <<0:320>>),
+    R1 = reconstruct_pcr([MkEv(<<"sha1">>, 20)], Expected1),
+    ?assertEqual(<<"sha1">>,  maps:get(<<"alg">>, R1)),
+    ?assertEqual(true,        maps:get(<<"matches-quoted">>, R1)),
+    %% SHA-256: seed = 32 zeros, fold one sha256 = 0.
+    Expected256 = crypto:hash(sha256, <<0:512>>),
+    R2 = reconstruct_pcr([MkEv(<<"sha256">>, 32)], Expected256),
+    ?assertEqual(<<"sha256">>, maps:get(<<"alg">>, R2)),
+    ?assertEqual(true,         maps:get(<<"matches-quoted">>, R2)),
+    %% SHA-384.
+    Expected384 = crypto:hash(sha384, <<0:768>>),
+    R3 = reconstruct_pcr([MkEv(<<"sha384">>, 48)], Expected384),
+    ?assertEqual(<<"sha384">>, maps:get(<<"alg">>, R3)),
+    ?assertEqual(true,         maps:get(<<"matches-quoted">>, R3)),
+    %% SHA-512.
+    Expected512 = crypto:hash(sha512, <<0:1024>>),
+    R4 = reconstruct_pcr([MkEv(<<"sha512">>, 64)], Expected512),
+    ?assertEqual(<<"sha512">>, maps:get(<<"alg">>, R4)),
+    ?assertEqual(true,         maps:get(<<"matches-quoted">>, R4)),
+    ok.
+
+%% Explicit-alg variant forces the bank even when the digest size
+%% would suggest otherwise.
+reconstruct_pcr_explicit_alg_test() ->
+    Ev = #{<<"event-type-code">> => 16#8,
+           <<"digests">> =>
+               #{<<"sha384">> => <<0:384>>}},
+    Expected384 = crypto:hash(sha384, <<0:768>>),
+    R = reconstruct_pcr([Ev], Expected384, <<"sha384">>),
+    ?assertEqual(<<"sha384">>, maps:get(<<"alg">>, R)),
+    ?assertEqual(true, maps:get(<<"matches-quoted">>, R)),
+    ok.
+
+%% Hour-8: platform-config aggregates the UEFI handoff tables +
+%% POST codes + option-ROM + UEFI variable count + per-PCR event
+%% histogram from a single-pass over the event log. This test
+%% builds a synthetic log with known content and asserts the
+%% aggregation arithmetic.
+claim_surface_hour8_platform_config_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    MkRec = fun(Pcr, Code, Data) ->
+        S1 = crypto:hash(sha,    Data),
+        S2 = crypto:hash(sha256, Data),
+        Sz = byte_size(Data),
+        <<Pcr:32/little, Code:32/little, 2:32/little,
+          16#04:16/little, S1/binary,
+          16#0B:16/little, S2/binary,
+          Sz:32/little, Data/binary>>
+    end,
+    %% EV_POST_CODE on PCR 0.
+    PC1 = MkRec(0, 16#1, <<"POST-stage-1">>),
+    PC2 = MkRec(0, 16#1, <<"POST-stage-2">>),
+    %% EV_EFI_HANDOFF_TABLES v1 with 2 rows: SMBIOS + ACPI 2.0.
+    SmbiosGuidBin = decode_guid(<<"eb9d2d31-2d88-11d3-9a16-0090273fc14d">>),
+    AcpiGuidBin   = decode_guid(<<"8868e871-e4f1-11d3-bc22-0080c73c8881">>),
+    HtData = <<2:64/little,
+               SmbiosGuidBin/binary, 16#7EFDE000:64/little,
+               AcpiGuidBin/binary,   16#7EFDE100:64/little>>,
+    HtRec = MkRec(1, 16#80000009, HtData),
+    %% Option ROM action.
+    OrData = <<"Option ROM init">>,
+    OrRec = MkRec(2, 16#80000007, OrData),
+    Raw = <<FirstRec/binary, PC1/binary, PC2/binary,
+            HtRec/binary, OrRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PC = maps:get(<<"platform-config">>, Claim),
+    ?assertEqual(true,  maps:get(<<"smbios-present">>, PC)),
+    ?assertEqual(true,  maps:get(<<"acpi-present">>, PC)),
+    ?assertEqual(false, maps:get(<<"hob-list-present">>, PC)),
+    ?assertEqual(2, length(maps:get(<<"handoff-tables-v1">>, PC))),
+    ?assertEqual(2, maps:get(<<"handoff-tables-count">>, PC)),
+    ?assertEqual(1, maps:get(<<"option-rom-count">>, PC)),
+    ?assertEqual([<<"POST-stage-1">>, <<"POST-stage-2">>],
+                 maps:get(<<"post-codes">>, PC)),
+    Hist = maps:get(<<"event-count-per-pcr">>, PC),
+    %% PCR 0: SpecID + 2 POST, PCR 1: handoff, PCR 2: option-ROM.
+    ?assertEqual(3, maps:get(<<"0">>, Hist)),
+    ?assertEqual(1, maps:get(<<"1">>, Hist)),
+    ?assertEqual(1, maps:get(<<"2">>, Hist)),
+    ok.
+
+%% Convert "aabbccdd-eeff-0011-2233-445566778899" into the
+%% mixed-endian 16-byte EFI_GUID binary. Test helper only.
+decode_guid(Dashed) ->
+    NoDashes = binary:replace(Dashed, <<"-">>, <<>>, [global]),
+    {ok, [A, B, C, D, E], _} =
+        io_lib:fread("~8c~4c~4c~4c~12c",
+                      unicode:characters_to_list(NoDashes)),
+    Bytes = list_to_binary(
+        [hex_bytes(A), hex_bytes(B), hex_bytes(C),
+         hex_bytes(D), hex_bytes(E)]),
+    <<D1:32, D2:16, D3:16, D4Rest:8/binary>> = Bytes,
+    <<D1:32/little, D2:16/little, D3:16/little, D4Rest/binary>>.
+
+hex_bytes([]) -> [];
+hex_bytes([A, B | Rest]) ->
+    [list_to_integer([A, B], 16) | hex_bytes(Rest)].
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
 %% DB entries.
