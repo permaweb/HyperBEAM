@@ -965,7 +965,7 @@ step_hook_test(InitOpts) ->
     Ref = make_ref(),
     Opts =
         InitOpts#{
-            on =>
+            <<"on">> =>
                 #{
                     <<"step">> =>
                         #{

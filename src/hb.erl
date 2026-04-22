@@ -115,7 +115,7 @@ top() -> not_available.
 start_mainnet() ->
     start_mainnet(hb_opts:get(port)).
 start_mainnet(Port) when is_integer(Port) ->
-    start_mainnet(#{ port => Port });
+    start_mainnet(#{ <<"port">> => Port });
 start_mainnet(Opts) ->
     application:ensure_all_started([
         kernel,
@@ -132,10 +132,14 @@ start_mainnet(Opts) ->
     hb_http_server:start_node(
         FinalOpts =
             BaseOpts#{
-                store => #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-                priv_wallet => Wallet
+                <<"store">> => #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-mainnet">>
+                },
+                <<"priv-wallet">> => Wallet
             }
     ),
+    Port = hb_opts:get(port, undefined, FinalOpts),
     Address =
         case hb_opts:get(address, no_address, FinalOpts) of
             no_address -> <<"[ !!! no-address !!! ]">>;
@@ -144,9 +148,9 @@ start_mainnet(Opts) ->
     io:format(
         "Started mainnet node at http://localhost:~p~n"
         "Operator: ~s~n",
-        [hb_maps:get(port, Opts, undefined, Opts), Address]
+        [Port, Address]
     ),
-    <<"http://localhost:", (integer_to_binary(hb_maps:get(port, Opts, undefined, Opts)))/binary>>.
+    <<"http://localhost:", (integer_to_binary(Port))/binary>>.
 
 %%% @doc Start a server with a `simple-pay@1.0' pre-processor.
 start_simple_pay() ->
@@ -155,7 +159,7 @@ start_simple_pay(Addr) ->
     rand:seed(default),
     start_simple_pay(Addr, 10000 + rand:uniform(50000)).
 start_simple_pay(Addr, Port) ->
-    do_start_simple_pay(#{ port => Port, operator => Addr }).
+    do_start_simple_pay(#{ <<"port">> => Port, <<"operator">> => Addr }).
 
 do_start_simple_pay(Opts) ->
     application:ensure_all_started([
@@ -168,7 +172,7 @@ do_start_simple_pay(Opts) ->
         gun,
         os_mon
     ]),
-    Port = hb_maps:get(port, Opts, undefined, Opts),
+    Port = hb_opts:get(port, undefined, Opts),
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
@@ -177,7 +181,7 @@ do_start_simple_pay(Opts) ->
         },
     hb_http_server:start_node(
         Opts#{
-            on => #{
+            <<"on">> => #{
                 <<"request">> => Processor,
                 <<"response">> => Processor
             }

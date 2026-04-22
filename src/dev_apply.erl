@@ -248,7 +248,7 @@ resolve_with_prefix_test() ->
             Node,
             <<"/~meta@1.0/info/request:debug-info~apply@1.0">>,
             #{
-                <<"debug-info">> => <<"short_trace_len">>
+                <<"debug-info">> => <<"short-trace-len">>
             },
             #{}
         )

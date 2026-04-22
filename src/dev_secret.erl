@@ -568,7 +568,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) when is_binary(Key) ->
     commit_message(Message, ar_wallet:from_json(Key), Opts);
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
     ?event({committing_with_proxy, {message, Message}, {wallet, Key}}),
-    hb_message:commit(Message, Opts#{ priv_wallet => Key }).
+    hb_message:commit(Message, Opts#{ <<"priv-wallet">> => Key }).
 
 %% @doc Export wallets from a request. The request should contain a source of
 %% wallets (cookies, keys, or wallet names), or a specific list/name of a
@@ -678,7 +678,7 @@ store_wallet(in_memory, KeyID, Details, Opts) ->
     UpdatedWallets = CurrentWallets#{ KeyID => Details },
     ?event({wallet_store, {updated_wallets, UpdatedWallets}}),
     % Update the node's options with the new wallets.
-    hb_http_server:set_opts(Opts#{ priv_wallet_hosted => UpdatedWallets }),
+    hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.

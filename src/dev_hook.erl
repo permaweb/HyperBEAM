@@ -144,7 +144,12 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
 
 %% @doc Execute a single handler
 %% Handlers are expressed as messages that can be resolved via AO.
-execute_handler(<<"step">>, Handler, Req, Opts = #{ on := On = #{ <<"step">> := _ }}) ->
+execute_handler(
+    <<"step">>,
+    Handler,
+    Req,
+    Opts = #{ <<"on">> := On = #{ <<"step">> := _ }}
+) ->
     % The `step' hook is a special case: It is executed during the course of
     % a resolution, and as such, the key must be removed from the node message
     % before execution of the handler. Failure to do so will result in infinite
@@ -153,7 +158,7 @@ execute_handler(<<"step">>, Handler, Req, Opts = #{ on := On = #{ <<"step">> := 
         <<"step">>,
         maps:remove(<<"step">>, Handler),
         Req,
-        Opts#{ on => maps:remove(<<"step">>, On) }
+        Opts#{ <<"on">> => maps:remove(<<"step">>, On) }
     );
 execute_handler(HookName, Handler, Req, Opts) ->
     try
@@ -202,7 +207,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:resolve(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ hashpath => ignore }
+                Opts#{ <<"hashpath">> => ignore }
             ),
         ?event(hook,
             {handler_result,
@@ -257,7 +262,7 @@ single_handler_test() ->
         }
     },
     Req = #{ <<"test">> => <<"value">> },
-    Opts = #{ on => #{ <<"test-hook">> => Handler }},
+    Opts = #{ <<"on">> => #{ <<"test-hook">> => Handler }},
     {ok, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(true, maps:get(<<"handler_executed">>, Result)).
 
@@ -281,7 +286,7 @@ multiple_handlers_test() ->
         }
     },
     Req = #{ <<"test">> => <<"value">> },
-    Opts = #{ on => #{ <<"test-hook">> => [Handler1, Handler2] }},
+    Opts = #{ <<"on">> => #{ <<"test-hook">> => [Handler1, Handler2] }},
     {ok, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(true, maps:get(<<"handler1">>, Result)),
     ?assertEqual(true, maps:get(<<"handler2">>, Result)).
@@ -314,6 +319,6 @@ halt_on_error_test() ->
         }
     },
     Req = #{ <<"test">> => <<"value">> },
-    Opts = #{ on => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
+    Opts = #{ <<"on">> => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).

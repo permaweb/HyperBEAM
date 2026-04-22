@@ -96,7 +96,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             hb_ao:resolve(
                 {as, <<"process@1.0">>, PrimaryProcess},
                     #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-                    Opts#{ hashpath => ignore }
+                    Opts#{ <<"hashpath">> => ignore }
                 )
         catch
             Class:Reason:Trace ->
@@ -256,7 +256,7 @@ maybe_evaluate_message(Message, Opts) ->
                     [<<"target">>],
                     Message
                 ),
-            ResolveOpts = Opts#{ force_message => true },
+            ResolveOpts = Opts#{ <<"force-message">> => true },
             case hb_ao:resolve(ReqMsg#{ <<"path">> => ResolvePath }, ResolveOpts) of
                 {ok, EvalRes} ->
                     {
@@ -431,7 +431,7 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
                     Opts
                 ) - 1
         },
-        Opts#{ cache_control => <<"always">> }
+        Opts#{ <<"cache-control">> => <<"always">> }
     ).
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
@@ -441,7 +441,7 @@ normalize_message(MsgToPush, Opts) ->
         #{
             <<"target">> => target_process(MsgToPush, Opts)
         },
-        Opts#{ hashpath => ignore }
+        Opts#{ <<"hashpath">> => ignore }
     ).
 
 %% @doc Find the target process ID for a message to push.
@@ -471,7 +471,7 @@ split_target(RawTarget) ->
 %% keys.
 calculate_base_id(GivenProcess, Opts) ->
     Process =
-        case hb_ao:get(<<"process">>, GivenProcess, Opts#{ hashpath => ignore }) of
+        case hb_ao:get(<<"process">>, GivenProcess, Opts#{ <<"hashpath">> => ignore }) of
             not_found -> GivenProcess;
             Proc -> Proc
         end,
@@ -479,7 +479,7 @@ calculate_base_id(GivenProcess, Opts) ->
         hb_ao:set(
             Process,
             #{ <<"authority">> => unset, <<"scheduler">> => unset },
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     {ok, BaseID} =
         hb_ao:resolve(
@@ -549,7 +549,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
                 hb_ao:resolve(
                     {as, <<"process@1.0">>, TargetProcess},
                     ScheduleReq,
-                    Opts#{ cache_control => <<"always">> }
+                    Opts#{ <<"cache-control">> => <<"always">> }
                 )
         end,
     ?event(push, {push_sched_result, {status, ErlStatus}, {response, Res}}, Opts),
@@ -605,7 +605,7 @@ augment_message(Origin, ToSched, Opts) ->
                 <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
                 <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
             },
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         )
     ).
 

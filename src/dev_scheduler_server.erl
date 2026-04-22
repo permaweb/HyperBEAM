@@ -104,8 +104,13 @@ commitment_wallets(ProcMsg, Opts) ->
     lists:filtermap(
         fun(Scheduler) ->
             case hb_opts:as(Scheduler, Opts) of
-                {ok, #{ priv_wallet := Wallet }} -> {true, Wallet};
-                _ -> false
+                {ok, SchedulerOpts} ->
+                    case hb_opts:get(priv_wallet, not_found, SchedulerOpts) of
+                        not_found -> false;
+                        Wallet -> {true, Wallet}
+                    end;
+                _ ->
+                    false
             end
         end,
         dev_scheduler:parse_schedulers(SchedulerVal)
@@ -292,7 +297,7 @@ commit_assignment(BaseAssignment, State) ->
         fun(Wallet, Assignment) ->
             hb_message:commit(
                 Assignment,
-                Opts#{ priv_wallet => Wallet },
+                Opts#{ <<"priv-wallet">> => Wallet },
                 CommittmentSpec
             )
         end,
@@ -341,11 +346,11 @@ new_proc_test() ->
     Wallet = ar_wallet:new(),
     SignedItem = hb_message:commit(
         #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ),
     SignedItem2 = hb_message:commit(
         #{ <<"data">> => <<"test2">> },
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ),
     SignedItem3 = hb_message:commit(
         #{
@@ -353,7 +358,7 @@ new_proc_test() ->
             <<"deep-key">> =>
                 #{ <<"data">> => <<"test3">> }
         },
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ),
     dev_scheduler_registry:find(hb_message:id(SignedItem, all), SignedItem),
     schedule(ID = hb_message:id(SignedItem, all), SignedItem),

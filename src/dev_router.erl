@@ -164,7 +164,7 @@ routes(M1, M2, Opts) ->
                         true ->
                             % Minimize the work performed by AO-Core to make the sort
                             % more efficient.
-                            SortOpts = Opts#{ hashpath => ignore },
+                            SortOpts = Opts#{ <<"hashpath">> => ignore },
                             NewRoutes =
                                 lists:sort(
                                     fun(X, Y) ->
@@ -173,7 +173,7 @@ routes(M1, M2, Opts) ->
                                     end,
                                     [M2|Routes]
                                 ),
-                            ok = hb_http_server:set_opts(Opts#{ routes => NewRoutes }),
+                            ok = hb_http_server:set_opts(Opts#{ <<"routes">> => NewRoutes }),
                             {ok, <<"Route added.">>};
                         false -> {error, not_authorized}
                     end;
@@ -457,7 +457,7 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
             <<"template">>,
             XM,
             #{},
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     case hb_util:template_matches(ToMatch, Template, Opts) of
         true -> XM#{ <<"reference">> => hb_path:to_binary([<<"routes">>, XKey]) };
@@ -719,7 +719,7 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Base, RawReq, Opts) ->
-    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ hashpath => ignore }),
+    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
     ?event(debug_preprocess, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
     ?event(debug_preprocess, {template_routes, TemplateRoutes}),
@@ -736,7 +736,7 @@ preprocess(Base, RawReq, Opts) ->
                             hb_ao:get(
                                 <<"body">>,
                                 RawReq,
-                                Opts#{ hashpath => ignore }
+                                Opts#{ <<"hashpath">> => ignore }
                             )
                     }};
                 <<"error">> ->
@@ -1866,7 +1866,7 @@ request_hook_reroute_to_nearest_test_parallel() ->
                     hb_http:get(
                         Node,
                         <<"/~meta@1.0/info/address">>,
-                        Opts#{ http_only_result => true }
+                        Opts#{ <<"http-only-result">> => true }
                     )
                 )
             end,

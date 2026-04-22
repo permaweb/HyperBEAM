@@ -103,6 +103,8 @@ do_monitor(Group, Last, Opts) ->
 %% explicitly disabled (the common case for internal/recursive resolves) we
 %% skip the grouper dispatch entirely: the leader short-circuit below would
 %% discard the computed group name anyway.
+find_or_register(_Base, _Req, #{ <<"await-inprogress">> := false }) ->
+    {leader, ungrouped_exec};
 find_or_register(_Base, _Req, #{ await_inprogress := false }) ->
     {leader, ungrouped_exec};
 find_or_register(Base, Req, Opts) ->

@@ -14,6 +14,7 @@
 %%% with a refusal to execute.
 -module(hb_opts).
 -export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
+-export([canonicalize/1]).
 -export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
@@ -135,13 +136,127 @@ topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
     lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
+%% @doc Canonicalize an opts or node message map to lower-case binary dash keys.
+canonicalize(Term) -> canonicalize(root, Term).
+
+canonicalize(_Context, List) when is_list(List) ->
+    case hb_util:is_string_list(List) of
+        true -> List;
+        false ->
+            lists:map(
+                fun(Item) -> canonicalize(root, Item) end,
+                List
+            )
+    end;
+canonicalize(Context, Map) when is_map(Map) ->
+    case dictionary_mode(Context) of
+        opaque ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {canonical_dictionary_key(Key), Value}
+                    end,
+                    maps:to_list(Map)
+                )
+            );
+        recurse_values ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {canonical_dictionary_key(Key), canonicalize(root, Value)}
+                    end,
+                    maps:to_list(Map)
+                )
+            );
+        normal ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        CanonKey = canonical_opt_key(Key),
+                        {CanonKey, canonicalize(CanonKey, Value)}
+                    end,
+                    maps:to_list(Map)
+                )
+            )
+    end;
+canonicalize(_Context, Other) -> Other.
+
+dictionary_mode(<<"hyperbuddy-serve">>) -> opaque;
+dictionary_mode(<<"identities">>) -> recurse_values;
+dictionary_mode(<<"local-names">>) -> opaque;
+dictionary_mode(<<"balance">>) -> opaque;
+dictionary_mode(<<"balances">>) -> opaque;
+dictionary_mode(<<"commitments">>) -> recurse_values;
+dictionary_mode(<<"node-processes">>) -> recurse_values;
+dictionary_mode(<<"nodes">>) -> recurse_values;
+dictionary_mode(<<"priv-wallet-hosted">>) -> recurse_values;
+dictionary_mode(<<"simple-pay-ledger">>) -> opaque;
+dictionary_mode(<<"state">>) -> opaque;
+dictionary_mode(<<"trusted">>) -> recurse_values;
+dictionary_mode(<<"trusted-nodes">>) -> recurse_values;
+dictionary_mode(_) -> normal.
+
+canonical_dictionary_key(Key) when is_atom(Key) ->
+    atom_to_binary(Key, utf8);
+canonical_dictionary_key(Key) when is_list(Key) ->
+    case hb_util:is_string_list(Key) of
+        true -> list_to_binary(Key);
+        false -> Key
+    end;
+canonical_dictionary_key(Key) -> Key.
+
+canonical_opt_key(Key) when is_atom(Key) ->
+    canonical_opt_key(atom_to_binary(Key, utf8));
+canonical_opt_key(Key) when is_list(Key) ->
+    case hb_util:is_string_list(Key) of
+        true -> canonical_opt_key(list_to_binary(Key));
+        false -> Key
+    end;
+canonical_opt_key(Key) when is_binary(Key) ->
+    hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
+canonical_opt_key(Key) -> Key.
+
+find_local_opt(Key, Map) ->
+    case maps:find(Key, Map) of
+        {ok, Value} -> {ok, Value};
+        error when is_atom(Key) ->
+            maps:find(canonical_opt_key(Key), Map);
+        error when is_binary(Key) ->
+            try maps:find(hb_util:key_to_atom(Key, existing), Map)
+            catch _:_ -> error
+            end;
+        error ->
+            error
+    end.
+
+find_local_fallback(Key, Map) when is_atom(Key) ->
+    maps:find(canonical_opt_key(Key), Map);
+find_local_fallback(Key, Map) when is_binary(Key) ->
+    try maps:find(hb_util:key_to_atom(Key, existing), Map)
+    catch _:_ -> error
+    end;
+find_local_fallback(_Key, _Map) ->
+    error.
+
+opt_map_get(Key, Map, Default) ->
+    case find_local_opt(Key, Map) of
+        {ok, Value} -> Value;
+        error -> Default
+    end.
+
+fast_lookup_default(Key, Default, Opts) ->
+    case is_map_key(Key, ?ENV_KEYS) of
+        true -> do_get(Key, Default, Opts);
+        false -> opt_map_get(Key, default_message(), Default)
+    end.
+
 %% @doc Return the default message with all environment variables set.
 default_message_with_env() ->
     maps:fold(
         fun(Key, _Spec, NodeMsg) ->
             case global_get(Key, undefined, #{}) of
                 undefined -> NodeMsg;
-                Value -> NodeMsg#{ Key => Value }
+                Value -> NodeMsg#{ canonical_opt_key(Key) => Value }
             end
         end,
         default_message(),
@@ -157,7 +272,7 @@ default_message_with_env() ->
 default_message() ->
     case erlang:get(default_message) of
         undefined ->
-            Cached = raw_default_message(),
+            Cached = canonicalize(raw_default_message()),
             erlang:put(default_message, Cached),
             Cached;
         Cached -> Cached
@@ -584,15 +699,17 @@ get(Key, Default, Opts)
     case Opts of
         #{ only := global } -> do_get(Key, Default, Opts);
         #{ Key   := Value } -> Value;
-        #{ only  := local } -> Default;
+        #{ only  := local } ->
+            case find_local_fallback(Key, Opts) of
+                {ok, Value} -> Value;
+                error -> Default
+            end;
         _ ->
-            case is_map_key(Key, ?ENV_KEYS) of
-                true -> do_get(Key, Default, Opts);
-                false ->
-                    case maps:get(Key, default_message(), '$hb_opts_not_found') of
-                        '$hb_opts_not_found' -> Default;
-                        V -> V
-                    end
+            case find_local_fallback(Key, Opts) of
+                {ok, Value} ->
+                    Value;
+                error ->
+                    fast_lookup_default(Key, Default, Opts)
             end
     end;
 get(Key, Default, Opts) ->
@@ -602,7 +719,7 @@ do_get(Key, Default, Opts = #{ <<"only">> := Only }) ->
 do_get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
     do_get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
 do_get(Key, Default, Opts = #{ only := local }) ->
-    case maps:find(Key, Opts) of
+    case find_local_opt(Key, Opts) of
         {ok, Value} -> Value;
         error -> 
             Default
@@ -686,7 +803,7 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
+config_lookup(Key, Default, _Opts) -> opt_map_get(Key, default_message(), Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
@@ -716,7 +833,7 @@ path_to_device(Path) ->
 
 %% @doc Convert a file extension to a device name.
 extension_to_device(Ext) ->
-    extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
+    extension_to_device(Ext, ?MODULE:get(preloaded_devices, [], default_message())).
 extension_to_device(_, []) -> {error, not_found};
 extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
     case binary:match(Name, Ext) of
@@ -764,13 +881,13 @@ load_bin(Device, Bin, Opts) ->
     end.
 
 %% @doc Mimic the types of the default message for a given map.
-mimic_default_types(Map, Mode, Opts) ->
+mimic_default_types(Map, _Mode, Opts) ->
     Default = default_message_with_env(),
+    CanonicalMap = canonicalize(Map),
     hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
-            NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
-                case hb_maps:get(NewKey, Default, not_found, Opts) of
+                case hb_maps:get(Key, Default, not_found, Opts) of
                     not_found -> Value;
                     DefaultValue when is_atom(DefaultValue) ->
                         hb_util:atom(Value);
@@ -782,9 +899,9 @@ mimic_default_types(Map, Mode, Opts) ->
                         Value;
                     _ -> Value
                 end,
-            {NewKey, NewValue}
+            {Key, NewValue}
         end,
-        hb_maps:to_list(Map, Opts)
+        hb_maps:to_list(CanonicalMap, Opts)
     )).
 
 %% @doc Find a given identity from the `identities' map, and return the options
@@ -793,7 +910,13 @@ as(Identity, Opts) ->
     case identities(Opts) of
         #{ Identity := SubOpts } ->
             ?event({found_identity_sub_opts_are, SubOpts}),
-            {ok, maps:merge(Opts, mimic_default_types(SubOpts, new_atoms, Opts))};
+            {ok,
+                hb_maps:merge(
+                    canonicalize(Opts),
+                    mimic_default_types(SubOpts, new_atoms, Opts),
+                    Opts
+                )
+            };
         _ ->
             {error, not_found}
     end.
@@ -807,16 +930,20 @@ as(Identity, Opts) ->
 identities(Opts) ->
     identities(hb:wallet(), Opts).
 identities(Default, Opts) ->
-    Named = ?MODULE:get(identities, #{}, Opts),
+    #{ <<"identities">> := Named } =
+        canonicalize(
+            #{ <<"identities">> => ?MODULE:get(identities, #{}, Opts) }
+        ),
     % Generate an address-based map of identities.
     Addresses =
         maps:from_list(lists:filtermap(
             fun({_Name, SubOpts}) ->
-                case maps:find(priv_wallet, SubOpts) of
-                    {ok, Wallet} ->
+                case hb_opts:get(priv_wallet, not_found, SubOpts) of
+                    not_found ->
+                        false;
+                    Wallet ->
                         Addr = hb_util:human_id(ar_wallet:to_address(Wallet)),
-                        {true, {Addr, SubOpts}};
-                    error -> false
+                        {true, {Addr, SubOpts}}
                 end
             end,
             maps:to_list(Named)
@@ -826,10 +953,11 @@ identities(Default, Opts) ->
     Identities =
         maps:map(
             fun(_NameOrID, SubOpts) ->
-                case maps:find(priv_wallet, SubOpts) of
-                    {ok, Wallet} ->
-                        SubOpts#{ <<"address">> => hb_util:human_id(Wallet) };
-                    error -> SubOpts
+                case hb_opts:get(priv_wallet, not_found, SubOpts) of
+                    not_found ->
+                        SubOpts;
+                    Wallet ->
+                        SubOpts#{ <<"address">> => hb_util:human_id(Wallet) }
                 end
             end,
             maps:merge(Named, Addresses)
@@ -842,10 +970,10 @@ identities(Default, Opts) ->
         error ->
             Identities#{
                 DefaultID => #{
-                    priv_wallet => DefaultWallet
+                    <<"priv-wallet">> => DefaultWallet
                 },
                 <<"default">> => #{
-                    priv_wallet => DefaultWallet
+                    <<"priv-wallet">> => DefaultWallet
                 }
             }
     end.
@@ -1005,26 +1133,33 @@ load_flat_test() ->
     {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
-    ?assertEqual(1234, hb_maps:get(port, Conf)),
+    ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
-    % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
+    ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)).
 
 load_json_test() ->
     {ok, Conf} = load("test/config.json", #{}),
     ?event(debug_node_msg, {loaded, Conf}),
-    ?assertEqual(1234, hb_maps:get(port, Conf)),
-    ?assertEqual(9001, hb_maps:get(example, Conf)),
+    ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
+    ?assertEqual(9001, hb_maps:get(<<"example">>, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
-    % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
+    ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
     % Ensure that a store with `ao-types' is loaded correctly.
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],
-        hb_maps:get(store, Conf)
+        hb_maps:get(<<"store">>, Conf)
     ).
+
+default_message_canonical_test() ->
+    Default = default_message_with_env(),
+    ?assertEqual(undefined, maps:get(port, Default, undefined)),
+    ?assertEqual(undefined, maps:get(node_host, Default, undefined)),
+    ?assertEqual(undefined, maps:get(await_inprogress, Default, undefined)),
+    ?assert(is_integer(hb_maps:get(<<"port">>, Default))),
+    ?assert(is_list(hb_maps:get(<<"cache-control">>, Default))),
+    ?assertNotEqual(undefined, maps:get(<<"await-inprogress">>, Default, undefined)).
 
 as_identity_test() ->
     DefaultWallet = ar_wallet:new(),
@@ -1054,23 +1189,23 @@ as_identity_test() ->
     % The wallets for each of the names should be the same as the wallets we
     % provided. We also check that the settings are applied correctly.
     ?assertMatch(
-        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        {ok, #{ <<"priv-wallet">> := DefaultWallet, <<"test-key">> := 0 }},
         as(<<"default">>, Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        {ok, #{ <<"priv-wallet">> := DefaultWallet, <<"test-key">> := 0 }},
         as(hb_util:human_id(DefaultWallet), Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(<<"testname-1">>, Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(hb_util:human_id(TestWallet1), Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet2, test_key := 2 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet2, <<"test-key">> := 2 }},
         as(TestID2, Opts)
     ).
     
@@ -1094,7 +1229,7 @@ ensure_node_history_test() ->
             }, 
         <<"key2">> => <<"value2">>, 
         <<"extra">> => <<"value">>,
-        node_history => [
+        <<"node-history">> => [
             #{
                 <<"key1">> => 
                     #{
@@ -1124,7 +1259,7 @@ ensure_node_history_test() ->
                 <<"type">> => <<"string">>,
                 <<"value">> => <<"value1">>
             }, 
-        node_history => [
+        <<"node-history">> => [
             #{
                 <<"key1">> => 
                     #{
@@ -1147,7 +1282,7 @@ ensure_node_history_test() ->
                     <<"value">> => <<"value">>
                 }, 
             <<"key2">> => <<"value2">>,
-            node_history =>
+            <<"node-history">> =>
                 [
                     #{
                         <<"key1">> => 

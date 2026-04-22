@@ -479,8 +479,12 @@ is_debug(Report) ->
 -spec execute_is_trusted(M1 :: term(), Msg :: map(), NodeOpts :: map()) ->
     {ok, boolean()}.
 execute_is_trusted(_M1, Msg, NodeOpts) ->
-    FilteredLocalHashes = get_filtered_local_hashes(Msg, NodeOpts),
-    TrustedSoftware = hb_opts:get(snp_trusted, [#{}], NodeOpts),
+    FilteredLocalHashes = hb_opts:canonicalize(get_filtered_local_hashes(Msg, NodeOpts)),
+    TrustedSoftware =
+        lists:map(
+            fun hb_opts:canonicalize/1,
+            hb_opts:get(snp_trusted, [#{}], NodeOpts)
+        ),
     ?event({trusted_software, {explicit, TrustedSoftware}}),
     IsTrusted = 
         is_software_trusted(
@@ -521,7 +525,10 @@ get_filtered_local_hashes(Msg, NodeOpts) ->
 -spec get_enforced_keys(NodeOpts :: map()) -> [binary()].
 get_enforced_keys(NodeOpts) ->
     lists:map(
-        fun atom_to_binary/1,
+        fun(Key) ->
+            [CanonicalKey] = maps:keys(hb_opts:canonicalize(#{ Key => true })),
+            CanonicalKey
+        end,
         hb_opts:get(snp_enforced_keys, ?COMMITTED_PARAMETERS, NodeOpts)
     ).
 

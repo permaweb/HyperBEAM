@@ -120,7 +120,7 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
             {Config, Key}
         ],
         Default,
-        Opts#{ hashpath => ignore }
+        Opts#{ <<"hashpath">> => ignore }
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. First,
@@ -350,7 +350,7 @@ dead_node() ->
 
 slow_node_opts(Ms) ->
     #{test_delay => Ms,
-      on => #{<<"request">> =>
+      <<"on">> => #{<<"request">> =>
         #{<<"device">> => <<"test-device@1.0">>, <<"path">> => <<"delay">>}}}.
 
 multi(Nodes, Extra) ->
@@ -396,11 +396,13 @@ multirequest_test_() ->
 parallel_race_stops_at_first_admissible_test_() ->
     {timeout, 30, fun parallel_race_stops_at_first_admissible/0}.
 parallel_race_stops_at_first_admissible() ->
-    Delay = 500,
+    % Leave headroom for local scheduling jitter while still proving we return
+    % before the slow nodes finish.
+    Delay = 750,
     FastURL = hb_http_server:start_node(#{}),
     SlowURL1 = hb_http_server:start_node(slow_node_opts(Delay)),
     SlowURL2 = hb_http_server:start_node(slow_node_opts(Delay)),
-    Routes = maps:get(routes, hb_opts:default_message()),
+    Routes = hb_opts:get(routes, [], hb_opts:default_message()),
     [ArweaveRoute] =
         [R || R <- Routes,
             maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,

@@ -275,10 +275,17 @@ key(_M1, _M2, Opts) ->
     % Retrieve the shared AES key and the node's wallet.
     GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
     Identities = hb_opts:get(identities, #{}, Opts),
-    Wallet = case maps:find(<<"green-zone">>, Identities) of
-        {ok, #{priv_wallet := GreenZoneWallet}} -> GreenZoneWallet;
-        _ -> hb_opts:get(priv_wallet, undefined, Opts)
-    end,
+    Wallet =
+        case maps:find(<<"green-zone">>, Identities) of
+            {ok, IdentityOpts} ->
+                hb_opts:get(
+                    priv_wallet,
+                    hb_opts:get(priv_wallet, undefined, Opts),
+                    IdentityOpts
+                );
+            _ ->
+                hb_opts:get(priv_wallet, undefined, Opts)
+        end,
     {{KeyType, Priv, Pub}, _PubKey} = Wallet,
     ?event(green_zone, 
         {get_key, wallet, hb_util:human_id(ar_wallet:to_address(Pub))}),

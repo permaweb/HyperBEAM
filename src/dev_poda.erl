@@ -132,8 +132,9 @@ validate_stage(3, Content, Commitments, Opts = #{ <<"quorum">> := Quorum }) ->
 validate_commitment(Msg, Comm, Opts) ->
     MsgID = hb_util:encode(ar_bundles:id(Msg, unsigned)),
     AttSigner = hb_util:encode(ar_bundles:signer(Comm)),
-    ?event({poda_commitment, {signer, AttSigner, hb_maps:get(authorities, Opts, undefined, Opts)}, {msg_id, MsgID}}),
-    ValidSigner = lists:member(AttSigner, hb_maps:get(authorities, Opts, undefined, Opts)),
+    Authorities = hb_opts:get(authorities, undefined, Opts),
+    ?event({poda_commitment, {signer, AttSigner, Authorities}, {msg_id, MsgID}}),
+    ValidSigner = lists:member(AttSigner, Authorities),
     ValidSignature = ar_bundles:verify_item(Comm),
     RelevantMsg = ar_bundles:id(Comm, unsigned) == MsgID orelse
         (lists:keyfind(<<"commitment-for">>, 1, Comm#tx.tags)
