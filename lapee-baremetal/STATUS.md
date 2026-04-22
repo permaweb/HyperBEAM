@@ -2396,5 +2396,65 @@ Two features advancing both width and depth:
    interpret device receives pre-parsed quote; a sibling parser
    for raw quote blobs is useful for external tooling.
 
-Iteration 5 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 5 — commit `ae69dd51a`
+
+Two coupled additions turning the quote itself into rich data
+and activating the previously-passive pcr-profiles catalogue:
+
+1. **TPMS_ATTEST full decode.** The existing quote-metadata
+   parser stopped at `safe`. Hour 5 extends it through the
+   remainder of TPMS_ATTEST per TPM 2.0 Part 2 Tables 10.12.8+:
+   `firmwareVersion` (u64, split into hex/high/low),
+   `qualifiedSigner` (TPM2B_NAME, base64url), and the
+   quote-specific `attested.quote` union — a full
+   TPML_PCR_SELECTION walker that decodes each bank's
+   `{hash-alg-name, pcr-indexes, pcr-bitmap}` plus the
+   pcrDigest. Hash-alg-code → name mapping covers SHA-1/2/3
+   and SM3 per Part 2 Table 9. Non-quote attest types get an
+   `attest-body-length` + `attest-body-sha256` fallback so no
+   data is lost.
+
+2. **`claim.quote`** — flat claim surface for the quote. All
+   the decoded fields show up pre-aggregated under one
+   section: `reset-count`, `restart-count`, `clock-ms`,
+   `safe`, `firmware-version-{u64,hex,high,low}`,
+   `qualified-signer-name`, `quoted-pcr-indexes`
+   (deduped/sorted across all banks), `quoted-pcr-count`,
+   `quoted-pcr-algs`, `pcr-digest`, `pcr-select` (raw list).
+   `unknown-quote-claim/0` returns zero-value defaults when
+   no quote is present (never errors out).
+
+3. **`claim.pcr-match`** — activates the 29-profile catalogue
+   shipped under `priv/tpm-interpret/pcr-profiles/`. Scores
+   every profile by how many of `{PCR 0, PCR 1, PCR 7}` match
+   the profile's `match-pcrs.sha256`. Confidence: 3/3 →
+   `"high"`, 2/3 → `"medium"`, 1/3 → `"low"`, 0/3 →
+   `"no-match"`. The best match surfaces the profile's full
+   `attributes` (platform-vendor, firmware-id-family,
+   record-count, secure-boot-enabled, trust-tier, …). An
+   `all-matches` list exposes runners-up. Live-verified: a
+   quote with Lenovo ThinkPad P51 PCR 0/1/7 → best-match
+   confidence="high", matched-pcrs=[0,1,7].
+
+5 new eunit tests. All 122 tests pass (95 tcg + 27 interpret).
+
+### Candidate priority list for hour 6
+
+1. **IMA per-file event log decode** — still the biggest un-
+   parsed Linux measurement surface (PCR 10 + runtime stream).
+2. **Boot-chain image-identity DB** — map known shim / grub /
+   UKI SHA-256 hashes → publisher + version → CVE timeline.
+3. **Per-PCR replay verifier** — check that `pcrDigest` in the
+   quote (now surfaced by hour-5) equals SHA-256(concatenated
+   selected PCR values) so the quote is internally consistent.
+4. **Nonce/freshness claim composer** — compose
+   `claim.freshness` from reset-count + restart-count + clock +
+   nonce-echo, asserting "this quote was produced in the
+   current boot epoch".
+5. **SPDM device-policy / authority decode** — SPDM events
+   (0x800000E3-E4) currently only surface event-code + device-
+   path + payload-sha256; unpack the SPDM measurement block
+   structure.
+
+Iteration 6 fires automatically at `:23`. Loop state: `b5d87b84`.
 
