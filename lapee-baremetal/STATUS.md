@@ -2656,5 +2656,66 @@ Fv/FvFile paths are platform-internal with no public hash DB.
 5. **Canonical claim-set serialisation** — TCG canonical
    wire form for downstream signing.
 
-Iteration 10 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 10 — commit `ee4d97dba`
+
+Two correctness + coverage improvements:
+
+1. **pcrSelect-driven bank dispatch** — hour 8's multi-bank
+   replay guessed algorithm from each PCR's digest byte-size,
+   which fails on mixed-bank quotes. Hour 10 reads the
+   quote's own TPMS_QUOTE_INFO pcrSelect (already decoded
+   by hour 5) and builds a deterministic
+   `{pcr-index → alg-name}` map with first-declared-bank-
+   wins semantics. `replay_one_pcr/4` uses that map per
+   PCR, keeping size-heuristic as the no-quote fallback.
+   Live-verified on a synthetic SHA-1+SHA-256 mixed-bank
+   quote: each PCR routes to the correct bank.
+
+2. **TCG_DEVICE_SECURITY_EVENT_DATA2 (SPDM v2) decoder** —
+   replaces the hour-4 heuristic with a proper spec-
+   conformant parser per UEFI 2.10 §32.5. Dispatches on
+   the 16-byte signature:
+     "SPDM Device Sec2"  → v2 (Header + SubHeader +
+                            DevicePath)
+     "SPDM Device Sec\0" → v1 (Header + MeasBlock +
+                            DevicePath)
+     other               → legacy path-first fallback
+
+   v2 SubHeaderType 0 (Measurement Block) unpacks the DMTF
+   DSP0274 §10.11.3 structure: `meas-block-index`,
+   `meas-block-spec-name`, `dmtf-value-type-name` (one of 8
+   named types: immutable-rom / mutable-firmware / hardware-
+   config / firmware-config / firmware-measurement-manifest
+   / device-mode / version-info / secure-version-number),
+   `dmtf-value-is-raw` (bit 7), sizes + SHA-256s.
+
+   v2 SubHeaderType 1 (Cert Chain) unpacks:
+   `spdm-slot-id`, `spdm-cert-hash-alg-name` (SPDM-SHA-256/
+   384/512/3-256/3-384/3-512/SM3-256), chain length + hash.
+
+   Named enumerations for AuthState (6 states), DeviceType
+   (NONE/PCI/USB), SubHeaderType, and BaseHashAlgo per
+   spec.
+
+5 new eunit tests. All 143 tests pass (98 tcg + 45 interpret).
+
+### Candidate priority list for hour 11
+
+1. **Real boot-image SHA-256 seeds** — still open. Populate
+   the arrays in each `boot-images/*.json' with published
+   hashes.
+2. **`claim.ima-policy` cross-reference** — seed a minimal
+   IMA policy manifest + flag unexpected files.
+3. **Canonical claim-set serialisation** — TCG canonical
+   wire form for downstream signing of the flat claim map.
+4. **Event-log digest bank detection** — real-world event
+   logs often have multiple digests per event (SHA-1 +
+   SHA-256 concurrently). Surface which banks each event
+   carries in `claim.platform-config` so mixed-bank
+   policy engines can plan.
+5. **TPM2_ActivateCredential / Makecredential** — decode
+   the MakeCredential blob when carried alongside a quote,
+   enabling end-to-end AK provenance.
+
+Iteration 11 fires automatically at `:23`. Loop state: `b5d87b84`.
 
