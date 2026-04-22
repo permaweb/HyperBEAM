@@ -2347,5 +2347,54 @@ tests pass (90 tcg + 21 interpret).
    have different TDX/SEV-SNP behavior); add Xeon SP 6th-gen
    Sierra Forest (family=6 model=175).
 
-Iteration 4 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 4 — commit `438bb2c5c`
+Two features advancing both width and depth:
+
+1. **SIPA per-subtype payload decode** — the existing SIPA
+   parser surfaced category/subtype name + a blind SHA-256.
+   Now every one of the 56 documented sub-event-types from
+   Microsoft's `windows-ic-sipa.h` is classified by payload
+   shape (bool / u32 / u64 / digest / utf16-string / aggregation)
+   and structurally decoded. `Vbs=true` instead of an opaque
+   byte. `BootCounter=0xA1B2C3D4`. `LoadedModuleName="ntoskrnl.
+   exe"`. `CertRootHash` decoded as `sha256` (32-byte) with
+   base64url digest + alg + size. Aggregation subtypes surface
+   length + sha256; nested-event recursion is parked for a
+   future iteration.
+
+2. **`claim.boot-chain`** — the paper aligns the attestation
+   story to the full pre-OS chain (shim → grub → kernel, or
+   firmware-updater-driver → sd-boot → UKI, etc.). New claim
+   section enumerates every EV_EFI_BOOT_SERVICES_{APPLICATION,
+   DRIVER} + EV_EFI_RUNTIME_SERVICES_DRIVER in seq order. Per
+   row: chain-index, role, base64url image-hash, image-length,
+   image-link-time-address, canonical device-path text (parsed
+   via the existing walker), device-path-node-count, provenance.
+   Summary: length, application-count, first/last-application-
+   hash, has-runtime-driver. Live-verified on dell-notebook-wbcl
+   fixture → 2-row chain `[Fv/FvFile, NVMe/\EFI\Boot\BootX64.
+   efi]` rendered correctly.
+
+6 new eunit tests. All 117 tests pass (95 tcg + 22 interpret).
+
+### Candidate priority list for hour 5
+
+1. **IMA per-file event log decode** — `ima-ng' / `ima-sig' /
+   `ima-buf' template parsing. Unlocks per-file measurement
+   chain in `claim.kernel-integrity.ima-chain`.
+2. **Per-platform PCR profile seeding** — capture from fixtures
+   whose PCR 0/1/7 are intact, produce 5-10 known-good-platform
+   profiles so a quote can assert "this is Lenovo N1UET79W".
+3. **CPU brand matrix expansion** — EPYC Milan vs Genoa
+   discrimination; Xeon SP 6th-gen Sierra Forest entries; Apple
+   Silicon if TPM emulation ever shows up.
+4. **Boot-chain image-identity DB** — a `priv/tpm-interpret/
+   boot-images/*.json' catalogue mapping known SHA-256 boot
+   loader hashes → publisher + version (e.g. shim-15.8+fedora
+   → {publisher: Fedora, version: 15.8, cve-free-as-of: date}).
+5. **TPM2_Quote/TPMS_ATTEST direct decode** — currently the
+   interpret device receives pre-parsed quote; a sibling parser
+   for raw quote blobs is useful for external tooling.
+
+Iteration 5 fires automatically at `:23`. Loop state: `b5d87b84`.
 
