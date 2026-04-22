@@ -149,15 +149,30 @@ print_greeter(Config, PrivWallet) ->
 %% before it is used to configure the server. The `start' hook expects gives and
 %% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
+    ServerID =
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_opts:get(
+                    priv_wallet,
+                    no_wallet,
+                    RawNodeMsg
+                )
+            )
+        ),
     RawNodeMsgWithDefaults =
         hb_maps:merge(
             hb_opts:default_message_with_env(),
-            RawNodeMsg#{ only => local }
+            RawNodeMsg#{ only => local, http_server => ServerID }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
         case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
-            {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
+            {ok, #{ <<"body">> := NodeMsgAfterHook }} when is_map(NodeMsgAfterHook) -> NodeMsgAfterHook;
+            {ok, Response} ->
+                ?event(boot, {start_hook_response, {response, Response}}),
+                %% Fire-and-forget start handlers (e.g. cron) use hook/result => ignore,
+                %% so this clause handles any remaining non-NodeMsg results gracefully.
+                maps:get(<<"body">>, HookMsg);
             Unexpected ->
                 ?event(http,
                     {failed_to_start_server,
@@ -172,16 +187,6 @@ new_server(RawNodeMsg) ->
         end,
     % Put server ID into node message so it's possible to update current server
     hb_http:start(),
-    ServerID =
-        hb_util:human_id(
-            ar_wallet:to_address(
-                hb_opts:get(
-                    priv_wallet,
-                    no_wallet,
-                    NodeMsg
-                )
-            )
-        ),
     % Put server ID into node message so it's possible to update current server
     % params.
     NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),

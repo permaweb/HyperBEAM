@@ -56,10 +56,10 @@ once(_Base, Req, Opts) ->
 
 %% @doc Internal function for scheduling a one-time message.
 once_worker(Path, Req, Opts) ->
-	% Directly call the meta device on the newly constructed 'singleton', just
-    % as hb_http_server does.
+	% Use hb_ao:resolve directly to bypass the HTTP request pipeline (auth
+    % hooks, etc.). Cron workers are internal/trusted calls.
 	try
-		dev_meta:handle(Opts, Req#{ <<"path">> => Path})
+		hb_ao:resolve(Req#{ <<"path">> => Path}, Opts)
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -170,7 +170,10 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
         }
     ),
     try
-        dev_meta:handle(Opts, Req1),
+        % Use hb_ao:resolve directly instead of dev_meta:handle to bypass the
+        % HTTP request pipeline (request hooks, auth, etc.). Cron workers are
+        % internal/trusted and should not be subject to HTTP-level auth checks.
+        hb_ao:resolve(Req1, Opts),
         ?event({cron_every_worker_executed, {path, CronPath}})
     catch
         Class:Reason:Stack ->

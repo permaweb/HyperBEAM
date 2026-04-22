@@ -162,13 +162,14 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % handler does not affect the hashpath of a request's output. If the
         % `hook/commit` key is set to `true`, the handler request will be
         % committed before execution.
+        ExtraParams = maps:get(<<"extra-params">>, Handler, #{}),
         BaseReq =
-            Req#{
+            hb_maps:merge(#{
                 <<"path">> =>
                     hb_maps:get(<<"path">>, Handler, HookName, Opts),
                 <<"method">> =>
                     hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
-            },
+            }, ExtraParams, Opts),
         CommitReqBin = 
             hb_util:bin(
                 hb_util:deep_get(
@@ -190,10 +191,20 @@ execute_handler(HookName, Handler, Req, Opts) ->
                     };
                 <<"false">> -> {Handler, BaseReq}
             end,
+        % Remove the current hook's handlers from Opts before resolution to
+        % prevent cross-hook interference (e.g. request handlers firing during
+        % start hook resolution).
+        ScopedOpts =
+            case maps:get(on, Opts, #{}) of
+                On when is_map(On) ->
+                    Opts#{ on => maps:remove(HookName, On) };
+                _ -> Opts
+            end,
         ?event(hook,
-            {resolving_handler, 
+            {resolving_handler,
                 {name, HookName},
                 {handler, Handler},
+                {prepared_base, PreparedBase},
                 {req, {explicit, PreparedReq}}
             }
         ),
@@ -202,7 +213,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:resolve(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ hashpath => ignore }
+                ScopedOpts#{ hashpath => ignore }
             ),
         ?event(hook,
             {handler_result,
