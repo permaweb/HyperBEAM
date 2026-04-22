@@ -2507,5 +2507,51 @@ policy-ready freshness composite:
    signed/countersigned by downstream attestation policy
    verifiers.
 
-Iteration 7 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 7 — commit `9758ca310`
+
+Two claim sections closing the last two headline gaps:
+
+1. **`claim.pcr-replay`** — per-PCR event-log ↔ quote consist-
+   ency on the flat claim API. For every PCR with events,
+   re-fold the SHA-256 extension chain and compare to the
+   quoted value. Summary: `pcrs-with-events`,
+   `pcrs-matching`, `pcrs-mismatching`, `consistent`,
+   `event-count`. Live-verified on `dell-notebook-wbcl.bin`:
+   62 events across 12 PCRs; 9 match, 3 real-world mismatches
+   on PCRs 6/12/13 (mixed-alg bank artifacts) — exposed
+   cleanly for policy inspection.
+
+2. **`claim.ima`** — new ASCII IMA parser. Envelope field
+   `ima-log-ascii` (base64url) is tokenised + per-template
+   body decoded for all 5 IMA template formats (ima, ima-ng,
+   ima-sig, ima-buf, ima-modsig). Summary: `templates-seen`,
+   `unique-files`, `unique-hash-algs`, `entries` — each row
+   exposes `{pcr, template, template-digest, hash-alg,
+   file-hash-hex, pathname, signature-present, signature-
+   hex}`. Linux IMA now navigable as AO-Core messages.
+
+4 new eunit tests. All 132 tests pass (95 tcg + 37 interpret).
+
+### Candidate priority list for hour 8
+
+1. **Boot-chain image-identity DB** — `priv/tpm-interpret/
+   boot-images/*.json' catalogue of known shim / grub / UKI
+   SHA-256 hashes with publisher + version + CVE timeline;
+   wire into `claim.boot-chain` for per-image attribution.
+2. **SPDM measurement block decode** — unpack the
+   `TCG_DEVICE_SECURITY_EVENT_DATA2` structure + embedded
+   SPDM measurement record for events 0x800000E1-E5.
+3. **Multi-bank PCR replay** — hour 7 replays only the SHA-256
+   bank. Extend to SHA-1 / SHA-384 / SHA-512 banks so the
+   3 real-world mismatches on dell-notebook-wbcl.bin either
+   match (legitimate cross-bank use) or definitively fail.
+4. **ACPI / SMBIOS structure introspection claim** — the
+   tcg_tcg parser already walks SMBIOS + ACPI; add
+   `claim.platform-config` surfacing system-manufacturer,
+   product-name, BIOS-release-date, baseboard-serial.
+5. **claim.ima-policy matching** — cross-reference IMA entries
+   against a Fedora / Debian / LapEE "expected files" policy
+   manifest so the claim can flag unexpected binaries.
+
+Iteration 8 fires automatically at `:23`. Loop state: `b5d87b84`.
 
