@@ -1161,6 +1161,18 @@ interpret_claim(Events, E, Db) ->
         %% policy-ready stanza. Tells a verifier whether the
         %% quote is from the current boot epoch.
         <<"freshness">>          => claim_freshness(E),
+        %% Hour-7: per-PCR event-log replay vs quoted value.
+        %% For every PCR with events, re-fold the extensions
+        %% and compare to the quote — gives a definitive
+        %% "event log is consistent with PCR values" verdict,
+        %% per-PCR.
+        <<"pcr-replay">>         => claim_pcr_replay(Events, E),
+        %% Hour-7: IMA per-file measurement chain. Linux's
+        %% Integrity Measurement Architecture hashes every
+        %% executed binary / loaded kernel module / opened
+        %% config file and extends PCR 10. We parse the ASCII
+        %% IMA template into a navigable per-file list.
+        <<"ima">>                => claim_ima(E),
         %% Paper field #2 — TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
@@ -2115,6 +2127,283 @@ freshness_indicator(_, false, _) -> <<"safe-false">>;
 freshness_indicator(_, true, 0)  -> <<"no-clock">>;
 freshness_indicator(_, true, Ms) when Ms > 0 -> <<"ok">>;
 freshness_indicator(_, _, _)     -> <<"ok">>.
+
+%% @doc Per-PCR event-log ↔ quote consistency check. For every
+%% PCR with events attributed to it, recompute the SHA-256 fold
+%% chain and compare to the quoted PCR value. A mismatch means
+%% the event log transport dropped / reordered / corrupted
+%% events, OR the PCR value in the envelope was tampered with.
+%%
+%% Shape: map from PCR index (0..23) to
+%%   #{replayed-digest: b64,
+%%     quoted-digest: b64,
+%%     matches: bool,
+%%     event-count: int,
+%%     pcr-is-zero: bool — nothing ever extended this PCR}.
+%%
+%% Summary fields:
+%%   pcrs-with-events      list of PCR indexes that had events
+%%   pcrs-matching         list of PCRs where log matches quote
+%%   pcrs-mismatching      list of PCRs where they don't match
+%%   consistent            true iff mismatch list is empty
+%%
+%% The paper's threat model puts the event log ON the wire
+%% alongside the signed quote; a verifier that accepts the quote
+%% must also accept the event log. `pcr-replay' gives them a
+%% single boolean to decide on.
+claim_pcr_replay(Events, E) ->
+    %% `Events' is the map #{<<"1">> => ev, ...}. Group by PCR.
+    EvList = event_list(Events),
+    EventsByPcr = group_events_list_by_pcr(EvList),
+    PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+    %% Cover every PCR mentioned by the event log OR the quote
+    %% to give a complete picture.
+    AllPcrs = lists:usort(
+        lists:flatten(
+          [maps:keys(EventsByPcr),
+           [key_to_int(K) || K <- maps:keys(PcrVals)]])),
+    PerPcr = maps:from_list(
+        [{integer_to_binary(P),
+          replay_one_pcr(P, EventsByPcr, PcrVals)}
+         || P <- AllPcrs]),
+    Matching = [P || {_K, R} <- maps:to_list(PerPcr),
+                     P <- [maps:get(<<"pcr-index">>, R, -1)],
+                     maps:get(<<"matches">>, R, false) =:= true],
+    Mismatching = [P || {_K, R} <- maps:to_list(PerPcr),
+                        P <- [maps:get(<<"pcr-index">>, R, -1)],
+                        maps:get(<<"matches">>, R, true) =:= false,
+                        maps:get(<<"event-count">>, R, 0) > 0],
+    Covered = [P || {_K, R} <- maps:to_list(PerPcr),
+                    P <- [maps:get(<<"pcr-index">>, R, -1)],
+                    maps:get(<<"event-count">>, R, 0) > 0],
+    #{
+        <<"per-pcr">>           => PerPcr,
+        <<"pcrs-with-events">>  => lists:sort(Covered),
+        <<"pcrs-matching">>     => lists:sort(Matching),
+        <<"pcrs-mismatching">>  => lists:sort(Mismatching),
+        <<"consistent">>        => Mismatching =:= [] andalso
+                                   Covered =/= [],
+        <<"event-count">>       => length(EvList)
+    }.
+
+replay_one_pcr(Pcr, EventsByPcr, PcrVals) ->
+    Events = maps:get(Pcr, EventsByPcr, []),
+    QuotedB64 = maps:get(integer_to_binary(Pcr), PcrVals, undefined),
+    Quoted = case QuotedB64 of
+        undefined -> undefined;
+        B when is_binary(B) ->
+            try hb_util:decode(B) catch _:_ -> undefined end
+    end,
+    Replay = reconstruct_pcr(Events, Quoted),
+    PcrIsZero = case Quoted of
+        <<0:256>> -> true;
+        <<>>      -> true;
+        undefined -> true;
+        _         -> false
+    end,
+    Base = #{
+        <<"pcr-index">>         => Pcr,
+        <<"event-count">>       => length(Events),
+        <<"quoted-digest">>     => case QuotedB64 of
+                                       undefined -> <<"">>;
+                                       B2        -> B2
+                                   end,
+        <<"pcr-is-zero">>       => PcrIsZero
+    },
+    case Replay of
+        undefined ->
+            Base#{<<"replayed-digest">> => <<"">>,
+                  <<"matches">>         => PcrIsZero};
+        _ when is_map(Replay) ->
+            Base#{<<"replayed-digest">> =>
+                      maps:get(<<"replayed-digest">>, Replay, <<"">>),
+                  <<"matches">>         =>
+                      maps:get(<<"matches-quoted">>, Replay, false)}
+    end.
+
+%% Group an event list by PCR index (integer).
+group_events_list_by_pcr(EvList) ->
+    lists:foldl(
+      fun(Ev, Acc) ->
+          case maps:get(<<"pcr">>, Ev, undefined) of
+              P when is_integer(P) ->
+                  maps:update_with(P,
+                                   fun(L) -> L ++ [Ev] end,
+                                   [Ev], Acc);
+              _ -> Acc
+          end
+      end, #{}, EvList).
+
+%% @doc Parse the Linux IMA (Integrity Measurement Architecture)
+%% per-file measurement chain and expose it as navigable AO-Core
+%% data. IMA extends PCR 10 with a per-file template digest for
+%% every file IMA's policy says to measure; the measurements
+%% live in /sys/kernel/security/ima/ascii_runtime_measurements
+%% (ASCII, one line per measurement) or .../binary_runtime_
+%% measurements (binary, easier to cryptographically verify).
+%%
+%% We read the ASCII form from the envelope under
+%% `ima-log-ascii' (base64url-encoded since it's plain UTF-8).
+%% Each line has the shape:
+%%
+%%   <pcr>  <template-digest>  <template-name>  <template-data>
+%%
+%% Template names we recognise:
+%%   ima       legacy — template-data is "<sha1>  <pathname>"
+%%   ima-ng    "<hash-alg>:<file-hash>  <pathname>"
+%%   ima-sig   "<hash-alg>:<file-hash>  <pathname>  <signature>"
+%%   ima-buf   "<hash-alg>:<buf-hash>  <buf-name>"
+%%   ima-modsig like ima-sig + kernel module signature
+%%
+%% Output:
+%%   schema-version, event-count, templates-seen,
+%%   unique-files, unique-hash-algs, entries[] where
+%%   entries[i] = #{pcr, template, template-digest,
+%%                  hash-alg, file-hash, pathname,
+%%                  signature-present}.
+claim_ima(E) ->
+    case hb_maps:get(<<"ima-log-ascii">>, E, undefined, #{}) of
+        undefined -> unknown_ima_claim();
+        <<>>      -> unknown_ima_claim();
+        B64 when is_binary(B64) ->
+            try
+                Ascii = hb_util:decode(B64),
+                Entries = parse_ima_ascii(Ascii),
+                project_ima_claim(Entries)
+            catch _:_ ->
+                unknown_ima_claim()
+            end
+    end.
+
+unknown_ima_claim() ->
+    #{
+        <<"schema-version">>     => 1,
+        <<"present">>            => false,
+        <<"event-count">>        => 0,
+        <<"templates-seen">>     => [],
+        <<"unique-files">>       => 0,
+        <<"unique-hash-algs">>   => [],
+        <<"entries">>            => [],
+        <<"note">>               =>
+            <<"No `ima-log-ascii' field on envelope. A verifier "
+              "can only assert PCR 10's final value matches a "
+              "known-good policy profile without the per-file "
+              "chain.">>
+    }.
+
+%% @doc Parse the ASCII runtime-measurements format. Tolerant
+%% against blank lines / trailing whitespace.
+parse_ima_ascii(Ascii) ->
+    Lines = binary:split(Ascii, <<"\n">>, [global, trim_all]),
+    [Parsed || L <- Lines,
+               Parsed <- [parse_ima_line(L)],
+               is_map(Parsed)].
+
+parse_ima_line(<<>>) -> undefined;
+parse_ima_line(Line) ->
+    %% Split by whitespace (space / tab). Up to 4 fields:
+    %% PCR, template-digest, template-name, template-data
+    %% The 4th field itself is whitespace-separated internally.
+    case binary:split(Line, [<<" ">>, <<"\t">>], [global, trim_all]) of
+        [PcrB, TemplateDigest, Template | Rest] ->
+            case safe_binary_to_integer(PcrB) of
+                P when is_integer(P) ->
+                    Body = iolist_to_binary(
+                        lists:join(<<" ">>, Rest)),
+                    TplMap = parse_ima_template_body(Template, Body),
+                    Base = #{
+                        <<"pcr">>              => P,
+                        <<"template">>         => Template,
+                        <<"template-digest">>  => TemplateDigest
+                    },
+                    maps:merge(Base, TplMap);
+                _ -> undefined
+            end;
+        _ -> undefined
+    end.
+
+parse_ima_template_body(<<"ima">>, Body) ->
+    %% Legacy template: "<sha1>  <pathname>".
+    case binary:split(Body, [<<" ">>, <<"\t">>], [trim_all]) of
+        [Sha1Hex, Path] ->
+            #{<<"hash-alg">>         => <<"sha1">>,
+              <<"file-hash-hex">>    => Sha1Hex,
+              <<"file-hash-length">> => byte_size(Sha1Hex) div 2,
+              <<"pathname">>         => Path,
+              <<"signature-present">> => false};
+        _ -> #{<<"raw">> => Body}
+    end;
+parse_ima_template_body(<<"ima-ng">>, Body) ->
+    %% "<hash-alg>:<file-hash>  <pathname>".
+    parse_ima_ng_like(Body, false);
+parse_ima_template_body(<<"ima-sig">>, Body) ->
+    %% "<hash-alg>:<file-hash>  <pathname>  <signature-hex>".
+    parse_ima_ng_like(Body, true);
+parse_ima_template_body(<<"ima-buf">>, Body) ->
+    %% Same layout as ima-ng but the pathname is a buffer name.
+    M = parse_ima_ng_like(Body, false),
+    M#{<<"is-buffer">> => true};
+parse_ima_template_body(<<"ima-modsig">>, Body) ->
+    %% Same as ima-sig but the trailing signature is a module-
+    %% signing PKCS#7 blob rather than an EVM signature.
+    M = parse_ima_ng_like(Body, true),
+    M#{<<"module-signature">> => true};
+parse_ima_template_body(_Other, Body) ->
+    #{<<"raw">> => Body}.
+
+parse_ima_ng_like(Body, WithSig) ->
+    Fields = binary:split(Body, [<<" ">>, <<"\t">>],
+                           [global, trim_all]),
+    case Fields of
+        [HashAlgColon, Path | SigRest] ->
+            {Alg, Hash} = split_alg_colon(HashAlgColon),
+            Base = #{
+                <<"hash-alg">>         => Alg,
+                <<"file-hash-hex">>    => Hash,
+                <<"file-hash-length">> => byte_size(Hash) div 2,
+                <<"pathname">>         => Path,
+                <<"signature-present">> => WithSig
+            },
+            case SigRest of
+                [Sig | _] when WithSig ->
+                    Base#{<<"signature-hex">> => Sig,
+                          <<"signature-length">> =>
+                              byte_size(Sig) div 2};
+                _ -> Base
+            end;
+        _ -> #{<<"raw">> => Body}
+    end.
+
+%% Split "sha256:abcdef..." into {"sha256", "abcdef..."}. If no
+%% colon is present, treat as unknown algorithm.
+split_alg_colon(B) ->
+    case binary:split(B, <<":">>) of
+        [Alg, Rest] -> {Alg, Rest};
+        _           -> {<<"unknown">>, B}
+    end.
+
+safe_binary_to_integer(B) ->
+    try binary_to_integer(B) catch _:_ -> undefined end.
+
+%% Aggregate a per-file entry list into the summary claim shape.
+project_ima_claim(Entries) ->
+    Templates = lists:usort([maps:get(<<"template">>, E, <<"">>)
+                              || E <- Entries]),
+    Paths = lists:usort([maps:get(<<"pathname">>, E, <<"">>)
+                          || E <- Entries,
+                             maps:get(<<"pathname">>, E, <<"">>)
+                               =/= <<"">>]),
+    Algs = lists:usort([maps:get(<<"hash-alg">>, E, <<"unknown">>)
+                         || E <- Entries]),
+    #{
+        <<"schema-version">>    => 1,
+        <<"present">>           => Entries =/= [],
+        <<"event-count">>       => length(Entries),
+        <<"templates-seen">>    => Templates,
+        <<"unique-files">>      => length(Paths),
+        <<"unique-hash-algs">>  => Algs,
+        <<"entries">>           => Entries
+    }.
 
 claim_boot_chain(Events) ->
     Codes = [16#80000003, 16#80000004, 16#80000005],
@@ -4709,6 +4998,145 @@ patch_clock(Blob, NewClock) ->
       QsTpm2B/binary, NonceTpm2B/binary,
       NewClock:64/big, ResetCount:32/big, RestartCount:32/big,
       Safe:8, FwVer:64/big, Tail/binary>>.
+
+%% Hour-7: PCR replay flags the log↔quote consistency on the
+%% flat claim API. Build a minimal log with TWO events on
+%% PCR 0 whose SHA-256 digests we compute ourselves, reproduce
+%% the TPM's SHA-256 fold, use that as the quoted value, and
+%% assert the match fires.
+claim_surface_hour7_pcr_replay_match_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    MkRec = fun(Pcr, Code, Data) ->
+        S1 = crypto:hash(sha,    Data),
+        S2 = crypto:hash(sha256, Data),
+        Sz = byte_size(Data),
+        {<<Pcr:32/little, Code:32/little, 2:32/little,
+           16#04:16/little, S1/binary,
+           16#0B:16/little, S2/binary,
+           Sz:32/little, Data/binary>>,
+         S2}
+    end,
+    {R1, D1} = MkRec(0, 16#8, <<"FW v1">>),
+    {R2, D2} = MkRec(0, 16#8, <<"FW v2">>),
+    Raw = <<FirstRec/binary, R1/binary, R2/binary>>,
+    %% Replay the SHA-256 fold by hand:
+    Fold0 = crypto:hash(sha256, <<0:256, D1/binary>>),
+    Fold1 = crypto:hash(sha256, <<Fold0/binary, D2/binary>>),
+    Envelope = #{
+        <<"tcg-event-log">> => hb_util:encode(Raw),
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> => #{
+                <<"0">> => hb_util:encode(Fold1)
+            },
+            <<"quoted">> => <<>>}
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PR = maps:get(<<"pcr-replay">>, Claim),
+    ?assertEqual([0], maps:get(<<"pcrs-matching">>, PR)),
+    ?assertEqual([],  maps:get(<<"pcrs-mismatching">>, PR)),
+    ?assertEqual(true, maps:get(<<"consistent">>, PR)),
+    PerPcr = maps:get(<<"per-pcr">>, PR),
+    Row = maps:get(<<"0">>, PerPcr),
+    %% EV_NO_ACTION (SpecID first record) + two EV_S_CRTM_VERSION
+    %% events = 3 events attributed to PCR 0. The replay still
+    %% matches because EV_NO_ACTION is excluded from the fold.
+    ?assertEqual(3, maps:get(<<"event-count">>, Row)),
+    ?assertEqual(true, maps:get(<<"matches">>, Row)),
+    ok.
+
+%% A tampered quoted value for PCR 0 triggers mismatch.
+claim_surface_hour7_pcr_replay_mismatch_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    Data = <<"FW v1">>,
+    S1 = crypto:hash(sha, Data),
+    S2 = crypto:hash(sha256, Data),
+    Rec = <<0:32/little, 16#8:32/little, 2:32/little,
+            16#04:16/little, S1/binary,
+            16#0B:16/little, S2/binary,
+            (byte_size(Data)):32/little, Data/binary>>,
+    Raw = <<FirstRec/binary, Rec/binary>>,
+    %% Ship an obviously-wrong quoted PCR value (all-ones).
+    Wrong = <<16#FF:8, 0:(256-8)>>,
+    Envelope = #{
+        <<"tcg-event-log">> => hb_util:encode(Raw),
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> => #{<<"0">> => hb_util:encode(Wrong)},
+            <<"quoted">> => <<>>}
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PR = maps:get(<<"pcr-replay">>, Claim),
+    ?assertEqual([0], maps:get(<<"pcrs-mismatching">>, PR)),
+    ?assertEqual(false, maps:get(<<"consistent">>, PR)),
+    ok.
+
+%% Hour-7: IMA parser round-trips ima-ng + ima-sig + ima-buf
+%% templates from an ASCII log carried as base64url in the
+%% envelope field `ima-log-ascii'.
+claim_surface_hour7_ima_parse_test() ->
+    Log = <<
+      "10 abcdef0123456789abcdef0123456789abcdef01 ima-ng "
+      "sha256:aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44"
+      " /bin/bash\n"
+      "10 deadbeefcafebabe0123456789abcdef0123beef ima-sig "
+      "sha256:5678abcd5678abcd5678abcd5678abcd5678abcd5678abcd5678abcd5678abcd"
+      " /usr/lib/systemd/systemd 0302016430820160deadbeef\n"
+      "10 aa11bb22cc33dd44ee55ff6600000000deadbeef ima-buf "
+      "sha512:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111"
+      " kexec-buffer\n"
+    >>,
+    Envelope = #{<<"ima-log-ascii">> => hb_util:encode(Log)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    I = maps:get(<<"ima">>, Claim),
+    ?assertEqual(true, maps:get(<<"present">>, I)),
+    ?assertEqual(3, maps:get(<<"event-count">>, I)),
+    %% Templates sorted alphabetically.
+    ?assertEqual([<<"ima-buf">>, <<"ima-ng">>, <<"ima-sig">>],
+                 maps:get(<<"templates-seen">>, I)),
+    ?assert(lists:member(<<"sha256">>,
+                         maps:get(<<"unique-hash-algs">>, I))),
+    ?assert(lists:member(<<"sha512">>,
+                         maps:get(<<"unique-hash-algs">>, I))),
+    Entries = maps:get(<<"entries">>, I),
+    ?assertEqual(3, length(Entries)),
+    [E1, E2, E3] = Entries,
+    ?assertEqual(<<"ima-ng">>, maps:get(<<"template">>, E1)),
+    ?assertEqual(<<"/bin/bash">>,
+                 maps:get(<<"pathname">>, E1)),
+    ?assertEqual(false, maps:get(<<"signature-present">>, E1)),
+    ?assertEqual(<<"ima-sig">>, maps:get(<<"template">>, E2)),
+    ?assertEqual(true, maps:get(<<"signature-present">>, E2)),
+    ?assertMatch(<<"0302016430820160deadbeef">>,
+                 maps:get(<<"signature-hex">>, E2)),
+    ?assertEqual(<<"ima-buf">>, maps:get(<<"template">>, E3)),
+    ?assertEqual(true, maps:get(<<"is-buffer">>, E3)),
+    ?assertEqual(<<"kexec-buffer">>,
+                 maps:get(<<"pathname">>, E3)),
+    ok.
+
+%% IMA is a no-op (returns unknown-ima-claim) when the envelope
+%% has no `ima-log-ascii' field.
+claim_surface_hour7_ima_absent_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    I = maps:get(<<"ima">>, Claim),
+    ?assertEqual(false, maps:get(<<"present">>, I)),
+    ?assertEqual(0, maps:get(<<"event-count">>, I)),
+    ?assertEqual([], maps:get(<<"entries">>, I)),
+    ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
 %% DB entries.
