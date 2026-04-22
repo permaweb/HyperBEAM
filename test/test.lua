@@ -161,3 +161,13 @@ function inc(base, req, opts)
     base.count = base.count + 1
     return base
 end
+
+--- @function trie_proxy_test
+--- @tparam table base A trie@1.0 message passed as the first argument.
+--- Reads "toronto" via trie traversal (__index -> dev_trie:get), then
+--- writes its value to "to" (an overlapping prefix key) via __newindex.
+function trie_proxy_test(base, req, opts)
+    local fetched = base["toronto"]
+    base["toro"] = fetched
+    return base
+end

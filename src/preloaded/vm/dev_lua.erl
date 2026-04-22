@@ -3,7 +3,7 @@
 -implements(<<"lua@5.3a">>).
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
--export([encode/2, decode/2]).
+-export([encode/2, decode/2, encode_value/3]).
 -export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -318,19 +318,72 @@ compute(Key, RawBase, RawReq, Opts) ->
             {req, Req}
         }
     ),
-    process_response(
-        try luerl:call_function_dec(
-            [Function],
-            encode(ResolvedParams, Opts),
-            State
-        )
+    {EncodedParams, State2} = encode_params(ResolvedParams, State, Opts),
+    ?event(debug_lua, {encoded_args, {luerl_args, EncodedParams}, {state, State2}}),
+    Response =
+        try 
+            case luerl:call_function([Function], EncodedParams, State2) of
+                {ok, Res, State3} ->
+                    {ok, luerl:decode_list(Res, State3), State3};
+                LuaError ->
+                    LuaError
+            end
         catch
             _:Reason:Stacktrace -> {error, Reason, Stacktrace}
         end,
+    process_response(
+        Response,
         OldPriv,
 		Opts
     ).
 
+
+%% @doc Encode a list of parameters for a Lua function call using encode_value/3.
+encode_params(Params, State, Opts) ->
+    lists:mapfoldl(
+        fun(Param, AccState) -> encode_value(Param, AccState, Opts) end,
+        State,
+        Params
+    ).
+
+%% @doc Recursively encode a single Erlang value for Lua:
+%%  Lists -> luerl integer-keyed table, each element recursively encoded
+%%  Maps -> encoded with encode_table to ensure metatable is set
+%%  Other -> primitive luerl encode
+encode_value(Value, State, Opts) when is_list(Value) ->
+    encode_list(Value, State, Opts);
+encode_value(Value, State, Opts) when is_map(Value) ->
+    encode_table(Value, State, Opts);
+encode_value(Value, State, Opts) ->
+    luerl:encode(do_encode(Value, Opts), State).
+
+%% @doc Encode a list of values for a Lua table.
+encode_list(List, State, Opts) ->
+    {EncodedElems, State1} =
+        lists:mapfoldl(
+            fun(Elem, S) -> encode_value(Elem, S, Opts) end,
+            State,
+            List
+        ),
+    Indexed = lists:zip(lists:seq(1, length(EncodedElems)), EncodedElems),
+    luerl_heap:alloc_table(Indexed, State1).
+
+%% @doc Encode a map of values for a Lua table.
+encode_table(Table, State, Opts) ->
+    FlatEntries = [{K, V} || {K, V} <- maps:to_list(Table)],
+    {Entries, State1} = 
+        lists:mapfoldl(
+            fun({K, V}, AccSt) ->
+                {EncodedV, NextSt} = encode_value(V, AccSt, Opts),
+                {{K, EncodedV}, NextSt}
+            end,
+            State,
+            FlatEntries
+        ),
+    {TableRef, State2} = luerl_heap:alloc_table(Entries, State1),
+    {MetaRef, State3} = dev_lua_lib:make_table_meta(State2, Opts),
+    State4 = luerl_heap:set_metatable(TableRef, MetaRef, State3),
+    {TableRef, State4}.
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
 process_response({ok, [Result], NewState}, Priv, Opts) ->
@@ -664,6 +717,53 @@ direct_benchmark_test() ->
         Iterations,
         BenchTime
     ).
+
+lua_trie_metatable_test() ->
+    Opts = #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    },
+    {ok, Script} = file:read_file("test/test.lua"),
+    Trie = hb_ao:set(
+        #{ <<"device">> => <<"trie@1.0">> },
+        #{
+            <<"toronto">> => 42,
+            <<"to">> => 1,
+            <<"tor">> => 2,
+            <<"torrent">> => 3
+        },
+        Opts
+    ),
+    LuaMsg =
+        #{
+            <<"device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        },
+    {ok, Res} = 
+        hb_ao:resolve_many(
+            [
+                LuaMsg,
+                #{
+                    <<"path">> => <<"trie_proxy_test">>,
+                    <<"parameters">> => [Trie, #{}, #{}]
+                }
+            ],
+            Opts
+        ),
+    % "toronto" was only reachable via trie traversal; must survive the round-trip.
+    ?assertEqual(42, hb_ao:get(<<"toronto">>, Res, Opts)),
+    % "to" was set to the fetched toronto value (42), overwriting the original (1).
+    ?assertEqual(1, hb_ao:get(<<"to">>, Res, Opts)),
+    % "toro" was set to the fetched toronto value (42), overwriting the original (2).
+    % Unrelated trie keys must be untouched.
+    ?assertEqual(2, hb_ao:get(<<"tor">>, Res, Opts)),
+    ?assertEqual(42, hb_ao:get(<<"toro">>, Res, Opts)),
+    ?assertEqual(3, hb_ao:get(<<"torrent">>, Res, Opts)),
+    % Assert that the table is still in trie form. Toro will be nested.
+    ?assertNot(maps:is_key(<<"toro">>, Res)).
 
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.
