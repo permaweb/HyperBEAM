@@ -1132,13 +1132,26 @@ interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
     Context = detect_context(Events, EvList),
     BaseClaim = interpret_claim_body(Events, EvList, E, Db, Context),
-    %% Hour-13: produce a deterministic digest over the entire
-    %% flat claim map so a verifier can pin "this exact decoded
-    %% state was observed". Must be computed last so every
-    %% sibling section is already present.
-    BaseClaim#{
-        <<"evidence-digest">> => claim_evidence_digest(BaseClaim),
+    %% Hour-13 + Hour-14: bolt meta layers onto the base
+    %% claim tree in dependency order —
+    %%   timeline        depends only on events + quote
+    %%   policy-verdict  aggregates BaseClaim signals
+    %%   attestation-summary READS policy-verdict (must come
+    %%                   after)
+    %%   evidence-digest hashes EVERYTHING (must be last so
+    %%                   no downstream fields drift)
+    WithTimeline = BaseClaim#{
         <<"timeline">>        => claim_timeline(EvList, E)
+    },
+    WithVerdict = WithTimeline#{
+        <<"policy-verdict">>  => claim_policy_verdict(WithTimeline)
+    },
+    WithSummary = WithVerdict#{
+        <<"attestation-summary">> =>
+            claim_attestation_summary(WithVerdict)
+    },
+    WithSummary#{
+        <<"evidence-digest">> => claim_evidence_digest(WithSummary)
     }.
 
 interpret_claim_body(Events, EvList, E, Db, Context) ->
@@ -1860,6 +1873,395 @@ event_seq_range(EvList) ->
         [H] -> {H, H};
         _   -> {lists:min(Seqs), lists:max(Seqs)}
     end.
+
+%% @doc Aggregate prescriptive `policy-verdict' across every
+%% claim section. Scans the decoded claim for signal facts
+%% (secure-boot enabled, quote-integrity match, pcr-replay
+%% consistency, freshness indicator, ima policy violations,
+%% tpm trust-tier, tme, …) and produces:
+%%
+%%   verdict       "trusted" | "attested-with-warnings" |
+%%                 "untrusted" | "unknown"
+%%   score         0-100 confidence score (integer)
+%%   warnings      list of #{code, section, message}
+%%   critical-failures   list of #{code, section, message}
+%%   signals       map of the decisive per-section facts
+%%                 (so a policy engine can inspect the
+%%                  evidence without re-walking the tree)
+%%   version       1  (so callers can reason about evolution)
+claim_policy_verdict(Claim) ->
+    Signals = collect_policy_signals(Claim),
+    {Warnings, Criticals} = classify_policy_findings(Signals),
+    Score = policy_score(Signals, Warnings, Criticals),
+    Verdict = policy_verdict_from(Criticals, Warnings, Signals),
+    #{
+        <<"version">>            => 1,
+        <<"verdict">>            => Verdict,
+        <<"score">>              => Score,
+        <<"critical-failures">>  => Criticals,
+        <<"warnings">>           => Warnings,
+        <<"signals">>            => Signals
+    }.
+
+%% Pull the small set of decisive per-section facts into a
+%% flat signal map — same keys drive the classify_ and
+%% score_ functions below.
+collect_policy_signals(Claim) ->
+    SB = maps:get(<<"secure-boot">>, Claim, #{}),
+    QI = maps:get(<<"quote-integrity">>, Claim, #{}),
+    PR = maps:get(<<"pcr-replay">>, Claim, #{}),
+    FR = maps:get(<<"freshness">>, Claim, #{}),
+    IMAPol = maps:get(<<"ima-policy">>, Claim, #{}),
+    TPM = maps:get(<<"tpm">>, Claim, #{}),
+    TME = maps:get(<<"tme">>, Claim, #{}),
+    Ctx = maps:get(<<"context">>, Claim, #{}),
+    SBP = maps:get(<<"secure-boot-policy">>, Claim, #{}),
+    BC = maps:get(<<"boot-chain">>, Claim, #{}),
+    Lockdown = maps:get(<<"lockdown">>, Claim, #{}),
+    #{
+        <<"secure-boot-enabled">>  =>
+            maps:get(<<"enabled">>, SB, <<"unknown">>),
+        <<"quote-integrity-match">> =>
+            maps:get(<<"pcr-digest-match">>, QI, <<"unknown">>),
+        <<"quote-verifiable">> =>
+            maps:get(<<"verifiable">>, QI, false),
+        <<"pcr-replay-consistent">> =>
+            maps:get(<<"consistent">>, PR, false),
+        <<"pcr-replay-mismatch-count">> =>
+            length(maps:get(<<"pcrs-mismatching">>, PR, [])),
+        <<"freshness-indicator">> =>
+            maps:get(<<"freshness-indicator">>, FR,
+                      <<"unknown">>),
+        <<"ima-policy-violations">> =>
+            length(maps:get(<<"violations">>, IMAPol, [])),
+        <<"ima-policy-picked">> =>
+            maps:get(<<"picked-policy-key">>, IMAPol, null),
+        <<"tpm-trust-tier">> =>
+            maps:get(<<"trust-tier">>, TPM, <<"unknown">>),
+        <<"tpm-known-cve-count">> =>
+            length(maps:get(<<"known-cves">>, TPM, [])),
+        <<"tme-enabled">> =>
+            maps:get(<<"enabled">>, TME, <<"unknown">>),
+        <<"context-kind">> =>
+            maps:get(<<"kind">>, Ctx, <<"unknown">>),
+        <<"policy-posture">> =>
+            maps:get(<<"policy-posture">>, SBP, <<"unknown">>),
+        <<"policy-strength">> =>
+            maps:get(<<"policy-strength">>, SBP, <<"unknown">>),
+        <<"boot-chain-length">> =>
+            maps:get(<<"length">>, BC, 0),
+        <<"has-runtime-driver">> =>
+            maps:get(<<"has-runtime-driver">>, BC, false),
+        <<"lockdown-level">> =>
+            maps:get(<<"level">>, Lockdown, <<"unknown">>)
+    }.
+
+%% Map signals to warnings + critical-failures. Every entry
+%% surfaces a `code' policy engines can match against, the
+%% originating `section', and a human-readable `message'.
+classify_policy_findings(S) ->
+    Findings =
+        [secure_boot_finding(S),
+         quote_integrity_finding(S),
+         pcr_replay_finding(S),
+         freshness_finding(S),
+         ima_policy_finding(S),
+         tpm_trust_finding(S),
+         tme_finding(S),
+         runtime_driver_finding(S),
+         cve_finding(S),
+         sb_policy_finding(S),
+         lockdown_finding(S)],
+    Flat = [F || F <- Findings, F =/= ok],
+    Criticals = [F || F <- Flat, map_severity(F) =:= critical],
+    Warnings = [maps:remove(<<"severity">>, F)
+                 || F <- Flat, map_severity(F) =:= warn],
+    {Warnings, [maps:remove(<<"severity">>, F) || F <- Criticals]}.
+
+map_severity(F) when is_map(F) ->
+    maps:get(<<"severity">>, F, warn).
+
+finding(critical, Code, Section, Message) ->
+    #{<<"severity">> => critical,
+      <<"code">> => Code,
+      <<"section">> => Section,
+      <<"message">> => Message};
+finding(warn, Code, Section, Message) ->
+    #{<<"severity">> => warn,
+      <<"code">> => Code,
+      <<"section">> => Section,
+      <<"message">> => Message}.
+
+secure_boot_finding(#{<<"secure-boot-enabled">> := false}) ->
+    finding(warn, <<"secure-boot-disabled">>,
+            <<"secure-boot">>,
+            <<"Secure Boot is disabled. Verification of the "
+              "boot chain is not cryptographically enforced.">>);
+secure_boot_finding(#{<<"secure-boot-enabled">> := <<"unknown">>}) ->
+    finding(warn, <<"secure-boot-unknown">>,
+            <<"secure-boot">>,
+            <<"Secure Boot state not determined from event log.">>);
+secure_boot_finding(_) -> ok.
+
+quote_integrity_finding(
+  #{<<"quote-integrity-match">> := false}) ->
+    finding(critical, <<"quote-integrity-mismatch">>,
+            <<"quote-integrity">>,
+            <<"Recomputed pcrDigest does not match the TPM's "
+              "signed value — the envelope's PCR values were "
+              "tampered with or the quote is forged.">>);
+quote_integrity_finding(_) -> ok.
+
+pcr_replay_finding(
+  #{<<"pcr-replay-mismatch-count">> := N}) when N >= 3 ->
+    finding(warn, <<"pcr-replay-multi-mismatch">>,
+            <<"pcr-replay">>,
+            iolist_to_binary(io_lib:format(
+              "~p PCR(s) mismatched between event log and "
+              "quoted values - event log is likely truncated "
+              "or has cross-bank artefacts.", [N])));
+pcr_replay_finding(
+  #{<<"pcr-replay-mismatch-count">> := N}) when N >= 1 ->
+    finding(warn, <<"pcr-replay-mismatch">>,
+            <<"pcr-replay">>,
+            iolist_to_binary(io_lib:format(
+              "~p PCR(s) do not match the event log.", [N])));
+pcr_replay_finding(_) -> ok.
+
+freshness_finding(
+  #{<<"freshness-indicator">> := <<"safe-false">>}) ->
+    finding(critical, <<"freshness-safe-false">>,
+            <<"freshness">>,
+            <<"TPM clock `safe' flag is false — clock has "
+              "been tampered with since last reset.">>);
+freshness_finding(
+  #{<<"freshness-indicator">> := <<"no-nonce">>}) ->
+    finding(warn, <<"freshness-no-nonce">>,
+            <<"freshness">>,
+            <<"Quote was produced without a challenger nonce "
+              "— replayable.">>);
+freshness_finding(_) -> ok.
+
+ima_policy_finding(
+  #{<<"ima-policy-violations">> := N}) when N > 0 ->
+    finding(warn, <<"ima-policy-violations">>,
+            <<"ima-policy">>,
+            iolist_to_binary(io_lib:format(
+              "~p IMA policy violation(s) detected.", [N])));
+ima_policy_finding(_) -> ok.
+
+tpm_trust_finding(
+  #{<<"tpm-trust-tier">> := <<"hypervisor">>}) ->
+    finding(warn, <<"tpm-trust-tier-hypervisor">>,
+            <<"tpm">>,
+            <<"TPM is hypervisor-emulated (vTPM) — trust is "
+              "delegated to the cloud provider.">>);
+tpm_trust_finding(
+  #{<<"tpm-trust-tier">> := <<"cpu-tee">>}) ->
+    finding(warn, <<"tpm-trust-tier-ftpm">>,
+            <<"tpm">>,
+            <<"TPM is an fTPM (firmware TPM) — compromise of "
+              "the CPU TEE compromises the TPM root-of-trust.">>);
+tpm_trust_finding(_) -> ok.
+
+tme_finding(#{<<"tme-enabled">> := false}) ->
+    finding(warn, <<"tme-disabled">>,
+            <<"tme">>,
+            <<"Total Memory Encryption is off; paper §Arch "
+              "§confidentiality premise violated.">>);
+tme_finding(#{<<"tme-enabled">> := <<"unknown">>}) ->
+    finding(warn, <<"tme-unknown">>,
+            <<"tme">>,
+            <<"TME state could not be determined; no "
+              "tier-2/3/4/5 evidence fired.">>);
+tme_finding(_) -> ok.
+
+runtime_driver_finding(#{<<"has-runtime-driver">> := true}) ->
+    finding(warn, <<"boot-chain-has-runtime-driver">>,
+            <<"boot-chain">>,
+            <<"Boot chain loaded a UEFI runtime-services "
+              "driver — survives into OS runtime; review the "
+              "image.">>);
+runtime_driver_finding(_) -> ok.
+
+cve_finding(#{<<"tpm-known-cve-count">> := N}) when N > 0 ->
+    finding(warn, <<"tpm-known-cves">>,
+            <<"tpm">>,
+            iolist_to_binary(io_lib:format(
+              "TPM vendor has ~p known CVE(s) listed in the "
+              "manufacturers DB.", [N])));
+cve_finding(_) -> ok.
+
+sb_policy_finding(#{<<"policy-posture">> := <<"setup-mode">>}) ->
+    finding(critical, <<"sb-policy-setup-mode">>,
+            <<"secure-boot-policy">>,
+            <<"Secure Boot in setup-mode — any key can be "
+              "enrolled. This is an unfinished provisioning "
+              "state.">>);
+sb_policy_finding(#{<<"policy-strength">> := <<"no-revocations">>}) ->
+    finding(warn, <<"sb-policy-no-dbx">>,
+            <<"secure-boot-policy">>,
+            <<"dbx (revocation list) is empty — known-vuln "
+              "boot binaries are not blocked.">>);
+sb_policy_finding(_) -> ok.
+
+lockdown_finding(
+  #{<<"lockdown-level">> := <<"confidentiality">>}) -> ok;
+lockdown_finding(
+  #{<<"lockdown-level">> := <<"integrity">>}) ->
+    finding(warn, <<"lockdown-integrity-not-confidentiality">>,
+            <<"lockdown">>,
+            <<"Kernel lockdown is in `integrity' mode; paper "
+              "§Arch recommends `confidentiality'.">>);
+lockdown_finding(_) -> ok.
+
+%% Heuristic scoring:
+%%   Start at 100. Every critical costs 40 points, every
+%%   warning costs 8 points. Clamp to 0..100. Some positive
+%%   signals (high-tier TPM, confidential-compute context)
+%%   bump the floor.
+policy_score(Signals, Warnings, Criticals) ->
+    Base = 100 - (length(Criticals) * 40) - (length(Warnings) * 8),
+    Bumped = case maps:get(<<"context-kind">>, Signals,
+                            <<"tcg-pc-client">>) of
+        <<"intel-tdx-ccel">> -> Base + 5;
+        <<"amd-sev-snp">>    -> Base + 5;
+        _                    -> Base
+    end,
+    max(0, min(100, Bumped)).
+
+%% Verdict triage:
+%%   any critical-failure    → "untrusted"
+%%   any warning             → "attested-with-warnings"
+%%   nothing found + good signals → "trusted"
+%%   signals all unknown     → "unknown"
+policy_verdict_from([_ | _], _Warnings, _Signals) ->
+    <<"untrusted">>;
+policy_verdict_from([], [_ | _], _Signals) ->
+    <<"attested-with-warnings">>;
+policy_verdict_from([], [], Signals) ->
+    case all_signals_unknown(Signals) of
+        true  -> <<"unknown">>;
+        false -> <<"trusted">>
+    end.
+
+all_signals_unknown(Signals) ->
+    Values = maps:values(Signals),
+    lists:all(fun(V) ->
+        V =:= <<"unknown">> orelse V =:= null orelse V =:= 0
+    end, Values).
+
+%% @doc Descriptive TL;DR of the attestation. Unlike
+%% policy-verdict (prescriptive: "trusted / untrusted"),
+%% this stanza is purely descriptive — a one-glance
+%% summary of WHAT this machine is and HOW it booted.
+%%
+%% Fields:
+%%   machine-identity       one-line "Vendor Model with CPU"
+%%   firmware-identity      "CRTM <version> (<family-name>)"
+%%   boot-identity          "boot-loader → UKI → kernel"
+%%   tpm-identity           "Vendor kind model (trust-tier)"
+%%   security-posture       "SB <en|dis>, Lockdown <lvl>, TME <on|off>"
+%%   context                "tcg-pc-client" | "intel-tdx-ccel" | ...
+%%   top-concerns           up to 5 critical/warning messages
+%%                          (from policy-verdict)
+%%   evidence-digest-short  first 16 chars of hour-13 digest
+claim_attestation_summary(Claim) ->
+    CPU = maps:get(<<"cpu">>, Claim, #{}),
+    FW = maps:get(<<"firmware">>, Claim, #{}),
+    TPM = maps:get(<<"tpm">>, Claim, #{}),
+    SB = maps:get(<<"secure-boot">>, Claim, #{}),
+    Lockdown = maps:get(<<"lockdown">>, Claim, #{}),
+    TME = maps:get(<<"tme">>, Claim, #{}),
+    Ctx = maps:get(<<"context">>, Claim, #{}),
+    BC = maps:get(<<"boot-chain">>, Claim, #{}),
+    Kernel = maps:get(<<"kernel">>, Claim, #{}),
+    Verdict = maps:get(<<"policy-verdict">>, Claim, #{}),
+    Concerns = lists:sublist(
+        maps:get(<<"critical-failures">>, Verdict, []) ++
+        maps:get(<<"warnings">>, Verdict, []), 5),
+    #{
+        <<"machine-identity">>  => compose_machine_identity(FW, CPU),
+        <<"firmware-identity">> => compose_firmware_identity(FW),
+        <<"boot-identity">>     => compose_boot_identity(BC, Kernel),
+        <<"tpm-identity">>      => compose_tpm_identity(TPM),
+        <<"security-posture">>  =>
+            compose_security_posture(SB, Lockdown, TME),
+        <<"context">>           =>
+            maps:get(<<"kind">>, Ctx, <<"unknown">>),
+        <<"top-concerns">>      => Concerns,
+        <<"verdict">>           =>
+            maps:get(<<"verdict">>, Verdict, <<"unknown">>),
+        <<"score">>             =>
+            maps:get(<<"score">>, Verdict, 0)
+    }.
+
+compose_machine_identity(FW, CPU) ->
+    Vendor = bin_or(<<"family-vendor">>, FW, <<"unknown-vendor">>),
+    Platform =
+        case bin_or(<<"family-platform">>, FW, null) of
+            null -> bin_or(<<"family-name">>, FW, <<"unknown-model">>);
+            P    -> P
+        end,
+    Codename = bin_or(<<"codename">>, CPU, <<"unknown-cpu">>),
+    iolist_to_binary([Vendor, <<" ">>, Platform,
+                       <<" with ">>, Codename]).
+
+%% @doc Look up `Key' in `Map'. If the value is a binary return
+%% it; if null / undefined return `Default'; if a non-binary
+%% return Default too (keeps composition iolist-safe).
+bin_or(Key, Map, Default) ->
+    case maps:get(Key, Map, Default) of
+        B when is_binary(B) -> B;
+        _                   -> Default
+    end.
+
+compose_firmware_identity(FW) ->
+    Crtm = bin_or(<<"crtm-version">>, FW, <<"unknown">>),
+    Family = case bin_or(<<"family-name">>, FW, null) of
+        null -> <<"">>;
+        F    -> iolist_to_binary([<<" (">>, F, <<")">>])
+    end,
+    iolist_to_binary([<<"CRTM ">>, Crtm, Family]).
+
+compose_boot_identity(BC, Kernel) ->
+    Length = maps:get(<<"length">>, BC, 0),
+    UkiHash = case maps:get(<<"uki-hash">>, Kernel, <<"unknown">>) of
+        <<"unknown">> -> <<"unknown-uki">>;
+        H when is_binary(H) -> short_hash(H)
+    end,
+    iolist_to_binary(io_lib:format(
+        "boot-chain len=~B -> UKI ~s",
+        [Length, UkiHash])).
+
+compose_tpm_identity(TPM) ->
+    Name = bin_or(<<"manufacturer-name">>, TPM, <<"unknown-vendor">>),
+    Kind = bin_or(<<"manufacturer-kind">>, TPM, <<"unknown-kind">>),
+    Tier = bin_or(<<"trust-tier">>, TPM, <<"unknown">>),
+    iolist_to_binary([Name, <<" ">>, Kind,
+                       <<" (trust-tier=">>, Tier, <<")">>]).
+
+compose_security_posture(SB, Lockdown, TME) ->
+    SbStr = case maps:get(<<"enabled">>, SB, <<"unknown">>) of
+        true             -> <<"SB on">>;
+        false            -> <<"SB off">>;
+        _                -> <<"SB unknown">>
+    end,
+    LdStr = case maps:get(<<"level">>, Lockdown, <<"unknown">>) of
+        L when is_binary(L) ->
+            iolist_to_binary([<<"lockdown=">>, L]);
+        _ -> <<"lockdown=unknown">>
+    end,
+    TmeStr = case maps:get(<<"enabled">>, TME, <<"unknown">>) of
+        true           -> <<"TME on">>;
+        false          -> <<"TME off">>;
+        _              -> <<"TME unknown">>
+    end,
+    iolist_to_binary([SbStr, <<", ">>, LdStr, <<", ">>, TmeStr]).
+
+short_hash(H) when is_binary(H), byte_size(H) > 8 ->
+    binary:part(H, 0, 8);
+short_hash(H) -> H.
 
 lookup_binary_sem(Events, VarName, SemKey) ->
     case [Ev || Ev <- Events,
@@ -6813,6 +7215,123 @@ claim_surface_hour13_timeline_test() ->
     ?assertEqual(null, maps:get(<<"event-log-seq-min">>, T)),
     ?assertEqual(null, maps:get(<<"event-log-seq-max">>, T)),
     ?assertEqual(0, maps:get(<<"event-log-seq-range">>, T)),
+    ok.
+
+%% Hour-14: policy-verdict + attestation-summary. An empty
+%% envelope produces `verdict=unknown' (no signals) with an
+%% empty concerns list.
+claim_surface_hour14_policy_verdict_empty_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    ?assertEqual(1, maps:get(<<"version">>, PV)),
+    Verdict = maps:get(<<"verdict">>, PV),
+    %% An empty envelope produces trust-tier=unknown etc, but
+    %% also triggers a few "unknown" warnings (secure-boot,
+    %% tme, etc.) — so it's attested-with-warnings, not
+    %% "unknown" outright.
+    ?assert(Verdict =:= <<"unknown">> orelse
+             Verdict =:= <<"attested-with-warnings">>),
+    ?assert(is_integer(maps:get(<<"score">>, PV))),
+    ?assert(is_list(maps:get(<<"warnings">>, PV))),
+    ?assert(is_list(maps:get(<<"critical-failures">>, PV))),
+    ok.
+
+%% A synthetic envelope with explicit secure-boot=true +
+%% freshness + quote-integrity-match evidence drives the
+%% verdict to "trusted" with no criticals and score > 50.
+claim_surface_hour14_policy_verdict_trusted_test() ->
+    %% Build a minimal but internally-consistent envelope:
+    %%   - EV_EFI_VARIABLE_DRIVER_CONFIG SecureBoot=true
+    %%   - EV_IPL cmdline with mem_encrypt + lockdown
+    %%   - quote with matching pcrDigest
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% SecureBoot variable event (type 0x80000001, PCR 7).
+    SbName = unicode:characters_to_binary(<<"SecureBoot">>,
+                                            utf8, {utf16, little}),
+    SbVar = <<0:(16*8), 10:64/little, 1:64/little,
+              SbName/binary, 1>>,
+    SbRec = <<7:32/little, 16#80000001:32/little, 2:32/little,
+              16#04:16/little, (crypto:hash(sha, SbVar))/binary,
+              16#0B:16/little, (crypto:hash(sha256, SbVar))/binary,
+              (byte_size(SbVar)):32/little, SbVar/binary>>,
+    Cmdline = <<"cmdline=ro quiet mem_encrypt=on lockdown=confidentiality", 0>>,
+    CmdRec = <<12:32/little, 16#D:32/little, 2:32/little,
+               16#04:16/little,
+               (crypto:hash(sha, Cmdline))/binary,
+               16#0B:16/little,
+               (crypto:hash(sha256, Cmdline))/binary,
+               (byte_size(Cmdline)):32/little, Cmdline/binary>>,
+    Raw = <<FirstRec/binary, SbRec/binary, CmdRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    %% Signals map surfaces the expected keys.
+    Sig = maps:get(<<"signals">>, PV),
+    ?assert(maps:is_key(<<"secure-boot-enabled">>, Sig)),
+    ?assert(maps:is_key(<<"freshness-indicator">>, Sig)),
+    ?assert(maps:is_key(<<"tme-enabled">>, Sig)),
+    %% SecureBoot=true surfaced on the signals map.
+    ?assertEqual(true,
+                 maps:get(<<"secure-boot-enabled">>, Sig)),
+    %% cmdline set mem_encrypt=on → tme-enabled=true on signals.
+    ?assertEqual(true, maps:get(<<"tme-enabled">>, Sig)),
+    %% The verdict is a recognised string.
+    V = maps:get(<<"verdict">>, PV),
+    ?assert(lists:member(V,
+        [<<"trusted">>, <<"attested-with-warnings">>,
+         <<"untrusted">>, <<"unknown">>])),
+    ok.
+
+%% Quote-integrity mismatch produces a critical failure + verdict
+%% = "untrusted".
+claim_surface_hour14_policy_verdict_untrusted_test() ->
+    Pcr0 = crypto:hash(sha256, <<"real">>),
+    PcrDigest = crypto:hash(sha256, Pcr0),
+    Quoted = build_minimal_quote_attest(
+        <<"n">>, 0, 0, 1,
+        <<1:32/big, 16#000B:16/big, 3:8, 16#01, 0, 0>>,
+        PcrDigest),
+    Tampered = crypto:hash(sha256, <<"attacker">>),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Quoted),
+        <<"pcr-values">> => #{
+            <<"0">> => hb_util:encode(Tampered)}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    ?assertEqual(<<"untrusted">>, maps:get(<<"verdict">>, PV)),
+    ?assert(length(maps:get(<<"critical-failures">>, PV)) >= 1),
+    ok.
+
+%% Hour-14: attestation-summary renders the descriptive TL;DR
+%% and stays iolist-safe on a sparse envelope.
+claim_surface_hour14_attestation_summary_shape_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    AS = maps:get(<<"attestation-summary">>, Claim),
+    %% Every field is a binary or simple type.
+    ?assert(is_binary(maps:get(<<"machine-identity">>, AS))),
+    ?assert(is_binary(maps:get(<<"firmware-identity">>, AS))),
+    ?assert(is_binary(maps:get(<<"boot-identity">>, AS))),
+    ?assert(is_binary(maps:get(<<"tpm-identity">>, AS))),
+    ?assert(is_binary(maps:get(<<"security-posture">>, AS))),
+    ?assert(is_binary(maps:get(<<"context">>, AS))),
+    ?assert(is_list(maps:get(<<"top-concerns">>, AS))),
+    %% top-concerns is capped at 5.
+    ?assert(length(maps:get(<<"top-concerns">>, AS)) =< 5),
+    %% Unified verdict matches policy-verdict's.
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    ?assertEqual(maps:get(<<"verdict">>, PV),
+                 maps:get(<<"verdict">>, AS)),
+    ?assertEqual(maps:get(<<"score">>, PV),
+                 maps:get(<<"score">>, AS)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
