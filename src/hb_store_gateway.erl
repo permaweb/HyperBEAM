@@ -7,28 +7,22 @@
 
 %% @doc The scope of a GraphQL store is always remote, due to performance.
 scope(_) -> remote.
-resolve_key(_StoreOpts, Key) -> Key.
-resolve(StoreOpts, #{ <<"resolve">> := Key }, _NodeOpts) ->
-    {ok, resolve_key(StoreOpts, Key)}.
+resolve(_StoreOpts, #{ <<"resolve">> := Key }, _NodeOpts) ->
+    {ok, Key}.
 
-list_key(StoreOpts, Key) ->
+list(StoreOpts, #{ <<"list">> := Key }, NodeOpts) ->
     ?event(store_gateway, executing_list),
-    case read_key(StoreOpts, Key) of
-        not_found -> {error, not_found};
-        failure -> {failure, failure};
-        {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
+    case read(StoreOpts, #{ <<"read">> => Key }, NodeOpts) of
+        {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)};
+        Other -> Other
     end.
-list(StoreOpts, #{ <<"list">> := Key }, _NodeOpts) ->
-    list_key(StoreOpts, Key).
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type_key(StoreOpts, Key) ->
+type(StoreOpts, #{ <<"type">> := Key }, NodeOpts) ->
     ?event(store_gateway, executing_type),
-    case read_key(StoreOpts, Key) of
-        not_found -> {error, not_found};
-        failure -> {failure, failure};
+    case read(StoreOpts, #{ <<"read">> => Key }, NodeOpts) of
         {ok, Data} ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
@@ -43,10 +37,10 @@ type_key(StoreOpts, Key) ->
             if
                 IsFlat -> {ok, simple};
                 true -> {ok, composite}
-            end
+            end;
+        Other ->
+            Other
     end.
-type(StoreOpts, #{ <<"type">> := Key }, _NodeOpts) ->
-    type_key(StoreOpts, Key).
 
 %% @doc Extract a value from a message, handling sub-paths.
 extract_path_value(Message, Rest, StoreOpts) ->
@@ -61,46 +55,45 @@ extract_path_value(Message, Rest, StoreOpts) ->
 
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
-read_key(BaseStoreOpts, Key) ->
+read(BaseStoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
     StoreOpts = opts(BaseStoreOpts),
     GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
-    case hb_path:term_to_path_parts(Key, StoreOpts) of
-        [ID|Rest] when ?IS_ID(ID) ->
-            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
-                not_found ->
-                    ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    try hb_gateway_client:read(ID, GatewayReadOpts) of
-                        {error, _} ->
-                            ?event({read_not_found, {key, ID}}),
-                            not_found;
-                        {ok, Message} ->
-                            ?event({read_found, {key, ID}}),
-                            hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
-                            extract_path_value(Message, Rest, StoreOpts)
-                    catch Class:Reason:Stacktrace ->
-                        ?event(
-                            gateway,
-                            {read_failed,
-                                {class, Class},
-                                {reason, Reason},
-                                {stacktrace, {trace, Stacktrace}}
-                            }
-                        ),
-                        failure
-                    end;
-                {ok, CachedMessage} ->
-                    extract_path_value(CachedMessage, Rest, StoreOpts)
-            end;
-        _ ->
-            ?event({ignoring_non_id, Key}),
-            not_found
-    end.
-read(StoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
-    case read_key(StoreOpts, Key) of
+    Result =
+        case hb_path:term_to_path_parts(Key, StoreOpts) of
+            [ID|Rest] when ?IS_ID(ID) ->
+                case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+                    not_found ->
+                        ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+                        try hb_gateway_client:read(ID, GatewayReadOpts) of
+                            {error, _} ->
+                                ?event({read_not_found, {key, ID}}),
+                                not_found;
+                            {ok, Message} ->
+                                ?event({read_found, {key, ID}}),
+                                hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
+                                extract_path_value(Message, Rest, StoreOpts)
+                        catch Class:Reason:Stacktrace ->
+                            ?event(
+                                gateway,
+                                {read_failed,
+                                    {class, Class},
+                                    {reason, Reason},
+                                    {stacktrace, {trace, Stacktrace}}
+                                }
+                            ),
+                            failure
+                        end;
+                    {ok, CachedMessage} ->
+                        extract_path_value(CachedMessage, Rest, StoreOpts)
+                end;
+            _ ->
+                ?event({ignoring_non_id, Key}),
+                not_found
+        end,
+    case Result of
         {ok, Data} -> {ok, Data};
         not_found -> {error, not_found};
-        failure -> {failure, failure};
-        {error, _} = Error -> Error
+        failure -> {failure, failure}
     end.
 
 %% @doc Normalize the routes in the given `Opts`.

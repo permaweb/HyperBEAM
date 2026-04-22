@@ -65,26 +65,23 @@ group(_, _, _) -> {error, not_found}.
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type_id(#{ <<"index-store">> := IndexStore }, ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), #{}) of
-        {ok, _Offset} -> simple;
-        _ -> not_found
-    end.
-type(Store, #{ <<"type">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
-    case type_id(Store, ID) of
-        simple -> {ok, simple};
-        composite -> {ok, composite};
-        not_found -> {error, not_found}
+type(#{ <<"index-store">> := IndexStore }, #{ <<"type">> := ID }, NodeOpts)
+        when ?IS_ID(ID) ->
+    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), NodeOpts) of
+        {ok, _Offset} ->
+            {ok, simple};
+        _ ->
+            {error, not_found}
     end;
 type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
     {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
+read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), #{})
+                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), StoreOpts)
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
@@ -105,16 +102,16 @@ read_offset(_, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read_id(StoreOpts, ID) ->
-    case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
-        {ok, Message} -> {ok, Message};
-        not_found -> do_read(StoreOpts, ID)
-    end.
 read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
-    case read_id(StoreOpts, ID) of
-        {ok, Message} -> {ok, Message};
-        not_found -> {error, not_found};
-        {error, _} = Error -> Error
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+        {ok, Message} ->
+            {ok, Message};
+        not_found ->
+            case do_read(StoreOpts, ID) of
+                {ok, Message} -> {ok, Message};
+                not_found -> {error, not_found};
+                {error, _} = Error -> Error
+            end
     end;
 read(_StoreOpts, #{ <<"read">> := _ID }, _NodeOpts) ->
     {error, not_found}.
@@ -274,7 +271,7 @@ read_chunks(StartOffset, Length, Opts) ->
 
 %% @doc Write offset information to the index store.
 write_offset(
-        #{ <<"index-store">> := IndexStore },
+        StoreOpts = #{ <<"index-store">> := IndexStore },
         ID,
         CodecName,
         StartOffset,
@@ -294,7 +291,7 @@ write_offset(
     case hb_store:write(
         IndexStore,
         #{ hb_store_arweave_offset:path(ID) => Value },
-        #{}
+        StoreOpts
     ) of
         ok -> ok;
         Error -> Error

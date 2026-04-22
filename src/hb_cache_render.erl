@@ -278,7 +278,6 @@ get_graph_data(Base, MaxSize, Opts) ->
             % Read cache data for the source node
             SourceData = case hb_cache:read(To, Opts) of
                 {ok, Data} -> hb_format:term(Data);
-                not_found ->  <<"">>;
                 _ -> <<"">>
             end,
             #{

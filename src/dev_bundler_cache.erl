@@ -161,14 +161,7 @@ load_tx(TXID, Opts) ->
 %% @doc Write a value to a pseudopath.
 write_pseudopath(Path, Value, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    case hb_store:write(Store, #{ Path => Value }, Opts) of
-        ok ->
-            % force a flush to disk
-            _ = hb_store:read(Store, Path, Opts),
-            ok;
-        Error ->
-            Error
-    end.
+    hb_store:write(Store, #{ Path => Value }, Opts).
 
 %% @doc Read a value from a pseudopath.
 read_pseudopath(Path, Opts) ->

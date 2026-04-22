@@ -96,8 +96,7 @@ query(Obj, <<"blocks">>, Args, Opts) ->
             fun(Match) ->
                 case hb_cache:read(Match, Opts) of
                     {ok, Msg} -> {true, Msg};
-                    {error, not_found} -> false;
-                    not_found -> false
+                    _ -> false
                 end
             end,
             Matches
@@ -228,9 +227,7 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
             [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
-        {error, not_found} ->
-            read_ids(Rest, Count, Opts);
-        not_found ->
+        _ ->
             read_ids(Rest, Count, Opts)
     end.
 
