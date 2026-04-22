@@ -1,12 +1,12 @@
-%%% @doc The TPM 2.0 device — binds HyperBEAM's identity to a real
+%%% @doc The TPM 2.0 device -- binds HyperBEAM's identity to a real
 %%% hardware TPM via `libtss2-esys'.
 %%%
 %%% This device is the software-layer of the LapEE (Laptop Execution
 %%% Environment) appliance architecture. At node startup, the `on.start'
 %%% hook invokes `extend' with the running node message as its subject.
 %%% The digest of the subject is fed to `TPM2_PCR_Extend' (PCR 15 by
-%%% default), binding this specific boot of the node — with this wallet,
-%%% this `trusted_signers' set, this device map — to a measurement the
+%%% default), binding this specific boot of the node -- with this wallet,
+%%% this `trusted_signers' set, this device map -- to a measurement the
 %%% TPM can later quote.
 %%%
 %%% Any party can then request `attestation', which returns a signed
@@ -18,7 +18,7 @@
 %%%      extend and confirm it matches the quoted value
 %%%   5. The node message itself, so the verifier can recompute
 %%%      `hb_message:id(NodeMsg, all, Opts)' and confirm equality with
-%%%      the extend digest — closing the loop from quote back to the
+%%%      the extend digest -- closing the loop from quote back to the
 %%%      specific software stack running.
 %%%
 %%% The device delegates all TPM operations to the `lapee_tpm_nif' NIF
@@ -63,7 +63,7 @@ info(_Base, _Req, _Opts) ->
         <<"description">> =>
             <<"TPM 2.0 device: bind a HyperBEAM node's identity to a real "
               "hardware TPM via libtss2-esys, and produce signed attestations "
-              "that chain through quote → PCR extend → event log → node message, "
+              "that chain through quote -> PCR extend -> event log -> node message, "
               "linking a running node's software state to TPM-rooted hardware "
               "attestation.">>,
         <<"version">> => <<"0.1">>,
@@ -82,7 +82,7 @@ info(_Base, _Req, _Opts) ->
                           "bound to the PCR. If absent, falls back to the "
                           "hook's `body' key, and then to the Base message.">>,
                     <<"pcr">> =>
-                        <<"Integer PCR index (0–23). Defaults to 15.">>
+                        <<"Integer PCR index (0-23). Defaults to 15.">>
                 },
                 <<"response">> =>
                     <<"`#{<<\"status\">> => 200, <<\"body\">> => "
@@ -102,7 +102,7 @@ info(_Base, _Req, _Opts) ->
                     <<"nonce">> =>
                         <<"base64url-encoded binary nonce (any length). If "
                           "absent, a fresh random 32-byte value is generated. "
-                          "Hex input is NOT accepted — HyperBEAM wire is "
+                          "Hex input is NOT accepted - HyperBEAM wire is "
                           "base64url everywhere.">>
                 }
             },
@@ -131,27 +131,27 @@ info(_Base, _Req, _Opts) ->
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %%%============================================================================
-%%% extend/3 — the load-bearing hook entry point
+%%% extend/3 -- the load-bearing hook entry point
 %%%============================================================================
 
 %% @doc Extend a PCR with the hash of a subject.
 %%
 %% Subject resolution order (highest precedence first):
-%%   1. `Req/subject' — if set, use that value.
-%%   2. `Req/body'   — the standard hook-payload location.
-%%   3. `Base'       — fallback when neither is set.
+%%   1. `Req/subject' -- if set, use that value.
+%%   2. `Req/body'   -- the standard hook-payload location.
+%%   3. `Base'       -- fallback when neither is set.
 %%
 %% Digest derivation:
 %%   * If the resolved subject is a binary of exactly 32 bytes, it is
 %%     used as the SHA-256 digest directly.
 %%   * If it is any other binary, SHA-256 is applied.
 %%   * If it is a map (HyperBEAM message), `hb_message:id(Subject, all, Opts)'
-%%     is used — this commits to every committed and uncommitted field in
+%%     is used -- this commits to every committed and uncommitted field in
 %%     the message, which is exactly the "bind this specific node identity"
 %%     semantic the LapEE paper requires.
 %%
 %% The PCR is taken from `Req/pcr' (integer or integer-binary), defaulting
-%% to 15 — the LapEE node-identity PCR.
+%% to 15 -- the LapEE node-identity PCR.
 %%
 %% On success, also records a named event in the runtime event log via
 %% `lapee_tpm_nif:append_event/2'. The event log is flushed into every
@@ -166,7 +166,7 @@ extend(Base, Req, Opts) ->
             %% `attestation' call can embed the same node message the
             %% TPM committed to. The hook-dispatch path does not thread
             %% the extended subject through `Opts', so we use
-            %% `persistent_term' — same pattern as the event log.
+            %% `persistent_term' -- same pattern as the event log.
             case Subject of
                 S when is_map(S), Pcr =:= ?NODE_IDENTITY_PCR ->
                     persistent_term:put(
@@ -274,7 +274,7 @@ pcr_read(_Base, Req, Opts) ->
     end.
 
 %%%============================================================================
-%%% verify/3 — HB-side attestation verifier
+%%% verify/3 -- HB-side attestation verifier
 %%%============================================================================
 
 %% @doc Verify an attestation envelope end-to-end in-process. This is
@@ -290,7 +290,7 @@ pcr_read(_Base, Req, Opts) ->
 %%                    for the EK cert chain. Defaults to the value of
 %%                    `lapee_tpm_ca_cert' in `Opts' (a file path).
 %%
-%% Return shape (always 200 — the `verified' bool is the real verdict):
+%% Return shape (always 200 -- the `verified' bool is the real verdict):
 %%   verified : boolean
 %%   verdict  : "accepted" | "rejected"
 %%   checks   : list of per-check reports in stable order
@@ -322,7 +322,7 @@ verify(Base, Req, Opts) ->
         %% fully replay into the quoted PCR 1; that's a SeaBIOS
         %% quirk, not a LapEE security problem. The check runs,
         %% surfaces its result in `checks', but does NOT gate
-        %% `verified' — policy engines that want strict firmware-
+        %% `verified' -- policy engines that want strict firmware-
         %% log consistency can key off the severity field.
         safely_run(fun() -> chk_tcg_event_log_replay(Envelope) end,
                    <<"Firmware TCG event log replays to quoted PCRs 0-14">>,
@@ -353,7 +353,7 @@ verify(Base, Req, Opts) ->
 
 %% Classify which source produced the trust anchor actually used
 %% by `resolve_trusted_ca/2'. Returns a binary: "request", "node_config",
-%% or "none" (when no anchor was found anywhere — the chain check
+%% or "none" (when no anchor was found anywhere -- the chain check
 %% will then fail with a targeted "missing or unparseable" message).
 trust_anchor_source(Req, _Opts, <<>>) ->
     case {hb_maps:get(<<"trusted-ca">>, Req, undefined, #{}),
@@ -370,7 +370,7 @@ trust_anchor_source(Req, _Opts, _Pem) ->
     end.
 
 %% Wrap any check in a try/catch so one misformed field doesn't take
-%% down the whole verifier — the relevant check just becomes `ok=false,
+%% down the whole verifier -- the relevant check just becomes `ok=false,
 %% detail=<exception info>'.
 safely_run(F, Name) ->
     safely_run(F, Name, <<"core">>).
@@ -427,13 +427,13 @@ is_envelope(_) ->
 
 %% Resolve the trust anchor in priority order:
 %%
-%%   1. `Req/trusted-ca'     — base64url-encoded PEM bytes (the
+%%   1. `Req/trusted-ca'     -- base64url-encoded PEM bytes (the
 %%                             HyperBEAM wire convention; the safe
 %%                             form over URL-encoded GET).
-%%   2. `Req/trusted-ca-pem' — raw PEM text (back-compat; unsafe
+%%   2. `Req/trusted-ca-pem' -- raw PEM text (back-compat; unsafe
 %%                             over URL-encoded GET because `+' is
 %%                             treated as literal `+', not space).
-%%   3. Opts/`lapee_tpm_ca_cert' — node-configured CA PEM path.
+%%   3. Opts/`lapee_tpm_ca_cert' -- node-configured CA PEM path.
 %%                             Default `/etc/lapee/tpm-ca.crt'.
 %%
 %% Keeping BOTH forms in sync across verify / verify-peer / the
@@ -472,13 +472,13 @@ resolve_trusted_ca_from_config(Opts) ->
 %%---- check 1: EK cert chain --------------------------------------------
 %%
 %% pkix_path_validation drives a verify_fun when it encounters events
-%% it can't resolve unilaterally — most legitimately, unknown TCG
+%% it can't resolve unilaterally -- most legitimately, unknown TCG
 %% extensions on EK certs (tpmManufacturer / tpmModel / tpmVersion /
 %% tpmSpecification OIDs, which stock OTP doesn't know). We allow
 %% ONLY those extension events through; every {bad_cert, _} event
 %% (unknown_ca, self-signed, expired, name-mismatch, etc.) is a hard
-%% reject. Returning {valid, State} for everything — the original
-%% implementation — was a rubber stamp: pkix would surface
+%% reject. Returning {valid, State} for everything -- the original
+%% implementation -- was a rubber stamp: pkix would surface
 %% `{bad_cert, selfsigned_peer}` for a rogue EK and the callback
 %% would tell it "that's fine", defeating the whole chain check.
 chk_ek_chain(Envelope, TrustedCaPem) ->
@@ -549,7 +549,7 @@ diagnose_chain_failure(Why, EkDer, CaDer) ->
                   "CA's public key. The trust anchor is from a different "
                   "CA generation than the one that signed this EK (common "
                   "when the peer rebooted and regenerated a per-boot test "
-                  "CA — refresh the trust anchor from the peer's CURRENT "
+                  "CA -- refresh the trust anchor from the peer's CURRENT "
                   "boot), or a rogue CA with the same DN is being "
                   "presented (investigate).">>;
             {{bad_cert, invalid_issuer}, _} ->
@@ -563,7 +563,7 @@ diagnose_chain_failure(Why, EkDer, CaDer) ->
     end.
 
 %% Verify-fun for the EK cert chain validation. Pulled out so it can
-%% be unit-tested in isolation — the previous implementation
+%% be unit-tested in isolation -- the previous implementation
 %% returned `{valid, State}' for every event and that rubber-stamped
 %% `{bad_cert, selfsigned_peer}', `{bad_cert, unknown_ca}' et al.
 %% Here, only `{extension, _}' events (unknown TCG TPM OIDs) are
@@ -754,7 +754,7 @@ chk_binding(Envelope) ->
                     end;
                 Size ->
                     %% Empty / short / unparseable id. Refuse to
-                    %% consider any event a match — otherwise an
+                    %% consider any event a match -- otherwise an
                     %% envelope with `node_message_id = ""' and an
                     %% event with `digest = ""' would match the empty
                     %% binary trivially.
@@ -777,12 +777,12 @@ chk_binding(Envelope) ->
 %% would diverge from the quoted value, rejecting.
 %%
 %% Permissive cases (not hard-rejects):
-%%   - Envelope has no tcg_event_log (byte_size 0) — can happen with
+%%   - Envelope has no tcg_event_log (byte_size 0) -- can happen with
 %%     QEMU SeaBIOS test guests where SeaBIOS emits only a minimal
 %%     log. In this case there are no per-PCR events to replay, so
 %%     the check is skipped with {ok, <<"no firmware log">>}. Callers
 %%     who require a firmware log should refuse this verdict.
-%%   - Event log parses but produces an error marker — replay what
+%%   - Event log parses but produces an error marker -- replay what
 %%     we got anyway, but flag partial.
 %%
 %% Hard rejects:
@@ -861,7 +861,7 @@ replay_and_compare([Ev | Rest], QuotedPcrs, Count, Mismatches) ->
                                                        Mismatches)
                             end;
                         _ ->
-                            %% No SHA-256 digest on this event —
+                            %% No SHA-256 digest on this event --
                             %% rare in modern logs. Skip without
                             %% counting as a mismatch; the overall
                             %% PCR reconstruction will reveal any
@@ -877,7 +877,7 @@ in_range(_) -> false.
 
 %% After replaying every event, compare each per-PCR
 %% reconstruction against the quoted value. Only PCRs that
-%% actually saw an event are compared — an all-zero PCR with no
+%% actually saw an event are compared -- an all-zero PCR with no
 %% events is consistent.
 collect_mismatches(QuotedPcrs, InitMismatches) ->
     lists:foldl(
@@ -944,14 +944,14 @@ decode_pem_rsa_pub(Pem) when is_binary(Pem) ->
     end.
 
 %%%============================================================================
-%%% attestation/3 — the full envelope
+%%% attestation/3 -- the full envelope
 %%%============================================================================
 
 %% @doc Produce a full LapEE attestation envelope.
 %%
 %% The envelope is a plain AO-Core message. Binary-like fields are
 %% base64url-encoded via `hb_util:encode/1' (same convention as every
-%% other hash/id in AO-Core — `hb_message:id/3' returns a base64url
+%% other hash/id in AO-Core -- `hb_message:id/3' returns a base64url
 %% binary, `hb_util:human_id/1' does the same, etc.). To receive the
 %% envelope inline over HTTP, pass `accept: application/json@1.0' +
 %% `accept-bundle: true' (or the equivalent content-negotiation via
@@ -981,13 +981,13 @@ decode_pem_rsa_pub(Pem) when is_binary(Pem) ->
 %% Read the kernel's binary TCG event log. Canonical location is
 %% `/sys/kernel/security/tpm0/binary_bios_measurements' (requires
 %% securityfs mounted, kernel TPM driver loaded). Falls back to
-%% `/sys/kernel/security/tpm1/…' (some Linux configs index their
+%% `/sys/kernel/security/tpm1/...' (some Linux configs index their
 %% TPM at tpm1). Returns empty binary when the log isn't
-%% accessible — either (a) no TPM driver, (b) securityfs not
+%% accessible -- either (a) no TPM driver, (b) securityfs not
 %% mounted, or (c) host has no firmware-measured boot (which is
 %% true for QEMU SeaBIOS test guests running under swtpm, where
 %% SeaBIOS emits only a minimal log). An empty TCG log doesn't
-%% break the attestation — interpretation callers just see no
+%% break the attestation -- interpretation callers just see no
 %% firmware events to reason about.
 read_tcg_event_log() ->
     {Bin, _Source} = read_tcg_event_log_with_source(),
@@ -1093,15 +1093,15 @@ attestation(_Base, Req, Opts) ->
                         <<"runtime-event-log">> => EventLog,
                         %% Firmware-side TCG event log (PCRs 0-14
                         %% measurements the kernel exposes).
-                        %% base64url — consistent with every other
+                        %% base64url -- consistent with every other
                         %% binary field in this envelope
                         %% (runtime_event_log digests, tpm_quote
-                        %% values, PCR digests, …). The interpret
+                        %% values, PCR digests, ...). The interpret
                         %% device parses this into per-event
                         %% messages and extracts machine-identifying
                         %% fields (Secure Boot, firmware version,
-                        %% bootloader hash, …) per the paper's
-                        %% §Architecture "every field is a named
+                        %% bootloader hash, ...) per the paper's
+                        %% section Architecture "every field is a named
                         %% event-log entry" requirement.
                         <<"tcg-event-log">> =>
                             hb_util:encode(TcgLogBin),
@@ -1404,7 +1404,7 @@ info_shape_test() ->
     ?assert(lists:member(<<"quote">>, Exports)),
     ?assert(lists:member(<<"pcr-read">>, Exports)),
     ?assert(lists:member(<<"attestation">>, Exports)),
-    %% No standalone tcg-event-log endpoint — the log travels
+    %% No standalone tcg-event-log endpoint -- the log travels
     %% INSIDE the attested attestation envelope. A standalone
     %% un-attested path would let a malicious node serve one
     %% log via /tcg-event-log and a different one via
@@ -1447,7 +1447,7 @@ infer_log_format_crypto_agile_test() ->
 
 infer_log_format_tdx_ccel_test() ->
     SpecId = <<"Spec ID Event03", 0, 0:128>>,
-    %% First record on PCR 1 (MRTD) → TDX CCEL.
+    %% First record on PCR 1 (MRTD) -> TDX CCEL.
     Bin = <<1:32/little, 3:32/little, 0:(20*8),
             (byte_size(SpecId)):32/little, SpecId/binary>>,
     ?assertEqual(<<"tdx-ccel">>, infer_log_format(Bin)).
@@ -1496,7 +1496,7 @@ resolve_pcr_list_test() ->
         resolve_pcr_list(#{}, ?DEFAULT_QUOTE_PCRS, #{})).
 
 %% `chk_tcg_event_log_replay' returns `{ok, _}' when the envelope
-%% has no firmware log (accepting this case — test/dev guests
+%% has no firmware log (accepting this case -- test/dev guests
 %% running QEMU+swtpm don't emit a firmware event log). Callers who
 %% require a firmware log chain should additionally check envelope.
 %% tcg_event_log size.
@@ -1511,7 +1511,7 @@ chk_tcg_event_log_replay_empty_log_test() ->
 
 %% When the envelope carries a TCG log whose events replay to
 %% match the quoted PCR values, the check passes. Uses the same
-%% synthetic fixture as dev_tpm_tcg's own tests — PCR 0 gets one
+%% synthetic fixture as dev_tpm_tcg's own tests -- PCR 0 gets one
 %% event, PCR 7 gets one event, and we compute the expected
 %% reconstructed values.
 chk_tcg_event_log_replay_accepts_consistent_fixture_test() ->
@@ -1547,10 +1547,10 @@ chk_tcg_event_log_replay_accepts_consistent_fixture_test() ->
     ?assertMatch({ok, _}, chk_tcg_event_log_replay(Envelope)).
 
 %% Tampering the log (flip one byte of the event data) makes the
-%% reconstructed PCR diverge from the quoted value → reject.
+%% reconstructed PCR diverge from the quoted value -> reject.
 chk_tcg_event_log_replay_rejects_tampered_fixture_test() ->
     %% Same fixture construction as the prior test but with
-    %% tampered event data — PCR 0 reconstruction diverges from
+    %% tampered event data -- PCR 0 reconstruction diverges from
     %% the expected value. Still records the "correct" quoted
     %% value in the envelope so the mismatch is detectable.
     AlgPairs = <<16#04:16/little, 20:16/little,
@@ -1585,12 +1585,12 @@ chk_tcg_event_log_replay_rejects_tampered_fixture_test() ->
     ?assertMatch({error, _}, chk_tcg_event_log_replay(Envelope)).
 
 %% Regression test: `resolve_trusted_ca' must honour inline
-%% request-supplied anchors in priority order — base64url
+%% request-supplied anchors in priority order -- base64url
 %% `trusted-ca' wins over raw `trusted-ca-pem', which wins over
 %% node config. An earlier version only handled `trusted-ca-pem'
 %% here, so a caller supplying a ROGUE CA via `trusted-ca' on
 %% the chain-URL path had the whole parameter silently dropped
-%% — leaving the node's configured (legitimate) CA to
+%% -- leaving the node's configured (legitimate) CA to
 %% rubber-stamp the chain as OK.
 resolve_trusted_ca_priority_test() ->
     InlinePemBin = <<"-----BEGIN CERTIFICATE-----\ninline-pem\n"
@@ -1614,7 +1614,7 @@ resolve_trusted_ca_priority_test() ->
                  resolve_trusted_ca(#{<<"trusted-ca">> => <<>>,
                                       <<"trusted-ca-pem">> => InlinePemBin},
                                     #{})),
-    %% (4) Neither inline nor config → empty binary (triggers clean
+    %% (4) Neither inline nor config -> empty binary (triggers clean
     %%     "trusted CA missing" error downstream in chk_ek_chain).
     %% Supply a nonexistent config path so file:read_file returns
     %% error; the default /etc/lapee/... likely isn't present in
@@ -1628,7 +1628,7 @@ resolve_trusted_ca_priority_test() ->
 %% Regression test: `chk_event_log_replay' must refuse to
 %% "replay" zero events into a zero PCR and call it valid. Even
 %% though `chk_binding' catches the same shape, we want the replay
-%% check to be explicit about non-emptiness too — defence in depth.
+%% check to be explicit about non-emptiness too -- defence in depth.
 chk_event_log_replay_rejects_empty_events_test() ->
     Zero43 = hb_util:encode(<<0:256>>),
     Envelope = #{

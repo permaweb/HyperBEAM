@@ -1,8 +1,8 @@
-%%% @doc `~tpm-interpret@1.0' — turn a verified LapEE TPM attestation
+%%% @doc `~tpm-interpret@1.0' -- turn a verified LapEE TPM attestation
 %%% into rich, human-readable AO-Core fields.
 %%%
 %%% The companion to `~tpm2@2.0a'. `~tpm2@2.0a' is responsible for the
-%%% cryptographic chain (EK cert → AK → TPM2_Quote → PCR 15 → node
+%%% cryptographic chain (EK cert -> AK -> TPM2_Quote -> PCR 15 -> node
 %%% message). This device is responsible for turning that chain into
 %%% *meaning*: the TPM vendor, the firmware identity, the kernel
 %%% identity, the IMA chain, any cross-references against a static
@@ -25,7 +25,7 @@
 %%%
 %%% Static lookup tables live under the release's `priv/tpm-interpret/':
 %%%
-%%%     manufacturers.json          TCG-assigned vendor IDs → {name,
+%%%     manufacturers.json          TCG-assigned vendor IDs -> {name,
 %%%                                 kind, website, notes}
 %%%     root-cas/                   per-vendor EK root CA PEMs; used
 %%%                                 by the verifier side but listed
@@ -33,7 +33,7 @@
 %%%                                 "which vendor CA verified this EK?")
 %%%     pcr-profiles/*.json         known PCR 0/1/7 values for specific
 %%%                                 firmware versions (Lenovo BIOS
-%%%                                 1.52, Dell XYZ, QEMU OVMF, …)
+%%%                                 1.52, Dell XYZ, QEMU OVMF, ...)
 %%%     uki-measurements/*.json     known PCR 11/12/13 values for
 %%%                                 specific UKI kernel images.
 %%%
@@ -80,7 +80,7 @@ info(_Base, _Req, _Opts) ->
                 <<"interpret">> => #{
                     <<"description">> =>
                         <<"Structured interpretation of the envelope. "
-                          "Does NOT itself verify — pair with `verify' "
+                          "Does NOT itself verify -- pair with `verify' "
                           "or pre-verified input.">>,
                     <<"input">> =>
                         <<"An attestation envelope (lapee_attestation_"
@@ -119,7 +119,7 @@ info(_Base, _Req, _Opts) ->
                               "inline form.">>,
                         <<"trusted-ca-pem">> =>
                             <<"Optional (back-compat). Raw PEM as a "
-                              "string. Unsafe over URL-encoded GET — "
+                              "string. Unsafe over URL-encoded GET -- "
                               "the `+' in base64 base-64 values and in "
                               "the PEM BEGIN header get mangled. Use "
                               "`trusted-ca' instead.">>
@@ -153,7 +153,7 @@ info(_Base, _Req, _Opts) ->
                         <<"Fetch a peer's attestation and return the "
                           "summary (interpret-only, NO crypto "
                           "verification). ~10x cheaper than verify-peer "
-                          "— use for dashboards or discovery where "
+                          "-- use for dashboards or discovery where "
                           "you'll crypto-verify separately.">>,
                     <<"params">> => #{
                         <<"peer">> => <<"Required. Base URL.">>
@@ -166,7 +166,7 @@ info(_Base, _Req, _Opts) ->
                     <<"description">> =>
                         <<"Cheapest possible probe: is the peer "
                           "reachable and LapEE-shaped? Does not fetch "
-                          "the full envelope — only the first layer "
+                          "the full envelope -- only the first layer "
                           "(envelope_version + wallet + node_message_id). "
                           "Intended for liveness checks.">>,
                     <<"params">> => #{
@@ -238,7 +238,7 @@ info(_Base, _Req, _Opts) ->
     }}.
 
 %%%============================================================================
-%%% events/3 — parsed TCG event log as AO-Core messages
+%%% events/3 -- parsed TCG event log as AO-Core messages
 %%%============================================================================
 
 events(Base, Req, Opts) ->
@@ -249,7 +249,7 @@ events(Base, Req, Opts) ->
     }}.
 
 %%%============================================================================
-%%% claim/3 — flat, policy-friendly surface
+%%% claim/3 -- flat, policy-friendly surface
 %%%============================================================================
 
 claim(Base, Req, Opts) ->
@@ -258,7 +258,7 @@ claim(Base, Req, Opts) ->
     %% Claim pipeline reads from RAW (non-wire-encoded) events so
     %% UTF-8 cmdline flag values survive unaltered. Claim values
     %% are UTF-8-safe by construction (parsed text, base64url-
-    %% encoded digests, integers, booleans, "unknown" sentinels —
+    %% encoded digests, integers, booleans, "unknown" sentinels --
     %% no raw firmware bytes), so we skip the wire-encode layer
     %% and return the claim as-is.
     Events = interpret_events_raw(Envelope),
@@ -268,7 +268,7 @@ claim(Base, Req, Opts) ->
     }}.
 
 %%%============================================================================
-%%% summary/3 — lightweight interpret (no verify)
+%%% summary/3 -- lightweight interpret (no verify)
 %%%============================================================================
 
 summary(Base, Req, Opts) ->
@@ -280,7 +280,7 @@ summary(Base, Req, Opts) ->
     }}.
 
 %%%============================================================================
-%%% peer_summary/3, peer_status/3 — lightweight cross-node introspection
+%%% peer_summary/3, peer_status/3 -- lightweight cross-node introspection
 %%%============================================================================
 
 peer_summary(_Base, Req, Opts) ->
@@ -353,7 +353,7 @@ peer_status(_Base, Req, Opts) ->
     end.
 
 %%%============================================================================
-%%% checks/3 — machine-readable description of the verify battery
+%%% checks/3 -- machine-readable description of the verify battery
 %%%             (5 core crypto checks + 1 informational firmware log
 %%%             replay check; `severity' distinguishes)
 %%%============================================================================
@@ -410,7 +410,7 @@ checks(_Base, _Req, _Opts) ->
                           "state.">>,
                     <<"failure-implies">> =>
                         <<"The runtime_event_log doesn't match "
-                          "what was actually quoted — events "
+                          "what was actually quoted -- events "
                           "missing, inserted, or out of order.">>
                 },
                 #{
@@ -420,7 +420,7 @@ checks(_Base, _Req, _Opts) ->
                     <<"severity">> => <<"core">>,
                     <<"purpose">> =>
                         <<"Proves THIS node's node_message_id was "
-                          "extended into PCR 15 — the LapEE key "
+                          "extended into PCR 15 -- the LapEE key "
                           "binding. Ties the attestation to the "
                           "specific node configuration.">>,
                     <<"failure-implies">> =>
@@ -456,7 +456,7 @@ checks(_Base, _Req, _Opts) ->
                           "fold (SHA-256 extend) into its quoted "
                           "PCR. A mismatch surfaces firmware-log "
                           "tampering or a decode bug. NOT a trust "
-                          "anchor — the LapEE trust model is "
+                          "anchor -- the LapEE trust model is "
                           "rooted at PCR 15 (the node identity), "
                           "not at PCRs 0-14. Reported but does "
                           "NOT gate `verified'. Policy engines "
@@ -484,7 +484,7 @@ missing_peer_400() ->
         <<"body">> => #{
             <<"error">> => <<"missing-peer">>,
             <<"detail">> =>
-                <<"This endpoint requires a `peer' key — the base "
+                <<"This endpoint requires a `peer' key -- the base "
                   "URL of a LapEE node (e.g. "
                   "http://127.0.0.1:8734).">>
         }
@@ -524,7 +524,7 @@ fmt_reason(Other) ->
     iolist_to_binary(io_lib:format("~p", [Other])).
 
 %%%============================================================================
-%%% verify/3 — the target endpoint
+%%% verify/3 -- the target endpoint
 %%%============================================================================
 
 verify(Base, Req, Opts) ->
@@ -553,7 +553,7 @@ verify(Base, Req, Opts) ->
     end.
 
 %%%============================================================================
-%%% verify_peer/3 — cross-node entry point
+%%% verify_peer/3 -- cross-node entry point
 %%%============================================================================
 %%%
 %%% Fetch another HB node's attestation envelope over HTTP, verify it
@@ -588,10 +588,10 @@ verify_peer(_Base, Req, Opts) ->
             %% dev_tpm2's `resolve_trusted_ca/2'. Two inline forms
             %% are accepted:
             %%
-            %%   `trusted-ca'      — base64url-encoded PEM bytes
+            %%   `trusted-ca'      -- base64url-encoded PEM bytes
             %%                       (HyperBEAM wire convention; the
             %%                       safe form over HTTP/URL).
-            %%   `trusted-ca-pem'  — raw PEM text. *Only* works when
+            %%   `trusted-ca-pem'  -- raw PEM text. *Only* works when
             %%                       the request carries an
             %%                       unambiguous binary (e.g. POST
             %%                       body, not GET query string),
@@ -651,7 +651,7 @@ fetch_and_verify_peer(PeerUrl, InlineCa, Opts) ->
     },
     %% Wrap the fetch: `hb_http:get' can raise on malformed URLs,
     %% transport errors, or decode failures. Treat a raise the same
-    %% way we treat `{error, _}' — 502 with a diagnostic — so a
+    %% way we treat `{error, _}' -- 502 with a diagnostic -- so a
     %% verifier never crashes because a peer misbehaved.
     FetchResult =
         try hb_http:get(Base, FetchMsg, Opts)
@@ -714,7 +714,7 @@ strip_trailing_slash(B) when is_binary(B) ->
     end.
 
 %% The cross-node path must not return the Envelope map back through
-%% HB's response pipeline verbatim — the peer's commitments + any
+%% HB's response pipeline verbatim -- the peer's commitments + any
 %% `body+link' references inside would trip hb_cache:write when this
 %% node normalises the response. We drop every map-valued field in
 %% the result and keep only JSON-primitive-friendly summaries.
@@ -819,7 +819,7 @@ flatten_checks(Cs) when is_list(Cs) ->
       end || C <- Cs];
 flatten_checks(_) -> [].
 
-%% Produce a small, link-free summary of the interpretation — the
+%% Produce a small, link-free summary of the interpretation -- the
 %% fields a caller would actually act on when deciding whether to
 %% trust the peer. The full structured interpretation is still
 %% available via `/~tpm-interpret@1.0/interpret' against the same
@@ -883,7 +883,7 @@ unwrap_envelope(M, Opts) ->
     end.
 
 %%%============================================================================
-%%% interpret/3 — structured reading of the envelope
+%%% interpret/3 -- structured reading of the envelope
 %%%============================================================================
 
 interpret(Base, Req, Opts) ->
@@ -930,7 +930,7 @@ interpret_envelope(E, Opts) ->
     Tpm = interpret_tpm_identity(E, Db),
     Ak  = interpret_ak(E),
     Quote = interpret_quote_metadata(E),
-    %% Events first — the rich per-record decoded TCG event log. Every
+    %% Events first -- the rich per-record decoded TCG event log. Every
     %% downstream interpretation (PCR-level enrichment, boot chain,
     %% kernel, IMA, claim) drills into these events to extract named
     %% fields. Keeping events as the single source of truth keeps
@@ -967,10 +967,10 @@ interpret_envelope(E, Opts) ->
 %% test guests). Keyed by 1-based sequence number so individual
 %% events are path-addressable:
 %%
-%%     /.../events/3                → whole event 3
-%%     /.../events/3/event_type     → its type string
-%%     /.../events/3/digests/sha256 → one digest
-%%     /.../events/3/parsed         → the per-type decoded payload
+%%     /.../events/3                -> whole event 3
+%%     /.../events/3/event_type     -> its type string
+%%     /.../events/3/digests/sha256 -> one digest
+%%     /.../events/3/parsed         -> the per-type decoded payload
 
 interpret_events(E) ->
     encode_events_for_wire(interpret_events_raw(E)).
@@ -1002,7 +1002,7 @@ encode_field(_K, V) when is_map(V) ->
     maps:map(fun encode_field/2, V);
 encode_field(_K, V) when is_list(V) ->
     [encode_field_val(X) || X <- V];
-%% These keys carry UTF-8 strings by construction — leave as-is.
+%% These keys carry UTF-8 strings by construction -- leave as-is.
 %% Keys whose VALUE we know to be a UTF-8-safe string by
 %% construction (produced by our decoders, not firmware bytes).
 %% These pass through unchanged; all other binary values get
@@ -1133,7 +1133,7 @@ interpret_claim(Events, E, Db) ->
     Context = detect_context(Events, EvList),
     BaseClaim = interpret_claim_body(Events, EvList, E, Db, Context),
     %% Hour-13 + Hour-14: bolt meta layers onto the base
-    %% claim tree in dependency order —
+    %% claim tree in dependency order --
     %%   timeline        depends only on events + quote
     %%   policy-verdict  aggregates BaseClaim signals
     %%   attestation-summary READS policy-verdict (must come
@@ -1157,7 +1157,7 @@ interpret_claim(Events, E, Db) ->
 interpret_claim_body(Events, EvList, E, Db, Context) ->
     #{
         <<"secure-boot">>        => claim_secure_boot(EvList),
-        %% Hour-12: folded Secure-Boot policy posture —
+        %% Hour-12: folded Secure-Boot policy posture --
         %% PK/KEK/db/dbx entry counts + mode (setup/user/
         %% deployed/audit) + trusted-signers list + blocked-
         %% hashes list + posture verdict (production, user-
@@ -1169,13 +1169,13 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         <<"kernel">>             => claim_kernel(EvList, E),
         <<"cpu">>                => claim_cpu(EvList, Db),
         <<"shim">>               => claim_shim(EvList),
-        %% Paper §Architecture — the quote itself carries freshness
+        %% Paper section Architecture -- the quote itself carries freshness
         %% (reset-count / restart-count / clock-ms), TPM firmware
         %% identity, and the exact PCR selection that was quoted.
         %% Surface them on the compact claim API so policy engines
         %% don't have to parse the full interpret output.
         <<"quote">>              => claim_quote(E),
-        %% PCR cross-reference — does the (PCR 0, PCR 1, PCR 7)
+        %% PCR cross-reference -- does the (PCR 0, PCR 1, PCR 7)
         %% triple match any profile in the shipped pcr-profiles/
         %% DB? If so we know exactly which firmware + platform
         %% booted this machine.
@@ -1186,14 +1186,14 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         %% quote is fraudulent OR the PCR values in the envelope
         %% were tampered with between signing and transport.
         <<"quote-integrity">>    => claim_quote_integrity(E),
-        %% Hour-6: freshness composite — reset-count / restart-
+        %% Hour-6: freshness composite -- reset-count / restart-
         %% count / clock / safe / nonce rolled into a single
         %% policy-ready stanza. Tells a verifier whether the
         %% quote is from the current boot epoch.
         <<"freshness">>          => claim_freshness(E),
         %% Hour-7: per-PCR event-log replay vs quoted value.
         %% For every PCR with events, re-fold the extensions
-        %% and compare to the quote — gives a definitive
+        %% and compare to the quote -- gives a definitive
         %% "event log is consistent with PCR values" verdict,
         %% per-PCR.
         <<"pcr-replay">>         => claim_pcr_replay(Events, E),
@@ -1217,7 +1217,7 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         %% per-PCR event histogram. Gives a verifier a single
         %% "what kind of machine is this?" stanza.
         <<"platform-config">>    => claim_platform_config(EvList),
-        %% Paper field #2 — TPM identity (vendor, model, firmware,
+        %% Paper field #2 -- TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
         <<"tpm">>                => claim_tpm(E, Db),
@@ -1229,7 +1229,7 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         %% lookup.
         <<"ek">>                 => claim_ek(E, Db),
         %% Structured decode of the Attestation Key (AK) public
-        %% blob — algorithm, size, public exponent / curve,
+        %% blob -- algorithm, size, public exponent / curve,
         %% DER SHA-256 fingerprint so a verifier can pin the
         %% exact AK that signed the quote.
         <<"ak">>                 => claim_ak(E),
@@ -1364,7 +1364,7 @@ claim_tpm(E, Db) ->
 %% CAs shipped under `priv/tpm-interpret/root-cas/'.
 %%
 %% Output fields:
-%%   present             bool — an EK cert PEM was on the envelope
+%%   present             bool -- an EK cert PEM was on the envelope
 %%   subject             X.500 subject (string form)
 %%   issuer              X.500 issuer (string form)
 %%   serial-hex          cert serial (big-endian hex)
@@ -1376,7 +1376,7 @@ claim_tpm(E, Db) ->
 %%   key-size-bits       integer
 %%   rsa-public-exponent integer (RSA only)
 %%   public-key-sha256   base64url SHA-256 of the DER-encoded
-%%                       SubjectPublicKeyInfo — a pin-able key ID
+%%                       SubjectPublicKeyInfo -- a pin-able key ID
 %%   chain-validation    map of:
 %%     validated-by-root-ca  name of the matching root CA,
 %%                            or null / "no-roots-loaded"
@@ -1604,7 +1604,7 @@ validate_against_one_root(DerCert, RootCert) ->
 %% DER SubjectPublicKeyInfo.
 %%
 %% Output fields:
-%%   present                bool — the envelope had an ak-pub-pem
+%%   present                bool -- the envelope had an ak-pub-pem
 %%   key-alg                "rsa" | "ecdsa" | "ed25519" | ...
 %%   key-size-bits          integer
 %%   rsa-public-exponent    integer (RSA only)
@@ -1659,7 +1659,7 @@ unknown_ak_claim() ->
         <<"evidence">>            => []
     }.
 
-%% Trust tier ordering per paper §Hardware-Availability:
+%% Trust tier ordering per paper section Hardware-Availability:
 %%  discrete TPM       : strongest (dedicated chip, own RAM, own clock)
 %%  fTPM-cpu           : weaker (shares CPU TEE; compromise propagates)
 %%  server-platform    : re-issued under OEM CA; depends on OEM's
@@ -1674,7 +1674,7 @@ tpm_trust_tier(<<"virtual">>)         -> <<"hypervisor">>;
 tpm_trust_tier(<<"software">>)        -> <<"hypervisor">>;
 tpm_trust_tier(_)                     -> <<"unknown">>.
 
-%% CPU microcode identity — from EV_CPU_MICROCODE on PCR 1.
+%% CPU microcode identity -- from EV_CPU_MICROCODE on PCR 1.
 %% Discriminates Intel vs AMD vs unknown via `parsed.format'.
 %% The 2-arg form additionally cross-references
 %% `priv/tpm-interpret/cpu-models.json' to attach a human-readable
@@ -1767,7 +1767,7 @@ extract_cpu_fms(<<"amd">>, P) ->
 extract_cpu_fms(_, _) ->
     {undefined, undefined, undefined}.
 
-%% Parse "family=6 model=151 stepping=2" → {6, 151, 2}.
+%% Parse "family=6 model=151 stepping=2" -> {6, 151, 2}.
 parse_fms_string(<<>>) -> {undefined, undefined, undefined};
 parse_fms_string(S) when is_binary(S) ->
     {find_fms(S, <<"family=">>),
@@ -1870,7 +1870,7 @@ claim_shim(Events) ->
       <<"moklist-trusted">>             => MokTrusted,
       <<"moklist-trusted-provenance">>  => MokProv}.
 
-%% Convert the keyed events map into a list sorted by seq number —
+%% Convert the keyed events map into a list sorted by seq number --
 %% more convenient for iterating and filtering per event-type.
 event_list(Events) when is_map(Events) ->
     Sorted = lists:sort(
@@ -2036,7 +2036,7 @@ project_blocked_hash(Entry) ->
     end,
     %% For x509 entries the "hash" is really the cert fingerprint.
     %% For hash-type entries the decoder may surface a `hash' or
-    %% `sha256' field — accept either shape.
+    %% `sha256' field -- accept either shape.
     HashOrFp = case maps:get(<<"hash">>, Entry, undefined) of
         B when is_binary(B) -> B;
         _ ->
@@ -2057,7 +2057,7 @@ project_blocked_hash(Entry) ->
 policy_posture(<<"unknown">>, _, _, _, _, _, _) -> <<"unknown">>;
 policy_posture(_, _, _, 0, _, _, _)              -> <<"setup-mode">>;
 policy_posture(false, _, _, _, _, _, _)          ->
-    %% SB disabled but policy keys present → audit-only
+    %% SB disabled but policy keys present -> audit-only
     <<"audit-only">>;
 policy_posture(true, _, <<"enabled">>, _, _, _, _) ->
     <<"deployed-production">>;
@@ -2095,7 +2095,7 @@ policy_strength(_) -> <<"no-revocations">>.
 %%   length    byte length of the canonical encoding
 %%             (exposed so verifiers can pre-size a buffer)
 %%
-%% NOTE: this digest is NOT TPM-bound — it's a client-side
+%% NOTE: this digest is NOT TPM-bound -- it's a client-side
 %% convenience for comparing snapshots. For a TPM-bound digest,
 %% use the `pcr-digest' from `claim.quote'.
 claim_evidence_digest(Claim) when is_map(Claim) ->
@@ -2129,13 +2129,13 @@ canonicalise_claim(V) -> V.
 %% count into a single chronology stanza. A policy engine can
 %% compare consecutive quotes to detect:
 %%
-%%   * replay attacks           — reset-count decrements or
+%%   * replay attacks           -- reset-count decrements or
 %%                                 repeats a known-consumed pair
-%%   * boot-epoch boundary      — (reset-count, restart-count)
+%%   * boot-epoch boundary      -- (reset-count, restart-count)
 %%                                 changes
-%%   * drift                    — elapsed wall-clock vs
+%%   * drift                    -- elapsed wall-clock vs
 %%                                 expected delta
-%%   * log truncation           — event-log seq range shrinks
+%%   * log truncation           -- event-log seq range shrinks
 %%
 %% Fields:
 %%   tpm-epoch              "reset-count:restart-count" unique
@@ -2144,7 +2144,7 @@ canonicalise_claim(V) -> V.
 %%   restart-count          from TPMS_ATTEST
 %%   clock-ms               TPM wall-clock (ms since last reset)
 %%   clock-seconds          same / 1000
-%%   boot-elapsed-ms        alias for clock-ms (paper §Arch
+%%   boot-elapsed-ms        alias for clock-ms (paper section Arch
 %%                          freshness check)
 %%   event-log-count        total parsed event-log entries
 %%   event-log-seq-min      lowest seq in the log
@@ -2199,7 +2199,7 @@ event_seq_range(EvList) ->
 %% claim section. Scans the decoded claim for signal facts
 %% (secure-boot enabled, quote-integrity match, pcr-replay
 %% consistency, freshness indicator, ima policy violations,
-%% tpm trust-tier, tme, …) and produces:
+%% tpm trust-tier, tme, ...) and produces:
 %%
 %%   verdict       "trusted" | "attested-with-warnings" |
 %%                 "untrusted" | "unknown"
@@ -2225,7 +2225,7 @@ claim_policy_verdict(Claim) ->
     }.
 
 %% Pull the small set of decisive per-section facts into a
-%% flat signal map — same keys drive the classify_ and
+%% flat signal map -- same keys drive the classify_ and
 %% score_ functions below.
 collect_policy_signals(Claim) ->
     SB = maps:get(<<"secure-boot">>, Claim, #{}),
@@ -2344,7 +2344,7 @@ quote_integrity_finding(
     finding(critical, <<"quote-integrity-mismatch">>,
             <<"quote-integrity">>,
             <<"Recomputed pcrDigest does not match the TPM's "
-              "signed value — the envelope's PCR values were "
+              "signed value -- the envelope's PCR values were "
               "tampered with or the quote is forged.">>);
 quote_integrity_finding(_) -> ok.
 
@@ -2368,14 +2368,14 @@ freshness_finding(
   #{<<"freshness-indicator">> := <<"safe-false">>}) ->
     finding(critical, <<"freshness-safe-false">>,
             <<"freshness">>,
-            <<"TPM clock `safe' flag is false — clock has "
+            <<"TPM clock `safe' flag is false -- clock has "
               "been tampered with since last reset.">>);
 freshness_finding(
   #{<<"freshness-indicator">> := <<"no-nonce">>}) ->
     finding(warn, <<"freshness-no-nonce">>,
             <<"freshness">>,
             <<"Quote was produced without a challenger nonce "
-              "— replayable.">>);
+              "-- replayable.">>);
 freshness_finding(_) -> ok.
 
 ima_policy_finding(
@@ -2390,21 +2390,21 @@ tpm_trust_finding(
   #{<<"tpm-trust-tier">> := <<"hypervisor">>}) ->
     finding(warn, <<"tpm-trust-tier-hypervisor">>,
             <<"tpm">>,
-            <<"TPM is hypervisor-emulated (vTPM) — trust is "
+            <<"TPM is hypervisor-emulated (vTPM) -- trust is "
               "delegated to the cloud provider.">>);
 tpm_trust_finding(
   #{<<"tpm-trust-tier">> := <<"cpu-tee">>}) ->
     finding(warn, <<"tpm-trust-tier-ftpm">>,
             <<"tpm">>,
-            <<"TPM is an fTPM (firmware TPM) — compromise of "
+            <<"TPM is an fTPM (firmware TPM) -- compromise of "
               "the CPU TEE compromises the TPM root-of-trust.">>);
 tpm_trust_finding(_) -> ok.
 
 tme_finding(#{<<"tme-enabled">> := false}) ->
     finding(warn, <<"tme-disabled">>,
             <<"tme">>,
-            <<"Total Memory Encryption is off; paper §Arch "
-              "§confidentiality premise violated.">>);
+            <<"Total Memory Encryption is off; paper section Arch "
+              "section confidentiality premise violated.">>);
 tme_finding(#{<<"tme-enabled">> := <<"unknown">>}) ->
     finding(warn, <<"tme-unknown">>,
             <<"tme">>,
@@ -2416,7 +2416,7 @@ runtime_driver_finding(#{<<"has-runtime-driver">> := true}) ->
     finding(warn, <<"boot-chain-has-runtime-driver">>,
             <<"boot-chain">>,
             <<"Boot chain loaded a UEFI runtime-services "
-              "driver — survives into OS runtime; review the "
+              "driver -- survives into OS runtime; review the "
               "image.">>);
 runtime_driver_finding(_) -> ok.
 
@@ -2431,13 +2431,13 @@ cve_finding(_) -> ok.
 sb_policy_finding(#{<<"policy-posture">> := <<"setup-mode">>}) ->
     finding(critical, <<"sb-policy-setup-mode">>,
             <<"secure-boot-policy">>,
-            <<"Secure Boot in setup-mode — any key can be "
+            <<"Secure Boot in setup-mode -- any key can be "
               "enrolled. This is an unfinished provisioning "
               "state.">>);
 sb_policy_finding(#{<<"policy-strength">> := <<"no-revocations">>}) ->
     finding(warn, <<"sb-policy-no-dbx">>,
             <<"secure-boot-policy">>,
-            <<"dbx (revocation list) is empty — known-vuln "
+            <<"dbx (revocation list) is empty -- known-vuln "
               "boot binaries are not blocked.">>);
 sb_policy_finding(_) -> ok.
 
@@ -2448,7 +2448,7 @@ lockdown_finding(
     finding(warn, <<"lockdown-integrity-not-confidentiality">>,
             <<"lockdown">>,
             <<"Kernel lockdown is in `integrity' mode; paper "
-              "§Arch recommends `confidentiality'.">>);
+              "section Arch recommends `confidentiality'.">>);
 lockdown_finding(_) -> ok.
 
 ek_finding(#{<<"ek-present">> := false}) ->
@@ -2466,7 +2466,7 @@ ek_finding(#{<<"ek-chain-valid">> := false}) ->
     finding(critical, <<"ek-chain-invalid">>,
             <<"ek">>,
             <<"EK certificate does not chain to any root CA "
-              "in priv/tpm-interpret/root-cas/ — cryptographic "
+              "in priv/tpm-interpret/root-cas/ -- cryptographic "
               "identity cannot be verified.">>);
 ek_finding(_) -> ok.
 
@@ -2500,10 +2500,10 @@ policy_score(Signals, Warnings, Criticals) ->
     max(0, min(100, Bumped)).
 
 %% Verdict triage:
-%%   any critical-failure    → "untrusted"
-%%   any warning             → "attested-with-warnings"
-%%   nothing found + good signals → "trusted"
-%%   signals all unknown     → "unknown"
+%%   any critical-failure    -> "untrusted"
+%%   any warning             -> "attested-with-warnings"
+%%   nothing found + good signals -> "trusted"
+%%   signals all unknown     -> "unknown"
 policy_verdict_from([_ | _], _Warnings, _Signals) ->
     <<"untrusted">>;
 policy_verdict_from([], [_ | _], _Signals) ->
@@ -2522,13 +2522,13 @@ all_signals_unknown(Signals) ->
 
 %% @doc Descriptive TL;DR of the attestation. Unlike
 %% policy-verdict (prescriptive: "trusted / untrusted"),
-%% this stanza is purely descriptive — a one-glance
+%% this stanza is purely descriptive -- a one-glance
 %% summary of WHAT this machine is and HOW it booted.
 %%
 %% Fields:
 %%   machine-identity       one-line "Vendor Model with CPU"
 %%   firmware-identity      "CRTM <version> (<family-name>)"
-%%   boot-identity          "boot-loader → UKI → kernel"
+%%   boot-identity          "boot-loader -> UKI -> kernel"
 %%   tpm-identity           "Vendor kind model (trust-tier)"
 %%   security-posture       "SB <en|dis>, Lockdown <lvl>, TME <on|off>"
 %%   context                "tcg-pc-client" | "intel-tdx-ccel" | ...
@@ -2753,7 +2753,7 @@ matching_prefix(Version, [Prefix | Rest]) when is_binary(Prefix) ->
 matching_prefix(Version, [_ | Rest]) ->
     matching_prefix(Version, Rest).
 
-%% If the manifest declares a `platforms' map (model-prefix → text),
+%% If the manifest declares a `platforms' map (model-prefix -> text),
 %% pick the first entry whose key is a prefix of the CRTM string.
 pick_platform(M, Version) ->
     Platforms = maps:get(<<"platforms">>, M, #{}),
@@ -2803,7 +2803,7 @@ claim_boot_loader(Events) ->
 %%     (GUID + PARTNR) each image came off,
 %%   * detect runtime-service drivers loaded outside the normal
 %%     chain (potential supply-chain surface).
-%% @doc Compact `claim.quote' — surface the TPMS_ATTEST metadata
+%% @doc Compact `claim.quote' -- surface the TPMS_ATTEST metadata
 %% on the flat claim API. Includes freshness signals (reset-count,
 %% restart-count, TPM wall-clock), TPM firmware identity, and the
 %% exact (hash-alg, pcr-indexes) selection covered by the quote.
@@ -3002,14 +3002,14 @@ pcr_match_confidence(_) -> <<"high">>.
 %%     TPM signing and the envelope arriving here,
 %%   * the pcrSelect / digest-alg are malformed.
 %%
-%% Any of those is a hard-stop for trusting the quote — the
+%% Any of those is a hard-stop for trusting the quote -- the
 %% crypto signature check alone is insufficient because the
 %% signature only binds the TPMS_ATTEST blob, not the unquoted
 %% per-PCR byte strings that the envelope carries.
 %%
 %% The digest algorithm is inferred from the declared
-%% pcr-digest-length: 20 → SHA-1, 32 → SHA-256, 48 → SHA-384,
-%% 64 → SHA-512.
+%% pcr-digest-length: 20 -> SHA-1, 32 -> SHA-256, 48 -> SHA-384,
+%% 64 -> SHA-512.
 claim_quote_integrity(E) ->
     Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
     case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
@@ -3099,7 +3099,7 @@ tpm_hash(_, _)              -> <<>>.
 %% @doc Walk pcrSelect in order, concatenate the corresponding
 %% raw PCR bytes from the envelope's `pcr-values` map. Returns
 %% `{Concatenated, UsedIndexes, Missing}'. Missing indexes are
-%% selected PCRs whose value is absent from the envelope — a
+%% selected PCRs whose value is absent from the envelope -- a
 %% quote is only verifiable if every selected PCR has a value.
 concat_selected_pcrs(Selections, PcrVals) ->
     concat_selected_pcrs_(Selections, PcrVals, <<>>, [], []).
@@ -3128,23 +3128,23 @@ concat_selected_pcrs_([Sel | Rest], PcrVals, Acc, Used, Missing) ->
     concat_selected_pcrs_(Rest, PcrVals, Acc1, Used1, Missing1).
 
 %% @doc Compose the freshness stanza. A verifier typically
-%% challenges with a fresh nonce — the TPM echoes it back as
+%% challenges with a fresh nonce -- the TPM echoes it back as
 %% extraData inside the quote. Here we surface:
 %%
 %%   * the nonce echoed by the TPM (base64url),
-%%   * the TPM's reset-count / restart-count (monotonic — newer
+%%   * the TPM's reset-count / restart-count (monotonic -- newer
 %%     quotes should have ≥ the most-recent previous pair from
 %%     the same TPM),
 %%   * clock-ms / clock-seconds (TPM wall-clock, monotonic
 %%     within a boot epoch),
 %%   * the `safe' flag (TRUE iff the clock hasn't been tampered
-%%     with since last reset — any FALSE here is a red flag),
+%%     with since last reset -- any FALSE here is a red flag),
 %%   * a composite `freshness-indicator' value:
-%%       "ok"         — nonce present, safe=true, clock>0
-%%       "safe-false" — safe flag is false; clock is untrusted
-%%       "no-nonce"   — empty nonce means no challenge was bound
-%%       "no-clock"   — clock-ms=0 is a sign of a dry-run quote
-%%       "unknown"    — no quote present
+%%       "ok"         -- nonce present, safe=true, clock>0
+%%       "safe-false" -- safe flag is false; clock is untrusted
+%%       "no-nonce"   -- empty nonce means no challenge was bound
+%%       "no-clock"   -- clock-ms=0 is a sign of a dry-run quote
+%%       "unknown"    -- no quote present
 claim_freshness(E) ->
     Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
     case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
@@ -3220,7 +3220,7 @@ freshness_indicator(_, _, _)     -> <<"ok">>.
 %%     quoted-digest: b64,
 %%     matches: bool,
 %%     event-count: int,
-%%     pcr-is-zero: bool — nothing ever extended this PCR}.
+%%     pcr-is-zero: bool -- nothing ever extended this PCR}.
 %%
 %% Summary fields:
 %%   pcrs-with-events      list of PCR indexes that had events
@@ -3238,7 +3238,7 @@ claim_pcr_replay(Events, E) ->
     EventsByPcr = group_events_list_by_pcr(EvList),
     PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
     %% Build a per-PCR bank-alg override map from the quote's
-    %% pcrSelect — for mixed-bank quotes (some PCRs SHA-1, others
+    %% pcrSelect -- for mixed-bank quotes (some PCRs SHA-1, others
     %% SHA-256 etc) this keeps per-PCR replay using the correct
     %% algorithm instead of a single guess-from-size default.
     AlgByPcr = pcr_algs_from_quote(E),
@@ -3329,14 +3329,14 @@ replay_one_pcr(Pcr, EventsByPcr, PcrVals, AlgByPcr) ->
 %%   handoff-tables-v1        list of {vendor-guid, vendor-guid-
 %%                            name, vendor-table-address} rows
 %%                            (UEFI configuration tables on this
-%%                            system — SMBIOS entry point, ACPI
-%%                            RSDP, HOB list, SAL, MPS, …)
+%%                            system -- SMBIOS entry point, ACPI
+%%                            RSDP, HOB list, SAL, MPS, ...)
 %%   handoff-tables-v2        list of {table-description} rows
 %%                            for the named HANDOFF_TABLES2 form
 %%   handoff-tables-count     total count across v1+v2
-%%   acpi-present             bool — an ACPI RSDP table showed up
-%%   smbios-present           bool — an SMBIOS entry point showed up
-%%   hob-list-present         bool — HOB List GUID seen (pre-OS
+%%   acpi-present             bool -- an ACPI RSDP table showed up
+%%   smbios-present           bool -- an SMBIOS entry point showed up
+%%   hob-list-present         bool -- HOB List GUID seen (pre-OS
 %%                            hand-off marker)
 %%   post-codes               list of ASCII post-code strings
 %%   option-rom-count         number of EV_EFI_ACTION events
@@ -3345,8 +3345,8 @@ replay_one_pcr(Pcr, EventsByPcr, PcrVals, AlgByPcr) ->
 %%   boot-current             active boot entry index
 %%   uefi-variable-count      distinct variable names measured
 %%   measured-uefi-variables  sorted unique variable names
-%%   event-count-per-pcr      histogram PCR → event-count
-%%   event-type-count         histogram event-type-name → count
+%%   event-count-per-pcr      histogram PCR -> event-count
+%%   event-type-count         histogram event-type-name -> count
 claim_platform_config(EvList) ->
     #{
         <<"handoff-tables-v1">>      => ht_v1_entries(EvList),
@@ -3371,18 +3371,18 @@ claim_platform_config(EvList) ->
 
 %% @doc Heuristic self-detection of the TCG event log format.
 %% Returns one of:
-%%   "crypto-agile"   — TCG PC Client PFP 1.05 multi-bank log.
-%%   "legacy-sha1"    — pre-PFP-1.05 single-SHA-1 log.
-%%   "tdx-ccel"       — Intel TDX Confidential Computing Event Log.
-%%   "empty"          — no events parsed.
-%%   "unknown"        — inconclusive.
+%%   "crypto-agile"   -- TCG PC Client PFP 1.05 multi-bank log.
+%%   "legacy-sha1"    -- pre-PFP-1.05 single-SHA-1 log.
+%%   "tdx-ccel"       -- Intel TDX Confidential Computing Event Log.
+%%   "empty"          -- no events parsed.
+%%   "unknown"        -- inconclusive.
 %%
 %% Signals:
 %%   * First event with event-type-code = 3 AND event-data
-%%     starts with "Spec ID Event03" → crypto-agile.
+%%     starts with "Spec ID Event03" -> crypto-agile.
 %%   * First event on PCR != 0 AND first event carries an SPDM
-%%     TDX signature → tdx-ccel.
-%%   * Digest-bank set = {sha1} only → legacy-sha1.
+%%     TDX signature -> tdx-ccel.
+%%   * Digest-bank set = {sha1} only -> legacy-sha1.
 detect_log_format([]) -> <<"empty">>;
 detect_log_format(EvList) ->
     First = hd(EvList),
@@ -3409,7 +3409,7 @@ detect_log_format(EvList) ->
 %% digests concurrently; the mix tells policy engines which
 %% PCR banks can be replayed against this event log.
 %%
-%% Returns a map `{alg-name → event-count-with-that-bank}'.
+%% Returns a map `{alg-name -> event-count-with-that-bank}'.
 digest_bank_coverage(EvList) ->
     lists:foldl(
       fun(Ev, Acc) ->
@@ -3574,7 +3574,7 @@ group_events_list_by_pcr(EvList) ->
 %%   <pcr>  <template-digest>  <template-name>  <template-data>
 %%
 %% Template names we recognise:
-%%   ima       legacy — template-data is "<sha1>  <pathname>"
+%%   ima       legacy -- template-data is "<sha1>  <pathname>"
 %%   ima-ng    "<hash-alg>:<file-hash>  <pathname>"
 %%   ima-sig   "<hash-alg>:<file-hash>  <pathname>  <signature>"
 %%   ima-buf   "<hash-alg>:<buf-hash>  <buf-name>"
@@ -3764,7 +3764,7 @@ strip_any_prefix(Bin, [P | Rest]) ->
         _ -> strip_any_prefix(Bin, Rest)
     end.
 
-%% "subsystem/path/name.ko.xz" → {"name", "xz", "subsystem/path"}.
+%% "subsystem/path/name.ko.xz" -> {"name", "xz", "subsystem/path"}.
 kernel_module_name_compression(B) when is_binary(B) ->
     %% Find the last slash to isolate the basename.
     {Dir, Base} =
@@ -3861,7 +3861,7 @@ project_ima_claim(Entries) ->
 %% matches the envelope wins. Match criteria:
 %%   - kernel_name EV_IPL on PCR 12 matches a
 %%     kernel-name-prefix
-%%   - the matched UKI-profile (if any — from hour 3) has a
+%%   - the matched UKI-profile (if any -- from hour 3) has a
 %%     key listed under `uki-profile-key'
 %%
 %% Output shape:
@@ -3870,7 +3870,7 @@ project_ima_claim(Entries) ->
 %%   classification-counts: #{matched, unexpected,
 %%                            signature-missing,
 %%                            hash-alg-downgrade},
-%%   violations: [{pathname, classification, reason}, …]
+%%   violations: [{pathname, classification, reason}, ...]
 claim_ima_policy(EvList, E, Db) ->
     ImaClaim = claim_ima(E),
     case maps:get(<<"present">>, ImaClaim, false) of
@@ -4040,7 +4040,7 @@ count_classifications(Classified) ->
           maps:update_with(K, fun(N) -> N + 1 end, 1, Acc)
       end, Init, Classified).
 
-%% Relative strength ordering for common hash algs — used for
+%% Relative strength ordering for common hash algs -- used for
 %% detecting a hash-alg downgrade vs the policy minimum.
 hash_alg_strength(<<"sha1">>)     -> 1;
 hash_alg_strength(<<"md5">>)      -> 0;
@@ -4145,7 +4145,7 @@ boot_role(_)           -> <<"unknown">>.
 %% boot-images catalogue. Returns the row augmented with
 %% `publisher', `product', `category', `signed-by',
 %% `cve-status', `cve-notes', `recommended-min-version',
-%% `matched-by', `notes' when a match fires — else `null' in
+%% `matched-by', `notes' when a match fires -- else `null' in
 %% each of those slots so the shape stays stable.
 %%
 %% Match rules (first-wins within a profile):
@@ -4307,7 +4307,7 @@ cmdline_flags_and_provenance(Events) ->
             {Flags, [event_provenance(E)]}
     end.
 
-%% TME/SME (paper §Arch line 226-230).
+%% TME/SME (paper section Arch line 226-230).
 %%
 %% Three orthogonal evidence tiers compose here:
 %%   tier 2 (kernel cmdline intent): `mem_encrypt=on' / `sme=on' /
@@ -4316,7 +4316,7 @@ cmdline_flags_and_provenance(Events) ->
 %%           in our uki-measurements DB with `checks-tme: true'
 %%           (the kernel's early init halts if TME is off).
 %%   tier 4 (boot-reached-PCR-15): PCR 15 was extended by the
-%%           ephemeral node key → halt-check didn't fire → TME is on.
+%%           ephemeral node key -> halt-check didn't fire -> TME is on.
 %%
 %% Any ONE tier alone is insufficient for a definitive "on":
 %%   tier 2 alone = intent, not proof (a kernel could ignore the flag)
@@ -4362,7 +4362,7 @@ claim_tme(Events, E, Db, Context) ->
                      maps:get(<<"-rule">>, MatchTme, <<"unknown">>)}]};
         _ -> {<<"unknown">>, []}
     end,
-    %% Tier 4: boot-reached-PCR-15 — we always have this if the
+    %% Tier 4: boot-reached-PCR-15 -- we always have this if the
     %% quote verified. Surface it as supporting evidence.
     Pcr15 = hb_maps:get(
               <<"15">>,
@@ -4439,7 +4439,7 @@ uki_db_lookup(Profiles, UkiHash, Key) ->
 %% "kernel-name-prefix" | "stub-name").
 uki_db_matches(Profiles, UkiHash, Events) when is_map(Profiles) ->
     %% dev_tpm_tcg:decode_ev_ipl/1 kebab-cases keys at parse time
-    %% (`kernel_name' → `kernel-name'), so look up with the kebab
+    %% (`kernel_name' -> `kernel-name'), so look up with the kebab
     %% form. We also probe both forms to keep the lookup robust
     %% against future changes to the parse side.
     KernelName =
@@ -4550,10 +4550,10 @@ uki_profile_asserts(P, Key) ->
     end.
 
 %% Compose a claim from multiple tiers. Rules:
-%%   * Any tier giving `true' → claim is true (with all supporting
+%%   * Any tier giving `true' -> claim is true (with all supporting
 %%     tiers' evidence).
-%%   * Any tier giving `false' while none say `true' → claim is false.
-%%   * All tiers return "unknown" → claim is "unknown".
+%%   * Any tier giving `false' while none say `true' -> claim is false.
+%%   * All tiers return "unknown" -> claim is "unknown".
 compose_claim(Field, TierResults) ->
     Values = [V || {V, _} <- TierResults],
     Evidence = lists:flatten([E || {_, E} <- TierResults]),
@@ -4576,7 +4576,7 @@ compose_verdict(Values) ->
             end
     end.
 
-%% Kernel lockdown mode (paper §Arch line 223:
+%% Kernel lockdown mode (paper section Arch line 223:
 %% `lockdown=confidentiality').
 %%
 %% Tier 2: cmdline `lockdown=<mode>'.
@@ -4625,13 +4625,13 @@ claim_lockdown(Events, E, Db) ->
         <<"confidentiality-confirmed-evidence">>  => Tier3Evidence
     }.
 
-%% IOMMU state (paper §Arch line 223:
+%% IOMMU state (paper section Arch line 223:
 %% `IOMMU strict mode ... init_on_alloc/init_on_free').
 %%
 %% Tier 2 cmdline flags:
-%%   iommu=pt                   → DMA-remap mode
-%%   iommu.strict=1             → flushes per-op (no lazy invalidation)
-%%   intel_iommu=on | amd_iommu=on → vendor-specific enable
+%%   iommu=pt                   -> DMA-remap mode
+%%   iommu.strict=1             -> flushes per-op (no lazy invalidation)
+%%   intel_iommu=on | amd_iommu=on -> vendor-specific enable
 claim_iommu(Events) ->
     {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
     Mode  = maps:get(<<"iommu">>, Flags, <<"unknown">>),
@@ -4659,14 +4659,14 @@ claim_iommu(Events) ->
         <<"amd-iommu-requested">>      => Amd
     }.
 
-%% Kernel integrity properties (paper §Security table):
-%%   module.sig_enforce=1  → unsigned modules rejected
-%%   init_on_alloc=1       → heap pages zeroed at alloc
-%%   init_on_free=1        → heap pages zeroed at free
-%%   slab_nomerge          → slab caches not merged (reduces cross-
+%% Kernel integrity properties (paper section Security table):
+%%   module.sig_enforce=1  -> unsigned modules rejected
+%%   init_on_alloc=1       -> heap pages zeroed at alloc
+%%   init_on_free=1        -> heap pages zeroed at free
+%%   slab_nomerge          -> slab caches not merged (reduces cross-
 %%                            cache exploitation)
-%%   page_poison=1         → free pages poisoned
-%%   lockdown=confidentiality → kernel lockdown in the strictest mode
+%%   page_poison=1         -> free pages poisoned
+%%   lockdown=confidentiality -> kernel lockdown in the strictest mode
 claim_kernel_integrity(Events) ->
     claim_kernel_integrity(Events, #{}).
 
@@ -4763,7 +4763,7 @@ project_module_summary(Entry) ->
             maps:get(<<"signature-present">>, Entry, false)
     }.
 
-%% dm-verity rootfs + /usr integrity (paper §Arch line 222:
+%% dm-verity rootfs + /usr integrity (paper section Arch line 222:
 %% `cmdline carries the dm-verity root hash').
 claim_verity(Events) ->
     {Flags, Prov} = cmdline_flags_and_provenance(Events),
@@ -4940,7 +4940,7 @@ interpret_quote_metadata(E) ->
         AttestFields = decode_attest_body(Type, Rest3),
         BaseFields = #{
             %% Magic is a 4-byte TCG sentinel (0xFF "TCG"). We don't
-            %% expose the raw bytes — `magic_ok' is the single fact a
+            %% expose the raw bytes -- `magic_ok' is the single fact a
             %% caller needs; an unrecognised magic means the quote is
             %% not TPM-shaped and `error' is returned instead.
             <<"magic-ok">>             => (Magic =:= <<16#FF, "TCG">>),
@@ -4979,7 +4979,7 @@ tpm2b(<<Size:16/unsigned-big, Payload:Size/binary, Rest/binary>>) ->
     {Payload, Rest}.
 
 %% @doc Decode the body of a TPMS_ATTEST based on its `Type'.
-%% Per TPM 2.0 Part 2 §10.12.8 the `attested' union switches on
+%% Per TPM 2.0 Part 2 section 10.12.8 the `attested' union switches on
 %% the TPMI_ST_ATTEST tag at offset +4 in TPMS_ATTEST. All 7
 %% recognised attest types are decoded structurally; unknown
 %% types get a `tail-length' + `tail-sha256' fallback.
@@ -5081,7 +5081,7 @@ decode_attest_body(16#8019, Body) ->
     %% firmwareVersion (u64). Note: the outer TPMS_ATTEST already
     %% carries a TPMS_CLOCK_INFO + firmwareVersion at the common
     %% header, so for TIME attestations the extra copy inside
-    %% the body is what this decoder yields — they SHOULD
+    %% the body is what this decoder yields -- they SHOULD
     %% match the outer fields; a mismatch signals TPM tampering.
     try
         %% TPMS_TIME_INFO = time (u64) + clockInfo
@@ -5206,7 +5206,7 @@ attest_type_name(N) -> iolist_to_binary(io_lib:format("0x~.16B", [N])).
 interpret_pcrs(E, _Db, Events) ->
     Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
     Vals = hb_maps:get(<<"pcr-values">>, Q, #{}, #{}),
-    %% Group events by the PCR they extended — a single pass over the
+    %% Group events by the PCR they extended -- a single pass over the
     %% parsed event log. The resulting `EventsByPcr' is a map from
     %% PCR index (integer) to a list of events sorted by seq.
     EventsByPcr = group_events_by_pcr(Events),
@@ -5292,7 +5292,7 @@ events_list_to_seq_map(EvList) ->
 %% starts from the algorithm's zero-seed, reads each event's
 %% matching digest from `event.digests.<alg>', concatenates with
 %% the accumulator, and rehashes. EV_NO_ACTION (code 3) is
-%% skipped per TCG PFP §5.3. If the quoted value has a size we
+%% skipped per TCG PFP section 5.3. If the quoted value has a size we
 %% don't know, we default to SHA-256.
 %%
 %% Returns `undefined' when the event list is empty (nothing to
@@ -5333,7 +5333,7 @@ reconstruct_pcr(EvList, Quoted, Alg) ->
         <<"alg">>                  => AlgName
     }.
 
-%% @doc Build a per-PCR `{pcr-index → alg-name}' map from the
+%% @doc Build a per-PCR `{pcr-index -> alg-name}' map from the
 %% quote's TPMS_QUOTE_INFO pcrSelect. When the quote selects
 %% multiple banks (e.g., SHA-1 for PCRs 0-7 + SHA-256 for
 %% PCRs 8-15), each PCR in the list gets the bank's alg. When
@@ -5360,7 +5360,7 @@ build_alg_by_pcr_map([], Acc) -> Acc;
 build_alg_by_pcr_map([Sel | Rest], Acc) when is_map(Sel) ->
     Alg = maps:get(<<"hash-alg-name">>, Sel, <<"sha256">>),
     Pcrs = maps:get(<<"pcr-indexes">>, Sel, []),
-    %% First-declared-bank wins per spec — use maps:merge with
+    %% First-declared-bank wins per spec -- use maps:merge with
     %% Acc last so existing entries are preserved.
     NewEntries = maps:from_list([{P, Alg} || P <- Pcrs]),
     build_alg_by_pcr_map(Rest, maps:merge(NewEntries, Acc));
@@ -5399,7 +5399,7 @@ derive_fields_from_events(Pcr, EvList) ->
         EvList).
 
 %% Per-PCR starting template of fields we expect to be able to derive
-%% on real hardware — callers can rely on the SHAPE always being
+%% on real hardware -- callers can rely on the SHAPE always being
 %% present, with `<<"unknown">>' values when the current event log
 %% can't populate them.
 derived_template_for_pcr(0) ->
@@ -5464,7 +5464,7 @@ derived_template_for_pcr(7) ->
 derived_template_for_pcr(8) -> #{<<"grub-cmdline">> => <<"unknown">>};
 derived_template_for_pcr(9) -> #{<<"grub-modules">> => []};
 derived_template_for_pcr(10) ->
-    %% PCR 10 = IMA runtime. Per-file chain not yet transported —
+    %% PCR 10 = IMA runtime. Per-file chain not yet transported --
     %% documented gap in the envelope.
     #{
         <<"ima-active">>            => true,
@@ -5483,9 +5483,9 @@ derived_template_for_pcr(11) ->
         <<"uki-kernel-version">>    => <<"unknown">>
     };
 derived_template_for_pcr(12) ->
-    %% PCR 12 = UKI kernel cmdline (systemd-stub convention) — the
+    %% PCR 12 = UKI kernel cmdline (systemd-stub convention) -- the
     %% paper's single most information-dense measurement. Every
-    %% flag the paper §Architecture l.223-230 + §Security table
+    %% flag the paper section Architecture l.223-230 + section Security table
     %% calls out is surfaced as a named field here, with
     %% `"unknown"' as the "flag absent" sentinel.
     #{
@@ -5537,7 +5537,7 @@ derived_template_for_pcr(14) ->
         <<"mok-entry-count">>       => <<"unknown">>
     };
 derived_template_for_pcr(15) ->
-    %% LapEE node identity — fully parsed elsewhere in `node.*'.
+    %% LapEE node identity -- fully parsed elsewhere in `node.*'.
     #{
         <<"lapee-node-identity-committed">> => true
     };
@@ -5557,25 +5557,25 @@ derive_from_event(Pcr, Ev) ->
     EtCode = maps:get(<<"event-type-code">>, Ev, 0),
     derive_from_event(Pcr, EtCode, Parsed, Semantic).
 
-%% EV_NO_ACTION — SpecID header (PCR 0).
+%% EV_NO_ACTION -- SpecID header (PCR 0).
 derive_from_event(0, 3, Parsed, _) ->
     case maps:get(<<"spec-id">>, Parsed, undefined) of
         undefined -> #{};
         V -> #{<<"spec-id">> => V}
     end;
-%% EV_SEPARATOR — boundary marker. Fires on many PCRs.
+%% EV_SEPARATOR -- boundary marker. Fires on many PCRs.
 derive_from_event(_, 4, Parsed, _) ->
     #{<<"separator-seen">> => true,
       <<"separator-kind">> => maps:get(<<"separator">>, Parsed,
                                        <<"unknown">>)};
-%% EV_S_CRTM_VERSION — PCR 0.
+%% EV_S_CRTM_VERSION -- PCR 0.
 derive_from_event(0, 8, Parsed, _) ->
     case maps:get(<<"crtm-version">>, Parsed, undefined) of
         V when is_binary(V), byte_size(V) > 0 ->
             #{<<"crtm-version">> => V};
         _ -> #{}
     end;
-%% EV_CPU_MICROCODE — PCR 1. Intel AND AMD layouts. The TCG parser
+%% EV_CPU_MICROCODE -- PCR 1. Intel AND AMD layouts. The TCG parser
 %% emits `parsed.format' = "intel" or "amd" so we discriminate here.
 derive_from_event(1, 9, Parsed, _) ->
     Format = maps:get(<<"format">>, Parsed, <<"unknown">>),
@@ -5608,17 +5608,17 @@ derive_from_event(1, 9, Parsed, _) ->
                               "unknown rev=0x~.16B", [Rev]))}
             end
     end;
-%% EV_POST_CODE — PCR 0.
+%% EV_POST_CODE -- PCR 0.
 derive_from_event(0, 1, Parsed, _) ->
     case maps:get(<<"post-code">>, Parsed, undefined) of
         V when is_binary(V), byte_size(V) > 0 ->
             #{<<"post-codes">> => [V]};
         _ -> #{}
     end;
-%% EV_EFI_HCRTM_EVENT — PCR 0.
+%% EV_EFI_HCRTM_EVENT -- PCR 0.
 derive_from_event(0, 16#80000010, _, _) ->
     #{<<"hcrtm">> => true};
-%% EV_EFI_PLATFORM_FIRMWARE_BLOB(2) — PCR 0.
+%% EV_EFI_PLATFORM_FIRMWARE_BLOB(2) -- PCR 0.
 derive_from_event(0, Code, Parsed, _) when Code =:= 16#80000008;
                                            Code =:= 16#8000000A ->
     Addr = maps:get(<<"blob-physical-address">>, Parsed, 0),
@@ -5628,7 +5628,7 @@ derive_from_event(0, Code, Parsed, _) when Code =:= 16#80000008;
              <<"length">>  => Len,
              <<"description">> => Desc},
     #{<<"firmware-blobs">> => [Blob]};
-%% EV_EFI_VARIABLE_DRIVER_CONFIG — PCR 7.
+%% EV_EFI_VARIABLE_DRIVER_CONFIG -- PCR 7.
 derive_from_event(7, 16#80000001, Parsed, Semantic) ->
     Name = maps:get(<<"variable-name">>, Parsed, <<>>),
     case Name of
@@ -5700,7 +5700,7 @@ derive_from_event(7, 16#80000001, Parsed, Semantic) ->
                 lists:sum([maps:get(<<"entry-count">>, L, 0) || L <- SL])};
         _ -> #{}
     end;
-%% EV_EFI_VARIABLE_AUTHORITY — PCR 7.
+%% EV_EFI_VARIABLE_AUTHORITY -- PCR 7.
 derive_from_event(7, 16#800000E0, Parsed, Semantic) ->
     Name = maps:get(<<"variable-name">>, Parsed, <<>>),
     Base = case Name of
@@ -5762,7 +5762,7 @@ derive_from_event(1, Code, Parsed, Semantic)
             end;
         _ -> #{}
     end;
-%% EV_ACTION — PCR 2/4, contributions to the boot action list.
+%% EV_ACTION -- PCR 2/4, contributions to the boot action list.
 derive_from_event(2, 5, Parsed, _) ->
     case maps:get(<<"action">>, Parsed, undefined) of
         A when is_binary(A) ->
@@ -5778,7 +5778,7 @@ derive_from_event(4, 5, Parsed, _) ->
         A when is_binary(A) -> #{<<"boot-action-markers">> => [A]};
         _ -> #{}
     end;
-%% EV_EFI_BOOT_SERVICES_APPLICATION — PCR 4.
+%% EV_EFI_BOOT_SERVICES_APPLICATION -- PCR 4.
 derive_from_event(4, 16#80000003, Parsed, _) ->
     App = #{
         <<"image-location-in-memory">> =>
@@ -5787,10 +5787,10 @@ derive_from_event(4, 16#80000003, Parsed, _) ->
             maps:get(<<"image-length-in-memory">>, Parsed, 0)
     },
     #{<<"boot-services-applications">> => [App]};
-%% EV_EFI_GPT_EVENT — PCR 5.
+%% EV_EFI_GPT_EVENT -- PCR 5.
 derive_from_event(5, 16#80000006, _, _) ->
     #{<<"gpt-partition-tables">> => 1};
-%% EV_IPL — PCR 11/12/13 (systemd-stub key=value).
+%% EV_IPL -- PCR 11/12/13 (systemd-stub key=value).
 derive_from_event(11, 16#0D, Parsed, _) ->
     case {maps:get(<<"key">>, Parsed, undefined),
           maps:get(<<"value">>, Parsed, undefined)} of
@@ -5804,8 +5804,8 @@ derive_from_event(12, 16#0D, Parsed, _) ->
     case {maps:get(<<"key">>, Parsed, undefined),
           maps:get(<<"value">>, Parsed, undefined)} of
         {<<"kernel-cmdline">>, V} when is_binary(V) ->
-            %% Base: the raw cmdline string. Plus — every security
-            %% flag the paper (§Architecture l.223-230, §Security
+            %% Base: the raw cmdline string. Plus -- every security
+            %% flag the paper (section Architecture l.223-230, section Security
             %% table) lists as a boot-time attested property gets
             %% extracted into a named `derived/<field>' slot.
             Flags = maps:get(<<"cmdline-flags">>, Parsed, #{}),
@@ -5816,27 +5816,27 @@ derive_from_event(12, 16#0D, Parsed, _) ->
     end;
 derive_from_event(_, _, _, _) -> #{}.
 
-%% Paper §Architecture line 219-230 + §Security table — the set of
+%% Paper section Architecture line 219-230 + section Security table -- the set of
 %% kernel-cmdline flags that, when present, attest to specific
 %% security properties of the running kernel. Each mapping pins one
 %% cmdline flag to one derived field on PCR 12.
 %%
-%%   mem_encrypt=on / sme=on → mem-encrypt-requested: true
-%%   kvm_intel.tdx=on       → intel-tdx-requested: true
-%%   iommu=pt | ...         → iommu-mode: "pt" (or other)
-%%   iommu.strict=1         → iommu-strict: true
-%%   intel_iommu=on         → intel-iommu-requested: true
-%%   amd_iommu=on           → amd-iommu-requested: true
-%%   lockdown=<mode>        → lockdown-mode: "integrity"|"confidentiality"|...
-%%   init_on_alloc=1        → init-on-alloc: true
-%%   init_on_free=1         → init-on-free: true
-%%   module.sig_enforce=1   → module-sig-enforce: true
-%%   roothash=<hex>         → verity-root-hash: <hex>
-%%   systemd.verity_root_hash=<hex> → verity-root-hash: <hex>
-%%   slab_nomerge           → slab-nomerge: true
-%%   page_poison=1          → page-poison: true
-%%   pti=on                 → kernel-page-table-isolation: true
-%%   randomize_kstack_offset=1 → randomize-kstack-offset: true
+%%   mem_encrypt=on / sme=on -> mem-encrypt-requested: true
+%%   kvm_intel.tdx=on       -> intel-tdx-requested: true
+%%   iommu=pt | ...         -> iommu-mode: "pt" (or other)
+%%   iommu.strict=1         -> iommu-strict: true
+%%   intel_iommu=on         -> intel-iommu-requested: true
+%%   amd_iommu=on           -> amd-iommu-requested: true
+%%   lockdown=<mode>        -> lockdown-mode: "integrity"|"confidentiality"|...
+%%   init_on_alloc=1        -> init-on-alloc: true
+%%   init_on_free=1         -> init-on-free: true
+%%   module.sig_enforce=1   -> module-sig-enforce: true
+%%   roothash=<hex>         -> verity-root-hash: <hex>
+%%   systemd.verity_root_hash=<hex> -> verity-root-hash: <hex>
+%%   slab_nomerge           -> slab-nomerge: true
+%%   page_poison=1          -> page-poison: true
+%%   pti=on                 -> kernel-page-table-isolation: true
+%%   randomize_kstack_offset=1 -> randomize-kstack-offset: true
 extract_cmdline_security_flags(Flags) when is_map(Flags) ->
     lists:foldl(
         fun({SrcKey, DstKey, Kind}, Acc) ->
@@ -5974,7 +5974,7 @@ interpret_boot_chain(_E, Db, Pcrs) ->
             %% PCR 7 all-zero => Secure Boot was OFF (or disabled) at
             %% boot. Non-zero => something extended it, likely
             %% genuine UEFI SB. We can't tell *on* vs *on-with-dev-
-            %% keys* from the PCR alone — that needs the event log.
+            %% keys* from the PCR alone -- that needs the event log.
             not pcr_is_zero(<<"7">>, Pcrs)
     },
     case Profile of
@@ -5997,7 +5997,7 @@ match_pcr_profile(Pcrs, Db) ->
     end.
 
 %% Accept either `match_pcrs' (preferred) or `pcrs' (legacy).
-%% An empty match block doesn't match — callers who want a
+%% An empty match block doesn't match -- callers who want a
 %% documentation-only profile to surface can look at the DB
 %% directly. Profile digests are base64url strings (no hex).
 profile_matches(Entry, Actual) when is_map(Entry) ->
@@ -6060,7 +6060,7 @@ interpret_kernel(_E, _Db, Pcrs) ->
 
 interpret_ima(_E, _Db, Pcrs) ->
     %% Without the firmware/IMA event log (which we don't transport
-    %% end-to-end today — a gap noted in SECURITY.md item 8), we can
+    %% end-to-end today -- a gap noted in SECURITY.md item 8), we can
     %% only report the PCR 10 final value + whether IMA was active.
     Pcr10 = pcr_digest(<<"10">>, Pcrs),
     Active = not pcr_is_zero(<<"10">>, Pcrs),
@@ -6132,7 +6132,7 @@ decode_pub_key(Pem) when is_binary(Pem) ->
         _ -> {error, no_entries}
     end.
 
-%%% Extract TPM-specific attributes from the EK cert — following the
+%%% Extract TPM-specific attributes from the EK cert -- following the
 %%% TCG EK Credential Profile. The interesting fields are on the
 %%% Subject Alternative Name's `directoryName', with three attribute
 %%% OIDs:
@@ -6311,7 +6311,7 @@ extract_spec_fields(_) -> {undefined, undefined, undefined}.
 
 %% Walk a nested-key path through a map. The map may have keys as
 %% either atoms or binaries depending on whether we are reading a
-%% native HB node message (atoms) or a TABM (binaries) — look up
+%% native HB node message (atoms) or a TABM (binaries) -- look up
 %% both forms, binary first.
 nested_get(M, [K]) when is_map(M) ->
     case map_get_anykey(K, M) of
@@ -6455,7 +6455,7 @@ claim_surface_extracts_secure_boot_and_crtm_test() ->
 
 %% Full paper-strength claim extraction from a synthetic event log
 %% that includes a kernel-cmdline event with every security flag
-%% the paper §Architecture line 219-230 + §Security table names.
+%% the paper section Architecture line 219-230 + section Security table names.
 %% Verifies every derived field resolves and every claim section
 %% gets populated.
 %% Intel TDX CCEL fixture (intel-tdx-ccel.bin) starts with a
@@ -6536,7 +6536,7 @@ claim_surface_full_cmdline_pipeline_test() ->
         fun(K) -> ?assert(maps:is_key(K, Claim)) end,
         [<<"tme">>, <<"iommu">>, <<"lockdown">>,
          <<"kernel-integrity">>, <<"verity">>]),
-    %% TME — composed from tier 2 (cmdline mem_encrypt=on) +
+    %% TME -- composed from tier 2 (cmdline mem_encrypt=on) +
     %% tier 4 (PCR 15 reached, but envelope has no quote so
     %% tier 4 is unknown) + tier 3 empty DB.
     TME = maps:get(<<"tme">>, Claim),
@@ -6580,10 +6580,10 @@ claim_surface_full_cmdline_pipeline_test() ->
 %%   * match `claim.lockdown.confidentiality-confirmed = true'
 %%     with tier-3 evidence pointing at the Fedora profile.
 claim_surface_hour3_db_cross_reference_test() ->
-    %% Intel Sapphire Rapids sig → family=6 model=143 stepping=2
-    %% (packed per Intel SDM §9.11.1). Encoded u32 LE:
+    %% Intel Sapphire Rapids sig -> family=6 model=143 stepping=2
+    %% (packed per Intel SDM section 9.11.1). Encoded u32 LE:
     %%   family=6 base, model low=F, ExtModel=8, stepping=2
-    %%   → raw sig = 0x000806F2
+    %%   -> raw sig = 0x000806F2
     ProcSig = 16#000806F2,
     %% Intel microcode header (48 bytes): HeaderVersion=1, rev=0x01,
     %% date=2024-01-15 (BCD), proc-sig, checksum=0, loader-rev=1,
@@ -6639,7 +6639,7 @@ claim_surface_hour3_db_cross_reference_test() ->
                  maps:get(<<"codename">>, Cpu)),
     ?assert(lists:member(<<"TDX">>,
                          maps:get(<<"tee-support">>, Cpu))),
-    %% claim.tme — tier-3 evidence from kernel-name-prefix match
+    %% claim.tme -- tier-3 evidence from kernel-name-prefix match
     %% against Fedora baseline.
     TME = maps:get(<<"tme">>, Claim),
     ?assertEqual(true, maps:get(<<"enabled">>, TME)),
@@ -6650,7 +6650,7 @@ claim_surface_hour3_db_cross_reference_test() ->
         fun({<<"match-rule">>, <<"kernel-name-prefix">>}) -> true;
            (_) -> false
         end, TmeEv)),
-    %% claim.lockdown — tier-3 confidentiality-confirmed = true
+    %% claim.lockdown -- tier-3 confidentiality-confirmed = true
     %% because the Fedora profile asserts lockdown-confidentiality.
     Lockdown = maps:get(<<"lockdown">>, Claim),
     ?assertEqual(true,
@@ -6709,7 +6709,7 @@ claim_surface_hour4_boot_chain_test() ->
     SpecIdSize = byte_size(SpecId),
     FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
                  SpecIdSize:32/little, SpecId/binary>>,
-    %% Two UEFI_IMAGE_LOAD_EVENT payloads — with empty device
+    %% Two UEFI_IMAGE_LOAD_EVENT payloads -- with empty device
     %% path (len=0) so the parser takes the fast path.
     MkImage = fun(Addr, Len) ->
         <<Addr:64/little, Len:64/little, 0:64/little, 0:64/little>>
@@ -6872,8 +6872,8 @@ claim_surface_hour5_pcr_match_nomatch_test() ->
     ?assertEqual([], maps:get(<<"all-matches">>, PM)),
     ok.
 
-%% Hour-5: pcr-bitmap decoder — 0x87 (byte 0) → PCRs 0,1,2,7.
-%% Cross-byte case: bitmap `<0x01, 0x01>` → PCR 0 + PCR 8.
+%% Hour-5: pcr-bitmap decoder -- 0x87 (byte 0) -> PCRs 0,1,2,7.
+%% Cross-byte case: bitmap `<0x01, 0x01>` -> PCR 0 + PCR 8.
 pcr_bitmap_decoder_test() ->
     ?assertEqual([0, 1, 2, 7], pcr_bitmap_to_list(<<16#87>>)),
     ?assertEqual([0, 8],       pcr_bitmap_to_list(<<16#01, 16#01>>)),
@@ -6894,7 +6894,7 @@ claim_surface_hour6_quote_integrity_match_test() ->
         <<Pcr0/binary, Pcr1/binary, Pcr7/binary>>),
     Quoted = build_minimal_quote_attest(
         <<"nonce12345">>, 5, 0, 1,
-        %% PCR 0, 1, 7 selected → bitmap 0x83.
+        %% PCR 0, 1, 7 selected -> bitmap 0x83.
         <<1:32/big, 16#000B:16/big, 3:8, 16#83, 0, 0>>,
         PcrDigest),
     Envelope = #{<<"tpm-quote">> => #{
@@ -6921,7 +6921,7 @@ claim_surface_hour6_quote_integrity_tamper_test() ->
     PcrDigest = crypto:hash(sha256, Pcr0),
     Quoted = build_minimal_quote_attest(
         <<"x">>, 0, 0, 1,
-        %% Only PCR 0 selected → bitmap 0x01.
+        %% Only PCR 0 selected -> bitmap 0x01.
         <<1:32/big, 16#000B:16/big, 3:8, 16#01, 0, 0>>,
         PcrDigest),
     Tampered = crypto:hash(sha256, <<"attacker-pcr0">>),
@@ -6935,7 +6935,7 @@ claim_surface_hour6_quote_integrity_tamper_test() ->
     ?assertEqual(true,  maps:get(<<"verifiable">>, QI)),
     ok.
 
-%% Hour-6: selected PCR absent from envelope → missing-pcrs
+%% Hour-6: selected PCR absent from envelope -> missing-pcrs
 %% populated and verifiable=false.
 claim_surface_hour6_quote_integrity_missing_pcr_test() ->
     %% Select PCR 0 + PCR 7 but only ship PCR 0 in the envelope.
@@ -7308,7 +7308,7 @@ hex_bytes([]) -> [];
 hex_bytes([A, B | Rest]) ->
     [list_to_integer([A, B], 16) | hex_bytes(Rest)].
 
-%% Hour-9: boot-chain DB cross-reference — a row whose
+%% Hour-9: boot-chain DB cross-reference -- a row whose
 %% device-path ends with `\EFI\Boot\BootX64.efi' should match
 %% the fallback-bootx64 catalogue entry and attach publisher /
 %% product / category / cve-status + `matched-by=device-path-
@@ -7373,8 +7373,8 @@ claim_surface_hour9_boot_chain_unmatched_test() ->
     SpecIdSize = byte_size(SpecId),
     FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
                  SpecIdSize:32/little, SpecId/binary>>,
-    %% Empty device path → device-path-text is empty →
-    %% no suffix match possible; image-hash random → no
+    %% Empty device path -> device-path-text is empty ->
+    %% no suffix match possible; image-hash random -> no
     %% hash match either.
     UefiImgLoad = <<0:64/little, 0:64/little, 0:64/little,
                     0:64/little>>,
@@ -7408,7 +7408,7 @@ match_dp_suffix_case_insensitive_test() ->
 
 %% Hour-10: pcrSelect-driven bank selection. A quote that
 %% selects PCR 0 under SHA-1 + PCR 7 under SHA-256 routes each
-%% PCR to the correct bank — even if the digest-size heuristic
+%% PCR to the correct bank -- even if the digest-size heuristic
 %% alone would have guessed wrong.
 claim_surface_hour10_pcr_select_alg_dispatch_test() ->
     Magic = <<16#FF, "TCG">>,
@@ -7450,7 +7450,7 @@ claim_surface_hour10_pcr_select_alg_dispatch_test() ->
                  maps:get(<<"alg">>, maps:get(<<"7">>, PerPcr))),
     ok.
 
-%% No quote present → pcr_algs_from_quote returns an empty map
+%% No quote present -> pcr_algs_from_quote returns an empty map
 %% and replay_one_pcr falls back to size-based detection.
 claim_surface_hour10_no_quote_falls_back_test() ->
     Envelope = #{
@@ -7468,7 +7468,7 @@ claim_surface_hour10_no_quote_falls_back_test() ->
     ok.
 
 %% Hour-11: claim.ima-policy picks the Fedora baseline when
-%% the envelope carries a `kernel_name=Fedora-Linux-…' EV_IPL,
+%% the envelope carries a `kernel_name=Fedora-Linux-...' EV_IPL,
 %% and flags /tmp/evil-binary as "unexpected" + a module
 %% without signature as "signature-missing".
 claim_surface_hour11_ima_policy_test() ->
@@ -7525,7 +7525,7 @@ claim_surface_hour11_ima_policy_test() ->
                          Paths)),
     ok.
 
-%% No IMA log → well-formed "unknown" with reason.
+%% No IMA log -> well-formed "unknown" with reason.
 claim_surface_hour11_ima_policy_no_log_test() ->
     Envelope = #{<<"tcg-event-log">> => <<"">>},
     {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
@@ -7569,7 +7569,7 @@ claim_surface_hour11_digest_bank_coverage_test() ->
 
 %% Hour-12: claim.secure-boot-policy on a real Dell fixture.
 %% The dell-notebook-wbcl.bin event log carries full PK/KEK/db/
-%% dbx content (1/2/4/267 entries) but Secure Boot disabled →
+%% dbx content (1/2/4/267 entries) but Secure Boot disabled ->
 %% policy-posture="audit-only" + policy-strength="latest-
 %% revocations" + trusted-signers list populated.
 claim_surface_hour12_secure_boot_policy_dell_test() ->
@@ -7680,7 +7680,7 @@ claim_surface_hour12_non_module_paths_excluded_test() ->
     ?assertEqual([], maps:get(<<"modules">>, Mods)),
     ok.
 
-%% Hour-13: evidence-digest is deterministic — identical
+%% Hour-13: evidence-digest is deterministic -- identical
 %% envelopes produce the same digest.
 claim_surface_hour13_evidence_digest_deterministic_test() ->
     Envelope = #{<<"tcg-event-log">> => hb_util:encode(build_tcg_fixture())},
@@ -7697,12 +7697,12 @@ claim_surface_hour13_evidence_digest_deterministic_test() ->
     ?assertEqual(43, byte_size(maps:get(<<"digest">>, Ed1))),
     ok.
 
-%% Different envelopes → different digests. Use a synthetic
+%% Different envelopes -> different digests. Use a synthetic
 %% log we know decodes cleanly.
 claim_surface_hour13_evidence_digest_discriminates_test() ->
     Env1 = #{<<"tcg-event-log">> =>
                  hb_util:encode(build_tcg_fixture())},
-    %% Any envelope that produces a different claim tree — an
+    %% Any envelope that produces a different claim tree -- an
     %% empty one differs trivially.
     Env2 = #{<<"tcg-event-log">> => <<"">>},
     {ok, #{<<"body">> := C1}} = claim(Env1, #{}, #{}),
@@ -7772,7 +7772,7 @@ claim_surface_hour14_policy_verdict_empty_test() ->
     Verdict = maps:get(<<"verdict">>, PV),
     %% An empty envelope produces trust-tier=unknown etc, but
     %% also triggers a few "unknown" warnings (secure-boot,
-    %% tme, etc.) — so it's attested-with-warnings, not
+    %% tme, etc.) -- so it's attested-with-warnings, not
     %% "unknown" outright.
     ?assert(Verdict =:= <<"unknown">> orelse
              Verdict =:= <<"attested-with-warnings">>),
@@ -7825,7 +7825,7 @@ claim_surface_hour14_policy_verdict_trusted_test() ->
     %% SecureBoot=true surfaced on the signals map.
     ?assertEqual(true,
                  maps:get(<<"secure-boot-enabled">>, Sig)),
-    %% cmdline set mem_encrypt=on → tme-enabled=true on signals.
+    %% cmdline set mem_encrypt=on -> tme-enabled=true on signals.
     ?assertEqual(true, maps:get(<<"tme-enabled">>, Sig)),
     %% The verdict is a recognised string.
     V = maps:get(<<"verdict">>, PV),
@@ -8000,8 +8000,8 @@ decode_attest_body_unknown_test() ->
     ok.
 
 %% Hour-15: log-format auto-detection. Synthetic crypto-agile log
-%% with SpecID first record → "crypto-agile". A sha1-only log →
-%% "legacy-sha1". Empty events → "empty".
+%% with SpecID first record -> "crypto-agile". A sha1-only log ->
+%% "legacy-sha1". Empty events -> "empty".
 claim_surface_hour15_log_format_crypto_agile_test() ->
     Envelope = #{
         <<"tcg-event-log">> =>
@@ -8099,7 +8099,7 @@ uki_db_lookup_handles_empty_and_malformed_test() ->
     ?assertEqual(false, uki_db_lookup(#{}, <<"x">>, [], <<"k">>)),
     ?assertEqual(false, uki_db_lookup(not_a_map, <<"x">>, [], <<"k">>)),
     %% Profile that declares kernel-name-prefix but the events
-    %% have no IPL event at all — no match.
+    %% have no IPL event at all -- no match.
     P = #{<<"name">> => <<"t">>,
           <<"match">> => #{<<"kernel-name-prefix">> => [<<"X-">>]},
           <<"claims">> => #{<<"checks-tme">> => true}},
@@ -8137,7 +8137,7 @@ build_tcg_fixture() ->
     <<FirstRec/binary, Rec2/binary, Rec3/binary>>.
 
 %% `checks/3' returns a machine-readable description of the
-%% cryptographic battery — clients build UI + policy on this, so
+%% cryptographic battery -- clients build UI + policy on this, so
 %% the shape must not drift silently.
 checks_surface_stable_test() ->
     {ok, #{<<"body">> := #{<<"checks">> := Cs}}} = checks(#{}, #{}, #{}),
@@ -8185,7 +8185,7 @@ summary_returns_link_free_map_test() ->
                  maps:get(<<"on-start-hook-device">>, S)),
     ?assertEqual(<<"sample-wallet">>,
                  maps:get(<<"wallet-address">>, S)),
-    %% Summary must not carry maps inside its values — that's the
+    %% Summary must not carry maps inside its values -- that's the
     %% link-free property. Spot-check a few known fields.
     [?assert(not is_map(maps:get(K, S, null)))
      || K <- [<<"tpm-manufacturer">>, <<"ak-algorithm">>,
@@ -8195,7 +8195,7 @@ summary_returns_link_free_map_test() ->
 
 %% `run_cross_node_verify' MUST reject when the envelope's
 %% tpm_quote.nonce does NOT match the verifier's challenge. That
-%% gate sits BEFORE any crypto verification — defence against a
+%% gate sits BEFORE any crypto verification -- defence against a
 %% replay of a previously-valid envelope captured off the wire.
 %% Proof: hand-build an envelope with a known nonce, pass a
 %% DIFFERENT nonce as the challenge, assert the response is
@@ -8221,7 +8221,7 @@ run_cross_node_verify_enforces_nonce_freshness_test() ->
     ?assertEqual(<<"rejected">>, maps:get(<<"verdict">>, Body)),
     ?assertEqual(<<"mismatch">>, maps:get(<<"nonce-freshness">>, Body)),
     %% Response should carry exactly one failed check describing
-    %% the nonce mismatch — no crypto checks should have run,
+    %% the nonce mismatch -- no crypto checks should have run,
     %% because we gated BEFORE them.
     [FailedCheck] = maps:get(<<"checks">>, Body),
     ?assertEqual(false, maps:get(<<"ok">>, FailedCheck)),
@@ -8252,9 +8252,9 @@ run_cross_node_verify_accepts_matching_nonce_test() ->
     {ok, #{<<"body">> := Body}} =
         run_cross_node_verify(<<"http://peer">>, Envelope,
                               undefined, Challenge, #{}),
-    %% Freshness gate passed — crypto checks attempted (and will
+    %% Freshness gate passed -- crypto checks attempted (and will
     %% fail on this synthetic envelope for other reasons, which is
-    %% fine — we only assert nonce_freshness says "verified" and
+    %% fine -- we only assert nonce_freshness says "verified" and
     %% the check list isn't the single-entry nonce-mismatch form).
     ?assertEqual(<<"verified">>,
                  maps:get(<<"nonce-freshness">>, Body)),
@@ -8263,14 +8263,14 @@ run_cross_node_verify_accepts_matching_nonce_test() ->
     Checks = maps:get(<<"checks">>, Body),
     ?assert(length(Checks) >= 1),
     %% None of the checks should be the "verifier-supplied nonce"
-    %% one — that's only emitted when the gate fails.
+    %% one -- that's only emitted when the gate fails.
     [?assert(binary:match(maps:get(<<"name">>, C, <<>>),
                           <<"Verifier-supplied nonce">>) =:= nomatch)
      || C <- Checks],
     ok.
 
 %% A missing `peer' parameter on any peer-* endpoint returns 400
-%% with a targeted error — not silent.
+%% with a targeted error -- not silent.
 peer_endpoints_reject_missing_peer_test() ->
     [?assertMatch({ok, #{<<"status">> := 400,
                          <<"body">> :=
@@ -8280,7 +8280,7 @@ peer_endpoints_reject_missing_peer_test() ->
     ok.
 
 %% `resolve_inline_ca/2' normalises both accepted forms of the
-%% inline trust anchor — base64url `trusted-ca' wins over raw PEM
+%% inline trust anchor -- base64url `trusted-ca' wins over raw PEM
 %% `trusted-ca-pem', and undefined/empty inputs stay undefined.
 resolve_inline_ca_normalises_forms_test() ->
     Pem = <<"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----">>,
@@ -8289,7 +8289,7 @@ resolve_inline_ca_normalises_forms_test() ->
     ?assertEqual(Pem, resolve_inline_ca(#{<<"trusted-ca">> => B64u}, #{})),
     %% raw-PEM form passes through
     ?assertEqual(Pem, resolve_inline_ca(#{<<"trusted-ca-pem">> => Pem}, #{})),
-    %% both keys — base64url wins
+    %% both keys -- base64url wins
     B64u2 = hb_util:encode(<<"OTHER">>),
     ?assertEqual(<<"OTHER">>,
                  resolve_inline_ca(#{<<"trusted-ca">> => B64u2,
@@ -8301,7 +8301,7 @@ resolve_inline_ca_normalises_forms_test() ->
                  resolve_inline_ca(#{<<"trusted-ca">> => <<>>}, #{})),
     ok.
 
-%% Interpret a hand-built envelope with NO valid EK cert — we still
+%% Interpret a hand-built envelope with NO valid EK cert -- we still
 %% get a map back with null TPM fields and the other sections filled
 %% in from the data that IS present.
 interpret_handles_partial_envelope_test() ->
@@ -8357,11 +8357,11 @@ pcr_role_canonical_mapping_test() ->
     ?assertEqual(<<"lapee-node-identity">>, pcr_role(<<"15">>)),
     ?assertEqual(<<"unassigned-or-application">>, pcr_role(<<"22">>)).
 
-%% Every PCR section includes a `derived' submap — named fields
+%% Every PCR section includes a `derived' submap -- named fields
 %% extracted from the events extended into that PCR. When events are
 %% present, the derived map pulls concrete values out of the events'
 %% `parsed' + `parsed.semantic' sub-maps. This is what makes the
-%% interpretation AO-Core navigable — every derivable property is
+%% interpretation AO-Core navigable -- every derivable property is
 %% path-addressable as `/interpret/pcrs/<N>/derived/<field>'.
 pcrs_derived_fields_populate_from_events_test() ->
     %% Synthesize an envelope whose events include both a
@@ -8388,14 +8388,14 @@ pcrs_derived_fields_populate_from_events_test() ->
     ?assertEqual(<<"TEST FW v1">>,
                  maps:get(<<"crtm-version">>, Derived0)),
     ?assert(maps:get(<<"event-count">>, Pcr0) >= 1),
-    %% PCR 7 has the SecureBoot variable (seq 3) → enabled=true.
+    %% PCR 7 has the SecureBoot variable (seq 3) -> enabled=true.
     Pcr7 = maps:get(<<"7">>, Pcrs),
     Derived7 = maps:get(<<"derived">>, Pcr7),
     ?assertEqual(true,
                  maps:get(<<"secure-boot-enabled">>, Derived7)),
     %% Every PCR carries a reconstruction submessage when events are
     %% present. We didn't quote the real values here, so it'll say
-    %% matches_quoted=false — but the SHAPE must be there.
+    %% matches_quoted=false -- but the SHAPE must be there.
     Recon0 = maps:get(<<"reconstruction">>, Pcr0),
     ?assert(maps:is_key(<<"replayed-digest">>, Recon0)),
     ?assert(maps:is_key(<<"matches-quoted">>, Recon0)),
@@ -8417,7 +8417,7 @@ manufacturer_db_lookup_test() ->
                                  maps:get(<<"name">>, Entry))
             end;
         _ ->
-            %% Priv dir not present in eunit layout — skip.
+            %% Priv dir not present in eunit layout -- skip.
             ok
     end.
 

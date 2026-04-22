@@ -129,6 +129,21 @@ echo ">> captured input: $OUT/input.bin ($BYTES bytes)"
 echo ">> label: $LABEL"
 [[ -n "$IMA_LOG" ]] && echo ">> IMA log: $OUT/ima.log"
 
+# Auto-detect: is the input a full attestation JSON envelope
+# (as produced by `~tpm2@2.0a/attestation' + LAPEE_WRITEBACK)
+# or a raw TCG binary event log? Both are valid starting points,
+# but the envelope form contains the FULL set of fields the
+# interpret device knows how to cross-reference (quote, AK, EK,
+# node-message, runtime-event-log alongside tcg-event-log).
+FIRST_CH=$(head -c 1 "$OUT/input.bin" 2>/dev/null || echo "")
+if [[ "$FIRST_CH" == "{" ]]; then
+    echo ">> input detected as JSON attestation envelope"
+    INPUT_MODE="envelope"
+else
+    echo ">> input detected as raw TCG event-log binary"
+    INPUT_MODE="raw-eventlog"
+fi
+
 # Make sure the test profile is built so the parser beams are on
 # the path.
 (cd "$REPO" && rebar3 as test compile >/dev/null 2>&1) \
@@ -149,7 +164,25 @@ erl -noshell \
             {ok, I} -> hb_util:encode(I);
             _ -> <<>>
         end,
-        Env0 = #{<<\"tcg-event-log\">> => hb_util:encode(Bin)},
+        %% Auto-detect + build the envelope map appropriately.
+        Env0 =
+            case \"$INPUT_MODE\" of
+                \"envelope\" ->
+                    %% JSON-encoded attestation envelope. Peel off
+                    %% any outer {status, body} wrapper layers and
+                    %% use the inner envelope map directly so
+                    %% interpret/claim see ak-pub-pem, ek-cert-pem,
+                    %% tpm-quote, tcg-event-log, runtime-event-log,
+                    %% node-message, commitments, etc. in one shot.
+                    Doc = json:decode(Bin),
+                    Peel = fun Self(#{<<\"body\">> := B}) when is_map(B) ->
+                                    Self(B);
+                                Self(M) -> M
+                            end,
+                    Peel(Doc);
+                _ ->
+                    #{<<\"tcg-event-log\">> => hb_util:encode(Bin)}
+            end,
         Env = case Ima of
             <<>> -> Env0;
             _ -> Env0#{<<\"ima-log-ascii\">> => Ima}

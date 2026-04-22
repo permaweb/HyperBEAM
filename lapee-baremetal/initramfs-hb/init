@@ -183,44 +183,102 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
         > /run/lapee/hb.log 2>&1 &
     HB_PID=$!
 
-    # Wait up to 60s for HB to answer on 127.0.0.1:8734. No
-    # network is required - all traffic is loopback.
+    # Two-phase wait. Phase 1: probe the cheap /info handler
+    # with short wget timeouts, logging progress every 10
+    # iterations so the console shows we're alive. Rosetta-
+    # emulated amd64 BEAM startup under QEMU takes 60-180s to
+    # reach cowboy-listen state; real hardware is much faster.
+    #
+    # `accept-bundle: true' routes around HB's auto-index
+    # generation in dev_codec_httpsig_conv (which otherwise
+    # hits an `{error, not_found}' on HB's cold store and
+    # loops the reply encoder).
+    #
+    # Phase 2: a single `/attestation' call with a long timeout
+    # (quotes are expensive: 2-5s of TPM work per request). One
+    # call = one quote = one envelope.
+    mkdir -p /mnt/esp /run/lapee
+    PROBE_OUT=/run/lapee/probe.json
+    ATT_OUT=/run/lapee/attestation.json
+
+    echo "[writeback] phase 1: waiting for HB to answer /~tpm2@2.0a/info"
     ready=0
-    for i in $(seq 1 60); do
-        if wget -q -O- --timeout=2 \
-                http://127.0.0.1:8734/ >/dev/null 2>&1; then
+    for i in $(seq 1 120); do
+        if wget -q -O "$PROBE_OUT" --timeout=2 \
+                --header='accept: application/json@1.0' \
+                --header='accept-bundle: true' \
+                http://127.0.0.1:8734/~tpm2@2.0a/info \
+                2>/dev/null && [ -s "$PROBE_OUT" ]; then
+            echo "[writeback] HB responded to /info after ~$((i*3))s"
             ready=1; break
         fi
-        sleep 1
+        if [ $((i % 10)) -eq 0 ]; then
+            echo "[writeback] phase 1: still waiting (probe ${i}/120)"
+        fi
+        sleep 2
     done
+
     if [ $ready -ne 1 ]; then
-        echo "[writeback] FAIL - hyperbeam did not answer :8734 in 60s"
+        echo "[writeback] FAIL - HB did not answer /info in ~360s"
         echo "[writeback] tail of /run/lapee/hb.log:"
-        tail -40 /run/lapee/hb.log 2>/dev/null
+        tail -80 /run/lapee/hb.log 2>/dev/null
     else
-        echo "[writeback] hyperbeam is up; calling /attestation..."
-        mkdir -p /mnt/esp
-        # Find the ESP we booted from by filesystem label.
-        ESP_DEV=""
-        for i in $(seq 1 20); do
-            ESP_DEV=$(blkid -L LAPEE_ESP 2>/dev/null || true)
-            [ -n "$ESP_DEV" ] && break
-            sleep 1
-        done
-        if [ -z "$ESP_DEV" ]; then
-            echo "[writeback] FAIL - no partition labelled LAPEE_ESP"
-            echo "[writeback] /dev/sd* = $(ls /dev/sd* 2>/dev/null)"
+        echo "[writeback] phase 2: calling /~tpm2@2.0a/attestation (quote takes ~5s)"
+        if wget -q -O "$ATT_OUT" --timeout=120 \
+                --header='accept: application/json@1.0' \
+                --header='accept-bundle: true' \
+                http://127.0.0.1:8734/~tpm2@2.0a/attestation \
+                2>/dev/null && [ -s "$ATT_OUT" ]; then
+            ATT_BYTES=$(wc -c < "$ATT_OUT")
+            echo "[writeback] phase 2: got $ATT_BYTES bytes"
         else
+            echo "[writeback] FAIL - /attestation returned empty or error"
+            tail -40 /run/lapee/hb.log 2>/dev/null
+            ATT_OUT=""
+        fi
+
+        # Find the ESP + write the envelope. Busybox does not
+        # ship a `blkid' applet that supports label lookup, so
+        # we take the robust path: try-mount every block-device
+        # partition as vfat-RO and check for the ESP marker file
+        # `/EFI/Boot/BootX64.efi' (which this UKI image always
+        # writes at build time). This works on USB mass-storage
+        # (/dev/sdXN on real hardware + QEMU emulated), virtio-
+        # blk (/dev/vdXN under QEMU), NVMe (/dev/nvmeXnYpZ),
+        # and eMMC (/dev/mmcblkXpY) without any extra tools.
+        ESP_DEV=""
+        if [ -n "$ATT_OUT" ]; then
+            for iter in $(seq 1 20); do
+                for dev in /dev/sd[a-z][0-9]* \
+                           /dev/vd[a-z][0-9]* \
+                           /dev/nvme[0-9]n[0-9]p[0-9]* \
+                           /dev/mmcblk[0-9]p[0-9]*; do
+                    [ -b "$dev" ] || continue
+                    if mount -t vfat -o ro,noatime "$dev" /mnt/esp \
+                          2>/dev/null; then
+                        if [ -f /mnt/esp/EFI/Boot/BootX64.efi ]; then
+                            ESP_DEV=$dev
+                            umount /mnt/esp 2>/dev/null
+                            break 2
+                        fi
+                        umount /mnt/esp 2>/dev/null
+                    fi
+                done
+                sleep 1
+            done
+        fi
+        if [ -z "$ESP_DEV" ] && [ -n "$ATT_OUT" ]; then
+            echo "[writeback] FAIL - could not locate LapEE ESP"
+            echo "[writeback] block devices:"
+            ls /dev/sd* /dev/vd* /dev/nvme* /dev/mmcblk* \
+                2>/dev/null | sed 's/^/[writeback]   /'
+        elif [ -n "$ESP_DEV" ]; then
             echo "[writeback] ESP = $ESP_DEV"
             if mount -t vfat -o rw,noatime "$ESP_DEV" /mnt/esp; then
                 STAMP=$(date +%Y%m%dT%H%M%SZ 2>/dev/null || echo run)
                 OUT=/mnt/esp/attestation-$STAMP.json
                 LINK=/mnt/esp/attestation-latest.json
-                wget -q -O "$OUT" \
-                    --header='accept: application/json@1.0' \
-                    --header='accept-bundle: true' \
-                    "http://127.0.0.1:8734/~tpm2@2.0a/attestation" \
-                    && ATT_OK=1 || ATT_OK=0
+                cp "$ATT_OUT" "$OUT" && ATT_OK=1 || ATT_OK=0
                 if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
                     rm -f "$LINK"
                     cp "$OUT" "$LINK"
