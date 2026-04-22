@@ -2996,8 +2996,44 @@ claim_platform_config(EvList) ->
         <<"event-count-per-pcr">>    => events_by_pcr_histogram(EvList),
         <<"event-type-count">>       => events_by_type_histogram(EvList),
         <<"digest-bank-coverage">>   => digest_bank_coverage(EvList),
-        <<"digest-banks-present">>   => digest_banks_present(EvList)
+        <<"digest-banks-present">>   => digest_banks_present(EvList),
+        <<"log-format">>             => detect_log_format(EvList)
     }.
+
+%% @doc Heuristic self-detection of the TCG event log format.
+%% Returns one of:
+%%   "crypto-agile"   — TCG PC Client PFP 1.05 multi-bank log.
+%%   "legacy-sha1"    — pre-PFP-1.05 single-SHA-1 log.
+%%   "tdx-ccel"       — Intel TDX Confidential Computing Event Log.
+%%   "empty"          — no events parsed.
+%%   "unknown"        — inconclusive.
+%%
+%% Signals:
+%%   * First event with event-type-code = 3 AND event-data
+%%     starts with "Spec ID Event03" → crypto-agile.
+%%   * First event on PCR != 0 AND first event carries an SPDM
+%%     TDX signature → tdx-ccel.
+%%   * Digest-bank set = {sha1} only → legacy-sha1.
+detect_log_format([]) -> <<"empty">>;
+detect_log_format(EvList) ->
+    First = hd(EvList),
+    FirstPcr = maps:get(<<"pcr">>, First, 0),
+    FirstCode = maps:get(<<"event-type-code">>, First, 0),
+    FirstData = maps:get(<<"event-data">>, First, <<>>),
+    Banks = digest_banks_present(EvList),
+    IsSpecId = FirstCode =:= 3 andalso
+               is_binary(FirstData) andalso
+               byte_size(FirstData) >= 16 andalso
+               binary:longest_common_prefix(
+                 [FirstData, <<"Spec ID Event03">>]) >= 15,
+    IsTdx = FirstPcr =/= 0,
+    SingleSha1Bank = Banks =:= [<<"sha1">>],
+    if
+        IsTdx           -> <<"tdx-ccel">>;
+        IsSpecId        -> <<"crypto-agile">>;
+        SingleSha1Bank  -> <<"legacy-sha1">>;
+        true            -> <<"unknown">>
+    end.
 
 %% Hour-11: histogram of which algorithm-bank digests are
 %% present across the event log. An event can carry 1-4 bank
@@ -4573,21 +4609,28 @@ interpret_quote_metadata(E) ->
 tpm2b(<<Size:16/unsigned-big, Payload:Size/binary, Rest/binary>>) ->
     {Payload, Rest}.
 
-%% @doc Decode the body of a TPMS_ATTEST based on its `Type'. For
-%% quotes (0x8018) this is TPMS_QUOTE_INFO. Other types carry
-%% different payloads; those we recognise are decoded, others get
-%% a `tail-length' + `tail-sha256' fallback.
+%% @doc Decode the body of a TPMS_ATTEST based on its `Type'.
+%% Per TPM 2.0 Part 2 §10.12.8 the `attested' union switches on
+%% the TPMI_ST_ATTEST tag at offset +4 in TPMS_ATTEST. All 7
+%% recognised attest types are decoded structurally; unknown
+%% types get a `tail-length' + `tail-sha256' fallback.
+%%
+%%   0x8014  TPM_ST_ATTEST_NV            TPMS_NV_CERTIFY_INFO
+%%   0x8015  TPM_ST_ATTEST_COMMAND_AUDIT TPMS_COMMAND_AUDIT_INFO
+%%   0x8016  TPM_ST_ATTEST_SESSION_AUDIT TPMS_SESSION_AUDIT_INFO
+%%   0x8017  TPM_ST_ATTEST_CERTIFY       TPMS_CERTIFY_INFO
+%%   0x8018  TPM_ST_ATTEST_QUOTE         TPMS_QUOTE_INFO
+%%   0x8019  TPM_ST_ATTEST_TIME          TPMS_TIME_ATTEST_INFO
+%%   0x801A  TPM_ST_ATTEST_CREATION      TPMS_CREATION_INFO
+%%   0x801C  TPM_ST_ATTEST_NV_DIGEST     TPMS_NV_DIGEST_CERTIFY_INFO
 decode_attest_body(16#8018, Body) ->
+    %% TPMS_QUOTE_INFO: pcrSelect + pcrDigest.
     try
-        %% TPMS_QUOTE_INFO:
-        %%   pcrSelect: TPML_PCR_SELECTION
-        %%     count:          u32 BE
-        %%     pcrSelections:  [TPMS_PCR_SELECTION]
-        %%   pcrDigest: TPM2B_DIGEST
         <<Count:32/unsigned-big, Rest0/binary>> = Body,
         {Selections, Rest1} = decode_pcr_selections(Count, Rest0, []),
         {PcrDigest, _Tail} = tpm2b(Rest1),
-        #{<<"pcr-select">> => Selections,
+        #{<<"attest-body-type">> => <<"TPMS_QUOTE_INFO">>,
+          <<"pcr-select">> => Selections,
           <<"pcr-select-count">> => Count,
           <<"pcr-digest">> => hb_util:encode(PcrDigest),
           <<"pcr-digest-length">> => byte_size(PcrDigest)}
@@ -4595,8 +4638,140 @@ decode_attest_body(16#8018, Body) ->
         #{<<"attest-body-error">> =>
               <<"TPMS_QUOTE_INFO parse failed">>}
     end;
+decode_attest_body(16#8017, Body) ->
+    %% TPMS_CERTIFY_INFO: name + qualifiedName (both TPM2B_NAME).
+    try
+        {Name, Rest1} = tpm2b(Body),
+        {QualName, _Tail} = tpm2b(Rest1),
+        #{<<"attest-body-type">>      => <<"TPMS_CERTIFY_INFO">>,
+          <<"object-name">>           => hb_util:encode(Name),
+          <<"object-name-length">>    => byte_size(Name),
+          <<"object-qualified-name">> => hb_util:encode(QualName),
+          <<"object-qualified-name-length">> =>
+              byte_size(QualName)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_CERTIFY_INFO parse failed">>}
+    end;
+decode_attest_body(16#8015, Body) ->
+    %% TPMS_COMMAND_AUDIT_INFO: auditCounter (u64) + digestAlg
+    %% (TPMI_ALG_HASH u16) + auditDigest (TPM2B_DIGEST) +
+    %% commandDigest (TPM2B_DIGEST).
+    try
+        <<AuditCounter:64/unsigned-big,
+          DigestAlg:16/unsigned-big,
+          Rest0/binary>> = Body,
+        {AuditDigest, Rest1} = tpm2b(Rest0),
+        {CommandDigest, _Tail} = tpm2b(Rest1),
+        #{<<"attest-body-type">>     =>
+              <<"TPMS_COMMAND_AUDIT_INFO">>,
+          <<"audit-counter">>        => AuditCounter,
+          <<"audit-digest-alg-code">> => DigestAlg,
+          <<"audit-digest-alg-name">> => hash_alg_name(DigestAlg),
+          <<"audit-digest">>         => hb_util:encode(AuditDigest),
+          <<"audit-digest-length">>  => byte_size(AuditDigest),
+          <<"command-digest">>       => hb_util:encode(CommandDigest),
+          <<"command-digest-length">> => byte_size(CommandDigest)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_COMMAND_AUDIT_INFO parse failed">>}
+    end;
+decode_attest_body(16#8016, Body) ->
+    %% TPMS_SESSION_AUDIT_INFO: exclusiveSession (TPMI_YES_NO = u8)
+    %% + sessionDigest (TPM2B_DIGEST).
+    try
+        <<Exclusive:8, Rest0/binary>> = Body,
+        {SessDigest, _Tail} = tpm2b(Rest0),
+        #{<<"attest-body-type">>     =>
+              <<"TPMS_SESSION_AUDIT_INFO">>,
+          <<"exclusive-session">>    => Exclusive =/= 0,
+          <<"session-digest">>       => hb_util:encode(SessDigest),
+          <<"session-digest-length">> => byte_size(SessDigest)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_SESSION_AUDIT_INFO parse failed">>}
+    end;
+decode_attest_body(16#801A, Body) ->
+    %% TPMS_CREATION_INFO: objectName (TPM2B_NAME) +
+    %% creationHash (TPM2B_DIGEST).
+    try
+        {ObjName, Rest1} = tpm2b(Body),
+        {CreationHash, _Tail} = tpm2b(Rest1),
+        #{<<"attest-body-type">>     => <<"TPMS_CREATION_INFO">>,
+          <<"object-name">>          => hb_util:encode(ObjName),
+          <<"object-name-length">>   => byte_size(ObjName),
+          <<"creation-hash">>        => hb_util:encode(CreationHash),
+          <<"creation-hash-length">> => byte_size(CreationHash)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_CREATION_INFO parse failed">>}
+    end;
+decode_attest_body(16#8019, Body) ->
+    %% TPMS_TIME_ATTEST_INFO: time (TPMS_TIME_INFO
+    %%   containing time:u64 + clockInfo:TPMS_CLOCK_INFO) +
+    %% firmwareVersion (u64). Note: the outer TPMS_ATTEST already
+    %% carries a TPMS_CLOCK_INFO + firmwareVersion at the common
+    %% header, so for TIME attestations the extra copy inside
+    %% the body is what this decoder yields — they SHOULD
+    %% match the outer fields; a mismatch signals TPM tampering.
+    try
+        %% TPMS_TIME_INFO = time (u64) + clockInfo
+        %% TPMS_CLOCK_INFO = clock(u64) + resetCount(u32) +
+        %%                   restartCount(u32) + safe(u8)
+        <<Time:64/unsigned-big,
+          ClockInner:64/unsigned-big,
+          RsetInner:32/unsigned-big,
+          RstrInner:32/unsigned-big,
+          SafeInner:8,
+          FwVerInner:64/unsigned-big,
+          _Tail/binary>> = Body,
+        #{<<"attest-body-type">>       => <<"TPMS_TIME_ATTEST_INFO">>,
+          <<"time-u64">>               => Time,
+          <<"inner-clock-ms">>         => ClockInner,
+          <<"inner-reset-count">>      => RsetInner,
+          <<"inner-restart-count">>    => RstrInner,
+          <<"inner-safe">>             => SafeInner =/= 0,
+          <<"inner-firmware-version-u64">> => FwVerInner}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_TIME_ATTEST_INFO parse failed">>}
+    end;
+decode_attest_body(16#8014, Body) ->
+    %% TPMS_NV_CERTIFY_INFO: indexName (TPM2B_NAME) + offset(u16)
+    %% + nvContents (TPM2B_MAX_NV_BUFFER).
+    try
+        {IndexName, Rest1} = tpm2b(Body),
+        <<Offset:16/unsigned-big, Rest2/binary>> = Rest1,
+        {NvContents, _Tail} = tpm2b(Rest2),
+        #{<<"attest-body-type">>  => <<"TPMS_NV_CERTIFY_INFO">>,
+          <<"nv-index-name">>     => hb_util:encode(IndexName),
+          <<"nv-index-name-length">> => byte_size(IndexName),
+          <<"nv-offset">>         => Offset,
+          <<"nv-contents">>       => hb_util:encode(NvContents),
+          <<"nv-contents-length">> => byte_size(NvContents)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_NV_CERTIFY_INFO parse failed">>}
+    end;
+decode_attest_body(16#801C, Body) ->
+    %% TPMS_NV_DIGEST_CERTIFY_INFO: indexName + nvDigest
+    %% (both TPM2B_*).
+    try
+        {IndexName, Rest1} = tpm2b(Body),
+        {NvDigest, _Tail} = tpm2b(Rest1),
+        #{<<"attest-body-type">>     =>
+              <<"TPMS_NV_DIGEST_CERTIFY_INFO">>,
+          <<"nv-index-name">>        => hb_util:encode(IndexName),
+          <<"nv-index-name-length">> => byte_size(IndexName),
+          <<"nv-digest">>            => hb_util:encode(NvDigest),
+          <<"nv-digest-length">>     => byte_size(NvDigest)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_NV_DIGEST_CERTIFY_INFO parse failed">>}
+    end;
 decode_attest_body(_OtherType, Body) ->
-    #{<<"attest-body-length">> => byte_size(Body),
+    #{<<"attest-body-type">> => <<"unknown">>,
+      <<"attest-body-length">> => byte_size(Body),
       <<"attest-body-sha256">> =>
           hb_util:encode(crypto:hash(sha256, Body))}.
 
@@ -7332,6 +7507,147 @@ claim_surface_hour14_attestation_summary_shape_test() ->
                  maps:get(<<"verdict">>, AS)),
     ?assertEqual(maps:get(<<"score">>, PV),
                  maps:get(<<"score">>, AS)),
+    ok.
+
+%% Hour-15: TPMS_CERTIFY_INFO body decode (type 0x8017).
+%% Name + qualifiedName as two TPM2B_NAME structures.
+decode_attest_body_certify_test() ->
+    Name = crypto:hash(sha256, <<"object">>),
+    QualName = crypto:hash(sha256, <<"qualified">>),
+    Body = <<(byte_size(Name)):16/big, Name/binary,
+             (byte_size(QualName)):16/big, QualName/binary>>,
+    M = decode_attest_body(16#8017, Body),
+    ?assertEqual(<<"TPMS_CERTIFY_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(hb_util:encode(Name),
+                 maps:get(<<"object-name">>, M)),
+    ?assertEqual(hb_util:encode(QualName),
+                 maps:get(<<"object-qualified-name">>, M)),
+    ok.
+
+%% TPMS_COMMAND_AUDIT_INFO body (0x8015).
+decode_attest_body_command_audit_test() ->
+    AuditDigest = crypto:hash(sha256, <<"ad">>),
+    CommandDigest = crypto:hash(sha256, <<"cmd">>),
+    Body = <<42:64/big, 16#000B:16/big,
+             (byte_size(AuditDigest)):16/big, AuditDigest/binary,
+             (byte_size(CommandDigest)):16/big,
+              CommandDigest/binary>>,
+    M = decode_attest_body(16#8015, Body),
+    ?assertEqual(<<"TPMS_COMMAND_AUDIT_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(42, maps:get(<<"audit-counter">>, M)),
+    ?assertEqual(<<"sha256">>,
+                 maps:get(<<"audit-digest-alg-name">>, M)),
+    ?assertEqual(hb_util:encode(AuditDigest),
+                 maps:get(<<"audit-digest">>, M)),
+    ?assertEqual(hb_util:encode(CommandDigest),
+                 maps:get(<<"command-digest">>, M)),
+    ok.
+
+%% TPMS_SESSION_AUDIT_INFO body (0x8016).
+decode_attest_body_session_audit_test() ->
+    SessionDigest = crypto:hash(sha256, <<"session">>),
+    Body = <<1:8, (byte_size(SessionDigest)):16/big,
+             SessionDigest/binary>>,
+    M = decode_attest_body(16#8016, Body),
+    ?assertEqual(<<"TPMS_SESSION_AUDIT_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(true, maps:get(<<"exclusive-session">>, M)),
+    ?assertEqual(hb_util:encode(SessionDigest),
+                 maps:get(<<"session-digest">>, M)),
+    ok.
+
+%% TPMS_CREATION_INFO body (0x801A).
+decode_attest_body_creation_test() ->
+    ObjName = crypto:hash(sha256, <<"obj">>),
+    CH = crypto:hash(sha256, <<"creation">>),
+    Body = <<(byte_size(ObjName)):16/big, ObjName/binary,
+             (byte_size(CH)):16/big, CH/binary>>,
+    M = decode_attest_body(16#801A, Body),
+    ?assertEqual(<<"TPMS_CREATION_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(hb_util:encode(ObjName),
+                 maps:get(<<"object-name">>, M)),
+    ?assertEqual(hb_util:encode(CH),
+                 maps:get(<<"creation-hash">>, M)),
+    ok.
+
+%% TPMS_TIME_ATTEST_INFO body (0x8019).
+decode_attest_body_time_test() ->
+    Body = <<16#12345:64/big,       % time-u64
+             16#ABCDE:64/big,       % inner-clock-ms
+             7:32/big,              % inner-reset-count
+             2:32/big,              % inner-restart-count
+             1:8,                   % inner-safe = true
+             16#0102030400050006:64/big>>,  % inner firmware version
+    M = decode_attest_body(16#8019, Body),
+    ?assertEqual(<<"TPMS_TIME_ATTEST_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(16#12345, maps:get(<<"time-u64">>, M)),
+    ?assertEqual(16#ABCDE, maps:get(<<"inner-clock-ms">>, M)),
+    ?assertEqual(7, maps:get(<<"inner-reset-count">>, M)),
+    ?assertEqual(true, maps:get(<<"inner-safe">>, M)),
+    ?assertEqual(16#0102030400050006,
+                 maps:get(<<"inner-firmware-version-u64">>, M)),
+    ok.
+
+%% TPMS_NV_CERTIFY_INFO body (0x8014).
+decode_attest_body_nv_certify_test() ->
+    IndexName = crypto:hash(sha256, <<"nv-name">>),
+    NvContents = <<"NV buffer contents here">>,
+    Body = <<(byte_size(IndexName)):16/big, IndexName/binary,
+             32:16/big,                    % offset
+             (byte_size(NvContents)):16/big, NvContents/binary>>,
+    M = decode_attest_body(16#8014, Body),
+    ?assertEqual(<<"TPMS_NV_CERTIFY_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(32, maps:get(<<"nv-offset">>, M)),
+    ?assertEqual(hb_util:encode(NvContents),
+                 maps:get(<<"nv-contents">>, M)),
+    ok.
+
+%% TPMS_NV_DIGEST_CERTIFY_INFO body (0x801C).
+decode_attest_body_nv_digest_test() ->
+    IndexName = crypto:hash(sha256, <<"nv-name">>),
+    NvDigest = crypto:hash(sha256, <<"nv-digest">>),
+    Body = <<(byte_size(IndexName)):16/big, IndexName/binary,
+             (byte_size(NvDigest)):16/big, NvDigest/binary>>,
+    M = decode_attest_body(16#801C, Body),
+    ?assertEqual(<<"TPMS_NV_DIGEST_CERTIFY_INFO">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(hb_util:encode(NvDigest),
+                 maps:get(<<"nv-digest">>, M)),
+    ok.
+
+%% Unknown attest type falls through to length + sha256.
+decode_attest_body_unknown_test() ->
+    Body = <<"arbitrary payload">>,
+    M = decode_attest_body(16#9999, Body),
+    ?assertEqual(<<"unknown">>,
+                 maps:get(<<"attest-body-type">>, M)),
+    ?assertEqual(byte_size(Body),
+                 maps:get(<<"attest-body-length">>, M)),
+    ok.
+
+%% Hour-15: log-format auto-detection. Synthetic crypto-agile log
+%% with SpecID first record → "crypto-agile". A sha1-only log →
+%% "legacy-sha1". Empty events → "empty".
+claim_surface_hour15_log_format_crypto_agile_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> =>
+            hb_util:encode(build_tcg_fixture())},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PC = maps:get(<<"platform-config">>, Claim),
+    ?assertEqual(<<"crypto-agile">>,
+                 maps:get(<<"log-format">>, PC)),
+    ok.
+
+claim_surface_hour15_log_format_empty_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PC = maps:get(<<"platform-config">>, Claim),
+    ?assertEqual(<<"empty">>, maps:get(<<"log-format">>, PC)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
