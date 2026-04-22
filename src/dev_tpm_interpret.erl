@@ -1133,6 +1133,12 @@ interpret_claim(Events, E, Db) ->
     Context = detect_context(Events, EvList),
     #{
         <<"secure-boot">>        => claim_secure_boot(EvList),
+        %% Hour-12: folded Secure-Boot policy posture —
+        %% PK/KEK/db/dbx entry counts + mode (setup/user/
+        %% deployed/audit) + trusted-signers list + blocked-
+        %% hashes list + posture verdict (production, user-
+        %% managed, setup, disabled, audit).
+        <<"secure-boot-policy">> => claim_secure_boot_policy(EvList),
         <<"firmware">>           => claim_firmware(EvList, Db),
         <<"boot-loader">>        => claim_boot_loader(EvList),
         <<"boot-chain">>         => claim_boot_chain(EvList, Db),
@@ -1202,7 +1208,7 @@ interpret_claim(Events, E, Db) ->
         <<"tme">>                => claim_tme(EvList, E, Db, Context),
         <<"iommu">>              => claim_iommu(EvList),
         <<"lockdown">>           => claim_lockdown(EvList, E, Db),
-        <<"kernel-integrity">>   => claim_kernel_integrity(EvList),
+        <<"kernel-integrity">>   => claim_kernel_integrity(EvList, E),
         <<"verity">>             => claim_verity(EvList)
     }.
 
@@ -1564,6 +1570,166 @@ collect_authorities(Events) ->
             maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000001,
             lists:member(sem_var_name(Ev),
                          [<<"PK">>, <<"KEK">>, <<"db">>, <<"dbx">>])]).
+
+%% @doc Full Secure-Boot policy posture. Hour-4's
+%% `claim.secure-boot` surfaces enabled / setup-mode / deployed-
+%% mode + a flat list of authorities. This stanza projects the
+%% same underlying PK/KEK/db/dbx events into a policy-ready
+%% view: per-bucket entry counts, the concrete trusted-signers
+%% list (each with subject / issuer / fingerprint / type),
+%% the blocked-hashes list (what the firmware refuses to load),
+%% and a composite `policy-posture' verdict.
+%%
+%% Output fields:
+%%   enabled                bool | "unknown"
+%%   setup-mode             "disabled" | "enabled" | "unknown"
+%%   deployed-mode          "disabled" | "enabled" | "unknown"
+%%   pk-entry-count         count of Platform Key entries
+%%   kek-entry-count        count of Key-Exchange-Key entries
+%%   db-entry-count         count of allowed-signature entries
+%%   dbx-entry-count        count of blocked-signature entries
+%%   trusted-signers        list of #{subject, issuer,
+%%                                   fingerprint, type-guid-name,
+%%                                   owner-guid}
+%%   blocked-hashes         list of #{hash-alg, hash-or-fingerprint,
+%%                                   type-guid-name, owner-guid}
+%%   policy-posture         one of:
+%%     "setup-mode"         PK=0, any key can be enrolled
+%%     "deployed-production" SB=true + all buckets populated +
+%%                            deployed-mode=enabled
+%%     "user-managed"       SB=true + all buckets populated +
+%%                            deployed-mode=disabled
+%%     "audit-only"         SB=false + buckets populated
+%%     "disabled"           SB=false + buckets empty
+%%     "unknown"            can't determine
+%%   policy-strength        heuristic based on dbx population:
+%%     "latest-revocations" dbx-entry-count >= 100
+%%     "moderate-revocations" dbx-entry-count >= 20
+%%     "minimal-revocations"  dbx-entry-count >= 1
+%%     "no-revocations"       dbx empty
+%%     "unknown"              no dbx event seen
+claim_secure_boot_policy(Events) ->
+    Sb = claim_secure_boot(Events),
+    PkEntries  = flat_entries_for_var(Events, <<"PK">>),
+    KekEntries = flat_entries_for_var(Events, <<"KEK">>),
+    DbEntries  = flat_entries_for_var(Events, <<"db">>),
+    DbxEntries = flat_entries_for_var(Events, <<"dbx">>),
+    TrustedSigners = [project_trusted_signer(E) || E <- DbEntries],
+    BlockedHashes = [project_blocked_hash(E) || E <- DbxEntries],
+    Enabled = maps:get(<<"enabled">>, Sb, <<"unknown">>),
+    SetupMode = maps:get(<<"setup-mode">>, Sb, <<"unknown">>),
+    DeployedMode = maps:get(<<"deployed-mode">>, Sb, <<"unknown">>),
+    Posture = policy_posture(Enabled, SetupMode, DeployedMode,
+                               length(PkEntries), length(KekEntries),
+                               length(DbEntries), length(DbxEntries)),
+    Strength = policy_strength(DbxEntries),
+    #{
+        <<"enabled">>            => Enabled,
+        <<"setup-mode">>         => SetupMode,
+        <<"deployed-mode">>      => DeployedMode,
+        <<"pk-entry-count">>     => length(PkEntries),
+        <<"kek-entry-count">>    => length(KekEntries),
+        <<"db-entry-count">>     => length(DbEntries),
+        <<"dbx-entry-count">>    => length(DbxEntries),
+        <<"trusted-signers">>    => TrustedSigners,
+        <<"blocked-hashes">>     => BlockedHashes,
+        <<"revocation-count">>   => length(DbxEntries),
+        <<"policy-posture">>     => Posture,
+        <<"policy-strength">>    => Strength
+    }.
+
+%% Iterate every PK/KEK/db/dbx event with the matching variable
+%% name, flatten their signature-list[].entries[] into a single
+%% list of entries. Each entry retains its parent type-guid-name
+%% + owner-guid + any cert/hash fields the decoder attached.
+flat_entries_for_var(Events, VarName) ->
+    [maps:merge(#{<<"type-guid-name">> =>
+                     maps:get(<<"type-guid-name">>, List, <<"">>)},
+                 Entry)
+     || Ev <- Events,
+        maps:get(<<"event-type-code">>, Ev, 0) =:= 16#80000001,
+        sem_var_name(Ev) =:= VarName,
+        List <- nested(Ev,
+                        [<<"parsed">>, <<"semantic">>,
+                         <<"signature-list">>], []),
+        is_map(List),
+        Entry <- maps:get(<<"entries">>, List, []),
+        is_map(Entry)].
+
+project_trusted_signer(Entry) ->
+    #{
+        <<"type-guid-name">> =>
+            maps:get(<<"type-guid-name">>, Entry, <<"unknown">>),
+        <<"owner-guid">>     =>
+            maps:get(<<"owner-guid">>, Entry, <<"">>),
+        <<"subject">>        =>
+            maps:get(<<"x509-subject">>, Entry, <<"">>),
+        <<"issuer">>         =>
+            maps:get(<<"x509-issuer">>, Entry, <<"">>),
+        <<"fingerprint">>    =>
+            maps:get(<<"x509-sha256-fingerprint">>, Entry, <<"">>),
+        <<"not-before">>     =>
+            maps:get(<<"x509-not-before">>, Entry, <<"">>),
+        <<"not-after">>      =>
+            maps:get(<<"x509-not-after">>, Entry, <<"">>),
+        <<"public-key-alg">> =>
+            maps:get(<<"x509-public-key-alg">>, Entry, <<"">>)
+    }.
+
+project_blocked_hash(Entry) ->
+    TypeName = maps:get(<<"type-guid-name">>, Entry, <<"unknown">>),
+    HashAlg = case TypeName of
+        <<"EFI_CERT_SHA256_GUID">>       -> <<"sha256">>;
+        <<"EFI_CERT_SHA384_GUID">>       -> <<"sha384">>;
+        <<"EFI_CERT_SHA512_GUID">>       -> <<"sha512">>;
+        <<"EFI_CERT_SHA1_GUID">>         -> <<"sha1">>;
+        <<"EFI_CERT_X509_SHA256_GUID">>  -> <<"sha256">>;
+        <<"EFI_CERT_X509_SHA384_GUID">>  -> <<"sha384">>;
+        <<"EFI_CERT_X509_SHA512_GUID">>  -> <<"sha512">>;
+        <<"EFI_CERT_X509_GUID">>         -> <<"x509-cert">>;
+        _                                 -> <<"unknown">>
+    end,
+    %% For x509 entries the "hash" is really the cert fingerprint.
+    %% For hash-type entries the decoder may surface a `hash' or
+    %% `sha256' field — accept either shape.
+    HashOrFp = case maps:get(<<"hash">>, Entry, undefined) of
+        B when is_binary(B) -> B;
+        _ ->
+            case maps:get(<<"sha256">>, Entry, undefined) of
+                B when is_binary(B) -> B;
+                _ -> maps:get(<<"x509-sha256-fingerprint">>,
+                              Entry, <<"">>)
+            end
+    end,
+    #{
+        <<"type-guid-name">> => TypeName,
+        <<"owner-guid">>     =>
+            maps:get(<<"owner-guid">>, Entry, <<"">>),
+        <<"hash-alg">>       => HashAlg,
+        <<"hash-or-fingerprint">> => HashOrFp
+    }.
+
+policy_posture(<<"unknown">>, _, _, _, _, _, _) -> <<"unknown">>;
+policy_posture(_, _, _, 0, _, _, _)              -> <<"setup-mode">>;
+policy_posture(false, _, _, _, _, _, _)          ->
+    %% SB disabled but policy keys present → audit-only
+    <<"audit-only">>;
+policy_posture(true, _, <<"enabled">>, _, _, _, _) ->
+    <<"deployed-production">>;
+policy_posture(true, _, _, _Pk, _Kek, _Db, _Dbx) when _Pk > 0,
+                                                      _Kek > 0,
+                                                      _Db > 0 ->
+    <<"user-managed">>;
+policy_posture(_, _, _, _, _, _, _) -> <<"unknown">>.
+
+policy_strength([]) -> <<"unknown">>;
+policy_strength(Dbx) when length(Dbx) >= 100 ->
+    <<"latest-revocations">>;
+policy_strength(Dbx) when length(Dbx) >= 20 ->
+    <<"moderate-revocations">>;
+policy_strength(Dbx) when length(Dbx) >= 1 ->
+    <<"minimal-revocations">>;
+policy_strength(_) -> <<"no-revocations">>.
 
 lookup_binary_sem(Events, VarName, SemKey) ->
     case [Ev || Ev <- Events,
@@ -2579,13 +2745,14 @@ parse_ima_ng_like(Body, WithSig) ->
     case Fields of
         [HashAlgColon, Path | SigRest] ->
             {Alg, Hash} = split_alg_colon(HashAlgColon),
-            Base = #{
+            PathEnriched = enrich_kernel_module_path(Path),
+            Base = maps:merge(PathEnriched, #{
                 <<"hash-alg">>         => Alg,
                 <<"file-hash-hex">>    => Hash,
                 <<"file-hash-length">> => byte_size(Hash) div 2,
                 <<"pathname">>         => Path,
                 <<"signature-present">> => WithSig
-            },
+            }),
             case SigRest of
                 [Sig | _] when WithSig ->
                     Base#{<<"signature-hex">> => Sig,
@@ -2594,6 +2761,119 @@ parse_ima_ng_like(Body, WithSig) ->
                 _ -> Base
             end;
         _ -> #{<<"raw">> => Body}
+    end.
+
+%% @doc Recognise Linux kernel-module pathnames and extract
+%% structured metadata.
+%%
+%% Canonical path shapes (Debian/Fedora/Ubuntu/Arch all use
+%% this layout):
+%%
+%%   /lib/modules/<kernel-version>/kernel/<subsystem>/<mod>.ko
+%%   /usr/lib/modules/<kernel-version>/kernel/<subsystem>/<mod>.ko
+%%
+%% With optional .xz / .gz / .zst compression suffix and the
+%% `kernel/' directory sometimes absent on third-party modules.
+%%
+%% Returns an empty map when the path doesn't look like a
+%% kernel module; else a map with:
+%%   is-kernel-module        true
+%%   module-name             bare name without .ko[.xz|.gz|.zst]
+%%   module-kernel-version   the <kver> path segment
+%%   module-subsystem        path from <kver>/[kernel/] to
+%%                           the filename's parent dir
+%%   module-compression      "none" | "xz" | "gz" | "zst"
+enrich_kernel_module_path(Path) ->
+    case kernel_module_path_parts(Path) of
+        undefined -> #{};
+        {Kver, Subsystem, Name, Compression} ->
+            #{
+                <<"is-kernel-module">>     => true,
+                <<"module-name">>          => Name,
+                <<"module-kernel-version">> => Kver,
+                <<"module-subsystem">>     => Subsystem,
+                <<"module-compression">>   => Compression
+            }
+    end.
+
+kernel_module_path_parts(Path) when is_binary(Path) ->
+    Prefixes = [<<"/lib/modules/">>, <<"/usr/lib/modules/">>],
+    case strip_any_prefix(Path, Prefixes) of
+        undefined -> undefined;
+        Tail ->
+            case binary:split(Tail, <<"/">>) of
+                [Kver, Rest] when byte_size(Kver) > 0 ->
+                    %% Rest = <subsystem>/<name>.ko[.xz|.gz|.zst]
+                    %% Optionally strip a leading "kernel/" segment.
+                    Rest1 = case Rest of
+                        <<"kernel/", R/binary>> -> R;
+                        _                       -> Rest
+                    end,
+                    case kernel_module_name_compression(Rest1) of
+                        undefined -> undefined;
+                        {Name, Compression, DirPath} ->
+                            {Kver, DirPath, Name, Compression}
+                    end;
+                _ -> undefined
+            end
+    end;
+kernel_module_path_parts(_) -> undefined.
+
+strip_any_prefix(_Bin, []) -> undefined;
+strip_any_prefix(Bin, [P | Rest]) ->
+    Sz = byte_size(P),
+    case Bin of
+        <<P:Sz/binary, Tail/binary>> -> Tail;
+        _ -> strip_any_prefix(Bin, Rest)
+    end.
+
+%% "subsystem/path/name.ko.xz" → {"name", "xz", "subsystem/path"}.
+kernel_module_name_compression(B) when is_binary(B) ->
+    %% Find the last slash to isolate the basename.
+    {Dir, Base} =
+        case binary:matches(B, <<"/">>) of
+            [] -> {<<>>, B};
+            Ms ->
+                {Off, _} = lists:last(Ms),
+                {binary:part(B, 0, Off),
+                 binary:part(B, Off + 1, byte_size(B) - Off - 1)}
+        end,
+    case split_module_basename(Base) of
+        undefined -> undefined;
+        {Name, Compression} -> {Name, Compression, Dir}
+    end.
+
+%% "foo.ko", "foo.ko.xz", "foo.ko.gz", "foo.ko.zst".
+split_module_basename(Bin) ->
+    split_module_basename(Bin, <<"">>).
+split_module_basename(Bin, _Comp) ->
+    case binary_suffix(Bin) of
+        {Name, <<".ko">>}      -> {Name, <<"none">>};
+        {Stem, <<".ko.xz">>}   -> {Stem, <<"xz">>};
+        {Stem, <<".ko.gz">>}   -> {Stem, <<"gz">>};
+        {Stem, <<".ko.zst">>}  -> {Stem, <<"zst">>};
+        _ -> undefined
+    end.
+
+%% Try progressively shorter suffixes. Returns {Prefix, Suffix}
+%% when a known kernel-module extension matches.
+binary_suffix(Bin) ->
+    Candidates = [<<".ko.xz">>, <<".ko.gz">>, <<".ko.zst">>, <<".ko">>],
+    binary_suffix_try(Bin, Candidates).
+
+binary_suffix_try(_Bin, []) -> undefined;
+binary_suffix_try(Bin, [S | Rest]) ->
+    Sz = byte_size(Bin),
+    Ssz = byte_size(S),
+    if
+        Sz >= Ssz ->
+            case binary:part(Bin, Sz - Ssz, Ssz) of
+                S ->
+                    {binary:part(Bin, 0, Sz - Ssz), S};
+                _ ->
+                    binary_suffix_try(Bin, Rest)
+            end;
+        true -> binary_suffix_try(Bin, Rest)
     end.
 
 %% Split "sha256:abcdef..." into {"sha256", "abcdef..."}. If no
@@ -3451,11 +3731,19 @@ claim_iommu(Events) ->
 %%   page_poison=1         → free pages poisoned
 %%   lockdown=confidentiality → kernel lockdown in the strictest mode
 claim_kernel_integrity(Events) ->
+    claim_kernel_integrity(Events, #{}).
+
+claim_kernel_integrity(Events, E) ->
     {Flags, Prov} = cmdline_flags_and_provenance(Events),
     Base = case Prov of
         [] -> [];
         _  -> [{<<"tier">>, 2} | Prov]
     end,
+    %% Hour-12 addition: summarise kernel-module IMA entries
+    %% when the envelope carries an IMA log. Gives a policy
+    %% engine an at-a-glance "what modules did this kernel
+    %% load?" view.
+    ModulesSummary = summarise_modules_from_ima(E),
     #{
         <<"module-sig-enforce">>     =>
             maps:get(<<"module.sig_enforce">>, Flags, <<"unknown">>),
@@ -3471,7 +3759,71 @@ claim_kernel_integrity(Events) ->
             maps:get(<<"pti">>, Flags, <<"unknown">>),
         <<"randomize-kstack-offset">> =>
             maps:get(<<"randomize_kstack_offset">>, Flags, <<"unknown">>),
+        <<"modules">>                => ModulesSummary,
         <<"evidence">>               => Base
+    }.
+
+%% Project module-loading activity out of the parsed IMA log.
+%% When no IMA log is present, returns an `absent' stanza.
+summarise_modules_from_ima(E) ->
+    ImaClaim = claim_ima(E),
+    case maps:get(<<"present">>, ImaClaim, false) of
+        false ->
+            #{<<"ima-log-present">> => false,
+              <<"modules-loaded-count">> => 0,
+              <<"modules-signed-count">> => 0,
+              <<"modules-unsigned-count">> => 0,
+              <<"modules-kernel-versions">> => [],
+              <<"modules-by-subsystem">> => #{},
+              <<"modules">> => []};
+        true ->
+            Entries = maps:get(<<"entries">>, ImaClaim, []),
+            ModuleEntries = [E0 || E0 <- Entries,
+                                    maps:get(<<"is-kernel-module">>,
+                                              E0, false) =:= true],
+            Signed = [E0 || E0 <- ModuleEntries,
+                             maps:get(<<"signature-present">>,
+                                       E0, false) =:= true],
+            Unsigned = [E0 || E0 <- ModuleEntries,
+                               maps:get(<<"signature-present">>,
+                                        E0, false) =:= false],
+            KVers = lists:usort(
+                [maps:get(<<"module-kernel-version">>, E0, <<"">>)
+                 || E0 <- ModuleEntries]),
+            BySubsystem = lists:foldl(
+                fun(E0, Acc) ->
+                    S = maps:get(<<"module-subsystem">>, E0, <<"">>),
+                    maps:update_with(S,
+                                      fun(N) -> N + 1 end, 1, Acc)
+                end, #{}, ModuleEntries),
+            Modules = [project_module_summary(E0) || E0 <- ModuleEntries],
+            #{<<"ima-log-present">>          => true,
+              <<"modules-loaded-count">>     => length(ModuleEntries),
+              <<"modules-signed-count">>     => length(Signed),
+              <<"modules-unsigned-count">>   => length(Unsigned),
+              <<"modules-kernel-versions">>  => KVers,
+              <<"modules-by-subsystem">>     => BySubsystem,
+              <<"modules">>                  => Modules}
+    end.
+
+project_module_summary(Entry) ->
+    #{
+        <<"module-name">>          =>
+            maps:get(<<"module-name">>, Entry, <<"">>),
+        <<"module-kernel-version">> =>
+            maps:get(<<"module-kernel-version">>, Entry, <<"">>),
+        <<"module-subsystem">>     =>
+            maps:get(<<"module-subsystem">>, Entry, <<"">>),
+        <<"module-compression">>   =>
+            maps:get(<<"module-compression">>, Entry, <<"unknown">>),
+        <<"pathname">>             =>
+            maps:get(<<"pathname">>, Entry, <<"">>),
+        <<"hash-alg">>             =>
+            maps:get(<<"hash-alg">>, Entry, <<"">>),
+        <<"file-hash-hex">>        =>
+            maps:get(<<"file-hash-hex">>, Entry, <<"">>),
+        <<"signature-present">>    =>
+            maps:get(<<"signature-present">>, Entry, false)
     }.
 
 %% dm-verity rootfs + /usr integrity (paper §Arch line 222:
@@ -6137,6 +6489,119 @@ claim_surface_hour11_digest_bank_coverage_test() ->
     Coverage = maps:get(<<"digest-bank-coverage">>, PC),
     ?assert(maps:get(<<"sha1">>, Coverage) >= 1),
     ?assert(maps:get(<<"sha256">>, Coverage) >= 1),
+    ok.
+
+%% Hour-12: claim.secure-boot-policy on a real Dell fixture.
+%% The dell-notebook-wbcl.bin event log carries full PK/KEK/db/
+%% dbx content (1/2/4/267 entries) but Secure Boot disabled →
+%% policy-posture="audit-only" + policy-strength="latest-
+%% revocations" + trusted-signers list populated.
+claim_surface_hour12_secure_boot_policy_dell_test() ->
+    Path = filename:join([
+        case code:priv_dir(hb) of
+            {error, _} ->
+                filename:join(
+                    filename:dirname(
+                        filename:dirname(code:which(?MODULE))),
+                    "priv");
+            D -> D
+        end,
+        "tpm-interpret", "fixtures",
+        "dell-notebook-wbcl.bin"]),
+    case filelib:is_file(Path) of
+        false -> ok;
+        true ->
+            {ok, Bin} = file:read_file(Path),
+            Envelope = #{<<"tcg-event-log">> => hb_util:encode(Bin)},
+            {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+            SP = maps:get(<<"secure-boot-policy">>, Claim),
+            ?assertEqual(1, maps:get(<<"pk-entry-count">>, SP)),
+            ?assertEqual(2, maps:get(<<"kek-entry-count">>, SP)),
+            ?assertEqual(4, maps:get(<<"db-entry-count">>, SP)),
+            ?assert(maps:get(<<"dbx-entry-count">>, SP) >= 100),
+            ?assertEqual(<<"audit-only">>,
+                         maps:get(<<"policy-posture">>, SP)),
+            ?assertEqual(<<"latest-revocations">>,
+                         maps:get(<<"policy-strength">>, SP)),
+            TrustedSigners = maps:get(<<"trusted-signers">>, SP),
+            ?assertEqual(4, length(TrustedSigners)),
+            %% At least one signer's subject mentions Dell.
+            Subjects = [maps:get(<<"subject">>, S) || S <- TrustedSigners],
+            ?assert(lists:any(
+                fun(B) -> binary:match(B, <<"Dell">>) =/= nomatch end,
+                Subjects))
+    end.
+
+%% claim.secure-boot-policy on an empty envelope returns
+%% well-formed `unknown' shape with all-zero counts.
+claim_surface_hour12_secure_boot_policy_empty_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    SP = maps:get(<<"secure-boot-policy">>, Claim),
+    ?assertEqual(0, maps:get(<<"pk-entry-count">>, SP)),
+    ?assertEqual(0, maps:get(<<"kek-entry-count">>, SP)),
+    ?assertEqual(0, maps:get(<<"db-entry-count">>, SP)),
+    ?assertEqual(0, maps:get(<<"dbx-entry-count">>, SP)),
+    ?assertEqual([], maps:get(<<"trusted-signers">>, SP)),
+    ?assertEqual([], maps:get(<<"blocked-hashes">>, SP)),
+    ok.
+
+%% Hour-12: kernel-module pathname decode enriches IMA entries
+%% with module-name / module-kernel-version / module-subsystem
+%% / module-compression, and claim.kernel-integrity.modules
+%% summarises them across subsystems.
+claim_surface_hour12_kernel_module_decode_test() ->
+    Ima = <<
+      "10 abc ima-sig sha256:1111 "
+      "/usr/lib/modules/6.8.7-300.fc40.x86_64/kernel/drivers/net/"
+      "ethernet/intel/e1000e/e1000e.ko.xz 0302\n"
+      "10 def ima-ng sha256:2222 "
+      "/lib/modules/6.8.7-300.fc40.x86_64/kernel/fs/ext4/ext4.ko.gz\n"
+      "10 ghi ima-ng sha256:3333 /usr/bin/bash\n"
+      "10 jkl ima-ng sha256:4444 "
+      "/usr/lib/modules/5.15.0/kernel/sound/core/snd.ko\n"
+    >>,
+    Envelope = #{<<"ima-log-ascii">> => hb_util:encode(Ima)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    KI = maps:get(<<"kernel-integrity">>, Claim),
+    Mods = maps:get(<<"modules">>, KI),
+    %% 3 kernel-module entries; /usr/bin/bash excluded.
+    ?assertEqual(3, maps:get(<<"modules-loaded-count">>, Mods)),
+    ?assertEqual(1, maps:get(<<"modules-signed-count">>, Mods)),
+    ?assertEqual(2, maps:get(<<"modules-unsigned-count">>, Mods)),
+    KVers = maps:get(<<"modules-kernel-versions">>, Mods),
+    ?assertEqual([<<"5.15.0">>, <<"6.8.7-300.fc40.x86_64">>], KVers),
+    BySub = maps:get(<<"modules-by-subsystem">>, Mods),
+    ?assertEqual(1,
+                 maps:get(<<"drivers/net/ethernet/intel/e1000e">>,
+                           BySub)),
+    ?assertEqual(1, maps:get(<<"fs/ext4">>, BySub)),
+    ?assertEqual(1, maps:get(<<"sound/core">>, BySub)),
+    %% Per-module rows carry all fields.
+    Rows = maps:get(<<"modules">>, Mods),
+    ?assertEqual(3, length(Rows)),
+    [R1 | _] = Rows,
+    ?assertEqual(<<"e1000e">>, maps:get(<<"module-name">>, R1)),
+    ?assertEqual(<<"6.8.7-300.fc40.x86_64">>,
+                 maps:get(<<"module-kernel-version">>, R1)),
+    ?assertEqual(<<"xz">>, maps:get(<<"module-compression">>, R1)),
+    ?assertEqual(true, maps:get(<<"signature-present">>, R1)),
+    ok.
+
+%% Paths that don't match kernel-module layout don't produce
+%% `is-kernel-module=true' and don't show up in the summary.
+claim_surface_hour12_non_module_paths_excluded_test() ->
+    Ima = <<
+      "10 abc ima-ng sha256:1111 /usr/bin/bash\n"
+      "10 def ima-ng sha256:2222 /etc/passwd\n"
+      "10 ghi ima-ng sha256:3333 /home/user/script.sh\n"
+    >>,
+    Envelope = #{<<"ima-log-ascii">> => hb_util:encode(Ima)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    KI = maps:get(<<"kernel-integrity">>, Claim),
+    Mods = maps:get(<<"modules">>, KI),
+    ?assertEqual(0, maps:get(<<"modules-loaded-count">>, Mods)),
+    ?assertEqual([], maps:get(<<"modules">>, Mods)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
