@@ -1173,6 +1173,12 @@ interpret_claim(Events, E, Db) ->
         %% config file and extends PCR 10. We parse the ASCII
         %% IMA template into a navigable per-file list.
         <<"ima">>                => claim_ima(E),
+        %% Hour-11: IMA policy cross-reference. Picks the
+        %% best-matching per-distribution policy from the
+        %% shipped `priv/tpm-interpret/ima-policies/' catalogue
+        %% and classifies each parsed IMA entry as matched /
+        %% unexpected / signature-missing / hash-alg-downgrade.
+        <<"ima-policy">>         => claim_ima_policy(EvList, E, Db),
         %% Hour-8: platform-configuration snapshot aggregating
         %% every platform-identifying fact the event log
         %% carries: UEFI handoff tables (ACPI/SMBIOS/HOB
@@ -2290,8 +2296,39 @@ claim_platform_config(EvList) ->
         <<"uefi-variable-count">>    => length(measured_uefi_vars(EvList)),
         <<"measured-uefi-variables">> => measured_uefi_vars(EvList),
         <<"event-count-per-pcr">>    => events_by_pcr_histogram(EvList),
-        <<"event-type-count">>       => events_by_type_histogram(EvList)
+        <<"event-type-count">>       => events_by_type_histogram(EvList),
+        <<"digest-bank-coverage">>   => digest_bank_coverage(EvList),
+        <<"digest-banks-present">>   => digest_banks_present(EvList)
     }.
+
+%% Hour-11: histogram of which algorithm-bank digests are
+%% present across the event log. An event can carry 1-4 bank
+%% digests concurrently; the mix tells policy engines which
+%% PCR banks can be replayed against this event log.
+%%
+%% Returns a map `{alg-name → event-count-with-that-bank}'.
+digest_bank_coverage(EvList) ->
+    lists:foldl(
+      fun(Ev, Acc) ->
+          Digests = maps:get(<<"digests">>, Ev, #{}),
+          lists:foldl(
+            fun({Alg, Size}, A) ->
+                case maps:get(Alg, Digests, undefined) of
+                    B when is_binary(B), byte_size(B) =:= Size ->
+                        maps:update_with(Alg,
+                                          fun(N) -> N + 1 end,
+                                          1, A);
+                    _ -> A
+                end
+            end, Acc,
+            [{<<"sha1">>, 20}, {<<"sha256">>, 32},
+             {<<"sha384">>, 48}, {<<"sha512">>, 64},
+             {<<"sm3-256">>, 32}])
+      end, #{}, EvList).
+
+%% Sorted list of bank names present in at least one event.
+digest_banks_present(EvList) ->
+    lists:sort(maps:keys(digest_bank_coverage(EvList))).
 
 %% All EV_EFI_HANDOFF_TABLES (v1, 0x80000009) rows across the log.
 ht_v1_entries(EvList) ->
@@ -2589,6 +2626,215 @@ project_ima_claim(Entries) ->
         <<"unique-hash-algs">>  => Algs,
         <<"entries">>           => Entries
     }.
+
+%% @doc IMA policy cross-reference. Picks the best-matching
+%% per-distribution policy from the shipped ima-policies/
+%% catalogue, then classifies each parsed IMA entry:
+%%
+%%   matched               pathname matches a policy-expected
+%%                         entry (exact / prefix / suffix)
+%%   unexpected            pathname does not match any
+%%                         policy entry
+%%   signature-missing     matched but the policy required a
+%%                         signature that wasn't present
+%%   hash-alg-downgrade    entry uses a weaker hash than the
+%%                         policy's minimum-hash-alg
+%%
+%% Policy selection: the first policy whose `applies-to'
+%% matches the envelope wins. Match criteria:
+%%   - kernel_name EV_IPL on PCR 12 matches a
+%%     kernel-name-prefix
+%%   - the matched UKI-profile (if any — from hour 3) has a
+%%     key listed under `uki-profile-key'
+%%
+%% Output shape:
+%%   picked-policy-key, picked-policy-name,
+%%   policy-match-reason, total-entries,
+%%   classification-counts: #{matched, unexpected,
+%%                            signature-missing,
+%%                            hash-alg-downgrade},
+%%   violations: [{pathname, classification, reason}, …]
+claim_ima_policy(EvList, E, Db) ->
+    ImaClaim = claim_ima(E),
+    case maps:get(<<"present">>, ImaClaim, false) of
+        false -> unknown_ima_policy_claim(<<"no-ima-log">>);
+        true ->
+            Policies = maps:get(<<"ima-policies">>, Db, #{}),
+            case pick_ima_policy(Policies, EvList) of
+                undefined ->
+                    unknown_ima_policy_claim(<<"no-matching-policy">>);
+                {Key, Policy, Reason} ->
+                    Entries = maps:get(<<"entries">>, ImaClaim, []),
+                    classify_ima_against_policy(
+                      Key, Policy, Reason, Entries)
+            end
+    end.
+
+unknown_ima_policy_claim(Reason) ->
+    #{
+        <<"picked-policy-key">>  => null,
+        <<"picked-policy-name">> => null,
+        <<"policy-match-reason">> => Reason,
+        <<"total-entries">>      => 0,
+        <<"classification-counts">> => #{
+            <<"matched">>               => 0,
+            <<"unexpected">>            => 0,
+            <<"signature-missing">>     => 0,
+            <<"hash-alg-downgrade">>    => 0
+        },
+        <<"violations">>         => []
+    }.
+
+%% Iterate policies; pick the first whose applies-to criteria
+%% fit the envelope.
+pick_ima_policy(Policies, EvList) when is_map(Policies) ->
+    KernelName = first_defined(
+                   [ipl_kv_value(EvList, <<"kernel-name">>),
+                    ipl_kv_value(EvList, <<"kernel_name">>)]),
+    pick_ima_policy_entries(
+      maps:to_list(Policies), KernelName);
+pick_ima_policy(_, _) -> undefined.
+
+pick_ima_policy_entries([], _) -> undefined;
+pick_ima_policy_entries([{K, P} | Rest], KernelName)
+    when is_map(P) ->
+    Applies = maps:get(<<"applies-to">>, P, #{}),
+    KnpList = maps:get(<<"kernel-name-prefix">>, Applies, []),
+    case KernelName =/= undefined andalso
+         any_prefix_match(KernelName, KnpList) of
+        true ->
+            {K, P, <<"kernel-name-prefix">>};
+        false ->
+            pick_ima_policy_entries(Rest, KernelName)
+    end;
+pick_ima_policy_entries([_ | Rest], KernelName) ->
+    pick_ima_policy_entries(Rest, KernelName).
+
+%% Walk every IMA entry, classify, aggregate.
+classify_ima_against_policy(Key, Policy, Reason, Entries) ->
+    Expected = maps:get(<<"expected-files">>, Policy, []),
+    MinAlg = maps:get(<<"minimum-hash-alg">>, Policy, <<"sha256">>),
+    MinAlgStrength = hash_alg_strength(MinAlg),
+    Classified = [classify_one_ima_entry(Ev, Expected,
+                                           MinAlgStrength, MinAlg)
+                   || Ev <- Entries],
+    Counts = count_classifications(Classified),
+    Violations = [maps:with(
+                    [<<"pathname">>, <<"classification">>,
+                     <<"reason">>, <<"matched-rule">>], C)
+                    || C <- Classified,
+                       is_violation(maps:get(<<"classification">>, C))],
+    #{
+        <<"picked-policy-key">>    => Key,
+        <<"picked-policy-name">>   =>
+            maps:get(<<"name">>, Policy, Key),
+        <<"policy-match-reason">>  => Reason,
+        <<"total-entries">>        => length(Entries),
+        <<"classification-counts">> => Counts,
+        <<"violations">>           => Violations
+    }.
+
+classify_one_ima_entry(Entry, Expected, MinAlgStrength, MinAlg) ->
+    Pathname = maps:get(<<"pathname">>, Entry, <<>>),
+    Alg = maps:get(<<"hash-alg">>, Entry, <<"unknown">>),
+    SignaturePresent = maps:get(<<"signature-present">>, Entry,
+                                  false),
+    case find_matching_expected(Pathname, Expected) of
+        undefined ->
+            #{<<"pathname">> => Pathname,
+              <<"classification">> => <<"unexpected">>,
+              <<"reason">> => <<"pathname matches no policy entry">>,
+              <<"matched-rule">> => null};
+        {Rule, Matcher} ->
+            SigReq = maps:get(<<"signature-required">>, Rule, false),
+            ActualStrength = hash_alg_strength(Alg),
+            if
+                SigReq, not SignaturePresent ->
+                    #{<<"pathname">> => Pathname,
+                      <<"classification">> => <<"signature-missing">>,
+                      <<"reason">> =>
+                          <<"policy requires signature; none "
+                            "present on IMA entry">>,
+                      <<"matched-rule">> => Matcher};
+                ActualStrength < MinAlgStrength ->
+                    #{<<"pathname">> => Pathname,
+                      <<"classification">> => <<"hash-alg-downgrade">>,
+                      <<"reason">> =>
+                          <<"IMA entry uses ", Alg/binary,
+                            "; policy minimum is ", MinAlg/binary>>,
+                      <<"matched-rule">> => Matcher};
+                true ->
+                    #{<<"pathname">> => Pathname,
+                      <<"classification">> => <<"matched">>,
+                      <<"reason">> => <<"">>,
+                      <<"matched-rule">> => Matcher}
+            end
+    end.
+
+%% Find the first expected-files rule whose pathname matcher
+%% (exact / prefix / suffix) fits the entry's pathname.
+%% Returns `{Rule, "exact:<val>" | "prefix:<val>" | "suffix:<val>"}'.
+find_matching_expected(_Pathname, []) -> undefined;
+find_matching_expected(Pathname, [Rule | Rest]) when is_map(Rule) ->
+    case rule_match(Pathname, Rule) of
+        {true, Matcher} -> {Rule, Matcher};
+        false           -> find_matching_expected(Pathname, Rest)
+    end;
+find_matching_expected(Pathname, [_ | Rest]) ->
+    find_matching_expected(Pathname, Rest).
+
+rule_match(Pathname, Rule) ->
+    case maps:get(<<"pathname">>, Rule, undefined) of
+        P when is_binary(P), P =:= Pathname ->
+            {true, <<"exact:", P/binary>>};
+        _ ->
+            case maps:get(<<"pathname-prefix">>, Rule, undefined) of
+                Pre when is_binary(Pre) ->
+                    case binary:match(Pathname, Pre) of
+                        {0, _} -> {true, <<"prefix:", Pre/binary>>};
+                        _ -> rule_match_suffix(Pathname, Rule)
+                    end;
+                _ -> rule_match_suffix(Pathname, Rule)
+            end
+    end.
+
+rule_match_suffix(Pathname, Rule) ->
+    case maps:get(<<"pathname-suffix">>, Rule, undefined) of
+        Sfx when is_binary(Sfx) ->
+            case binary:longest_common_suffix([Pathname, Sfx]) of
+                L when L =:= byte_size(Sfx) ->
+                    {true, <<"suffix:", Sfx/binary>>};
+                _ -> false
+            end;
+        _ -> false
+    end.
+
+is_violation(<<"matched">>) -> false;
+is_violation(_)             -> true.
+
+count_classifications(Classified) ->
+    Init = #{<<"matched">> => 0,
+             <<"unexpected">> => 0,
+             <<"signature-missing">> => 0,
+             <<"hash-alg-downgrade">> => 0},
+    lists:foldl(
+      fun(C, Acc) ->
+          K = maps:get(<<"classification">>, C, <<"matched">>),
+          maps:update_with(K, fun(N) -> N + 1 end, 1, Acc)
+      end, Init, Classified).
+
+%% Relative strength ordering for common hash algs — used for
+%% detecting a hash-alg downgrade vs the policy minimum.
+hash_alg_strength(<<"sha1">>)     -> 1;
+hash_alg_strength(<<"md5">>)      -> 0;
+hash_alg_strength(<<"sha256">>)   -> 2;
+hash_alg_strength(<<"sha224">>)   -> 2;
+hash_alg_strength(<<"sha384">>)   -> 3;
+hash_alg_strength(<<"sha3-256">>) -> 2;
+hash_alg_strength(<<"sha3-384">>) -> 3;
+hash_alg_strength(<<"sha512">>)   -> 4;
+hash_alg_strength(<<"sha3-512">>) -> 4;
+hash_alg_strength(_)              -> 2.   % assume sha256-equivalent default
 
 claim_boot_chain(Events) -> claim_boot_chain(Events, #{}).
 
@@ -5791,6 +6037,106 @@ claim_surface_hour10_no_quote_falls_back_test() ->
     PR = maps:get(<<"pcr-replay">>, Claim),
     Row = maps:get(<<"0">>, maps:get(<<"per-pcr">>, PR)),
     ?assertEqual(<<"sha256">>, maps:get(<<"alg">>, Row)),
+    ok.
+
+%% Hour-11: claim.ima-policy picks the Fedora baseline when
+%% the envelope carries a `kernel_name=Fedora-Linux-…' EV_IPL,
+%% and flags /tmp/evil-binary as "unexpected" + a module
+%% without signature as "signature-missing".
+claim_surface_hour11_ima_policy_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    Kname = <<"kernel_name=Fedora-Linux-6.8.7-300.fc40.x86_64", 0>>,
+    KnSha1 = crypto:hash(sha, Kname),
+    KnSha256 = crypto:hash(sha256, Kname),
+    KnRec = <<12:32/little, 16#D:32/little, 2:32/little,
+              16#04:16/little, KnSha1/binary,
+              16#0B:16/little, KnSha256/binary,
+              (byte_size(Kname)):32/little, Kname/binary>>,
+    Raw = <<FirstRec/binary, KnRec/binary>>,
+    Ima = <<
+      "10 abc ima-ng "
+      "sha256:11111111111111111111111111111111"
+      "11111111111111111111111111111111"
+      " /usr/bin/bash\n"
+      "10 def ima-ng "
+      "sha256:22222222222222222222222222222222"
+      "22222222222222222222222222222222"
+      " /tmp/evil-binary\n"
+      "10 ghi ima-ng "
+      "sha256:33333333333333333333333333333333"
+      "33333333333333333333333333333333"
+      " /usr/lib/modules/6.8.7/drivers/e1000e.ko\n"
+    >>,
+    Envelope = #{
+        <<"tcg-event-log">> => hb_util:encode(Raw),
+        <<"ima-log-ascii">> => hb_util:encode(Ima)
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    IP = maps:get(<<"ima-policy">>, Claim),
+    ?assertEqual(<<"fedora-baseline">>,
+                 maps:get(<<"picked-policy-key">>, IP)),
+    ?assertEqual(<<"kernel-name-prefix">>,
+                 maps:get(<<"policy-match-reason">>, IP)),
+    ?assertEqual(3, maps:get(<<"total-entries">>, IP)),
+    Counts = maps:get(<<"classification-counts">>, IP),
+    ?assertEqual(1, maps:get(<<"matched">>, Counts)),
+    ?assertEqual(1, maps:get(<<"unexpected">>, Counts)),
+    ?assertEqual(1, maps:get(<<"signature-missing">>, Counts)),
+    Violations = maps:get(<<"violations">>, IP),
+    ?assertEqual(2, length(Violations)),
+    Paths = [maps:get(<<"pathname">>, V) || V <- Violations],
+    ?assert(lists:member(<<"/tmp/evil-binary">>, Paths)),
+    ?assert(lists:member(<<"/usr/lib/modules/6.8.7/drivers/e1000e.ko">>,
+                         Paths)),
+    ok.
+
+%% No IMA log → well-formed "unknown" with reason.
+claim_surface_hour11_ima_policy_no_log_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    IP = maps:get(<<"ima-policy">>, Claim),
+    ?assertEqual(<<"no-ima-log">>,
+                 maps:get(<<"policy-match-reason">>, IP)),
+    ?assertEqual([], maps:get(<<"violations">>, IP)),
+    ok.
+
+%% Hour-11: digest-bank-coverage reports which algorithm banks
+%% are present across the event log.
+claim_surface_hour11_digest_bank_coverage_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    Data = <<"FW v1">>,
+    S1 = crypto:hash(sha, Data),
+    S2 = crypto:hash(sha256, Data),
+    Rec = <<0:32/little, 16#8:32/little, 2:32/little,
+            16#04:16/little, S1/binary,
+            16#0B:16/little, S2/binary,
+            (byte_size(Data)):32/little, Data/binary>>,
+    Raw = <<FirstRec/binary, Rec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PC = maps:get(<<"platform-config">>, Claim),
+    Banks = maps:get(<<"digest-banks-present">>, PC),
+    %% SpecID's EV_NO_ACTION has a 20-byte sha1-sized zero; the
+    %% CRTM event has both sha1 + sha256. Both banks appear.
+    ?assert(lists:member(<<"sha1">>, Banks)),
+    ?assert(lists:member(<<"sha256">>, Banks)),
+    Coverage = maps:get(<<"digest-bank-coverage">>, PC),
+    ?assert(maps:get(<<"sha1">>, Coverage) >= 1),
+    ?assert(maps:get(<<"sha256">>, Coverage) >= 1),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed

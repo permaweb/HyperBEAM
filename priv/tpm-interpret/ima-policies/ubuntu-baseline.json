@@ -1,0 +1,39 @@
+{
+    "schema-version": 1,
+    "name": "Ubuntu 24.04+ baseline IMA policy",
+    "distribution": "Ubuntu",
+    "applies-to": {
+        "kernel-name-prefix": ["Ubuntu", "ubuntu-"],
+        "uki-profile-key":    ["ubuntu-systemd-stub-baseline"]
+    },
+    "minimum-hash-alg": "sha256",
+    "expected-files": [
+        {"pathname-prefix": "/usr/bin/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "system-binary"},
+        {"pathname-prefix": "/usr/sbin/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "system-binary"},
+        {"pathname-prefix": "/usr/lib/modules/",
+         "signature-required": true,
+         "hash-alg": "sha256",
+         "category": "module"},
+        {"pathname-prefix": "/snap/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "other",
+         "notes": "Snap packages are measured but not required to be IMA-signed (snaps have their own signature chain)."},
+        {"pathname-prefix": "/etc/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "config"},
+        {"pathname": "boot_aggregate",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "other"}
+    ],
+    "notes": "Ubuntu's stock kernel ships `ima-appraise-tcb' as the measurement template; signature enforcement is on kernel modules only. The `fips-signed' kernel variants add appraisal enforcement on userspace binaries; those would use a separate policy file.",
+    "source": "Canonical Ubuntu kernel source + /lib/modules/<ver>/kernel/security/integrity/ima/"
+}

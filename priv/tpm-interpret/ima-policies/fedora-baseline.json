@@ -1,0 +1,41 @@
+{
+    "schema-version": 1,
+    "name": "Fedora 40+ baseline IMA appraisal policy",
+    "distribution": "Fedora Linux",
+    "applies-to": {
+        "kernel-name-prefix": ["Fedora-Linux-", "Fedora-"],
+        "uki-profile-key":    ["fedora-systemd-stub-baseline"]
+    },
+    "minimum-hash-alg": "sha256",
+    "expected-files": [
+        {"pathname-prefix": "/usr/bin/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "system-binary",
+         "notes": "Fedora's default ima-appraise-tcb policy measures but does not enforce signatures on userspace."},
+        {"pathname-prefix": "/usr/sbin/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "system-binary"},
+        {"pathname-prefix": "/usr/lib/modules/",
+         "signature-required": true,
+         "hash-alg": "sha256",
+         "category": "module",
+         "notes": "Kernel modules must be signed by the Fedora Linux kernel CA."},
+        {"pathname-prefix": "/usr/lib64/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "system-binary",
+         "notes": "Shared objects (.so) measured; not required to be signed."},
+        {"pathname-prefix": "/etc/",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "config"},
+        {"pathname": "boot_aggregate",
+         "signature-required": false,
+         "hash-alg": "sha256",
+         "category": "other"}
+    ],
+    "notes": "Fedora's stock kernel runs the `ima-appraise-tcb' policy: measure everything the TCB (Trusted Computing Base) executes; signature enforcement is only on kernel modules. Userspace binaries are measured for audit/forensics but unsigned changes don't block boot. Override via `ima_appraise=enforce ima_template=ima-sig' on the kernel cmdline + a signed /etc/ima/policy.",
+    "source": "Fedora kernel config: CONFIG_IMA_DEFAULT_HASH_SHA256=y + /etc/ima/ima-policy template"
+}

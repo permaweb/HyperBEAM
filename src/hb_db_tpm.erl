@@ -88,6 +88,8 @@ load_fresh() ->
             read_json(filename:join(Root, "cpu-models.json")),
         <<"boot-images">> =>
             read_dir_of_json(filename:join(Root, "boot-images")),
+        <<"ima-policies">> =>
+            read_dir_of_json(filename:join(Root, "ima-policies")),
         <<"cert-roots">> =>
             read_cert_roots(filename:join(Root, "root-cas"))
     }.
