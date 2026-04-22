@@ -2829,5 +2829,49 @@ Two additions closing the top items from hour-11's list:
    log sequence + IMA timestamps as a unified temporal
    chain, letting a policy engine detect drift.
 
-Iteration 13 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 13 — commit `eb217912e`
+
+Two meta-level claim sections that give verifiers single-
+value handles for high-level comparison:
+
+1. **`claim.evidence-digest`** — deterministic SHA-256 over
+   the entire flat claim map. Canonicalisation: recursively
+   sort map keys → proplist form → `term_to_binary/2`
+   `{minor_version, 2}` → SHA-256. Output: `digest`
+   (base64url, 43 chars), `alg`, `form`
+   (canonical-sorted-keys-erlang-ext-v2), `length` (bytes).
+   Policy uses: pin snapshots, diff via hash inequality,
+   cache verification keyed on digest. Verified
+   deterministic + tamper-detectable (62-event fixture →
+   unique digest; 12-event corrupted log → different
+   digest).
+
+2. **`claim.timeline`** — unified temporal stanza aggregating
+   `tpm-epoch` (`reset-count:restart-count`), reset-count,
+   restart-count, clock-ms, clock-seconds, boot-elapsed-ms
+   (alias), event-log-count, event-log-seq-min/max/range,
+   ima-event-count. Supports:
+     - replay detection (non-monotonic reset-count)
+     - event-log drop/reorder detection
+       (seq-range ≠ event-log-count)
+     - unexpected-restart detection (tpm-epoch change)
+
+4 new eunit tests. All 154 tests pass (98 tcg + 56 interpret).
+
+### Candidate priority list for hour 14
+
+1. **TPM2_ActivateCredential decode** — AK-EK binding proof.
+2. **Real boot-image / UKI hash seeds** — populate the DBs
+   with published hashes.
+3. **Canonical CBOR serialisation** — cross-language form
+   of evidence-digest, RFC 8949 deterministic CBOR.
+4. **`claim.policy-verdict`** — aggregate verdict across
+   all claim sections: boot trust-level, freshness-ok,
+   ima-clean, pcr-replay-consistent, firmware-attributed.
+5. **OCSP / CRL cross-reference** — check the EK cert's
+   TCG CA chain against the vendor's published revocation
+   list at attestation time (online) or at release-build
+   time (offline snapshot).
+
+Iteration 14 fires automatically at `:23`. Loop state: `b5d87b84`.
 
