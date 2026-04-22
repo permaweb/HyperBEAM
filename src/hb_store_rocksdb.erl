@@ -9,8 +9,8 @@
 -module(hb_store_rocksdb).
 -behaviour(gen_server).
 -behaviour(hb_store).
--export([enabled/0, start/1, start/3, start_link/1, stop/1, stop/3, scope/1]).
--export([read/3, write/3, list/3, reset/1, reset/3, list/0]).
+-export([enabled/0, start/3, start_link/1, stop/3, scope/1]).
+-export([read/3, write/3, list/3, reset/3, list/0]).
 -export([link/3, group/3, type/3, resolve/3]).
 -export([init/1, terminate/2, handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
@@ -57,29 +57,24 @@ start_link(_Opts) -> ignore.
 
 -endif.
 
-start(Opts = #{ <<"store-module">> := hb_store_rocksdb, <<"name">> := _Dir}) ->
-    start_link(Opts);
-start(Opts) ->
-    start_link(Opts).
 start(Opts, _Req, _NodeOpts) ->
-    case start(Opts) of
-        ok -> ok;
+    case start_link(Opts) of
         {ok, _} = Result -> Result;
         {error, _} = Error -> Error;
         ignore -> ok
     end.
 
--spec stop(any()) -> ok.
-stop(_Opts) ->
+-spec stop_store(any()) -> ok.
+stop_store(_Opts) ->
     gen_server:stop(?MODULE).
 stop(Opts, _Req, _NodeOpts) ->
-    stop(Opts).
+    stop_store(Opts).
 
--spec reset([]) -> ok | no_return().
-reset(_Opts) ->
+-spec reset_store([]) -> ok | no_return().
+reset_store(_Opts) ->
     gen_server:call(?MODULE, reset, ?TIMEOUT).
 reset(Opts, _Req, _NodeOpts) ->
-    reset(Opts).
+    reset_store(Opts).
 
 %% @doc Return scope (local)
 scope(_) -> local.
@@ -449,7 +444,7 @@ write_read_test_() ->
             Pid = get_or_start_server(),
             unlink(Pid)
         end,
-        fun(_) -> reset([]) end,
+        fun(_) -> reset_store([]) end,
         [
             {"can read/write data", fun() ->
                 ok = write(#{}, #{ <<"test_key">> => <<"test_value">> }, #{}),
@@ -480,7 +475,7 @@ api_test_() ->
             Pid = get_or_start_server(),
             unlink(Pid)
         end,
-        fun(_) -> reset([]) end, [
+        fun(_) -> reset_store([]) end, [
             {"write/3 can automatically create folders", fun() ->
                 ok = write(#{}, #{ <<"messages/key1">> => <<"val1">> }, #{}),
                 ok = write(#{}, #{ <<"messages/key2">> => <<"val2">> }, #{}),
@@ -533,7 +528,7 @@ api_test_() ->
                     #{}
                 ),
 
-                ok = reset([]),
+                ok = reset_store([]),
                 ?assertEqual(
                     {error, not_found},
                     read(ignored_options, #{ <<"read">> => <<"test_key">> }, #{})

@@ -18,23 +18,19 @@
 %%% S3-compatible cloud storage APIs, etc).
 -module(hb_store_fs).
 -behavior(hb_store).
--export([start/1, start/3, stop/1, stop/3, reset/1, reset/3, scope/0, scope/1]).
+-export([start/3, stop/3, reset/3, scope/0, scope/1]).
 -export([type/3, read/3, write/3, list/3]).
 -export([group/3, link/3, resolve/3]).
 -include_lib("kernel/include/file.hrl").
 -include("include/hb.hrl").
 
 %% @doc Initialize the file system store with the given data directory.
-start(#{ <<"name">> := DataDir }) ->
+start(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     ok = filelib:ensure_dir(DataDir).
-start(Store, _Req, _Opts) ->
-    start(Store).
 
 %% @doc Stop the file system store. Currently a no-op.
-stop(#{ <<"name">> := _DataDir }) ->
+stop(#{ <<"name">> := _DataDir }, _Req, _Opts) ->
     ok.
-stop(Store, _Req, _Opts) ->
-    stop(Store).
 
 %% @doc The file-based store is always local, for now. In the future, we may
 %% want to allow that an FS store is shared across a cluster and thus remote.
@@ -43,14 +39,10 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 %% @doc Reset the store by completely removing its directory and recreating it.
-reset_store(#{ <<"name">> := DataDir }) ->
+reset(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     % Use pattern that completely removes directory then recreates it
     os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
     ?event({reset_store, {path, DataDir}}).
-reset(Store) ->
-    reset_store(Store).
-reset(Store, _Req, _Opts) ->
-    reset_store(Store).
 
 %% @doc Read a key from the store, following symlinks as needed.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->

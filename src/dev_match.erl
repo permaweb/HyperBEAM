@@ -105,6 +105,7 @@ write(IDs, Base, Opts) ->
                 fun(RawKey, Value) ->
                     Key = hb_ao:normalize_key(RawKey),
                     ValuePath = value_path(Value, Opts),
+                    ok = hb_store:group(Store, address(Key, ValuePath), Opts),
                     lists:foreach(
                         fun(ID) ->
                             Address = address(Key, ValuePath, ID),

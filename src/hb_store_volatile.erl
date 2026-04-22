@@ -9,7 +9,7 @@
 %%% `hb_store` and `hb_cache`: writes, reads, groups, links, type checks,
 %%% path resolution, and resets.
 -module(hb_store_volatile).
--export([start/1, start/3, stop/1, stop/3, reset/1, reset/3, scope/0, scope/1]).
+-export([start/3, stop/3, reset/3, scope/0, scope/1]).
 -export([write/3, read/3, list/3, type/3, link/3, group/3, resolve/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -18,7 +18,7 @@
 -define(MAX_REDIRECTS, 32).
 
 %% @doc Start the ETS-backed store and return the store instance message.
-start(StoreOpts = #{ <<"name">> := Name }) ->
+start(StoreOpts = #{ <<"name">> := Name }, _Req, _Opts) ->
     ?event(cache_ets, {starting_ets_store, Name}),
     Parent = self(),
     spawn(
@@ -38,8 +38,6 @@ start(StoreOpts = #{ <<"name">> := Name }) ->
         {ok, InstanceMessage} ->
             {ok, InstanceMessage}
     end.
-start(StoreOpts, _Req, _Opts) ->
-    start(StoreOpts).
 
 %% @doc Owner loop for the ETS store. Simply waits for a stop message and exits.
 %% Until the store is stopped, the table will remain alive.
@@ -69,7 +67,7 @@ maybe_start_ttl_timer(StoreOpts, PID) ->
     end.
 
 %% @doc Stop the ETS owner process (which also drops the table).
-stop(Opts) ->
+stop(Opts, _Req, _NodeOpts) ->
     #{ <<"pid">> := Pid } = hb_store:find(Opts),
     Pid ! {stop, self(), Ref = make_ref()},
     receive
@@ -77,8 +75,6 @@ stop(Opts) ->
     after 5000 ->
         ok
     end.
-stop(Opts, _Req, _NodeOpts) ->
-    stop(Opts).
 
 %% @doc Scope for this store backend.
 scope() -> local.
@@ -90,8 +86,6 @@ reset_store(Opts) ->
     ets:delete_all_objects(Table),
     ?event(store_volatile, {reset, {table, Table}}),
     ok.
-reset(Opts) ->
-    reset_store(Opts).
 reset(Opts, _Req, _NodeOpts) ->
     reset_store(Opts).
 

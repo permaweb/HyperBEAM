@@ -2,7 +2,7 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/3, read/3, start/1, start/3]).
+-export([scope/0, scope/1, type/3, read/3, start/3]).
 %%% Unused Store API:
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
@@ -31,15 +31,9 @@ first_arweave_store(
 first_arweave_store([_ | Rest]) -> first_arweave_store(Rest).
 
 %% @doc Start the Arweave store, and the downstream associated index store.
-start(#{<<"index-store">> := IndexStore}) ->
+start(#{<<"index-store">> := IndexStore}, _Req, _Opts) ->
     init_prometheus(),
     hb_store:start(IndexStore).
-start(Store, _Req, _Opts) ->
-    case start(Store) of
-        ok -> ok;
-        {ok, _} = Result -> Result;
-        {error, _} = Error -> Error
-    end.
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -106,12 +100,16 @@ read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
         {ok, Message} ->
             {ok, Message};
-        not_found ->
+        {error, not_found} ->
             case do_read(StoreOpts, ID) of
                 {ok, Message} -> {ok, Message};
                 not_found -> {error, not_found};
                 {error, _} = Error -> Error
-            end
+            end;
+        {failure, _} = Failure ->
+            Failure;
+        {error, _} = Error ->
+            Error
     end;
 read(_StoreOpts, #{ <<"read">> := _ID }, _NodeOpts) ->
     {error, not_found}.

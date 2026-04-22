@@ -48,7 +48,7 @@ extract_path_value(Message, Rest, StoreOpts) ->
         [] -> {ok, Message};
         _ ->
             case hb_util:deep_get(Rest, Message, StoreOpts) of
-                not_found -> not_found;
+                not_found -> {error, not_found};
                 Value -> {ok, Value}
             end
     end.
@@ -58,42 +58,40 @@ extract_path_value(Message, Rest, StoreOpts) ->
 read(BaseStoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
     StoreOpts = opts(BaseStoreOpts),
     GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
-    Result =
-        case hb_path:term_to_path_parts(Key, StoreOpts) of
-            [ID|Rest] when ?IS_ID(ID) ->
-                case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
-                    not_found ->
-                        ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                        try hb_gateway_client:read(ID, GatewayReadOpts) of
-                            {error, _} ->
-                                ?event({read_not_found, {key, ID}}),
-                                not_found;
-                            {ok, Message} ->
-                                ?event({read_found, {key, ID}}),
-                                hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
-                                extract_path_value(Message, Rest, StoreOpts)
-                        catch Class:Reason:Stacktrace ->
-                            ?event(
-                                gateway,
-                                {read_failed,
-                                    {class, Class},
-                                    {reason, Reason},
-                                    {stacktrace, {trace, Stacktrace}}
-                                }
-                            ),
-                            failure
-                        end;
-                    {ok, CachedMessage} ->
-                        extract_path_value(CachedMessage, Rest, StoreOpts)
-                end;
-            _ ->
-                ?event({ignoring_non_id, Key}),
-                not_found
-        end,
-    case Result of
-        {ok, Data} -> {ok, Data};
-        not_found -> {error, not_found};
-        failure -> {failure, failure}
+    case hb_path:term_to_path_parts(Key, StoreOpts) of
+        [ID|Rest] when ?IS_ID(ID) ->
+            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+                {error, not_found} ->
+                    ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+                    try hb_gateway_client:read(ID, GatewayReadOpts) of
+                        {error, _} ->
+                            ?event({read_not_found, {key, ID}}),
+                            {error, not_found};
+                        {ok, Message} ->
+                            ?event({read_found, {key, ID}}),
+                            hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
+                            extract_path_value(Message, Rest, StoreOpts)
+                    catch Class:Reason:Stacktrace ->
+                        ?event(
+                            gateway,
+                            {read_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {stacktrace, {trace, Stacktrace}}
+                            }
+                        ),
+                        {failure, failure}
+                    end;
+                {ok, CachedMessage} ->
+                    extract_path_value(CachedMessage, Rest, StoreOpts);
+                {failure, _} = Failure ->
+                    Failure;
+                {error, _} = Error ->
+                    Error
+            end;
+        _ ->
+            ?event({ignoring_non_id, Key}),
+            {error, not_found}
     end.
 
 %% @doc Normalize the routes in the given `Opts`.

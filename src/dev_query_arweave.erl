@@ -538,7 +538,7 @@ matching_commitments(Field, Value, Opts) when is_binary(Value) ->
                 }
             ),
             lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
-        {error, not_found} -> not_found
+        _ -> not_found
     end.
 
 %% @doc Convert a commitment message's ID to a base ID.
@@ -550,7 +550,7 @@ commitment_id_to_base_id(ID, Opts) ->
             Sig = hb_util:decode(EncSig),
             ?event({commitment_id_to_base_id_sig, Sig}),
             hb_util:encode(hb_crypto:sha256(Sig));
-        {error, not_found} -> not_found
+        _ -> not_found
     end.
 
 %% @doc Find all IDs for a message, by any of its other IDs. It achieves this

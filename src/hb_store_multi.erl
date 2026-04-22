@@ -14,7 +14,7 @@
 %%% the `workers-per-store' key.
 -module(hb_store_multi).
 -behaviour(hb_store).
--export([start/1, start/3, stop/1, stop/3, reset/1, reset/3, scope/0, scope/1]).
+-export([start/3, stop/3, reset/3, scope/0, scope/1]).
 -export([read/3, type/3, list/3, match/3]).
 -export([write/3, group/3, link/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -30,13 +30,11 @@ scope(_) -> scope().
 scope() -> local.
 
 %% @doc Find (causing a spawn and caching of the instance data) each store.
-start(StoreOpts) ->
-    {ok, store_with_workers(StoreOpts)}.
 start(StoreOpts, _Req, _Opts) ->
-    start(StoreOpts).
+    {ok, store_with_workers(StoreOpts)}.
 
 %% @doc Stop each store and its worker process.
-stop(StoreOpts) ->
+stop(StoreOpts, _Req, _Opts) ->
     #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
     operation(
         length(Stores),
@@ -51,11 +49,9 @@ stop(StoreOpts) ->
         Stores
     ),
     ok.
-stop(StoreOpts, _Req, _Opts) ->
-    stop(StoreOpts).
 
 %% @doc Reset each store.
-reset(StoreOpts) ->
+reset(StoreOpts, _Req, _Opts) ->
     #{ <<"stores">> := Stores } = hb_store:find(StoreOpts),
     operation(
         length(Stores),
@@ -64,8 +60,6 @@ reset(StoreOpts) ->
         [#{}, StoreOpts]
     ),
     ok.
-reset(StoreOpts, _Req, _Opts) ->
-    reset(StoreOpts).
 
 %%% Read operations.
 
