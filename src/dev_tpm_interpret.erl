@@ -1131,6 +1131,17 @@ is_printable_ascii(_) -> false.
 interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
     Context = detect_context(Events, EvList),
+    BaseClaim = interpret_claim_body(Events, EvList, E, Db, Context),
+    %% Hour-13: produce a deterministic digest over the entire
+    %% flat claim map so a verifier can pin "this exact decoded
+    %% state was observed". Must be computed last so every
+    %% sibling section is already present.
+    BaseClaim#{
+        <<"evidence-digest">> => claim_evidence_digest(BaseClaim),
+        <<"timeline">>        => claim_timeline(EvList, E)
+    }.
+
+interpret_claim_body(Events, EvList, E, Db, Context) ->
     #{
         <<"secure-boot">>        => claim_secure_boot(EvList),
         %% Hour-12: folded Secure-Boot policy posture —
@@ -1730,6 +1741,125 @@ policy_strength(Dbx) when length(Dbx) >= 20 ->
 policy_strength(Dbx) when length(Dbx) >= 1 ->
     <<"minimal-revocations">>;
 policy_strength(_) -> <<"no-revocations">>.
+
+%% @doc Compute a deterministic SHA-256 digest over the entire
+%% flat claim map. Used by verifiers to pin "this exact decoded
+%% state was observed at time T" without copying the full tree.
+%%
+%% Canonicalisation:
+%%   1. Recursively walk every map, sorting keys into the
+%%      canonical byte-order.
+%%   2. Encode the result with `term_to_binary/2' with
+%%      `{minor_version, 2}', which is stable across Erlang/OTP
+%%      versions.
+%%   3. SHA-256 the encoded bytes.
+%%
+%% The returned stanza carries:
+%%   digest    base64url SHA-256
+%%   alg       "sha256"
+%%   form      "canonical-sorted-keys-erlang-ext-v2"
+%%   length    byte length of the canonical encoding
+%%             (exposed so verifiers can pre-size a buffer)
+%%
+%% NOTE: this digest is NOT TPM-bound — it's a client-side
+%% convenience for comparing snapshots. For a TPM-bound digest,
+%% use the `pcr-digest' from `claim.quote'.
+claim_evidence_digest(Claim) when is_map(Claim) ->
+    Canonical = canonicalise_claim(Claim),
+    Encoded = term_to_binary(Canonical, [{minor_version, 2}]),
+    Digest = crypto:hash(sha256, Encoded),
+    #{
+        <<"digest">>    => hb_util:encode(Digest),
+        <<"alg">>       => <<"sha256">>,
+        <<"form">>      =>
+            <<"canonical-sorted-keys-erlang-ext-v2">>,
+        <<"length">>    => byte_size(Encoded)
+    };
+claim_evidence_digest(_) ->
+    #{<<"digest">> => <<"">>,
+      <<"alg">>    => <<"sha256">>,
+      <<"form">>   => <<"canonical-sorted-keys-erlang-ext-v2">>,
+      <<"length">> => 0}.
+
+%% Recursively sort a claim tree. Maps become sorted proplists;
+%% lists are walked element-wise; scalars pass through.
+canonicalise_claim(M) when is_map(M) ->
+    Sorted = lists:sort(maps:to_list(M)),
+    [{K, canonicalise_claim(V)} || {K, V} <- Sorted];
+canonicalise_claim(L) when is_list(L) ->
+    [canonicalise_claim(X) || X <- L];
+canonicalise_claim(V) -> V.
+
+%% @doc Unified temporal chain combining TPM wall-clock +
+%% reset/restart counters + event-log seq range + IMA entry
+%% count into a single chronology stanza. A policy engine can
+%% compare consecutive quotes to detect:
+%%
+%%   * replay attacks           — reset-count decrements or
+%%                                 repeats a known-consumed pair
+%%   * boot-epoch boundary      — (reset-count, restart-count)
+%%                                 changes
+%%   * drift                    — elapsed wall-clock vs
+%%                                 expected delta
+%%   * log truncation           — event-log seq range shrinks
+%%
+%% Fields:
+%%   tpm-epoch              "reset-count:restart-count" unique
+%%                          per-boot-epoch within one TPM
+%%   reset-count            from TPMS_ATTEST
+%%   restart-count          from TPMS_ATTEST
+%%   clock-ms               TPM wall-clock (ms since last reset)
+%%   clock-seconds          same / 1000
+%%   boot-elapsed-ms        alias for clock-ms (paper §Arch
+%%                          freshness check)
+%%   event-log-count        total parsed event-log entries
+%%   event-log-seq-min      lowest seq in the log
+%%   event-log-seq-max      highest seq in the log
+%%   event-log-seq-range    max - min + 1
+%%   ima-event-count        count of parsed IMA entries
+claim_timeline(EvList, E) ->
+    Quote = claim_quote(E),
+    Ima = claim_ima(E),
+    {SeqMin, SeqMax} = event_seq_range(EvList),
+    SeqRange = case SeqMin of
+        null -> 0;
+        _    -> SeqMax - SeqMin + 1
+    end,
+    ResetCount = maps:get(<<"reset-count">>, Quote, 0),
+    RestartCount = maps:get(<<"restart-count">>, Quote, 0),
+    ClockMs = maps:get(<<"clock-ms">>, Quote, 0),
+    Epoch = iolist_to_binary(io_lib:format(
+        "~B:~B", [ResetCount, RestartCount])),
+    #{
+        <<"tpm-epoch">>          => Epoch,
+        <<"reset-count">>        => ResetCount,
+        <<"restart-count">>      => RestartCount,
+        <<"clock-ms">>           => ClockMs,
+        <<"clock-seconds">>      => ClockMs div 1000,
+        <<"boot-elapsed-ms">>    => ClockMs,
+        <<"event-log-count">>    => length(EvList),
+        <<"event-log-seq-min">>  => or_null_int(SeqMin),
+        <<"event-log-seq-max">>  => or_null_int(SeqMax),
+        <<"event-log-seq-range">> => SeqRange,
+        <<"ima-event-count">>    =>
+            maps:get(<<"event-count">>, Ima, 0)
+    }.
+
+or_null_int(null) -> null;
+or_null_int(N) when is_integer(N) -> N;
+or_null_int(_) -> null.
+
+%% Scan events, return {MinSeq, MaxSeq} (null/null if empty).
+event_seq_range([]) -> {null, null};
+event_seq_range(EvList) ->
+    Seqs = [S || E <- EvList,
+                 S <- [maps:get(<<"seq">>, E, null)],
+                 is_integer(S)],
+    case Seqs of
+        []  -> {null, null};
+        [H] -> {H, H};
+        _   -> {lists:min(Seqs), lists:max(Seqs)}
+    end.
 
 lookup_binary_sem(Events, VarName, SemKey) ->
     case [Ev || Ev <- Events,
@@ -6602,6 +6732,87 @@ claim_surface_hour12_non_module_paths_excluded_test() ->
     Mods = maps:get(<<"modules">>, KI),
     ?assertEqual(0, maps:get(<<"modules-loaded-count">>, Mods)),
     ?assertEqual([], maps:get(<<"modules">>, Mods)),
+    ok.
+
+%% Hour-13: evidence-digest is deterministic — identical
+%% envelopes produce the same digest.
+claim_surface_hour13_evidence_digest_deterministic_test() ->
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(build_tcg_fixture())},
+    {ok, #{<<"body">> := C1}} = claim(Envelope, #{}, #{}),
+    {ok, #{<<"body">> := C2}} = claim(Envelope, #{}, #{}),
+    Ed1 = maps:get(<<"evidence-digest">>, C1),
+    Ed2 = maps:get(<<"evidence-digest">>, C2),
+    ?assertEqual(maps:get(<<"digest">>, Ed1),
+                 maps:get(<<"digest">>, Ed2)),
+    ?assertEqual(<<"sha256">>, maps:get(<<"alg">>, Ed1)),
+    ?assertEqual(<<"canonical-sorted-keys-erlang-ext-v2">>,
+                 maps:get(<<"form">>, Ed1)),
+    %% Digest is 32 bytes base64url-encoded = 43 chars.
+    ?assertEqual(43, byte_size(maps:get(<<"digest">>, Ed1))),
+    ok.
+
+%% Different envelopes → different digests. Use a synthetic
+%% log we know decodes cleanly.
+claim_surface_hour13_evidence_digest_discriminates_test() ->
+    Env1 = #{<<"tcg-event-log">> =>
+                 hb_util:encode(build_tcg_fixture())},
+    %% Any envelope that produces a different claim tree — an
+    %% empty one differs trivially.
+    Env2 = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := C1}} = claim(Env1, #{}, #{}),
+    {ok, #{<<"body">> := C2}} = claim(Env2, #{}, #{}),
+    D1 = maps:get(<<"digest">>,
+                   maps:get(<<"evidence-digest">>, C1)),
+    D2 = maps:get(<<"digest">>,
+                   maps:get(<<"evidence-digest">>, C2)),
+    ?assertNotEqual(D1, D2),
+    ok.
+
+%% Hour-13: canonicalise_claim sorts map keys recursively so
+%% that `term_to_binary' produces a deterministic byte-sequence
+%% regardless of insertion order.
+canonicalise_claim_sorts_keys_test() ->
+    A = #{<<"b">> => 2, <<"a">> => 1, <<"z">> => #{<<"q">> => 9,
+                                                      <<"p">> => 8}},
+    B = #{<<"z">> => #{<<"p">> => 8, <<"q">> => 9},
+          <<"a">> => 1, <<"b">> => 2},
+    ?assertEqual(term_to_binary(canonicalise_claim(A),
+                                  [{minor_version, 2}]),
+                 term_to_binary(canonicalise_claim(B),
+                                  [{minor_version, 2}])),
+    ok.
+
+%% Hour-13: timeline aggregates TPM clock + reset + restart
+%% + event-log seq range + IMA count into a compact stanza.
+claim_surface_hour13_timeline_test() ->
+    Magic = <<16#FF, "TCG">>, Type = 16#8018,
+    QsName = crypto:hash(sha256, <<"s">>),
+    QsTpm2B = <<(byte_size(QsName)):16/big, QsName/binary>>,
+    Nonce = <<"n">>, NonceTpm2B = <<1:16/big, Nonce/binary>>,
+    Clock = 12345678, ResetCount = 42, RestartCount = 3,
+    Quoted = <<Magic/binary, Type:16/big,
+               QsTpm2B/binary, NonceTpm2B/binary,
+               Clock:64/big, ResetCount:32/big,
+               RestartCount:32/big, 1:8, 0:64,
+               0:32/big, 0:16>>,
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"quoted">> => hb_util:encode(Quoted),
+            <<"pcr-values">> => #{}
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    T = maps:get(<<"timeline">>, Claim),
+    ?assertEqual(<<"42:3">>, maps:get(<<"tpm-epoch">>, T)),
+    ?assertEqual(42, maps:get(<<"reset-count">>, T)),
+    ?assertEqual(3,  maps:get(<<"restart-count">>, T)),
+    ?assertEqual(Clock, maps:get(<<"clock-ms">>, T)),
+    ?assertEqual(Clock div 1000,
+                 maps:get(<<"clock-seconds">>, T)),
+    ?assertEqual(0, maps:get(<<"event-log-count">>, T)),
+    ?assertEqual(null, maps:get(<<"event-log-seq-min">>, T)),
+    ?assertEqual(null, maps:get(<<"event-log-seq-max">>, T)),
+    ?assertEqual(0, maps:get(<<"event-log-seq-range">>, T)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
