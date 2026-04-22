@@ -416,14 +416,21 @@ is_direct_key_access(Base, Req, Opts, MaybeStore) when ?IS_ID(Base) ->
         if MaybeStore =:= unknown -> hb_opts:get(store, no_viable_store, Opts);
         true -> MaybeStore
         end,
-    DevPath = hb_store:resolve(Store, [Base, <<"device">>]),
-    case hb_store:read(Store, DevPath) of
-        {ok, Dev} ->
-            do_is_direct_key_access(Dev, Req, Opts);
-        not_found ->
-            case hb_store:type(Store, Base) of
-                not_found -> unknown;
-                _ -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
+    case hb_store:resolve(Store, [Base, <<"device">>], Opts) of
+        {ok, DevPath} ->
+            case hb_store:read(Store, DevPath, Opts) of
+                {ok, Dev} ->
+                    do_is_direct_key_access(Dev, Req, Opts);
+                {error, not_found} ->
+                    case hb_store:type(Store, Base, Opts) of
+                        {error, not_found} -> unknown;
+                        {ok, _} -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
+                    end
+            end;
+        {error, not_found} ->
+            case hb_store:type(Store, Base, Opts) of
+                {error, not_found} -> unknown;
+                {ok, _} -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
             end
     end;
 is_direct_key_access(Base, Req, Opts, _) when is_map(Base) ->

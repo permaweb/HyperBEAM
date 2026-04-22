@@ -2,9 +2,9 @@
 %%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
 -module(hb_store_arweave).
 %%% Store API:
--export([scope/0, scope/1, type/2, read/2, start/1]).
+-export([scope/0, scope/1, type/2, type/3, read/2, read/3, start/1, start/3]).
 %%% Unused Store API:
--export([resolve/2, write/3, make_link/3, make_group/2]).
+-export([resolve/2, resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
 -include("include/hb.hrl").
@@ -34,6 +34,12 @@ first_arweave_store([_ | Rest]) -> first_arweave_store(Rest).
 start(#{<<"index-store">> := IndexStore}) ->
     init_prometheus(),
     hb_store:start(IndexStore).
+start(Store, _Req, _Opts) ->
+    case start(Store) of
+        ok -> ok;
+        {ok, _} = Result -> Result;
+        {error, _} = Error -> Error
+    end.
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -44,32 +50,43 @@ scope(_) -> scope().
 %% @doc Resolve a key path in the Arweave store, ignoring other paths.
 resolve(_, ID) when ?IS_ID(ID) -> ID;
 resolve(_, _) -> not_found.
+resolve(Store, #{ <<"resolve">> := ID }, _NodeOpts) ->
+    case resolve(Store, ID) of
+        not_found -> {error, not_found};
+        Resolved -> {ok, Resolved}
+    end.
 
 %% @doc Unsupported.
-write(_, _, _) -> not_found.
+write(_, _, _) -> {error, not_found}.
 
 %% @doc Unsupported.
-make_link(_, _, _) -> not_found.
+link(_, _, _) -> {error, not_found}.
 
 %% @doc Unsupported.
-make_group(_, _) -> not_found.
+group(_, _, _) -> {error, not_found}.
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, ID) when ?IS_ID(ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID)) of
+    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), #{}) of
         {ok, _Offset} -> simple;
         _ -> not_found
     end;
 type(_, _) -> not_found.
+type(Store, #{ <<"type">> := ID }, _NodeOpts) ->
+    case type(Store, ID) of
+        simple -> {ok, simple};
+        composite -> {ok, composite};
+        not_found -> {error, not_found}
+    end.
 
 %% @doc Read the offset of the data at the given key.
 read_offset(#{ <<"index-store">> := IndexStore }, ID) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID))
+                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), #{})
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
@@ -96,6 +113,12 @@ read(StoreOpts, ID) when ?IS_ID(ID) ->
         not_found -> do_read(StoreOpts, ID)
     end;
 read(_, _) -> not_found.
+read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) ->
+    case read(StoreOpts, ID) of
+        {ok, Message} -> {ok, Message};
+        not_found -> {error, not_found};
+        {error, _} = Error -> Error
+    end.
 
 %% @doc Read the data at the given key, reading the provided Arweave index store
 %% as a source of offsets. After offsets have been found, the data is loaded
@@ -269,7 +292,14 @@ write_offset(
             {value, {explicit, Value}}
         }
     ),
-    hb_store:write(IndexStore, hb_store_arweave_offset:path(ID), Value).
+    case hb_store:write(
+        IndexStore,
+        #{ hb_store_arweave_offset:path(ID) => Value },
+        #{}
+    ) of
+        ok -> ok;
+        Error -> Error
+    end.
 
 %% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset, Result) when is_integer(Offset) ->

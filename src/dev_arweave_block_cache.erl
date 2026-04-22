@@ -25,7 +25,7 @@ latest(Opts) ->
 heights(Opts) ->
     AllBlocks =
         hb_cache:list_numbered(
-            hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
+            hb_path:to_binary([
                 ?ARWEAVE_BLOCK_CACHE_PREFIX,
                 <<"block">>,
                 <<"height">>
@@ -42,8 +42,8 @@ read(Block, Opts) ->
     Res.
 
 %% @doc Return the path of a block that will be used in the cache.
-path(Block, Opts) when is_integer(Block) ->
-    hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
+path(Block, _Opts) when is_integer(Block) ->
+    hb_path:to_binary([
         ?ARWEAVE_BLOCK_CACHE_PREFIX,
         <<"block">>,
         <<"height">>,

@@ -1,21 +1,25 @@
 %%% @doc A store module that reads data from the nodes Arweave gateway and 
 %%% GraphQL routes, additionally including additional store-specific routes.
 -module(hb_store_gateway).
--export([scope/1, type/2, read/2, resolve/2, list/2]).
+-export([scope/1, type/3, read/3, resolve/3, list/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc The scope of a GraphQL store is always remote, due to performance.
 scope(_) -> remote.
 resolve(_, Key) -> Key.
+resolve(StoreOpts, #{ <<"resolve">> := Key }, _NodeOpts) ->
+    {ok, resolve(StoreOpts, Key)}.
 
 list(StoreOpts, Key) ->
     ?event(store_gateway, executing_list),
     case read(StoreOpts, Key) of
-        not_found -> not_found;
-        failure -> failure;
+        not_found -> {error, not_found};
+        failure -> {failure, failure};
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
     end.
+list(StoreOpts, #{ <<"list">> := Key }, _NodeOpts) ->
+    list(StoreOpts, Key).
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
@@ -23,8 +27,8 @@ list(StoreOpts, Key) ->
 type(StoreOpts, Key) ->
     ?event(store_gateway, executing_type),
     case read(StoreOpts, Key) of
-        not_found -> not_found;
-        failure -> failure;
+        not_found -> {error, not_found};
+        failure -> {failure, failure};
         {ok, Data} ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
@@ -37,10 +41,12 @@ type(StoreOpts, Key) ->
                 )
             ),
             if
-                IsFlat -> simple;
-                true -> composite
+                IsFlat -> {ok, simple};
+                true -> {ok, composite}
             end
     end.
+type(StoreOpts, #{ <<"type">> := Key }, _NodeOpts) ->
+    type(StoreOpts, Key).
 
 %% @doc Extract a value from a message, handling sub-paths.
 extract_path_value(Message, Rest, StoreOpts) ->
@@ -57,18 +63,19 @@ extract_path_value(Message, Rest, StoreOpts) ->
 %% to read the data if the key is an ID.
 read(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
+    GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 not_found ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    try hb_gateway_client:read(ID, StoreOpts) of
+                    try hb_gateway_client:read(ID, GatewayReadOpts) of
                         {error, _} ->
                             ?event({read_not_found, {key, ID}}),
                             not_found;
                         {ok, Message} ->
                             ?event({read_found, {key, ID}}),
-                            hb_store_remote_node:maybe_cache(StoreOpts, Message),
+                            hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
                             extract_path_value(Message, Rest, StoreOpts)
                     catch Class:Reason:Stacktrace ->
                         ?event(
@@ -87,6 +94,13 @@ read(BaseStoreOpts, Key) ->
         _ ->
             ?event({ignoring_non_id, Key}),
             not_found
+    end.
+read(StoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
+    case read(StoreOpts, Key) of
+        {ok, Data} -> {ok, Data};
+        not_found -> {error, not_found};
+        failure -> {failure, failure};
+        {error, _} = Error -> Error
     end.
 
 %% @doc Normalize the routes in the given `Opts`.
@@ -150,7 +164,8 @@ graphql_as_store_test_() ->
 			{ok, #{ <<"app-name">> := <<"aos">> }},
 			hb_store:read(
 				[#{ <<"store-module">> => hb_store_gateway }],
-				<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>
+				<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+                #{}
 			)
 		)
 	end}.

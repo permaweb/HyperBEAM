@@ -9,8 +9,8 @@
 %%% `hb_store` and `hb_cache`: writes, reads, groups, links, type checks,
 %%% path resolution, and resets.
 -module(hb_store_volatile).
--export([start/1, stop/1, reset/1, scope/0, scope/1]).
--export([write/3, read/2, list/2, type/2, make_link/3, make_group/2, resolve/2]).
+-export([start/1, start/3, stop/1, stop/3, reset/1, reset/3, scope/0, scope/1]).
+-export([write/3, read/3, list/3, type/3, link/3, group/3, resolve/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -38,6 +38,8 @@ start(StoreOpts = #{ <<"name">> := Name }) ->
         {ok, InstanceMessage} ->
             {ok, InstanceMessage}
     end.
+start(StoreOpts, _Req, _Opts) ->
+    start(StoreOpts).
 
 %% @doc Owner loop for the ETS store. Simply waits for a stop message and exits.
 %% Until the store is stopped, the table will remain alive.
@@ -47,7 +49,7 @@ owner_loop(StoreOpts) ->
             From ! {ok, Ref},
             exit(normal);
         reset ->
-            reset(StoreOpts),
+            reset_store(StoreOpts),
             maybe_start_ttl_timer(StoreOpts, self()),
             owner_loop(StoreOpts);
         _ ->
@@ -75,21 +77,37 @@ stop(Opts) ->
     after 5000 ->
         ok
     end.
+stop(Opts, _Req, _NodeOpts) ->
+    {ok, stop(Opts)}.
 
 %% @doc Scope for this store backend.
 scope() -> local.
 scope(_) -> scope().
 
 %% @doc Remove all entries from the ETS table.
-reset(Opts) ->
+reset_store(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ets:delete_all_objects(Table),
     ?event(store_volatile, {reset, {table, Table}}),
     ok.
+reset(Opts) ->
+    reset_store(Opts).
+reset(Opts, _Req, _NodeOpts) ->
+    reset_store(Opts).
 
 %% @doc Write a value at the key path.
-write(Opts, RawKey, Value) ->
-    Key = hb_store:join(RawKey),
+write(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(Key, Value, ok) ->
+            write_path(Opts, Key, Value);
+           (_Key, _Value, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
+write_path(Opts, RawKey, Value) ->
+    Key = hb_path:to_binary(RawKey),
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ensure_parent_groups(Table, Key),
     ?event(store_volatile, {write, {key, Key}}),
@@ -97,97 +115,118 @@ write(Opts, RawKey, Value) ->
     ok.
 
 %% @doc Read a value, following links when needed.
-read(Opts, RawKey) ->
-    read_resolved(Opts, resolve(Opts, RawKey), 0).
+read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
+    read_path(Opts, RawKey).
+read_path(Opts, RawKey) ->
+    read_resolved(Opts, resolve_path(Opts, RawKey), 0).
 
 read_resolved(_Opts, _Key, Depth) when Depth > ?MAX_REDIRECTS ->
-    not_found;
+    {error, not_found};
 read_resolved(Opts, Key, Depth) ->
     case lookup_entry(Opts, Key) of
         {raw, Value} ->
             ?event(store_volatile, {hit, {key, Key}}),
             {ok, Value};
+        {group, Set} ->
+            ?event(store_volatile, {hit, {key, Key}}),
+            {composite, sets:to_list(Set)};
         {link, Link} ->
             ?event(store_volatile, {hit, {key, Key}}),
-            read_resolved(Opts, hb_store:join(Link), Depth + 1);
+            read_resolved(Opts, hb_path:to_binary(Link), Depth + 1);
         _ ->
             ?event(store_volatile, {miss, {key, Key}}),
-            not_found
+            {error, not_found}
     end.
 
 %% @doc Resolve links through a path segment-by-segment.
-resolve(Opts, Key) ->
-    resolve(Opts, <<>>, hb_path:term_to_path_parts(hb_store:join(Key), Opts), 0).
+resolve(Opts, #{ <<"resolve">> := Key }, _NodeOpts) ->
+    {ok, resolve_path(Opts, Key)}.
+resolve_path(Opts, Key) ->
+    resolve_path(Opts, <<>>, hb_path:term_to_path_parts(hb_path:to_binary(Key), Opts), 0).
 
-resolve(_Opts, CurrPath, [], _Depth) ->
-    hb_store:join(CurrPath);
-resolve(_Opts, CurrPath, _Rest, Depth) when Depth > ?MAX_REDIRECTS ->
-    hb_store:join(CurrPath);
-resolve(Opts, CurrPath, [Next | Rest], Depth) ->
+resolve_path(_Opts, CurrPath, [], _Depth) ->
+    hb_path:to_binary(CurrPath);
+resolve_path(_Opts, CurrPath, _Rest, Depth) when Depth > ?MAX_REDIRECTS ->
+    hb_path:to_binary(CurrPath);
+resolve_path(Opts, CurrPath, [Next | Rest], Depth) ->
     PathPart = join_path(CurrPath, Next),
     case lookup_entry(Opts, PathPart) of
         {link, Link} ->
-            resolve(Opts, hb_store:join(Link), Rest, Depth + 1);
+            resolve_path(Opts, hb_path:to_binary(Link), Rest, Depth + 1);
         _ ->
-            resolve(Opts, PathPart, Rest, Depth)
+            resolve_path(Opts, PathPart, Rest, Depth)
     end.
 
 %% @doc List child names under a group path.
-list(Opts, <<"">>) ->
-    list(Opts, ?ROOT_GROUP);
-list(Opts, <<"/">>) ->
-    list(Opts, ?ROOT_GROUP);
-list(Opts, Path) ->
-    ResolvedPath = resolve(Opts, Path),
+list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+    list_path(Opts, Path).
+list_path(Opts, <<"">>) ->
+    list_path(Opts, ?ROOT_GROUP);
+list_path(Opts, <<"/">>) ->
+    list_path(Opts, ?ROOT_GROUP);
+list_path(Opts, Path) ->
+    ResolvedPath = resolve_path(Opts, Path),
     case lookup_entry(Opts, ResolvedPath) of
         {group, Set} ->
             {ok, sets:to_list(Set)};
         {link, Link} ->
-            list(Opts, Link);
+            list_path(Opts, Link);
         {raw, Value} when is_map(Value) ->
             {ok, maps:keys(Value)};
         {raw, Value} when is_list(Value) ->
             {ok, Value};
         _ ->
-            not_found
+            {error, not_found}
     end.
 
 %% @doc Determine the item type at a path.
-type(Opts, RawKey) ->
-    Key = resolve(Opts, RawKey),
+type(Opts, #{ <<"type">> := RawKey }, _NodeOpts) ->
+    type_path(Opts, RawKey).
+type_path(Opts, RawKey) ->
+    Key = resolve_path(Opts, RawKey),
     case lookup_entry(Opts, Key) of
         {raw, _} ->
-            simple;
+            {ok, simple};
         {group, _} ->
-            composite;
+            {ok, composite};
         {link, Link} ->
-            type(Opts, Link);
+            type_path(Opts, Link);
         _ ->
-            not_found
+            {error, not_found}
     end.
 
 %% @doc Ensure a group exists at the given path.
-make_group(Opts, RawKey) ->
-    Key = hb_store:join(RawKey),
+group(Opts, #{ <<"group">> := RawKey }, _NodeOpts) ->
+    Key = hb_path:to_binary(RawKey),
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ensure_dir(Table, Key),
     ok.
 
 %% @doc Create or replace a link from New to Existing.
-make_link(_, Link, Link) ->
+link(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(LinkPath, ExistingPath, ok) ->
+            link_path(Opts, LinkPath, ExistingPath);
+           (_LinkPath, _ExistingPath, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
+link_path(_, LinkPath, LinkPath) ->
     ok;
-make_link(Opts, RawExisting, RawNew) ->
-    Existing = hb_store:join(RawExisting),
-    New = hb_store:join(RawNew),
+link_path(Opts, RawNew, RawExisting) ->
+    Existing = hb_path:to_binary(RawExisting),
+    New = hb_path:to_binary(RawNew),
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
     ensure_parent_groups(Table, New),
     ets:insert(Table, {New, {link, Existing}}),
     ok.
 
 join_path(<<>>, Next) ->
-    hb_store:join(Next);
+    hb_path:to_binary(Next);
 join_path(CurrPath, Next) ->
-    hb_store:join([CurrPath, Next]).
+    hb_path:to_binary([CurrPath, Next]).
 
 lookup_entry(Opts, Key) when is_map(Opts) ->
     #{ <<"ets-table">> := Table } = hb_store:find(Opts),
@@ -222,9 +261,9 @@ ensure_dir(Table, CurrentGroup, [Next | Rest]) ->
     ensure_dir(Table, NextGroup, Rest).
 
 next_group_path(?ROOT_GROUP, Next) ->
-    hb_store:join(Next);
+    hb_path:to_binary(Next);
 next_group_path(CurrentGroup, Next) ->
-    hb_store:join([CurrentGroup, Next]).
+    hb_path:to_binary([CurrentGroup, Next]).
 
 ensure_group(Table, GroupPath) ->
     case lookup_entry(Table, GroupPath) of
@@ -254,13 +293,13 @@ max_ttl_test() ->
             <<"name">> => <<"ets-max-ttl-test">>,
             <<"max-ttl-ms">> => 100
         },
-    hb_store:start(StoreOpts),
-    hb_store:write(StoreOpts, <<"a">>, <<"b">>),
-    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>)),
+    ok = hb_store:start(StoreOpts),
+    ok = hb_store:write(StoreOpts, #{ <<"a">> => <<"b">> }, #{}),
+    ?assertEqual({ok, <<"b">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
     timer:sleep(200),
-    ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
-    hb_store:write(StoreOpts, <<"a">>, <<"c">>),
-    ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>)),
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:write(StoreOpts, #{ <<"a">> => <<"c">> }, #{}),
+    ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
     timer:sleep(200),
-    ?assertEqual(not_found, hb_store:read(StoreOpts, <<"a">>)),
-    hb_store:stop(StoreOpts).
+    ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:stop(StoreOpts).

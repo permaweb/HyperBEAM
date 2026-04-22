@@ -32,9 +32,9 @@ cache_path_to_graph(ToRender, GraphOpts, StoreOrOpts) when is_map(StoreOrOpts) -
     cache_path_to_graph(ToRender, GraphOpts, Store, StoreOrOpts).
 cache_path_to_graph(all, GraphOpts, Store, Opts) ->
     Keys = 
-        case hb_store:list(Store, <<"/">>) of
+        case hb_store:list(Store, <<"/">>, Opts) of
             {ok, KeyList} -> KeyList;
-            not_found -> []
+            {error, not_found} -> []
         end,
     ?event({all_keys, Keys}),
     cache_path_to_graph(Store, GraphOpts, Keys, Opts);
@@ -53,15 +53,16 @@ cache_path_to_graph(Store, GraphOpts, RootKeys, Opts) ->
 %% @doc Traverse the store recursively to build the graph
 traverse_store(Store, Path, Parent, Graph, Opts) ->
     % Get the path and check if we've already visited it
-    JoinedPath = hb_store:join(Path),
+    JoinedPath = hb_path:to_binary(Path),
     ResolvedPath =
         case hb_link:is_link_key(JoinedPath) of
             true ->
                 ?event({is_link_key, {path, Path}, {res_path, JoinedPath}}),
-                {ok, Link} = hb_store:read(Store, hb_store:resolve(Store, JoinedPath)),
+                {ok, ResolvedLink} = hb_store:resolve(Store, JoinedPath, Opts),
+                {ok, Link} = hb_store:read(Store, ResolvedLink, Opts),
                 ?event({resolved_link, {read, Link}}),
-                hb_store:resolve(Store, Link);
-            false -> hb_store:resolve(Store, Path)
+                hb_util:ok(hb_store:resolve(Store, Link, Opts));
+            false -> hb_util:ok(hb_store:resolve(Store, Path, Opts))
         end,
     ?event({traverse_store, {path, Path}, {joined_path, JoinedPath}, {resolved_path, ResolvedPath}, {parent, Parent}}),
     % Skip if we've already processed this node
@@ -72,13 +73,13 @@ traverse_store(Store, Path, Parent, Graph, Opts) ->
             Graph1 = Graph#{visited => hb_maps:put(JoinedPath, true, hb_maps:get(visited, Graph, #{}, Opts), Opts)},
             % ?event({traverse_store, {key, Key}, {graph1, Graph1}}),
             % Process node based on its type
-            case hb_store:type(Store, ResolvedPath) of
-                simple -> 
+            case hb_store:type(Store, ResolvedPath, Opts) of
+                {ok, simple} ->
                     process_simple_node(Store, Path, Parent, ResolvedPath, JoinedPath, Graph1, Opts);
-                composite -> 
+                {ok, composite} ->
                     process_composite_node(Store, Path, Parent, ResolvedPath, JoinedPath, Graph1, Opts);
-                _ -> 
-                    ?event({unknown_node_type, {path, Path}, {type, hb_store:type(Store, Path)}}),
+                _ ->
+                    ?event({unknown_node_type, {path, Path}, {type, hb_store:type(Store, Path, Opts)}}),
                     Graph1
             end
     end.
@@ -116,7 +117,7 @@ process_composite_node(Store, _Key, Parent, ResolvedPath, JoinedPath, Graph, Opt
             add_arc(Graph1, ParentPath, ResolvedPath, Label, Opts)
     end,
     % Process children recursively
-    case hb_store:list(Store, ResolvedPath) of
+    case hb_store:list(Store, ResolvedPath, Opts) of
         {ok, SubItems} ->
             lists:foldl(
                 fun(SubItem, Acc) ->

@@ -773,7 +773,7 @@ block({id, ID}, Opts) ->
                 {id, {explicit, ID}}
             }),
             {ok, Block};
-        not_found ->
+        {error, not_found} ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
     end;
 block({height, Height}, Opts) ->
@@ -783,7 +783,7 @@ block({height, Height}, Opts) ->
                 {height, Height}
             }),
             {ok, Block};
-        not_found ->
+        {error, not_found} ->
             request(
                 <<"GET">>,
                 <<"/block/height/",

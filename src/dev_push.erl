@@ -211,6 +211,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                     <<"target">> => Target,
                                     <<"reason">> =>
                                         <<"Could not access target process!">>
+                                };
+                            {error, not_found} ->
+                                #{
+                                    <<"response">> => <<"error">>,
+                                    <<"status">> => 404,
+                                    <<"target">> => Target,
+                                    <<"reason">> =>
+                                        <<"Could not access target process!">>
                                 }
                         end;
                        (Key, Msg) ->

@@ -150,10 +150,10 @@ run(Name, OptsName, Suite, OptsList) ->
 %% different sets of options.
 compare_events(Fun, Opts1, Opts2) ->
     hb_store:reset(hb_opts:get(store, hb_opts:get(store), Opts1)),
-    hb_store:write(
+    ok = hb_store:write(
         hb_opts:get(store, hb_opts:get(store), Opts1),
-        <<"test">>,
-        <<"test">>
+        #{ <<"test">> => <<"test">> },
+        Opts1
     ),
     {EventsSample1, _Res2} = hb_event:diff(
         fun() ->
@@ -303,4 +303,3 @@ preload(Opts, File) ->
             Opts
         ),
     hb_cache:write(Message, Opts).
-

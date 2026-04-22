@@ -393,7 +393,7 @@ test_env_opts() ->
         #{
             store => 
                 [
-                    TempStore
+                    TempStore,
                     #{<<"store-module">> => hb_store_gateway}
                 ]
         },

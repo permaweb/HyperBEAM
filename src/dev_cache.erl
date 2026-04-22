@@ -3,7 +3,7 @@
 %%% supports writing messages to the store, if the node message has the
 %%% writer's address in its `cache_writers' key.
 -module(dev_cache).
--export([read/3, write/3, link/3, read_from_cache/2]).
+-export([read/3, write/3, link/3, group/3, read_from_cache/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -22,7 +22,11 @@
 %%          not_found if the key does not exist,
 %%          {error, Reason} on failure.
 read(_M1, M2, Opts) ->
-    Location = hb_ao:get(<<"target">>, M2, Opts),
+    Location =
+        case hb_ao:get(<<"read">>, M2, not_found, Opts) of
+            not_found -> hb_ao:get(<<"target">>, M2, Opts);
+            ReadPath -> ReadPath
+        end,
     ?event({read, {key_extracted, Location}}),
     ?event(debug_gateway, cache_read),
     case hb_cache:read(Location, Opts) of
@@ -46,13 +50,17 @@ read(_M1, M2, Opts) ->
                 _ ->
                     {ok, Res}
             end;
-        not_found ->
+        {error, not_found} ->
             % The cache does not have this ID,but it may still be an explicit
             % `data/' path.
             % Store = hb_opts:get(store, [], Opts),
             Store = maps:get(store, Opts),
             ?event(dev_cache, {read, {location, Location}, {store, Store}}),
-            hb_store:read(Store, Location)
+            hb_store:read(Store, Location, Opts);
+        {error, _} = Error ->
+            Error;
+        {failure, _} = Failure ->
+            Failure
     end.
 
 %% @doc Write data to the cache.
@@ -71,7 +79,12 @@ write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
             ?event(dev_cache, {write, {trusted_writer, true}}),
-            Type = hb_ao:get(<<"type">>, M2, <<"single">>, Opts),
+            Type =
+                case hb_maps:get(<<"type">>, M2, <<"single">>, Opts) of
+                    <<"single">> -> <<"single">>;
+                    <<"batch">> -> <<"batch">>;
+                    _ -> <<"single">>
+                end,
             ?event(dev_cache, {write, {write_type, Type}}),
             case Type of
                 <<"single">> ->
@@ -110,13 +123,43 @@ write(_M1, M2, Opts) ->
 link(_Base, Req, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->
-            Source = hb_ao:get(<<"source">>, Req, Opts),
-            Destination = hb_ao:get(<<"destination">>, Req, Opts),
-            write_single(#{
-                <<"operation">> => <<"link">>,
-                <<"source">> => Source,
-                <<"destination">> => Destination
-            }, Opts);
+            StoreReq =
+                case hb_ao:get(<<"request-type">>, Req, not_found, Opts) of
+                    <<"store">> ->
+                        hb_ao:get(<<"body">>, Req, #{}, Opts);
+                    _ ->
+                        Destination = hb_ao:get(<<"destination">>, Req, Opts),
+                        Source = hb_ao:get(<<"source">>, Req, Opts),
+                        #{ Destination => Source }
+                end,
+            wrap_store_result(
+                hb_store:link(
+                    hb_opts:get(store, no_viable_store, Opts),
+                    StoreReq,
+                    Opts
+                )
+            );
+        false ->
+            {error, not_authorized}
+    end.
+
+group(_Base, Req, Opts) ->
+    case is_trusted_writer(Req, Opts) of
+        true ->
+            StoreReq =
+                case hb_ao:get(<<"request-type">>, Req, not_found, Opts) of
+                    <<"store">> ->
+                        hb_ao:get(<<"body">>, Req, #{}, Opts);
+                    _ ->
+                        #{ <<"group">> => hb_ao:get(<<"group">>, Req, Opts) }
+                end,
+            wrap_store_result(
+                hb_store:group(
+                    hb_opts:get(store, no_viable_store, Opts),
+                    StoreReq,
+                    Opts
+                )
+            );
         false ->
             {error, not_authorized}
     end.
@@ -137,6 +180,20 @@ write_single(Msg, Opts) ->
     ?event(dev_cache, {write_single, {location_extracted, Location}}),
     Operation = hb_ao:get(<<"operation">>, Msg, <<"write">>, Opts),
     ?event(dev_cache, {write_single, {operation, Operation}}),
+    case hb_ao:get(<<"request-type">>, Msg, not_found, Opts) of
+        <<"store">> ->
+            wrap_store_result(
+                hb_store:write(
+                    hb_opts:get(store, no_viable_store, Opts),
+                    Body,
+                    Opts
+                )
+            );
+        _ ->
+            write_single_legacy(Msg, Body, Location, Operation, Opts)
+    end.
+
+write_single_legacy(Msg, Body, Location, Operation, Opts) ->
     case {Operation, Body, Location} of
         {<<"write">>, not_found, _} ->
             ?event(dev_cache, {write_single, {error, "No body to write"}}),
@@ -146,16 +203,14 @@ write_single(Msg, Opts) ->
                     <<"body">> => <<"No body to write.">>
                 }
             };
-        {<<"write">>, Binary, not_found} when is_binary(Binary) ->
-            % When asked to write only a binary, we do not calculate any
-            % alternative IDs.
+        {<<"write">>, Value, not_found} ->
             ?event(dev_cache, 
 				{write_single, 
-					{processing_binary, Binary, Location}
+					{processing_value, Value, Location}
 				}
 			),
-            {ok, Path} = hb_cache:write(Binary, Opts),
-            ?event(dev_cache, {write_single, {binary_written, Path}}),
+            {ok, Path} = hb_cache:write(Value, Opts),
+            ?event(dev_cache, {write_single, {value_written, Path}}),
             {ok, #{ <<"status">> => 200, <<"path">> => Path }};
         {<<"link">>, _, _} ->
             ?event(dev_cache, {write_single, {processing_link}}),
@@ -166,7 +221,7 @@ write_single(Msg, Opts) ->
 					{link_params, Source, Destination}
 				}
 			),
-            ok = hb_cache:link(Source, Destination, Opts),
+	            ok = hb_cache:link(Source, Destination, Opts),
             ?event(dev_cache, {write_single, {link_success}}),
             {ok, #{ <<"status">> => 200 }};
         _ ->
@@ -178,6 +233,15 @@ write_single(Msg, Opts) ->
                 }
             }
     end.
+
+wrap_store_result(ok) ->
+    {ok, #{ <<"status">> => 200 }};
+wrap_store_result({ok, _}) ->
+    {ok, #{ <<"status">> => 200 }};
+wrap_store_result({error, Reason}) ->
+    {error, Reason};
+wrap_store_result({failure, Reason}) ->
+    {error, Reason}.
 
 %% @doc Verify that the request originates from a trusted writer.
 %% Checks that the single signer of the request is present in the list

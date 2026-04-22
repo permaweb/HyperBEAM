@@ -45,9 +45,7 @@ write(ProcID, Slot, Msg, Opts) ->
 path(ProcID, Ref, Opts) ->
     path(ProcID, Ref, [], Opts).
 path(ProcID, Ref, PathSuffix, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:path(
-        Store,
+    hb_path:to_binary(
         [
             <<"computed">>,
             hb_util:human_id(ProcID)
@@ -114,9 +112,13 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
             Opts
         ),
     case BestSlot of
+        {failure, _} = Failure ->
+            Failure;
+        {error, _} = Error ->
+            Error;
         not_found ->
             % No slot found with the necessary path was found.
-            not_found;
+            {error, not_found};
         SlotNum ->
             % Found. Return the slot number and the message at that slot.
             {ok, Msg} = hb_cache:read(path(ProcID, SlotNum, Opts), Opts),
@@ -136,11 +138,14 @@ first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
     not_found;
 first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
     RawPath = path(ProcID, Slot, RequiredPath, Opts),
-    ResolvedPath = hb_store:resolve(Store, RawPath),
-    ?event({trying_slot, {slot, Slot}, {path, RawPath}, {resolved_path, ResolvedPath}}),
-    case hb_store:type(Store, ResolvedPath) of
-        not_found ->
+    ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
+    case hb_store:read(Store, RawPath, Opts) of
+        {error, not_found} ->
             first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
+        {failure, _} = Failure ->
+            Failure;
+        {error, _} = Error ->
+            Error;
         _ ->
             Slot
     end.

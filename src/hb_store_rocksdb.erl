@@ -9,9 +9,9 @@
 -module(hb_store_rocksdb).
 -behaviour(gen_server).
 -behaviour(hb_store).
--export([enabled/0, start/1, start_link/1, stop/1, scope/1]).
--export([read/2, write/3, list/2, reset/1, list/0]).
--export([make_link/3, make_group/2, type/2, add_path/3, path/2, resolve/2]).
+-export([enabled/0, start/1, start/3, start_link/1, stop/1, stop/3, scope/1]).
+-export([read/3, write/3, list/3, reset/1, reset/3, list/0]).
+-export([link/3, group/3, type/3, resolve/3]).
 -export([init/1, terminate/2, handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
 -include("include/hb.hrl").
@@ -61,31 +61,38 @@ start(Opts = #{ <<"store-module">> := hb_store_rocksdb, <<"name">> := _Dir}) ->
     start_link(Opts);
 start(Opts) ->
     start_link(Opts).
+start(Opts, _Req, _NodeOpts) ->
+    case start(Opts) of
+        ok -> ok;
+        {ok, _} = Result -> Result;
+        {error, _} = Error -> Error;
+        ignore -> ok
+    end.
 
 -spec stop(any()) -> ok.
 stop(_Opts) ->
     gen_server:stop(?MODULE).
+stop(Opts, _Req, _NodeOpts) ->
+    stop(Opts).
 
 -spec reset([]) -> ok | no_return().
 reset(_Opts) ->
     gen_server:call(?MODULE, reset, ?TIMEOUT).
+reset(Opts, _Req, _NodeOpts) ->
+    reset(Opts).
 
 %% @doc Return scope (local)
 scope(_) -> local.
 
-%% @doc Return path
-path(_Opts, Path) ->
-    hb_store:path(Path).
-
 %% @doc Read data by the key.
 %% Recursively follows link messages
--spec read(Opts, Key) -> Result when
+-spec read_path(Opts, Key) -> Result when
     Opts :: map(),
     Key :: key() | list(),
     Result :: {ok, value()} | not_found | {error, {corruption, string()}} | {error, any()}.
-read(Opts, RawPath) ->
+read_path(Opts, RawPath) ->
     ?event({read, RawPath}),
-    Path = resolve(Opts, RawPath),
+    Path = resolve_path(Opts, RawPath),
     case do_read(Opts, Path) of
         not_found ->
             not_found;
@@ -98,18 +105,48 @@ read(Opts, RawPath) ->
         {ok, {group, _Result}} ->
             not_found
     end.
+read(Opts, RawPath) ->
+    read_path(Opts, RawPath).
+read(Opts, #{ <<"read">> := RawPath }, _NodeOpts) ->
+    Path = resolve_path(Opts, RawPath),
+    case do_read(Opts, Path) of
+        not_found ->
+            {error, not_found};
+        {error, _Reason} = Err ->
+            Err;
+        {ok, {raw, Result}} ->
+            {ok, Result};
+        {ok, {link, Link}} ->
+            ?event({link_found, Path, Link}),
+            read(Opts, #{ <<"read">> => Link }, #{});
+        {ok, {group, Result}} ->
+            {composite, sets:to_list(Result)}
+    end.
 
 %% @doc Write given Key and Value to the database
--spec write(Opts, Key, Value) -> Result when
+-spec write_path(Opts, Key, Value) -> Result when
     Opts :: map(),
     Key :: key(),
     Value :: value(),
     Result :: ok | {error, any()}.
-write(Opts, RawKey, Value) ->
-    Key = hb_store:join(RawKey),
+write(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(Key, Value, ok) ->
+            write_path(Opts, Key, Value);
+           (_Key, _Value, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
+write_path(Opts, RawKey, Value) ->
+    Key = hb_path:to_binary(RawKey),
     EncodedValue = encode_value(raw, Value),
     ?event({writing, Key, byte_size(EncodedValue)}),
-    do_write(Opts, Key, EncodedValue).
+    case do_write(Opts, Key, EncodedValue) of
+        ok -> ok;
+        {error, _} = Error -> Error
+    end.
 
 %% @doc Returns the full list of items stored under the given path. Where the path
 %% child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
@@ -118,7 +155,7 @@ write(Opts, RawKey, Value) ->
     Path :: any(),
     Result :: {ok, [string()]} | {error, term()}.
 
-list(Opts, Path) ->
+list_path(Opts, Path) ->
     case do_read(Opts, Path) of
         not_found -> {error, not_found};
         {error, _Reason} = Err ->
@@ -132,24 +169,35 @@ list(Opts, Path) ->
             ?event(rocksdb, {could_not_list_folder, Reason}),
             {ok, []}
     end.
+list(Opts, Path) ->
+    list_path(Opts, hb_path:to_binary(Path)).
+list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+    list_path(Opts, hb_path:to_binary(Path)).
 
 %% @doc Replace links in a path with the target of the link.
 -spec resolve(Opts, Path) -> Result when
     Opts :: any(),
     Path :: binary() | list(),
     Result :: not_found | string().
-resolve(Opts, Path) ->
-    PathList = hb_path:term_to_path_parts(hb_store:join(Path)),
+resolve_path(Opts, Path) ->
+    PathList = hb_path:term_to_path_parts(hb_path:to_binary(Path)),
 
     ResolvedPath = do_resolve(Opts, "", PathList),
     ResolvedPath.
+resolve(Opts, Path) ->
+    resolve_path(Opts, Path).
+resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
+    case resolve_path(Opts, Path) of
+        not_found -> {error, not_found};
+        Resolved -> {ok, Resolved}
+    end.
 
 do_resolve(_Opts, FinalPath, []) ->
     FinalPath;
 do_resolve(Opts, CurrentPath, [CurrentPath | Rest]) ->
     do_resolve(Opts, CurrentPath, Rest);
 do_resolve(Opts, CurrentPath, [Next | Rest]) ->
-    PathPart = hb_store:join([CurrentPath, Next]),
+    PathPart = hb_path:to_binary([CurrentPath, Next]),
     case do_read(Opts, PathPart) of
         not_found -> do_resolve(Opts, PathPart, Rest);
         {error, _Reason} = Err -> Err;
@@ -165,43 +213,62 @@ do_resolve(Opts, CurrentPath, [Next | Rest]) ->
     Result :: composite | simple | not_found.
 
 type(Opts, RawKey) ->
-    Key = hb_store:join(RawKey),
+    type_path(Opts, RawKey).
+type_path(Opts, RawKey) ->
+    Key = hb_path:to_binary(RawKey),
     case do_read(Opts, Key) of
         not_found -> not_found;
         {ok, {raw, _Item}} -> simple;
-        {ok, {link, NewKey}} -> type(Opts, NewKey);
+        {ok, {link, NewKey}} -> type_path(Opts, NewKey);
         {ok, {group, _Item}} -> composite
+    end.
+type(Opts, #{ <<"type">> := RawKey }, _NodeOpts) ->
+    case type_path(Opts, RawKey) of
+        simple -> {ok, simple};
+        composite -> {ok, composite};
+        not_found -> {error, not_found}
     end.
 
 %% @doc Creates group under the given path.
--spec make_group(Opts, Key) -> Result when
+-spec group(Opts, Req, NodeOpts) -> Result when
     Opts :: any(),
-    Key :: binary(),
+    Req :: map(),
+    NodeOpts :: map(),
     Result :: ok | {error, already_added}.
-make_group(#{ <<"name">> := _DataDir }, Key) ->
-    gen_server:call(?MODULE, {make_group, Key}, ?TIMEOUT);
-make_group(_Opts, Key) ->
-    gen_server:call(?MODULE, {make_group, Key}, ?TIMEOUT).
+group(#{ <<"name">> := _DataDir }, #{ <<"group">> := Key }, _NodeOpts) ->
+    gen_server:call(?MODULE, {make_group, hb_path:to_binary(Key)}, ?TIMEOUT);
+group(_Opts, #{ <<"group">> := Key }, _NodeOpts) ->
+    gen_server:call(?MODULE, {make_group, hb_path:to_binary(Key)}, ?TIMEOUT).
 
--spec make_link(any(), key(), key()) -> ok.
-make_link(_, Key1, Key1) ->
+link(_, Req, _NodeOpts) when map_size(Req) =:= 0 ->
     ok;
+link(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(New, Existing, ok) ->
+            link_path(Opts, Existing, New);
+           (_New, _Existing, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
 
-make_link(Opts, Existing, New) ->
+link_path(_, Key1, Key1) ->
+    ok;
+link_path(Opts, Existing, New) ->
     ExistingBin = convert_if_list(Existing),
     NewBin = convert_if_list(New),
 
     % Create: NewValue -> ExistingBin
     case do_read(Opts, NewBin) of
         not_found ->
-            do_write(Opts, NewBin, encode_value(link, ExistingBin));
+            case do_write(Opts, NewBin, encode_value(link, ExistingBin)) of
+                ok -> ok;
+                {error, _} = Error -> Error
+            end;
         _ ->
             ok
     end.
-
-%% @doc Add two path components together. // is not used
-add_path(_Opts, Path1, Path2) ->
-    Path1 ++ Path2.
 
 %% @doc List all items registered in rocksdb store. Should be used only
 %% for testing/debugging, as the underlying operation is doing full traversal
@@ -316,10 +383,10 @@ ensure_dir(DBHandle, CurrentPath, []) ->
     ok;
 ensure_dir(DBHandle, CurrentPath, [Next]) ->
     maybe_create_dir(DBHandle, CurrentPath, Next),
-    ensure_dir(DBHandle, hb_store:join([CurrentPath, Next]), []);
+    ensure_dir(DBHandle, hb_path:to_binary([CurrentPath, Next]), []);
 ensure_dir(DBHandle, CurrentPath, [Next | Rest]) ->
     maybe_create_dir(DBHandle, CurrentPath, Next),
-    ensure_dir(DBHandle, hb_store:join([CurrentPath, Next]), Rest).
+    ensure_dir(DBHandle, hb_path:to_binary([CurrentPath, Next]), Rest).
 
 maybe_create_dir(DBHandle, DirPath, Value) ->
     CurrentValueSet =
@@ -343,23 +410,13 @@ open_rockdb(RawDir) ->
 
 % Helper function to convert lists to binaries
 convert_if_list(Value) when is_list(Value) ->
-    join(Value);  % Perform the conversion if it's a list
+    hb_path:to_binary(Value);
 convert_if_list(Value) ->
-    Value.  % Leave unchanged if it's not a list
+    Value.
 
 %% @doc Ensure that the given filename is a list, not a binary.
 ensure_list(Value) when is_binary(Value) -> binary_to_list(Value);
 ensure_list(Value) -> Value.
-
-maybe_convert_to_binary(Value) when is_list(Value) ->
-    list_to_binary(Value);
-maybe_convert_to_binary(Value) when is_binary(Value) ->
-    Value.
-
-join(Key) when is_list(Key) ->
-    KeyList = hb_store:join(Key),
-    maybe_convert_to_binary(KeyList);
-join(Key) when is_binary(Key) -> Key.
 
 collect(Iterator) ->
     case rocksdb:iterator_move(Iterator, <<>>) of
@@ -420,19 +477,23 @@ write_read_test_() ->
         fun(_) -> reset([]) end,
         [
             {"can read/write data", fun() ->
-                ok = write(#{}, <<"test_key">>, <<"test_value">>),
-                {ok, Value} = read(#{}, <<"test_key">>),
+                ok = write(#{}, #{ <<"test_key">> => <<"test_value">> }, #{}),
+                {ok, Value} = read(#{}, #{ <<"read">> => <<"test_key">> }, #{}),
 
                 ?assertEqual(<<"test_value">>, Value)
             end},
             {"returns not_found for non existing keys", fun() ->
-                Value = read(#{}, <<"non_existing">>),
-                ?assertEqual(not_found, Value)
+                Value = read(#{}, #{ <<"read">> => <<"non_existing">> }, #{}),
+                ?assertEqual({error, not_found}, Value)
             end},
             {"follows links", fun() ->
-                ok = write(#{}, <<"test_key2">>, <<"value_under_linked_key">>),
-                ok = make_link(#{}, <<"test_key2">>, <<"test_key">>),
-                {ok, Value} = read(#{}, <<"test_key">>),
+                ok = write(
+                    #{},
+                    #{ <<"test_key2">> => <<"value_under_linked_key">> },
+                    #{}
+                ),
+                ok = link(#{}, #{ <<"test_key">> => <<"test_key2">> }, #{}),
+                {ok, Value} = read(#{}, #{ <<"read">> => <<"test_key">> }, #{}),
 
                 ?assertEqual(<<"value_under_linked_key">>, Value)
             end}
@@ -446,161 +507,254 @@ api_test_() ->
         end,
         fun(_) -> reset([]) end, [
             {"write/3 can automatically create folders", fun() ->
-                ok = write(#{}, <<"messages/key1">>, <<"val1">>),
-                ok = write(#{}, <<"messages/key2">>, <<"val2">>),
+                ok = write(#{}, #{ <<"messages/key1">> => <<"val1">> }, #{}),
+                ok = write(#{}, #{ <<"messages/key2">> => <<"val2">> }, #{}),
 
-                {ok, Items} = list(#{}, <<"messages">>),
+                {ok, Items} = list(#{}, #{ <<"list">> => <<"messages">> }, #{}),
                 ?assertEqual(
                     lists:sort([<<"key1">>, <<"key2">>]),
                     lists:sort(Items)
                 ),
-                {ok, Item} = read(#{}, <<"messages/key1">>),
+                {ok, Item} = read(#{}, #{ <<"read">> => <<"messages/key1">> }, #{}),
                 ?assertEqual(<<"val1">>, Item)
             end},
             {"list/2 lists keys under given path", fun() ->
-                ok = write(#{}, <<"messages/key1">>, <<"val1">>),
-                ok = write(#{}, <<"messages/key2">>, <<"val2">>),
-                ok = write(#{}, <<"other_path/key3">>, <<"val3">>),
-                {ok, Items} = list(#{}, <<"messages">>),
+                ok = write(#{}, #{ <<"messages/key1">> => <<"val1">> }, #{}),
+                ok = write(#{}, #{ <<"messages/key2">> => <<"val2">> }, #{}),
+                ok = write(#{}, #{ <<"other_path/key3">> => <<"val3">> }, #{}),
+                {ok, Items} = list(#{}, #{ <<"list">> => <<"messages">> }, #{}),
                 ?assertEqual(
                     lists:sort([<<"key1">>, <<"key2">>]), lists:sort(Items)
                 )
             end},
             {"list/2 when database is empty", fun() ->
-                ?assertEqual({error, not_found}, list(#{}, <<"process/slot">>))
+                ?assertEqual(
+                    {error, not_found},
+                    list(#{}, #{ <<"list">> => <<"process/slot">> }, #{})
+                )
             end},
-            {"make_link/3 creates a link to actual data", fun() ->
-                ok = write(ignored_options, <<"key1">>, <<"test_value">>),
-                ok = make_link([], <<"key1">>, <<"key2">>),
-                {ok, Value} = read([], <<"key2">>),
+            {"link/3 creates a link to actual data", fun() ->
+                ok = write(
+                    ignored_options,
+                    #{ <<"key1">> => <<"test_value">> },
+                    #{}
+                ),
+                ok = link([], #{ <<"key2">> => <<"key1">> }, #{}),
+                {ok, Value} = read([], #{ <<"read">> => <<"key2">> }, #{}),
 
                 ?assertEqual(<<"test_value">>, Value)
             end},
-            {"make_link/3 does not create links if keys are same", fun() ->
-                ok = make_link([], <<"key1">>, <<"key1">>),
-                ?assertEqual(not_found, read(#{}, <<"key1">>))
+            {"link/3 does not create links if keys are same", fun() ->
+                ok = link([], #{ <<"key1">> => <<"key1">> }, #{}),
+                ?assertEqual(
+                    {error, not_found},
+                    read(#{}, #{ <<"read">> => <<"key1">> }, #{})
+                )
             end},
             {"reset cleans up the database", fun() ->
-                ok = write(ignored_options, <<"test_key">>, <<"test_value">>),
+                ok = write(
+                    ignored_options,
+                    #{ <<"test_key">> => <<"test_value">> },
+                    #{}
+                ),
 
                 ok = reset([]),
-                ?assertEqual(not_found, read(ignored_options, <<"test_key">>))
+                ?assertEqual(
+                    {error, not_found},
+                    read(ignored_options, #{ <<"read">> => <<"test_key">> }, #{})
+                )
             end},
             {
                 "type/2 can identify simple items",
                 fun() ->
-                    ok = write(#{}, <<"simple_item">>, <<"test">>),
-                    ?assertEqual(simple, type(#{}, <<"simple_item">>))
+                    ok = write(#{}, #{ <<"simple_item">> => <<"test">> }, #{}),
+                    ?assertEqual(
+                        {ok, simple},
+                        type(#{}, #{ <<"type">> => <<"simple_item">> }, #{})
+                    )
                 end
             },
             {
                 "type/2 returns not_found for non existing keys",
                 fun() ->
-                    ?assertEqual(not_found, type(#{}, <<"random_key">>))
+                    ?assertEqual(
+                        {error, not_found},
+                        type(#{}, #{ <<"type">> => <<"random_key">> }, #{})
+                    )
                 end
             },
             {
                 "type/2 resolves links before checking real type of the following item",
                 fun() ->
-                    ok = write(#{}, <<"messages/key1">>, <<"val1">>),
-                    ok = write(#{}, <<"messages/key2">>, <<"val2">>),
+                    ok = write(#{}, #{ <<"messages/key1">> => <<"val1">> }, #{}),
+                    ok = write(#{}, #{ <<"messages/key2">> => <<"val2">> }, #{}),
 
-                    make_link(#{}, <<"messages">>, <<"CompositeKey">>),
-                    make_link(#{}, <<"messages/key2">>, <<"SimpleKey">>),
-                    ?assertEqual(composite, type(#{}, <<"CompositeKey">>)),
-                    ?assertEqual(simple, type(#{}, <<"SimpleKey">>))
+                    ok =
+                        link(
+                            #{},
+                            #{ <<"CompositeKey">> => <<"messages">> },
+                            #{}
+                        ),
+                    ok =
+                        link(
+                            #{},
+                            #{ <<"SimpleKey">> => <<"messages/key2">> },
+                            #{}
+                        ),
+                    ?assertEqual(
+                        {ok, composite},
+                        type(#{}, #{ <<"type">> => <<"CompositeKey">> }, #{})
+                    ),
+                    ?assertEqual(
+                        {ok, simple},
+                        type(#{}, #{ <<"type">> => <<"SimpleKey">> }, #{})
+                    )
                 end
             },
             {
                 "type/2 treats groups as composite items",
                 fun() ->
-                    make_group(#{}, <<"messages_folder">>),
-                    ?assertEqual(composite, type(#{}, <<"messages_folder">>))
+                    ok =
+                        group(#{}, #{ <<"group">> => <<"messages_folder">> }, #{}),
+                    ?assertEqual(
+                        {ok, composite},
+                        type(#{}, #{ <<"type">> => <<"messages_folder">> }, #{})
+                    )
                 end
             },
             {
                 "resolve/2 resolves raw/groups items",
                 fun() ->
-                    write(#{}, <<"top_level/level1/item1">>, <<"1">>),
-                    write(#{}, <<"top_level/level1/item2">>, <<"1">>),
-                    write(#{}, <<"top_level/level1/item3">>, <<"1">>),
+                    ok = write(
+                        #{},
+                        #{ <<"top_level/level1/item1">> => <<"1">> },
+                        #{}
+                    ),
+                    ok = write(
+                        #{},
+                        #{ <<"top_level/level1/item2">> => <<"1">> },
+                        #{}
+                    ),
+                    ok = write(
+                        #{},
+                        #{ <<"top_level/level1/item3">> => <<"1">> },
+                        #{}
+                    ),
 
                     ?assertEqual(
-                        <<"top_level/level1/item3">>,
-                        resolve(#{},  <<"top_level/level1/item3">>)
+                        {ok, <<"top_level/level1/item3">>},
+                        resolve(
+                            #{},
+                            #{ <<"resolve">> => <<"top_level/level1/item3">> },
+                            #{}
+                        )
                     )
                 end
             },
             {
                 "resolve/2 follows links",
                 fun() ->
-                    write(#{}, <<"data/the_data_item">>, <<"the_data">>),
-                    make_link(#{}, <<"data/the_data_item">>, <<"top_level/level1/item">>),
+                    ok = write(
+                        #{},
+                        #{ <<"data/the_data_item">> => <<"the_data">> },
+                        #{}
+                    ),
+                    ok =
+                        link(
+                            #{},
+                            #{ <<"top_level/level1/item">> => <<"data/the_data_item">> },
+                            #{}
+                        ),
 
                     ?assertEqual(
-                        <<"data/the_data_item">>,
-                        resolve(#{},  <<"top_level/level1/item">>)
+                        {ok, <<"data/the_data_item">>},
+                        resolve(
+                            #{},
+                            #{ <<"resolve">> => <<"top_level/level1/item">> },
+                            #{}
+                        )
                     )
                 end
             },
             {
-                "make_group/2 creates a folder",
+                "group/3 creates a folder",
                 fun() ->
-                    ?assertEqual(ok, make_group(#{}, <<"messages">>)),
+                    ?assertEqual(
+                        ok,
+                        group(#{}, #{ <<"group">> => <<"messages">> }, #{})
+                    ),
 
                     ?assertEqual(
-                        list(#{}, <<"messages">>),
-                        {ok, []}
+                        {ok, []},
+                        list(#{}, #{ <<"list">> => <<"messages">> }, #{})
                     )
                 end
             },
             {
-                "make_group/2 does not override folder contents",
+                "group/3 does not override folder contents",
                 fun() ->
-                    write(#{}, <<"messages/id">>, <<"1">>),
-                    write(#{}, <<"messages/commitments">>, <<"2">>),
-
-                    ?assertEqual(ok, make_group(#{}, <<"messages">>)),
+                    ok = write(#{}, #{ <<"messages/id">> => <<"1">> }, #{}),
+                    ok = write(
+                        #{},
+                        #{ <<"messages/commitments">> => <<"2">> },
+                        #{}
+                    ),
 
                     ?assertEqual(
-                        list(#{}, <<"messages">>),
-                        {ok, [<<"id">>, <<"commitments">>]}
+                        ok,
+                        group(#{}, #{ <<"group">> => <<"messages">> }, #{})
+                    ),
+
+                    ?assertEqual(
+                        {ok, [<<"id">>, <<"commitments">>]},
+                        list(#{}, #{ <<"list">> => <<"messages">> }, #{})
                     )
                 end
             },
             {
-                "make_group/2 making deep nested groups",
+                "group/3 makes deep nested groups",
                 fun() ->
-                    make_group(#{}, <<"messages/ids/items">>),
+                    ok =
+                        group(
+                            #{},
+                            #{ <<"group">> => <<"messages/ids/items">> },
+                            #{}
+                        ),
                     ?assertEqual(
                         {ok, [<<"ids">>]},
-                        list(#{}, <<"messages">>)
+                        list(#{}, #{ <<"list">> => <<"messages">> }, #{})
                     ),
                     ?assertEqual(
                         {ok, [<<"items">>]},
-                        list(#{}, <<"messages/ids">>)
+                        list(#{}, #{ <<"list">> => <<"messages/ids">> }, #{})
                     ),
                     ?assertEqual(
                         {ok, []},
-                        list(#{}, <<"messages/ids/items">>)
+                        list(#{}, #{ <<"list">> => <<"messages/ids/items">> }, #{})
                     )
                 end
             },
             {
                 "write/3 automatically does deep groups",
                 fun() ->
-                    write(#{}, <<"messages/ids/item1">>, <<"1">>),
-                    write(#{}, <<"messages/ids/item2">>, <<"2">>),
+                    ok = write(#{}, #{ <<"messages/ids/item1">> => <<"1">> }, #{}),
+                    ok = write(#{}, #{ <<"messages/ids/item2">> => <<"2">> }, #{}),
                     ?assertEqual(
                         {ok, [<<"ids">>]},
-                        list(#{}, <<"messages">>)
+                        list(#{}, #{ <<"list">> => <<"messages">> }, #{})
                     ),
                     ?assertEqual(
                         {ok, [<<"item2">>, <<"item1">>]},
-                        list(#{}, <<"messages/ids">>)
+                        list(#{}, #{ <<"list">> => <<"messages/ids">> }, #{})
                     ),
-                    ?assertEqual(read(#{}, <<"messages/ids/item1">>),{ok, <<"1">>}),
-                    ?assertEqual(read(#{}, <<"messages/ids/item2">>), {ok, <<"2">>})
+                    ?assertEqual(
+                        {ok, <<"1">>},
+                        read(#{}, #{ <<"read">> => <<"messages/ids/item1">> }, #{})
+                    ),
+                    ?assertEqual(
+                        {ok, <<"2">>},
+                        read(#{}, #{ <<"read">> => <<"messages/ids/item2">> }, #{})
+                    )
                 end
             }
         ]}.

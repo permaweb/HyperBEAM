@@ -83,9 +83,9 @@ is_tx_indexed(TXID, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> false;
         #{ <<"index-store">> := Store } ->
-            case hb_store:read(Store, hb_store_arweave_offset:path(TXID)) of
+            case hb_store:read(Store, hb_store_arweave_offset:path(TXID), #{}) of
                 {ok, _} -> true;
-                not_found -> false
+                {error, not_found} -> false
             end
     end.
 
