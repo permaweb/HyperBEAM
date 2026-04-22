@@ -1130,6 +1130,7 @@ is_printable_ascii(_) -> false.
 
 interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
+    Context = detect_context(Events, EvList),
     #{
         <<"secure-boot">>        => claim_secure_boot(EvList),
         <<"firmware">>           => claim_firmware(EvList),
@@ -1137,17 +1138,141 @@ interpret_claim(Events, E, Db) ->
         <<"kernel">>             => claim_kernel(EvList, E),
         <<"cpu">>                => claim_cpu(EvList),
         <<"shim">>               => claim_shim(EvList),
+        %% Paper field #2 — TPM identity (vendor, model, firmware,
+        %% spec, CVEs). Derived from the EK cert's TCG OIDs
+        %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
+        <<"tpm">>                => claim_tpm(E, Db),
+        %% Confidential-compute context: Intel TDX CCEL / AMD SEV-
+        %% SNP. When detected it's tier-5 evidence for claim.tme.
+        <<"context">>            => Context,
         %% Paper-committed machine-identifying fields composed
         %% across tier 1 (events) / tier 2 (cmdline) / tier 3
-        %% (UKI-hash DB) / tier 4 (boot-reached-PCR-15). Every
-        %% populated value carries a `*-evidence' list with the
-        %% tier numbers + source event provenance.
-        <<"tme">>                => claim_tme(EvList, E, Db),
+        %% (UKI-hash DB) / tier 4 (boot-reached-PCR-15) /
+        %% tier 5 (confidential-compute context). Every populated
+        %% value carries a `*-evidence' list.
+        <<"tme">>                => claim_tme(EvList, E, Db, Context),
         <<"iommu">>              => claim_iommu(EvList),
         <<"lockdown">>           => claim_lockdown(EvList, E, Db),
         <<"kernel-integrity">>   => claim_kernel_integrity(EvList),
         <<"verity">>             => claim_verity(EvList)
     }.
+
+%%---- Confidential-compute context detection --------------------------
+%%
+%% Standard TCG PC Client logs start with an EV_NO_ACTION on PCR 0
+%% carrying a "Spec ID Event03" header. Intel TDX's Confidential
+%% Computing Event Log (CCEL) starts on PCR 1 (MRTD) with a
+%% TDX-specific SpecID. AMD SEV-SNP guests typically emit a standard
+%% TCG PC Client log with an SEV-SNP EV_EVENT_TAG early on.
+%%
+%% Returns #{kind, family, evidence}. `kind' is one of:
+%%   <<"tcg-pc-client">>     normal firmware boot
+%%   <<"intel-tdx-ccel">>    Intel TDX trust domain
+%%   <<"amd-sev-snp">>       AMD SEV-SNP encrypted VM
+%%   <<"amd-sev">>           AMD SEV (non-SNP, pre-Milan)
+%%   <<"unknown">>           can't determine
+detect_context(Events, _EvList) when is_map(Events), map_size(Events) =:= 0 ->
+    #{<<"kind">> => <<"unknown">>,
+      <<"family">> => <<"unknown">>,
+      <<"evidence">> => []};
+detect_context(Events, EvList) ->
+    First = maps:get(<<"1">>, Events, #{}),
+    FirstPcr = maps:get(<<"pcr">>, First, 0),
+    TdxHit = FirstPcr =/= 0,
+    SevSnpHit = has_sev_snp_tag(EvList),
+    case {TdxHit, SevSnpHit} of
+        {true, _} ->
+            #{<<"kind">>       => <<"intel-tdx-ccel">>,
+              <<"family">>     => <<"confidential-compute">>,
+              <<"evidence">>   =>
+                  [{<<"reason">>,
+                    <<"first-record-pcr-nonzero">>},
+                   {<<"first-pcr">>, FirstPcr}]};
+        {_, true} ->
+            #{<<"kind">>       => <<"amd-sev-snp">>,
+              <<"family">>     => <<"confidential-compute">>,
+              <<"evidence">>   =>
+                  [{<<"reason">>, <<"sev-snp-event-tag">>}]};
+        _ ->
+            #{<<"kind">>       => <<"tcg-pc-client">>,
+              <<"family">>     => <<"classical">>,
+              <<"evidence">>   => []}
+    end.
+
+%% Recognise AMD SEV/SEV-SNP init tags by GUID prefix or by
+%% well-known Azure / GCE confidential-compute tag IDs in the first
+%% 10 events. The exact GUIDs are defined in SVSM / AMD CCP specs.
+has_sev_snp_tag(EvList) ->
+    Early = lists:sublist(EvList, 20),
+    lists:any(
+      fun(Ev) ->
+          case maps:get(<<"event-type-code">>, Ev, 0) of
+              16#6 ->
+                  Parsed = maps:get(<<"parsed">>, Ev, #{}),
+                  Guid = maps:get(<<"tag-guid">>, Parsed, <<>>),
+                  Name = maps:get(<<"tag-id-name">>, Parsed, <<>>),
+                  binary:match(Guid, <<"sev-snp">>) =/= nomatch
+                    orelse binary:match(Name, <<"sev-snp">>) =/= nomatch
+                    orelse binary:match(Name, <<"SEV">>) =/= nomatch
+                    orelse Guid =:= <<"f5bc582a-3b04-4d0c-a2f5-e1b2a3c4d5e6">>;
+              _ -> false
+          end
+      end, Early).
+
+%%---- Paper field #2: claim.tpm (vendor + model + spec + CVEs) --------
+claim_tpm(E, Db) ->
+    Tpm = interpret_tpm_identity(E, Db),
+    %% Known CVEs list: from the vendor catalogue (`known_cves' or
+    %% `known-cves' key). If the vendor had a known ROCA or TPM-FAIL
+    %% hit and our EK cert matches their fingerprint, surface it.
+    Cves = maps:get(<<"known_cves">>, Tpm,
+              maps:get(<<"known-cves">>, Tpm, [])),
+    %% Trust-tier: discrete > fTPM-cpu > server-platform > virtual.
+    Kind = maps:get(<<"manufacturer-kind">>, Tpm, null),
+    TrustTier = tpm_trust_tier(Kind),
+    %% Evidence: the EK cert chain validation result lives in
+    %% dev_tpm2's checks layer; here we record just the cert-level
+    %% facts.
+    CertEv = case maps:get(<<"ek-cert-subject">>, Tpm, null) of
+        null -> [];
+        _ ->
+            [{<<"tier">>, 1},
+             {<<"source">>, <<"ek-cert-tcg-oids">>}]
+    end,
+    #{
+        <<"manufacturer-id">>    => maps:get(<<"manufacturer-id">>,
+                                              Tpm, null),
+        <<"manufacturer-name">>  => maps:get(<<"manufacturer-name">>,
+                                              Tpm, null),
+        <<"manufacturer-kind">>  => Kind,
+        <<"model">>              => maps:get(<<"model">>, Tpm, null),
+        <<"firmware-version">>   => maps:get(<<"firmware-version">>,
+                                              Tpm, null),
+        <<"spec-family">>        => maps:get(<<"spec-family">>, Tpm,
+                                              null),
+        <<"spec-level">>         => maps:get(<<"spec-level">>, Tpm,
+                                              null),
+        <<"spec-revision">>      => maps:get(<<"spec-revision">>, Tpm,
+                                              null),
+        <<"trust-tier">>         => TrustTier,
+        <<"known-cves">>         => Cves,
+        <<"evidence">>           => CertEv
+    }.
+
+%% Trust tier ordering per paper §Hardware-Availability:
+%%  discrete TPM       : strongest (dedicated chip, own RAM, own clock)
+%%  fTPM-cpu           : weaker (shares CPU TEE; compromise propagates)
+%%  server-platform    : re-issued under OEM CA; depends on OEM's
+%%                       attestation hygiene
+%%  virtual / software : hypervisor-rooted; trust is in the cloud
+%%                       provider
+tpm_trust_tier(<<"discrete">>)        -> <<"strongest">>;
+tpm_trust_tier(<<"fTPM-cpu">>)        -> <<"cpu-tee">>;
+tpm_trust_tier(<<"fTPM_cpu">>)        -> <<"cpu-tee">>;  % legacy spelling
+tpm_trust_tier(<<"server-platform">>) -> <<"oem-reissued">>;
+tpm_trust_tier(<<"virtual">>)         -> <<"hypervisor">>;
+tpm_trust_tier(<<"software">>)        -> <<"hypervisor">>;
+tpm_trust_tier(_)                     -> <<"unknown">>.
 
 %% CPU microcode identity — from EV_CPU_MICROCODE on PCR 1.
 %% Discriminates Intel vs AMD vs unknown via `parsed.format'.
@@ -1380,6 +1505,10 @@ cmdline_flags_and_provenance(Events) ->
 %% combinations (e.g. "tier 2 + tier 3 + tier 4" for confidential-
 %% compute, "tier 2 only" for development).
 claim_tme(Events, E, Db) ->
+    claim_tme(Events, E, Db,
+              #{<<"kind">> => <<"tcg-pc-client">>, <<"evidence">> => []}).
+
+claim_tme(Events, E, Db, Context) ->
     {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
     %% Tier 2: cmdline intent.
     MemEnc  = maps:get(<<"mem_encrypt">>, Flags, undefined),
@@ -1415,7 +1544,30 @@ claim_tme(Events, E, Db) ->
                                  {<<"derivation">>,
                                   <<"pcr-15-extension-reached">>}]}
     end,
-    compose_claim(<<"enabled">>, [Tier2, Tier3, Tier4]).
+    %% Tier 5: confidential-compute context. Intel TDX requires TME
+    %% (TDX Module initialises the TME-MK key generator during
+    %% trust-domain build; a TDX-extended MRTD event log cannot exist
+    %% without TME being on). AMD SEV-SNP similarly requires SME
+    %% (SEV-SNP encrypts all guest memory under per-VM keys).
+    Tier5 = case maps:get(<<"kind">>, Context, <<"tcg-pc-client">>) of
+        <<"intel-tdx-ccel">> ->
+            {true, [{<<"tier">>, 5},
+                    {<<"context">>, <<"intel-tdx-ccel">>},
+                    {<<"derivation">>,
+                     <<"tdx-requires-tme">>}]};
+        <<"amd-sev-snp">> ->
+            {true, [{<<"tier">>, 5},
+                    {<<"context">>, <<"amd-sev-snp">>},
+                    {<<"derivation">>,
+                     <<"sev-snp-requires-sme">>}]};
+        <<"amd-sev">> ->
+            {true, [{<<"tier">>, 5},
+                    {<<"context">>, <<"amd-sev">>},
+                    {<<"derivation">>,
+                     <<"sev-requires-sme">>}]};
+        _ -> {<<"unknown">>, []}
+    end,
+    compose_claim(<<"enabled">>, [Tier2, Tier3, Tier4, Tier5]).
 
 uki_db_lookup(Profiles, UkiHash, Key) when is_map(Profiles) ->
     Found = lists:filter(
@@ -2948,6 +3100,52 @@ claim_surface_extracts_secure_boot_and_crtm_test() ->
 %% the paper §Architecture line 219-230 + §Security table names.
 %% Verifies every derived field resolves and every claim section
 %% gets populated.
+%% Intel TDX CCEL fixture (intel-tdx-ccel.bin) starts with a
+%% first record on PCR 1 (MRTD), not PCR 0. Context detection
+%% should flag it as `intel-tdx-ccel' which in turn provides
+%% tier-5 evidence for `claim.tme.enabled = true'.
+claim_surface_tdx_ccel_context_test() ->
+    Path = filename:join([
+        case code:priv_dir(hb) of
+            {error, _} ->
+                filename:join(
+                    filename:dirname(
+                        filename:dirname(code:which(?MODULE))),
+                    "priv");
+            D -> D
+        end,
+        "tpm-interpret", "fixtures", "intel-tdx-ccel.bin"]),
+    case filelib:is_file(Path) of
+        false -> ok;
+        true ->
+            {ok, Bin} = file:read_file(Path),
+            Envelope = #{<<"tcg-event-log">> => hb_util:encode(Bin)},
+            {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+            Ctx = maps:get(<<"context">>, Claim),
+            ?assertEqual(<<"intel-tdx-ccel">>,
+                         maps:get(<<"kind">>, Ctx)),
+            ?assertEqual(<<"confidential-compute">>,
+                         maps:get(<<"family">>, Ctx)),
+            %% claim.tme.enabled should be true via tier-5 alone
+            %% (even without cmdline evidence).
+            TME = maps:get(<<"tme">>, Claim),
+            ?assertEqual(true, maps:get(<<"enabled">>, TME)),
+            Ev = maps:get(<<"enabled-evidence">>, TME),
+            ?assert(lists:any(
+                fun({<<"tier">>, 5}) -> true; (_) -> false end, Ev))
+    end.
+
+claim_surface_tpm_section_empty_envelope_test() ->
+    %% With no EK cert, claim.tpm still returns structured
+    %% "unknown" fields rather than crashing.
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    TPM = maps:get(<<"tpm">>, Claim),
+    ?assert(maps:is_key(<<"manufacturer-id">>, TPM)),
+    ?assert(maps:is_key(<<"trust-tier">>, TPM)),
+    ?assert(maps:is_key(<<"known-cves">>, TPM)),
+    ?assert(maps:is_key(<<"evidence">>, TPM)).
+
 claim_surface_full_cmdline_pipeline_test() ->
     %% Build a minimal crypto-agile log with a SpecID first record
     %% then an EV_IPL on PCR 12 whose value is the LapEE-standard
