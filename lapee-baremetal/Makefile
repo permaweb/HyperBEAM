@@ -41,6 +41,7 @@ help:
 builders:
 	docker build --platform=linux/amd64 -t lapee-builder:latest       -f docker/Dockerfile.builder       docker/
 	docker build --platform=linux/amd64 -t lapee-hyperbeam-builder:latest -f docker/Dockerfile.hyperbeam docker/
+	docker build --platform=linux/amd64 -t lapee-tools:latest         -f reference-demo/tpm-tools-docker/Dockerfile reference-demo/tpm-tools-docker/
 
 tpm-start:
 	./scripts/swtpm.sh start

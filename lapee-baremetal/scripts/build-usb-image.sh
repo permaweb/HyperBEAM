@@ -113,16 +113,50 @@ if [[ -n "$PREBUILT_UKI" ]]; then
     echo ">> using pre-built UKI: $PREBUILT_UKI"
 else
     echo ">> building UKI from kernel + initramfs"
-    # Stage inputs under work/ so uki.sh + its container can see
-    # them via the /work bind-mount.
+    # Stage inputs under $BUILD_DIR (== $LAPEE_ROOT/work/usb-build).
+    # The tools container mounts $LAPEE_ROOT/work as /work, so
+    # the same directory is visible at /work/usb-build inside.
+    # All paths passed to ukify below are container-absolute to
+    # avoid host/container path confusion.
     cp "$KERNEL"    "$BUILD_DIR/kernel"
     cp "$INITRAMFS" "$BUILD_DIR/initramfs.cpio.gz"
-    REL_BUILD=${BUILD_DIR#${LAPEE_ROOT}/}
-    "${LAPEE_ROOT}/scripts/uki.sh" \
-        --kernel  "${REL_BUILD}/kernel" \
-        --initrd  "${REL_BUILD}/initramfs.cpio.gz" \
-        --cmdline "$CMDLINE" \
-        --output  "${REL_BUILD}/lapee.efi"
+    cat > "$BUILD_DIR/os-release" <<EOF
+NAME="LapEE"
+ID=lapee
+VERSION_ID="${LAPEE_VERSION:-dev}"
+PRETTY_NAME="LapEE (${LAPEE_VERSION:-dev})"
+EOF
+    echo "$CMDLINE" > "$BUILD_DIR/cmdline.txt"
+
+    docker run --rm --platform=linux/amd64 \
+        -v "${LAPEE_ROOT}/work":/work \
+        -w /work/usb-build \
+        "$LAPEE_IMAGE" \
+        bash -euo pipefail -c "
+            if command -v ukify >/dev/null 2>&1; then
+                ukify build \\
+                    --linux=/work/usb-build/kernel \\
+                    --initrd=/work/usb-build/initramfs.cpio.gz \\
+                    --cmdline=\"\$(cat /work/usb-build/cmdline.txt)\" \\
+                    --os-release=@/work/usb-build/os-release \\
+                    --output=/work/usb-build/lapee.efi
+            else
+                # Manual fallback via systemd-stub + objcopy.
+                STUB=\$(find /usr/lib /lib -name 'linuxx64.efi.stub' \\
+                        -print -quit 2>/dev/null)
+                : \${STUB:?systemd-stub not found}
+                objcopy \\
+                    --add-section .osrel=/work/usb-build/os-release \\
+                    --change-section-vma .osrel=0x20000 \\
+                    --add-section .cmdline=/work/usb-build/cmdline.txt \\
+                    --change-section-vma .cmdline=0x30000 \\
+                    --add-section .linux=/work/usb-build/kernel \\
+                    --change-section-vma .linux=0x2000000 \\
+                    --add-section .initrd=/work/usb-build/initramfs.cpio.gz \\
+                    --change-section-vma .initrd=0x3000000 \\
+                    \"\${STUB}\" /work/usb-build/lapee.efi
+            fi
+        "
 fi
 
 UKI_SIZE=$(stat -f %z "$BUILD_DIR/lapee.efi" 2>/dev/null \
