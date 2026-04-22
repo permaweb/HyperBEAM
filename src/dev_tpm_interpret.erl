@@ -1150,6 +1150,17 @@ interpret_claim(Events, E, Db) ->
         %% DB? If so we know exactly which firmware + platform
         %% booted this machine.
         <<"pcr-match">>          => claim_pcr_match(E, Db),
+        %% Hour-6: fundamental quote-integrity check. Recompute
+        %% SHA-XX(concat of selected PCRs) and compare against
+        %% the TPM's declared pcrDigest. A mismatch means the
+        %% quote is fraudulent OR the PCR values in the envelope
+        %% were tampered with between signing and transport.
+        <<"quote-integrity">>    => claim_quote_integrity(E),
+        %% Hour-6: freshness composite — reset-count / restart-
+        %% count / clock / safe / nonce rolled into a single
+        %% policy-ready stanza. Tells a verifier whether the
+        %% quote is from the current boot epoch.
+        <<"freshness">>          => claim_freshness(E),
         %% Paper field #2 — TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
@@ -1885,6 +1896,225 @@ pcr_match_confidence(1) -> <<"low">>;
 pcr_match_confidence(2) -> <<"medium">>;
 pcr_match_confidence(3) -> <<"high">>;
 pcr_match_confidence(_) -> <<"high">>.
+
+%% @doc Fundamental quote-integrity check. The TPM's pcrDigest
+%% field (now decoded into `claim.quote.pcr-digest') is defined
+%% as the hash over the concatenation of the selected PCR values
+%% in `pcrSelect' order. We recompute that digest and compare.
+%%
+%% A mismatch means one of:
+%%   * the quote was not produced by the TPM that claims to have
+%%     signed it (wrong PCRs fed in),
+%%   * the envelope's `pcr-values' map was altered between the
+%%     TPM signing and the envelope arriving here,
+%%   * the pcrSelect / digest-alg are malformed.
+%%
+%% Any of those is a hard-stop for trusting the quote — the
+%% crypto signature check alone is insufficient because the
+%% signature only binds the TPMS_ATTEST blob, not the unquoted
+%% per-PCR byte strings that the envelope carries.
+%%
+%% The digest algorithm is inferred from the declared
+%% pcr-digest-length: 20 → SHA-1, 32 → SHA-256, 48 → SHA-384,
+%% 64 → SHA-512.
+claim_quote_integrity(E) ->
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
+        <<>> -> unknown_quote_integrity();
+        _ ->
+            Meta = interpret_quote_metadata(E),
+            case maps:is_key(<<"error">>, Meta) of
+                true ->
+                    M0 = unknown_quote_integrity(),
+                    M0#{<<"error">> => maps:get(<<"error">>, Meta)};
+                false ->
+                    compute_quote_integrity(E, Meta)
+            end
+    end.
+
+unknown_quote_integrity() ->
+    #{
+        <<"verifiable">>              => false,
+        <<"pcr-digest-match">>        => <<"unknown">>,
+        <<"pcr-digest-alg">>          => <<"unknown">>,
+        <<"pcr-digest-claimed">>      => <<"">>,
+        <<"pcr-digest-computed">>     => <<"">>,
+        <<"pcr-indexes-used">>        => [],
+        <<"missing-pcrs">>            => [],
+        <<"evidence">>                => []
+    }.
+
+compute_quote_integrity(E, Meta) ->
+    ClaimedDigestB64 = maps:get(<<"pcr-digest">>, Meta, <<"">>),
+    Claimed = try hb_util:decode(ClaimedDigestB64)
+              catch _:_ -> <<>> end,
+    ClaimedLen = byte_size(Claimed),
+    Alg = pcr_digest_alg_from_size(ClaimedLen),
+    Sel = maps:get(<<"pcr-select">>, Meta, []),
+    PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+    {Concatenated, UsedIndexes, Missing} =
+        concat_selected_pcrs(Sel, PcrVals),
+    case Alg of
+        <<"unknown">> ->
+            #{
+                <<"verifiable">>              => false,
+                <<"pcr-digest-match">>        => <<"unknown">>,
+                <<"pcr-digest-alg">>          => <<"unknown">>,
+                <<"pcr-digest-claimed">>      => ClaimedDigestB64,
+                <<"pcr-digest-computed">>     => <<"">>,
+                <<"pcr-indexes-used">>        => UsedIndexes,
+                <<"missing-pcrs">>            => Missing,
+                <<"evidence">>                => [
+                    {<<"reason">>,
+                     <<"unknown-digest-alg-for-length">>},
+                    {<<"claimed-length">>, ClaimedLen}]
+            };
+        _ ->
+            Computed = tpm_hash(Alg, Concatenated),
+            Match = Computed =:= Claimed,
+            #{
+                <<"verifiable">>          => Missing =:= [],
+                <<"pcr-digest-match">>    => Match,
+                <<"pcr-digest-alg">>      => Alg,
+                <<"pcr-digest-claimed">>  => ClaimedDigestB64,
+                <<"pcr-digest-computed">> => hb_util:encode(Computed),
+                <<"pcr-indexes-used">>    => UsedIndexes,
+                <<"missing-pcrs">>        => Missing,
+                <<"evidence">>            => quote_integrity_evidence(
+                    Match, Missing, length(UsedIndexes), Alg)
+            }
+    end.
+
+quote_integrity_evidence(Match, Missing, UsedCount, Alg) ->
+    [{<<"alg">>, Alg},
+     {<<"pcr-count">>, UsedCount},
+     {<<"match">>, Match},
+     {<<"missing-count">>, length(Missing)}].
+
+pcr_digest_alg_from_size(20) -> <<"sha1">>;
+pcr_digest_alg_from_size(32) -> <<"sha256">>;
+pcr_digest_alg_from_size(48) -> <<"sha384">>;
+pcr_digest_alg_from_size(64) -> <<"sha512">>;
+pcr_digest_alg_from_size(_)  -> <<"unknown">>.
+
+tpm_hash(<<"sha1">>, Bin)   -> crypto:hash(sha,     Bin);
+tpm_hash(<<"sha256">>, Bin) -> crypto:hash(sha256,  Bin);
+tpm_hash(<<"sha384">>, Bin) -> crypto:hash(sha384,  Bin);
+tpm_hash(<<"sha512">>, Bin) -> crypto:hash(sha512,  Bin);
+tpm_hash(_, _)              -> <<>>.
+
+%% @doc Walk pcrSelect in order, concatenate the corresponding
+%% raw PCR bytes from the envelope's `pcr-values` map. Returns
+%% `{Concatenated, UsedIndexes, Missing}'. Missing indexes are
+%% selected PCRs whose value is absent from the envelope — a
+%% quote is only verifiable if every selected PCR has a value.
+concat_selected_pcrs(Selections, PcrVals) ->
+    concat_selected_pcrs_(Selections, PcrVals, <<>>, [], []).
+
+concat_selected_pcrs_([], _PcrVals, Acc, Used, Missing) ->
+    {Acc, lists:reverse(Used), lists:reverse(Missing)};
+concat_selected_pcrs_([Sel | Rest], PcrVals, Acc, Used, Missing) ->
+    Indexes = maps:get(<<"pcr-indexes">>, Sel, []),
+    {Acc1, Used1, Missing1} =
+        lists:foldl(
+          fun(I, {A, U, M}) ->
+              Key = integer_to_binary(I),
+              case maps:get(Key, PcrVals, undefined) of
+                  undefined ->
+                      {A, U, [I | M]};
+                  B64 when is_binary(B64) ->
+                      try
+                          Raw = hb_util:decode(B64),
+                          {<<A/binary, Raw/binary>>, [I | U], M}
+                      catch _:_ ->
+                          {A, U, [I | M]}
+                      end;
+                  _ -> {A, U, [I | M]}
+              end
+          end, {Acc, Used, Missing}, Indexes),
+    concat_selected_pcrs_(Rest, PcrVals, Acc1, Used1, Missing1).
+
+%% @doc Compose the freshness stanza. A verifier typically
+%% challenges with a fresh nonce — the TPM echoes it back as
+%% extraData inside the quote. Here we surface:
+%%
+%%   * the nonce echoed by the TPM (base64url),
+%%   * the TPM's reset-count / restart-count (monotonic — newer
+%%     quotes should have ≥ the most-recent previous pair from
+%%     the same TPM),
+%%   * clock-ms / clock-seconds (TPM wall-clock, monotonic
+%%     within a boot epoch),
+%%   * the `safe' flag (TRUE iff the clock hasn't been tampered
+%%     with since last reset — any FALSE here is a red flag),
+%%   * a composite `freshness-indicator' value:
+%%       "ok"         — nonce present, safe=true, clock>0
+%%       "safe-false" — safe flag is false; clock is untrusted
+%%       "no-nonce"   — empty nonce means no challenge was bound
+%%       "no-clock"   — clock-ms=0 is a sign of a dry-run quote
+%%       "unknown"    — no quote present
+claim_freshness(E) ->
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
+        <<>> -> unknown_freshness_claim();
+        _ ->
+            Meta = interpret_quote_metadata(E),
+            case maps:is_key(<<"error">>, Meta) of
+                true ->
+                    M0 = unknown_freshness_claim(),
+                    M0#{<<"error">> => maps:get(<<"error">>, Meta)};
+                false ->
+                    project_freshness(Meta)
+            end
+    end.
+
+unknown_freshness_claim() ->
+    #{
+        <<"nonce">>                 => <<"">>,
+        <<"nonce-length">>          => 0,
+        <<"reset-count">>           => 0,
+        <<"restart-count">>         => 0,
+        <<"clock-ms">>              => 0,
+        <<"clock-seconds">>         => 0,
+        <<"safe">>                  => false,
+        <<"freshness-indicator">>   => <<"unknown">>,
+        <<"evidence">>              => []
+    }.
+
+project_freshness(Meta) ->
+    Nonce = maps:get(<<"nonce">>, Meta, <<"">>),
+    Safe = maps:get(<<"safe">>, Meta, false),
+    ClockMs = maps:get(<<"clock-ms">>, Meta, 0),
+    ResetCount = maps:get(<<"reset-count">>, Meta, 0),
+    RestartCount = maps:get(<<"restart-count">>, Meta, 0),
+    NonceLen = try hb_util:decode(Nonce) of
+                   Raw when is_binary(Raw) -> byte_size(Raw)
+               catch _:_ -> 0
+               end,
+    Indicator = freshness_indicator(NonceLen, Safe, ClockMs),
+    Evidence =
+        [{<<"nonce-present">>, NonceLen > 0},
+         {<<"nonce-length">>, NonceLen},
+         {<<"safe">>, Safe},
+         {<<"clock-positive">>, ClockMs > 0},
+         {<<"reset-count">>, ResetCount},
+         {<<"restart-count">>, RestartCount}],
+    #{
+        <<"nonce">>               => Nonce,
+        <<"nonce-length">>        => NonceLen,
+        <<"reset-count">>         => ResetCount,
+        <<"restart-count">>       => RestartCount,
+        <<"clock-ms">>            => ClockMs,
+        <<"clock-seconds">>       => ClockMs div 1000,
+        <<"safe">>                => Safe,
+        <<"freshness-indicator">> => Indicator,
+        <<"evidence">>            => Evidence
+    }.
+
+freshness_indicator(0, _, _)     -> <<"no-nonce">>;
+freshness_indicator(_, false, _) -> <<"safe-false">>;
+freshness_indicator(_, true, 0)  -> <<"no-clock">>;
+freshness_indicator(_, true, Ms) when Ms > 0 -> <<"ok">>;
+freshness_indicator(_, _, _)     -> <<"ok">>.
 
 claim_boot_chain(Events) ->
     Codes = [16#80000003, 16#80000004, 16#80000005],
@@ -4311,6 +4541,174 @@ pcr_bitmap_decoder_test() ->
                   16, 17, 18, 19, 20, 21, 22, 23],
                  pcr_bitmap_to_list(<<16#FF, 16#FF, 16#FF>>)),
     ok.
+
+%% Hour-6: quote-integrity check fires true on a consistent
+%% envelope. Build a quote where pcrDigest = SHA-256(PCR0 ||
+%% PCR1 || PCR7) with all three PCRs present in the envelope.
+claim_surface_hour6_quote_integrity_match_test() ->
+    Pcr0 = crypto:hash(sha256, <<"fake-pcr0-value">>),
+    Pcr1 = crypto:hash(sha256, <<"fake-pcr1-value">>),
+    Pcr7 = crypto:hash(sha256, <<"fake-pcr7-value">>),
+    PcrDigest = crypto:hash(sha256,
+        <<Pcr0/binary, Pcr1/binary, Pcr7/binary>>),
+    Quoted = build_minimal_quote_attest(
+        <<"nonce12345">>, 5, 0, 1,
+        %% PCR 0, 1, 7 selected → bitmap 0x83.
+        <<1:32/big, 16#000B:16/big, 3:8, 16#83, 0, 0>>,
+        PcrDigest),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Quoted),
+        <<"pcr-values">> => #{
+            <<"0">> => hb_util:encode(Pcr0),
+            <<"1">> => hb_util:encode(Pcr1),
+            <<"7">> => hb_util:encode(Pcr7)}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    QI = maps:get(<<"quote-integrity">>, Claim),
+    ?assertEqual(true,  maps:get(<<"verifiable">>, QI)),
+    ?assertEqual(true,  maps:get(<<"pcr-digest-match">>, QI)),
+    ?assertEqual(<<"sha256">>, maps:get(<<"pcr-digest-alg">>, QI)),
+    ?assertEqual([0, 1, 7], maps:get(<<"pcr-indexes-used">>, QI)),
+    ?assertEqual([], maps:get(<<"missing-pcrs">>, QI)),
+    ?assertEqual(maps:get(<<"pcr-digest-claimed">>, QI),
+                 maps:get(<<"pcr-digest-computed">>, QI)),
+    ok.
+
+%% Hour-6: a tampered PCR value (signed with the real one,
+%% shipped with a different one) is detected as mismatch.
+claim_surface_hour6_quote_integrity_tamper_test() ->
+    Pcr0 = crypto:hash(sha256, <<"real-pcr0">>),
+    PcrDigest = crypto:hash(sha256, Pcr0),
+    Quoted = build_minimal_quote_attest(
+        <<"x">>, 0, 0, 1,
+        %% Only PCR 0 selected → bitmap 0x01.
+        <<1:32/big, 16#000B:16/big, 3:8, 16#01, 0, 0>>,
+        PcrDigest),
+    Tampered = crypto:hash(sha256, <<"attacker-pcr0">>),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Quoted),
+        <<"pcr-values">> => #{
+            <<"0">> => hb_util:encode(Tampered)}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    QI = maps:get(<<"quote-integrity">>, Claim),
+    ?assertEqual(false, maps:get(<<"pcr-digest-match">>, QI)),
+    ?assertEqual(true,  maps:get(<<"verifiable">>, QI)),
+    ok.
+
+%% Hour-6: selected PCR absent from envelope → missing-pcrs
+%% populated and verifiable=false.
+claim_surface_hour6_quote_integrity_missing_pcr_test() ->
+    %% Select PCR 0 + PCR 7 but only ship PCR 0 in the envelope.
+    Pcr0 = crypto:hash(sha256, <<"p0">>),
+    PcrDigest = crypto:hash(sha256, Pcr0), % wrong, but we only
+                                            % care about `verifiable`
+    Quoted = build_minimal_quote_attest(
+        <<"n">>, 0, 0, 1,
+        <<1:32/big, 16#000B:16/big, 3:8, 16#81, 0, 0>>,
+        PcrDigest),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Quoted),
+        <<"pcr-values">> => #{
+            <<"0">> => hb_util:encode(Pcr0)}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    QI = maps:get(<<"quote-integrity">>, Claim),
+    ?assertEqual(false, maps:get(<<"verifiable">>, QI)),
+    ?assertEqual([7],   maps:get(<<"missing-pcrs">>, QI)),
+    ok.
+
+%% Hour-6: freshness stanza aggregates nonce + reset/restart +
+%% clock + safe into a composite indicator.
+claim_surface_hour6_freshness_ok_test() ->
+    Nonce = <<"unique-nonce-for-this-attestation">>,
+    Quoted = build_minimal_quote_attest(
+        Nonce, 42, 3, 1,
+        <<1:32/big, 16#000B:16/big, 3:8, 0, 0, 0>>,
+        <<0:256>>),
+    %% Manually patch clock-ms to be nonzero (the helper's default
+    %% is 0; we need >0 for freshness-indicator=ok).
+    Clocked = patch_clock(Quoted, 16#12345),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Clocked),
+        <<"pcr-values">> => #{}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    F = maps:get(<<"freshness">>, Claim),
+    ?assertEqual(42, maps:get(<<"reset-count">>, F)),
+    ?assertEqual(3,  maps:get(<<"restart-count">>, F)),
+    ?assertEqual(true, maps:get(<<"safe">>, F)),
+    ?assertEqual(16#12345, maps:get(<<"clock-ms">>, F)),
+    ?assertEqual(<<"ok">>,
+                 maps:get(<<"freshness-indicator">>, F)),
+    ?assertEqual(33, maps:get(<<"nonce-length">>, F)),
+    ok.
+
+%% Freshness-indicator = "no-nonce" when the TPM echoed an
+%% empty extraData field.
+claim_surface_hour6_freshness_no_nonce_test() ->
+    Quoted = build_minimal_quote_attest(
+        <<>>, 0, 0, 1,
+        <<0:32>>, <<0:256>>),
+    Clocked = patch_clock(Quoted, 1),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Clocked),
+        <<"pcr-values">> => #{}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    F = maps:get(<<"freshness">>, Claim),
+    ?assertEqual(<<"no-nonce">>,
+                 maps:get(<<"freshness-indicator">>, F)),
+    ?assertEqual(0, maps:get(<<"nonce-length">>, F)),
+    ok.
+
+%% Freshness-indicator = "safe-false" is the red-flag case.
+claim_surface_hour6_freshness_safe_false_test() ->
+    Quoted = build_minimal_quote_attest(
+        <<"n">>, 0, 0, 0,  %% Safe=0
+        <<0:32>>, <<0:256>>),
+    Clocked = patch_clock(Quoted, 1),
+    Envelope = #{<<"tpm-quote">> => #{
+        <<"quoted">> => hb_util:encode(Clocked),
+        <<"pcr-values">> => #{}}},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    F = maps:get(<<"freshness">>, Claim),
+    ?assertEqual(false, maps:get(<<"safe">>, F)),
+    ?assertEqual(<<"safe-false">>,
+                 maps:get(<<"freshness-indicator">>, F)),
+    ok.
+
+%% Helper: minimal TPMS_ATTEST_QUOTE blob with parameterised
+%% nonce / reset / restart / safe / pcrSelect / pcrDigest.
+%% clock-ms defaults to 0 because quote tests usually don't
+%% care about it; use patch_clock/2 when you do.
+build_minimal_quote_attest(Nonce, ResetCount, RestartCount, Safe,
+                             PcrSelect, PcrDigest) ->
+    Magic = <<16#FF, "TCG">>,
+    Type = 16#8018,
+    QsName = crypto:hash(sha256, <<"signer">>),
+    QsTpm2B = <<(byte_size(QsName)):16/big, QsName/binary>>,
+    NonceTpm2B = <<(byte_size(Nonce)):16/big, Nonce/binary>>,
+    FwVer = 16#0102030400050006,
+    PcrDigestTpm2B = <<(byte_size(PcrDigest)):16/big,
+                         PcrDigest/binary>>,
+    <<Magic/binary, Type:16/big,
+      QsTpm2B/binary, NonceTpm2B/binary,
+      0:64/big, ResetCount:32/big, RestartCount:32/big,
+      Safe:8, FwVer:64/big,
+      PcrSelect/binary, PcrDigestTpm2B/binary>>.
+
+%% Patch the clock-ms field (8 bytes starting at the fixed
+%% offset of magic+type+QsName+ExtraData = depends on variable-
+%% length fields; we compute from scratch).
+patch_clock(Blob, NewClock) ->
+    <<Magic:4/binary, Type:16/big, Rest0/binary>> = Blob,
+    {QsName, Rest1} = tpm2b(Rest0),
+    {ExtraData, Rest2} = tpm2b(Rest1),
+    <<_OldClock:64/big,
+      ResetCount:32/big, RestartCount:32/big,
+      Safe:8, FwVer:64/big, Tail/binary>> = Rest2,
+    QsTpm2B = <<(byte_size(QsName)):16/big, QsName/binary>>,
+    NonceTpm2B = <<(byte_size(ExtraData)):16/big, ExtraData/binary>>,
+    <<Magic/binary, Type:16/big,
+      QsTpm2B/binary, NonceTpm2B/binary,
+      NewClock:64/big, ResetCount:32/big, RestartCount:32/big,
+      Safe:8, FwVer:64/big, Tail/binary>>.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
 %% DB entries.
