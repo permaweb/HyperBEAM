@@ -34,11 +34,12 @@ resolve(Store, #{ <<"resolve">> := Key }, _NodeOpts) ->
 
 %% @doc Determine the type of value at a given key.
 %%
-%% Remote nodes support only the `simple' type or `not_found'.
+%% Remote nodes support `simple', `composite', or `{error, not_found}'.
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key whose value type is determined.
-%% @returns simple if found, or not_found otherwise.
+%% @returns `{ok, simple}' or `{ok, composite}' if found, or
+%%          `{error, not_found}' otherwise.
 type(Opts = #{ <<"node">> := Node }, Key) ->
     ?event({remote_type, {node, Node}, {key, Key}}),
     case read_request(Opts, Key) of
@@ -56,7 +57,7 @@ type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
-%% @returns {ok, Msg} on success or not_found if the key is missing.
+%% @returns `{ok, Msg}' on success or `{error, not_found}' if the key is missing.
 read_request(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
     {error, not_found};
 read_request(Opts = #{ <<"node">> := Node }, Key) ->

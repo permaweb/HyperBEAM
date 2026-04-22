@@ -78,7 +78,7 @@ stop(Opts) ->
         ok
     end.
 stop(Opts, _Req, _NodeOpts) ->
-    {ok, stop(Opts)}.
+    stop(Opts).
 
 %% @doc Scope for this store backend.
 scope() -> local.

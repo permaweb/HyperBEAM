@@ -52,18 +52,17 @@ spawn_register(Name, Opts) ->
                     Opts,
                     hb_opts:get(node_process_spawn_codec, <<"httpsig@1.0">>, Opts)
                 ),
-            LoadedSigned = hb_cache:ensure_all_loaded(Signed, Opts),
-            ?event(node_process, {signed, {name, Name}, {signed, LoadedSigned}}),
-            ID = hb_message:id(LoadedSigned, signed, Opts),
-            ?event(node_process, {spawned, {name, Name}, {process, LoadedSigned}}),
+            ?event(node_process, {signed, {name, Name}, {signed, Signed}}),
+            ID = hb_message:id(Signed, signed, Opts),
+            ?event(node_process, {spawned, {name, Name}, {process, Signed}}),
             % `POST' to the schedule device for the process to start its sequence.
             {ok, Assignment} =
                 hb_ao:resolve(
-                    LoadedSigned,
+                    Signed,
                     #{
                         <<"path">> => <<"schedule">>,
                         <<"method">> => <<"POST">>,
-                        <<"body">> => LoadedSigned
+                        <<"body">> => Signed
                     },
                     Opts
                 ),
@@ -76,7 +75,7 @@ spawn_register(Name, Opts) ->
             ?event(node_process, {registered, {name, Name}, {process_id, ID}}),
             case RegResult of
                 {ok, _} ->
-                    {ok, LoadedSigned};
+                    {ok, Signed};
                 {error, Err} ->
                     {error, #{
                         <<"status">> => 500,

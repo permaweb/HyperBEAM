@@ -28,13 +28,13 @@
 start(#{ <<"name">> := DataDir }) ->
     ok = filelib:ensure_dir(DataDir).
 start(Store, _Req, _Opts) ->
-    {ok, start(Store)}.
+    start(Store).
 
 %% @doc Stop the file system store. Currently a no-op.
 stop(#{ <<"name">> := _DataDir }) ->
     ok.
 stop(Store, _Req, _Opts) ->
-    {ok, stop(Store)}.
+    stop(Store).
 
 %% @doc The file-based store is always local, for now. In the future, we may
 %% want to allow that an FS store is shared across a cluster and thus remote.
@@ -50,7 +50,7 @@ reset_store(#{ <<"name">> := DataDir }) ->
 reset(Store) ->
     reset_store(Store).
 reset(Store, _Req, _Opts) ->
-    {ok, reset_store(Store)}.
+    reset_store(Store).
 
 %% @doc Read a key from the store, following symlinks as needed.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->

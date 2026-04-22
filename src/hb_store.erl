@@ -18,16 +18,19 @@
 %%%     scope/0:      A tag describing the 'scope' of a stores search: `in_memory',
 %%%                   `local', `remote', `arweave', etc. Used in order to allow
 %%%                   node operators to prioritize their stores for search.
-%%%     group/3:      Create a new group of keys in the store with the given ID.
-%%%     link/3:       Create a link (implying one key should redirect to another)
-%%%                   from `existing` to `new` (in that order).
+%%%     group/3:      Create a new group of keys in the store using a request
+%%%                   map of the form `#{<<"group">> => Path}`.
+%%%     link/3:       Create links using a request map of the form
+%%%                   `#{NewPath => ExistingPath}`.
 %%%     type/3:       Return whether the value found at the given key is a
-%%%                   `composite' (group) type, or a `simple' direct binary.
+%%%                   `composite' (group) type, or a `simple' direct binary,
+%%%                   using a request map of the form `#{<<"type">> => Path}`.
 %%%     read/3:       Read the data at the given location, returning a binary
 %%%                   if it is a `simple' value, or a message if it is a complex
-%%%                   term.
-%%%     write/3:      Write the request map to the store.
-%%%     list/3:       For `composite' type keys, return a list of its child keys.
+%%%                   term, using a request map of the form `#{<<"read">> => Path}`.
+%%%     write/3:      Write a request map of the form `#{Path => Value}`.
+%%%     list/3:       For `composite' type keys, return a list of child keys
+%%%                   using a request map of the form `#{<<"list">> => Path}`.
 %%% '''
 %%% Each function takes a `store' message first, containing an arbitrary set
 %%% of its necessary configuration keys, as well as the `store-module' key which
@@ -501,20 +504,6 @@ retry(Mod, Store, Function, Args, AttemptsRemaining, _Result) ->
     set(Store, undefined),
     find(Store),
     apply_store_function(Mod, Store, Function, Args, AttemptsRemaining - 1).
-
-%% @doc Call a function on all modules in the store.
-call_all(X, _Function, _Args) when not is_list(X) ->
-    call_all([X], _Function, _Args);
-call_all([], _Function, _Args) ->
-    ok;
-call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
-    try apply_store_function(Mod, Store, Function, Args)
-    catch
-        Class:Reason:Stacktrace ->
-            ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
-            ok
-    end,
-    call_all(Rest, Function, Args).
 
 admin_call(Stores, Function, Req, Opts) when not is_list(Stores) ->
     admin_call([Stores], Function, Req, Opts);

@@ -9,18 +9,19 @@
 
 %% @doc Read data from the cache.
 %% Retrieves data corresponding to a key from a local store.
-%% The key is extracted from the incoming message under &lt;&lt;"target"&gt;&gt;.
+%% The key is extracted from the incoming message under either
+%% &lt;&lt;"read"&gt;&gt; or the legacy &lt;&lt;"target"&gt;&gt; key.
 %% The options map may include store configuration.
 %% If the "accept" header is set to &lt;&lt;"application/aos-2"&gt;&gt;, the result is 
 %% converted to a JSON structure and encoded.
 %%
 %% @param M1 Ignored parameter.
-%% @param M2 The request message containing the key (&lt;&lt;"target"&gt;&gt;) and an
-%%            optional "accept" header.
+%% @param M2 The request message containing the key and an optional "accept"
+%%            header.
 %% @param Opts A map of configuration options.
 %% @returns {ok, Data} on success,
-%%          not_found if the key does not exist,
-%%          {error, Reason} on failure.
+%%          {error, not_found} if the key does not exist,
+%%          {error, Reason} or {failure, Reason} on failure.
 read(_M1, M2, Opts) ->
     Location =
         case hb_ao:get(<<"read">>, M2, not_found, Opts) of
@@ -74,7 +75,7 @@ read(_M1, M2, Opts) ->
 %%            and any additional parameters.
 %% @param Opts A map of configuration options.
 %% @returns {ok, Path} on success, where Path indicates where the data was
-%%          stored, {error, Reason} on failure.
+%%          stored, {error, Reason} or {failure, Reason} on failure.
 write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
@@ -203,14 +204,14 @@ write_single_legacy(Msg, Body, Location, Operation, Opts) ->
                     <<"body">> => <<"No body to write.">>
                 }
             };
-        {<<"write">>, Value, not_found} ->
+        {<<"write">>, Binary, not_found} when is_binary(Binary) ->
             ?event(dev_cache, 
 				{write_single, 
-					{processing_value, Value, Location}
+					{processing_binary, Binary, Location}
 				}
 			),
-            {ok, Path} = hb_cache:write(Value, Opts),
-            ?event(dev_cache, {write_single, {value_written, Path}}),
+            {ok, Path} = hb_cache:write(Binary, Opts),
+            ?event(dev_cache, {write_single, {binary_written, Path}}),
             {ok, #{ <<"status">> => 200, <<"path">> => Path }};
         {<<"link">>, _, _} ->
             ?event(dev_cache, {write_single, {processing_link}}),
@@ -241,7 +242,7 @@ wrap_store_result({ok, _}) ->
 wrap_store_result({error, Reason}) ->
     {error, Reason};
 wrap_store_result({failure, Reason}) ->
-    {error, Reason}.
+    {failure, Reason}.
 
 %% @doc Verify that the request originates from a trusted writer.
 %% Checks that the single signer of the request is present in the list
@@ -314,36 +315,6 @@ setup_test_env() ->
 	    ]
     },
     {ok, TestOpts, [LocalStore, Wallet, Address, Node]}.
-
-%% @doc Write data to the cache via HTTP.
-%% Constructs a write request message with the provided data, signs it with the
-%% given wallet, sends it to the node, and verifies that the response indicates
-%% a successful write.
-%%
-%% @param Node The target node.
-%% @param Data The data to be written.
-%% @param Wallet The wallet used to sign the request.
-%% @returns {ok, WriteResponse} on success.
-write_to_cache(Node, Data, Wallet) ->
-    ?event(dev_cache, {write_to_cache, {start, Node}}),
-    WriteMsg = #{
-        <<"path">> => <<"/~cache@1.0/write">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Data
-    },
-    ?event(dev_cache, {write_to_cache, {message_created, WriteMsg}}),
-    SignedMsg = hb_message:commit(WriteMsg, Wallet),
-    ?event(dev_cache, {write_to_cache, {message_signed}}),
-    WriteResult = hb_http:post(Node, SignedMsg, #{}),
-    ?event(dev_cache, {write_to_cache, {http_post, WriteResult}}),
-    {ok, WriteResponse} = WriteResult,
-    ?event(dev_cache, {write_to_cache, {response_received, WriteResponse}}),
-    Status = hb_ao:get(<<"status">>, WriteResponse, 0, #{}),
-    ?assertEqual(200, Status),
-    Path = hb_ao:get(<<"path">>, WriteResponse, not_found, #{}),
-    ?assertNotEqual(not_found, Path),
-    ?event(dev_cache, {write_to_cache, {write_success, Path}}),
-    {WriteResponse, Path}.
 
 %% @doc Read data from the cache via HTTP.
 %% Constructs a GET request using the provided path, sends it to the node,

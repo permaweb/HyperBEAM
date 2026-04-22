@@ -86,27 +86,11 @@ scope(_) -> local.
 
 %% @doc Read data by the key.
 %% Recursively follows link messages
--spec read_path(Opts, Key) -> Result when
+-spec read(Opts, Req, NodeOpts) -> Result when
     Opts :: map(),
-    Key :: key() | list(),
-    Result :: {ok, value()} | not_found | {error, {corruption, string()}} | {error, any()}.
-read_path(Opts, RawPath) ->
-    ?event({read, RawPath}),
-    Path = resolve_path(Opts, RawPath),
-    case do_read(Opts, Path) of
-        not_found ->
-            not_found;
-        {error, _Reason} = Err -> Err;
-        {ok, {raw, Result}} ->
-            {ok, Result};
-        {ok, {link, Link}} ->
-            ?event({link_found, Path, Link}),
-            read(Opts, Link);
-        {ok, {group, _Result}} ->
-            not_found
-    end.
-read(Opts, RawPath) ->
-    read_path(Opts, RawPath).
+    Req :: map(),
+    NodeOpts :: map(),
+    Result :: {ok, value()} | {composite, [binary()]} | {error, any()}.
 read(Opts, #{ <<"read">> := RawPath }, _NodeOpts) ->
     Path = resolve_path(Opts, RawPath),
     case do_read(Opts, Path) of
@@ -150,7 +134,7 @@ write_path(Opts, RawKey, Value) ->
 
 %% @doc Returns the full list of items stored under the given path. Where the path
 %% child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
--spec list(Opts, Path) -> Result when
+-spec list_path(Opts, Path) -> Result when
     Opts :: any(),
     Path :: any(),
     Result :: {ok, [string()]} | {error, term()}.
@@ -164,18 +148,16 @@ list_path(Opts, Path) ->
         {ok, {group, Value}} ->
             {ok, sets:to_list(Value)};
         {ok, {link, LinkedPath}} ->
-            list(Opts, LinkedPath);
+            list_path(Opts, LinkedPath);
         Reason ->
             ?event(rocksdb, {could_not_list_folder, Reason}),
             {ok, []}
     end.
-list(Opts, Path) ->
-    list_path(Opts, hb_path:to_binary(Path)).
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
     list_path(Opts, hb_path:to_binary(Path)).
 
 %% @doc Replace links in a path with the target of the link.
--spec resolve(Opts, Path) -> Result when
+-spec resolve_path(Opts, Path) -> Result when
     Opts :: any(),
     Path :: binary() | list(),
     Result :: not_found | string().
@@ -184,8 +166,6 @@ resolve_path(Opts, Path) ->
 
     ResolvedPath = do_resolve(Opts, "", PathList),
     ResolvedPath.
-resolve(Opts, Path) ->
-    resolve_path(Opts, Path).
 resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
     case resolve_path(Opts, Path) of
         not_found -> {error, not_found};
@@ -207,13 +187,10 @@ do_resolve(Opts, CurrentPath, [Next | Rest]) ->
     end.
 
 %% @doc Get type of the current item
--spec type(Opts, Key) -> Result when
+-spec type_path(Opts, Key) -> Result when
     Opts :: map(),
     Key :: binary(),
     Result :: composite | simple | not_found.
-
-type(Opts, RawKey) ->
-    type_path(Opts, RawKey).
 type_path(Opts, RawKey) ->
     Key = hb_path:to_binary(RawKey),
     case do_read(Opts, Key) of
@@ -235,8 +212,6 @@ type(Opts, #{ <<"type">> := RawKey }, _NodeOpts) ->
     Req :: map(),
     NodeOpts :: map(),
     Result :: ok | {error, already_added}.
-group(#{ <<"name">> := _DataDir }, #{ <<"group">> := Key }, _NodeOpts) ->
-    gen_server:call(?MODULE, {make_group, hb_path:to_binary(Key)}, ?TIMEOUT);
 group(_Opts, #{ <<"group">> := Key }, _NodeOpts) ->
     gen_server:call(?MODULE, {make_group, hb_path:to_binary(Key)}, ?TIMEOUT).
 

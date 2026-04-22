@@ -653,7 +653,7 @@ stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
 stop(_InvalidStoreOpts) ->
     ok.
 stop(Store, _Req, _Opts) ->
-    {ok, stop(Store)}.
+    stop(Store).
 
 %% @doc Completely delete the database directory and all its contents.
 %%
@@ -681,7 +681,7 @@ reset(Opts) ->
             ok
     end.
 reset(Store, _Req, _Opts) ->
-    {ok, reset(Store)}.
+    reset(Store).
 
 %% @doc Sample roughly 1/1024 reads using the start timestamp and scale the
 %% hit counter by the same factor to preserve an approximate total.

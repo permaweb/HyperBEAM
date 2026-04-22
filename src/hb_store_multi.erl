@@ -52,7 +52,7 @@ stop(StoreOpts) ->
     ),
     ok.
 stop(StoreOpts, _Req, _Opts) ->
-    {ok, stop(StoreOpts)}.
+    stop(StoreOpts).
 
 %% @doc Reset each store.
 reset(StoreOpts) ->
@@ -65,7 +65,7 @@ reset(StoreOpts) ->
     ),
     ok.
 reset(StoreOpts, _Req, _Opts) ->
-    {ok, reset(StoreOpts)}.
+    reset(StoreOpts).
 
 %%% Read operations.
 
