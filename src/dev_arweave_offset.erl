@@ -7,7 +7,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 all_parallel_test_() ->
-    hb_test_parallel:all(?MODULE, 15).
+    {timeout, 15, hb_test_parallel:all(?MODULE)}.
 
 %% @doc Resolve either a message at an Arweave offset, or a direct key from the
 %% base message if the key is not an integer.

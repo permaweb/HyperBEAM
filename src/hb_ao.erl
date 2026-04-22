@@ -108,8 +108,7 @@
 -define(TEMP_OPTS,
     [
         <<"add-key">>, <<"force-message">>, <<"cache-control">>,
-        <<"spawn-worker">>,
-        add_key, force_message, cache_control, spawn_worker
+        <<"spawn-worker">>
     ]
 ).
 
@@ -330,7 +329,7 @@ resolve_stage(1, Base, {resolve, Subres}, Opts) ->
     ?event(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
     % We make sure to unset the `force_message' option so that if the subresolution
     % returns a literal, the rest of `resolve' will normalize it to a path.
-    case resolve_many(Subres, maps:without([<<"force-message">>, force_message], Opts)) of
+    case resolve_many(Subres, maps:without([<<"force-message">>], Opts)) of
         {ok, Req} ->
             ?event(
                 ao_core,
@@ -735,27 +734,17 @@ subresolve(RawBase, DevID, Req, Opts) ->
         case DevID of
             undefined -> Base;
             _ ->
-                case hb_maps:get(<<"device">>, Base, undefined, Opts) of
-                    DevID -> Base;
-                    _ ->
-                        set(
-                            Base,
-                            <<"device">>,
-                            DevID,
-                            hb_maps:without(?TEMP_OPTS, Opts, Opts)
-                        )
-                end
+                set(
+                    Base,
+                    <<"device">>,
+                    DevID,
+                    hb_maps:without(?TEMP_OPTS, Opts, Opts)
+                )
         end,
     % If there is no path but there are elements to the request, we set these on
     % the base message. If there is a path, we do not modify the base message 
     % and instead apply the request message directly.
     case hb_path:from_message(request, Req, Opts) of
-        undefined when Req =:= RawBase, Base2 =:= Base ->
-            ?event(subresolution,
-                {subresolve_unmodified_base, Base2},
-                Opts
-            ),
-            {ok, Base2};
         undefined ->
             Base3 =
                 case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
@@ -1241,14 +1230,16 @@ do_normalize_keys(Map, Opts) ->
 %% @doc The execution options that are used internally by this module
 %% when calling itself.
 internal_opts(Opts) ->
-    BaseOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
-    hb_maps:merge(BaseOpts, #{
-        <<"topic">> => hb_opts:get(topic, ao_internal, Opts),
-        <<"hashpath">> => ignore,
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
-        <<"spawn-worker">> => false,
-        <<"await-inprogress">> => false
-    }).
+    hb_maps:merge(
+        hb_maps:without(?TEMP_OPTS, Opts, Opts),
+        #{
+            <<"topic">> => hb_opts:get(topic, ao_internal, Opts),
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+            <<"spawn-worker">> => false,
+            <<"await-inprogress">> => false
+        }
+    ).
 
 %% @doc Return the node message that should be used in order to perform
 %% recursive executions.
@@ -1258,22 +1249,13 @@ execution_opts(Opts) ->
 	Opts1 =
         hb_maps:remove(
             <<"trace">>,
-            hb_maps:remove(
-                trace,
-                hb_maps:without(?TEMP_OPTS, Opts, Opts),
-                Opts
-            ),
+            hb_maps:without(?TEMP_OPTS, Opts, Opts),
             Opts
         ),
     % Unless the user has explicitly requested recursive spawning, we
     % unset the spawn_worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_opts:get(spawn_worker, false, Opts1) of
-        recursive -> Opts1;
-        _ ->
-            hb_maps:remove(
-                <<"spawn-worker">>,
-                hb_maps:remove(spawn_worker, Opts1, Opts),
-                Opts
-            )
+    case hb_opts:get(spawn_worker, false, Opts) of
+        recursive -> Opts1#{ <<"spawn-worker">> => recursive };
+        _ -> Opts1
     end.

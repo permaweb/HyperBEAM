@@ -208,7 +208,13 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % Search for a `body' key in the message, and if found use it as the source
         % of the report. If not found, use the message itself as the source.
         ?event({node_opts, {explicit, NodeOpts}}),
-        RawMsg = hb_ao:get(<<"body">>, M2, M2, NodeOpts#{ hashpath => ignore }),
+        RawMsg =
+            hb_ao:get(
+                <<"body">>,
+                M2,
+                M2,
+                NodeOpts#{ <<"hashpath">> => ignore }
+            ),
         ?event({msg, {explicit, RawMsg}}),
         MsgWithJSONReport =
             hb_util:ok(
@@ -272,7 +278,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
 -spec extract_node_message_id(Msg :: map(), NodeOpts :: map()) ->
     {ok, binary()} | {error, missing_node_msg_id}.
 extract_node_message_id(Msg, NodeOpts) ->
-    case {hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ hashpath => ignore }),
+    case {hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ <<"hashpath">> => ignore }),
           hb_ao:get(<<"node-message-id">>, Msg, NodeOpts)} of
         {undefined, undefined} ->
             {error, missing_node_msg_id};
@@ -525,10 +531,7 @@ get_filtered_local_hashes(Msg, NodeOpts) ->
 -spec get_enforced_keys(NodeOpts :: map()) -> [binary()].
 get_enforced_keys(NodeOpts) ->
     lists:map(
-        fun(Key) ->
-            [CanonicalKey] = maps:keys(hb_opts:canonicalize(#{ Key => true })),
-            CanonicalKey
-        end,
+        fun hb_opts:canonical_key/1,
         hb_opts:get(snp_enforced_keys, ?COMMITTED_PARAMETERS, NodeOpts)
     ).
 

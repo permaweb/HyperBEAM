@@ -796,10 +796,10 @@ genesis_wasm_tests() -> [].
 test_full_push() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        process_async_cache => false,
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => [hb_test_utils:test_store(hb_store_lmdb)]
+        <<"process-async-cache">> => false,
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Base = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Base, Opts),
@@ -914,9 +914,9 @@ test_push_as_identity() ->
 test_multi_process_push() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => [hb_test_utils:test_store(hb_store_lmdb)]
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Proc1 = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Proc1, Opts),
@@ -1054,9 +1054,9 @@ push_with_redirect_hint_test_disabled() ->
 test_push_prompts_encoding_change() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store =>
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
                 % Include a gateway store so that we can get the legacynet 
@@ -1275,9 +1275,9 @@ test_oracle_push() ->
 test_nested_push_prompts_encoding_change() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     ?event(debug_push, {opts, Opts}),
     Base = dev_process_test_vectors:aos_process(Opts),

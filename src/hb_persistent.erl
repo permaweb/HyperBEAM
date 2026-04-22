@@ -306,9 +306,9 @@ start_worker(GroupName, Msg, Opts) ->
                         GroupName,
                         Msg,
                         hb_maps:merge(Opts, #{
-                            is_worker => true,
-                            spawn_worker => false,
-                            allow_infinite => true
+                            <<"is-worker">> => true,
+                            <<"spawn-worker">> => false,
+                            <<"allow-infinite">> => true
                         },
 						Opts)
                     ]
@@ -505,9 +505,9 @@ spawn_after_execution_test() ->
             Base,
             Req,
             #{
-                spawn_worker => true,
-                static_worker => true,
-                hashpath => ignore
+                <<"spawn-worker">> => true,
+                <<"static-worker">> => true,
+                <<"hashpath">> => ignore
             }
         ),
     receive after 10 -> ok end,

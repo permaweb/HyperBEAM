@@ -122,15 +122,15 @@ test_opts() ->
         #{
             name => normal,
             desc => "Default opts",
-            opts => #{ store => hb_test_utils:test_store() },
+            opts => #{ <<"store">> => hb_test_utils:test_store() },
             skip => []
         },
         #{
             name => without_hashpath,
             desc => "Default without hashpath",
             opts => #{
-                hashpath => ignore,
-                store => hb_test_utils:test_store()
+                <<"hashpath">> => ignore,
+                <<"store">> => hb_test_utils:test_store()
             },
             skip => []
         },
@@ -138,10 +138,10 @@ test_opts() ->
             name => no_cache,
             desc => "No cache read or write",
             opts => #{
-                hashpath => ignore,
-                cache_control => [<<"no-cache">>, <<"no-store">>],
-                spawn_worker => false,
-                store => hb_test_utils:test_store()
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => hb_test_utils:test_store()
             },
             skip => [load_as]
         },
@@ -149,10 +149,10 @@ test_opts() ->
             name => only_store,
             desc => "Store, don't read",
             opts => #{
-                hashpath => update,
-                cache_control => [<<"no-cache">>],
-                spawn_worker => false,
-                store => CachedExecStore
+                <<"hashpath">> => update,
+                <<"cache-control">> => [<<"no-cache">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => CachedExecStore
             },
             skip => [
                 denormalized_device_name,
@@ -165,10 +165,10 @@ test_opts() ->
             name => only_if_cached,
             desc => "Only read, don't exec",
             opts => #{
-                hashpath => ignore,
-                cache_control => [<<"only-if-cached">>],
-                spawn_worker => false,
-                store => CachedExecStore
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"only-if-cached">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => CachedExecStore
             },
             skip => [
                 % Skip test with locally defined device, amongst others.

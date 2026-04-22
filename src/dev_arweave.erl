@@ -16,7 +16,7 @@
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
 all_parallel_test_() ->
-    hb_test_parallel:all(?MODULE, 15).
+    {timeout, 15, hb_test_parallel:all(?MODULE)}.
 
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
@@ -205,7 +205,7 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
             StructuredTXHeader,
             <<"application/octet-stream">>,
             Opts#{
-                cache_control =>
+                <<"cache-control">> =>
                     [<<"no-cache">>, <<"no-store">>]
             }
         ),
@@ -328,7 +328,7 @@ parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
     [Start, End] = binary:split(ByteRange, <<"-">>),
     {ok, hb_util:int(Start), hb_util:int(End)};
 parse_range_params(Msg, Opts) ->
-    case hb_ao:resolve(Msg, <<"range">>, Opts#{ hashpath => ignore }) of
+    case hb_ao:resolve(Msg, <<"range">>, Opts#{ <<"hashpath">> => ignore }) of
         {ok, Str} -> parse_range_params(Str, Opts);
         _ -> false
     end.
@@ -886,7 +886,7 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"method">> => Method
             },
             Opts#{
-                cache_control => [<<"no-cache">>, <<"no-store">>]
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
     to_message(Path, Method, best_response(Res), LogExtra, Opts).

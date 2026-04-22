@@ -14,7 +14,7 @@
 %%% with a refusal to execute.
 -module(hb_opts).
 -export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
--export([canonicalize/1]).
+-export([canonicalize/1, canonical_key/1]).
 -export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
@@ -136,7 +136,12 @@ topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
     lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
-%% @doc Canonicalize an opts or node message map to lower-case binary dash keys.
+%% @doc Canonicalize an opts or node message term to lower-case binary dash
+%% keys.
+%%
+%% This function is used at the points where a node message is generated,
+%% loaded, or persisted. It is deliberately not part of the hot lookup path in
+%% `get/3'.
 canonicalize(Term) -> canonicalize(root, Term).
 
 canonicalize(_Context, List) when is_list(List) ->
@@ -172,7 +177,7 @@ canonicalize(Context, Map) when is_map(Map) ->
             maps:from_list(
                 lists:map(
                     fun({Key, Value}) ->
-                        CanonKey = canonical_opt_key(Key),
+                        CanonKey = canonical_key(Key),
                         {CanonKey, canonicalize(CanonKey, Value)}
                     end,
                     maps:to_list(Map)
@@ -181,6 +186,17 @@ canonicalize(Context, Map) when is_map(Map) ->
     end;
 canonicalize(_Context, Other) -> Other.
 
+%% @doc Return how `canonicalize/2' should treat a nested map.
+%%
+%% `normal' means the key names are themselves opts/message keys, so we
+%% canonicalize them and recurse into the values.
+%%
+%% `opaque' means the map is dictionary-like user data. We keep the values as
+%% they are and only turn string-like keys into binaries so names/IDs remain
+%% stable.
+%%
+%% `recurse_values' is the middle ground: the top-level keys are names/IDs, but
+%% the values are themselves opts maps that should be canonicalized.
 dictionary_mode(<<"hyperbuddy-serve">>) -> opaque;
 dictionary_mode(<<"identities">>) -> recurse_values;
 dictionary_mode(<<"local-names">>) -> opaque;
@@ -205,50 +221,22 @@ canonical_dictionary_key(Key) when is_list(Key) ->
     end;
 canonical_dictionary_key(Key) -> Key.
 
-canonical_opt_key(Key) when is_atom(Key) ->
-    canonical_opt_key(atom_to_binary(Key, utf8));
-canonical_opt_key(Key) when is_list(Key) ->
+%% @doc Convert a single opts key to lower-case binary dash form.
+canonical_key(Key) when is_atom(Key) ->
+    canonical_key(atom_to_binary(Key, utf8));
+canonical_key(Key) when is_list(Key) ->
     case hb_util:is_string_list(Key) of
-        true -> canonical_opt_key(list_to_binary(Key));
+        true -> canonical_key(list_to_binary(Key));
         false -> Key
     end;
-canonical_opt_key(Key) when is_binary(Key) ->
+canonical_key(Key) when is_binary(Key) ->
     hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
-canonical_opt_key(Key) -> Key.
+canonical_key(Key) -> Key.
 
-find_local_opt(Key, Map) ->
-    case maps:find(Key, Map) of
-        {ok, Value} -> {ok, Value};
-        error when is_atom(Key) ->
-            maps:find(canonical_opt_key(Key), Map);
-        error when is_binary(Key) ->
-            try maps:find(hb_util:key_to_atom(Key, existing), Map)
-            catch _:_ -> error
-            end;
-        error ->
-            error
-    end.
-
-find_local_fallback(Key, Map) when is_atom(Key) ->
-    maps:find(canonical_opt_key(Key), Map);
-find_local_fallback(Key, Map) when is_binary(Key) ->
-    try maps:find(hb_util:key_to_atom(Key, existing), Map)
-    catch _:_ -> error
-    end;
-find_local_fallback(_Key, _Map) ->
+find_canonical_key(Key, Opts) when is_atom(Key); is_list(Key) ->
+    maps:find(canonical_key(Key), Opts);
+find_canonical_key(_Key, _Opts) ->
     error.
-
-opt_map_get(Key, Map, Default) ->
-    case find_local_opt(Key, Map) of
-        {ok, Value} -> Value;
-        error -> Default
-    end.
-
-fast_lookup_default(Key, Default, Opts) ->
-    case is_map_key(Key, ?ENV_KEYS) of
-        true -> do_get(Key, Default, Opts);
-        false -> opt_map_get(Key, default_message(), Default)
-    end.
 
 %% @doc Return the default message with all environment variables set.
 default_message_with_env() ->
@@ -256,7 +244,7 @@ default_message_with_env() ->
         fun(Key, _Spec, NodeMsg) ->
             case global_get(Key, undefined, #{}) of
                 undefined -> NodeMsg;
-                Value -> NodeMsg#{ canonical_opt_key(Key) => Value }
+                Value -> NodeMsg#{ canonical_key(Key) => Value }
             end
         end,
         default_message(),
@@ -700,16 +688,27 @@ get(Key, Default, Opts)
         #{ only := global } -> do_get(Key, Default, Opts);
         #{ Key   := Value } -> Value;
         #{ only  := local } ->
-            case find_local_fallback(Key, Opts) of
+            case find_canonical_key(Key, Opts) of
                 {ok, Value} -> Value;
                 error -> Default
             end;
         _ ->
-            case find_local_fallback(Key, Opts) of
+            case find_canonical_key(Key, Opts) of
                 {ok, Value} ->
                     Value;
                 error ->
-                    fast_lookup_default(Key, Default, Opts)
+                    case is_map_key(Key, ?ENV_KEYS) of
+                        true -> do_get(Key, Default, Opts);
+                        false ->
+                            case maps:get(
+                                canonical_key(Key),
+                                default_message(),
+                                '$hb_opts_not_found'
+                            ) of
+                                '$hb_opts_not_found' -> Default;
+                                V -> V
+                            end
+                    end
             end
     end;
 get(Key, Default, Opts) ->
@@ -719,10 +718,13 @@ do_get(Key, Default, Opts = #{ <<"only">> := Only }) ->
 do_get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
     do_get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
 do_get(Key, Default, Opts = #{ only := local }) ->
-    case find_local_opt(Key, Opts) of
+    case maps:find(Key, Opts) of
         {ok, Value} -> Value;
-        error -> 
-            Default
+        error ->
+            case find_canonical_key(Key, Opts) of
+                {ok, Value} -> Value;
+                error -> Default
+            end
     end;
 do_get(Key, Default, Opts = #{ only := global }) ->
     case global_get(Key, hb_opts_not_found, Opts) of
@@ -803,7 +805,8 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default, _Opts) -> opt_map_get(Key, default_message(), Default).
+config_lookup(Key, Default, _Opts) ->
+    maps:get(canonical_key(Key), default_message(), Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
@@ -869,7 +872,7 @@ load_bin(Device, Bin, Opts) ->
                         Bin,
                         <<"structured@1.0">>,
                         Device,
-                        Opts#{ linkify_mode => false }
+                        Opts#{ <<"linkify-mode">> => false }
                     ),
                     Opts
                 ),
