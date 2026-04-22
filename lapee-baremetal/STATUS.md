@@ -2553,5 +2553,63 @@ Two claim sections closing the last two headline gaps:
    against a Fedora / Debian / LapEE "expected files" policy
    manifest so the claim can flag unexpected binaries.
 
-Iteration 8 fires automatically at `:23`. Loop state: `b5d87b84`.
+### Hour 8 — commit `281b15904`
+
+Two improvements building on hour 7:
+
+1. **Multi-bank PCR replay** — `reconstruct_pcr/2` now auto-
+   detects the hash algorithm from the declared quoted-digest
+   size (20=SHA-1, 32=SHA-256, 48=SHA-384, 64=SHA-512) and
+   folds the matching bank. A `reconstruct_pcr/3` explicit-
+   alg form is added for callers that want to force a bank.
+   Each row in `claim.pcr-replay` now surfaces an `alg` field
+   so policy engines know which bank was replayed. Live-
+   verified on `sha1-only-log.bin`: SHA-1 auto-detected,
+   replay matches.
+
+2. **`claim.platform-config`** — compact platform-
+   configuration stanza aggregating every platform-identifying
+   fact the event log carries, in a single policy-friendly
+   view:
+     - `handoff-tables-v1` / `handoff-tables-v2`
+       — UEFI configuration tables advertised pre-OS
+     - `acpi-present` / `smbios-present` /
+       `hob-list-present` — derived booleans
+     - `post-codes` — ASCII POST-code strings (deduped)
+     - `option-rom-count` — EV_EFI_ACTION option-ROM scans
+     - `boot-order` / `boot-current` — UEFI boot variables
+     - `uefi-variable-count` + `measured-uefi-variables`
+     - `event-count-per-pcr` + `event-type-count`
+       histograms
+
+   Live-verified on `dell-notebook-wbcl.bin`: 3 handoff
+   tables (SMBIOS 2.x + 2 unknowns), 11 measured UEFI vars,
+   62 events across 12 PCRs — a single "what kind of
+   machine is this?" lookup.
+
+3 new eunit tests. All 135 tests pass (95 tcg + 40 interpret).
+
+### Candidate priority list for hour 9
+
+1. **Boot-chain image-identity DB** — still high value; the
+   `priv/tpm-interpret/boot-images/*.json' catalogue remains
+   un-built. Wire into `claim.boot-chain` to attribute each
+   row to a known publisher (shim/grub/sd-boot/UKI).
+2. **SPDM measurement block decode** — unpack
+   `TCG_DEVICE_SECURITY_EVENT_DATA2` + embedded SPDM
+   measurement records for events 0x800000E1-E5.
+3. **`claim.ima-policy` matching** — cross-reference parsed
+   IMA entries (hour 7) against a "expected files" manifest
+   so unexpected binaries are flagged.
+4. **Replay-alg per-PCR independence** — some quotes select
+   different banks for different PCRs (mixed sha1/sha256).
+   Hour 8 picks one alg per PCR from the quoted digest size;
+   extend to read pcrSelect bank info from the TPMS_ATTEST
+   quote body.
+5. **Canonical claim-set serialisation** — produce a
+   TCG-canonicalised byte sequence over the flat claim API
+   so a downstream verifier can sign/countersign without
+   re-parsing.
+
+Iteration 9 fires automatically at `:23`. Loop state: `b5d87b84`.
 
