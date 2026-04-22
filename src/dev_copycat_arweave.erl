@@ -1599,7 +1599,11 @@ validate_and_flag_item_id(ItemBinary, DeclaredID, EncodedDeclaredID, Store) ->
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
-    dev_arweave_common:type(TX) =/= binary.
+    try dev_arweave_common:type(TX) =/= binary
+    catch _:_:_ ->
+        ?event(copycat_short, {tx_error, {tx, TX}}),
+        false 
+    end.
 
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
