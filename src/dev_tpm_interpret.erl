@@ -1139,6 +1139,17 @@ interpret_claim(Events, E, Db) ->
         <<"kernel">>             => claim_kernel(EvList, E),
         <<"cpu">>                => claim_cpu(EvList, Db),
         <<"shim">>               => claim_shim(EvList),
+        %% Paper §Architecture — the quote itself carries freshness
+        %% (reset-count / restart-count / clock-ms), TPM firmware
+        %% identity, and the exact PCR selection that was quoted.
+        %% Surface them on the compact claim API so policy engines
+        %% don't have to parse the full interpret output.
+        <<"quote">>              => claim_quote(E),
+        %% PCR cross-reference — does the (PCR 0, PCR 1, PCR 7)
+        %% triple match any profile in the shipped pcr-profiles/
+        %% DB? If so we know exactly which firmware + platform
+        %% booted this machine.
+        <<"pcr-match">>          => claim_pcr_match(E, Db),
         %% Paper field #2 — TPM identity (vendor, model, firmware,
         %% spec, CVEs). Derived from the EK cert's TCG OIDs
         %% (2.23.133.2.1-3, 2.23.133.2.16) + the vendor catalogue.
@@ -1688,6 +1699,193 @@ claim_boot_loader(Events) ->
 %%     (GUID + PARTNR) each image came off,
 %%   * detect runtime-service drivers loaded outside the normal
 %%     chain (potential supply-chain surface).
+%% @doc Compact `claim.quote' — surface the TPMS_ATTEST metadata
+%% on the flat claim API. Includes freshness signals (reset-count,
+%% restart-count, TPM wall-clock), TPM firmware identity, and the
+%% exact (hash-alg, pcr-indexes) selection covered by the quote.
+claim_quote(E) ->
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
+        <<>> -> unknown_quote_claim();
+        _ ->
+            Meta = interpret_quote_metadata(E),
+            case maps:is_key(<<"error">>, Meta) of
+                true ->
+                    Base = unknown_quote_claim(),
+                    Base#{<<"error">> => maps:get(<<"error">>, Meta)};
+                false ->
+                    Sel = maps:get(<<"pcr-select">>, Meta, []),
+                    QuotedIndexes = lists:usort(
+                        lists:flatten(
+                          [maps:get(<<"pcr-indexes">>, S, [])
+                           || S <- Sel])),
+                    QuotedAlgs =
+                        [maps:get(<<"hash-alg-name">>, S, <<"unknown">>)
+                         || S <- Sel],
+                    #{
+                        <<"magic-ok">>            =>
+                            maps:get(<<"magic-ok">>, Meta, false),
+                        <<"attest-type">>         =>
+                            maps:get(<<"attest-type">>, Meta,
+                                      <<"unknown">>),
+                        <<"attest-type-code">>    =>
+                            maps:get(<<"attest-type-code">>, Meta, 0),
+                        <<"nonce">>               =>
+                            maps:get(<<"nonce">>, Meta, <<"">>),
+                        <<"clock-ms">>            =>
+                            maps:get(<<"clock-ms">>, Meta, 0),
+                        <<"clock-seconds">>       =>
+                            maps:get(<<"clock-seconds">>, Meta, 0),
+                        <<"reset-count">>         =>
+                            maps:get(<<"reset-count">>, Meta, 0),
+                        <<"restart-count">>       =>
+                            maps:get(<<"restart-count">>, Meta, 0),
+                        <<"safe">>                =>
+                            maps:get(<<"safe">>, Meta, false),
+                        <<"firmware-version-u64">>  =>
+                            maps:get(<<"firmware-version-u64">>, Meta, 0),
+                        <<"firmware-version-hex">>  =>
+                            maps:get(<<"firmware-version-hex">>, Meta,
+                                      <<"unknown">>),
+                        <<"firmware-version-high">> =>
+                            maps:get(<<"firmware-version-high">>, Meta, 0),
+                        <<"firmware-version-low">>  =>
+                            maps:get(<<"firmware-version-low">>, Meta, 0),
+                        <<"qualified-signer-name">>         =>
+                            maps:get(<<"qualified-signer-name">>, Meta,
+                                      <<"">>),
+                        <<"qualified-signer-name-length">>  =>
+                            maps:get(<<"qualified-signer-name-length">>,
+                                      Meta, 0),
+                        <<"quoted-pcr-indexes">>  => QuotedIndexes,
+                        <<"quoted-pcr-count">>    => length(QuotedIndexes),
+                        <<"quoted-pcr-algs">>     => QuotedAlgs,
+                        <<"pcr-digest">>          =>
+                            maps:get(<<"pcr-digest">>, Meta, <<"">>),
+                        <<"pcr-digest-length">>   =>
+                            maps:get(<<"pcr-digest-length">>, Meta, 0),
+                        <<"pcr-select">>          => Sel
+                    }
+            end
+    end.
+
+unknown_quote_claim() ->
+    #{
+        <<"magic-ok">>                      => false,
+        <<"attest-type">>                   => <<"unknown">>,
+        <<"attest-type-code">>              => 0,
+        <<"nonce">>                         => <<"">>,
+        <<"clock-ms">>                      => 0,
+        <<"clock-seconds">>                 => 0,
+        <<"reset-count">>                   => 0,
+        <<"restart-count">>                 => 0,
+        <<"safe">>                          => false,
+        <<"firmware-version-u64">>          => 0,
+        <<"firmware-version-hex">>          => <<"0x0000000000000000">>,
+        <<"firmware-version-high">>         => 0,
+        <<"firmware-version-low">>          => 0,
+        <<"qualified-signer-name">>         => <<"">>,
+        <<"qualified-signer-name-length">>  => 0,
+        <<"quoted-pcr-indexes">>            => [],
+        <<"quoted-pcr-count">>              => 0,
+        <<"quoted-pcr-algs">>               => [],
+        <<"pcr-digest">>                    => <<"">>,
+        <<"pcr-digest-length">>             => 0,
+        <<"pcr-select">>                    => []
+    }.
+
+%% @doc Cross-reference the (PCR 0, PCR 1, PCR 7) triple against
+%% the shipped `priv/tpm-interpret/pcr-profiles/*.json' catalogue.
+%% If all three match a profile's `match-pcrs.sha256' we declare
+%% a high-confidence match; 2/3 is medium, 1/3 is low, 0/3 is
+%% `no-match'. Returns the best match plus a list of all-matching
+%% profiles so a policy engine can inspect alternatives.
+%%
+%% PCR 0 = core firmware measurement (CRTM + POST code + vendor
+%% firmware blobs). PCR 1 = host platform configuration (CPU
+%% microcode, SMBIOS, motherboard variables). PCR 7 = Secure Boot
+%% state (db, dbx, KEK, PK, SecureBoot variable, MokListTrusted).
+%% Matching all 3 pins firmware identity + boot policy + platform
+%% config within the same fingerprint class.
+claim_pcr_match(E, Db) ->
+    PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+    P0 = maps:get(<<"0">>, PcrVals, undefined),
+    P1 = maps:get(<<"1">>, PcrVals, undefined),
+    P7 = maps:get(<<"7">>, PcrVals, undefined),
+    Profiles = maps:get(<<"pcr-profiles">>, Db, #{}),
+    Scored = score_pcr_profiles(Profiles, P0, P1, P7),
+    Best = best_pcr_profile_match(Scored),
+    #{
+        <<"pcr-0">>        => or_null(P0),
+        <<"pcr-1">>        => or_null(P1),
+        <<"pcr-7">>        => or_null(P7),
+        <<"profile-count">> => maps:size(Profiles),
+        <<"best-match">>   => project_pcr_match(Best),
+        <<"all-matches">>  =>
+            [project_pcr_match(M) || M <- Scored,
+                                      maps:get(<<"score">>, M, 0) > 0]
+    }.
+
+%% Score every profile by how many of {pcr-0, pcr-1, pcr-7}
+%% agree. Returns a list of `#{profile-key, name, score,
+%% matched-pcrs, attributes}' maps sorted by descending score.
+score_pcr_profiles(Profiles, P0, P1, P7) ->
+    Scored = maps:fold(
+        fun(Key, Profile, Acc) ->
+            [score_one_profile(Key, Profile, P0, P1, P7) | Acc]
+        end, [], Profiles),
+    lists:reverse(
+      lists:sort(
+        fun(A, B) ->
+            maps:get(<<"score">>, A, 0) =< maps:get(<<"score">>, B, 0)
+        end, Scored)).
+
+score_one_profile(Key, Profile, P0, P1, P7) ->
+    Sha256 = nested(Profile, [<<"match-pcrs">>, <<"sha256">>], #{}),
+    Pp0 = maps:get(<<"0">>, Sha256, undefined),
+    Pp1 = maps:get(<<"1">>, Sha256, undefined),
+    Pp7 = maps:get(<<"7">>, Sha256, undefined),
+    Hits = [{<<"0">>, eq(P0, Pp0)},
+            {<<"1">>, eq(P1, Pp1)},
+            {<<"7">>, eq(P7, Pp7)}],
+    Matched = [Idx || {Idx, true} <- Hits],
+    Score = length(Matched),
+    #{
+        <<"profile-key">>  => Key,
+        <<"name">>         => maps:get(<<"name">>, Profile, Key),
+        <<"score">>        => Score,
+        <<"matched-pcrs">> => Matched,
+        <<"attributes">>   => maps:get(<<"attributes">>, Profile, #{})
+    }.
+
+eq(A, B) when A =/= undefined, B =/= undefined -> A =:= B;
+eq(_, _) -> false.
+
+best_pcr_profile_match([]) -> undefined;
+best_pcr_profile_match([Top | _]) ->
+    case maps:get(<<"score">>, Top, 0) of
+        0 -> undefined;
+        _ -> Top
+    end.
+
+project_pcr_match(undefined) ->
+    #{<<"profile-key">> => null,
+      <<"name">>        => null,
+      <<"score">>       => 0,
+      <<"confidence">>  => <<"no-match">>,
+      <<"matched-pcrs">>=> [],
+      <<"attributes">>  => #{}};
+project_pcr_match(M) when is_map(M) ->
+    Score = maps:get(<<"score">>, M, 0),
+    Confidence = pcr_match_confidence(Score),
+    M#{<<"confidence">> => Confidence}.
+
+pcr_match_confidence(0) -> <<"no-match">>;
+pcr_match_confidence(1) -> <<"low">>;
+pcr_match_confidence(2) -> <<"medium">>;
+pcr_match_confidence(3) -> <<"high">>;
+pcr_match_confidence(_) -> <<"high">>.
+
 claim_boot_chain(Events) ->
     Codes = [16#80000003, 16#80000004, 16#80000005],
     Sorted = lists:sort(
@@ -2365,26 +2563,52 @@ interpret_quote_metadata(E) ->
     try
         Quoted = hb_util:decode(QuotedB64),
         <<Magic:4/binary, Type:16/unsigned-big, Rest0/binary>> = Quoted,
-        {_QualifiedSigner, Rest1} = tpm2b(Rest0),
-        {ExtraData, Rest2}        = tpm2b(Rest1),
+        {QualifiedSigner, Rest1} = tpm2b(Rest0),
+        {ExtraData, Rest2}       = tpm2b(Rest1),
         <<Clock:64/unsigned-big,
           ResetCount:32/unsigned-big,
           RestartCount:32/unsigned-big,
-          SafeByte:8, _Rest3/binary>> = Rest2,
-        #{
+          SafeByte:8,
+          FirmwareVersion:64/unsigned-big,
+          Rest3/binary>> = Rest2,
+        %% The `attested' union depends on `Type'. For quotes
+        %% (0x8018) it's TPMS_QUOTE_INFO = TPML_PCR_SELECTION +
+        %% TPM2B_DIGEST. Other attest types carry different
+        %% payloads; we parse those we recognise and fall back to
+        %% a `tail-length' field otherwise.
+        TypeName = attest_type_name(Type),
+        AttestFields = decode_attest_body(Type, Rest3),
+        BaseFields = #{
             %% Magic is a 4-byte TCG sentinel (0xFF "TCG"). We don't
             %% expose the raw bytes — `magic_ok' is the single fact a
             %% caller needs; an unrecognised magic means the quote is
             %% not TPM-shaped and `error' is returned instead.
-            <<"magic-ok">> => (Magic =:= <<16#FF, "TCG">>),
-            <<"attest-type">> => attest_type_name(Type),
-            <<"nonce">> =>
-                hb_util:encode(ExtraData),
-            <<"clock-ms">> => Clock,
-            <<"reset-count">> => ResetCount,
-            <<"restart-count">> => RestartCount,
-            <<"safe">> => SafeByte =/= 0
-        }
+            <<"magic-ok">>             => (Magic =:= <<16#FF, "TCG">>),
+            <<"attest-type">>          => TypeName,
+            <<"attest-type-code">>     => Type,
+            <<"qualified-signer-name">> => hb_util:encode(QualifiedSigner),
+            <<"qualified-signer-name-length">> => byte_size(QualifiedSigner),
+            <<"nonce">>                => hb_util:encode(ExtraData),
+            <<"clock-ms">>             => Clock,
+            <<"clock-seconds">>        => Clock div 1000,
+            <<"reset-count">>          => ResetCount,
+            <<"restart-count">>        => RestartCount,
+            <<"safe">>                 => SafeByte =/= 0,
+            %% TPM firmware version is a 64-bit opaque identifier
+            %% whose packing is vendor-defined. We surface both
+            %% the raw u64 and a split form (hi/lo u32) that
+            %% matches the common Infineon / Nuvoton / STMicro /
+            %% Microsoft-TPM display convention.
+            <<"firmware-version-u64">> => FirmwareVersion,
+            <<"firmware-version-hex">> =>
+                iolist_to_binary(io_lib:format(
+                    "0x~16.16.0B", [FirmwareVersion])),
+            <<"firmware-version-high">> =>
+                (FirmwareVersion bsr 32) band 16#FFFFFFFF,
+            <<"firmware-version-low">>  =>
+                FirmwareVersion band 16#FFFFFFFF
+        },
+        maps:merge(BaseFields, AttestFields)
     catch
         _:_ ->
             #{<<"error">> =>
@@ -2393,6 +2617,79 @@ interpret_quote_metadata(E) ->
 
 tpm2b(<<Size:16/unsigned-big, Payload:Size/binary, Rest/binary>>) ->
     {Payload, Rest}.
+
+%% @doc Decode the body of a TPMS_ATTEST based on its `Type'. For
+%% quotes (0x8018) this is TPMS_QUOTE_INFO. Other types carry
+%% different payloads; those we recognise are decoded, others get
+%% a `tail-length' + `tail-sha256' fallback.
+decode_attest_body(16#8018, Body) ->
+    try
+        %% TPMS_QUOTE_INFO:
+        %%   pcrSelect: TPML_PCR_SELECTION
+        %%     count:          u32 BE
+        %%     pcrSelections:  [TPMS_PCR_SELECTION]
+        %%   pcrDigest: TPM2B_DIGEST
+        <<Count:32/unsigned-big, Rest0/binary>> = Body,
+        {Selections, Rest1} = decode_pcr_selections(Count, Rest0, []),
+        {PcrDigest, _Tail} = tpm2b(Rest1),
+        #{<<"pcr-select">> => Selections,
+          <<"pcr-select-count">> => Count,
+          <<"pcr-digest">> => hb_util:encode(PcrDigest),
+          <<"pcr-digest-length">> => byte_size(PcrDigest)}
+    catch _:_ ->
+        #{<<"attest-body-error">> =>
+              <<"TPMS_QUOTE_INFO parse failed">>}
+    end;
+decode_attest_body(_OtherType, Body) ->
+    #{<<"attest-body-length">> => byte_size(Body),
+      <<"attest-body-sha256">> =>
+          hb_util:encode(crypto:hash(sha256, Body))}.
+
+decode_pcr_selections(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+decode_pcr_selections(N, Bin, Acc) ->
+    <<HashAlg:16/unsigned-big, SizeOfSelect:8,
+      Select:SizeOfSelect/binary, Rest/binary>> = Bin,
+    SelRec = #{
+        <<"hash-alg-code">> => HashAlg,
+        <<"hash-alg-name">> => hash_alg_name(HashAlg),
+        <<"pcr-indexes">>   => pcr_bitmap_to_list(Select),
+        <<"pcr-bitmap">>    => hb_util:encode(Select),
+        <<"size-of-select">>=> SizeOfSelect
+    },
+    decode_pcr_selections(N - 1, Rest, [SelRec | Acc]).
+
+%% @doc TPM_ALG_ID hash-algorithm mapping (TPM 2.0 Part 2 Table 9).
+hash_alg_name(16#0004) -> <<"sha1">>;
+hash_alg_name(16#000B) -> <<"sha256">>;
+hash_alg_name(16#000C) -> <<"sha384">>;
+hash_alg_name(16#000D) -> <<"sha512">>;
+hash_alg_name(16#0012) -> <<"sm3-256">>;
+hash_alg_name(16#0027) -> <<"sha3-256">>;
+hash_alg_name(16#0028) -> <<"sha3-384">>;
+hash_alg_name(16#0029) -> <<"sha3-512">>;
+hash_alg_name(N) ->
+    iolist_to_binary(io_lib:format("alg-0x~4.16.0B", [N])).
+
+%% @doc Convert a TPML_PCR_SELECTION bitmap into a sorted list
+%% of PCR indexes.
+%%
+%% The bitmap is little-endian-per-byte, LSB-of-each-byte is the
+%% lowest PCR in that byte. Byte 0 bit 0 = PCR 0, byte 0 bit 7 =
+%% PCR 7, byte 1 bit 0 = PCR 8, and so on.
+pcr_bitmap_to_list(Bitmap) ->
+    pcr_bitmap_to_list(Bitmap, 0, []).
+
+pcr_bitmap_to_list(<<>>, _, Acc) -> lists:reverse(Acc);
+pcr_bitmap_to_list(<<Byte:8, Rest/binary>>, Offset, Acc) ->
+    Acc1 = lists:foldl(
+        fun(Bit, A) ->
+            case (Byte bsr Bit) band 1 of
+                1 -> [Offset * 8 + Bit | A];
+                0 -> A
+            end
+        end, Acc, lists:seq(0, 7)),
+    pcr_bitmap_to_list(Rest, Offset + 1, Acc1).
 
 %% Per TCG TPM 2.0 Part 2 Table 19 (TPM_ST Constants):
 attest_type_name(16#8014) -> <<"TPM_ST_ATTEST_NV">>;
@@ -3877,6 +4174,142 @@ claim_surface_hour4_boot_chain_test() ->
                  maps:get(<<"last-application-hash">>, BC)),
     ?assertEqual(16#2000, maps:get(<<"image-length-in-memory">>, Row0)),
     ?assertEqual(16#10000, maps:get(<<"image-length-in-memory">>, Row1)),
+    ok.
+
+%% Hour-5: TPMS_ATTEST full decode round-trip. Build a synthetic
+%% quote blob that hits every field (quote-specific pcrSelect +
+%% pcrDigest union body, firmwareVersion, qualifiedSigner,
+%% clockInfo, extraData), thread it through `claim/3`, assert
+%% every field decodes correctly.
+claim_surface_hour5_quote_round_trip_test() ->
+    Magic = <<16#FF, "TCG">>,
+    Type = 16#8018,                          %% TPM_ST_ATTEST_QUOTE
+    QsName = crypto:hash(sha256, <<"signer">>),
+    QsTpm2B = <<(byte_size(QsName)):16/big, QsName/binary>>,
+    Nonce = <<"hour5-nonce-16-by">>,  %% 17 bytes (odd length ok)
+    NonceTpm2B = <<(byte_size(Nonce)):16/big, Nonce/binary>>,
+    Clock = 16#0000000012345678,
+    ResetCount = 42,
+    RestartCount = 7,
+    Safe = 1,
+    FwVer = 16#0102030400050006,
+    %% Select PCRs 0, 1, 2, 7 under SHA-256
+    %% (bitmap byte 0 = 0b10000111 = 0x87).
+    PcrSelect = <<1:32/big, 16#000B:16/big, 3:8, 16#87, 0, 0>>,
+    PcrDigest = crypto:hash(sha256, <<"some-pcr-set">>),
+    PcrDigestTpm2B = <<(byte_size(PcrDigest)):16/big,
+                        PcrDigest/binary>>,
+    Quoted = <<Magic/binary, Type:16/big,
+               QsTpm2B/binary, NonceTpm2B/binary,
+               Clock:64/big, ResetCount:32/big,
+               RestartCount:32/big, Safe:8, FwVer:64/big,
+               PcrSelect/binary, PcrDigestTpm2B/binary>>,
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"quoted">> => hb_util:encode(Quoted),
+            <<"pcr-values">> => #{}
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    Q = maps:get(<<"quote">>, Claim),
+    ?assertEqual(true, maps:get(<<"magic-ok">>, Q)),
+    ?assertEqual(<<"TPM_ST_ATTEST_QUOTE">>,
+                 maps:get(<<"attest-type">>, Q)),
+    ?assertEqual(16#8018, maps:get(<<"attest-type-code">>, Q)),
+    ?assertEqual(Clock, maps:get(<<"clock-ms">>, Q)),
+    ?assertEqual(ResetCount, maps:get(<<"reset-count">>, Q)),
+    ?assertEqual(RestartCount, maps:get(<<"restart-count">>, Q)),
+    ?assertEqual(true, maps:get(<<"safe">>, Q)),
+    ?assertEqual(FwVer, maps:get(<<"firmware-version-u64">>, Q)),
+    ?assertEqual(<<"0x0102030400050006">>,
+                 maps:get(<<"firmware-version-hex">>, Q)),
+    ?assertEqual([0, 1, 2, 7],
+                 maps:get(<<"quoted-pcr-indexes">>, Q)),
+    ?assertEqual(4, maps:get(<<"quoted-pcr-count">>, Q)),
+    ?assertEqual([<<"sha256">>],
+                 maps:get(<<"quoted-pcr-algs">>, Q)),
+    ?assertEqual(hb_util:encode(PcrDigest),
+                 maps:get(<<"pcr-digest">>, Q)),
+    ?assertEqual(32, maps:get(<<"pcr-digest-length">>, Q)),
+    ?assertEqual(hb_util:encode(QsName),
+                 maps:get(<<"qualified-signer-name">>, Q)),
+    ok.
+
+%% Hour-5: claim.quote on an envelope with no quote returns a
+%% well-formed "unknown" stanza (not an error).
+claim_surface_hour5_quote_missing_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<"">>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    Q = maps:get(<<"quote">>, Claim),
+    ?assertEqual(false, maps:get(<<"magic-ok">>, Q)),
+    ?assertEqual(<<"unknown">>, maps:get(<<"attest-type">>, Q)),
+    ?assertEqual(0, maps:get(<<"reset-count">>, Q)),
+    ?assertEqual([], maps:get(<<"quoted-pcr-indexes">>, Q)),
+    ok.
+
+%% Hour-5: claim.pcr-match cross-references the (PCR 0, PCR 1,
+%% PCR 7) triple against the 29 shipped pcr-profiles. When all
+%% three match a profile's match-pcrs.sha256 we get confidence=
+%% "high" and the profile's attributes are surfaced.
+claim_surface_hour5_pcr_match_lenovo_test() ->
+    %% Values straight from priv/tpm-interpret/pcr-profiles/
+    %% from-fixture-lenovo-thinkpad-p51.json.
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> => #{
+                <<"0">> =>
+                    <<"XZ_KKkGSMn0dXX55Cw8WbWI1VVKsrA6r5FkdingFTuM">>,
+                <<"1">> =>
+                    <<"qoP03h5aHQXMvQjlP-ff0KNXxnOjn0355qAIMCT_3sE">>,
+                <<"7">> =>
+                    <<"SNfH-dPubRqKD7eZUWKq7NAOu50FvnkHAdTu7I34UZ4">>
+            },
+            <<"quoted">> => <<>>
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PM = maps:get(<<"pcr-match">>, Claim),
+    ?assert(maps:get(<<"profile-count">>, PM) >= 29),
+    Best = maps:get(<<"best-match">>, PM),
+    ?assertEqual(<<"high">>, maps:get(<<"confidence">>, Best)),
+    ?assertEqual([<<"0">>, <<"1">>, <<"7">>],
+                 maps:get(<<"matched-pcrs">>, Best)),
+    ?assertMatch(<<"Lenovo", _/binary>>,
+                 maps:get(<<"name">>, Best)),
+    %% All-matches list contains the hit.
+    ?assert(length(maps:get(<<"all-matches">>, PM)) >= 1),
+    ok.
+
+%% Hour-5: claim.pcr-match on a random triple returns no-match
+%% with score=0 and an empty all-matches list.
+claim_surface_hour5_pcr_match_nomatch_test() ->
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"pcr-values">> => #{
+                <<"0">> => <<"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
+                <<"1">> => <<"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">>,
+                <<"7">> => <<"ccccccccccccccccccccccccccccccccccccccccccc">>
+            },
+            <<"quoted">> => <<>>
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PM = maps:get(<<"pcr-match">>, Claim),
+    Best = maps:get(<<"best-match">>, PM),
+    ?assertEqual(<<"no-match">>, maps:get(<<"confidence">>, Best)),
+    ?assertEqual(0, maps:get(<<"score">>, Best)),
+    ?assertEqual([], maps:get(<<"all-matches">>, PM)),
+    ok.
+
+%% Hour-5: pcr-bitmap decoder — 0x87 (byte 0) → PCRs 0,1,2,7.
+%% Cross-byte case: bitmap `<0x01, 0x01>` → PCR 0 + PCR 8.
+pcr_bitmap_decoder_test() ->
+    ?assertEqual([0, 1, 2, 7], pcr_bitmap_to_list(<<16#87>>)),
+    ?assertEqual([0, 8],       pcr_bitmap_to_list(<<16#01, 16#01>>)),
+    ?assertEqual([],           pcr_bitmap_to_list(<<0>>)),
+    ?assertEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                  16, 17, 18, 19, 20, 21, 22, 23],
+                 pcr_bitmap_to_list(<<16#FF, 16#FF, 16#FF>>)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
