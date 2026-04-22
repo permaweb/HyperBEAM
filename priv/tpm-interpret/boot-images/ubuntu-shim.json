@@ -1,0 +1,24 @@
+{
+    "schema-version": 1,
+    "name": "Canonical Ubuntu shim",
+    "publisher": "Canonical Ltd.",
+    "product": "shim-signed (shimx64.efi)",
+    "category": "shim",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\ubuntu\\shimx64.efi",
+            "\\EFI\\ubuntu\\shim.efi",
+            "\\EFI\\ubuntu\\shimaa64.efi"
+        ]
+    },
+    "signed-by": [
+        "Microsoft UEFI CA 2011",
+        "Microsoft Windows UEFI CA 2023"
+    ],
+    "recommended-min-version": "shim-signed 1.58+ (Ubuntu 24.04)",
+    "cve-status": "clear",
+    "cve-notes": "Canonical ships shim-signed 1.58+ with upstream 15.8 post-CVE-2023-40547.",
+    "notes": "Ubuntu shim chains to Canonical's MokList Signing Key for grub2 / kernel verification.",
+    "source": "https://launchpad.net/ubuntu/+source/shim-signed"
+}

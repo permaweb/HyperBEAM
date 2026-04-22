@@ -1,0 +1,23 @@
+{
+    "schema-version": 1,
+    "name": "Microsoft Windows Boot Manager",
+    "publisher": "Microsoft Corporation",
+    "product": "Windows Boot Manager (bootmgfw.efi)",
+    "category": "boot-manager",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\Microsoft\\Boot\\bootmgfw.efi",
+            "\\EFI\\Boot\\bootmgfw.efi"
+        ]
+    },
+    "signed-by": [
+        "Microsoft Windows Production PCA 2011",
+        "Microsoft UEFI CA 2011"
+    ],
+    "recommended-min-version": "Windows 11 24H2 (post-BlackLotus)",
+    "cve-status": "has-known-cves",
+    "cve-notes": "Multiple pre-2024 Windows Boot Manager builds are revoked in the UEFI Revocation List (dbx) for CVE-2022-21894 (BlackLotus) and CVE-2023-24932 (Black Lotus follow-up). Verifiers should cross-reference image-hash-sha256 against the current UEFI RL.",
+    "notes": "Windows boot chain: bootmgfw.efi → winload.efi → Windows kernel. Measured on PCR 4.",
+    "source": "https://uefi.org/revocationlistfile + https://learn.microsoft.com/en-us/windows/security/information-protection/bitlocker/bcd-settings-and-bitlocker"
+}

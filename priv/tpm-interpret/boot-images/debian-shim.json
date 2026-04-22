@@ -1,0 +1,23 @@
+{
+    "schema-version": 1,
+    "name": "Debian shim",
+    "publisher": "Debian Project",
+    "product": "shim-signed (shimx64.efi)",
+    "category": "shim",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\debian\\shimx64.efi",
+            "\\EFI\\debian\\shim.efi"
+        ]
+    },
+    "signed-by": [
+        "Microsoft UEFI CA 2011",
+        "Microsoft Windows UEFI CA 2023"
+    ],
+    "recommended-min-version": "shim-signed 1.40+debian12u (post-CVE-2023-40547)",
+    "cve-status": "clear",
+    "cve-notes": "Debian 12 bookworm-security ships shim-signed 1.40+ with upstream 15.8.",
+    "notes": "Debian ships two variants: shim-signed (Microsoft-signed, production) and shim-unsigned (locally signed via MOK).",
+    "source": "https://packages.debian.org/bookworm/shim-signed"
+}

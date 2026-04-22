@@ -1,0 +1,27 @@
+{
+    "schema-version": 1,
+    "name": "Fedora / Red Hat shim",
+    "publisher": "Red Hat, Inc.",
+    "product": "shim-x64 (shim.efi)",
+    "category": "shim",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\fedora\\shimx64.efi",
+            "\\EFI\\fedora\\shim.efi",
+            "\\EFI\\redhat\\shimx64.efi",
+            "\\EFI\\redhat\\shim.efi",
+            "\\EFI\\centos\\shimx64.efi",
+            "\\EFI\\centos\\shim.efi"
+        ]
+    },
+    "signed-by": [
+        "Microsoft UEFI CA 2011",
+        "Microsoft Windows UEFI CA 2023"
+    ],
+    "recommended-min-version": "shim-15.8",
+    "cve-status": "clear",
+    "cve-notes": "shim 15.6 and earlier had CVE-2023-40546/40547/40548/40549/40550 (buffer overflows); 15.8 is the current post-CVE release.",
+    "notes": "Fedora shim is signed by Microsoft's UEFI CA which Secure Boot chains of trust. Internally, shim verifies grub2 / systemd-boot against the Fedora CA (enrolled in MokList). Measured on PCR 4 via EV_EFI_BOOT_SERVICES_APPLICATION.",
+    "source": "https://github.com/rhboot/shim-review + https://github.com/rhboot/shim/releases"
+}

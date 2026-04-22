@@ -1135,7 +1135,7 @@ interpret_claim(Events, E, Db) ->
         <<"secure-boot">>        => claim_secure_boot(EvList),
         <<"firmware">>           => claim_firmware(EvList, Db),
         <<"boot-loader">>        => claim_boot_loader(EvList),
-        <<"boot-chain">>         => claim_boot_chain(EvList),
+        <<"boot-chain">>         => claim_boot_chain(EvList, Db),
         <<"kernel">>             => claim_kernel(EvList, E),
         <<"cpu">>                => claim_cpu(EvList, Db),
         <<"shim">>               => claim_shim(EvList),
@@ -2577,7 +2577,9 @@ project_ima_claim(Entries) ->
         <<"entries">>           => Entries
     }.
 
-claim_boot_chain(Events) ->
+claim_boot_chain(Events) -> claim_boot_chain(Events, #{}).
+
+claim_boot_chain(Events, Db) ->
     Codes = [16#80000003, 16#80000004, 16#80000005],
     Sorted = lists:sort(
         fun(A, B) ->
@@ -2586,9 +2588,10 @@ claim_boot_chain(Events) ->
         [Ev || Ev <- Events,
                lists:member(maps:get(<<"event-type-code">>, Ev, 0),
                             Codes)]),
-    Rows = lists:map(fun project_boot_row/1,
-                     lists:zip(lists:seq(0, length(Sorted) - 1),
-                               Sorted)),
+    BootImages = maps:get(<<"boot-images">>, Db, #{}),
+    Rows = lists:map(
+        fun(IE) -> enrich_boot_row(project_boot_row(IE), BootImages) end,
+        lists:zip(lists:seq(0, length(Sorted) - 1), Sorted)),
     %% Summary: indices of first/last "application" (role =
     %% application implies it's the thing that ran next; the LAST
     %% application typically IS the OS loader / UKI).
@@ -2661,6 +2664,124 @@ boot_role(16#80000003) -> <<"application">>;
 boot_role(16#80000004) -> <<"driver">>;
 boot_role(16#80000005) -> <<"runtime-driver">>;
 boot_role(_)           -> <<"unknown">>.
+
+%% @doc Cross-reference a boot-chain row against the shipped
+%% boot-images catalogue. Returns the row augmented with
+%% `publisher', `product', `category', `signed-by',
+%% `cve-status', `cve-notes', `recommended-min-version',
+%% `matched-by', `notes' when a match fires — else `null' in
+%% each of those slots so the shape stays stable.
+%%
+%% Match rules (first-wins within a profile):
+%%   1. exact `image-hash-sha256' match against the row's
+%%      image-hash (base64url-encoded by project_boot_row/1).
+%%   2. prefix match of the row's device-path-text against any
+%%      `match.device-path-suffix' string. We use prefix-from-
+%%      right (the suffix appears at the end of the path text).
+enrich_boot_row(Row, BootImages) when is_map(BootImages),
+                                        map_size(BootImages) > 0 ->
+    ImageHash = maps:get(<<"image-hash">>, Row, <<"">>),
+    DpText    = maps:get(<<"device-path-text">>, Row, <<"">>),
+    case first_boot_image_match(BootImages, ImageHash, DpText) of
+        undefined  -> boot_row_unmatched(Row);
+        {Key, Profile, MatchBy, Pattern} ->
+            Row#{
+                <<"publisher">> =>
+                    maps:get(<<"publisher">>, Profile, <<"unknown">>),
+                <<"product">>   =>
+                    maps:get(<<"product">>, Profile, <<"unknown">>),
+                <<"category">>  =>
+                    maps:get(<<"category">>, Profile, <<"unknown">>),
+                <<"signed-by">> =>
+                    maps:get(<<"signed-by">>, Profile, []),
+                <<"cve-status">> =>
+                    maps:get(<<"cve-status">>, Profile, <<"unknown">>),
+                <<"cve-notes">> =>
+                    maps:get(<<"cve-notes">>, Profile, <<"">>),
+                <<"recommended-min-version">> =>
+                    maps:get(<<"recommended-min-version">>, Profile,
+                              null),
+                <<"matched-by">> => MatchBy,
+                <<"matched-pattern">> => Pattern,
+                <<"matched-profile-key">> => Key,
+                <<"notes">> =>
+                    maps:get(<<"notes">>, Profile, <<"">>)
+            }
+    end;
+enrich_boot_row(Row, _Db) ->
+    boot_row_unmatched(Row).
+
+boot_row_unmatched(Row) ->
+    Row#{
+        <<"publisher">>                => null,
+        <<"product">>                  => null,
+        <<"category">>                 => null,
+        <<"signed-by">>                => [],
+        <<"cve-status">>               => <<"unknown">>,
+        <<"cve-notes">>                => <<"">>,
+        <<"recommended-min-version">>  => null,
+        <<"matched-by">>               => <<"unmatched">>,
+        <<"matched-pattern">>          => null,
+        <<"matched-profile-key">>      => null,
+        <<"notes">>                    => <<"">>
+    }.
+
+%% Iterate boot-image profiles; return `{ProfileKey, Profile,
+%% MatchedBy, MatchedPattern}' on the first hit or `undefined'.
+first_boot_image_match(Profiles, ImageHash, DpText) ->
+    first_boot_image_match_list(
+      maps:to_list(Profiles), ImageHash, DpText).
+
+first_boot_image_match_list([], _, _) -> undefined;
+first_boot_image_match_list([{K, P} | Rest], ImageHash, DpText)
+    when is_map(P) ->
+    M = maps:get(<<"match">>, P, #{}),
+    HashList = maps:get(<<"image-hash-sha256">>, M, []),
+    SfxList = maps:get(<<"device-path-suffix">>, M, []),
+    %% Rule 1: exact hash.
+    case lists:member(ImageHash, HashList) of
+        true ->
+            {K, P, <<"image-hash-sha256">>, ImageHash};
+        false ->
+            %% Rule 2: device-path suffix.
+            case match_dp_suffix(DpText, SfxList) of
+                {match, Pattern} ->
+                    {K, P, <<"device-path-suffix">>, Pattern};
+                nomatch ->
+                    first_boot_image_match_list(
+                      Rest, ImageHash, DpText)
+            end
+    end;
+first_boot_image_match_list([_ | Rest], ImageHash, DpText) ->
+    first_boot_image_match_list(Rest, ImageHash, DpText).
+
+%% Does `DpText' end with any of the given suffixes? Returns
+%% `{match, Suffix}' on first hit or `nomatch'. Case-insensitive
+%% for the ASCII portion since UEFI filesystems are case-
+%% insensitive.
+match_dp_suffix(_, []) -> nomatch;
+match_dp_suffix(DpText, [Sfx | Rest]) when is_binary(Sfx) ->
+    case ends_with_ci(DpText, Sfx) orelse
+         binary:match(DpText, Sfx) =/= nomatch of
+        true  -> {match, Sfx};
+        false -> match_dp_suffix(DpText, Rest)
+    end;
+match_dp_suffix(DpText, [_ | Rest]) ->
+    match_dp_suffix(DpText, Rest).
+
+%% Case-insensitive "DpText ends with Sfx?" for ASCII bytes.
+ends_with_ci(DpText, Sfx) when is_binary(DpText), is_binary(Sfx) ->
+    DpLen = byte_size(DpText),
+    SfxLen = byte_size(Sfx),
+    DpLen >= SfxLen andalso
+        bin_to_lower(binary:part(DpText, DpLen - SfxLen, SfxLen))
+         =:= bin_to_lower(Sfx).
+
+bin_to_lower(B) when is_binary(B) ->
+    << <<(to_lower_byte(X))>> || <<X:8>> <= B >>.
+
+to_lower_byte(X) when X >= $A, X =< $Z -> X + 32;
+to_lower_byte(X) -> X.
 
 %% Kernel / UKI identity. systemd-stub emits key=value EV_IPL events
 %% on PCR 11/12/13 whose keys include `kernel_name', `kernel_
@@ -5465,6 +5586,104 @@ decode_guid(Dashed) ->
 hex_bytes([]) -> [];
 hex_bytes([A, B | Rest]) ->
     [list_to_integer([A, B], 16) | hex_bytes(Rest)].
+
+%% Hour-9: boot-chain DB cross-reference — a row whose
+%% device-path ends with `\EFI\Boot\BootX64.efi' should match
+%% the fallback-bootx64 catalogue entry and attach publisher /
+%% product / category / cve-status + `matched-by=device-path-
+%% suffix'. We build a synthetic log whose boot-services row
+%% has a device path carrying the fallback suffix.
+claim_surface_hour9_boot_chain_enrichment_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% Build a UEFI_IMAGE_LOAD_EVENT with a device path ending in
+    %% the fallback path. Use a File Path node (type 0x04
+    %% sub-type 0x04, UTF-16LE path string + End-entire).
+    PathUtf16 = unicode:characters_to_binary(
+                  <<"\\EFI\\Boot\\BootX64.efi">>,
+                  utf8, {utf16, little}),
+    PathNode = <<16#04, 16#04,
+                 (byte_size(PathUtf16) + 4):16/little,
+                 PathUtf16/binary>>,
+    EndEntire = <<16#7F, 16#FF, 16#04, 16#00>>,
+    DevicePath = <<PathNode/binary, EndEntire/binary>>,
+    UefiImgLoad = <<16#10000:64/little,    %% imageLocationInMemory
+                    16#20000:64/little,    %% imageLengthInMemory
+                    16#400000:64/little,   %% imageLinkTimeAddress
+                    (byte_size(DevicePath)):64/little,
+                    DevicePath/binary>>,
+    S1 = crypto:hash(sha,    UefiImgLoad),
+    S2 = crypto:hash(sha256, UefiImgLoad),
+    AppRec = <<4:32/little, 16#80000003:32/little, 2:32/little,
+               16#04:16/little, S1/binary,
+               16#0B:16/little, S2/binary,
+               (byte_size(UefiImgLoad)):32/little, UefiImgLoad/binary>>,
+    Raw = <<FirstRec/binary, AppRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    BC = maps:get(<<"boot-chain">>, Claim),
+    [Row | _] = maps:get(<<"chain">>, BC),
+    ?assertEqual(<<"application">>, maps:get(<<"role">>, Row)),
+    ?assertEqual(<<"device-path-suffix">>,
+                 maps:get(<<"matched-by">>, Row)),
+    ?assertEqual(<<"multi-vendor">>,
+                 maps:get(<<"publisher">>, Row)),
+    ?assertEqual(<<"fallback">>,
+                 maps:get(<<"category">>, Row)),
+    ?assertEqual(<<"fallback-bootx64">>,
+                 maps:get(<<"matched-profile-key">>, Row)),
+    ok.
+
+%% A boot-chain row whose device path doesn't match any
+%% catalogue pattern gets matched-by=unmatched and null
+%% attribution fields (shape stays stable).
+claim_surface_hour9_boot_chain_unmatched_test() ->
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    %% Empty device path → device-path-text is empty →
+    %% no suffix match possible; image-hash random → no
+    %% hash match either.
+    UefiImgLoad = <<0:64/little, 0:64/little, 0:64/little,
+                    0:64/little>>,
+    S1 = crypto:hash(sha,    UefiImgLoad),
+    S2 = crypto:hash(sha256, UefiImgLoad),
+    AppRec = <<4:32/little, 16#80000003:32/little, 2:32/little,
+               16#04:16/little, S1/binary,
+               16#0B:16/little, S2/binary,
+               (byte_size(UefiImgLoad)):32/little, UefiImgLoad/binary>>,
+    Raw = <<FirstRec/binary, AppRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    BC = maps:get(<<"boot-chain">>, Claim),
+    [Row | _] = maps:get(<<"chain">>, BC),
+    ?assertEqual(<<"unmatched">>, maps:get(<<"matched-by">>, Row)),
+    ?assertEqual(null, maps:get(<<"publisher">>, Row)),
+    ?assertEqual(null, maps:get(<<"matched-profile-key">>, Row)),
+    ok.
+
+%% Hour-9: match_dp_suffix helper is case-insensitive
+%% (EFI filesystems are case-insensitive by spec).
+match_dp_suffix_case_insensitive_test() ->
+    ?assertEqual({match, <<"\\EFI\\Boot\\BootX64.efi">>},
+                 match_dp_suffix(
+                   <<"Acpi(...)/\\EFI\\BOOT\\BOOTX64.EFI">>,
+                   [<<"\\EFI\\Boot\\BootX64.efi">>])),
+    ?assertEqual(nomatch,
+                 match_dp_suffix(<<"/foo/bar">>,
+                                  [<<"/baz/qux">>])),
+    ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
 %% DB entries.

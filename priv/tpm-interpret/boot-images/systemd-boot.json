@@ -1,0 +1,24 @@
+{
+    "schema-version": 1,
+    "name": "systemd-boot / sd-boot",
+    "publisher": "systemd project",
+    "product": "systemd-bootx64.efi",
+    "category": "bootloader",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\systemd\\systemd-bootx64.efi",
+            "\\EFI\\systemd\\systemd-boot.efi",
+            "\\EFI\\BOOT\\BOOTX64.EFI"
+        ]
+    },
+    "signed-by": [
+        "Distribution shim signing key (MokList)",
+        "Microsoft UEFI CA 2011 (when unsigned)"
+    ],
+    "recommended-min-version": "systemd 255+ (paper §Architecture assumes sd-stub 253+)",
+    "cve-status": "clear",
+    "cve-notes": "systemd 254 and earlier had CVE-2023-7008 (initrd_generator); 255+ fixed.",
+    "notes": "sd-boot chains to sd-stub-wrapped UKIs measured on PCR 11/12/13. Reads loader.conf + type1/type2 boot entries from the ESP /loader/entries/ directory. Measurements per systemd-stub(7).",
+    "source": "https://www.freedesktop.org/software/systemd/man/latest/systemd-boot.html"
+}

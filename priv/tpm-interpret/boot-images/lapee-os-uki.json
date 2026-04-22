@@ -1,0 +1,23 @@
+{
+    "schema-version": 1,
+    "name": "LapEE OS Unified Kernel Image",
+    "publisher": "LapEE",
+    "product": "lapee-os-*.efi",
+    "category": "uki",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\Linux\\lapee-os.efi",
+            "\\EFI\\Linux\\lapee-os-",
+            "\\EFI\\lapee\\"
+        ]
+    },
+    "signed-by": [
+        "LapEE OS Kernel Signing CA"
+    ],
+    "recommended-min-version": null,
+    "cve-status": "clear",
+    "cve-notes": "LapEE OS UKIs are pinned to an immutable kernel image + initramfs hash + cmdline, all measured into PCR 11/12/13 by systemd-stub at boot.",
+    "notes": "The LapEE reference OS boots via sd-boot chaining into a systemd-stub-wrapped UKI at `\\EFI\\Linux\\lapee-os.efi`. The UKI image carries .linux / .initrd / .cmdline / .osrel / .uname PE sections whose SHA-256 hashes are extended into PCR 11. Tier-3 evidence for claim.tme / claim.lockdown fires when the PCR 11 hash matches a known LapEE release.",
+    "source": "lapee-baremetal/STATUS.md + priv/tpm-interpret/uki-measurements/lapee-os-reference.json"
+}

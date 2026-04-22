@@ -1,0 +1,28 @@
+{
+    "schema-version": 1,
+    "name": "GNU GRUB 2 bootloader",
+    "publisher": "GNU Project (distribution-specific builds)",
+    "product": "grubx64.efi",
+    "category": "bootloader",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\fedora\\grubx64.efi",
+            "\\EFI\\redhat\\grubx64.efi",
+            "\\EFI\\centos\\grubx64.efi",
+            "\\EFI\\ubuntu\\grubx64.efi",
+            "\\EFI\\debian\\grubx64.efi",
+            "\\EFI\\opensuse\\grubx64.efi",
+            "\\EFI\\sles\\grubx64.efi",
+            "\\EFI\\arch\\grubx64.efi"
+        ]
+    },
+    "signed-by": [
+        "Distribution MokList key (via shim)"
+    ],
+    "recommended-min-version": "grub2-2.12+ (post-CVE-2023-4692 EXT filesystem)",
+    "cve-status": "has-known-cves",
+    "cve-notes": "BootHole (CVE-2020-10713), CVE-2022-2601 (font parsing), CVE-2023-4692/4693 (EXT fs stack overflow / RCE). Verify against the UEFI Revocation List (dbx).",
+    "notes": "grub2 is loaded by shim and then loads and verifies the Linux kernel. Measurements: the grubx64.efi image on PCR 4; the grub cmdline on PCR 8; grub modules on PCR 9.",
+    "source": "https://www.gnu.org/software/grub/ + https://uefi.org/revocationlistfile"
+}

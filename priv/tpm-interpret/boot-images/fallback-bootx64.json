@@ -1,0 +1,25 @@
+{
+    "schema-version": 1,
+    "name": "UEFI fallback boot loader",
+    "publisher": "multi-vendor",
+    "product": "\\EFI\\Boot\\BootX64.efi (UEFI-spec fallback path)",
+    "category": "fallback",
+    "match": {
+        "image-hash-sha256": [],
+        "device-path-suffix": [
+            "\\EFI\\Boot\\BootX64.efi",
+            "\\EFI\\BOOT\\BOOTX64.EFI",
+            "\\EFI\\Boot\\bootx64.efi",
+            "\\EFI\\Boot\\BootIA32.efi",
+            "\\EFI\\Boot\\BootAA64.efi"
+        ]
+    },
+    "signed-by": [
+        "unknown — depends on which vendor's binary is installed at this path"
+    ],
+    "recommended-min-version": null,
+    "cve-status": "unknown",
+    "cve-notes": "The \\EFI\\Boot\\Boot<ARCH>.efi path is the UEFI 2.x fallback boot entry. It gets used when there's no BootOrder variable (fresh installs, removable media, disaster recovery). The actual binary at this path varies by vendor — Dell uses it for firmware-update-drivers, Windows installers copy bootmgfw.efi there, Linux distros install shim there for removable-media boot.",
+    "notes": "Attestation showing this path means the system booted via the UEFI-spec fallback — policy engines should treat it as \"unknown boot loader\" and require the next-hop image-hash-sha256 to be matched against a known catalogue entry.",
+    "source": "UEFI Specification 2.10 §3.4.1.2 Boot Manager Firmware Policy"
+}
