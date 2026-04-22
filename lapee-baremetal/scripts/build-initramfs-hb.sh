@@ -23,14 +23,9 @@ docker rm -f lapee-hb-mini 2>/dev/null || true
 docker run -d --platform=linux/amd64 --name lapee-hb-mini \
     lapee-hyperbeam-builder:latest sleep infinity >/dev/null
 # busybox-static gives us udhcpc + `ip' handling; iproute2 provides
-# the full `ip' binary; linux-image-generic is the source of BOTH
-# (a) the kernel we boot on real hardware — the pre-built Buildroot
-# kernel we had lacks USB-Ethernet drivers so tethered phones don't
-# show up as NICs — AND (b) the matching kernel modules we copy into
-# the initramfs for modprobe-at-boot. The builder image is Ubuntu
-# 24.04 Noble so the package name is `linux-image-generic' (Debian
-# calls the equivalent `linux-image-amd64').
-docker exec lapee-hb-mini bash -c "apt-get update -qq 2>&1 | tail -1 && apt-get install -y -qq busybox-static iproute2 linux-image-generic kmod 2>&1 | tail -1"
+# the full `ip' binary; linux-image-amd64 is the source of the
+# USB-Ethernet kernel modules we copy into the initramfs below.
+docker exec lapee-hb-mini bash -c "apt-get update -qq 2>&1 | tail -1 && apt-get install -y -qq busybox-static iproute2 linux-image-amd64 kmod 2>&1 | tail -1"
 
 # Copy HB release into the container.
 docker cp "$HB_REL" lapee-hb-mini:/opt/hb
@@ -193,20 +188,7 @@ SH
 
 rm -rf /tmp/lapee-hb-ramfs && mkdir /tmp/lapee-hb-ramfs
 docker cp lapee-hb-mini:/ramfs /tmp/lapee-hb-ramfs
-
-# Copy the Ubuntu generic kernel out so the USB-image builder
-# boots a kernel whose version matches the modules we just
-# baked into the initramfs. Overwrites any stale vmlinuz-lapee
-# from the Buildroot flow (which lacked USB-Ethernet drivers).
-KVER_OUT=$(docker exec lapee-hb-mini bash -c \
-    'basename /lib/modules/*' | head -1)
-if [ -n "$KVER_OUT" ]; then
-    docker cp "lapee-hb-mini:/boot/vmlinuz-$KVER_OUT" \
-        "$LAPEE/work/vmlinuz-lapee"
-    echo "kernel: $LAPEE/work/vmlinuz-lapee (version $KVER_OUT)"
-fi
-
 docker rm -f lapee-hb-mini >/dev/null
 
 cd /tmp/lapee-hb-ramfs/ramfs && find . | cpio -o -H newc 2>/dev/null | gzip -1 > "$LAPEE/work/initramfs-hb.cpio.gz"
-ls -lh "$LAPEE/work/initramfs-hb.cpio.gz" "$LAPEE/work/vmlinuz-lapee"
+ls -lh "$LAPEE/work/initramfs-hb.cpio.gz"

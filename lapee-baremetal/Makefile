@@ -134,12 +134,7 @@ hb-boot:
 # Debian kernel + our HB initramfs + a default LapEE cmdline.
 # Override KERNEL / INITRAMFS / CMDLINE / SIZE_MIB / OUT on the
 # make command line.
-# KERNEL defaults to work/vmlinuz-lapee, the Ubuntu-generic
-# kernel extracted by build-initramfs-hb.sh. Its modules are the
-# same ones we bake into the initramfs (so depmod resolves), and
-# it has USB-Ethernet drivers compiled in/modular for the Pixel-
-# tether path we exercise on Framework hardware.
-KERNEL     ?= work/vmlinuz-lapee
+KERNEL     ?= build-alpine/vmlinuz-lapee
 INITRAMFS  ?= work/initramfs-hb.cpio.gz
 CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
 SIZE_MIB   ?= 1024
