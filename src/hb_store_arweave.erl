@@ -145,7 +145,7 @@ do_read(StoreOpts, ID) ->
                             {length, Length}
                         }
                     ),
-                    record_partition_metric(StartOffset, ok),
+                    record_partition_metric(StartOffset, ok, StoreOpts),
                     Loaded;
                 {error, Reason} ->
                     ?event(
@@ -159,7 +159,7 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
-                    record_partition_metric(StartOffset, not_found),
+                    record_partition_metric(StartOffset, not_found, StoreOpts),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end
@@ -292,15 +292,20 @@ write_offset(
     ).
 
 %% @doc Record the partition that data is found in when it is requested.
-record_partition_metric(Offset, Result) when is_integer(Offset) ->
-    spawn(fun() -> 
-        hb_prometheus:inc(
-            counter,
-            hb_store_arweave_requests_partition,
-            [Offset div ?PARTITION_SIZE, hb_util:bin(Result)],
-            1
-        )
-    end).
+record_partition_metric(Offset, Result, StoreOpts) when is_integer(Offset) ->
+    case hb_opts:get(prometheus, not hb_features:test(), StoreOpts) of
+        true ->
+            spawn(fun() ->
+                hb_prometheus:inc(
+                    counter,
+                    hb_store_arweave_requests_partition,
+                    [Offset div ?PARTITION_SIZE, hb_util:bin(Result)],
+                    1
+                )
+            end);
+        false ->
+            ok
+    end.
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
