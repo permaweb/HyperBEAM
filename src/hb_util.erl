@@ -19,7 +19,7 @@
 -export([remove_common/2, to_lower/1]).
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
--export([ok/1, ok/2, until/1, until/2, until/3, wait_until/2]).
+-export([ok/1, ok/2, ok_or/2, until/1, until/2, until/3, wait_until/2]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1, shuffle/1]).
 -export([unique/1]).
 -export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
@@ -129,11 +129,16 @@ floor_int(IntValue, Nearest) ->
 %% the value of the `error_strategy' option.
 ok(Value) -> ok(Value, #{}).
 ok({ok, Value}, _Opts) -> Value;
-ok(Other, Opts) ->
-	case hb_opts:get(error_strategy, throw, Opts) of
-		throw -> throw({unexpected, Other});
-		_ -> {unexpected, Other}
-	end.
+ok(Other, Opts) when is_map(Opts) ->
+    case hb_opts:get(error_strategy, throw, Opts) of
+        throw -> throw({unexpected, Other});
+        _ -> {unexpected, Other}
+    end.
+
+%% @doc Unwrap a tuple of the form `{ok, Value}', returning `Default' if the
+%% value is not `{ok, _}'.
+ok_or({ok, Value}, _Default) -> Value;
+ok_or(_Other, Default) -> Default.
 
 %% @doc Utility function to wait for a condition to be true. Optionally,
 %% you can pass a function that will be called with the current count of

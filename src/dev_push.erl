@@ -204,22 +204,8 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                     },
                                     Opts
                                 );
-                            not_found ->
-                                #{
-                                    <<"response">> => <<"error">>,
-                                    <<"status">> => 404,
-                                    <<"target">> => Target,
-                                    <<"reason">> =>
-                                        <<"Could not access target process!">>
-                                };
                             {error, not_found} ->
-                                #{
-                                    <<"response">> => <<"error">>,
-                                    <<"status">> => 404,
-                                    <<"target">> => Target,
-                                    <<"reason">> =>
-                                        <<"Could not access target process!">>
-                                }
+                                target_process_not_found(Target)
                         end;
                        (Key, Msg) ->
                             #{
@@ -245,6 +231,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
             {error, Error}
     end.
+
+target_process_not_found(Target) ->
+    #{
+        <<"response">> => <<"error">>,
+        <<"status">> => 404,
+        <<"target">> => Target,
+        <<"reason">> => <<"Could not access target process!">>
+    }.
 
 
 %% @doc If the outbox message has a path we interpret it as a request to perform

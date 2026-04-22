@@ -150,8 +150,8 @@ read_local_cache(StoreOpts, ID) ->
 
 %% @doc Write a key to the remote node.
 %%
-%% Constructs an HTTP POST write request for each provided value, uploading the
-%% value first and then linking each requested destination to the uploaded path.
+%% Uploads each value to the remote cache and then links each requested
+%% destination to the uploaded path.
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Req Map of destination paths to values.
@@ -164,7 +164,7 @@ write(Opts = #{ <<"node">> := Node }, Req, _NodeOpts) when is_map(Req) ->
         fun(Destination, Value, ok) ->
             case remote_write_value(Opts, Value) of
                 {ok, SourcePath} ->
-                    remote_link(Opts, SourcePath, hb_path:to_binary(Destination));
+                    remote_link(Opts, hb_path:to_binary(SourcePath), hb_path:to_binary(Destination));
                 {error, _} = Error ->
                     Error
             end;
@@ -177,8 +177,8 @@ write(Opts = #{ <<"node">> := Node }, Req, _NodeOpts) when is_map(Req) ->
 
 %% @doc Link a source to a destination in the remote node.
 %%
-%% Constructs an HTTP POST link request for each source/destination pair in the
-%% request map, signing the request when a wallet is available.
+%% Constructs an HTTP POST link request for the given source and destination,
+%% signing the request when a wallet is available.
 %%
 %% @returns `ok' on success or `{error, Reason}' on failure.
 link(#{ <<"read-only">> := true }, _Req, _NodeOpts) ->
@@ -201,12 +201,12 @@ group(Opts = #{ <<"node">> := _Node }, #{ <<"group">> := Path }, _NodeOpts) ->
     remote_group(Opts, hb_path:to_binary(Path)).
 
 remote_write_value(Opts = #{ <<"node">> := Node }, Value) ->
-    WriteMsg = #{
+    Msg = #{
         <<"path">> => <<"/~cache@1.0/write">>,
         <<"method">> => <<"POST">>,
         <<"body">> => Value
     },
-    SignedMsg = hb_message:commit(WriteMsg, Opts),
+    SignedMsg = hb_message:commit(Msg, Opts),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of
@@ -223,13 +223,13 @@ remote_write_value(Opts = #{ <<"node">> := Node }, Value) ->
     end.
 
 remote_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
-    LinkMsg = #{
+    Msg = #{
         <<"path">> => <<"/~cache@1.0/link">>,
         <<"method">> => <<"POST">>,
         <<"source">> => Source,
         <<"destination">> => Destination
     },
-    SignedMsg = hb_message:commit(LinkMsg, Opts),
+    SignedMsg = hb_message:commit(Msg, Opts),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of
@@ -241,12 +241,12 @@ remote_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
     end.
 
 remote_group(Opts = #{ <<"node">> := Node }, Path) ->
-    GroupMsg = #{
+    Msg = #{
         <<"path">> => <<"/~cache@1.0/group">>,
         <<"method">> => <<"POST">>,
         <<"group">> => Path
     },
-    SignedMsg = hb_message:commit(GroupMsg, Opts),
+    SignedMsg = hb_message:commit(Msg, Opts),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of

@@ -545,7 +545,7 @@ refresh_periodically_test() ->
     {ok, UpdatedBlacklistID} = hb_cache:write(UpdatedBlacklistMsg, Opts0),
     ok = hb_store:link(Store, #{ <<"mutable">> => InitialBlacklistID }, Opts0),
     Opts1 = Opts0#{
-        blacklist_providers => [<<"/~cache@1.0/read?target=mutable">>],
+        blacklist_providers => [<<"/~cache@1.0/read?read=mutable">>],
         blacklist_refresh_frequency => 1
     },
     Node = hb_http_server:start_node(Opts1),

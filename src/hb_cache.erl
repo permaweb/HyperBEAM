@@ -185,10 +185,12 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
     case hb_opts:get(store, no_viable_store, Opts) of
         not_found -> [];
         Store ->
-            list(Path, Store)
+            list(Path, Store, Opts)
     end;
 list(Path, Store) ->
-    case hb_store:read(Store, Path, #{}) of
+    list(Path, Store, #{}).
+list(Path, Store, Opts) ->
+    case hb_store:read(Store, Path, Opts) of
         {composite, Names} -> Names;
         _ -> []
     end.
@@ -653,14 +655,11 @@ read_ao_types(Path, Subpaths, Store, Opts) ->
     ?event({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
         true ->
-            case hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts) of
-                {ok, TypesBin} ->
-                    Types = dev_codec_structured:decode_ao_types(TypesBin, Opts),
-                    ?event({parsed_ao_types, {types, Types}}),
-                    {ok, types_to_implicit(Types), Types};
-                _ ->
-                    {ok, #{}, #{}}
-            end;
+            {ok, TypesBin} =
+                hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts),
+            Types = dev_codec_structured:decode_ao_types(TypesBin, Opts),
+            ?event({parsed_ao_types, {types, Types}}),
+            {ok, types_to_implicit(Types), Types};
         false ->
             ?event({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
             {ok, #{}, #{}}
@@ -716,10 +715,9 @@ read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsg
                 }
             ),
             case hb_store:resolve(Store, [BaseMsgID, Key], Opts) of
-                {ok, KeyPath} -> {hit, read(KeyPath, Opts)};
+                {ok, KeyPath} -> hashpath_read_result(read(KeyPath, Opts));
                 {error, not_found} -> miss;
-                {error, _} = Error -> {hit, Error};
-                {failure, _} = Failure -> {hit, Failure}
+                Other -> {hit, Other}
             end
     end;
 read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) ->
@@ -755,28 +753,17 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
 read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
     ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
-    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
-        {ok, Msg} -> {hit, {ok, Msg}};
-        {error, not_found} -> miss;
-        {error, _} = Error -> {hit, Error};
-        {failure, _} = Failure -> {hit, Failure}
-    end;
+    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
     {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
-    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
-        {ok, Msg} -> {hit, {ok, Msg}};
-        {error, not_found} -> miss;
-        {error, _} = Error -> {hit, Error};
-        {failure, _} = Failure -> {hit, Failure}
-    end;
+    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
-    case read(hb_path:hashpath(BaseMsg, Req, Opts), Opts) of
-        {ok, Msg} -> {hit, {ok, Msg}};
-        {error, not_found} -> miss;
-        {error, _} = Error -> {hit, Error};
-        {failure, _} = Failure -> {hit, Failure}
-    end;
+    hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
 read_hashpath(_, _, _) -> miss.
+
+hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
+hashpath_read_result({error, not_found}) -> miss;
+hashpath_read_result(Other) -> {hit, Other}.
 
 %% @doc Make a link from one path to another in the store.
 %% Note: Argument order is `link(Src, Dst, Opts)'.
