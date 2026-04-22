@@ -67,7 +67,9 @@
          parse_device_path/1, parse_smbios/1, parse_smbios_structure/1,
          parse_acpi_table/1, parse_acpi_rsdp/1,
          %% systemd-stub UKI section awareness:
-         systemd_stub_pe_section_pcr/1, is_systemd_stub_pe_section/1]).
+         systemd_stub_pe_section_pcr/1, is_systemd_stub_pe_section/1,
+         %% Linux kernel cmdline tokeniser (paper §Architecture):
+         parse_kernel_cmdline/1]).
 -include_lib("public_key/include/public_key.hrl").
 
 %%%============================================================================
@@ -2161,19 +2163,27 @@ decode_ev_ipl(#{<<"event-data">> := Data}) ->
         true ->
             case binary:split(TrimmedData, <<"=">>) of
                 [Key, Value] ->
-                    %% Normalise the systemd-stub key to kebab-case to
-                    %% match AO-Core convention throughout the interpret
-                    %% surface. systemd-stub's own canonical spelling is
-                    %% already kebab (`kernel-cmdline', `kernel-name',
-                    %% ...); older encodings used underscores. Both
-                    %% arrive here; we unify.
                     KebabKey = binary:replace(Key, <<"_">>, <<"-">>,
                                                [global]),
-                    #{
+                    Base = #{
                         <<"key">>   => KebabKey,
                         <<"value">> => Value,
                         <<"format">> => <<"key-value-ascii">>
-                    };
+                    },
+                    %% When the key identifies the kernel cmdline
+                    %% (systemd-stub `cmdline' / `kernel-cmdline' +
+                    %% legacy aliases), tokenise the value and
+                    %% extract the security-relevant flags per
+                    %% paper §Architecture line 219-230.
+                    case is_cmdline_key(KebabKey) of
+                        true ->
+                            Base#{
+                                <<"cmdline-flags">> =>
+                                    parse_kernel_cmdline(Value),
+                                <<"cmdline-raw">> => Value
+                            };
+                        false -> Base
+                    end;
                 _ ->
                     #{<<"text">> => TrimmedData,
                       <<"format">> => <<"ascii">>}
@@ -2183,6 +2193,97 @@ decode_ev_ipl(#{<<"event-data">> := Data}) ->
               <<"length">> => byte_size(Data)}
     end;
 decode_ev_ipl(_) -> #{}.
+
+%% Whether an EV_IPL `key' names the Linux kernel cmdline.
+is_cmdline_key(<<"cmdline">>)         -> true;
+is_cmdline_key(<<"kernel-cmdline">>)  -> true;
+is_cmdline_key(<<"kernel.cmdline">>)  -> true;
+is_cmdline_key(_)                     -> false.
+
+%%%============================================================================
+%%% Linux kernel command-line tokeniser (paper §Architecture l.223-229)
+%%%============================================================================
+%%%
+%%% Given a Linux kernel cmdline binary, tokenise into
+%%%   #{
+%%%     <<"flag-name">> => Value,
+%%%     ...
+%%%     <<"-flags-seen">> => [<<"flag-name">>, ...],  %% stable-sorted
+%%%     <<"-boolean">>    => [<<"flag-name">>, ...]   %% present-as-bool
+%%%   }
+%%%
+%%% A cmdline token is either:
+%%%   * `flag'          — present-as-bool (added to -boolean list)
+%%%   * `flag=value'    — value is the binary after first `='
+%%%   * `"quoted value"' — literal between " is one token (systemd-boot
+%%%                        quoting convention)
+%%%
+%%% Flag names are normalised: kernel `.'-separated flags
+%%% (`kvm_intel.nested', `module.sig_enforce') are preserved with
+%%% their dots; underscores in a flag name stay as underscores (they
+%%% are part of kernel-space naming convention) — we deliberately do
+%%% NOT kebab-normalise flag names because `init_on_alloc' is a
+%%% distinct symbol from `init-on-alloc' in the kernel namespace.
+parse_kernel_cmdline(Bin) when is_binary(Bin) ->
+    Tokens = cmdline_tokens(Bin, [], <<>>, false),
+    {Map, Bools, Flags} = lists:foldl(
+        fun(Tok, {M, Bs, Fs}) ->
+            case binary:split(Tok, <<"=">>) of
+                [Name, Val] when Name =/= <<>> ->
+                    {M#{Name => cmdline_value(Val)}, Bs, [Name | Fs]};
+                [Name] when Name =/= <<>> ->
+                    {M#{Name => true}, [Name | Bs], [Name | Fs]};
+                _ -> {M, Bs, Fs}
+            end
+        end, {#{}, [], []}, Tokens),
+    Map#{
+        <<"-flags-seen">>  => lists:usort(Flags),
+        <<"-boolean">>     => lists:usort(Bools),
+        <<"-token-count">> => length(Tokens)
+    };
+parse_kernel_cmdline(_) -> #{}.
+
+%% Tokenise with "quoted values" handled — `foo="a b c" bar' → ["foo=a b c", "bar"].
+cmdline_tokens(<<>>, Acc, Cur, _InQuote) ->
+    case Cur of
+        <<>> -> lists:reverse(Acc);
+        _    -> lists:reverse([Cur | Acc])
+    end;
+cmdline_tokens(<<$", Rest/binary>>, Acc, Cur, InQuote) ->
+    cmdline_tokens(Rest, Acc, Cur, not InQuote);
+cmdline_tokens(<<C, Rest/binary>>, Acc, Cur, true) ->
+    cmdline_tokens(Rest, Acc, <<Cur/binary, C>>, true);
+cmdline_tokens(<<C, Rest/binary>>, Acc, Cur, false)
+  when C =:= $ ; C =:= $\t; C =:= $\n; C =:= $\r ->
+    case Cur of
+        <<>> -> cmdline_tokens(Rest, Acc, <<>>, false);
+        _    -> cmdline_tokens(Rest, [Cur | Acc], <<>>, false)
+    end;
+cmdline_tokens(<<C, Rest/binary>>, Acc, Cur, false) ->
+    cmdline_tokens(Rest, Acc, <<Cur/binary, C>>, false).
+
+%% Interpret a cmdline value: boolean "on"/"off"/"1"/"0" → bool;
+%% integer-looking decimals → int; everything else → binary.
+cmdline_value(<<"on">>)    -> true;
+cmdline_value(<<"ON">>)    -> true;
+cmdline_value(<<"yes">>)   -> true;
+cmdline_value(<<"Y">>)     -> true;
+cmdline_value(<<"y">>)     -> true;
+cmdline_value(<<"true">>)  -> true;
+cmdline_value(<<"1">>)     -> true;
+cmdline_value(<<"off">>)   -> false;
+cmdline_value(<<"OFF">>)   -> false;
+cmdline_value(<<"no">>)    -> false;
+cmdline_value(<<"N">>)     -> false;
+cmdline_value(<<"n">>)     -> false;
+cmdline_value(<<"false">>) -> false;
+cmdline_value(<<"0">>)     -> false;
+cmdline_value(V) ->
+    %% Multi-value comma list? `iommu=pt,strict' → split.
+    case binary:match(V, <<",">>) of
+        nomatch -> V;
+        _       -> binary:split(V, <<",">>, [global, trim_all])
+    end.
 
 %% UEFI_PLATFORM_FIRMWARE_BLOB:
 %%   blobBase   uint64 LE
@@ -3020,7 +3121,68 @@ decode_ev_ipl_systemd_stub_kernel_cmdline_test() ->
     P = maps:get(<<"parsed">>, decode_event(Ev)),
     ?assertEqual(<<"kernel-cmdline">>, maps:get(<<"key">>, P)),
     ?assertEqual(<<"ro quiet">>, maps:get(<<"value">>, P)),
-    ?assertEqual(<<"key-value-ascii">>, maps:get(<<"format">>, P)).
+    ?assertEqual(<<"key-value-ascii">>, maps:get(<<"format">>, P)),
+    %% Now also: cmdline-flags submap with tokenised flags.
+    Flags = maps:get(<<"cmdline-flags">>, P),
+    ?assert(maps:is_key(<<"ro">>, Flags)),
+    ?assert(maps:is_key(<<"quiet">>, Flags)),
+    ?assertEqual(true, maps:get(<<"ro">>, Flags)),
+    ?assertEqual(true, maps:get(<<"quiet">>, Flags)),
+    ?assertEqual(2, maps:get(<<"-token-count">>, Flags)).
+
+%% Full paper-strength cmdline: mem_encrypt / iommu / lockdown /
+%% init_on_alloc / init_on_free / module.sig_enforce / verity
+%% roothash. Derived from LapEE's own recommended cmdline
+%% (paper §Architecture l.219-230).
+parse_kernel_cmdline_security_flags_test() ->
+    Raw = <<"ro quiet mem_encrypt=on intel_iommu=on iommu=pt "
+            "iommu.strict=1 lockdown=confidentiality "
+            "init_on_alloc=1 init_on_free=1 module.sig_enforce=1 "
+            "roothash=deadbeef slab_nomerge page_poison=1 "
+            "kvm_intel.nested=0">>,
+    Flags = parse_kernel_cmdline(Raw),
+    ?assertEqual(true,   maps:get(<<"ro">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"quiet">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"mem_encrypt">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"intel_iommu">>, Flags)),
+    ?assertEqual(<<"pt">>, maps:get(<<"iommu">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"iommu.strict">>, Flags)),
+    ?assertEqual(<<"confidentiality">>,
+                 maps:get(<<"lockdown">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"init_on_alloc">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"init_on_free">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"module.sig_enforce">>, Flags)),
+    ?assertEqual(<<"deadbeef">>, maps:get(<<"roothash">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"slab_nomerge">>, Flags)),
+    ?assertEqual(true,   maps:get(<<"page_poison">>, Flags)),
+    ?assertEqual(false,  maps:get(<<"kvm_intel.nested">>, Flags)),
+    %% Token count is the full flag list.
+    ?assertEqual(14, maps:get(<<"-token-count">>, Flags)),
+    %% -boolean list contains the flags that appeared without "=".
+    Bools = maps:get(<<"-boolean">>, Flags),
+    ?assert(lists:member(<<"ro">>, Bools)),
+    ?assert(lists:member(<<"quiet">>, Bools)),
+    ?assert(lists:member(<<"slab_nomerge">>, Bools)),
+    ?assertNot(lists:member(<<"mem_encrypt">>, Bools)).
+
+%% Quoted-value tokenisation: `foo="a b c" bar' → foo has the
+%% three-word string, bar is a bool.
+parse_kernel_cmdline_quoted_value_test() ->
+    Raw = <<"foo=\"a b c\" bar baz=42">>,
+    Flags = parse_kernel_cmdline(Raw),
+    ?assertEqual(<<"a b c">>, maps:get(<<"foo">>, Flags)),
+    ?assertEqual(true,        maps:get(<<"bar">>, Flags)),
+    ?assertEqual(<<"42">>,    maps:get(<<"baz">>, Flags)),
+    ?assertEqual(3, maps:get(<<"-token-count">>, Flags)).
+
+%% Multi-value comma-list splits into a list.
+parse_kernel_cmdline_multivalue_test() ->
+    Raw = <<"iommu=pt,strict audit=1,2,3">>,
+    Flags = parse_kernel_cmdline(Raw),
+    ?assertEqual([<<"pt">>, <<"strict">>],
+                 maps:get(<<"iommu">>, Flags)),
+    ?assertEqual([<<"1">>, <<"2">>, <<"3">>],
+                 maps:get(<<"audit">>, Flags)).
 
 decode_ev_ipl_opaque_test() ->
     Ev = #{<<"event-type-code">> => 16#D,

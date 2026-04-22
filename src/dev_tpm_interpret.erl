@@ -255,7 +255,13 @@ events(Base, Req, Opts) ->
 claim(Base, Req, Opts) ->
     Envelope = resolve_envelope(Base, Req, Opts),
     Db = hb_db_tpm:load(Opts),
-    Events = interpret_events(Envelope),
+    %% Claim pipeline reads from RAW (non-wire-encoded) events so
+    %% UTF-8 cmdline flag values survive unaltered. Claim values
+    %% are UTF-8-safe by construction (parsed text, base64url-
+    %% encoded digests, integers, booleans, "unknown" sentinels —
+    %% no raw firmware bytes), so we skip the wire-encode layer
+    %% and return the claim as-is.
+    Events = interpret_events_raw(Envelope),
     {ok, #{
         <<"status">> => 200,
         <<"body">> => interpret_claim(Events, Envelope, Db)
@@ -967,23 +973,20 @@ interpret_envelope(E, Opts) ->
 %%     /.../events/3/parsed         → the per-type decoded payload
 
 interpret_events(E) ->
+    encode_events_for_wire(interpret_events_raw(E)).
+
+%% Raw (non-wire-encoded) events map. For internal consumers like
+%% `interpret_claim' that need UTF-8 values (kernel cmdline flags,
+%% variable names, etc.) without base64url round-tripping.
+interpret_events_raw(E) ->
     case hb_maps:get(<<"tcg-event-log">>, E, <<>>, #{}) of
         LogB64 when is_binary(LogB64), byte_size(LogB64) > 0 ->
             LogBin = try hb_util:decode(LogB64) catch _:_ -> <<>> end,
             case byte_size(LogBin) of
                 0 -> #{};
                 _ ->
-                    Events = dev_tpm_tcg:decode_events(
-                               dev_tpm_tcg:parse(LogBin)),
-                    %% Binaries in `event_data', `digests', and
-                    %% nested `parsed' values can be arbitrary
-                    %% firmware bytes — NOT guaranteed UTF-8. JSON
-                    %% encoding requires strings to be valid UTF-8,
-                    %% so we base64url every non-ASCII-safe binary
-                    %% before returning. Consistent with the
-                    %% envelope's convention (every other binary
-                    %% on the wire is base64url).
-                    encode_events_for_wire(Events)
+                    dev_tpm_tcg:decode_events(
+                      dev_tpm_tcg:parse(LogBin))
             end;
         _ -> #{}
     end.
@@ -1128,14 +1131,22 @@ is_printable_ascii(_) -> false.
 interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
     #{
-        <<"secure-boot">> => claim_secure_boot(EvList),
-        <<"firmware">>    => claim_firmware(EvList),
-        <<"boot-loader">> => claim_boot_loader(EvList),
-        <<"kernel">>      => claim_kernel(EvList, E),
-        <<"cpu">>         => claim_cpu(EvList),
-        <<"shim">>        => claim_shim(EvList),
-        <<"tme">>         => claim_tme(EvList, E, Db),
-        <<"lockdown">>    => claim_lockdown(EvList)
+        <<"secure-boot">>        => claim_secure_boot(EvList),
+        <<"firmware">>           => claim_firmware(EvList),
+        <<"boot-loader">>        => claim_boot_loader(EvList),
+        <<"kernel">>             => claim_kernel(EvList, E),
+        <<"cpu">>                => claim_cpu(EvList),
+        <<"shim">>               => claim_shim(EvList),
+        %% Paper-committed machine-identifying fields composed
+        %% across tier 1 (events) / tier 2 (cmdline) / tier 3
+        %% (UKI-hash DB) / tier 4 (boot-reached-PCR-15). Every
+        %% populated value carries a `*-evidence' list with the
+        %% tier numbers + source event provenance.
+        <<"tme">>                => claim_tme(EvList, E, Db),
+        <<"iommu">>              => claim_iommu(EvList),
+        <<"lockdown">>           => claim_lockdown(EvList, E, Db),
+        <<"kernel-integrity">>   => claim_kernel_integrity(EvList),
+        <<"verity">>             => claim_verity(EvList)
     }.
 
 %% CPU microcode identity — from EV_CPU_MICROCODE on PCR 1.
@@ -1303,26 +1314,30 @@ claim_boot_loader(Events) ->
 %% on PCR 11/12/13 whose keys include `kernel_name', `kernel_
 %% version', `initrd', and the cmdline. We collect them.
 claim_kernel(Events, E) ->
-    %% Cmdline: systemd-stub writes "cmdline" on PCR 12.
-    CmdlineEvs = ipl_kv_matches(Events, <<"cmdline">>),
-    Cmdline = case CmdlineEvs of
-        [] -> <<"unknown">>;
-        [Ev | _] -> nested(Ev, [<<"parsed">>, <<"value">>], <<"unknown">>)
+    CmdlineEvs = ipl_kv_matches(Events, <<"cmdline">>) ++
+                 ipl_kv_matches(Events, <<"kernel-cmdline">>),
+    {Cmdline, CmdlineFlags, CmdlineProv} = case CmdlineEvs of
+        [] -> {<<"unknown">>, #{}, []};
+        [Ev | _] ->
+            {nested(Ev, [<<"parsed">>, <<"value">>], <<"unknown">>),
+             nested(Ev, [<<"parsed">>, <<"cmdline-flags">>], #{}),
+             [event_provenance(Ev)]}
     end,
-    %% UKI kernel hash: PCR 11's accumulated digest (from envelope's
-    %% pcr_values). Gives us the CURRENT PCR 11 state directly.
     UkiHash = hb_maps:get(
                 <<"11">>,
                 nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
-    IommuStrict = kernel_cmdline_flag(Cmdline, <<"iommu.strict=1">>),
     #{
         <<"cmdline">>             => Cmdline,
-        <<"cmdline-provenance">>  =>
-            [event_provenance(Ev) || Ev <- CmdlineEvs],
+        <<"cmdline-provenance">>  => CmdlineProv,
+        <<"cmdline-flag-count">>  =>
+            maps:get(<<"-token-count">>, CmdlineFlags, 0),
         <<"uki-hash">>            => UkiHash,
         <<"uki-hash-provenance">> => [{<<"pcr">>, 11}],
-        <<"iommu-strict">>        => IommuStrict
+        %% `iommu-strict' retained for backward compat; the new
+        %% `claim.iommu' section has the full breakdown.
+        <<"iommu-strict">>        =>
+            maps:get(<<"iommu.strict">>, CmdlineFlags, <<"unknown">>)
     }.
 
 ipl_kv_matches(Events, Key) ->
@@ -1330,55 +1345,244 @@ ipl_kv_matches(Events, Key) ->
            maps:get(<<"event-type-code">>, Ev, 0) =:= 16#D,
            nested(Ev, [<<"parsed">>, <<"key">>], <<>>) =:= Key].
 
-kernel_cmdline_flag(<<"unknown">>, _) -> <<"unknown">>;
-kernel_cmdline_flag(Cmdline, Flag) when is_binary(Cmdline) ->
-    case binary:match(Cmdline, Flag) of
-        nomatch -> false;
-        _       -> true
-    end;
-kernel_cmdline_flag(_, _) -> <<"unknown">>.
+%% Find the first EV_IPL cmdline event (PCR 12 "cmdline" or
+%% "kernel-cmdline" key), return {CmdlineFlagsMap, [provenance]}.
+%% Tier-2 evidence source for the claim rewrites below.
+cmdline_flags_and_provenance(Events) ->
+    Evs = ipl_kv_matches(Events, <<"cmdline">>) ++
+          ipl_kv_matches(Events, <<"kernel-cmdline">>),
+    case Evs of
+        [] -> {#{}, []};
+        [E | _] ->
+            Flags = nested(E, [<<"parsed">>, <<"cmdline-flags">>], #{}),
+            {Flags, [event_provenance(E)]}
+    end.
 
-%% TME/SME: per paper §Arch line 229, a successful attestation is
-%% itself proof that TME was enabled (kernel halts at init if it
-%% isn't). So if uki_hash matches a known TME-checking UKI in our
-%% DB, tme.enabled = true. Otherwise "unknown".
-claim_tme(_Events, E, Db) ->
+%% TME/SME (paper §Arch line 226-230).
+%%
+%% Three orthogonal evidence tiers compose here:
+%%   tier 2 (kernel cmdline intent): `mem_encrypt=on' / `sme=on' /
+%%           `kvm_intel.tdx=on' measured into PCR 12 via sd-stub.
+%%   tier 3 (UKI-hash claim DB lookup): this PCR 11 UKI hash appears
+%%           in our uki-measurements DB with `checks-tme: true'
+%%           (the kernel's early init halts if TME is off).
+%%   tier 4 (boot-reached-PCR-15): PCR 15 was extended by the
+%%           ephemeral node key → halt-check didn't fire → TME is on.
+%%
+%% Any ONE tier alone is insufficient for a definitive "on":
+%%   tier 2 alone = intent, not proof (a kernel could ignore the flag)
+%%   tier 3 alone = capability (the kernel HAS the halt-check), but
+%%                  we'd still want tier 4 to know halt didn't fire
+%%   tier 4 alone = boot completed, but we don't know what kernel ran
+%%
+%% The `enabled' field surfaces the composite verdict; the
+%% `evidence' list lets policy engines require specific tier
+%% combinations (e.g. "tier 2 + tier 3 + tier 4" for confidential-
+%% compute, "tier 2 only" for development).
+claim_tme(Events, E, Db) ->
+    {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
+    %% Tier 2: cmdline intent.
+    MemEnc  = maps:get(<<"mem_encrypt">>, Flags, undefined),
+    Sme     = maps:get(<<"sme">>,          Flags, undefined),
+    Tdx     = maps:get(<<"kvm_intel.tdx">>,Flags, undefined),
+    Tier2 = case {MemEnc, Sme, Tdx} of
+        {undefined, undefined, undefined} -> {<<"unknown">>, []};
+        _ ->
+            Intent = (MemEnc =:= true) orelse (Sme =:= true)
+                     orelse (Tdx =:= true),
+            {Intent, [{<<"tier">>, 2} | CmdlineProv]}
+    end,
+    %% Tier 3: UKI-hash claim DB lookup.
     UkiHash = hb_maps:get(
                 <<"11">>,
                 nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
                 <<"unknown">>),
     UkiProfiles = maps:get(<<"uki-profiles">>, Db, #{}),
-    Matched = lists:any(
-        fun(#{<<"uki-hash">> := H, <<"checks-tme">> := true}) -> H =:= UkiHash;
+    Tier3 = case uki_db_lookup(UkiProfiles, UkiHash, <<"checks-tme">>) of
+        true  -> {true, [{<<"tier">>, 3},
+                         {<<"uki-hash">>, UkiHash}]};
+        _     -> {<<"unknown">>, []}
+    end,
+    %% Tier 4: boot-reached-PCR-15 — we always have this if the
+    %% quote verified. Surface it as supporting evidence.
+    Pcr15 = hb_maps:get(
+              <<"15">>,
+              nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+              <<"unknown">>),
+    Tier4 = case Pcr15 of
+        <<"unknown">> -> {<<"unknown">>, []};
+        _             -> {true, [{<<"tier">>, 4},
+                                 {<<"derivation">>,
+                                  <<"pcr-15-extension-reached">>}]}
+    end,
+    compose_claim(<<"enabled">>, [Tier2, Tier3, Tier4]).
+
+uki_db_lookup(Profiles, UkiHash, Key) when is_map(Profiles) ->
+    Found = lists:filter(
+        fun(P) when is_map(P) ->
+            H = maps:get(<<"uki-hash">>, P, undefined),
+            V = maps:get(Key, P, false),
+            H =:= UkiHash andalso V =:= true;
            (_) -> false
-        end, maps:values(UkiProfiles)),
-    case Matched of
-        true ->
-            #{
-                <<"enabled">>          => true,
-                <<"enabled-provenance">> =>
-                    [{<<"derivation">>, <<"known_TME_checking_UKI_hash">>}]
-            };
+        end, maps:values(Profiles)),
+    Found =/= [];
+uki_db_lookup(_, _, _) -> false.
+
+%% Compose a claim from multiple tiers. Rules:
+%%   * Any tier giving `true' → claim is true (with all supporting
+%%     tiers' evidence).
+%%   * Any tier giving `false' while none say `true' → claim is false.
+%%   * All tiers return "unknown" → claim is "unknown".
+compose_claim(Field, TierResults) ->
+    Values = [V || {V, _} <- TierResults],
+    Evidence = lists:flatten([E || {_, E} <- TierResults]),
+    Verdict = compose_verdict(Values),
+    #{
+        Field                                => Verdict,
+        <<(Field)/binary, "-evidence">>      => Evidence,
+        <<(Field)/binary, "-tier-count">>    =>
+            length([E || E <- Evidence, is_tuple(E),
+                          element(1, E) =:= <<"tier">>])
+    }.
+
+compose_verdict(Values) ->
+    case lists:member(true, Values) of
+        true -> true;
         false ->
-            #{
-                <<"enabled">>          => <<"unknown">>,
-                <<"enabled-provenance">> =>
-                    [{<<"derivation">>,
-                      <<"uki_hash_not_in_known_TME_checking_list">>}]
-            }
+            case lists:member(false, Values) of
+                true -> false;
+                false -> <<"unknown">>
+            end
     end.
 
-%% Lockdown state. We don't have a direct event for this — paper
-%% §Arch says kernel runs with lockdown=confidentiality. For MVP,
-%% this is "unknown" unless we recognise the UKI (same pattern as
-%% TME). Once an operator onboards a kernel and asserts its
-%% lockdown level in the uki-measurements DB, we can resolve it.
-claim_lockdown(_Events) ->
+%% Kernel lockdown mode (paper §Arch line 223:
+%% `lockdown=confidentiality').
+%%
+%% Tier 2: cmdline `lockdown=<mode>'.
+%% Tier 3: UKI-hash claim `lockdown-confidentiality: true' in the DB.
+claim_lockdown(Events) ->
+    claim_lockdown(Events, #{}, #{}).
+
+claim_lockdown(Events, E, Db) ->
+    {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
+    Mode = maps:get(<<"lockdown">>, Flags, <<"unknown">>),
+    Level = case Mode of
+        <<"confidentiality">> -> <<"confidentiality">>;
+        <<"integrity">>       -> <<"integrity">>;
+        <<"none">>            -> <<"none">>;
+        V when is_binary(V)   -> V;
+        _                     -> <<"unknown">>
+    end,
+    LevelProv = case Level of
+        <<"unknown">> -> [];
+        _             -> [{<<"tier">>, 2} | CmdlineProv]
+    end,
+    %% Tier 3: did a matching UKI-hash claim lockdown-confidentiality?
+    UkiHash = hb_maps:get(
+                <<"11">>,
+                nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+                <<"unknown">>),
+    UkiProfiles = maps:get(<<"uki-profiles">>, Db, #{}),
+    Tier3Confirm =
+        uki_db_lookup(UkiProfiles, UkiHash,
+                       <<"lockdown-confidentiality">>),
     #{
-        <<"level">>             => <<"unknown">>,
-        <<"level-provenance">>  =>
-            [{<<"derivation">>,
-              <<"uki-not-in-known-lockdown-level-list">>}]
+        <<"level">>             => Level,
+        <<"level-evidence">>    => LevelProv,
+        <<"confidentiality-confirmed">>           => Tier3Confirm,
+        <<"confidentiality-confirmed-evidence">>  =>
+            case Tier3Confirm of
+                true -> [{<<"tier">>, 3}, {<<"uki-hash">>, UkiHash}];
+                false -> []
+            end
+    }.
+
+%% IOMMU state (paper §Arch line 223:
+%% `IOMMU strict mode ... init_on_alloc/init_on_free').
+%%
+%% Tier 2 cmdline flags:
+%%   iommu=pt                   → DMA-remap mode
+%%   iommu.strict=1             → flushes per-op (no lazy invalidation)
+%%   intel_iommu=on | amd_iommu=on → vendor-specific enable
+claim_iommu(Events) ->
+    {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
+    Mode  = maps:get(<<"iommu">>, Flags, <<"unknown">>),
+    Strct = maps:get(<<"iommu.strict">>, Flags, <<"unknown">>),
+    Intel = maps:get(<<"intel_iommu">>, Flags, <<"unknown">>),
+    Amd   = maps:get(<<"amd_iommu">>,   Flags, <<"unknown">>),
+    %% An IOMMU is effectively "enabled" if at least one vendor enable
+    %% flag is on or a mode was set.
+    Enabled = case {Mode, Intel, Amd} of
+        {<<"unknown">>, <<"unknown">>, <<"unknown">>} -> <<"unknown">>;
+        _ ->
+            (Mode =/= <<"unknown">>) orelse (Intel =:= true)
+                                     orelse is_binary(Amd)
+    end,
+    Prov = case Enabled of
+        <<"unknown">> -> [];
+        _             -> [{<<"tier">>, 2} | CmdlineProv]
+    end,
+    #{
+        <<"enabled">>                  => Enabled,
+        <<"enabled-evidence">>         => Prov,
+        <<"mode">>                     => Mode,
+        <<"strict">>                   => Strct,
+        <<"intel-iommu-requested">>    => Intel,
+        <<"amd-iommu-requested">>      => Amd
+    }.
+
+%% Kernel integrity properties (paper §Security table):
+%%   module.sig_enforce=1  → unsigned modules rejected
+%%   init_on_alloc=1       → heap pages zeroed at alloc
+%%   init_on_free=1        → heap pages zeroed at free
+%%   slab_nomerge          → slab caches not merged (reduces cross-
+%%                            cache exploitation)
+%%   page_poison=1         → free pages poisoned
+%%   lockdown=confidentiality → kernel lockdown in the strictest mode
+claim_kernel_integrity(Events) ->
+    {Flags, Prov} = cmdline_flags_and_provenance(Events),
+    Base = case Prov of
+        [] -> [];
+        _  -> [{<<"tier">>, 2} | Prov]
+    end,
+    #{
+        <<"module-sig-enforce">>     =>
+            maps:get(<<"module.sig_enforce">>, Flags, <<"unknown">>),
+        <<"init-on-alloc">>          =>
+            maps:get(<<"init_on_alloc">>, Flags, <<"unknown">>),
+        <<"init-on-free">>           =>
+            maps:get(<<"init_on_free">>, Flags, <<"unknown">>),
+        <<"slab-nomerge">>           =>
+            maps:get(<<"slab_nomerge">>, Flags, <<"unknown">>),
+        <<"page-poison">>            =>
+            maps:get(<<"page_poison">>, Flags, <<"unknown">>),
+        <<"kernel-page-table-isolation">> =>
+            maps:get(<<"pti">>, Flags, <<"unknown">>),
+        <<"randomize-kstack-offset">> =>
+            maps:get(<<"randomize_kstack_offset">>, Flags, <<"unknown">>),
+        <<"evidence">>               => Base
+    }.
+
+%% dm-verity rootfs + /usr integrity (paper §Arch line 222:
+%% `cmdline carries the dm-verity root hash').
+claim_verity(Events) ->
+    {Flags, Prov} = cmdline_flags_and_provenance(Events),
+    RootHash = case maps:get(<<"roothash">>, Flags, undefined) of
+        undefined ->
+            maps:get(<<"systemd.verity_root_hash">>, Flags, <<"unknown">>);
+        V when is_binary(V) -> V;
+        _ -> <<"unknown">>
+    end,
+    UsrHash = maps:get(<<"systemd.verity_usr_root_hash">>,
+                        Flags, <<"unknown">>),
+    Evidence = case RootHash of
+        <<"unknown">> -> [];
+        _             -> [{<<"tier">>, 2} | Prov]
+    end,
+    #{
+        <<"root-hash">>           => RootHash,
+        <<"usr-root-hash">>       => UsrHash,
+        <<"evidence">>            => Evidence
     }.
 
 %%---- small helpers -----------------------------------------------------
@@ -1769,9 +1973,50 @@ derived_template_for_pcr(11) ->
         <<"uki-kernel-version">>    => <<"unknown">>
     };
 derived_template_for_pcr(12) ->
+    %% PCR 12 = UKI kernel cmdline (systemd-stub convention) — the
+    %% paper's single most information-dense measurement. Every
+    %% flag the paper §Architecture l.223-230 + §Security table
+    %% calls out is surfaced as a named field here, with
+    %% `"unknown"' as the "flag absent" sentinel.
     #{
-        <<"uki-cmdline">>           => <<"unknown">>,
-        <<"uki-initrd-hash">>       => <<"unknown">>
+        <<"uki-cmdline">>                  => <<"unknown">>,
+        <<"uki-initrd-hash">>              => <<"unknown">>,
+        %% Memory encryption (tier 2 evidence per the paper):
+        <<"mem-encrypt-requested">>        => <<"unknown">>,
+        <<"intel-tdx-requested">>          => <<"unknown">>,
+        %% IOMMU:
+        <<"iommu-mode">>                   => <<"unknown">>,
+        <<"iommu-strict">>                 => <<"unknown">>,
+        <<"intel-iommu-requested">>        => <<"unknown">>,
+        <<"amd-iommu-requested">>          => <<"unknown">>,
+        <<"iommu-passthrough">>            => <<"unknown">>,
+        <<"iommu-dma-mode">>               => <<"unknown">>,
+        %% Kernel lockdown:
+        <<"lockdown-mode">>                => <<"unknown">>,
+        %% Memory hygiene:
+        <<"init-on-alloc">>                => <<"unknown">>,
+        <<"init-on-free">>                 => <<"unknown">>,
+        <<"slab-nomerge">>                 => <<"unknown">>,
+        <<"page-poison">>                  => <<"unknown">>,
+        %% Module loading:
+        <<"module-sig-enforce">>           => <<"unknown">>,
+        %% dm-verity rootfs integrity:
+        <<"verity-root-hash">>             => <<"unknown">>,
+        <<"verity-usr-root-hash">>         => <<"unknown">>,
+        %% CPU mitigations:
+        <<"kernel-page-table-isolation">>  => <<"unknown">>,
+        <<"randomize-kstack-offset">>      => <<"unknown">>,
+        <<"no-smt">>                       => <<"unknown">>,
+        <<"mitigations-mode">>             => <<"unknown">>,
+        <<"spectre-v2-mitigation">>        => <<"unknown">>,
+        <<"ssbd-mode">>                    => <<"unknown">>,
+        <<"vsyscall-mode">>                => <<"unknown">>,
+        %% KASLR / audit / IMA:
+        <<"no-kaslr">>                     => <<"unknown">>,
+        <<"audit-enabled">>                => <<"unknown">>,
+        <<"ima-policy">>                   => <<"unknown">>,
+        <<"ima-appraise-mode">>            => <<"unknown">>,
+        <<"debugfs-mode">>                 => <<"unknown">>
     };
 derived_template_for_pcr(13) ->
     #{
@@ -2049,10 +2294,93 @@ derive_from_event(12, 16#0D, Parsed, _) ->
     case {maps:get(<<"key">>, Parsed, undefined),
           maps:get(<<"value">>, Parsed, undefined)} of
         {<<"kernel-cmdline">>, V} when is_binary(V) ->
-            #{<<"uki-cmdline">> => V};
+            %% Base: the raw cmdline string. Plus — every security
+            %% flag the paper (§Architecture l.223-230, §Security
+            %% table) lists as a boot-time attested property gets
+            %% extracted into a named `derived/<field>' slot.
+            Flags = maps:get(<<"cmdline-flags">>, Parsed, #{}),
+            maps:merge(
+                #{<<"uki-cmdline">> => V},
+                extract_cmdline_security_flags(Flags));
         _ -> #{}
     end;
 derive_from_event(_, _, _, _) -> #{}.
+
+%% Paper §Architecture line 219-230 + §Security table — the set of
+%% kernel-cmdline flags that, when present, attest to specific
+%% security properties of the running kernel. Each mapping pins one
+%% cmdline flag to one derived field on PCR 12.
+%%
+%%   mem_encrypt=on / sme=on → mem-encrypt-requested: true
+%%   kvm_intel.tdx=on       → intel-tdx-requested: true
+%%   iommu=pt | ...         → iommu-mode: "pt" (or other)
+%%   iommu.strict=1         → iommu-strict: true
+%%   intel_iommu=on         → intel-iommu-requested: true
+%%   amd_iommu=on           → amd-iommu-requested: true
+%%   lockdown=<mode>        → lockdown-mode: "integrity"|"confidentiality"|...
+%%   init_on_alloc=1        → init-on-alloc: true
+%%   init_on_free=1         → init-on-free: true
+%%   module.sig_enforce=1   → module-sig-enforce: true
+%%   roothash=<hex>         → verity-root-hash: <hex>
+%%   systemd.verity_root_hash=<hex> → verity-root-hash: <hex>
+%%   slab_nomerge           → slab-nomerge: true
+%%   page_poison=1          → page-poison: true
+%%   pti=on                 → kernel-page-table-isolation: true
+%%   randomize_kstack_offset=1 → randomize-kstack-offset: true
+extract_cmdline_security_flags(Flags) when is_map(Flags) ->
+    lists:foldl(
+        fun({SrcKey, DstKey, Kind}, Acc) ->
+            case maps:get(SrcKey, Flags, undefined) of
+                undefined -> Acc;
+                Val       -> Acc#{DstKey => normalise_flag(Val, Kind)}
+            end
+        end, #{}, cmdline_security_flag_map());
+extract_cmdline_security_flags(_) -> #{}.
+
+cmdline_security_flag_map() ->
+    [
+        %% {cmdline-key, derived-field, kind}
+        {<<"mem_encrypt">>,          <<"mem-encrypt-requested">>, bool},
+        {<<"sme">>,                  <<"mem-encrypt-requested">>, bool},
+        {<<"kvm_intel.tdx">>,        <<"intel-tdx-requested">>,   bool},
+        {<<"iommu">>,                <<"iommu-mode">>,            raw},
+        {<<"iommu.strict">>,         <<"iommu-strict">>,          bool},
+        {<<"intel_iommu">>,          <<"intel-iommu-requested">>, bool},
+        {<<"amd_iommu">>,            <<"amd-iommu-requested">>,   raw},
+        {<<"iommu.passthrough">>,    <<"iommu-passthrough">>,     bool},
+        {<<"iommu.dma_mode">>,       <<"iommu-dma-mode">>,        raw},
+        {<<"lockdown">>,             <<"lockdown-mode">>,         raw},
+        {<<"init_on_alloc">>,        <<"init-on-alloc">>,         bool},
+        {<<"init_on_free">>,         <<"init-on-free">>,          bool},
+        {<<"module.sig_enforce">>,   <<"module-sig-enforce">>,    bool},
+        {<<"roothash">>,             <<"verity-root-hash">>,      raw},
+        {<<"systemd.verity_root_hash">>, <<"verity-root-hash">>,  raw},
+        {<<"systemd.verity_usr_root_hash">>,
+                                     <<"verity-usr-root-hash">>,  raw},
+        {<<"slab_nomerge">>,         <<"slab-nomerge">>,          bool},
+        {<<"page_poison">>,          <<"page-poison">>,           bool},
+        {<<"pti">>,                  <<"kernel-page-table-isolation">>, raw},
+        {<<"randomize_kstack_offset">>,
+                                     <<"randomize-kstack-offset">>, bool},
+        {<<"nosmt">>,                <<"no-smt">>,                bool},
+        {<<"mitigations">>,          <<"mitigations-mode">>,      raw},
+        {<<"spectre_v2">>,           <<"spectre-v2-mitigation">>, raw},
+        {<<"spec_store_bypass_disable">>,
+                                     <<"ssbd-mode">>,             raw},
+        {<<"vsyscall">>,             <<"vsyscall-mode">>,         raw},
+        {<<"audit">>,                <<"audit-enabled">>,         raw},
+        {<<"debugfs">>,              <<"debugfs-mode">>,          raw},
+        {<<"nokaslr">>,              <<"no-kaslr">>,              bool},
+        {<<"ima_policy">>,           <<"ima-policy">>,            raw},
+        {<<"ima_appraise">>,         <<"ima-appraise-mode">>,     raw}
+    ].
+
+normalise_flag(true, bool)  -> true;
+normalise_flag(false, bool) -> false;
+normalise_flag(<<"1">>, bool) -> true;
+normalise_flag(<<"0">>, bool) -> false;
+normalise_flag(V, bool) when is_binary(V) -> V;   %% non-bool form
+normalise_flag(V, raw)  -> V.
 
 %% Merge two partial derived maps. Rules:
 %%   - Lists concatenate.
@@ -2608,12 +2936,80 @@ claim_surface_extracts_secure_boot_and_crtm_test() ->
     ?assertEqual(1, length(Prov)),
     FW = maps:get(<<"firmware">>, Claim),
     ?assertEqual(<<"TEST FW v1">>, maps:get(<<"crtm-version">>, FW)),
-    %% Fields we can't derive from the fixture are "unknown" with
-    %% empty provenance.
+    %% Fields we can't derive from the fixture are "unknown".
     TME = maps:get(<<"tme">>, Claim),
     ?assertEqual(<<"unknown">>, maps:get(<<"enabled">>, TME)),
     Lockdown = maps:get(<<"lockdown">>, Claim),
     ?assertEqual(<<"unknown">>, maps:get(<<"level">>, Lockdown)),
+    ok.
+
+%% Full paper-strength claim extraction from a synthetic event log
+%% that includes a kernel-cmdline event with every security flag
+%% the paper §Architecture line 219-230 + §Security table names.
+%% Verifies every derived field resolves and every claim section
+%% gets populated.
+claim_surface_full_cmdline_pipeline_test() ->
+    %% Build a minimal crypto-agile log with a SpecID first record
+    %% then an EV_IPL on PCR 12 whose value is the LapEE-standard
+    %% cmdline.
+    AlgPairs = <<16#04:16/little, 20:16/little,
+                 16#0B:16/little, 32:16/little>>,
+    SpecId = <<"Spec ID Event03", 0,
+               0:32/little, 0:8, 2:8, 0:8, 8:8,
+               2:32/little, AlgPairs/binary, 0:8>>,
+    SpecIdSize = byte_size(SpecId),
+    FirstRec = <<0:32/little, 3:32/little, 0:(20*8),
+                 SpecIdSize:32/little, SpecId/binary>>,
+    Cmdline = <<"cmdline=ro quiet mem_encrypt=on intel_iommu=on "
+                "iommu=pt iommu.strict=1 lockdown=confidentiality "
+                "init_on_alloc=1 init_on_free=1 "
+                "module.sig_enforce=1 slab_nomerge page_poison=1 "
+                "roothash=deadbeef01", 0>>,
+    CmdSha1 = crypto:hash(sha, Cmdline),
+    CmdSha256 = crypto:hash(sha256, Cmdline),
+    %% EV_IPL record on PCR 12.
+    CmdRec = <<12:32/little, 16#D:32/little, 2:32/little,
+               16#04:16/little, CmdSha1/binary,
+               16#0B:16/little, CmdSha256/binary,
+               (byte_size(Cmdline)):32/little, Cmdline/binary>>,
+    Raw = <<FirstRec/binary, CmdRec/binary>>,
+    Envelope = #{<<"tcg-event-log">> => hb_util:encode(Raw)},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    %% Every new paper-claim section is present.
+    lists:foreach(
+        fun(K) -> ?assert(maps:is_key(K, Claim)) end,
+        [<<"tme">>, <<"iommu">>, <<"lockdown">>,
+         <<"kernel-integrity">>, <<"verity">>]),
+    %% TME — composed from tier 2 (cmdline mem_encrypt=on) +
+    %% tier 4 (PCR 15 reached, but envelope has no quote so
+    %% tier 4 is unknown) + tier 3 empty DB.
+    TME = maps:get(<<"tme">>, Claim),
+    ?assertEqual(true, maps:get(<<"enabled">>, TME)),
+    %% Evidence includes tier 2.
+    TmeEv = maps:get(<<"enabled-evidence">>, TME),
+    ?assert(lists:any(
+        fun({<<"tier">>, 2}) -> true; (_) -> false end, TmeEv)),
+    %% Lockdown = "confidentiality" from cmdline.
+    Lockdown = maps:get(<<"lockdown">>, Claim),
+    ?assertEqual(<<"confidentiality">>,
+                 maps:get(<<"level">>, Lockdown)),
+    %% IOMMU enabled + mode="pt" + strict=true.
+    Iommu = maps:get(<<"iommu">>, Claim),
+    ?assertEqual(true,       maps:get(<<"enabled">>, Iommu)),
+    ?assertEqual(<<"pt">>,   maps:get(<<"mode">>, Iommu)),
+    ?assertEqual(true,       maps:get(<<"strict">>, Iommu)),
+    ?assertEqual(true,       maps:get(<<"intel-iommu-requested">>, Iommu)),
+    %% Kernel integrity: every flag set.
+    KI = maps:get(<<"kernel-integrity">>, Claim),
+    ?assertEqual(true, maps:get(<<"module-sig-enforce">>, KI)),
+    ?assertEqual(true, maps:get(<<"init-on-alloc">>, KI)),
+    ?assertEqual(true, maps:get(<<"init-on-free">>, KI)),
+    ?assertEqual(true, maps:get(<<"slab-nomerge">>, KI)),
+    ?assertEqual(true, maps:get(<<"page-poison">>, KI)),
+    %% Verity root hash extracted.
+    Verity = maps:get(<<"verity">>, Claim),
+    ?assertEqual(<<"deadbeef01">>,
+                 maps:get(<<"root-hash">>, Verity)),
     ok.
 
 %% Helper: same fixture dev_tpm_tcg uses for its own tests.
