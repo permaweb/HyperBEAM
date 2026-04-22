@@ -986,32 +986,335 @@ decode_nonhost(#{<<"event-data">> := Data}, Kind) ->
             "from the silicon vendor.">>};
 decode_nonhost(_, _) -> #{}.
 
-%% EV_EFI_SPDM_* — UEFI 2.10 §32.5. Data starts with a device
-%% context that includes a UEFI_DEVICE_PATH (variable length),
-%% then protocol-specific payload. We parse the device path and
-%% surface the SPDM payload length + SHA-256.
+%% EV_EFI_SPDM_* — UEFI 2.10 §32.5.
+%%
+%% The event data is either:
+%%
+%%   TCG_DEVICE_SECURITY_EVENT_DATA   (v1, "SPDM Device Sec\0")
+%%   TCG_DEVICE_SECURITY_EVENT_DATA2  (v2, "SPDM Device Sec2")
+%%
+%% Both start with a 16-byte signature which we match on. When
+%% recognised we unpack the full structure: header fields +
+%% SPDM measurement block (SubHeaderType 0) or SPDM cert chain
+%% (SubHeaderType 1) + trailing UEFI_DEVICE_PATH.
+%%
+%% Legacy / malformed data falls back to a path-first heuristic
+%% (find the End-entire terminator) for backward compatibility
+%% with older firmware that emitted a non-canonical layout.
 decode_spdm_event(#{<<"event-data">> := Data}, Kind) ->
-    %% Try to find an End-entire device-path terminator to delimit
-    %% the device-context prefix.
+    case Data of
+        <<"SPDM Device Sec2", _/binary>> ->
+            decode_spdm_v2(Data, Kind);
+        <<"SPDM Device Sec", 0, _/binary>> ->
+            decode_spdm_v1(Data, Kind);
+        _ ->
+            decode_spdm_legacy(Data, Kind)
+    end;
+decode_spdm_event(_, _) -> #{}.
+
+%% TCG_DEVICE_SECURITY_EVENT_DATA2 (UEFI 2.10 §32.5.1):
+%%   Signature[16] "SPDM Device Sec2"
+%%   Version           u16 LE (0x0002)
+%%   AuthState         u8  (0=Success 1=NoAuthSig 2=NoAuth
+%%                          3=NoBinding 4=Fail 0xFF=NoSpdm)
+%%   Reserved          u8
+%%   Length            u32 LE (total event data length)
+%%   DeviceType        u32 LE (0=NONE 1=PCI 2=USB)
+%%   SubHeaderType     u32 LE (0=SPDM_MEAS_BLOCK 1=SPDM_CERT_CHAIN)
+%%   SubHeaderLength   u32 LE
+%%   SubHeaderUid      u64 LE (SPDM session UID)
+%%   SubHeader         [SubHeaderLength] — SPDM meas or cert chain
+%%   DevicePathLength  u64 LE
+%%   DevicePath        [DevicePathLength]
+decode_spdm_v2(Data, Kind) ->
+    try
+        <<_Sig:16/binary, Version:16/little, AuthState:8,
+          _Reserved:8, Length:32/little, DeviceType:32/little,
+          SubHeaderType:32/little, SubHeaderLength:32/little,
+          SubHeaderUid:64/little, Rest0/binary>> = Data,
+        <<SubHeader:SubHeaderLength/binary, Rest1/binary>> = Rest0,
+        {DpLen, DevicePath, Tail} =
+            case Rest1 of
+                <<DL:64/little, DP:DL/binary, T/binary>> ->
+                    {DL, DP, T};
+                _ -> {0, <<>>, Rest1}
+            end,
+        {Nodes, Text} = parse_device_path(DevicePath),
+        SubMap = decode_spdm_subheader(SubHeaderType, SubHeader),
+        Base = #{
+            <<"spdm-kind">>              => Kind,
+            <<"spdm-data-version">>      => 2,
+            <<"spdm-version">>           =>
+                iolist_to_binary(io_lib:format(
+                    "0x~4.16.0B", [Version])),
+            <<"auth-state">>             => AuthState,
+            <<"auth-state-name">>        => spdm_auth_state_name(AuthState),
+            <<"declared-length">>        => Length,
+            <<"device-type">>            => DeviceType,
+            <<"device-type-name">>       => spdm_device_type_name(DeviceType),
+            <<"sub-header-type">>        => SubHeaderType,
+            <<"sub-header-type-name">>   => spdm_sub_header_type_name(SubHeaderType),
+            <<"sub-header-length">>      => SubHeaderLength,
+            <<"sub-header-uid">>         => SubHeaderUid,
+            <<"sub-header-uid-hex">>     =>
+                iolist_to_binary(io_lib:format(
+                    "0x~16.16.0B", [SubHeaderUid])),
+            <<"device-path-length">>     => DpLen,
+            <<"device-path-nodes">>      => Nodes,
+            <<"device-path-text">>       => Text,
+            <<"tail-length">>            => byte_size(Tail)
+        },
+        maps:merge(Base, SubMap)
+    catch _:_ ->
+        decode_spdm_legacy(Data, Kind)
+    end.
+
+%% TCG_DEVICE_SECURITY_EVENT_DATA (v1, UEFI 2.7-2.9):
+%%   Signature[16] "SPDM Device Sec\0"
+%%   Version           u16 LE
+%%   Length            u16 LE
+%%   SpdmHashAlg       u32 LE
+%%   DeviceType        u32 LE
+%%   (then a fixed SPDM_MEASUREMENT_BLOCK)
+%%   DevicePathLength  u64 LE
+%%   DevicePath        [DevicePathLength]
+%%
+%% v1 has no SubHeader union; the measurement block is positional.
+decode_spdm_v1(Data, Kind) ->
+    try
+        <<_Sig:16/binary, Version:16/little, Length:16/little,
+          SpdmHashAlg:32/little, DeviceType:32/little,
+          Rest0/binary>> = Data,
+        %% SPDM_MEASUREMENT_BLOCK starts at Rest0. The block itself
+        %% is DMTF-structured; we let decode_spdm_measurement_block/1
+        %% consume what it can.
+        {BlockMap, _Rest1} = decode_spdm_measurement_block(Rest0),
+        %% The device path comes after the measurement block; we
+        %% can't predict its offset without tracking the block
+        %% size carefully. Best-effort: find the last u64 followed
+        %% by a valid device-path terminator.
+        {DpLen, DevicePath} = find_trailing_device_path(Rest0),
+        {Nodes, Text} = parse_device_path(DevicePath),
+        Base = #{
+            <<"spdm-kind">>              => Kind,
+            <<"spdm-data-version">>      => 1,
+            <<"spdm-version">>           =>
+                iolist_to_binary(io_lib:format(
+                    "0x~4.16.0B", [Version])),
+            <<"declared-length">>        => Length,
+            <<"spdm-hash-alg-code">>     => SpdmHashAlg,
+            <<"spdm-hash-alg-name">>     => spdm_hash_alg_name(SpdmHashAlg),
+            <<"device-type">>            => DeviceType,
+            <<"device-type-name">>       => spdm_device_type_name(DeviceType),
+            <<"device-path-length">>     => DpLen,
+            <<"device-path-nodes">>      => Nodes,
+            <<"device-path-text">>       => Text
+        },
+        maps:merge(Base, BlockMap)
+    catch _:_ ->
+        decode_spdm_legacy(Data, Kind)
+    end.
+
+%% Legacy path-first heuristic: find an End-entire terminator and
+%% treat bytes before it as device-path, after as payload. Kept
+%% for backward compatibility with firmware that didn't emit a
+%% canonical v1/v2 signature.
+decode_spdm_legacy(Data, Kind) ->
     case binary:match(Data, <<16#7F, 16#FF, 16#04, 16#00>>) of
         {Offset, 4} ->
             PrefixLen = Offset + 4,
             <<PathBin:PrefixLen/binary, Payload/binary>> = Data,
             {Nodes, Text} = parse_device_path(PathBin),
             #{<<"spdm-kind">>        => Kind,
+              <<"spdm-data-version">> => 0,
               <<"device-path-nodes">> => Nodes,
               <<"device-path-text">>  => Text,
               <<"payload-length">>   => byte_size(Payload),
               <<"payload-sha256">>   =>
                   hb_util:encode(crypto:hash(sha256, Payload))};
         _ ->
-            %% No device-path terminator — just surface opaque.
             #{<<"spdm-kind">>     => Kind,
+              <<"spdm-data-version">> => 0,
               <<"data-length">>   => byte_size(Data),
               <<"sha256">>        =>
                   hb_util:encode(crypto:hash(sha256, Data))}
+    end.
+
+%% Dispatch SPDM SubHeader decode based on type.
+%%   0 = SPDM Measurement Block
+%%   1 = SPDM Cert Chain
+decode_spdm_subheader(0, Data) ->
+    %% TCG_DEVICE_SECURITY_EVENT_DATA_SUB_HEADER_SPDM_MEASUREMENT_BLOCK:
+    %%   SpdmVersion      u16 LE
+    %%   (then the SPDM measurement block itself)
+    case Data of
+        <<SpdmVersion:16/little, Rest/binary>> ->
+            {BlockMap, _} = decode_spdm_measurement_block(Rest),
+            maps:merge(
+              #{<<"spdm-sub-version">> =>
+                    iolist_to_binary(io_lib:format(
+                        "0x~4.16.0B", [SpdmVersion]))},
+              BlockMap);
+        _ ->
+            #{<<"spdm-sub-error">> =>
+                  <<"truncated SPDM measurement sub-header">>}
     end;
-decode_spdm_event(_, _) -> #{}.
+decode_spdm_subheader(1, Data) ->
+    %% TCG_DEVICE_SECURITY_EVENT_DATA_SUB_HEADER_SPDM_CERT_CHAIN:
+    %%   SpdmVersion      u16 LE
+    %%   SpdmSlotId       u8
+    %%   Reserved         u8
+    %%   SpdmHashAlgo     u32 LE
+    %%   SpdmCertChain    [remainder]
+    case Data of
+        <<SpdmVersion:16/little, SlotId:8, _Res:8,
+          HashAlg:32/little, CertChain/binary>> ->
+            #{<<"spdm-sub-version">> =>
+                  iolist_to_binary(io_lib:format(
+                      "0x~4.16.0B", [SpdmVersion])),
+              <<"spdm-slot-id">>     => SlotId,
+              <<"spdm-cert-hash-alg-code">> => HashAlg,
+              <<"spdm-cert-hash-alg-name">> =>
+                  spdm_hash_alg_name(HashAlg),
+              <<"spdm-cert-chain-length">>  => byte_size(CertChain),
+              <<"spdm-cert-chain-sha256">>  =>
+                  hb_util:encode(crypto:hash(sha256, CertChain))};
+        _ ->
+            #{<<"spdm-sub-error">> =>
+                  <<"truncated SPDM cert-chain sub-header">>}
+    end;
+decode_spdm_subheader(Other, Data) ->
+    #{<<"spdm-sub-unknown-type">> => Other,
+      <<"spdm-sub-length">>       => byte_size(Data),
+      <<"spdm-sub-sha256">>       =>
+          hb_util:encode(crypto:hash(sha256, Data))}.
+
+%% SPDM_MEASUREMENT_BLOCK (DMTF DSP0274 §10.11.3):
+%%   Index                          u8
+%%   MeasurementSpecification       u8 (0x01 = DMTF)
+%%   MeasurementSize                u16 LE
+%%   Measurement                    bytes[MeasurementSize]
+%%     (DMTF-spec measurement value):
+%%     DMTFSpecMeasurementValueType u8
+%%       bit 7 = raw bit stream
+%%       bits 0-6 = type (0=immutable ROM, 1=mutable firmware,
+%%                        2=hardware config, 3=firmware config,
+%%                        4=firmware-measurement manifest,
+%%                        5=device mode, 6=version info,
+%%                        7=secure version number)
+%%     DMTFSpecMeasurementValueSize u16 LE
+%%     DMTFSpecMeasurementValue     bytes[size]
+decode_spdm_measurement_block(<<Index:8, MeasSpec:8, MeasSize:16/little,
+                                  Rest/binary>>)
+    when byte_size(Rest) >= MeasSize ->
+    <<MeasurementRaw:MeasSize/binary, Tail/binary>> = Rest,
+    InnerMap = decode_dmtf_measurement(MeasurementRaw),
+    BaseMap = #{
+        <<"meas-block-index">>         => Index,
+        <<"meas-block-spec-code">>     => MeasSpec,
+        <<"meas-block-spec-name">>     => spdm_meas_spec_name(MeasSpec),
+        <<"meas-block-size">>          => MeasSize,
+        <<"meas-block-sha256">>        =>
+            hb_util:encode(crypto:hash(sha256, MeasurementRaw))
+    },
+    {maps:merge(BaseMap, InnerMap), Tail};
+decode_spdm_measurement_block(Data) ->
+    {#{<<"meas-block-error">> =>
+           <<"truncated SPDM measurement block">>}, Data}.
+
+decode_dmtf_measurement(<<ValType:8, ValSize:16/little,
+                            Value:ValSize/binary, _/binary>>) ->
+    Raw = (ValType bsr 7) band 1,
+    TypeLow = ValType band 16#7F,
+    #{
+        <<"dmtf-value-type-code">>   => ValType,
+        <<"dmtf-value-type-low">>    => TypeLow,
+        <<"dmtf-value-type-name">>   => dmtf_meas_type_name(TypeLow),
+        <<"dmtf-value-is-raw">>      => Raw =:= 1,
+        <<"dmtf-value-size">>        => ValSize,
+        <<"dmtf-value-sha256">>      =>
+            hb_util:encode(crypto:hash(sha256, Value))
+    };
+decode_dmtf_measurement(_) ->
+    #{<<"dmtf-value-error">> =>
+          <<"truncated DMTF measurement value">>}.
+
+%% When we can't cleanly track the measurement-block size (v1
+%% path), scan from the end: a valid device path ends with End-
+%% entire (7F FF 04 00) and is preceded by a u64 length.
+find_trailing_device_path(Data) ->
+    %% Walk from right: last 4 bytes must be end-entire.
+    case binary:matches(Data, <<16#7F, 16#FF, 16#04, 16#00>>) of
+        [] -> {0, <<>>};
+        Matches ->
+            {Off, _} = lists:last(Matches),
+            PathEnd = Off + 4,
+            %% Best-effort: pull the u64 LE right before a
+            %% plausible device-path beginning by scanning
+            %% backwards a few kilobytes.
+            DpLen = PathEnd - 8,
+            case DpLen of
+                L when L > 0, L =< byte_size(Data) ->
+                    <<_:(byte_size(Data) - PathEnd - 8)/binary,
+                      Len:64/little, _/binary>> = Data,
+                    case Len =< byte_size(Data) andalso
+                         (PathEnd - 8 - Len) >= 0 of
+                        true ->
+                            <<_:(byte_size(Data) - PathEnd)/binary,
+                              DP:Len/binary, _/binary>> =
+                                binary:part(Data, byte_size(Data) - PathEnd - Len,
+                                             Len + PathEnd),
+                            {Len, DP};
+                        false -> {0, <<>>}
+                    end;
+                _ -> {0, <<>>}
+            end
+    end.
+
+%% SPDM AuthState enumeration (TCG-defined).
+spdm_auth_state_name(0)    -> <<"Success">>;
+spdm_auth_state_name(1)    -> <<"NoAuthNoSig">>;
+spdm_auth_state_name(2)    -> <<"NoAuth">>;
+spdm_auth_state_name(3)    -> <<"NoBinding">>;
+spdm_auth_state_name(4)    -> <<"Fail">>;
+spdm_auth_state_name(16#FF)-> <<"NoSpdm">>;
+spdm_auth_state_name(_)    -> <<"unknown">>.
+
+%% UEFI 2.10 §32.5.2 DeviceType enumeration.
+spdm_device_type_name(0) -> <<"NONE">>;
+spdm_device_type_name(1) -> <<"PCI">>;
+spdm_device_type_name(2) -> <<"USB">>;
+spdm_device_type_name(_) -> <<"unknown">>.
+
+%% UEFI 2.10 §32.5.3 SubHeaderType enumeration.
+spdm_sub_header_type_name(0) -> <<"SPDM_MEAS_BLOCK">>;
+spdm_sub_header_type_name(1) -> <<"SPDM_CERT_CHAIN">>;
+spdm_sub_header_type_name(_) -> <<"unknown">>.
+
+%% DMTF DSP0274 §10.11.3 Table "MeasurementSpecification".
+spdm_meas_spec_name(16#01) -> <<"DMTF">>;
+spdm_meas_spec_name(_)     -> <<"unknown">>.
+
+%% DMTF DSP0274 §10.11.3 Table "DMTFSpecMeasurementValueType".
+dmtf_meas_type_name(0) -> <<"immutable-rom">>;
+dmtf_meas_type_name(1) -> <<"mutable-firmware">>;
+dmtf_meas_type_name(2) -> <<"hardware-config">>;
+dmtf_meas_type_name(3) -> <<"firmware-config">>;
+dmtf_meas_type_name(4) -> <<"firmware-measurement-manifest">>;
+dmtf_meas_type_name(5) -> <<"device-mode">>;
+dmtf_meas_type_name(6) -> <<"version-info">>;
+dmtf_meas_type_name(7) -> <<"secure-version-number">>;
+dmtf_meas_type_name(_) -> <<"unknown">>.
+
+%% SPDM BaseHashAlgo per DMTF DSP0274 §10.6.2 bitmap.
+spdm_hash_alg_name(16#00000001) -> <<"spdm-sha-256">>;
+spdm_hash_alg_name(16#00000002) -> <<"spdm-sha-384">>;
+spdm_hash_alg_name(16#00000004) -> <<"spdm-sha-512">>;
+spdm_hash_alg_name(16#00000008) -> <<"spdm-sha3-256">>;
+spdm_hash_alg_name(16#00000010) -> <<"spdm-sha3-384">>;
+spdm_hash_alg_name(16#00000020) -> <<"spdm-sha3-512">>;
+spdm_hash_alg_name(16#00000040) -> <<"spdm-sm3-256">>;
+spdm_hash_alg_name(_)           -> <<"spdm-unknown">>.
 
 %% Windows SIPA / WBCL events (0x10000000 + subtype). Structure per
 %% `windows-ic-sipa.h` header in the Windows SDK and Microsoft's
@@ -3427,6 +3730,98 @@ decode_firmware_blob_test() ->
     P = maps:get(<<"parsed">>, decode_event(Ev)),
     ?assertEqual(16#FF000000, maps:get(<<"blob-physical-address">>, P)),
     ?assertEqual(16#100000, maps:get(<<"blob-length">>, P)).
+
+%% Hour-10: TCG_DEVICE_SECURITY_EVENT_DATA2 round-trip. Build a
+%% synthetic v2 SPDM event with a PCI device type + SPDM
+%% measurement block (DMTF mutable-firmware type) + simple
+%% device path, feed through decode_event, assert every field.
+decode_spdm_event_data2_test() ->
+    Sig = <<"SPDM Device Sec2">>,
+    DmtfValue = <<0:256>>,          %% 32 zero bytes
+    DmtfMeas = <<1:8,               %% type = mutable-firmware
+                 32:16/little, DmtfValue/binary>>,
+    MeasBlock = <<1:8,               %% meas-block-index
+                  16#01:8,           %% DMTF spec
+                  (byte_size(DmtfMeas)):16/little,
+                  DmtfMeas/binary>>,
+    SubHeaderBody = <<16#0012:16/little, MeasBlock/binary>>,
+    %% Device path: minimal "ACPI(HID=0, UID=0)" + End-entire.
+    AcpiNode = <<16#02, 16#01, 12:16/little, 0:32, 0:32>>,
+    EndEntire = <<16#7F, 16#FF, 16#04, 16#00>>,
+    DevicePath = <<AcpiNode/binary, EndEntire/binary>>,
+    Data = <<Sig/binary,
+             16#0002:16/little,                %% Version
+             0:8,                              %% AuthState = Success
+             0:8,                              %% Reserved
+             0:32/little,                      %% Length
+             1:32/little,                      %% DeviceType = PCI
+             0:32/little,                      %% SubHeaderType = MEAS
+             (byte_size(SubHeaderBody)):32/little,
+             16#DEADBEEFCAFEBABE:64/little,    %% SubHeaderUid
+             SubHeaderBody/binary,
+             (byte_size(DevicePath)):64/little,
+             DevicePath/binary>>,
+    Ev = #{<<"event-type-code">> => 16#800000E1,
+           <<"event-data">>      => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(2, maps:get(<<"spdm-data-version">>, P)),
+    ?assertEqual(<<"Success">>,
+                 maps:get(<<"auth-state-name">>, P)),
+    ?assertEqual(<<"PCI">>,
+                 maps:get(<<"device-type-name">>, P)),
+    ?assertEqual(<<"SPDM_MEAS_BLOCK">>,
+                 maps:get(<<"sub-header-type-name">>, P)),
+    ?assertEqual(1, maps:get(<<"meas-block-index">>, P)),
+    ?assertEqual(<<"DMTF">>,
+                 maps:get(<<"meas-block-spec-name">>, P)),
+    ?assertEqual(<<"mutable-firmware">>,
+                 maps:get(<<"dmtf-value-type-name">>, P)),
+    ?assertEqual(false, maps:get(<<"dmtf-value-is-raw">>, P)),
+    ?assertEqual(32, maps:get(<<"dmtf-value-size">>, P)),
+    ?assertEqual(<<"0xDEADBEEFCAFEBABE">>,
+                 maps:get(<<"sub-header-uid-hex">>, P)),
+    ok.
+
+%% Hour-10: SPDM cert-chain sub-header decoded correctly.
+decode_spdm_cert_chain_test() ->
+    Sig = <<"SPDM Device Sec2">>,
+    CertChain = <<"FAKE-PKCS7-CERT-CHAIN-PAYLOAD">>,
+    SubHeaderBody = <<16#0012:16/little, 0:8, 0:8,
+                       16#00000002:32/little,   %% SPDM_HASH_SHA_384
+                       CertChain/binary>>,
+    Data = <<Sig/binary,
+             16#0002:16/little, 0:8, 0:8,
+             0:32/little, 2:32/little,           %% DeviceType = USB
+             1:32/little,                        %% SubHeaderType=CERT
+             (byte_size(SubHeaderBody)):32/little,
+             0:64/little,
+             SubHeaderBody/binary,
+             0:64/little>>,                      %% no device path
+    Ev = #{<<"event-type-code">> => 16#800000E4,
+           <<"event-data">>      => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(<<"SPDM_CERT_CHAIN">>,
+                 maps:get(<<"sub-header-type-name">>, P)),
+    ?assertEqual(<<"USB">>,
+                 maps:get(<<"device-type-name">>, P)),
+    ?assertEqual(<<"spdm-sha-384">>,
+                 maps:get(<<"spdm-cert-hash-alg-name">>, P)),
+    ?assertEqual(byte_size(CertChain),
+                 maps:get(<<"spdm-cert-chain-length">>, P)),
+    ok.
+
+%% Hour-10: unsigned / non-canonical SPDM data falls through to
+%% the legacy path-first heuristic.
+decode_spdm_event_legacy_fallback_test() ->
+    Data = <<"some-non-canonical-spdm-blob",
+             16#7F, 16#FF, 16#04, 16#00,    %% end-entire terminator
+             "payload-after-terminator">>,
+    Ev = #{<<"event-type-code">> => 16#800000E1,
+           <<"event-data">>      => Data},
+    P = maps:get(<<"parsed">>, decode_event(Ev)),
+    ?assertEqual(0, maps:get(<<"spdm-data-version">>, P)),
+    ?assertEqual(<<"firmware-blob">>, maps:get(<<"spdm-kind">>, P)),
+    ok.
 
 decode_firmware_blob2_with_description_test() ->
     Desc = <<"main-fw">>,

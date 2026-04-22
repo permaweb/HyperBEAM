@@ -2164,6 +2164,11 @@ claim_pcr_replay(Events, E) ->
     EvList = event_list(Events),
     EventsByPcr = group_events_list_by_pcr(EvList),
     PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+    %% Build a per-PCR bank-alg override map from the quote's
+    %% pcrSelect — for mixed-bank quotes (some PCRs SHA-1, others
+    %% SHA-256 etc) this keeps per-PCR replay using the correct
+    %% algorithm instead of a single guess-from-size default.
+    AlgByPcr = pcr_algs_from_quote(E),
     %% Cover every PCR mentioned by the event log OR the quote
     %% to give a complete picture.
     AllPcrs = lists:usort(
@@ -2172,7 +2177,7 @@ claim_pcr_replay(Events, E) ->
            [key_to_int(K) || K <- maps:keys(PcrVals)]])),
     PerPcr = maps:from_list(
         [{integer_to_binary(P),
-          replay_one_pcr(P, EventsByPcr, PcrVals)}
+          replay_one_pcr(P, EventsByPcr, PcrVals, AlgByPcr)}
          || P <- AllPcrs]),
     Matching = [P || {_K, R} <- maps:to_list(PerPcr),
                      P <- [maps:get(<<"pcr-index">>, R, -1)],
@@ -2195,6 +2200,9 @@ claim_pcr_replay(Events, E) ->
     }.
 
 replay_one_pcr(Pcr, EventsByPcr, PcrVals) ->
+    replay_one_pcr(Pcr, EventsByPcr, PcrVals, #{}).
+
+replay_one_pcr(Pcr, EventsByPcr, PcrVals, AlgByPcr) ->
     Events = maps:get(Pcr, EventsByPcr, []),
     QuotedB64 = maps:get(integer_to_binary(Pcr), PcrVals, undefined),
     Quoted = case QuotedB64 of
@@ -2202,7 +2210,12 @@ replay_one_pcr(Pcr, EventsByPcr, PcrVals) ->
         B when is_binary(B) ->
             try hb_util:decode(B) catch _:_ -> undefined end
     end,
-    Replay = reconstruct_pcr(Events, Quoted),
+    %% Prefer bank-alg from the quote's pcrSelect when
+    %% available; otherwise fall back to size-from-digest.
+    Replay = case maps:get(Pcr, AlgByPcr, undefined) of
+        undefined -> reconstruct_pcr(Events, Quoted);
+        Alg       -> reconstruct_pcr(Events, Quoted, Alg)
+    end,
     PcrIsZero = case Quoted of
         <<0:256>> -> true;
         <<>>      -> true;
@@ -3645,6 +3658,40 @@ reconstruct_pcr(EvList, Quoted, Alg) ->
         <<"replayed-from-events">> => length(EvList),
         <<"alg">>                  => AlgName
     }.
+
+%% @doc Build a per-PCR `{pcr-index → alg-name}' map from the
+%% quote's TPMS_QUOTE_INFO pcrSelect. When the quote selects
+%% multiple banks (e.g., SHA-1 for PCRs 0-7 + SHA-256 for
+%% PCRs 8-15), each PCR in the list gets the bank's alg. When
+%% the same PCR is selected under multiple banks the first
+%% declared bank wins (TPM 2.0 spec behaviour).
+%%
+%% Returns an empty map if no quote / pcrSelect is present,
+%% in which case replay falls back to size-based auto-detection.
+pcr_algs_from_quote(E) ->
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    case hb_maps:get(<<"quoted">>, Q, <<>>, #{}) of
+        <<>> -> #{};
+        _ ->
+            Meta = interpret_quote_metadata(E),
+            case maps:is_key(<<"error">>, Meta) of
+                true  -> #{};
+                false ->
+                    Sel = maps:get(<<"pcr-select">>, Meta, []),
+                    build_alg_by_pcr_map(Sel, #{})
+            end
+    end.
+
+build_alg_by_pcr_map([], Acc) -> Acc;
+build_alg_by_pcr_map([Sel | Rest], Acc) when is_map(Sel) ->
+    Alg = maps:get(<<"hash-alg-name">>, Sel, <<"sha256">>),
+    Pcrs = maps:get(<<"pcr-indexes">>, Sel, []),
+    %% First-declared-bank wins per spec — use maps:merge with
+    %% Acc last so existing entries are preserved.
+    NewEntries = maps:from_list([{P, Alg} || P <- Pcrs]),
+    build_alg_by_pcr_map(Rest, maps:merge(NewEntries, Acc));
+build_alg_by_pcr_map([_ | Rest], Acc) ->
+    build_alg_by_pcr_map(Rest, Acc).
 
 %% Infer bank-alg name from the size of a raw digest. Defaults
 %% to sha256 for the all-zero / empty / unknown cases.
@@ -5683,6 +5730,67 @@ match_dp_suffix_case_insensitive_test() ->
     ?assertEqual(nomatch,
                  match_dp_suffix(<<"/foo/bar">>,
                                   [<<"/baz/qux">>])),
+    ok.
+
+%% Hour-10: pcrSelect-driven bank selection. A quote that
+%% selects PCR 0 under SHA-1 + PCR 7 under SHA-256 routes each
+%% PCR to the correct bank — even if the digest-size heuristic
+%% alone would have guessed wrong.
+claim_surface_hour10_pcr_select_alg_dispatch_test() ->
+    Magic = <<16#FF, "TCG">>,
+    Type = 16#8018,
+    QsName = crypto:hash(sha256, <<"signer">>),
+    QsTpm2B = <<(byte_size(QsName)):16/big, QsName/binary>>,
+    Nonce = <<"n">>,
+    NonceTpm2B = <<(byte_size(Nonce)):16/big, Nonce/binary>>,
+    %% Two PCR selections: SHA-1 (0x0004) with PCR 0, SHA-256
+    %% (0x000B) with PCR 7.
+    PcrSelect = <<2:32/big,
+                  16#0004:16/big, 3:8, 16#01, 0, 0,
+                  16#000B:16/big, 3:8, 16#80, 0, 0>>,
+    PcrDigest = <<0:256>>,
+    PcrDigestTpm2B = <<(byte_size(PcrDigest)):16/big,
+                         PcrDigest/binary>>,
+    Quoted = <<Magic/binary, Type:16/big,
+               QsTpm2B/binary, NonceTpm2B/binary,
+               0:64, 0:32, 0:32, 1:8, 0:64,
+               PcrSelect/binary, PcrDigestTpm2B/binary>>,
+    %% PCR 0 shipped as SHA-1 (20 bytes), PCR 7 as SHA-256.
+    Pcr0_sha1 = <<1:160>>,
+    Pcr7_sha256 = <<2:256>>,
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"quoted">> => hb_util:encode(Quoted),
+            <<"pcr-values">> => #{
+                <<"0">> => hb_util:encode(Pcr0_sha1),
+                <<"7">> => hb_util:encode(Pcr7_sha256)
+            }
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PR = maps:get(<<"pcr-replay">>, Claim),
+    PerPcr = maps:get(<<"per-pcr">>, PR),
+    ?assertEqual(<<"sha1">>,
+                 maps:get(<<"alg">>, maps:get(<<"0">>, PerPcr))),
+    ?assertEqual(<<"sha256">>,
+                 maps:get(<<"alg">>, maps:get(<<"7">>, PerPcr))),
+    ok.
+
+%% No quote present → pcr_algs_from_quote returns an empty map
+%% and replay_one_pcr falls back to size-based detection.
+claim_surface_hour10_no_quote_falls_back_test() ->
+    Envelope = #{
+        <<"tpm-quote">> => #{
+            <<"quoted">> => <<>>,
+            <<"pcr-values">> => #{
+                <<"0">> => hb_util:encode(<<3:256>>)   %% 32 bytes
+            }
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PR = maps:get(<<"pcr-replay">>, Claim),
+    Row = maps:get(<<"0">>, maps:get(<<"per-pcr">>, PR)),
+    ?assertEqual(<<"sha256">>, maps:get(<<"alg">>, Row)),
     ok.
 
 %% Hour-3: UKI lookup helpers are resilient against malformed
