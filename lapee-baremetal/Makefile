@@ -143,7 +143,27 @@ hb-boot:
 # no kernel-module side-loading.
 KERNEL     ?= build-alpine/vmlinuz-lapee
 INITRAMFS  ?= work/initramfs-hb.cpio.gz
-CMDLINE    ?= console=tty0 console=ttyS0 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
+#
+# CMDLINE validated end-to-end on:
+#   * QEMU + OVMF + swtpm (scripts/boot-usb-image.sh, 2026-04-22)
+#   * Framework 13 / Insyde BIOS IFR30.03.04, Secure Boot off,
+#     AMD fTPM, microSD expansion card -- first successful
+#     bare-metal boot + signed-attestation writeback 2026-04-22
+#
+# Token-by-token:
+#   console=tty0       physical screen (Framework + any laptop)
+#   console=ttyS0      serial (QEMU -nographic; ignored on iron)
+#   quiet loglevel=4   suppress kernel info spam; warnings +
+#                      errors still show, init's echoes still
+#                      show (they're userspace, unaffected)
+#   panic=10           reboot 10s after kernel panic (safety)
+#   ima_policy=tcb     measure TCB files into IMA (PCR 10),
+#                      paper-aligned integrity chain
+#   rdinit=/init       run our initramfs init as PID 1
+#   LAPEE_WRITEBACK=1  init writes attestation to the ESP
+#                      partition it was booted from, then
+#                      waits for power-off
+CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=4 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
 hb-usb-image:
