@@ -1430,14 +1430,42 @@ get_node_msg(Opts) ->
 %%% NIF wrappers + AK caching
 %%%============================================================================
 
+%% Reviewer pass 11 (concurrency race auditor, batch 13) CRITICAL
+%% fix: the pre-batch-13 version was a classic check-then-act --
+%% two concurrent /attestation requests arriving within ~10ms of
+%% boot both saw `undefined' and both entered init_chain,
+%% creating two EK primaries (same key, extra transient handle),
+%% two AK primaries (DIFFERENT keys), extending PCR 15 twice
+%% with different digests, and racing persistent_term writes.
+%% Worst case: one envelope carried ak-pub-pem from B but the
+%% quote was signed by A's AK -> rsa_pss:verify fails ->
+%% verdict=rejected on a legitimate boot.
+%%
+%% Closed via `global:trans' with double-checked locking: the
+%% fast path (ak_tr already set) stays lock-free; only the once-
+%% per-boot init path takes the node-local lock. The inner
+%% re-check under the lock ensures only one caller runs
+%% init_chain even if N callers arrived before any of them
+%% finished.
 ensure_ak(Opts) ->
     case persistent_term:get({dev_tpm2, ak_tr}, undefined) of
         undefined ->
-            case init_chain(Opts) of
-                ok ->
-                    {ok, persistent_term:get({dev_tpm2, ak_tr})};
-                {error, _} = E -> E
-            end;
+            global:trans(
+                {{dev_tpm2, init_chain}, self()},
+                fun() ->
+                    case persistent_term:get({dev_tpm2, ak_tr},
+                                              undefined) of
+                        undefined ->
+                            case init_chain(Opts) of
+                                ok ->
+                                    {ok, persistent_term:get(
+                                           {dev_tpm2, ak_tr})};
+                                {error, _} = E -> E
+                            end;
+                        Tr -> {ok, Tr}
+                    end
+                end,
+                [node()]);
         Tr -> {ok, Tr}
     end.
 
@@ -2458,6 +2486,72 @@ ek_chain_verify_fun_rejects_bad_certs_test() ->
     %% Valid events pass through.
     ?assertMatch({valid, state}, F(ignored, valid, state)),
     ?assertMatch({valid, state}, F(ignored, valid_peer, state)),
+    ok.
+
+%% Reviewer pass 11 / batch 13: verifies that the
+%% double-checked-locking pattern used in ensure_ak/1
+%% correctly serialises concurrent callers that pass the
+%% outer check but race on the inner compute. Tests the
+%% primitive (global:trans + a shared persistent_term flag)
+%% directly rather than ensure_ak itself (which requires
+%% a real TPM NIF); regresses the shape of the fix.
+ensure_once_double_checked_lock_serialises_test() ->
+    Key = {dev_tpm2, batch13_test_flag},
+    Counter = {dev_tpm2, batch13_test_counter},
+    persistent_term:erase(Key),
+    persistent_term:put(Counter, 0),
+    %% Synthetic "init_chain" that increments a counter and
+    %% sets the flag. With no serialisation, 20 concurrent
+    %% callers past the outer check would all run the body
+    %% and the counter would hit 20. With the double-checked
+    %% locking pattern, only one caller under the lock sees
+    %% the flag as undefined; the rest re-read and short-
+    %% circuit. Counter MUST end at 1.
+    EnsureOnce = fun Loop() ->
+        case persistent_term:get(Key, undefined) of
+            undefined ->
+                global:trans(
+                    {{dev_tpm2, batch13_test_lock}, self()},
+                    fun() ->
+                        %% Re-check under lock. This is the
+                        %% critical step -- without it, the
+                        %% lock serialises but every caller
+                        %% still executes the body in turn.
+                        case persistent_term:get(Key, undefined) of
+                            undefined ->
+                                %% Simulate real init_chain
+                                %% work: small sleep so
+                                %% competing callers pile up.
+                                timer:sleep(10),
+                                Old = persistent_term:get(Counter),
+                                persistent_term:put(Counter, Old + 1),
+                                persistent_term:put(Key, done),
+                                done;
+                            done -> done
+                        end
+                    end,
+                    [node()]);
+            done -> done
+        end,
+        Loop
+    end,
+    Parent = self(),
+    N = 20,
+    Pids = [spawn_link(fun() ->
+        _ = EnsureOnce(),
+        Parent ! {done, self()}
+    end) || _ <- lists:seq(1, N)],
+    %% Wait for all callers to complete.
+    lists:foreach(
+        fun(P) ->
+            receive {done, P} -> ok
+            after 5000 -> error({timeout, P}) end
+        end, Pids),
+    %% The body ran exactly once.
+    ?assertEqual(1, persistent_term:get(Counter)),
+    ?assertEqual(done, persistent_term:get(Key)),
+    persistent_term:erase(Key),
+    persistent_term:erase(Counter),
     ok.
 
 event_log_append_test() ->

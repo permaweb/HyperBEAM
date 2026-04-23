@@ -924,6 +924,109 @@ enforced by the test suite, not just aspirational. 20 adversarial
 envelope shapes from reviewer pass 10 that previously had three
 crash paths now all produce structured verdicts.
 
+**Pass 11 -- concurrency race auditor** (against batch-12 HEAD
+c2524729d). Verdict before fixes: FIX-BEFORE-DEMO. Five concrete
+concurrency findings across `dev_tpm2.erl' and
+`native/lapee_tpm_nif/'. One (B1) demo-blocking; four (B2-B5)
+production-quality issues that don't block a single-user demo.
+B1 addressed in batch 13; B2-B5 deferred to v1.3 with concrete
+fix proposals. Details:
+
+  B1 CRITICAL  `ensure_ak/1' was a classic check-then-act. Two
+               concurrent `/attestation' requests within ~10ms
+               of boot both saw `{dev_tpm2, ak_tr}=undefined'
+               and both entered `init_chain', creating two EK
+               primaries (same key, extra transient handle
+               wasted), two AK primaries with DIFFERENT RSA
+               keys, extending PCR 15 twice with different
+               digests, and racing `persistent_term:put'
+               writes. Worst case: request A's envelope
+               carries B's `ak-pub-pem' (last-writer-wins on
+               the cached PEM) while A's quote was signed by
+               A's AK -> `rsa_pss:verify' fails -> verdict=
+               rejected on a legitimate boot.
+               **Fixed in batch 13 (commit pending):** wrap
+               the fast path in `global:trans/3' with
+               double-checked locking. The outer `persistent_
+               term:get' stays lock-free on the hot path;
+               only the once-per-boot init path takes the
+               node-local lock; the inner re-check ensures
+               only one caller runs `init_chain' even when
+               N callers arrive before any finish.
+               New eunit test `ensure_once_double_checked_
+               lock_serialises_test' spawns 20 concurrent
+               callers against a synthetic init-chain-like
+               body and asserts the body ran exactly once.
+
+  B2 HIGH      `append_event/2' has a classic lost-update RMW
+               race: two concurrent callers both read `Old',
+               one `put' wins. The TPM `PCR_Extend' is atomic
+               at the TPM so the final PCR value is correct,
+               but the Erlang event-log loses one entry ->
+               `chk_event_log_replay' diverges from the
+               quoted PCR -> verdict=rejected.
+               Demo-impact: single-user boot typically has
+               at most one `extend' per PCR so the race
+               window is narrow. v1.3 fix: move `event_log'
+               to ETS with `ets:update_counter' for seq;
+               both operations atomic.
+
+  B3 HIGH      `nif_pcr_extend' + `append_event' pair is not
+               atomic together. Two concurrent `extend' calls
+               can see TPM-order different from Erlang-log-
+               order, so `chk_event_log_replay' rejects
+               (because the fold order on the Erlang side
+               doesn't match the PCR trajectory).
+               v1.3 fix: wrap both operations in one lock
+               together.
+
+  B4 HIGH      Global `g_esys_ctx' in
+               `native/lapee_tpm_nif/lapee_tpm_nif.c' is
+               accessed from multiple BEAM scheduler threads
+               without a mutex. TSS2 ESAPI spec: `ESYS_CONTEXT'
+               is NOT thread-safe. Under swtpm and low
+               concurrency it works (current demo path);
+               under hardware-TPM load or concurrent
+               attestation, sporadic TSS2 state corruption +
+               possible BEAM segfault.
+               v1.3 fix: either (a) serialise all Esys_*
+               through a single gen_server on the Erlang
+               side, or (b) add a pthread_mutex around every
+               Esys_* call in the NIF. (a) is cleaner.
+
+  B5 MEDIUM    `persistent_term:put({dev_tpm2, event_log},
+               Old ++ [Entry])' grows the log in O(N^2)
+               memory + triggers a process-wide scan on every
+               put. Long-lived node with many on/start hooks
+               degrades. Not a race; a memory-churn issue.
+               v1.3 fix: same ETS migration as B2.
+
+Batch 13 landed B1 only -- ~25 LoC + 1 regression test,
+closes the demo-blocking race. Acceptance test for the fix:
+
+```
+# Against a running LapEE node (post-boot):
+for i in 1 2 3 4 5; do
+    curl -s -H 'accept: application/json@1.0' \
+            -H 'accept-bundle: true' \
+            http://<node>:8734/~tpm2@2.0a/attestation \
+      > /tmp/att-$i.json &
+done
+wait
+
+# Every envelope must have the SAME ak-pub-pem:
+for i in 1 2 3 4 5; do
+    python3 -c "
+import json
+print(json.load(open('/tmp/att-$i.json'))['body']['ak-pub-pem'][:64])"
+done | sort -u | wc -l
+# -> 1 (was 2+ pre-fix under heavy concurrent load)
+```
+
+Single-user demo flow in the morning (one curl at a time)
+does not hit the race in practice, but the fix is cheap and
+closes the sharpest footgun.
+
 Predictions from reviewer pass 8 (likely morning outcome):
 
   verdict  = untrusted
