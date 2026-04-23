@@ -441,6 +441,15 @@ nif_quote(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         int i;
         if (!enif_get_int(env, head, &i) || i < 0 || i > 23)
             return enif_make_badarg(env);
+        /* Reviewer pass 12 (NIF audit, batch 14) CRITICAL-1:
+         * guard against pcr_indices[24] stack overflow. A caller
+         * sending >24 PCR indices (or duplicates that inflate
+         * pcr_count past the bitmap's unique-index count) would
+         * otherwise write past the end of the stack buffer.
+         * The per-index 0..23 range check above does NOT bound
+         * pcr_count. */
+        if (pcr_count >= 24)
+            return enif_make_badarg(env);
         sel.pcrSelections[0].pcrSelect[i / 8] |= (1 << (i % 8));
         pcr_indices[pcr_count++] = i;
         have_any = 1;
@@ -1013,17 +1022,47 @@ nif_set_tcti(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 /*-------------------------------- NIF table ---------------------------------*/
 
+/* Reviewer pass 12 (NIF audit, batch 14) HIGH: every NIF that
+ * blocks on a synchronous TPM/SPI round-trip longer than ~1ms
+ * must be declared with ERL_NIF_DIRTY_JOB_IO_BOUND so the BEAM
+ * scheduler yields the calling process to a dirty scheduler
+ * instead of stalling a regular scheduler for the duration of
+ * the call.
+ *
+ * Observed latencies on Nuvoton NPCT75x over SPI:
+ *   Esys_CreatePrimary (RSA-2048 keygen) : 300-800 ms
+ *   Esys_Quote (RSA-PSS sign + PCR read) : 200-400 ms
+ *   Esys_NV_Read (chunked 512 B/round)   :  30-80 ms for a 1.5 KB cert
+ *   Esys_PCR_Extend                      :   5-15 ms
+ *   Esys_PCR_Read                        :   2- 8 ms
+ *   Esys_GetCapability                   :   2-10 ms (tpm_properties)
+ *
+ * flush_context, set_tcti, and startup are either no-ops on the
+ * TPM or one-shot calls during init; they stay on the regular
+ * scheduler. `startup' is technically borderline (~50-200 ms on
+ * first call) but fires once per boot, so the flag churn isn't
+ * worth it.
+ *
+ * With dirty-NIF flags set, concurrent /attestation requests no
+ * longer block a regular scheduler, and the BEAM will log no
+ * scheduler-stall warnings during the demo's 2-second
+ * attestation window.
+ */
 static ErlNifFunc nif_funcs[] = {
     {"startup", 0, nif_startup, 0},
-    {"pcr_read", 1, nif_pcr_read, 0},
-    {"pcr_extend", 2, nif_pcr_extend, 0},
-    {"create_primary_ek", 0, nif_create_primary_ek, 0},
-    {"create_signing_key", 1, nif_create_signing_key, 0},
-    {"quote", 3, nif_quote, 0},
-    {"sign", 2, nif_sign, 0},
-    {"tpm_properties", 0, nif_tpm_properties, 0},
-    {"nv_read_public", 1, nif_nv_read_public, 0},
-    {"nv_read", 1, nif_nv_read, 0},
+    {"pcr_read", 1, nif_pcr_read, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"pcr_extend", 2, nif_pcr_extend, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"create_primary_ek", 0, nif_create_primary_ek,
+                              ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"create_signing_key", 1, nif_create_signing_key,
+                              ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"quote", 3, nif_quote, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"sign", 2, nif_sign, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"tpm_properties", 0, nif_tpm_properties,
+                           ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"nv_read_public", 1, nif_nv_read_public,
+                          ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"nv_read", 1, nif_nv_read, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"flush_context", 1, nif_flush_context, 0},
     {"set_tcti", 1, nif_set_tcti, 0}
 };

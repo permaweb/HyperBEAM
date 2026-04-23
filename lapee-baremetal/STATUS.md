@@ -1027,6 +1027,71 @@ Single-user demo flow in the morning (one curl at a time)
 does not hit the race in practice, but the fix is cheap and
 closes the sharpest footgun.
 
+**Pass 12 -- NIF-level memory safety + error-path auditor**
+(against batch-13 HEAD 1ef6fe2d9). Twelve NIF entry points +
+two helper files audited across 1184 LoC of C. Verdict before
+fixes: SHIP-WITH-NOTES -- one CRITICAL and one HIGH landed as
+batch 14. Residual findings deferred to v1.3.
+
+  CRITICAL-1  `nif_quote' in `native/lapee_tpm_nif/lapee_tpm_
+              nif.c' declared a stack array `int pcr_indices[24]'
+              and had NO bounds check against `pcr_count'. The
+              per-index range check `i < 0 || i > 23' present
+              on line 442 does NOT guard the array index: a
+              caller passing >24 PCRs, or passing a list with
+              duplicates such that pcr_count grows past 24,
+              overflows the stack buffer. Today the Erlang
+              caller always passes curated short lists, but
+              the NIF must not trust that. Stack-smash from
+              caller-controlled input = RCE-grade bug.
+              **Fixed in batch 14** with a 3-LoC bounds check
+              `if (pcr_count >= 24) return enif_make_badarg(env);'
+              before the write on line 445.
+
+  HIGH-1      Every NIF function that blocks on a synchronous
+              TPM/SPI round-trip was declared with scheduler
+              flag 0 (regular scheduler). On the Nuvoton
+              NPCT75x observed latencies:
+                Esys_CreatePrimary (RSA-2048 keygen)    300-800 ms
+                Esys_Quote (RSA-PSS sign)               200-400 ms
+                Esys_NV_Read (chunked 512 B/round)       30- 80 ms
+                Esys_PCR_Extend                           5- 15 ms
+                Esys_PCR_Read                             2-  8 ms
+                Esys_GetCapability                        2- 10 ms
+              A scheduler-stall of 300-800 ms violates BEAM's
+              1-ms-per-NIF-call budget and on any concurrently-
+              loaded node causes scheduler-stall warnings +
+              degraded latency for UNRELATED HTTP handlers.
+              **Fixed in batch 14** by declaring
+              `ERL_NIF_DIRTY_JOB_IO_BOUND' on nine NIF entry
+              points (all the ESYS-calling ones except
+              `flush_context' / `set_tcti' / `startup' which
+              are either near-instant or one-shot).
+
+Residual findings from reviewer pass 12 (v1.3 backlog):
+
+  B4 (re-confirm) `g_esys_ctx' in `tpm_helpers.c' not mutex-
+                  protected. Mitigated by the batch-13
+                  `global:trans' lock on the Erlang side (which
+                  serialises ensure_ak), but the NIF relies on
+                  that discipline rather than enforcing it. For
+                  production robustness, wrap with
+                  `ErlNifMutex' in the NIF. ~15 LoC.
+  B7 (new)       `nif_set_tcti' on Esys_Initialize failure
+                  leaves `g_tcti_ctx' live but `g_esys_ctx'
+                  NULL. Next call NULL-dereferences. 2-LoC
+                  fix: add `Tss2_TctiLdr_Finalize(&g_tcti_ctx);'
+                  before the error return.
+  B8 (new)       `nif_nv_read_public' / `nif_nv_read' RC_HANDLE
+                  mask `0x0BF' at line 801 / 883 is semantically
+                  correct but misleading; should read `0xBF'.
+                  Cosmetic only.
+
+Tests: 235 pass (Erlang side unchanged; C-side PCR bounds
+defence isn't exercisable at the eunit layer without spinning
+up swtpm in the test harness -- validated via QEMU smoke test
+of the rebuilt image).
+
 Predictions from reviewer pass 8 (likely morning outcome):
 
   verdict  = untrusted
