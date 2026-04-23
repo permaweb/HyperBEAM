@@ -2940,7 +2940,7 @@ collect_policy_signals(Claim, Envelope) ->
             verify_quote_signature(Envelope),
         %% v1.2 paper-to-code pass P5: the AK pub is supposed to be
         %% extended into PCR 15 at init_chain time (see paper
-        %% §Ephemeral-node-key-binding). An envelope without a
+        %% ephemeral-node-key-binding). An envelope without a
         %% matching EV_HYPERBEAM_KEY_PUBKEY_EXTEND event in the
         %% runtime event log does not prove the AK pub is bound to
         %% the measured-boot session. Computed here (mirrors
@@ -3235,7 +3235,7 @@ ek_finding(#{<<"ek-chain-valid">> := false}) ->
 %% previously slid through the catch-all. An envelope where the
 %% verifier could not load roots (empty roots directory, bad path,
 %% etc) was silently treated as "chain not-invalid = fine" -- the
-%% exact failure mode the paper's §Threat-Model EK chain property
+%% exact failure mode the paper's threat-model EK chain property
 %% is supposed to catch. Upgrade to critical: an un-verified chain
 %% is indistinguishable from a broken chain at the trust-anchor
 %% layer.
@@ -3245,7 +3245,7 @@ ek_finding(#{<<"ek-chain-valid">> := <<"unknown">>}) ->
             <<"EK chain validity is UNKNOWN (verifier could not "
               "load any root CAs, or the chain was not evaluated). "
               "An un-verified chain cannot anchor cryptographic "
-              "identity; paper's §Threat-Model requires the chain "
+              "identity; paper's threat-model requires the chain "
               "terminates at a TPM-vendor root.">>);
 ek_finding(_) -> ok.
 
@@ -3309,7 +3309,7 @@ ak_pubkey_extend_finding(
             <<"ak">>,
             <<"No EV_HYPERBEAM_KEY_PUBKEY_EXTEND event in the "
               "runtime event log matches sha256(ak-pub-pem). "
-              "Paper §Ephemeral-node-key-binding P5 requires the "
+              "Paper ephemeral-node-key-binding P5 requires the "
               "AK pub to be extended into PCR 15 at init_chain "
               "time; without it, the quote cannot be "
               "cryptographically tied to THIS measured-boot "
@@ -3320,7 +3320,7 @@ ak_pubkey_extend_finding(
             <<"ak">>,
             <<"Cannot evaluate the AK pub PCR-15 binding: envelope "
               "is missing ak-pub-pem or runtime_event_log. Paper "
-              "§Ephemeral-node-key-binding P5 requires both.">>);
+              "ephemeral-node-key-binding P5 requires both.">>);
 ak_pubkey_extend_finding(_) -> ok.
 
 %% v1.2 red-team review: the EK<->AK binding is NOT cryptographically
@@ -3405,8 +3405,13 @@ verify_ak_pubkey_extend(E) ->
         {Pem, Events} ->
             try
                 Expected = crypto:hash(sha256, Pem),
+                %% Must be a PCR-15 event (paper P5 is specifically
+                %% about PCR 15; a correctly-shaped event in another
+                %% PCR does not satisfy the property). Matches the
+                %% dev_tpm2:chk_ak_pubkey_binding/1 core-side filter.
                 Match = [X || X <- Events,
                               is_map(X),
+                              ev_pcr(X) =:= 15,
                               maps:get(<<"event-type">>, X, <<>>) =:=
                                   <<"EV_HYPERBEAM_KEY_PUBKEY_EXTEND">>,
                               hb_util:decode(
@@ -3418,6 +3423,17 @@ verify_ak_pubkey_extend(E) ->
                 end
             catch _:_ -> <<"unknown">>
             end
+    end.
+
+%% Accept a PCR index expressed as integer or integer-binary
+%% (envelopes that have round-tripped through JSON sometimes
+%% serialise integer keys as binaries).
+ev_pcr(E) ->
+    case maps:get(<<"pcr">>, E, 0) of
+        N when is_integer(N) -> N;
+        B when is_binary(B)  ->
+            try binary_to_integer(B) catch _:_ -> 0 end;
+        _ -> 0
     end.
 
 %% Small local PEM-RSA public-key decoder. Not sharing
@@ -10008,10 +10024,26 @@ v1_2_verify_ak_pubkey_extend_shapes_test() ->
                  verify_ak_pubkey_extend(
                    #{<<"ak-pub-pem">> => AkPem,
                      <<"runtime-event-log">> => [GoodEvent]})),
+    %% (6) Reviewer 7 follow-up: a correctly-shaped event in the
+    %% wrong PCR (not 15) must NOT satisfy P5. The core check
+    %% `dev_tpm2:chk_ak_pubkey_binding/1' already filters by
+    %% pcr=15; the interpret-side mirror now does too.
+    WrongPcrEvent = GoodEvent#{<<"pcr">> => 11},
+    ?assertEqual(false,
+                 verify_ak_pubkey_extend(
+                   #{<<"ak-pub-pem">> => AkPem,
+                     <<"runtime-event-log">> => [WrongPcrEvent]})),
+    %% (7) Integer-binary-encoded PCR field (round-trip via JSON).
+    %% Must still be recognised as PCR 15.
+    GoodEventBin = GoodEvent#{<<"pcr">> => <<"15">>},
+    ?assertEqual(true,
+                 verify_ak_pubkey_extend(
+                   #{<<"ak-pub-pem">> => AkPem,
+                     <<"runtime-event-log">> => [GoodEventBin]})),
     ok.
 
 %% ak_pubkey_extend_finding: true -> ok; false -> critical;
-%% unknown -> critical. Paper §Ephemeral-node-key-binding P5 demands
+%% unknown -> critical. Paper ephemeral-node-key-binding P5 demands
 %% this is a gating signal, not a warning.
 v1_2_ak_pubkey_extend_finding_severity_test() ->
     ?assertEqual(ok,

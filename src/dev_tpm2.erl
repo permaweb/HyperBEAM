@@ -242,7 +242,7 @@ extend_with_ak_pubkey(AKPem) when is_binary(AKPem) ->
                         <<"EV_HYPERBEAM_KEY_PUBKEY_EXTEND">>,
                     <<"description">> =>
                         <<"TPM2 attestation-key public-key PEM "
-                          "extend (paper §Ephemeral-node-key-binding "
+                          "extend (paper ephemeral-node-key-binding "
                           "P5: binds AK pub into this measured-boot "
                           "session's PCR 15 trajectory).">>,
                     <<"digest">> => hb_util:encode(Digest),
@@ -792,11 +792,18 @@ int_pcr(V) when is_binary(V)  -> binary_to_integer(V).
 
 %%---- check 4a: PCR 15 event commits to AK pub PEM ---------------------
 %%
-%% Paper §Ephemeral-node-key-binding P5 requires that the AK pub is
-%% extended into PCR 15 at init_chain time BEFORE any node-identity
-%% extends, so every subsequent AK-signed quote cryptographically
-%% proves the AK pub was bound into this measured-boot session's
-%% PCR 15 trajectory.
+%% Paper ephemeral-node-key-binding P5 requires that the AK pub is
+%% extended into PCR 15 at init_chain time, so every subsequent
+%% AK-signed quote cryptographically proves the AK pub was bound
+%% into this measured-boot session's PCR 15 trajectory.
+%%
+%% Reviewer 7 note: in the real boot sequence the on/start hook
+%% (which fires `EV_HYPERBEAM_NODE_IDENTITY_EXTEND' at seq 0) runs
+%% BEFORE the first `/attestation' request reaches `init_chain',
+%% so the AK-pub-extend lands at seq 1, not seq 0. The verifier
+%% does not pin seq position -- it only checks PRESENCE of an
+%% `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event with the right digest --
+%% so ordering is a documentation detail, not an enforcement one.
 %%
 %% Verifier: find an event in the runtime event log with
 %% event-type = `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' whose decoded digest
@@ -821,7 +828,7 @@ chk_ak_pubkey_binding(Envelope) ->
             {error, <<"no ak_pub_pem in envelope">>};
         {_, []} ->
             {error, <<"no EV_HYPERBEAM_KEY_PUBKEY_EXTEND event in "
-                      "runtime_event_log -- paper §Ephemeral-node-"
+                      "runtime_event_log -- paper ephemeral-node-"
                       "key-binding P5 violated">>};
         {Pem, _} ->
             Expected = crypto:hash(sha256, Pem),
@@ -1461,15 +1468,15 @@ init_chain(Opts) ->
                         {ok, #{esys_tr := AKTr, public_pem := AKPem}} ->
                             persistent_term:put({dev_tpm2, ak_tr}, AKTr),
                             persistent_term:put({dev_tpm2, ak_pub_pem}, AKPem),
-                            %% Paper §Ephemeral-node-key-binding P5:
+                            %% Paper ephemeral-node-key-binding P5:
                             %% "as the last step before attestation,
                             %% HyperBEAM extends PCR 15 with the public
-                            %% half [of the AK]". Fires ONCE at
-                            %% init_chain time, BEFORE any on/start
-                            %% node-identity-extend; the event lands
-                            %% at seq 0 and every subsequent quote
+                            %% half [of the AK]". Fires once per
+                            %% init_chain; every subsequent quote
                             %% cryptographically covers
-                            %% sha256(ak_pub_pem) via PCR 15.
+                            %% sha256(ak_pub_pem) via PCR 15. See
+                            %% extend_with_ak_pubkey/1 header for
+                            %% the sequencing caveat.
                             extend_with_ak_pubkey(AKPem);
                         {error, _} = E -> E
                     end;
