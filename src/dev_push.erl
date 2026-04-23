@@ -11,14 +11,31 @@
 %% provided in the `body' of the request, it will be scheduled (initializing
 %% it if it does not exist). Otherwise, the message specified by the given
 %% `slot' key will be pushed.
-%% 
+%%
 %% Optional parameters:
-%% `/result-depth': The depth to which the full contents of the result
-%%                    will be included in the response. Default: 1, returning 
+%% `/result-depth':  The depth to which the full contents of the result
+%%                    will be included in the response. Default: 1, returning
 %%                    the full result of the first message, but only the 'tree'
 %%                    of downstream messages.
-%%  `/push-mode':    Whether or not the push should be done asynchronously.
-%%                    Default: `sync', pushing synchronously.
+%% `/async':         Boolean. When `true', the push runs in a spawned
+%%                    process and the call returns immediately. When
+%%                    `false' or absent, the push runs synchronously.
+%% `/max-depth':     Bounds the recursive `/push' fan-out from one source
+%%                    slot's outbox. The source slot's outbox is ALWAYS
+%%                    scheduled on each target (the target's next slot
+%%                    advances) -- `max-depth' only controls whether we
+%%                    then drive that next slot's `/push' synchronously
+%%                    to fan further downstream:
+%%                       omitted - unbounded recursion.
+%%                       `0'     - schedule on each target then stop.
+%%                                 The target's compute is NOT invoked
+%%                                 here; its own scheduler-driven `/push'
+%%                                 (cron tick or explicit caller) picks
+%%                                 up the new slot. The response carries
+%%                                 a `resulted-in: <<"skipped">>' marker.
+%%                       `N > 0' - recurse, with the inner `/push'
+%%                                 inheriting `max-depth = N - 1'.
+%%                                 Unwinds at most `N' levels deep.
 push(Base, Req, Opts) ->
     Process = dev_process_lib:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
@@ -51,25 +68,22 @@ push(Base, Req, Opts) ->
     end.
 
 push_with_mode(Process, Req, Opts) ->
-    Mode = is_async(Process, Req, Opts),
-    case Mode of
-        <<"sync">> ->
-            do_push(Process, Req, Opts);
-        <<"async">> ->
-            spawn(fun() -> do_push(Process, Req, Opts) end)
+    case is_async(Process, Req, Opts) of
+        true -> spawn(fun() -> do_push(Process, Req, Opts) end);
+        false -> do_push(Process, Req, Opts)
     end.
 
-%% @doc Determine if the push is asynchronous.
+%% @doc Determine if the push is asynchronous. The boolean `async' key
+%% on either the request or the process selects between sync (default,
+%% `false') and async (`true').
 is_async(Process, Req, Opts) ->
-    hb_ao:get_first(
-        [
-            {Req, <<"push-mode">>},
-            {Process, <<"push-mode">>},
-            {Process, <<"process/push-mode">>}
-        ],
-        <<"sync">>,
-        Opts
-    ).
+    hb_util:bin(
+        hb_maps:get_first(
+            [{Req, <<"async">>}, {Process, <<"async">>}],
+            false,
+            Opts
+        )
+    ) =:= <<"true">>.
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
@@ -135,6 +149,11 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             X when X > 0 -> Result;
             _ -> #{}
         end,
+    % Read the optional `max-depth' bound on recursive fan-out. `undefined'
+    % means unbounded; a non-negative integer decrements at each downstream
+    % `/push' and skips the recursion (target still scheduled) when it
+    % reaches `0'.
+    MaxDepth = parse_max_depth(hb_maps:get(<<"max-depth">>, Assignment, undefined, Opts)),
     ?event(push_depth, {depth, IncludeDepth, {assignment, Assignment}}),
     ?event(push,
         {push_compute_result,
@@ -187,6 +206,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                         <<"slot">> => Slot,
                                         <<"outbox-key">> => Key,
                                         <<"result-depth">> => IncludeDepth,
+                                        <<"max-depth">> => MaxDepth,
                                         <<"from-base">> => BaseID,
                                         <<"from-uncommitted">> => UncommittedID,
                                         <<"from-scheduler">> =>
@@ -338,11 +358,26 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
 
 %% @doc Push a downstream resultant message that has already been scheduled.
 %% We determine whether to push the message locally or remotely based on the
-%% `push_route_downstream' option.
+%% `push_route_downstream' option. When the inherited `max-depth' has reached
+%% `0' we skip the recursive `/push' entirely (returning the binary marker
+%% `<<"skipped">>'): the message is already in the target's schedule queue
+%% from the `schedule_result' call above, so the target's own `/push'
+%% invocation will pick it up on its next cron tick or explicit caller.
 push_downstream(TargetID, NextSlotOnProc, Origin, Opts) ->
-    case hb_opts:get(push_route_downstream, true, Opts) of
-        true -> push_downstream_remote(TargetID, NextSlotOnProc, Origin, Opts);
-        false -> push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts)
+    case parse_max_depth(hb_maps:get(<<"max-depth">>, Origin, undefined, Opts)) of
+        0 ->
+            ?event(push_short,
+                {push_max_depth_reached,
+                    {target, TargetID},
+                    {slot, NextSlotOnProc}
+                }
+            ),
+            {ok, <<"skipped">>};
+        _ ->
+            case hb_opts:get(push_route_downstream, true, Opts) of
+                true -> push_downstream_remote(TargetID, NextSlotOnProc, Origin, Opts);
+                false -> push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts)
+            end
     end.
 
 %% @doc Push a downstream message on a remote node if a route can be found to
@@ -409,6 +444,8 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
     end.
 
 %% @doc Push a resulting message recursively, executing the action on this node.
+%% We decrement `result-depth' (and, when set, `max-depth') so the recursion
+%% naturally winds down.
 push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
     ?event(push,
         {push_downstream_local,
@@ -417,22 +454,38 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
             {origin, Origin}
         }
     ),
-    % Push the message downstream. We decrease the result-depth.
-    hb_ao:resolve(
-        {as, <<"process@1.0">>, TargetID},
+    BaseReq =
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => NextSlotOnProc,
             <<"result-depth">> =>
-                hb_ao:get(
-                    <<"result-depth">>,
-                    Origin,
-                    1,
-                    Opts
-                ) - 1
+                hb_maps:get(<<"result-depth">>, Origin, 1, Opts) - 1
         },
+    Req =
+        case parse_max_depth(hb_maps:get(<<"max-depth">>, Origin, undefined, Opts)) of
+            undefined -> BaseReq;
+            N when is_integer(N), N > 0 ->
+                BaseReq#{ <<"max-depth">> => N - 1 }
+        end,
+    hb_ao:resolve(
+        {as, <<"process@1.0">>, TargetID},
+        Req,
         Opts#{ <<"cache-control">> => <<"always">> }
     ).
+
+%% @doc Normalise the `max-depth' value supplied by the caller. Accepts a
+%% non-negative integer (verbatim or as a binary), returns `undefined' when
+%% the value is absent or unparseable.
+parse_max_depth(undefined) -> undefined;
+parse_max_depth(N) when is_integer(N), N >= 0 -> N;
+parse_max_depth(Bin) when is_binary(Bin) ->
+    try hb_util:int(Bin) of
+        N when is_integer(N), N >= 0 -> N;
+        _ -> undefined
+    catch
+        _:_ -> undefined
+    end;
+parse_max_depth(_) -> undefined.
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
 normalize_message(MsgToPush, Opts) ->
@@ -778,10 +831,18 @@ parse_redirect(Location, Opts) ->
 
 %%% Tests
 
+%% The test groups run sequentially with respect to each other but each
+%% group is internally parallel. Splitting keeps the WASM-heavy core
+%% push tests off the same BEAM as the max-depth + post-compute hook
+%% tests; merging them into one `{inparallel, ...}' batch oversubscribed
+%% the scheduler enough to slow every individual test by ~50%.
 dev_push_test_() ->
-    {inparallel, push_test_cases()}.
+    [
+        {inparallel, core_push_test_cases() ++ genesis_wasm_tests()},
+        {inparallel, max_depth_test_cases()}
+    ].
 
-push_test_cases() ->
+core_push_test_cases() ->
     [
         {timeout, 30, fun test_full_push/0},
         {timeout, 90, fun test_push_as_identity/0},
@@ -789,9 +850,15 @@ push_test_cases() ->
         {timeout, 30, fun test_push_prompts_encoding_change/0},
         {timeout, 60, fun test_remote_routed_push/0},
         {timeout, 30, fun test_oracle_push/0}
-    ]
-    ++
-    genesis_wasm_tests().
+    ].
+
+max_depth_test_cases() ->
+    [
+        {timeout, 30, fun test_max_depth_zero_schedules_only/0},
+        {timeout, 30, fun test_max_depth_one_walks_one_hop/0},
+        {timeout, 30, fun test_compute_push_hook_idempotent/0},
+        fun test_parse_max_depth/0
+    ].
 
 -ifdef(ENABLE_GENESIS_WASM).
 genesis_wasm_tests() -> [{timeout, 30, fun test_nested_push_prompts_encoding_change/0}].
@@ -918,61 +985,38 @@ test_push_as_identity() ->
     ).
 
 test_multi_process_push() ->
-    dev_process_test_vectors:init(),
-    Opts = #{
-        <<"priv-wallet">> => hb:wallet(),
-        <<"cache-control">> => <<"always">>,
-        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
-    },
-    Proc1 = dev_process_test_vectors:aos_process(Opts),
-    hb_cache:write(Proc1, Opts),
-    {ok, _SchedInit1} =
-        hb_ao:resolve(Proc1, #{
-            <<"method">> => <<"POST">>,
-            <<"path">> => <<"schedule">>,
-            <<"body">> => Proc1
-        },
-        Opts
-    ),
-    {ok, _} = dev_process_test_vectors:schedule_aos_call(Proc1, reply_script()),
-    Proc2 = dev_process_test_vectors:aos_process(Opts),
-    hb_cache:write(Proc2, Opts),
-    {ok, _SchedInit2} =
-        hb_ao:resolve(Proc2, #{
-            <<"method">> => <<"POST">>,
-            <<"path">> => <<"schedule">>,
-            <<"body">> => Proc2
-        },
-        Opts
-    ),
-    ProcID1 = hb_message:id(Proc1, all, Opts),
-    ProcID2 = hb_message:id(Proc2, all, Opts),
-    ?event(push, {testing_with, {proc1_id, ProcID1}, {proc2_id, ProcID2}}),
-    {ok, ToPush} = dev_process_test_vectors:schedule_aos_call(
-        Proc2,
-        <<
-            "Handlers.add(\"Pong\",\n"
-            "   function (test) return true end,\n"
-            "   function(m)\n"
-            "       print(\"GOT PONG\")\n"
-            "   end\n"
-            ")\n"
-            "Send({ Target = \"", (ProcID1)/binary, "\", Action = \"Ping\" })"
-        >>
-    ),
-    SlotToPush = hb_ao:get(<<"slot">>, ToPush, Opts),
-    ?event(push, {slot_to_push_proc2, SlotToPush}),
-    Res =
-        #{
-            <<"path">> => <<"push">>,
-            <<"slot">> => SlotToPush,
-            <<"result-depth">> => 1
-        },
-    {ok, PushResult} = hb_ao:resolve(Proc2, Res, Opts),
-    ?event(push, {push_result_proc2, PushResult}),
-    AfterPush = hb_ao:resolve(Proc2, <<"now/results/data">>, Opts),
-    ?event(push, {after_push, AfterPush}),
-    ?assertEqual({ok, <<"GOT PONG">>}, AfterPush).
+    {Sender, _Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    %% Install a catch-all `Pong' handler on the Sender so the Receiver's
+    %% reply (the helper's `reply_script' fires on `Action = "Ping"' and
+    %% sends back `Action = "Reply"') is observable as `GOT PONG' in the
+    %% Sender's `now/results/data'.
+    {ok, _} =
+        dev_process_test_vectors:schedule_aos_call(
+            Sender,
+            <<
+                "Handlers.add(\"Pong\",\n"
+                "   function (test) return true end,\n"
+                "   function(m)\n"
+                "       print(\"GOT PONG\")\n"
+                "   end\n"
+                ")"
+            >>
+        ),
+    {ok, PushResult} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => MsgSlot,
+                <<"result-depth">> => 1
+            },
+            Opts
+        ),
+    ?event(push, {push_result, PushResult}),
+    ?assertEqual(
+        {ok, <<"GOT PONG">>},
+        hb_ao:resolve(Sender, <<"now/results/data">>, Opts)
+    ).
 
 push_with_redirect_hint_test_disabled() ->
     {timeout, 30, fun() ->
@@ -1273,6 +1317,201 @@ test_oracle_push() ->
         ),
     ?event({compute_res, ComputeRes}),
     ?assertMatch({ok, _}, ComputeRes).
+
+%% @doc `parse_max_depth/1' contract: accept non-negative integers verbatim
+%% or as binaries; reject everything else as `undefined' (unbounded).
+test_parse_max_depth() ->
+    ?assertEqual(undefined, parse_max_depth(undefined)),
+    ?assertEqual(0, parse_max_depth(0)),
+    ?assertEqual(7, parse_max_depth(7)),
+    ?assertEqual(0, parse_max_depth(<<"0">>)),
+    ?assertEqual(42, parse_max_depth(<<"42">>)),
+    ?assertEqual(undefined, parse_max_depth(<<"not-a-number">>)),
+    ?assertEqual(undefined, parse_max_depth(-1)),
+    ?assertEqual(undefined, parse_max_depth(<<>>)),
+    ?assertEqual(undefined, parse_max_depth(false)),
+    ?assertEqual(undefined, parse_max_depth(true)).
+
+%% @doc `max-depth = 0' on the outer push: the outbox of the source slot is
+%% still scheduled on each target (target's `slot/current' advances), but the
+%% recursive `/push' is skipped, so the response carries an explicit
+%% `resulted-in: <<"skipped">>' marker and the target's compute is not invoked.
+test_max_depth_zero_schedules_only() ->
+    {Sender, Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {ok, ReceiverSlotBefore} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    {ok, PushResult} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => MsgSlot,
+                <<"max-depth">> => 0
+            },
+            Opts
+        ),
+    ?event({push_result_max_depth_zero, PushResult}),
+    %% The outbox entry exists in the response with `resulted-in' set to the
+    %% binary `<<"skipped">>' -- the explicit signal that we deliberately stopped.
+    ?assertMatch(
+        #{ <<"1">> := #{ <<"resulted-in">> := <<"skipped">> }},
+        PushResult
+    ),
+    %% The receiver's scheduler nevertheless has the new message: schedule_result
+    %% always runs, even when push_downstream is short-circuited.
+    {ok, ReceiverSlotAfter} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    ?assert(ReceiverSlotAfter > ReceiverSlotBefore).
+
+%% @doc `max-depth = 1' on the outer push: the outbox is scheduled and the
+%% target's `/push' runs once (depth 1 -> depth 0). When that target's own
+%% outbox would fan out further, the recursion is skipped. Verifies the
+%% decrement plumbing by observing both the recursion and the skip.
+test_max_depth_one_walks_one_hop() ->
+    {Sender, _Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {ok, PushResult} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => MsgSlot,
+                <<"max-depth">> => 1
+            },
+            Opts
+        ),
+    ?event({push_result_max_depth_one, PushResult}),
+    %% The receiver was actually pushed (recursion happened, depth 1 was
+    %% spent here). For a `Reply' handler the receiver replies back to the
+    %% sender, producing one further outbox entry whose own push would
+    %% decrement to depth 0 and skip.
+    #{ <<"1">> := #{ <<"resulted-in">> := Inner }} = PushResult,
+    %% Either the receiver had a downstream message that skipped, or it had
+    %% no outbox -- both prove that we did NOT short-circuit at depth 1.
+    case hb_maps:get(<<"1">>, Inner, undefined) of
+        undefined ->
+            %% No downstream. Receiver's slot fired but produced no outbox.
+            ?assert(hb_maps:is_key(<<"slot">>, Inner));
+        Next ->
+            %% Downstream existed; it must have skipped at depth 0.
+            ?assertMatch(
+                #{ <<"resulted-in">> := <<"skipped">> },
+                Next
+            )
+    end.
+
+%% @doc `~process@1.0/compute' called with `push = true' fires an async
+%% `~push@1.0/push' for the freshly-computed slot. Calling
+%% `~process@1.0/compute' again for the same slot is a cache hit, which
+%% does NOT re-fire the hook -- so the push is naturally idempotent across
+%% repeated polls (e.g. the cron tick pattern).
+test_compute_push_hook_idempotent() ->
+    {Sender, Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {ok, ReceiverSlot0} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    %% Drive a fresh compute for the message slot WITH `push = 0', so the
+    %% hook fires and schedules on the receiver but the recursion halts.
+    {ok, _} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"compute">>,
+                <<"slot">> => MsgSlot,
+                <<"push">> => 0
+            },
+            Opts
+        ),
+    %% The hook spawns the push in a fresh process; wait for the receiver's
+    %% schedule to advance.
+    true = wait_until(
+        fun() ->
+            {ok, S} =
+                hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+            S > ReceiverSlot0
+        end,
+        10000
+    ),
+    {ok, ReceiverSlot1} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    %% Second call is a cache hit -> compute_slot is NOT entered ->
+    %% maybe_trigger_push is NOT called. The receiver's slot must not advance
+    %% any further.
+    {ok, _} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"compute">>,
+                <<"slot">> => MsgSlot,
+                <<"push">> => 0
+            },
+            Opts
+        ),
+    timer:sleep(500),
+    {ok, ReceiverSlot2} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    ?assertEqual(ReceiverSlot1, ReceiverSlot2).
+
+%% @doc Spin up two AOS processes -- a Sender and a Receiver with a `Reply'
+%% handler for `Action = "Ping"' -- and schedule (without pushing) a single
+%% Ping message on the Sender that targets the Receiver. Returns
+%% `{Sender, Receiver, MsgSlot, Opts}' so individual tests can drive
+%% `/push' (or `/compute&push') against the staged message and observe the
+%% resulting downstream behaviour.
+setup_two_process_message() ->
+    dev_process_test_vectors:init(),
+    Opts = #{
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
+    },
+    Sender = dev_process_test_vectors:aos_process(Opts),
+    {ok, _} = hb_cache:write(Sender, Opts),
+    {ok, _} =
+        hb_ao:resolve(Sender, #{
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"schedule">>,
+            <<"body">> => Sender
+        }, Opts),
+    Receiver = dev_process_test_vectors:aos_process(Opts),
+    {ok, _} = hb_cache:write(Receiver, Opts),
+    {ok, _} =
+        hb_ao:resolve(Receiver, #{
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"schedule">>,
+            <<"body">> => Receiver
+        }, Opts),
+    %% Install the Reply handler on the Receiver.
+    {ok, _} = dev_process_test_vectors:schedule_aos_call(Receiver, reply_script(), Opts),
+    %% Stage the Ping that the Sender will fire at the Receiver.
+    ReceiverID = hb_message:id(Receiver, all, Opts),
+    {ok, MsgSched} =
+        dev_process_test_vectors:schedule_aos_call(
+            Sender,
+            <<
+                "Send({ Target = \"", (ReceiverID)/binary,
+                "\", Action = \"Ping\" })\n"
+            >>
+        ),
+    {ok, MsgSlot} =
+        hb_ao:resolve(MsgSched, #{ <<"path">> => <<"slot">> }, Opts),
+    {Sender, Receiver, MsgSlot, Opts}.
+
+%% @doc Poll `Pred' every 50ms until it returns `true' or `TimeoutMs'
+%% elapses. Returns `true' on success, `false' on timeout.
+wait_until(Pred, TimeoutMs) ->
+    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
+    wait_until_loop(Pred, Deadline).
+
+wait_until_loop(Pred, Deadline) ->
+    case (catch Pred()) of
+        true -> true;
+        _ ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> false;
+                false ->
+                    timer:sleep(50),
+                    wait_until_loop(Pred, Deadline)
+            end
+    end.
 
 -ifdef(ENABLE_GENESIS_WASM).
 %% @doc Test that a message that generates another message which resides on an
