@@ -699,11 +699,14 @@ nif_tpm_properties(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     u32_to_ascii4(vs4, vs_s + 12);
     char fam_s[5] = {0};     u32_to_ascii4(fam, fam_s);
 
-    /* Trim NUL bytes off vendor string (manufacturers that have a
-     * short string pad with zeros; presenting "AMD\0\0\0\0\0" as a
-     * 16-byte binary would be a foot-gun). */
-    size_t vs_len = 16;
-    while (vs_len > 0 && vs_s[vs_len - 1] == '\0') vs_len--;
+    /* Vendor string is 4 x 32-bit big-endian chunks per TCG spec.
+     * Manufacturers with a short string (e.g. Nuvoton: "NPCT75x\0")
+     * put their name in the first chunks and undefined bytes after
+     * the terminating NUL. Treat as C-string: truncate at the first
+     * NUL. The old trailing-NUL trim left embedded-NUL-plus-junk
+     * tails like `NPCT75x\0"!!4rls` intact. */
+    size_t vs_len = 0;
+    while (vs_len < 16 && vs_s[vs_len] != '\0') vs_len++;
 
     /* Local "length until NUL, cap at MAX" -- avoids the strnlen
      * extension which isn't available on all libcs we target. */

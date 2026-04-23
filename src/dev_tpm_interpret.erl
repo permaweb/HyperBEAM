@@ -1736,23 +1736,73 @@ der_encode_spki(_, _) -> <<>>.
 %% string we emit from `x509_time/1').
 currently_valid(undefined, _) -> <<"unknown">>;
 currently_valid(_, undefined) -> <<"unknown">>;
-currently_valid(FromBin, ToBin) ->
-    Now = x509_now_iso(),
-    case {is_binary(FromBin), is_binary(ToBin)} of
-        {true, true} ->
-            FromBin =< Now andalso Now =< ToBin;
+currently_valid(FromBin, ToBin) when is_binary(FromBin),
+                                     is_binary(ToBin) ->
+    %% Validity strings come from format_time/1 as raw ASCII in the
+    %% X.509 shape: UTCTime `YYMMDDHHMMSSZ' (13 chars, year in
+    %% [1950..2049] per RFC 5280 section 4.1.2.5.1) or
+    %% GeneralizedTime `YYYYMMDDHHMMSSZ' (15 chars). The old
+    %% x509_now_iso/0 emitted `YYYY-MM-DDTHH:MM:SSZ' which doesn't
+    %% lexicographically compare to either form -- the dashes/colons
+    %% shift every position, so a current-epoch cert reads as
+    %% `valid-from' > `now', falsely rendering it "not-yet-valid".
+    %% Parse both endpoints to `calendar:datetime()' and compare
+    %% against `calendar:universal_time/0' via gregorian seconds.
+    case {parse_x509_time(FromBin), parse_x509_time(ToBin)} of
+        {{ok, FromDT}, {ok, ToDT}} ->
+            NowDT = calendar:universal_time(),
+            F = calendar:datetime_to_gregorian_seconds(FromDT),
+            T = calendar:datetime_to_gregorian_seconds(ToDT),
+            N = calendar:datetime_to_gregorian_seconds(NowDT),
+            F =< N andalso N =< T;
         _ -> <<"unknown">>
-    end.
+    end;
+currently_valid(_, _) -> <<"unknown">>.
 
-%% Emit the current time in a form that lexicographically
-%% compares to the cert-validity strings emitted by
-%% `x509_time/1' (which renders utcTime / generalTime in their
-%% raw 13-or-15 char ASCII shapes, e.g. "230123045959Z").
-x509_now_iso() ->
-    {{Y, Mo, D}, {H, Mi, S}} = calendar:universal_time(),
-    iolist_to_binary(io_lib:format(
-        "~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
-        [Y, Mo, D, H, Mi, S])).
+%% Parse an X.509 validity string into `calendar:datetime()'. Accepts
+%% UTCTime (13 char, two-digit year) and GeneralizedTime (15 char,
+%% four-digit year). Returns `{ok, {{Y,Mo,D},{H,Mi,S}}}' on success,
+%% `error' otherwise.
+parse_x509_time(<<YY:2/binary, Rest:11/binary>>)
+        when byte_size(Rest) == 11 ->
+    %% UTCTime: 13 chars, terminating Z. Year resolution per
+    %% RFC 5280 section 4.1.2.5.1: YY in [50..99] maps to [1950..1999],
+    %% YY in [00..49] to [2000..2049].
+    case parse_dt_tail(Rest) of
+        {ok, Mo, D, H, Mi, S} ->
+            Y2 = safe_int(YY),
+            case Y2 of
+                N when is_integer(N), N >= 0, N =< 49 ->
+                    {ok, {{2000 + N, Mo, D}, {H, Mi, S}}};
+                N when is_integer(N), N >= 50, N =< 99 ->
+                    {ok, {{1900 + N, Mo, D}, {H, Mi, S}}};
+                _ -> error
+            end;
+        _ -> error
+    end;
+parse_x509_time(<<YYYY:4/binary, Rest:11/binary>>)
+        when byte_size(Rest) == 11 ->
+    %% GeneralizedTime: 15 chars, terminating Z. Four-digit year.
+    case parse_dt_tail(Rest) of
+        {ok, Mo, D, H, Mi, S} ->
+            case safe_int(YYYY) of
+                Y when is_integer(Y) -> {ok, {{Y, Mo, D}, {H, Mi, S}}};
+                _ -> error
+            end;
+        _ -> error
+    end;
+parse_x509_time(_) -> error.
+
+parse_dt_tail(<<Mo:2/binary, D:2/binary, H:2/binary,
+                Mi:2/binary, S:2/binary, "Z">>) ->
+    Ints = [safe_int(X) || X <- [Mo, D, H, Mi, S]],
+    case lists:all(fun(I) -> is_integer(I) end, Ints) of
+        true ->
+            [Mo1, D1, H1, Mi1, S1] = Ints,
+            {ok, Mo1, D1, H1, Mi1, S1};
+        false -> error
+    end;
+parse_dt_tail(_) -> error.
 
 %% Validate the EK cert chain against shipped root CAs.
 %% When no roots are loaded we return an `unknown' verdict
@@ -2660,7 +2710,16 @@ collect_policy_signals(Claim) ->
         <<"ak-present">> =>
             maps:get(<<"present">>, AK, false),
         <<"ak-key-size-bits">> =>
-            maps:get(<<"key-size-bits">>, AK, 0)
+            maps:get(<<"key-size-bits">>, AK, 0),
+        %% v1.2 E6: expose reset/restart counts so freshness_finding
+        %% can soften `safe=false' when this is clearly a first-cold-
+        %% boot (the TPM has never seen a clean shutdown-with-state).
+        <<"reset-count">> =>
+            maps:get(<<"reset-count">>,
+                     maps:get(<<"quote">>, Claim, #{}), null),
+        <<"restart-count">> =>
+            maps:get(<<"restart-count">>,
+                     maps:get(<<"quote">>, Claim, #{}), null)
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -2737,12 +2796,36 @@ pcr_replay_finding(
               "~p PCR(s) do not match the event log.", [N])));
 pcr_replay_finding(_) -> ok.
 
-freshness_finding(
-  #{<<"freshness-indicator">> := <<"safe-false">>}) ->
-    finding(critical, <<"freshness-safe-false">>,
-            <<"freshness">>,
-            <<"TPM clock `safe' flag is false -- clock has "
-              "been tampered with since last reset.">>);
+freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
+                  = S) ->
+    %% A TPM's clock-safe bit is off whenever the TPM hasn't yet
+    %% seen a clean shutdown-with-state since the last cold reset.
+    %% On a freshly-flashed / freshly-provisioned device this is
+    %% the NORMAL first-boot state -- not evidence of tampering.
+    %% Only treat it as critical when we can see non-first-boot
+    %% reset/restart counts (indicating the TPM HAS been cleanly
+    %% shut down before and the safe bit is still unset, which IS
+    %% the tamper signal). See HyperBEAM section Architecture
+    %% table "TPM clock", and TPM 2.0 Part 1 section "Safe".
+    R  = maps:get(<<"reset-count">>,  S, null),
+    RC = maps:get(<<"restart-count">>, S, null),
+    case is_fresh_boot(R, RC) of
+        true ->
+            finding(warn, <<"freshness-safe-false-first-boot">>,
+                    <<"freshness">>,
+                    <<"TPM clock `safe' flag is false. The TPM's "
+                      "reset/restart counts indicate this is a "
+                      "first-cold-boot (TPM has never seen a "
+                      "clean shutdown-with-state-save), so the "
+                      "unset `safe' bit is the expected state -- "
+                      "not a tamper signal. Will be set on the "
+                      "next clean reboot.">>);
+        false ->
+            finding(critical, <<"freshness-safe-false">>,
+                    <<"freshness">>,
+                    <<"TPM clock `safe' flag is false -- clock has "
+                      "been tampered with since last reset.">>)
+    end;
 freshness_finding(
   #{<<"freshness-indicator">> := <<"no-nonce">>}) ->
     finding(warn, <<"freshness-no-nonce">>,
@@ -2750,6 +2833,18 @@ freshness_finding(
             <<"Quote was produced without a challenger nonce "
               "-- replayable.">>);
 freshness_finding(_) -> ok.
+
+%% Heuristic: `reset-count <= 1' AND `restart-count <= 1' means
+%% the TPM is within its first boot epoch, so no clean shutdown
+%% has been performed yet. `null' counts mean the quote didn't
+%% surface them; that's a missing data case, not a tamper case,
+%% so treat it as fresh-boot equivalent (the old behaviour of
+%% flagging it critical would have over-triggered on envelopes
+%% with a stripped quote block).
+is_fresh_boot(R, RC) ->
+    Rok = (R =:= null) orelse (is_integer(R) andalso R =< 1),
+    RCok = (RC =:= null) orelse (is_integer(RC) andalso RC =< 1),
+    Rok andalso RCok.
 
 ima_policy_finding(
   #{<<"ima-policy-violations">> := N}) when N > 0 ->
@@ -3126,13 +3221,39 @@ matching_prefix(Version, [Prefix | Rest]) when is_binary(Prefix) ->
 matching_prefix(Version, [_ | Rest]) ->
     matching_prefix(Version, Rest).
 
-%% If the manifest declares a `platforms' map (model-prefix -> text),
-%% pick the first entry whose key is a prefix of the CRTM string.
+%% Resolve the manifest's `platforms' field to a concrete platform
+%% string (or a list of candidates when the CRTM alone doesn't
+%% differentiate). Accepts three shapes:
+%%
+%%   map  : `#{<<"IFR30">> => <<"Framework 13 (AMD Ryzen 7040)">>}'
+%%          -- preferred; disambiguates by CRTM-prefix key.
+%%   list : `[<<"Framework 13 (Intel)">>, <<"Framework 13 (AMD)">>,
+%%           <<"Framework 16 (AMD)">>]'
+%%          -- used when the CRTM is the same across variants
+%%          (Framework shares IFR30 across Intel + AMD + 16-inch
+%%          generations). We surface the full list as the candidate
+%%          set; downstream CPU-identification narrows to one.
+%%   atom/binary: return as-is.
+%%
+%% Returns `null' only when the manifest has no `platforms' field at
+%% all, or the field is an empty map/list.
 pick_platform(M, Version) ->
-    Platforms = maps:get(<<"platforms">>, M, #{}),
-    case is_map(Platforms) andalso maps:size(Platforms) > 0 of
-        true -> pick_platform_entry(maps:to_list(Platforms), Version);
-        false -> null
+    case maps:get(<<"platforms">>, M, undefined) of
+        undefined -> null;
+        P when is_map(P), map_size(P) == 0 -> null;
+        P when is_map(P) ->
+            pick_platform_entry(maps:to_list(P), Version);
+        [] -> null;
+        L when is_list(L), length(L) == 1 ->
+            hd(L);
+        L when is_list(L) ->
+            %% Multiple candidates sharing the same CRTM prefix.
+            %% Present the full list so the verifier can narrow
+            %% using CPU identity (once claim_cpu resolves vendor +
+            %% brand) without losing information.
+            L;
+        B when is_binary(B) -> B;
+        _ -> null
     end.
 
 pick_platform_entry([], _) -> null;
@@ -8954,5 +9075,122 @@ v1_1_vendor_lookup_by_u32_test() ->
             ?assertEqual(<<"Infineon">>, maps:get(<<"name">>, Ifx));
         _ -> ok
     end.
+
+%% v1.2 E1: the old currently_valid/2 emitted ISO-8601 ("2026-04-23...")
+%% for `now' but compared it against raw X.509 ASCII
+%% ("230912044823Z") which misordered every cert. Lock in the fix.
+v1_2_currently_valid_parses_utctime_test() ->
+    %% Nuvoton EK from Sam's Framework: Sep 2023 -> Sep 2043, today
+    %% is inside the window.
+    ?assertEqual(true,
+                 currently_valid(<<"230912044823Z">>,
+                                 <<"430912044823Z">>)).
+
+v1_2_currently_valid_expired_test() ->
+    ?assertEqual(false,
+                 currently_valid(<<"200101000000Z">>,
+                                 <<"210101000000Z">>)).
+
+v1_2_currently_valid_future_utctime_test() ->
+    %% Far-future UTCTime years 30..49 map to 2030..2049 per
+    %% RFC 5280 section 4.1.2.5.1.
+    ?assertEqual(false,
+                 currently_valid(<<"300101000000Z">>,
+                                 <<"400101000000Z">>)).
+
+v1_2_currently_valid_utctime_pre_2000_test() ->
+    %% UTCTime year 99 maps to 1999, far-past.
+    ?assertEqual(false,
+                 currently_valid(<<"990101000000Z">>,
+                                 <<"990601000000Z">>)).
+
+v1_2_currently_valid_generalizedtime_test() ->
+    %% Cert with GeneralizedTime endpoints covering today.
+    ?assertEqual(true,
+                 currently_valid(<<"20200101000000Z">>,
+                                 <<"20500101000000Z">>)).
+
+v1_2_currently_valid_malformed_test() ->
+    ?assertEqual(<<"unknown">>,
+                 currently_valid(<<"not-a-date">>,
+                                 <<"20500101000000Z">>)),
+    ?assertEqual(<<"unknown">>,
+                 currently_valid(<<"20200101000000Z">>,
+                                 <<"nope">>)),
+    ?assertEqual(<<"unknown">>,
+                 currently_valid(undefined, <<"20500101000000Z">>)).
+
+%% v1.2 E5: framework-laptop.json (and similar Intel/Dell manifests)
+%% ship `platforms' as a LIST, not a map. pick_platform used to
+%% return null in that case, leaving `firmware.family-platform =
+%% null' even on a perfectly-matched CRTM.
+v1_2_pick_platform_map_test() ->
+    Manifest = #{<<"platforms">> => #{
+        <<"IFR30">> => <<"Framework Laptop 13 (AMD Ryzen 7040)">>,
+        <<"IFG1">>  => <<"Framework Laptop 16 (AMD Ryzen 7040)">>
+    }},
+    ?assertEqual(<<"Framework Laptop 13 (AMD Ryzen 7040)">>,
+                 pick_platform(Manifest, <<"IFR30.03.04">>)).
+
+v1_2_pick_platform_single_list_test() ->
+    Manifest = #{<<"platforms">> =>
+        [<<"Framework Laptop 13 (AMD Ryzen 7040)">>]},
+    ?assertEqual(<<"Framework Laptop 13 (AMD Ryzen 7040)">>,
+                 pick_platform(Manifest, <<"IFR30.03.04">>)).
+
+v1_2_pick_platform_multi_list_test() ->
+    %% The real framework-laptop.json shape: three variants share
+    %% the same CRTM prefix. pick_platform returns the full list
+    %% as the candidate set; caller narrows by CPU identity.
+    Manifest = #{<<"platforms">> => [
+        <<"Framework Laptop 13 (Intel 11th-13th gen)">>,
+        <<"Framework Laptop 13 (AMD Ryzen 7040 / 7xxx series)">>,
+        <<"Framework Laptop 16 (AMD Ryzen 7040)">>
+    ]},
+    Res = pick_platform(Manifest, <<"IFR30.03.04">>),
+    ?assert(is_list(Res)),
+    ?assertEqual(3, length(Res)).
+
+v1_2_pick_platform_empty_test() ->
+    ?assertEqual(null, pick_platform(#{}, <<"IFR30.03.04">>)),
+    ?assertEqual(null,
+                 pick_platform(#{<<"platforms">> => #{}},
+                               <<"IFR30.03.04">>)),
+    ?assertEqual(null,
+                 pick_platform(#{<<"platforms">> => []},
+                               <<"IFR30.03.04">>)).
+
+%% v1.2 E6: the old freshness_finding/1 always flagged
+%% `safe=false' as critical. On a first-cold-boot TPM (resetCount
+%% + restartCount both low), that's the expected state, not a
+%% tamper signal. Soften to warning-with-reason.
+v1_2_freshness_safe_false_first_boot_warns_test() ->
+    S = #{<<"freshness-indicator">> => <<"safe-false">>,
+          <<"reset-count">>         => 1,
+          <<"restart-count">>       => 0},
+    F = freshness_finding(S),
+    ?assertEqual(warn, maps:get(<<"severity">>, F)),
+    ?assertEqual(<<"freshness-safe-false-first-boot">>,
+                 maps:get(<<"code">>, F)).
+
+v1_2_freshness_safe_false_tamper_stays_critical_test() ->
+    %% Non-first-boot TPM (> 1 reset AND > 1 restart) with safe=false
+    %% -- this IS the tamper pattern.
+    S = #{<<"freshness-indicator">> => <<"safe-false">>,
+          <<"reset-count">>         => 5,
+          <<"restart-count">>       => 17},
+    F = freshness_finding(S),
+    ?assertEqual(critical, maps:get(<<"severity">>, F)),
+    ?assertEqual(<<"freshness-safe-false">>,
+                 maps:get(<<"code">>, F)).
+
+v1_2_freshness_safe_false_missing_counts_warns_test() ->
+    %% Counts absent from the quote (stripped envelope) should NOT
+    %% over-trigger as critical. Treat as best-effort warning.
+    S = #{<<"freshness-indicator">> => <<"safe-false">>,
+          <<"reset-count">>         => null,
+          <<"restart-count">>       => null},
+    F = freshness_finding(S),
+    ?assertEqual(warn, maps:get(<<"severity">>, F)).
 
 -endif.
