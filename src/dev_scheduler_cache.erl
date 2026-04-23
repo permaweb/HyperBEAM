@@ -39,18 +39,17 @@ write(RawAssignment, RawOpts) ->
         {ok, _UnsignedID} ->
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
-            hb_store:make_link(
+            ok = hb_store:link(
                 Store,
-                hb_message:id(Assignment, signed, Opts),
-                hb_store:path(
-                    Store,
-                    [
+                #{
+                    hb_path:to_binary([
                         ?SCHEDULER_CACHE_PREFIX,
                         <<"assignments">>,
                         hb_util:human_id(ProcID),
                         hb_ao:normalize_key(Slot)
-                    ]
-                )
+                    ]) => hb_message:id(Assignment, signed, Opts)
+                },
+                Opts
             ),
             ok;
         {error, Reason} ->
@@ -69,16 +68,12 @@ read(ProcID, Slot, Opts) when is_integer(Slot) ->
 read(ProcID, Slot, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ResolvedPath =
-        P2 = hb_store:resolve(
-            Store,
-            P1 = hb_store:path(Store, [
-                ?SCHEDULER_CACHE_PREFIX,
-                "assignments",
-                hb_util:human_id(ProcID),
-                Slot
-            ])
-        ),
+    P1 = hb_path:to_binary([
+        ?SCHEDULER_CACHE_PREFIX,
+        <<"assignments">>,
+        hb_util:human_id(ProcID),
+        Slot
+    ]),
     ?event(
         {read_assignment,
             {proc_id, ProcID},
@@ -86,21 +81,27 @@ read(ProcID, Slot, RawOpts) ->
             {store, Store}
         }
     ),
-    ?event({resolved_path, {p1, P1}, {p2, P2}, {resolved, ResolvedPath}}),
-    case hb_cache:read(ResolvedPath, Opts) of
-        {ok, Assignment} ->
-            % If the slot key is not present, the format of the assignment is
-            % AOS2, so we need to convert it to the canonical format.
-            case hb_ao:get(<<"variant">>, Assignment, Opts) of
-                <<"ao.TN.1">> ->
-                    Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
-                    Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
-                    ?event({normalized_aos2_assignment, Norm}),
-                    {ok, Norm};
-                <<"ao.N.1">> ->
-                    {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
+    case hb_store:resolve(Store, P1, Opts) of
+        {ok, ResolvedPath} ->
+            ?event({resolved_path, {p1, P1}, {p2, ResolvedPath}, {resolved, ResolvedPath}}),
+            case hb_cache:read(ResolvedPath, Opts) of
+                {ok, Assignment} ->
+                    % If the slot key is not present, the format of the assignment is
+                    % AOS2, so we need to convert it to the canonical format.
+                    case hb_ao:get(<<"variant">>, Assignment, Opts) of
+                        <<"ao.TN.1">> ->
+                            Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
+                            Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
+                            ?event({normalized_aos2_assignment, Norm}),
+                            {ok, Norm};
+                        <<"ao.N.1">> ->
+                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
+                    end;
+                {error, not_found} ->
+                    ?event(debug_sched, {read_assignment, {res, not_found}}),
+                    not_found
             end;
-        not_found ->
+        {error, not_found} ->
             ?event(debug_sched, {read_assignment, {res, not_found}}),
             not_found
     end.
@@ -109,9 +110,9 @@ read(ProcID, Slot, RawOpts) ->
 list(ProcID, RawOpts) ->
     Opts = opts(RawOpts),
     hb_cache:list_numbered(
-        hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
+        hb_path:to_binary([
             ?SCHEDULER_CACHE_PREFIX,
-            "assignments",
+            <<"assignments">>,
             hb_util:human_id(ProcID)
         ]),
         Opts

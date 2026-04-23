@@ -684,7 +684,7 @@ update_store_config(StoreConfig, _NewPath) ->
 safe_stop_lmdb_store(StoreConfig) ->
     ?event(debug_volume, {stopping_current_store, StoreConfig}),
     try 
-        hb_store_lmdb:stop(StoreConfig)
+        hb_store:stop(StoreConfig)
     catch 
         error:StopReason ->
             ?event(debug_volume, {stop_error, StopReason})
@@ -694,7 +694,7 @@ safe_stop_lmdb_store(StoreConfig) ->
 safe_start_lmdb_store(StoreConfig) ->
     NewName = maps:get(<<"name">>, StoreConfig),
     ?event(debug_volume, {starting_new_store, NewName}),
-    hb_store_lmdb:start(StoreConfig).
+    hb_store:start(StoreConfig).
 
 -doc """
 Check if a device exists on the system.
@@ -850,4 +850,4 @@ safe_exec_mock_test() ->
             "Error: disk not found", 
             ["Error", "failed"]
         ),
-    ?assertEqual(error, TestResult2). 
+    ?assertEqual(error, TestResult2).

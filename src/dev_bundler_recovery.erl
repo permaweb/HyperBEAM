@@ -253,13 +253,13 @@ normalize_items(Items, Opts) ->
 
 write_missing_item_bundle(ItemID, TX, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    Path = hb_store:path(Store, [
+    Path = hb_path:to_binary([
         <<"~bundler@1.0">>,
         <<"item">>,
         ItemID,
         <<"bundle">>
     ]),
-    hb_store:write(Store, Path, hb_message:id(TX, signed, Opts)).
+    hb_store:write(Store, #{ Path => hb_message:id(TX, signed, Opts) }, Opts).
 
 new_data_item(Index, Size, Opts) ->
     Tag = <<"tag", (integer_to_binary(Index))/binary>>,

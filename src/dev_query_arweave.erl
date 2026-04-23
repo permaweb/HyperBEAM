@@ -96,7 +96,7 @@ query(Obj, <<"blocks">>, Args, Opts) ->
             fun(Match) ->
                 case hb_cache:read(Match, Opts) of
                     {ok, Msg} -> {true, Msg};
-                    not_found -> false
+                    _ -> false
                 end
             end,
             Matches
@@ -227,7 +227,7 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
             [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
-        not_found ->
+        _ ->
             read_ids(Rest, Count, Opts)
     end.
 
@@ -343,6 +343,13 @@ block_range_to_offset_range(Heights, Opts) ->
 read_block(Height, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} -> {ok, Block};
+        {error, not_found} ->
+            case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
+                true ->
+                    ?event({read_block_remote, {height, Height}}),
+                    dev_arweave:block(#{}, #{ <<"block">> => Height }, Opts);
+                _ -> not_found
+            end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
                 true ->
@@ -375,7 +382,7 @@ match_args([], Results, Opts) ->
     % For every ID in every result, we resolve it to its uncommitted ID form.
     ResolvedResults =
         [
-            [ hb_store:resolve(Store, ID) || ID <- Result ]
+            [ hb_util:ok(hb_store:resolve(Store, ID, Opts)) || ID <- Result ]
         ||
             Result <- Results
         ],
@@ -412,9 +419,13 @@ match(<<"height">>, Heights, Opts) ->
         lists:filtermap(
             fun(Height) ->
                 Path = dev_arweave_block_cache:path(Height, Opts),
-                case hb_store:type(ScopedStores, Path) of
-                    not_found -> false;
-                    _ -> {true, hb_store:resolve(ScopedStores, Path)}
+                case hb_store:type(ScopedStores, Path, Opts) of
+                    {error, not_found} -> false;
+                    {ok, _} ->
+                        case hb_store:resolve(ScopedStores, Path, Opts) of
+                            {ok, ResolvedPath} -> {true, ResolvedPath};
+                            _ -> false
+                        end
                 end
             end,
             lists:seq(Min, Max)
@@ -527,45 +538,52 @@ matching_commitments(Field, Value, Opts) when is_binary(Value) ->
                 }
             ),
             lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
-        not_found -> not_found
+        _ -> not_found
     end.
 
 %% @doc Convert a commitment message's ID to a base ID.
 commitment_id_to_base_id(ID, Opts) ->
     Store = hb_opts:get(store, no_store, Opts),
     ?event({commitment_id_to_base_id, ID}),
-    case hb_store:read(Store, << ID/binary, "/signature">>) of
+    case hb_store:read(Store, << ID/binary, "/signature">>, Opts) of
         {ok, EncSig} ->
             Sig = hb_util:decode(EncSig),
             ?event({commitment_id_to_base_id_sig, Sig}),
             hb_util:encode(hb_crypto:sha256(Sig));
-        not_found -> not_found
+        _ -> not_found
     end.
 
 %% @doc Find all IDs for a message, by any of its other IDs. It achieves this
 %% by resolving the given ID, recursing through its links, then returning all
 %% of the IDs found in that `BaseID/commitments' key.
-all_signed_ids(ID, Store, _Opts) ->
-    ResolvedID = hb_store:resolve(Store, ID),
-    case hb_store:list(Store, << ResolvedID/binary, "/commitments">>) of
-        {ok, CommitmentIDs} ->
+all_signed_ids(ID, Store, Opts) ->
+    ResolvedID = hb_util:ok_or(hb_store:resolve(Store, ID, Opts), ID),
+    case hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts) of
+        {composite, CommitmentIDs} ->
             lists:filter(
                 fun(CommitmentID) ->
-                    ResolvedCommitmentMsgID =
-                        hb_store:resolve(
-                            Store,
-                            <<
-                                ResolvedID/binary,
-                                "/commitments/",
-                                CommitmentID/binary,
-                                "/committer"
-                            >>
+                    CommitmentPath =
+                        <<
+                            ResolvedID/binary,
+                            "/commitments/",
+                            CommitmentID/binary,
+                            "/committer"
+                        >>,
+                    CommitmentMsgID =
+                        hb_util:ok_or(
+                            hb_store:resolve(Store, CommitmentPath, Opts),
+                            CommitmentPath
                         ),
-                    hb_store:read(Store, ResolvedCommitmentMsgID) =/= not_found
+                    case hb_store:read(Store, CommitmentMsgID, Opts) of
+                        {ok, _} -> true;
+                        _ ->
+                            false
+                    end
                 end,
                 CommitmentIDs
             );
-        _ -> [ID]
+        _ ->
+            [ID]
     end.
 
 %% @doc Scope the stores used for block matching. The searched stores can be

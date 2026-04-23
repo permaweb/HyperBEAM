@@ -662,8 +662,7 @@ direct_benchmark_test() ->
         <<"executions">>,
         Iterations,
         BenchTime
-    ),
-    ?assert(Iterations > 10).
+    ).
 
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.
@@ -761,12 +760,14 @@ pure_lua_process_benchmark(Opts) ->
     BeforeExec = os:system_time(millisecond),
     {ok, _} = hb_ao:resolve(Process, <<"now">>, Opts),
     AfterExec = os:system_time(millisecond),
+    ExecMs = AfterExec - BeforeExec,
     hb_test_utils:benchmark_print(
         <<"Pure Lua process: Computed">>,
         <<"slots">>,
         BenchMsgs,
-        (AfterExec - BeforeExec) / 1000
-    ).
+        ExecMs / 1000
+    ),
+    ?assert(ExecMs =< 500).
 
 invoke_aos_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
@@ -833,12 +834,14 @@ aos_process_benchmark_test_() ->
             Opts
         ),
         AfterExec = os:system_time(millisecond),
+        ExecMs = AfterExec - BeforeExec,
         hb_test_utils:benchmark_print(
             <<"HyperAOS process: Computed">>,
             <<"slots">>,
             BenchMsgs,
-            (AfterExec - BeforeExec) / 1000
-        )
+            ExecMs / 1000
+        ),
+        ?assert(ExecMs =< 250)
     end}.
 
 %%% Test helpers

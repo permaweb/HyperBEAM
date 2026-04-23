@@ -132,7 +132,7 @@ httpc_req(Args, Opts) ->
                     get ->
                         {URL, HeaderKV};
                     _ ->
-                        upload_metric(Body),
+                        upload_metric(Body, Opts),
                         {URL, HeaderKV, binary_to_list(ContentType), Body}
                 end,
             ?event({http_client_outbound, Method, URL, Request}),
@@ -140,7 +140,7 @@ httpc_req(Args, Opts) ->
             StartTime = os:system_time(native),
             case httpc:request(Method, Request, [], HTTPCOpts) of
                 {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
-                    download_metric(RespBody),
+                    download_metric(RespBody, Opts),
                     EndTime = os:system_time(native),
                     RespHeaders =
                         [
@@ -187,7 +187,7 @@ hackney_req(Args, Opts) ->
             Method = string:uppercase(hb_util:bin(RawMethod)),
             HeaderList =
                 [{Key, Value} || {Key, Value} <- hb_maps:to_list(Headers, Opts)],
-            upload_metric(#{method => Method, body => Body}),
+            upload_metric(#{method => Method, body => Body}, Opts),
             ConnTimeout = hb_opts:get(http_client_connect_timeout, ?DEFAULT_CONNECT_TIMEOUT, Opts),
             RecvTimeout = hb_opts:get(http_client_hackney_recv_timeout, ?DEFAULT_HACKNEY_RECEIVE_TIMEOUT, Opts),
             CheckoutTimeout = hb_opts:get(http_client_hackney_checkout_timeout, ?DEFAULT_HACKNEY_CHECKOUT_TIMEOUT, Opts),
@@ -200,7 +200,7 @@ hackney_req(Args, Opts) ->
             StartTime = erlang:monotonic_time(native),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
                 {ok, Status, RespHeaders, RespBody} ->
-                    download_metric(RespBody),
+                    download_metric(RespBody, Opts),
                     ?event(debug_http_client, {hackney_resp, Status, RespHeaders, RespBody}),
                     {ok, Status, RespHeaders, RespBody};
                 {ok, Status, RespHeaders} ->
@@ -219,7 +219,7 @@ hackney_req(Args, Opts) ->
                 },
                 Opts
             ),
-            record_response_status(Method, Response, Path),
+            record_response_status(Method, Response, Path, Opts),
             Response
     end.
 
@@ -306,7 +306,7 @@ maybe_invoke_monitor(Details, Opts) ->
 
 init(Opts) ->
     init_hackney_pool(),
-    case hb_opts:get(prometheus, not hb_features:test(), Opts) of
+    case prometheus_enabled(Opts) of
         true ->
             ?event({starting_prometheus_application,
                     {test_mode, hb_features:test()}
@@ -481,7 +481,7 @@ do_gun_request(PID, Args, Opts) ->
 			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
         },
 	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
-	record_response_status(Method, Response, Path),
+	record_response_status(Method, Response, Path, Opts),
 	inet:stop_timer(Timer),
 	Response.
 
@@ -490,7 +490,7 @@ await_response(Args, Opts) ->
 			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
 	case gun:await(PID, Ref, inet:timeout(Timer)) of
 		{response, fin, Status, Headers} ->
-			upload_metric(Args),
+			upload_metric(Args, Opts),
 			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
 			{ok, Status, Headers, <<>>};
 		{response, nofin, Status, Headers} ->
@@ -518,15 +518,15 @@ await_response(Args, Opts) ->
 			end;
 		{data, fin, Data} ->
 			FinData = iolist_to_binary([Acc | Data]),
-			download_metric(FinData),
-			upload_metric(Args),
+			download_metric(FinData, Opts),
+			upload_metric(Args, Opts),
 			{ok,
                 hb_maps:get(status, Args, undefined, Opts),
                 hb_maps:get(headers, Args, undefined, Opts),
                 FinData
             };
 		{error, timeout} = Response ->
-			record_response_status(Method, Response, Path),
+			record_response_status(Method, Response, Path, Opts),
             ?event(http_outbound, {gun_cancel, {path, Path}}),
 			gun:cancel(PID, Ref),
 			log(warning, gun_await_process_down, Args, timeout, Opts),
@@ -630,18 +630,23 @@ record_duration(Details, Opts) ->
                     (Key) ->
                         hb_util:list(maps:get(Key, Details))
                 end,
-            Labels = lists:map(
-                GetFormat,
-                [
-                    <<"request-method">>,
-                    <<"status-class">>,
-                    <<"request-category">>
-                ]),
-            hb_prometheus:observe(
-                maps:get(<<"duration">>, Details),
-                http_client_duration_seconds,
-                Labels
-            ),
+            case prometheus_enabled(Opts) of
+                true ->
+                    Labels = lists:map(
+                        GetFormat,
+                        [
+                            <<"request-method">>,
+                            <<"status-class">>,
+                            <<"request-category">>
+                        ]),
+                    hb_prometheus:observe(
+                        maps:get(<<"duration">>, Details),
+                        http_client_duration_seconds,
+                        Labels
+                    );
+                false ->
+                    ok
+            end,
             maybe_invoke_monitor(
                 Details#{ <<"path">> => <<"duration">> },
                 Opts
@@ -649,41 +654,61 @@ record_duration(Details, Opts) ->
         end
     ).
 
-record_response_status(Method, Response) ->
-    record_response_status(Method, Response, undefined).
 record_response_status(Method, Response, Path) ->
-	hb_prometheus:inc(
-        counter, 
-        gun_requests_total,
-        [
-            hb_util:list(method_to_bin(Method)),
-			hb_util:list(get_status_class(Response)),
-            hb_util:list(path_to_category(Path))
-        ],
-        1
-    ).
+    record_response_status(Method, Response, Path, #{}).
+record_response_status(Method, Response, Path, Opts) ->
+    case prometheus_enabled(Opts) of
+        true ->
+	        hb_prometheus:inc(
+                counter,
+                gun_requests_total,
+                [
+                    hb_util:list(method_to_bin(Method)),
+			        hb_util:list(get_status_class(Response)),
+                    hb_util:list(path_to_category(Path))
+                ],
+                1
+            );
+        false ->
+            ok
+    end.
 
-download_metric(Data) ->
-	hb_prometheus:inc(
-        counter,
-		http_client_downloaded_bytes_total,
-        [],
-		byte_size(Data)
-	).
+download_metric(Data, Opts) ->
+    case prometheus_enabled(Opts) of
+        true ->
+	        hb_prometheus:inc(
+                counter,
+		        http_client_downloaded_bytes_total,
+                [],
+		        byte_size(Data)
+	        );
+        false ->
+            ok
+    end.
 
 %% @doc Record instances of uploaded bytes to the remote server.
-upload_metric(#{method := Method, body := Body}) when is_atom(Method) ->
-    upload_metric(#{ method => hb_util:bin(Method), body => Body });
-upload_metric(#{ method := <<"POST">>, body := Body}) -> upload_metric(Body);
-upload_metric(#{ method := <<"PUT">>, body := Body}) -> upload_metric(Body);
-upload_metric(Body) when is_binary(Body) ->
-	hb_prometheus:inc(counter,
-		http_client_uploaded_bytes_total,
-		[],
-		byte_size(Body)
-	);
-upload_metric(_) ->
+upload_metric(#{method := Method, body := Body}, Opts) when is_atom(Method) ->
+    upload_metric(#{ method => hb_util:bin(Method), body => Body }, Opts);
+upload_metric(#{ method := <<"POST">>, body := Body}, Opts) ->
+    upload_metric(Body, Opts);
+upload_metric(#{ method := <<"PUT">>, body := Body}, Opts) ->
+    upload_metric(Body, Opts);
+upload_metric(Body, Opts) when is_binary(Body) ->
+    case prometheus_enabled(Opts) of
+        true ->
+	        hb_prometheus:inc(counter,
+		        http_client_uploaded_bytes_total,
+		        [],
+		        byte_size(Body)
+	        );
+        false ->
+            ok
+    end;
+upload_metric(_, _) ->
 	ok.
+
+prometheus_enabled(Opts) ->
+    hb_opts:get(prometheus, not hb_features:test(), Opts).
 
 method_to_bin(get) ->
 	<<"GET">>;

@@ -686,7 +686,13 @@ store_wallet(non_volatile, KeyID, Details, Opts) ->
     {ok, Msg} = hb_cache:write(#{ KeyID => Details }, PrivOpts),
     PrivStore = hb_opts:get(priv_store, undefined, PrivOpts),
     % Link the wallet to the store.
-    ok = hb_store:make_link(PrivStore, Msg, <<"wallet@1.0/", KeyID/binary>>).
+    ok =
+        hb_store:link(
+            PrivStore,
+            #{ <<"wallet@1.0/", KeyID/binary>> => Msg },
+            PrivOpts
+        ),
+    ok.
 
 %% @doc Find the wallet by name or address in the node's options.
 find_wallet(KeyID, Opts) ->
@@ -706,12 +712,17 @@ find_wallet(in_memory, KeyID, Opts) ->
 find_wallet(non_volatile, KeyID, Opts) ->
     PrivOpts = priv_store_opts(Opts),
     Store = hb_opts:get(priv_store, undefined, PrivOpts),
-    Resolved = hb_store:resolve(Store, <<"wallet@1.0/", KeyID/binary>>),
-    case hb_cache:read(Resolved, PrivOpts) of
-        {ok, Wallet} ->
-            WalletDetails = hb_maps:get(KeyID, Wallet, not_found, PrivOpts),
-            hb_cache:ensure_all_loaded(WalletDetails, PrivOpts);
-        _ -> not_found
+    case hb_store:resolve(Store, <<"wallet@1.0/", KeyID/binary>>, PrivOpts) of
+        {ok, Resolved} ->
+            case hb_cache:read(Resolved, PrivOpts) of
+                {ok, Wallet} ->
+                    WalletDetails = hb_maps:get(KeyID, Wallet, not_found, PrivOpts),
+                    hb_cache:ensure_all_loaded(WalletDetails, PrivOpts);
+                _ ->
+                    not_found
+            end;
+        _ ->
+            not_found
     end.
 
 %% @doc Generate a list of all hosted wallets.

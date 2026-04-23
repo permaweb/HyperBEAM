@@ -132,7 +132,7 @@ node(Base, RawReq, RawOpts) ->
             case dev_location_cache:read(Self, Opts) of
                 {ok, Location} ->
                     {ok, Location};
-                not_found ->
+                {error, not_found} ->
                     case hb_opts:get(location_open_generation, true, Opts) of
                         true ->
                             % We don't have a valid location record, so we generate a new

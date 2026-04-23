@@ -12,43 +12,58 @@
 %%% 
 %%% A valid store must implement a _subset_ of the following functions:
 %%% ```
-%%%     start/1:      Initialize the store.
-%%%     stop/1:       Stop any processes (etc.) that manage the store.
-%%%     reset/1:      Restore the store to its original, empty state.
+%%%     start/3:      Initialize the store.
+%%%     stop/3:       Stop any processes (etc.) that manage the store.
+%%%     reset/3:      Restore the store to its original, empty state.
 %%%     scope/0:      A tag describing the 'scope' of a stores search: `in_memory',
 %%%                   `local', `remote', `arweave', etc. Used in order to allow
 %%%                   node operators to prioritize their stores for search.
-%%%     make_group/2: Create a new group of keys in the store with the given ID.
-%%%     make_link/3:  Create a link (implying one key should redirect to another)
-%%%                   from `existing` to `new` (in that order).
-%%%     type/2:       Return whether the value found at the given key is a
-%%%                   `composite' (group) type, or a `simple' direct binary.
-%%%     read/2:       Read the data at the given location, returning a binary
+%%%     group/3:      Create a new group of keys in the store using a request
+%%%                   map of the form `#{<<"group">> => Path}`.
+%%%     link/3:       Create links using a request map of the form
+%%%                   `#{NewPath => ExistingPath}`.
+%%%     type/3:       Return whether the value found at the given key is a
+%%%                   `composite' (group) type, or a `simple' direct binary,
+%%%                   using a request map of the form `#{<<"type">> => Path}`.
+%%%     read/3:       Read the data at the given location, returning a binary
 %%%                   if it is a `simple' value, or a message if it is a complex
-%%%                   term.
-%%%     write/3:      Write the given `key` with the associated `value` (in that
-%%%                   order) to the store.
-%%%     list/2:       For `composite' type keys, return a list of its child keys.
-%%%     path/2:       Optionally transform a list of path parts into the store's
-%%%                   canonical form.
+%%%                   term, using a request map of the form `#{<<"read">> => Path}`.
+%%%     write/3:      Write a request map of the form `#{Path => Value}`.
+%%%     list/3:       For `composite' type keys, return a list of child keys
+%%%                   using a request map of the form `#{<<"list">> => Path}`.
 %%% '''
 %%% Each function takes a `store' message first, containing an arbitrary set
 %%% of its necessary configuration keys, as well as the `store-module' key which
 %%% refers to the Erlang module that implements the store.
 %%% 
-%%% All functions must return `ok` or `{ok, Result}`, as appropriate. Other 
-%%% results will lead to the store manager (this module) iterating to the next
-%%% store message given by the user. If none of the given store messages are 
-%%% able to execute a requested service, the store manager will return 
-%%% `not_found`.
+%%% All functions must return `ok`, `{ok, Result}`, `{error, Reason}`, or
+%%% `{failure, Reason}`, as appropriate. `{error, Reason}` results will lead to
+%%% the store manager (this module) iterating to the next store message given by
+%%% the user. `{failure, Reason}` results trigger retry logic before the next
+%%% store is tried. If none of the given store messages are able to execute a
+%%% requested service, the store manager will return the strongest terminal
+%%% result observed, or `{error, not_found}`.
 
 -module(hb_store).
 -export([behavior_info/1]).
--export([start/1, stop/1, reset/1]).
+-export([
+    start/1, start/2, start/3,
+    stop/1, stop/2, stop/3,
+    reset/1, reset/2, reset/3
+]).
 -export([filter/2, scope/2, sort/2]).
--export([type/2, read/2, write/3, list/2, match/2]).
--export([path/1, path/2, add_path/2, add_path/3, join/1]).
--export([make_group/2, make_link/3, resolve/2]).
+-export([
+    type/2, type/3,
+    read/2, read/3,
+    write/2, write/3,
+    list/2, list/3,
+    match/2, match/3
+]).
+-export([
+    group/2, group/3,
+    link/2, link/3,
+    resolve/2, resolve/3
+]).
 -export([find/1]).
 -export([generate_test_suite/1, generate_test_suite/2, test_stores/0]).
 -include("include/hb.hrl").
@@ -66,9 +81,9 @@
 
 behavior_info(callbacks) ->
     [
-        {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
-        {type, 2}, {read, 2}, {write, 3},
-        {list, 2}, {match, 2}, {path, 2}, {add_path, 3}
+        {start, 3}, {stop, 3}, {reset, 3}, {group, 3}, {link, 3},
+        {type, 3}, {read, 3}, {write, 3}, {list, 3}, {match, 3},
+        {resolve, 3}
     ].
 
 -define(DEFAULT_SCOPE, local).
@@ -76,8 +91,8 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, path, add_path, join, scope],
-    <<"write">> => [write, make_link, make_group, reset, path, add_path, join, scope],
+    <<"read">> => [read, resolve, list, type, match, scope],
+    <<"write">> => [write, link, group, reset, scope],
     <<"admin">> => [start, stop, reset, scope]
 }).
 
@@ -133,15 +148,19 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
 %% @doc Create a new instance of a store and return its term.
 spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
     Name = maps:get(<<"name">>, StoreOpts, Mod),
-    try Mod:start(StoreOpts) of
+    try call_store_start(Mod, StoreOpts, #{}, StoreOpts) of
         ok -> ok;
         {ok, InstanceMessage} ->
             set(Mod, Name, InstanceMessage),
             InstanceMessage;
         {error, Reason} ->
             ?event(error, {store_start_failed, {Mod, Name, Reason}}),
+            throw({store_start_failed, {Mod, Name, Reason}});
+        {failure, Reason} ->
+            ?event(error, {store_start_failed, {Mod, Name, Reason}}),
             throw({store_start_failed, {Mod, Name, Reason}})
-    catch error:undef ->
+    catch
+        error:undef ->
         ok
     end.
 
@@ -158,14 +177,34 @@ ensure_instance_alive(_, InstanceMessage) ->
 %%% Library wrapper implementations.
 
 %% @doc Ensure that a store, or list of stores, have all been started.
-start(StoreOpts) when not is_list(StoreOpts) -> start([StoreOpts]);
-start([]) -> ok;
-start([StoreOpts | Rest]) ->
-    find(StoreOpts),
-    start(Rest).
+start(StoreOrOpts) ->
+    case is_store_spec(StoreOrOpts) of
+        true -> start(StoreOrOpts, #{});
+        false -> start(hb_opts:get(store, [], StoreOrOpts), #{}, StoreOrOpts)
+    end.
+start(Store, Opts) ->
+    start(Store, #{}, Opts).
+start(StoreOpts, Req, Opts) when not is_list(StoreOpts) ->
+    start([StoreOpts], Req, Opts);
+start([], _Req, _Opts) ->
+    ok;
+start([StoreOpts | Rest], Req, Opts) ->
+    case start_one(StoreOpts, Req, Opts) of
+        ok -> start(Rest, Req, Opts);
+        {ok, _} -> start(Rest, Req, Opts);
+        {error, not_found} -> start(Rest, Req, Opts);
+        Result -> Result
+    end.
 
-stop(Modules) ->
-    call_function(Modules, stop, []).
+stop(StoreOrOpts) ->
+    case is_store_spec(StoreOrOpts) of
+        true -> stop(StoreOrOpts, #{});
+        false -> stop(hb_opts:get(store, [], StoreOrOpts), #{}, StoreOrOpts)
+    end.
+stop(Store, Opts) ->
+    stop(Store, #{}, Opts).
+stop(Stores, Req, Opts) ->
+    admin_call(Stores, stop, Req, Opts).
 
 %% @doc Takes a store object and a filter function or match spec, returning a
 %% new store object with only the modules that match the filter. The filter
@@ -216,7 +255,7 @@ scope(Store, Scope) ->
 %% @doc Ask a store for its own scope. If it doesn't have one, return the
 %% default scope (local).
 get_store_scope(Store) ->
-    case call_function(Store, scope, []) of
+    case get_store_scope_result(Store) of
         not_found -> ?DEFAULT_SCOPE;
         Scope -> Scope
     end.
@@ -250,60 +289,84 @@ sort(Stores, ScoreMap) ->
         Stores
     ).
 
-%% @doc Join a list of path components together.
-join(Path) -> hb_path:to_binary(Path).
-
 %%% The store interface that modules should implement.
 
 %% @doc Read a key from the store.
-read(Modules, Key) -> call_function(Modules, read, [Key]).
+read(Path, Opts) ->
+    read(hb_opts:get(store, [], Opts), Path, Opts).
+read(Modules, Req = #{ <<"read">> := _ }, Opts) ->
+    call_function(Modules, read, [Req, Opts]);
+read(Modules, Path, Opts) ->
+    read(Modules, #{ <<"read">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Write a key with a value to the store.
-write(Modules, Key, Value) -> call_function(Modules, write, [Key, Value]).
+write(Req, Opts) ->
+    write(hb_opts:get(store, [], Opts), Req, Opts).
+write(Modules, Req, Opts) ->
+    call_function(Modules, write, [Req, Opts]).
 
 %% @doc Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.
-make_group(Modules, Path) -> call_function(Modules, make_group, [Path]).
+group(Path, Opts) ->
+    group(hb_opts:get(store, [], Opts), Path, Opts).
+group(Modules, Req = #{ <<"group">> := _ }, Opts) ->
+    call_function(Modules, group, [Req, Opts]);
+group(Modules, Path, Opts) ->
+    group(Modules, #{ <<"group">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Make a link from one path to another in the store.
-make_link(Modules, Existing, New) ->
-    call_function(Modules, make_link, [Existing, New]).
+link(Req, Opts) ->
+    link(hb_opts:get(store, [], Opts), Req, Opts).
+link(Modules, Req, Opts) ->
+    call_function(Modules, link, [Req, Opts]).
 
 %% @doc Delete all of the keys in a store. Should be used with extreme
 %% caution. Lost data can lose money in many/most of hyperbeam's use cases.
-reset(Modules) -> call_function(Modules, reset, []).
+reset(StoreOrOpts) ->
+    case is_store_spec(StoreOrOpts) of
+        true -> reset(StoreOrOpts, #{});
+        false -> reset(hb_opts:get(store, [], StoreOrOpts), #{}, StoreOrOpts)
+    end.
+reset(Store, Opts) ->
+    reset(Store, #{}, Opts).
+reset(Stores, Req, Opts) ->
+    admin_call(Stores, reset, Req, Opts).
 
 %% @doc Get the type of element of a given path in the store. This can be
 %% a performance killer if the store is remote etc. Use only when necessary.
-type(Modules, Path) -> call_function(Modules, type, [Path]).
-
-%% @doc Create a path from a list of path components. If no store implements
-%% the path function, we return the path with the 'default' transformation (id).
-path(Path) -> join(Path).
-path(_, Path) -> path(Path).
-
-%% @doc Add two path components together. If no store implements the add_path
-%% function, we concatenate the paths.
-add_path(Path1, Path2) -> Path1 ++ Path2.
-add_path(Store, Path1, Path2) ->
-    case call_function(Store, add_path, [Path1, Path2]) of
-        not_found -> add_path(Path1, Path2);
-        Result -> Result
-    end.
+type(Path, Opts) ->
+    type(hb_opts:get(store, [], Opts), Path, Opts).
+type(Modules, Req = #{ <<"type">> := _ }, Opts) ->
+    call_function(Modules, type, [Req, Opts]);
+type(Modules, Path, Opts) ->
+    type(Modules, #{ <<"type">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Follow links through the store to resolve a path to its ultimate target.
-resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
+resolve(Path, Opts) ->
+    resolve(hb_opts:get(store, [], Opts), Path, Opts).
+resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
+    call_function(Modules, resolve, [Req, Opts]);
+resolve(Modules, Path, Opts) ->
+    resolve(Modules, #{ <<"resolve">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc List the keys in a group in the store. Use only in debugging.
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
-list(Modules, Path) -> call_function(Modules, list, [Path]).
+list(Path, Opts) ->
+    list(hb_opts:get(store, [], Opts), Path, Opts).
+list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
+    call_function(Modules, list, [Req, Opts]);
+list(Modules, Path, Opts) ->
+    list(Modules, #{ <<"list">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Match a series of keys and values against the store. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
 %% messages in the store that feature all of the given key-value pairs. `Matches'
 %% is given as a list of IDs.
-match(Modules, Match) -> call_function(Modules, match, [Match]).
+match(Match, Opts) ->
+    match(hb_opts:get(store, [], Opts), Match, Opts).
+match(Modules, Match, Opts) ->
+    call_function(Modules, match, [Match, Opts]).
 
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
@@ -311,7 +374,8 @@ match(Modules, Match) -> call_function(Modules, match, [Match]).
 %% counter.
 -ifdef(STORE_EVENTS).
 call_function(X, Function, Args) ->
-    {Time, Result} = timer:tc(fun() -> do_call_function(X, Function, Args) end),
+    {Time, Result} =
+        timer:tc(fun() -> do_call_function(X, Function, Args, undefined, undefined) end),
     ?event(store_events,
         {store_call,
             {function, Function},
@@ -331,13 +395,13 @@ call_function(X, Function, Args) ->
     Result.
 -else.
 call_function(X, Function, Args) ->
-    do_call_function(X, Function, Args).
+    do_call_function(X, Function, Args, undefined, undefined).
 -endif.
-do_call_function(X, _Function, _Args) when not is_list(X) ->
-    do_call_function([X], _Function, _Args);
-do_call_function([], _Function, _Args) ->
-    not_found;
-do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args) ->
+do_call_function(X, Function, Args, Failure, Error) when not is_list(X) ->
+    do_call_function([X], Function, Args, Failure, Error);
+do_call_function([], _Function, _Args, Failure, Error) ->
+    terminal_result(Failure, Error);
+do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args, Failure, Error) ->
     % If the store has an access controls, check if the function is allowed from
     % the stated policies.
     IsAdmissible =
@@ -355,19 +419,44 @@ do_call_function([Store = #{<<"access">> := Access} | Rest], Function, Args) ->
             do_call_function(
                 [maps:remove(<<"access">>, Store) | Rest],
                 Function,
-                Args
+                Args,
+                Failure,
+                Error
             );
         false ->
-            do_call_function(Rest, Function, Args)
+            do_call_function(Rest, Function, Args, Failure, Error)
     end;
-do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
+do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, Failure, Error) ->
     % Attempt to apply the function. If it fails, try the next store.
     try apply_store_function(Mod, Store, Function, Args) of
-        not_found ->
-            do_call_function(Rest, Function, Args);
-        Result ->
-            Result
-    catch _:_:_ -> do_call_function(Rest, Function, Args)
+        ok ->
+            ok;
+        {ok, _} = Result ->
+            Result;
+        {composite, _} = Result ->
+            Result;
+        {failure, _} = Result ->
+            do_call_function(
+                Rest,
+                Function,
+                Args,
+                strongest_failure(Failure, Result),
+                Error
+            );
+        {error, not_found} ->
+            do_call_function(Rest, Function, Args, Failure, Error);
+        {error, _} = Result ->
+            do_call_function(
+                Rest,
+                Function,
+                Args,
+                Failure,
+                strongest_error(Error, Result)
+            );
+        Other ->
+            normalize_result(Other)
+    catch _:_:_ ->
+        do_call_function(Rest, Function, Args, Failure, Error)
     end.
 
 %% @doc Apply a store function, checking if the store returns a retry request or
@@ -378,11 +467,17 @@ apply_store_function(Mod, Store, Function, Args) ->
     apply_store_function(Mod, Store, Function, Args, MaxAttempts).
 apply_store_function(_Mod, _Store, _Function, _Args, 0) ->
     % Too many attempts have already failed. Bail.
-    not_found;
+    {error, not_found};
 apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
-    try apply(Mod, Function, [Store | Args]) of
-        retry -> retry(Mod, Store, Function, Args, AttemptsRemaining);
-        Other -> Other
+    try normalize_result(apply(Mod, Function, [Store | Args])) of
+        retry ->
+            retry(Mod, Store, Function, Args, AttemptsRemaining, {error, not_found});
+        {failure, _} = Failure when AttemptsRemaining =< 1 ->
+            Failure;
+        {failure, _} = Failure ->
+            retry(Mod, Store, Function, Args, AttemptsRemaining, Failure);
+        Other ->
+            Other
     catch Class:Reason:Stacktrace ->
         ?event(store_error,
             {store_call_failed_retrying,
@@ -394,30 +489,155 @@ apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
                 {stacktrace, {trace, Stacktrace}}
             }
         ),
-        retry(Mod, Store, Function, Args, AttemptsRemaining)
+        retry(Mod, Store, Function, Args, AttemptsRemaining, {error, not_found})
     end.
 
 %% @doc Stop and start the store, then retry.
-retry(Mod, Store, Function, Args, AttemptsRemaining) ->
+retry(_Mod, _Store, _Function, _Args, AttemptsRemaining, Result)
+        when AttemptsRemaining =< 1 ->
+    Result;
+retry(Mod, Store, Function, Args, AttemptsRemaining, _Result) ->
     % Attempt to stop the store and start it again, then retry.
-    try Mod:stop(Store) catch _:_ -> ignore_errors end,
+    try call_store_stop(Mod, Store) catch _:_ -> ignore_errors end,
     set(Store, undefined),
-    start(Store),
+    find(Store),
     apply_store_function(Mod, Store, Function, Args, AttemptsRemaining - 1).
 
-%% @doc Call a function on all modules in the store.
-call_all(X, _Function, _Args) when not is_list(X) ->
-    call_all([X], _Function, _Args);
-call_all([], _Function, _Args) ->
+admin_call(Stores, Function, Req, Opts) when not is_list(Stores) ->
+    admin_call([Stores], Function, Req, Opts);
+admin_call([], _Function, _Req, _Opts) ->
     ok;
-call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
-    try apply_store_function(Mod, Function, Store, Args)
-    catch
-        Class:Reason:Stacktrace ->
-            ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
-            ok
-    end,
-    call_all(Rest, Function, Args).
+admin_call([Store | Rest], Function, Req, Opts) ->
+    case call_function([Store], Function, [Req, Opts]) of
+        ok ->
+            admin_post_process(Function, Store),
+            admin_call(Rest, Function, Req, Opts);
+        {ok, _} ->
+            admin_post_process(Function, Store),
+            admin_call(Rest, Function, Req, Opts);
+        {error, not_found} ->
+            admin_call(Rest, Function, Req, Opts);
+        {error, _} = Error ->
+            Error;
+        {failure, _} = Failure ->
+            Failure;
+        {composite, _} = Composite ->
+            Composite
+    end.
+
+admin_post_process(stop, Store) ->
+    set(Store, undefined);
+admin_post_process(reset, Store) ->
+    set(Store, undefined);
+admin_post_process(_, _Store) ->
+    ok.
+
+start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
+    case is_admissible(Store, start) of
+        false ->
+            {error, not_found};
+        true ->
+            Name = maps:get(<<"name">>, Store, Mod),
+            try call_store_start(Mod, Store, Req, Opts) of
+                ok ->
+                    ok;
+                {ok, InstanceMessage} ->
+                    set(Mod, Name, InstanceMessage),
+                    ok;
+                Other ->
+                    normalize_result(Other)
+            catch Class:Reason:Stacktrace ->
+                ?event(store_error,
+                    {store_start_failed,
+                        {store, Store},
+                        {class, Class},
+                        {reason, Reason},
+                        {stacktrace, {trace, Stacktrace}}
+                    }
+                ),
+                {failure, {Class, Reason, Stacktrace}}
+            end
+    end.
+
+call_store_start(Mod, Store, Req, Opts) ->
+    case erlang:function_exported(Mod, start, 3) of
+        true -> Mod:start(Store, Req, Opts);
+        false -> Mod:start(Store)
+    end.
+
+call_store_stop(Mod, Store) ->
+    case erlang:function_exported(Mod, stop, 3) of
+        true -> Mod:stop(Store, #{}, Store);
+        false -> Mod:stop(Store)
+    end.
+
+is_store_spec(#{ <<"store-module">> := _ }) -> true;
+is_store_spec([#{ <<"store-module">> := _ } | _]) -> true;
+is_store_spec([]) -> true;
+is_store_spec(_) -> false.
+
+is_admissible(#{ <<"access">> := Access }, Function) ->
+    lists:any(
+        fun(Group) ->
+            lists:any(
+                fun(F) -> F == Function end,
+                maps:get(Group, ?STORE_ACCESS_POLICIES, [])
+            )
+        end,
+        Access
+    );
+is_admissible(_, _) ->
+    true.
+
+get_store_scope_result(Store = #{ <<"store-module">> := Mod }) ->
+    try
+        code:ensure_loaded(Mod),
+        case erlang:function_exported(Mod, scope, 3) of
+            true -> normalize_scope(Mod:scope(Store, #{}, Store));
+            false ->
+                case erlang:function_exported(Mod, scope, 1) of
+                    true -> Mod:scope(Store);
+                    false ->
+                        case erlang:function_exported(Mod, scope, 0) of
+                            true -> Mod:scope();
+                            false -> not_found
+                        end
+                end
+        end
+    catch _:_ ->
+        not_found
+    end.
+
+normalize_scope({ok, Scope}) -> Scope;
+normalize_scope(Scope) -> Scope.
+
+normalize_result({ok, Result}) when Result =:= ok -> ok;
+normalize_result({ok, _} = Result) -> Result;
+normalize_result({error, _} = Result) -> Result;
+normalize_result({failure, _} = Result) -> Result;
+normalize_result({composite, _} = Result) -> Result;
+normalize_result(not_found) -> {error, not_found};
+normalize_result(failure) -> {failure, failure};
+normalize_result(retry) -> retry;
+normalize_result(ok) -> ok;
+normalize_result(simple) -> {ok, simple};
+normalize_result(composite) -> {ok, composite};
+normalize_result(Result) -> {ok, Result}.
+
+terminal_result(undefined, undefined) ->
+    {error, not_found};
+terminal_result({failure, _} = Failure, _Error) ->
+    Failure;
+terminal_result(undefined, {error, _} = Error) ->
+    Error;
+terminal_result(_Failure, {error, _} = Error) ->
+    Error.
+
+strongest_failure(undefined, Failure) -> Failure;
+strongest_failure(Current, _Failure) -> Current.
+
+strongest_error(undefined, Error) -> Error;
+strongest_error(Current, _Error) -> Current.
 
 %%% Test helpers
 
@@ -485,27 +705,38 @@ generate_test_suite(Suite, Stores) ->
 
 %%% Tests
 
+write_req(Key, Value) ->
+    #{ hb_path:to_binary(Key) => Value }.
+
+link_req(New, Existing) ->
+    #{ hb_path:to_binary(New) => hb_path:to_binary(Existing) }.
+
 %% @doc Test path resolution dynamics.
 simple_path_resolution_test(Store) ->
-    ok = hb_store:write(Store, <<"test-file">>, <<"test-data">>),
-    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link">>)).
+    ok = write(Store, write_req(<<"test-file">>, <<"test-data">>), #{}),
+    ok = link(Store, link_req(<<"test-link">>, <<"test-file">>), #{}),
+    ?assertEqual({ok, <<"test-data">>}, read(Store, <<"test-link">>, #{})).
 
 %% @doc Ensure that we can resolve links recursively.
 resursive_path_resolution_test(Store) ->
-    hb_store:write(Store, <<"test-file">>, <<"test-data">>),
-    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
-    hb_store:make_link(Store, <<"test-link">>, <<"test-link2">>),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link2">>)).
+    ok = write(Store, write_req(<<"test-file">>, <<"test-data">>), #{}),
+    ok = link(Store, link_req(<<"test-link">>, <<"test-file">>), #{}),
+    ok = link(Store, link_req(<<"test-link2">>, <<"test-link">>), #{}),
+    ?assertEqual({ok, <<"test-data">>}, read(Store, <<"test-link2">>, #{})).
 
 %% @doc Ensure that we can resolve links through a directory.
 hierarchical_path_resolution_test(Store) ->
-    hb_store:make_group(Store, <<"test-dir1">>),
-    hb_store:write(Store, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
-    hb_store:make_link(Store, [<<"test-dir1">>], <<"test-link">>),
+    ok = group(Store, <<"test-dir1">>, #{}),
+    ok =
+        write(
+            Store,
+            write_req([<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
+            #{}
+        ),
+    ok = link(Store, link_req(<<"test-link">>, [<<"test-dir1">>]), #{}),
     ?assertEqual(
         {ok, <<"test-data">>},
-        hb_store:read(Store, [<<"test-link">>, <<"test-file">>])
+        read(Store, [<<"test-link">>, <<"test-file">>], #{})
     ).
 
 store_suite_test_() ->
@@ -558,7 +789,9 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         timer:tc(
             fun() ->
                 lists:foreach(
-                    fun(Key) -> ok = write(Store, Key, RandomData) end,
+                    fun(Key) ->
+                        ok = write(Store, write_req(Key, RandomData), #{})
+                    end,
                     Keys
                 )
             end
@@ -587,7 +820,7 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             fun() ->
                 lists:foldl(
                     fun(Key, Count) -> 
-                        case read(Store, Key) of
+                        case read(Store, Key, #{}) of
                             {ok, _} -> Count;
                             _ -> Count + 1
                         end
@@ -666,14 +899,17 @@ benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
             fun() ->
                 lists:map(
                     fun({GroupID, KeyPairs}) ->
-                        ok = make_group(Store, GroupID),
+                        ok = group(Store, GroupID, #{}),
                         lists:foreach(
                             fun({Key, Value}) ->
                                 ok =
                                     write(
                                         Store,
-                                        <<GroupID/binary, "/", Key/binary >>,
-                                        Value
+                                        write_req(
+                                            <<GroupID/binary, "/", Key/binary>>,
+                                            Value
+                                        ),
+                                        #{}
                                     )
                             end,
                             KeyPairs
@@ -684,7 +920,7 @@ benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
                 % Perform one list operation to ensure that the write queue is
                 % flushed.
                 {LastGroupID, _} = lists:last(Groups),
-                list(Store, LastGroupID)
+                list(Store, LastGroupID, #{})
             end
         ),
     % Print the results. Our write time is in microseconds, so we normalize it
@@ -711,7 +947,7 @@ benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
                     fun({GroupID, GroupKeyValues}, Count) ->
                         ExpectedKeys =
                             [ KeyInGroup || {KeyInGroup, _} <- GroupKeyValues ],
-                        case list(Store, GroupID) of
+                        case list(Store, GroupID, #{}) of
                             {ok, ListedKeys} ->
                                 Res =
                                     lists:all(
@@ -885,18 +1121,18 @@ read_only_access_test() ->
     TestValue = <<"test-value">>,
     start(StoreList),
     ?event(testing, {read_only_test_started}),
-    WriteResponse = write(StoreList, TestKey, TestValue),
+    WriteResponse = write(StoreList, write_req(TestKey, TestValue), #{}),
     ?assertEqual(ok, WriteResponse),
     ?event(testing, {write_used_fallback_store, WriteResponse}),
-    ReadResponse = read(StoreList, TestKey),
+    ReadResponse = read(StoreList, TestKey, #{}),
     ?assertEqual({ok, TestValue}, ReadResponse),
     ?event(testing, {read_succeeded, ReadResponse}),
-    ReadOnlyStoreState = read([ReadOnlyStore], TestKey),
-    WriteStoreState = read([WriteStore], TestKey),
+    ReadOnlyStoreState = read([ReadOnlyStore], TestKey, #{}),
+    WriteStoreState = read([WriteStore], TestKey, #{}),
     ?event(testing, {
         store_state, {read_only, ReadOnlyStoreState},{ write, WriteStoreState}
     }),
-    ?assertEqual(not_found, ReadOnlyStoreState),
+    ?assertEqual({error, not_found}, ReadOnlyStoreState),
     ?assertEqual({ok, TestValue}, WriteStoreState).
 
 %% @doc Test that write-only stores allow write operations but block read operations  
@@ -911,13 +1147,13 @@ write_only_access_test() ->
     TestValue = <<"write-test-value">>,
     start(StoreList),
     ?event(testing, {write_only_test_started}),
-    ?assertEqual(ok, write(StoreList, TestKey, TestValue)),
+    ?assertEqual(ok, write(StoreList, write_req(TestKey, TestValue), #{})),
     ?event(testing, {write_succeeded_on_write_only}),
-    ReadStoreState = read(StoreList, TestKey),
-    ?assertEqual(not_found, ReadStoreState),
+    ReadStoreState = read(StoreList, TestKey, #{}),
+    ?assertEqual({error, not_found}, ReadStoreState),
     ?event(testing, {read_skipped_write_only_store, ReadStoreState}),
     WriteOnlyStoreNoAccess = maps:remove(<<"access">>, WriteOnlyStore),
-    ReadStoreNoAccess = read([WriteOnlyStoreNoAccess], TestKey),
+    ReadStoreNoAccess = read([WriteOnlyStoreNoAccess], TestKey, #{}),
     ?event(testing, {store, ReadStoreNoAccess}),
     ?assertEqual({ok, TestValue}, ReadStoreNoAccess).
 
@@ -931,11 +1167,11 @@ admin_only_access_test() ->
     TestKey = <<"admin-test-key">>,
     TestValue = <<"admin-test-value">>,
     start(StoreList),
-    ?assertEqual(ok, write(StoreList, TestKey, TestValue)),
-    ?assertEqual({ok, TestValue}, read(StoreList, TestKey)),
-    reset(StoreList),
+    ?assertEqual(ok, write(StoreList, write_req(TestKey, TestValue), #{})),
+    ?assertEqual({ok, TestValue}, read(StoreList, TestKey, #{})),
+    ?assertEqual(ok, reset(StoreList)),
     ?assertEqual(ok, start(StoreList)),
-    ?assertEqual(not_found, read(StoreList, TestKey)).
+    ?assertEqual({error, not_found}, read(StoreList, TestKey, #{})).
 
 %% @doc Test multiple access permissions
 multi_access_permissions_test() ->
@@ -952,13 +1188,13 @@ multi_access_permissions_test() ->
     TestValue = <<"multi-access-value">>,
     start(StoreList),
     ?event(testing, {multi_access_test_started}),
-    ?assertEqual(ok, write(StoreList, TestKey, TestValue)),
+    ?assertEqual(ok, write(StoreList, write_req(TestKey, TestValue), #{})),
     ?event(testing, {write_succeeded_on_read_write_store}),
-    ?assertEqual({ok, TestValue}, read(StoreList, TestKey)),
+    ?assertEqual({ok, TestValue}, read(StoreList, TestKey, #{})),
     ?event(testing, {read_succeeded_on_read_write_store}),
-    reset(StoreList),
+    ?assertEqual(ok, reset(StoreList)),
     ?assertEqual(ok, start(StoreList)),
-    ?assertEqual(not_found, read(StoreList, TestKey)).
+    ?assertEqual({error, not_found}, read(StoreList, TestKey, #{})).
 
 %% @doc Test access control with a list of stores.
 store_access_list_test() ->
@@ -978,12 +1214,12 @@ store_access_list_test() ->
     TestValue = <<"chain-test-value">>,
     start(StoreChain),
     ?event(testing, {fallback_chain_test_started, length(StoreChain)}),
-    ?assertEqual(ok, write(StoreChain, TestKey, TestValue)),
+    ?assertEqual(ok, write(StoreChain, write_req(TestKey, TestValue), #{})),
     ?event(testing, {write_used_second_store_in_chain}),
-    ?assertEqual(not_found, read(StoreChain, TestKey)),
+    ?assertEqual({error, not_found}, read(StoreChain, TestKey, #{})),
     ?event(testing, {read_fell_through_entire_chain}),
     WriteOnlyNoAccess = maps:remove(<<"access">>, WriteOnlyStore),
-    ?assertEqual({ok, TestValue}, read([WriteOnlyNoAccess], TestKey)).
+    ?assertEqual({ok, TestValue}, read([WriteOnlyNoAccess], TestKey, #{})).
 
 %% @doc Test invalid access permissions are ignored
 invalid_access_permissions_test() ->
@@ -997,13 +1233,13 @@ invalid_access_permissions_test() ->
     TestValue = <<"invalid-access-value">>,
     start(StoreList),
     ?event(testing, {invalid_access_test_started}),
-    ?assertEqual(ok, write(StoreList, TestKey, TestValue)),
+    ?assertEqual(ok, write(StoreList, write_req(TestKey, TestValue), #{})),
     ?event(testing, {write_used_fallback_store}),
-    ?assertEqual({ok, TestValue}, read(StoreList, TestKey)),
+    ?assertEqual({ok, TestValue}, read(StoreList, TestKey, #{})),
     ?event(testing, {read_used_fallback_store}),
     InvalidStoreNoAccess = maps:remove(<<"access">>, InvalidAccessStore),
     start([InvalidStoreNoAccess]),
-    ?assertEqual(not_found, read([InvalidStoreNoAccess], TestKey)).
+    ?assertEqual({error, not_found}, read([InvalidStoreNoAccess], TestKey, #{})).
 
 %% @doc Test list operations with access control
 list_access_control_test() ->
@@ -1018,13 +1254,13 @@ list_access_control_test() ->
     TestValue = <<"list-test-value">>,
     start(StoreList),
     ?event(testing, {list_access_test_started}),
-    GroupResult = make_group(StoreList, ListGroup),
+    GroupResult = group(StoreList, ListGroup, #{}),
     ?assertEqual(ok, GroupResult),
     ?event(testing, {group_created, GroupResult}),
-    WriteResponse = write(StoreList, [ListGroup, TestKey], TestValue),
+    WriteResponse = write(StoreList, write_req([ListGroup, TestKey], TestValue), #{}),
     ?assertEqual(ok, WriteResponse),
-    ListResult = list(StoreList, ListGroup),
-    ListValue = read(StoreList, [ListGroup, TestKey]),
+    ListResult = list(StoreList, ListGroup, #{}),
+    ListValue = read(StoreList, [ListGroup, TestKey], #{}),
     ?event(testing, {list_result, ListResult, ListValue}),
     ?assertEqual({ok,[TestKey]}, ListResult),
     ?assertEqual({ok,TestValue}, ListValue).
@@ -1042,10 +1278,10 @@ make_link_access_test() ->
     TestValue = <<"link-test-value">>,
     start(StoreList),
     ?event(testing, {make_link_access_test_started}),
-    ?assertEqual(ok, write(StoreList, TargetKey, TestValue)),
-    LinkResult = make_link(StoreList, TargetKey, SourceKey),
+    ?assertEqual(ok, write(StoreList, write_req(TargetKey, TestValue), #{})),
+    LinkResult = link(StoreList, link_req(SourceKey, TargetKey), #{}),
     ?event(testing, {make_link_result, LinkResult}),
-    ReadResult = read(StoreList, SourceKey),
+    ReadResult = read(StoreList, SourceKey, #{}),
     ?event(testing, {read_linked_value, ReadResult}),
     ?assertEqual({ok, TestValue}, ReadResult),
     ?assertEqual(ok, LinkResult).

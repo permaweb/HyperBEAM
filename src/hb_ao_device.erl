@@ -416,18 +416,25 @@ is_direct_key_access(Base, Req, Opts, MaybeStore) when ?IS_ID(Base) ->
         if MaybeStore =:= unknown -> hb_opts:get(store, no_viable_store, Opts);
         true -> MaybeStore
         end,
-    DevPath = hb_store:resolve(Store, [Base, <<"device">>]),
-    case hb_store:read(Store, DevPath) of
+    DevPath =
+        hb_util:ok_or(
+            hb_store:resolve(Store, [Base, <<"device">>], Opts),
+            [Base, <<"device">>]
+        ),
+    case hb_store:read(Store, DevPath, Opts) of
         {ok, Dev} ->
             do_is_direct_key_access(Dev, Req, Opts);
-        not_found ->
-            case hb_store:type(Store, Base) of
-                not_found -> unknown;
-                _ -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
-            end
+        {error, not_found} ->
+            fallback_direct_key_access(Store, Base, Req, Opts)
     end;
 is_direct_key_access(Base, Req, Opts, _) when is_map(Base) ->
     do_is_direct_key_access(hb_maps:find(<<"device">>, Base, Opts), Req, Opts).
+
+fallback_direct_key_access(Store, Base, Req, Opts) ->
+    case hb_store:type(Store, Base, Opts) of
+        {error, not_found} -> unknown;
+        {ok, _} -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
+    end.
 
 do_is_direct_key_access(DevRes, #{ <<"path">> := Key }, Opts) ->
     do_is_direct_key_access(DevRes, Key, Opts);
@@ -453,9 +460,7 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
             ),
             not lists:member(NormKey, Exports ++ ?MESSAGE_KEYS);
         _ -> false
-    end;
-do_is_direct_key_access(_, _, _) ->
-    false.
+    end.
 
 %% @doc The default device is the identity device, which simply returns the
 %% value associated with any key as it exists in its Erlang map. It should also

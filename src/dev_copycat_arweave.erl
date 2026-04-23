@@ -83,9 +83,9 @@ is_tx_indexed(TXID, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> false;
         #{ <<"index-store">> := Store } ->
-            case hb_store:read(Store, hb_store_arweave_offset:path(TXID)) of
+            case hb_store:read(Store, hb_store_arweave_offset:path(TXID), Opts) of
                 {ok, _} -> true;
-                not_found -> false
+                {error, not_found} -> false
             end
     end.
 
@@ -502,7 +502,8 @@ index_ids_test_parallel() ->
         {ok, _},
         hb_store_arweave:read(
             StoreOpts,
-            <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>
+            #{ <<"read">> => <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">> },
+            Opts
         )
     ),
     assert_item_read(
@@ -543,7 +544,8 @@ index_ids_test_parallel() ->
         {badmatch,<<"\"address\":\"0x124e64C9Ed898d4A8B130F6ACb76b33E21CD711c\"", _/binary>>},
         hb_store_arweave:read(
             StoreOpts,
-            <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">>)
+            #{ <<"read">> => <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">> },
+            Opts)
     ),
     assert_bundle_read(
         <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
@@ -701,14 +703,16 @@ tx_with_data_tag_test_disabled() ->
         {badmatch, unsupported_tx_format},
         hb_store_arweave:read(
             StoreOpts,
-            <<"ZwsFMXcwuakDuIhskokVHYiOPVcywDUAUTMLAJ72fgw">>)
+            #{ <<"read">> => <<"ZwsFMXcwuakDuIhskokVHYiOPVcywDUAUTMLAJ72fgw">> },
+            Opts)
     ),
     ?assertException(
         error,
         {badmatch, unsupported_tx_format},
         hb_store_arweave:read(
             StoreOpts,
-            <<"-8ikoQo3KZkp9Hz_7kNdiUw3Vmn7J2DFslL_rBz0OBY">>)
+            #{ <<"read">> => <<"-8ikoQo3KZkp9Hz_7kNdiUw3Vmn7J2DFslL_rBz0OBY">> },
+            Opts)
     ),
     assert_bundle_read(
         <<"0vvttUgGqSsMul8RKIPvBjlwTU5_0x68sZr4uJxgNF8">>,

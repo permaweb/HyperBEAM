@@ -236,7 +236,7 @@ compute(Base, Req, Opts) ->
                         }
                     ),
                     {ok, without_snapshot(Result, Opts)};
-                not_found ->
+                {error, not_found} ->
                     {ok, Loaded} = ensure_loaded(ProcBase, Req, Opts),
                     ?event(compute,
                         {computing, {process_id, ProcID},
@@ -721,7 +721,7 @@ ensure_loaded(Base, Req, Opts) ->
                         }
                     ),
                     {ok, NormalizedWithoutSnapshot};
-                not_found ->
+                {error, not_found} ->
                     % If we do not have a checkpoint, initialize the
                     % process from scratch.
                     ?event(

@@ -122,11 +122,16 @@ augment_definition(BaseDef, Opts) ->
 %%% The name that should be used for the singleton process during tests.
 -define(TEST_NAME, <<"test-node-process">>).
 
+test_name() ->
+    <<?TEST_NAME/binary, "-", (integer_to_binary(erlang:unique_integer([positive])))/binary>>.
+
 %% @doc Helper function to generate a test environment and its options.
 generate_test_opts() ->
     {ok, Module} = file:read_file(<<"test/test.lua">>),
-    generate_test_opts(#{
-        ?TEST_NAME => #{
+    Name = test_name(),
+    {
+        Name,
+        generate_test_opts(Name, #{
             <<"device">> => <<"process@1.0">>,
             <<"execution-device">> => <<"lua@5.3a">>,
             <<"scheduler-device">> => <<"scheduler@1.0">>,
@@ -134,27 +139,27 @@ generate_test_opts() ->
                 <<"content-type">> => <<"text/x-lua">>,
                 <<"body">> => Module
             }
-        }
-    }).
-generate_test_opts(Defs) ->
+        })
+    }.
+generate_test_opts(Name, Def) ->
     #{
-        node_processes => Defs,
+        node_processes => #{ Name => Def },
         priv_wallet => ar_wallet:new()
     }.
 
 lookup_no_spawn_test() ->
-    Opts = generate_test_opts(),
+    {_Name, Opts} = generate_test_opts(),
     ?assertEqual(
         {error, not_found},
         lookup(<<"name1">>, #{}, #{}, Opts)
     ).
 
 lookup_spawn_test() ->
-    Opts = generate_test_opts(),
+    {Name, Opts} = generate_test_opts(),
     Res1 = {_, Process1} =
         hb_ao:resolve(
             #{ <<"device">> => <<"node-process@1.0">> },
-            ?TEST_NAME,
+            Name,
             Opts
         ),
     ?assertMatch(
@@ -163,7 +168,7 @@ lookup_spawn_test() ->
     ),
     {ok, Process2} = hb_ao:resolve(
         #{ <<"device">> => <<"node-process@1.0">> },
-        ?TEST_NAME,
+        Name,
         Opts
     ),
     LoadedProcess1 = 
@@ -180,12 +185,12 @@ lookup_spawn_test() ->
 
 %% @doc Test that a process can be spawned, executed upon, and its result retrieved.
 lookup_execute_test() ->
-    Opts = generate_test_opts(),
+    {Name, Opts} = generate_test_opts(),
     Res1 =
         hb_ao:resolve_many(
             [
                 #{ <<"device">> => <<"node-process@1.0">> },
-                ?TEST_NAME,
+                Name,
                 #{
                     <<"path">> => <<"schedule">>,
                     <<"method">> => <<"POST">>,
@@ -208,7 +213,7 @@ lookup_execute_test() ->
     ?assertMatch(
         42,
         hb_ao:get(
-            << ?TEST_NAME/binary, "/now/results/output/body" >>,
+            << Name/binary, "/now/results/output/body" >>,
             #{ <<"device">> => <<"node-process@1.0">> },
             Opts
         )

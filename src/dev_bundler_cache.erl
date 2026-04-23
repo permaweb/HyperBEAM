@@ -57,9 +57,8 @@ get_item_bundle(Item, Opts) when is_map(Item) ->
 %% Item should be a structured message.
 item_path(Item, Opts) when is_map(Item) ->
     item_path(item_id(Item, Opts), Opts);
-item_path(ItemID, Opts) when is_binary(ItemID) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:path(Store, [
+item_path(ItemID, _Opts) when is_binary(ItemID) ->
+    hb_path:to_binary([
         ?BUNDLER_PREFIX,
         <<"item">>,
         ItemID,
@@ -104,8 +103,7 @@ get_tx_status(TX, Opts) ->
 %% @doc Construct the pseudopath for a TX's status.
 %% TXID should already be encoded (base64 string).
 tx_path(TX, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:path(Store, [
+    hb_path:to_binary([
         ?BUNDLER_PREFIX,
         <<"tx">>,
         tx_id(TX, Opts),
@@ -117,8 +115,7 @@ tx_path(TX, Opts) ->
 %% @doc Load all bundle TX states from cache.
 %% Returns list of {TXID, Status} tuples.
 load_bundle_states(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    TXRootPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"tx">>]),
+    TXRootPath = hb_path:to_binary([?BUNDLER_PREFIX, <<"tx">>]),
     % List all TX IDs
     TXIDs = case hb_cache:list(TXRootPath, Opts) of
         [] -> [];
@@ -164,23 +161,19 @@ load_tx(TXID, Opts) ->
 %% @doc Write a value to a pseudopath.
 write_pseudopath(Path, Value, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    Result = hb_store:write(Store, Path, Value),
-    % force a flush to disk
-    hb_store:read(Store, Path),
-    Result.
+    hb_store:write(Store, #{ Path => Value }, Opts).
 
 %% @doc Read a value from a pseudopath.
 read_pseudopath(Path, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    case hb_store:read(Store, Path) of
+    case hb_store:read(Store, Path, Opts) of
         {ok, Value} -> {ok, Value};
         _ -> not_found
     end.
 
 %% @doc List all cached bundler item IDs.
 list_item_ids(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
+    ItemsPath = hb_path:to_binary([?BUNDLER_PREFIX, <<"item">>]),
     case hb_cache:list(ItemsPath, Opts) of
         [] -> [];
         List -> List

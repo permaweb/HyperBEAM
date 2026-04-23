@@ -180,16 +180,16 @@ priv_opts_store_read_link_test() ->
     PublicStore = [hb_test_utils:test_store()],
     timer:sleep(1),
     OnlyPrivStore = [hb_test_utils:test_store()],
-    ok = hb_store:write(PublicStore, <<"key">>, <<"test-message">>),
-    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"key">>),
+    ok = hb_store:write(PublicStore, #{ <<"key">> => <<"test-message">> }, #{}),
+    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"key">>, #{}),
     % Make a link to the key in the public store.
-    ok = hb_store:make_link(PublicStore, <<"key">>, <<"link">>),
-    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"link">>),
+    ok = hb_store:link(PublicStore, #{ <<"link">> => <<"key">> }, #{}),
+    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"link">>, #{}),
     % Read the link from the private store. First as a simple store read, then
     % as a link.
     Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
     PrivOpts = #{ store := PrivStore } = opts(Opts),
-    {ok, <<"test-message">>} = hb_store:read(PrivStore, <<"link">>),
+    {ok, <<"test-message">>} = hb_store:read(PrivStore, <<"link">>, #{}),
     Loaded =
         hb_cache:ensure_loaded(
             {link, <<"link">>, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},

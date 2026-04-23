@@ -18,18 +18,18 @@
 %%% S3-compatible cloud storage APIs, etc).
 -module(hb_store_fs).
 -behavior(hb_store).
--export([start/1, stop/1, reset/1, scope/0, scope/1]).
--export([type/2, read/2, write/3, list/2]).
--export([make_group/2, make_link/3, resolve/2]).
+-export([start/3, stop/3, reset/3, scope/0, scope/1]).
+-export([type/3, read/3, write/3, list/3]).
+-export([group/3, link/3, resolve/3]).
 -include_lib("kernel/include/file.hrl").
 -include("include/hb.hrl").
 
 %% @doc Initialize the file system store with the given data directory.
-start(#{ <<"name">> := DataDir }) ->
+start(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     ok = filelib:ensure_dir(DataDir).
 
 %% @doc Stop the file system store. Currently a no-op.
-stop(#{ <<"name">> := _DataDir }) ->
+stop(#{ <<"name">> := _DataDir }, _Req, _Opts) ->
     ok.
 
 %% @doc The file-based store is always local, for now. In the future, we may
@@ -39,41 +39,64 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 %% @doc Reset the store by completely removing its directory and recreating it.
-reset(#{ <<"name">> := DataDir }) ->
+reset(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     % Use pattern that completely removes directory then recreates it
     os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
     ?event({reset_store, {path, DataDir}}).
 
 %% @doc Read a key from the store, following symlinks as needed.
-read(Opts, Key) ->
-    read(add_prefix(Opts, resolve(Opts, Key))).
-read(Path) ->
+read(Opts, #{ <<"read">> := Key }, NodeOpts) ->
+    case resolve(Opts, #{ <<"resolve">> => Key }, NodeOpts) of
+        {ok, ResolvedPath} ->
+            read_path(add_prefix(Opts, ResolvedPath));
+        {error, _} = Error ->
+            Error
+    end.
+read_path(Path) ->
 	?event({read, Path}),
 	case file:read_file_info(Path) of
 		{ok, #file_info{type = regular}} ->
 			{ok, _} = file:read_file(Path);
+        {ok, #file_info{type = directory}} ->
+            case file:list_dir(Path) of
+                {ok, Files} ->
+                    {composite, lists:map(fun hb_util:bin/1, Files)};
+                {error, _} ->
+                    {error, not_found}
+            end;
 		_ ->
 			case file:read_link(Path) of
 				{ok, Link} ->
 					?event({link_found, Path, Link}),
-					read(Link);
+					read_path(Link);
 				_ ->
-					not_found
+					{error, not_found}
 			end
 	end.
 
 %% @doc Write a value to the specified path in the store.
-write(Opts, PathComponents, Value) ->
-    Path = add_prefix(Opts, PathComponents),
+write(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(PathComponents, Value, ok) ->
+            write_path(Opts, PathComponents, Value);
+           (_PathComponents, _Value, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
+write_path(Opts, PathComponents, Value) ->
+    Path = add_prefix(Opts, hb_path:to_binary(PathComponents)),
     ?event({writing, Path, byte_size(Value)}),
     filelib:ensure_dir(Path),
-    ok = file:write_file(Path, Value).
+    ok = file:write_file(Path, Value),
+    ok.
 
 %% @doc List contents of a directory in the store.
-list(Opts, Path) ->
-    case file:list_dir(add_prefix(Opts, Path)) of
+list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+    case file:list_dir(add_prefix(Opts, hb_path:to_binary(Path))) of
         {ok, Files} -> {ok, lists:map(fun hb_util:bin/1, Files)};
-        {error, _} -> not_found
+        {error, _} -> {error, not_found}
     end.
 
 %% @doc Replace links in a path successively, returning the final path.
@@ -86,14 +109,19 @@ list(Opts, Path) ->
 %%    /a/alt-b/c: "Correct data"
 %%
 %% will resolve "a/b/c" to "Correct data".
-resolve(Opts, RawPath) ->
-    Res = resolve(Opts, "", hb_path:term_to_path_parts(hb_store:join(RawPath), Opts)),
-    ?event({resolved, RawPath, Res}),
-    Res.
-resolve(_, CurrPath, []) ->
-    hb_store:join(CurrPath);
-resolve(Opts, CurrPath, [Next|Rest]) ->
-    PathPart = hb_store:join([CurrPath, Next]),
+resolve(Opts, #{ <<"resolve">> := RawPath }, _NodeOpts) ->
+    Result =
+        resolve_parts(
+            Opts,
+            <<>>,
+            hb_path:term_to_path_parts(hb_path:to_binary(RawPath), Opts)
+        ),
+    ?event({resolved, RawPath, Result}),
+    Result.
+resolve_parts(_, CurrPath, []) ->
+    {ok, hb_path:to_binary(CurrPath)};
+resolve_parts(Opts, CurrPath, [Next|Rest]) ->
+    PathPart = hb_path:to_binary([CurrPath, Next]),
     ?event(
         {resolving,
             {accumulated_path, CurrPath},
@@ -104,33 +132,33 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
     case file:read_link(add_prefix(Opts, PathPart)) of
         {ok, RawLink} ->
             Link = remove_prefix(Opts, RawLink),
-            resolve(Opts, Link, Rest);
+            resolve_parts(Opts, Link, Rest);
         {error, enoent} ->
-            not_found;
+            {error, not_found};
         _ ->
-            resolve(Opts, PathPart, Rest)
+            resolve_parts(Opts, PathPart, Rest)
     end.
 
 %% @doc Determine the type of a key in the store.
-type(Opts, Key) ->
-    type(add_prefix(Opts, Key)).
-type(Path) ->
+type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
+    type_path(add_prefix(Opts, hb_path:to_binary(Key))).
+type_path(Path) ->
     ?event({type, Path}),
     case file:read_file_info(Path) of
-        {ok, #file_info{type = directory}} -> composite;
-        {ok, #file_info{type = regular}} -> simple;
+        {ok, #file_info{type = directory}} -> {ok, composite};
+        {ok, #file_info{type = regular}} -> {ok, simple};
         _ ->
             case file:read_link(Path) of
                 {ok, Link} ->
-                    type(Link);
+                    type_path(Link);
                 _ ->
-                    not_found
+                    {error, not_found}
             end
     end.
 
 %% @doc Create a directory (group) in the store.
-make_group(Opts = #{ <<"name">> := _DataDir }, Path) ->
-    P = add_prefix(Opts, Path),
+group(Opts = #{ <<"name">> := _DataDir }, #{ <<"group">> := Path }, _NodeOpts) ->
+    P = add_prefix(Opts, hb_path:to_binary(Path)),
     ?event({making_group, P}),
     % We need to ensure that the parent directory exists, so that we can
     % make the group.
@@ -141,25 +169,40 @@ make_group(Opts = #{ <<"name">> := _DataDir }, Path) ->
     end.
 
 %% @doc Create a symlink, handling the case where the link would point to itself.
-make_link(_, Link, Link) -> ok;
-make_link(Opts, Existing, New) ->
+link(Opts, Req, _NodeOpts) when is_map(Req) ->
+    maps:fold(
+        fun(New, Existing, ok) ->
+            link_path(Opts, Existing, New);
+           (_New, _Existing, Error) ->
+            Error
+        end,
+        ok,
+        Req
+    ).
+link_path(_, Link, Link) ->
+    ok;
+link_path(Opts, Existing, New) ->
+    ExistingPath = hb_path:to_binary(Existing),
+    NewPath = hb_path:to_binary(New),
     ?event({symlink,
-		add_prefix(Opts, Existing),
-		P2 = add_prefix(Opts, New)}),
+		add_prefix(Opts, ExistingPath),
+		P2 = add_prefix(Opts, NewPath)}),
     filelib:ensure_dir(P2),
-    case file:make_symlink(add_prefix(Opts, Existing), N = add_prefix(Opts, New)) of
+    case file:make_symlink(add_prefix(Opts, ExistingPath), N = add_prefix(Opts, NewPath)) of
         ok -> ok;
         {error, eexist} ->
             file:delete(N),
-            R = file:make_symlink(add_prefix(Opts, Existing), N),
+            R = file:make_symlink(add_prefix(Opts, ExistingPath), N),
             ?event(debug_fs,
                 {symlink_recreated,
-                    {existing, Existing},
-                    {new, New},
+                    {existing, ExistingPath},
+                    {new, NewPath},
                     {result, R}
                 }
             ),
-            R
+            R;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Add the directory prefix to a path.
@@ -169,7 +212,7 @@ add_prefix(#{ <<"name">> := Prefix }, Path) ->
     IsAbsolute = is_binary(Prefix) andalso binary:first(Prefix) =:= $/ orelse
                  is_list(Prefix) andalso hd(Prefix) =:= $/,
     % Join the paths
-    JoinedPath = hb_store:join([Prefix, Path]),
+    JoinedPath = hb_path:to_binary([Prefix, Path]),
     % If the prefix was absolute, ensure the joined path is also absolute
     case IsAbsolute of
         true -> 

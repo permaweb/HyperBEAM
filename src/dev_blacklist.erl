@@ -535,7 +535,7 @@ refresh_periodically_test() ->
         },
     BlacklistMsg = hb_message:commit(InitialBlacklist, Opts0),
     {ok, InitialBlacklistID} = hb_cache:write(BlacklistMsg, Opts0),
-    hb_store:make_link(Store, InitialBlacklistID, <<"mutable">>),
+    ok = hb_store:link(Store, #{ <<"mutable">> => InitialBlacklistID }, Opts0),
     UpdatedBlacklist =
         #{
             <<"data-protocol">> => <<"content-policy">>,
@@ -543,9 +543,9 @@ refresh_periodically_test() ->
         },
     UpdatedBlacklistMsg = hb_message:commit(UpdatedBlacklist, Opts0),
     {ok, UpdatedBlacklistID} = hb_cache:write(UpdatedBlacklistMsg, Opts0),
-    hb_store:make_link(Store, InitialBlacklistID, <<"mutable">>),
+    ok = hb_store:link(Store, #{ <<"mutable">> => InitialBlacklistID }, Opts0),
     Opts1 = Opts0#{
-        blacklist_providers => [<<"/~cache@1.0/read?target=mutable">>],
+        blacklist_providers => [<<"/~cache@1.0/read?read=mutable">>],
         blacklist_refresh_frequency => 1
     },
     Node = hb_http_server:start_node(Opts1),
@@ -557,7 +557,7 @@ refresh_periodically_test() ->
         {ok, <<"test-3">>},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
     ),
-    hb_store:make_link(Store, UpdatedBlacklistID, <<"mutable">>),
+    ok = hb_store:link(Store, #{ <<"mutable">> => UpdatedBlacklistID }, Opts0),
     ?assertMatch(
         {ok, <<"test-3">>},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)

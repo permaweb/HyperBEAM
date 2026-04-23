@@ -105,6 +105,7 @@ write(IDs, Base, Opts) ->
                 fun(RawKey, Value) ->
                     Key = hb_ao:normalize_key(RawKey),
                     ValuePath = value_path(Value, Opts),
+                    ok = hb_store:group(Store, address(Key, ValuePath), Opts),
                     lists:foreach(
                         fun(ID) ->
                             Address = address(Key, ValuePath, ID),
@@ -113,7 +114,7 @@ write(IDs, Base, Opts) ->
                                 {writing_reverse_index, {address, Address},
                                 Opts
                             }),
-                            hb_store:write(Store, Address, <<"">>)
+                            hb_store:write(Store, #{ Address => <<"">> }, Opts)
                         end,
                         IDs
                     )
@@ -133,7 +134,8 @@ match(Key, Base, Opts) ->
         address(
             hb_ao:normalize_key(Key),
             value_path(Value, Opts)
-        )
+        ),
+        Opts
     ) of
         {ok, Messages} -> {ok, Messages};
         _ -> {error, not_found}

@@ -25,19 +25,16 @@ read(Address, RawOpts) ->
     Opts = opts(RawOpts),
     Res =
         hb_cache:read(
-            hb_store:path(
-                hb_opts:get(store, no_viable_store, Opts),
-                [
-                    ?LOCATION_CACHE_PREFIX,
-                    hb_util:human_id(Address)
-                ]
-            ),
+            hb_path:to_binary([
+                ?LOCATION_CACHE_PREFIX,
+                hb_util:human_id(Address)
+            ]),
             Opts
         ),
     Event =
         case Res of
             {ok, _} -> found_in_store;
-            not_found -> not_found_in_store;
+            {error, not_found} -> not_found_in_store;
             _ -> local_lookup_unexpected_result
         end,
     ?event(scheduler_location, {Event, {address, Address}, {res, Res}}),
@@ -59,16 +56,15 @@ write(LocationMsg, RawOpts) ->
         {ok, RootPath} ->
             lists:foreach(
                 fun(Signer) ->
-                    hb_store:make_link(
+                    ok = hb_store:link(
                         Store,
-                        RootPath,
-                        hb_store:path(
-                            Store,
-                            [
+                        #{
+                            hb_path:to_binary([
                                 ?LOCATION_CACHE_PREFIX,
                                 hb_util:human_id(Signer)
-                            ]
-                        )
+                            ]) => RootPath
+                        },
+                        Opts
                     )
                 end,
                 Signers
@@ -86,4 +82,4 @@ write(LocationMsg, RawOpts) ->
 list(RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:list(Store, [?LOCATION_CACHE_PREFIX]).
+    hb_store:list(Store, hb_path:to_binary([?LOCATION_CACHE_PREFIX]), Opts).
