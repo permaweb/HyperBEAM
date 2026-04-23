@@ -154,12 +154,13 @@ resolve_path(Opts, CurrPath, [Next | Rest], Depth) ->
 %% @doc List child names under a group path.
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
     list_path(Opts, Path).
-list_path(Opts, <<"">>) ->
-    list_path(Opts, ?ROOT_GROUP);
-list_path(Opts, <<"/">>) ->
-    list_path(Opts, ?ROOT_GROUP);
 list_path(Opts, Path) ->
-    ResolvedPath = resolve_path(Opts, Path),
+    ResolvedPath =
+        case Path of
+            <<"">> -> ?ROOT_GROUP;
+            <<"/">> -> ?ROOT_GROUP;
+            _ -> resolve_path(Opts, Path)
+        end,
     case lookup_entry(Opts, ResolvedPath) of
         {group, Set} ->
             {ok, sets:to_list(Set)};
@@ -296,4 +297,16 @@ max_ttl_test() ->
     ?assertEqual({ok, <<"c">>}, hb_store:read(StoreOpts, <<"a">>, #{})),
     timer:sleep(200),
     ?assertEqual({error, not_found}, hb_store:read(StoreOpts, <<"a">>, #{})),
+    ok = hb_store:stop(StoreOpts).
+
+list_root_test() ->
+    StoreOpts =
+        #{
+            <<"store-module">> => ?MODULE,
+            <<"name">> => <<"ets-list-root-test">>
+        },
+    ok = hb_store:start(StoreOpts),
+    ok = hb_store:write(StoreOpts, #{ <<"a">> => <<"b">> }, #{}),
+    {ok, Keys} = hb_store:list(StoreOpts, <<"/">>, #{}),
+    ?assert(lists:member(<<"a">>, Keys)),
     ok = hb_store:stop(StoreOpts).
