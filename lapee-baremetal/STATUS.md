@@ -1092,6 +1092,68 @@ defence isn't exercisable at the eunit layer without spinning
 up swtpm in the test harness -- validated via QEMU smoke test
 of the rebuilt image).
 
+**Pass 13 -- cryptographic primitives auditor** (against batch-14
+HEAD edc25cbff). Six cryptographic surfaces audited:
+
+  1. RSA-PSS signature verification (TPM quote sig) --
+     `dev_tpm2:chk_quote/1' + `dev_tpm_interpret:
+     verify_quote_signature/1'
+  2. PCR extend digest consistency (SHA-256 across 7 call
+     sites + the NIF's TPML_DIGEST_VALUES)
+  3. EK cert chain validation (`pkix_path_validation' +
+     TCG-OID whitelist)
+  4. Hash-algorithm-agile decoders (SHA-256 bank selection,
+     SHA-1-only-log rejection path)
+  5. Nonce freshness (32-byte `strong_rand_bytes', strict
+     `=:=' match)
+  6. Constant-time comparison considerations
+
+**Verdict: SHIP.** No CRITICAL or HIGH cryptographic findings.
+All primitives are used correctly and consistently:
+  - RSA-PSS: MGF1-SHA-256, salt=auto (accepts TPM's hashLen
+    salt per TCG TPM 2.0 Part 1 §11.2.4.4 + PKCS #1 v2.1 §8.1;
+    for SHA-256 the TPM emits salt=32).
+  - TPMS_ATTEST signing: NIF declares `TPM2_ALG_RSAPSS' +
+    `hashAlg = TPM2_ALG_SHA256' in `nif_quote'; matches
+    verifier `rsa_pss:verify(Quoted, sha256, Sig, Key)' call.
+  - PCR-extend: SHA-256 everywhere -- no algorithm drift.
+  - EK chain: full pkix_path_validation, no weaker-algorithm
+    shortcuts, narrow 2-OID TCG whitelist.
+  - Nonces: `crypto:strong_rand_bytes(32)' on both producer
+    and verifier, strict equality match on cross-node path.
+  - Constant-time: comparisons are only on public data
+    (hashes of public inputs), so short-circuit `=:=' is
+    fine; no MAC verifications present.
+
+Three LOW-severity polish items landed as **batch 15** (no
+security impact, code-quality cleanup only):
+
+  1. Removed dead `#'SubjectPublicKeyInfo'{}' fallback in
+     `dev_tpm2:decode_pem_rsa_pub/1'. The fallback called
+     `pkix_decode_cert' on an SPKI record, which was both
+     broken (pkix_decode_cert expects DER bytes) and
+     unreachable (the NIF always emits SPKI PEM that OTP's
+     `pem_entry_decode/1' renders directly as
+     `#'RSAPublicKey'{}').
+  2. Corrected the `verify_quote_signature/1' comment in
+     dev_tpm_interpret to document `salt=auto' (matches
+     reality) instead of `salt=32' (which was misleading --
+     the salt is auto-discovered from the signature, and
+     happens to be 32 because that's what the TPM emits for
+     SHA-256).
+  3. Added a 64-byte TPM2B_DATA nonce length guard in
+     `dev_tpm2:resolve_nonce/1'. Oversize nonces now fall
+     through to a freshly-generated 32-byte random nonce
+     rather than producing an `enif_make_badarg' crash in
+     the NIF (which would return a less-helpful HTTP 400).
+
+Tests: 235 pass (unchanged).
+
+**End-of-night status:** 13 reviewer passes and 15 code
+batches. The final iteration converged to LOW-severity polish
+only -- strong signal of code maturity. No outstanding
+CRITICAL or HIGH security findings.
+
 Predictions from reviewer pass 8 (likely morning outcome):
 
   verdict  = untrusted

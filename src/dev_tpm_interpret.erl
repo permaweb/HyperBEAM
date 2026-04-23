@@ -3400,8 +3400,11 @@ ek_ak_binding_finding(_Signals) ->
 %% Verify the RSA-PSS-SHA256 signature over the envelope's
 %% TPMS_ATTEST blob. Returns `true' | `false' | `<<"unknown">>`.
 %% Uses the same primitive (rsa_pss:verify/4) and convention
-%% (salt=32, MGF1=SHA-256) as dev_tpm2:chk_quote/1 so a signed
-%% quote that passes chk_quote will also pass this check.
+%% (MGF1=SHA-256, salt=auto -- the verifier accepts the TPM's
+%% hashLen-length salt per TCG TPM 2.0 Part 1 §11.2.4.4 and
+%% PKCS #1 v2.1 §8.1; for SHA-256 the TPM emits salt=32) as
+%% dev_tpm2:chk_quote/1 so a signed quote that passes chk_quote
+%% will also pass this check.
 verify_quote_signature(E) ->
     Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
     AkPem = hb_maps:get(<<"ak-pub-pem">>, E, <<>>, #{}),

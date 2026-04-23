@@ -1072,13 +1072,18 @@ decode_pem_cert(Pem) when is_binary(Pem) ->
 
 decode_pem_rsa_pub(<<>>) -> {error, empty};
 decode_pem_rsa_pub(Pem) when is_binary(Pem) ->
+    %% Reviewer pass 13 (crypto primitives): removed a dead
+    %% `#'SubjectPublicKeyInfo'{}' fallback that called
+    %% `public_key:pkix_decode_cert(Spki, otp)' on a record --
+    %% `pkix_decode_cert' expects DER bytes, so that clause was
+    %% broken as well as unreachable (the NIF always emits SPKI
+    %% PEM which OTP's `pem_entry_decode/1' renders directly as
+    %% `#'RSAPublicKey'{}').
     case public_key:pem_decode(Pem) of
         [Entry | _] ->
             try
                 case public_key:pem_entry_decode(Entry) of
                     #'RSAPublicKey'{} = Rsa -> {ok, Rsa};
-                    #'SubjectPublicKeyInfo'{} = Spki ->
-                        {ok, public_key:pkix_decode_cert(Spki, otp)};
                     Other -> {error, {unsupported_pub_key_type, Other}}
                 end
             catch
@@ -1381,8 +1386,20 @@ resolve_nonce(Req) when is_map(Req) ->
         undefined ->
             crypto:strong_rand_bytes(32);
         B when is_binary(B) ->
-            try hb_util:decode(B)
-            catch _:_ -> B
+            Decoded =
+                try hb_util:decode(B)
+                catch _:_ -> B
+                end,
+            %% Reviewer pass 13 (crypto primitives): TPM2B_DATA
+            %% caps extraData at 64 bytes (TCG TPM 2.0 Part 2 §
+            %% 10.4.1). The NIF would otherwise reject with
+            %% enif_make_badarg and the HTTP response would be a
+            %% less-helpful 400. Canonical nonces are 32 bytes
+            %% (`crypto:strong_rand_bytes(32)'); anything larger
+            %% is either caller confusion or a padding attempt.
+            case byte_size(Decoded) > 64 of
+                true -> crypto:strong_rand_bytes(32);
+                false -> Decoded
             end
     end;
 resolve_nonce(_) -> crypto:strong_rand_bytes(32).
