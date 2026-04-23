@@ -873,6 +873,57 @@ time of writing):
     and panic. Tests don't pin the exact wording (they check
     the `code' field only); all 229 still pass.
 
+**Pass 10 -- adversarial envelope fuzzer** (against batch-11 HEAD
+1c31787f6). Verdict before fixes: PASS-WITH-NOTES -- the
+`verify/3' path (which wraps every check in `safely_run') was
+structurally robust against all 20 adversarial shapes tested.
+The unguarded entry points `interpret/3' and `claim/3' had three
+concrete crash paths that violated the LapEE canonical rule
+(AGENTS.md: "no crashes; every claim.* field populates to a
+concrete value OR an explicit unknown/absent"). All three
+landed as batch 12:
+
+  CRITICAL  `decode_cert(undefined)' and `decode_pub_key(undefined)'
+            raised `function_clause' on envelopes round-tripped
+            through a JSON library that decodes `null' to the
+            Erlang atom `undefined'. Since neither `claim/3' nor
+            `interpret/3' wraps its callee in `try' (only
+            `verify/3' does via `safe_interpret'), the crash
+            escaped to a 500 stacktrace. Added catch-all clauses
+            returning `{error, not_binary}'; existing downstream
+            callers already handle `{error, _}' and produce a
+            structured `unknown_ek_claim()' / `unknown_ak_claim()'
+            verdict.
+  MEDIUM    `resolve_envelope/3' in BOTH `dev_tpm_interpret' and
+            `dev_tpm2' called `hb_maps:get(<<"body">>, Base, ...)'
+            without guarding `is_map(Base)'. A top-level JSON
+            array (or any non-map Base) crashed with
+            `{badmap, Base}' before the `safely_run' / `safe_
+            interpret' shield. Both modules now guard with
+            `when is_map(Base)' and fall through to an empty map.
+  LOW       Three `platform-probes' consumers (`enrich_cpu_from_
+            cpuinfo', `claim_lockdown', `claim_iommu') read
+            `platform-probes' as a map and indexed into it. An
+            adversarial envelope setting `platform-probes' to a
+            binary / integer / list / atom crashed the second
+            `hb_maps:get'. Centralised in a new `probes_map/1'
+            helper that normalises to `#{}'; all three sites now
+            call it.
+
+Tests: 229 -> 234 (+5 new regression tests, each reproducing one
+of the pre-fix crash shapes and asserting the structured-unknown
+response instead):
+  - v1_2_decode_cert_survives_non_binary_test
+  - v1_2_decode_pub_key_survives_non_binary_test
+  - v1_2_resolve_envelope_survives_non_map_base_test
+  - v1_2_probes_map_normalises_non_map_test
+  - v1_2_claim_survives_adversarial_envelope_test
+
+The LapEE canonical "no crashes" rule is now mechanically
+enforced by the test suite, not just aspirational. 20 adversarial
+envelope shapes from reviewer pass 10 that previously had three
+crash paths now all produce structured verdicts.
+
 Predictions from reviewer pass 8 (likely morning outcome):
 
   verdict  = untrusted

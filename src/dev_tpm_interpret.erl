@@ -897,7 +897,13 @@ interpret(Base, Req, Opts) ->
 %%% Envelope resolution (same shape as dev_tpm2:verify)
 %%%============================================================================
 
-resolve_envelope(Base, Req, Opts) ->
+%% Reviewer pass 10 fuzzer: guard on `is_map(Base)' so an
+%% internal caller passing a top-level JSON array (or any non-
+%% map shape) does not crash `hb_maps:get(<<"body">>, Base, ...)'
+%% with `{badmap, Base}' before `safe_interpret' can wrap. The
+%% only path through `interpret/3' / `claim/3' that reaches this
+%% without a `safely_run' shield is the direct-call one.
+resolve_envelope(Base, Req, Opts) when is_map(Base) ->
     case hb_maps:get(<<"envelope">>, Req, undefined, Opts) of
         E when is_map(E) -> E;
         _ ->
@@ -909,12 +915,30 @@ resolve_envelope(Base, Req, Opts) ->
                         _ -> Base
                     end
             end
-    end.
+    end;
+resolve_envelope(_Base, _Req, _Opts) ->
+    %% Non-map Base (list, binary, integer, atom, etc.). No
+    %% envelope can be extracted; fall through to an empty map so
+    %% the downstream pipeline produces a structured "everything
+    %% unknown" verdict instead of crashing.
+    #{}.
 
 is_envelope(M) when is_map(M) ->
     hb_maps:get(<<"lapee-attestation-version">>, M, undefined, #{}) /=
         undefined;
 is_envelope(_) -> false.
+
+%% Reviewer pass 10 fuzzer: three sites read `platform-probes'
+%% as a map and then index into it. An adversarial envelope that
+%% sets `platform-probes' to a binary / integer / list / atom
+%% would otherwise crash the second `hb_maps:get' with
+%% `{badmap, _}'. Centralised here so the is_map guard lives in
+%% one place.
+probes_map(E) ->
+    case hb_maps:get(<<"platform-probes">>, E, #{}, #{}) of
+        P when is_map(P) -> P;
+        _ -> #{}
+    end.
 
 safe_interpret(E, Opts) ->
     try interpret_envelope(E, Opts)
@@ -2227,7 +2251,7 @@ pick_brand_range(Needles) ->
 %% hints and microcode events for vendor / model / family /
 %% stepping / microcode description.
 enrich_cpu_from_cpuinfo(Base, E) ->
-    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    Probes = probes_map(E),
     CpuInfo = hb_maps:get(<<"cpuinfo">>, Probes, #{}, #{}),
     case CpuInfo of
         #{} when map_size(CpuInfo) == 0 -> Base;
@@ -5641,7 +5665,7 @@ claim_lockdown(Events, E, Db) ->
     %% evidence, stronger than cmdline alone because it reflects
     %% whatever the kernel ACTUALLY settled on (including LSM
     %% interactions).
-    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    Probes = probes_map(E),
     RawLockdown = hb_maps:get(<<"lockdown">>, Probes, null, #{}),
     {RuntimeLevel, RuntimeProv} =
         case parse_lockdown_line(RawLockdown) of
@@ -5738,7 +5762,7 @@ claim_iommu(Events, E) ->
     %% the guest reports any groups, the IOMMU is active in the
     %% running kernel regardless of what the cmdline said. This
     %% is tier-2 runtime evidence (stronger than cmdline-only).
-    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    Probes = probes_map(E),
     GroupCount = hb_maps:get(<<"iommu-groups-count">>,
                              Probes, null, #{}),
     {RuntimeEnabled, RuntimeProv} =
@@ -7234,7 +7258,17 @@ decode_cert(Pem) when is_binary(Pem) ->
             catch C:R -> {error, {C, R}}
             end;
         _ -> {error, no_certificate}
-    end.
+    end;
+%% Reviewer pass 10 fuzzer: some JSON round-trip libraries
+%% decode `null' into the Erlang atom `undefined' rather than a
+%% binary. Without this clause, `decode_cert(undefined)' raised
+%% `function_clause' and escaped past `claim/3' / `interpret/3'
+%% (neither wraps its callee in `try' -- only the `verify/3' path
+%% does via `safe_interpret'). The LapEE canonical rule in
+%% AGENTS.md demands every claim.* field populate to a concrete
+%% value OR an explicit unknown/absent; a 500 stacktrace is
+%% neither.
+decode_cert(_) -> {error, not_binary}.
 
 decode_pub_key(<<>>) -> {error, empty};
 decode_pub_key(Pem) when is_binary(Pem) ->
@@ -7244,7 +7278,8 @@ decode_pub_key(Pem) when is_binary(Pem) ->
             catch C:R -> {error, {C, R}}
             end;
         _ -> {error, no_entries}
-    end.
+    end;
+decode_pub_key(_) -> {error, not_binary}.
 
 %%% Extract TPM-specific attributes from the EK cert -- following the
 %%% TCG EK Credential Profile. The interesting fields are on the
@@ -10130,6 +10165,104 @@ v1_2_ek_finding_catches_chain_unknown_test() ->
     FF = ek_finding(#{<<"ek-chain-valid">> => false}),
     ?assertMatch(#{<<"severity">> := critical}, FF),
     ?assertEqual(<<"ek-chain-invalid">>, maps:get(<<"code">>, FF)),
+    ok.
+
+%% v1.2 batch 12 / reviewer pass 10 fuzzer: the LapEE canonical
+%% rule (AGENTS.md) demands every claim.* field populate to a
+%% concrete value OR an explicit unknown/absent; a 500 stacktrace
+%% is neither. The fuzzer identified three shapes that crashed
+%% the pre-batch-12 parser; each gets a regression test here.
+
+%% Shape 1: envelope whose fields round-tripped through a JSON
+%% library that decoded `null' as the atom `undefined'. Pre-
+%% batch-12 `decode_cert(undefined)' and `decode_pub_key(undefined)'
+%% had no matching clause and raised `function_clause', escaping
+%% past `interpret/3' and `claim/3' (neither `try'-wraps).
+v1_2_decode_cert_survives_non_binary_test() ->
+    ?assertMatch({error, not_binary}, decode_cert(undefined)),
+    ?assertMatch({error, not_binary}, decode_cert(42)),
+    ?assertMatch({error, not_binary}, decode_cert([])),
+    ?assertMatch({error, not_binary}, decode_cert(#{})),
+    ?assertMatch({error, empty},      decode_cert(<<>>)),
+    ?assertMatch({error, no_certificate},
+                 decode_cert(<<"not-a-pem-cert">>)),
+    ok.
+
+v1_2_decode_pub_key_survives_non_binary_test() ->
+    ?assertMatch({error, not_binary}, decode_pub_key(undefined)),
+    ?assertMatch({error, not_binary}, decode_pub_key(42)),
+    ?assertMatch({error, not_binary}, decode_pub_key([])),
+    ?assertMatch({error, not_binary}, decode_pub_key(#{})),
+    ?assertMatch({error, empty},      decode_pub_key(<<>>)),
+    ?assertMatch({error, no_entries},
+                 decode_pub_key(<<"not-a-pem-key">>)),
+    ok.
+
+%% Shape 2: non-map Base (top-level JSON array, binary, integer,
+%% atom). Pre-batch-12 `resolve_envelope' called
+%% `hb_maps:get(<<"body">>, Base, ...)' unconditionally, raising
+%% `{badmap, Base}' before `safe_interpret' could wrap.
+v1_2_resolve_envelope_survives_non_map_base_test() ->
+    %% All non-map inputs collapse to an empty map -- the
+    %% downstream pipeline then produces a structured
+    %% "everything unknown" verdict instead of crashing.
+    ?assertEqual(#{}, resolve_envelope([], #{}, #{})),
+    ?assertEqual(#{}, resolve_envelope(<<"binary">>, #{}, #{})),
+    ?assertEqual(#{}, resolve_envelope(42, #{}, #{})),
+    ?assertEqual(#{}, resolve_envelope(undefined, #{}, #{})),
+    %% Map inputs still work.
+    ?assertEqual(#{<<"a">> => 1},
+                 resolve_envelope(#{<<"a">> => 1}, #{}, #{})),
+    %% And the nested-body path still unwraps.
+    ?assertEqual(#{<<"x">> => 2},
+                 resolve_envelope(#{<<"body">> => #{<<"x">> => 2}},
+                                  #{}, #{})),
+    ok.
+
+%% Shape 3: `platform-probes' set to a non-map value. The three
+%% claim_* paths (cpu, lockdown, iommu) read `platform-probes' as
+%% a map and index into it; a non-map value raised `{badmap, _}'
+%% on the second `hb_maps:get'. Now they all go through
+%% `probes_map/1' which normalises to `#{}'.
+v1_2_probes_map_normalises_non_map_test() ->
+    ?assertEqual(#{},
+                 probes_map(#{<<"platform-probes">> => <<"binary">>})),
+    ?assertEqual(#{},
+                 probes_map(#{<<"platform-probes">> => 42})),
+    ?assertEqual(#{},
+                 probes_map(#{<<"platform-probes">> => []})),
+    ?assertEqual(#{},
+                 probes_map(#{<<"platform-probes">> => undefined})),
+    ?assertEqual(#{},
+                 probes_map(#{})),    % absent
+    %% Map-valued probes pass through unchanged.
+    P = #{<<"cpuinfo">> => #{<<"vendor-id">> => <<"GenuineIntel">>}},
+    ?assertEqual(P, probes_map(#{<<"platform-probes">> => P})),
+    ok.
+
+%% End-to-end: claim/3 with an adversarial envelope (non-map Base
+%% + platform-probes binary + undefined pem-ish fields) does NOT
+%% crash the parser. Returns a structured verdict with `unknown'
+%% signals instead of a 500.
+v1_2_claim_survives_adversarial_envelope_test() ->
+    %% Top-level non-map Base (envelope 16 in the fuzzer audit):
+    {ok, Claim1} = claim([], #{}, #{}),
+    ?assertMatch(#{<<"status">> := 200}, Claim1),
+    %% Body-wrapped envelope with `platform-probes' as a binary
+    %% and PEM fields as atoms (envelope 10 + 15 combined):
+    Adversarial = #{
+        <<"body">> => #{
+            <<"platform-probes">> => <<"not-a-map">>,
+            <<"ek-cert-pem">>      => undefined,
+            <<"ak-pub-pem">>       => undefined
+        }
+    },
+    {ok, Claim2} = claim(Adversarial, #{}, #{}),
+    ?assertMatch(#{<<"status">> := 200}, Claim2),
+    %% Verdict pipeline still produces a structured result.
+    Body = maps:get(<<"body">>, Claim2),
+    ?assert(is_map(Body)),
+    ?assert(maps:is_key(<<"policy-verdict">>, Body)),
     ok.
 
 %% v1.2 batch 9 / paper-to-code LOW-1: freshness_finding must emit

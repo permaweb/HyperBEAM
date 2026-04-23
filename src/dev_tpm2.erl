@@ -447,7 +447,11 @@ safely_run(F, Name, Severity) ->
 %%      verify is invoked as the second segment of
 %%      `.../attestation/verify~tpm2@2.0a' and Base is the response
 %%      message produced by `attestation/3').
-resolve_envelope(Base, Req, Opts) ->
+%% Reviewer pass 10 fuzzer: guard on `is_map(Base)' so a
+%% non-map Base (list, binary, atom) does not crash
+%% `hb_maps:get(<<"body">>, Base, ...)' with `{badmap, Base}'.
+%% Kept in lock-step with `dev_tpm_interpret:resolve_envelope/3'.
+resolve_envelope(Base, Req, Opts) when is_map(Base) ->
     case hb_maps:get(<<"envelope">>, Req, undefined, Opts) of
         E when is_map(E) -> E;
         _ ->
@@ -459,7 +463,9 @@ resolve_envelope(Base, Req, Opts) ->
                         _ -> Base
                     end
             end
-    end.
+    end;
+resolve_envelope(_Base, _Req, _Opts) ->
+    #{}.
 
 is_envelope(M) when is_map(M) ->
     hb_maps:get(<<"lapee-attestation-version">>, M, undefined, #{}) /=
