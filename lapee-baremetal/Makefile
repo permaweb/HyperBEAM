@@ -44,16 +44,16 @@ builders:
 	docker build --platform=linux/amd64 -t lapee-tools:latest         -f reference-demo/tpm-tools-docker/Dockerfile reference-demo/tpm-tools-docker/
 
 tpm-start:
-	./scripts/swtpm.sh start
+	./scripts/legacy/swtpm.sh start
 
 tpm-stop:
-	./scripts/swtpm.sh stop
+	./scripts/legacy/swtpm.sh stop
 
 tpm-status:
-	./scripts/swtpm.sh status
+	./scripts/legacy/swtpm.sh status
 
 reset-tpm:
-	./scripts/swtpm.sh reset && ./scripts/swtpm.sh start
+	./scripts/legacy/swtpm.sh reset && ./scripts/legacy/swtpm.sh start
 
 nif-linux:
 	@mkdir -p work
@@ -104,10 +104,10 @@ fetch-debian-kernel:
 
 initramfs: nif-linux
 	@mkdir -p work
-	@./scripts/build-initramfs.sh
+	@./scripts/legacy/build-initramfs.sh
 
 boot-real:
-	@./scripts/boot-real.sh
+	@./scripts/legacy/boot-real.sh
 
 real-all: builders fetch-debian-kernel nif-linux initramfs boot-real verify
 
@@ -129,7 +129,7 @@ hb-initramfs:
 	./scripts/build-initramfs-hb.sh
 
 hb-boot:
-	./scripts/boot-hb.sh
+	./scripts/legacy/boot-hb.sh
 
 # hb-usb-image: produce a UEFI-bootable .img combining the
 # Buildroot kernel + our HB initramfs + a default LapEE cmdline.
@@ -153,17 +153,23 @@ INITRAMFS  ?= work/initramfs-hb.cpio.gz
 # Token-by-token:
 #   console=tty0       physical screen (Framework + any laptop)
 #   console=ttyS0      serial (QEMU -nographic; ignored on iron)
-#   quiet loglevel=4   suppress kernel info spam; warnings +
+#   quiet loglevel=3   suppress kernel info + notice; warnings +
 #                      errors still show, init's echoes still
-#                      show (they're userspace, unaffected)
+#                      show (they're userspace, unaffected).
+#                      Bumped from 4 to 3 in v1.2 for tighter
+#                      sub-second boot -- every buffered kmsg
+#                      takes visible ms on serial.
 #   panic=10           reboot 10s after kernel panic (safety)
-#   ima_policy=tcb     measure TCB files into IMA (PCR 10),
-#                      paper-aligned integrity chain
 #   rdinit=/init       run our initramfs init as PID 1
 #   LAPEE_WRITEBACK=1  init writes attestation to the ESP
 #                      partition it was booted from, then
 #                      waits for power-off
-CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=4 panic=10 ima_policy=tcb rdinit=/init LAPEE_WRITEBACK=1
+#
+# v1.2 removed `ima_policy=tcb' -- the initramfs stub doesn't
+# emit an IMA log, so PCR 10 reads as zero anyway. Re-add when
+# the guest grows an IMA runtime; keeping the default off saves
+# kernel time on every exec.
+CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=3 panic=10 rdinit=/init LAPEE_WRITEBACK=1
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
 hb-usb-image:
@@ -221,25 +227,25 @@ hb-all:
 # always has a human-readable view of the latest run. The exit code
 # still reflects the underlying script's outcome.
 hb-acceptance:
-	./scripts/hb-acceptance.sh; rc=$$?; ./scripts/build-evidence-dashboard.py >/dev/null || true; exit $$rc
+	./scripts/legacy/hb-acceptance.sh; rc=$$?; ./scripts/legacy/build-evidence-dashboard.py >/dev/null || true; exit $$rc
 
 # hb-tamper-test: starting from a valid envelope in out/evidence/,
 # produces seven targeted byte-flips and asserts the verifier rejects
 # each at the expected check. Completeness pair to hb-acceptance.
 hb-tamper-test:
-	./scripts/hb-tamper-test.sh; rc=$$?; ./scripts/build-evidence-dashboard.py >/dev/null || true; exit $$rc
+	./scripts/legacy/hb-tamper-test.sh; rc=$$?; ./scripts/legacy/build-evidence-dashboard.py >/dev/null || true; exit $$rc
 
 # hb-interpret-demo: end-to-end demo of ~tpm-interpret@1.0, feeding
 # a saved envelope to /~tpm-interpret@1.0/verify over HTTP and
 # pretty-printing the rich per-section interpretation. Also exercises
 # /events + /claim via the new events+claim demo script.
 hb-interpret-demo:
-	./scripts/hb-interpret-demo.sh && ./scripts/hb-events-claim-demo.sh; rc=$$?; \
+	./scripts/legacy/hb-interpret-demo.sh && ./scripts/legacy/hb-events-claim-demo.sh; rc=$$?; \
 	mkdir -p out/evidence; \
 	[ -f /tmp/hb-interpret-result.json ] && cp /tmp/hb-interpret-result.json out/evidence/interpret-verify-live.json || true; \
 	[ -f /tmp/hb-events-result.json ]    && cp /tmp/hb-events-result.json    out/evidence/events-live.json    || true; \
 	[ -f /tmp/hb-claim-result.json ]     && cp /tmp/hb-claim-result.json     out/evidence/claim-live.json     || true; \
-	./scripts/build-evidence-dashboard.py >/dev/null || true; \
+	./scripts/legacy/build-evidence-dashboard.py >/dev/null || true; \
 	exit $$rc
 
 # hb-cross-node-verify: the paper's real use-case. Starts a SEPARATE
@@ -260,10 +266,10 @@ hb-cross-node-verify:
 # (inline CSS, embedded JSON) so it works when emailed, stashed in
 # git, or served from a static file host.
 hb-dashboard:
-	./scripts/build-evidence-dashboard.py
+	./scripts/legacy/build-evidence-dashboard.py
 
 hb-dashboard-open:
-	./scripts/build-evidence-dashboard.py --open
+	./scripts/legacy/build-evidence-dashboard.py --open
 
 # ----- Buildroot path -----
 #
@@ -291,7 +297,7 @@ buildroot-clean:
 	  bash -c "rm -rf /build/out /build/buildroot-external"
 
 boot-buildroot:
-	./scripts/boot-buildroot.sh
+	./scripts/legacy/boot-buildroot.sh
 
 clean:
 	rm -rf work/lapee-tpm-linux work/initramfs-mini.cpio.gz out/*.json out/test-ek.* out/node-address.txt

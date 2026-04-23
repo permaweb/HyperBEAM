@@ -31,8 +31,12 @@ docker cp "$LAPEE/../../lapee-dev-tpm2/config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat 2>/dev/null || \
     docker cp "$(git -C /Users/sam/src/hyperbeam/.claude/worktrees/lapee-dev-tpm2 rev-parse --show-toplevel)/config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat
-# Copy our init.
-docker cp "$LAPEE/initramfs-hb/init" lapee-hb-mini:/init-hb
+# Copy the init + splash + DHCP-hook + ASCII logo.
+docker cp "$LAPEE/initramfs-hb/init"              lapee-hb-mini:/init-hb
+docker exec lapee-hb-mini mkdir -p /ramfs-src
+docker cp "$LAPEE/initramfs-hb/logo.ascii"        lapee-hb-mini:/ramfs-src/logo.ascii
+docker cp "$LAPEE/initramfs-hb/lapee-splash"      lapee-hb-mini:/ramfs-src/lapee-splash
+docker cp "$LAPEE/initramfs-hb/lapee-dhcp-hook"   lapee-hb-mini:/ramfs-src/lapee-dhcp-hook
 
 docker exec -i lapee-hb-mini bash <<'SH'
 set -e
@@ -46,7 +50,8 @@ cp /usr/bin/busybox /ramfs/bin/busybox
 cd /ramfs/bin
 for cmd in sh mount umount ls cat cp mv rm mkdir ln chmod chown echo grep sed awk find hostname \
            ifconfig dmesg ps head tail wc tar gzip sleep stat uname date touch test mknod reboot poweroff \
-           vi env printf sync tee base64; do
+           vi env printf sync tee base64 \
+           udhcpc stty; do
     ln -sf busybox $cmd
 done
 cd /
@@ -78,31 +83,56 @@ ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /ramfs/lib64/ld-linux-x86-64.s
 # libssl, pulled in above) stay -- HyperBEAM's crypto NIFs still need
 # them; what is gone is the userspace CLI tool + its default config.
 
+# v1.2 boot splash + DHCP hook. These get called from /init:
+#   - lapee-splash               render centred HB ASCII + status
+#   - lapee-dhcp-hook            udhcpc action script; claims the
+#                                first-to-lease interface as the
+#                                default route + re-renders the
+#                                splash with the node URL.
+# logo.ascii is the HyperBEAM figlet-style art the splash centres.
+cp /ramfs-src/logo.ascii          /ramfs/etc/lapee/logo.ascii
+cp /ramfs-src/lapee-splash        /ramfs/usr/local/bin/lapee-splash
+cp /ramfs-src/lapee-dhcp-hook     /ramfs/usr/local/bin/lapee-dhcp-hook
+chmod +x /ramfs/usr/local/bin/lapee-splash \
+         /ramfs/usr/local/bin/lapee-dhcp-hook
+
 # HyperBEAM release.
 cp -r /opt/hb/. /ramfs/usr/lib/hyperbeam/
 # Make sure bin/hb is executable.
 chmod +x /ramfs/usr/lib/hyperbeam/bin/hb 2>/dev/null || true
 
-# --- slim the release for the guest initramfs -------------------------
-# See HARDENING.md for the full rationale. The release tree we embed is
-# ~180 MB out of the box; the guest doesn't need:
+# --- slim the release for the guest initramfs (v1.2) ----------------
+# The bare release is ~180 MB out of the box; the runtime guest only
+# needs a fraction. Remove:
 #
-#   * the `bin/priv/' overlay copy of `priv/' (relx puts priv at
-#     `lib/hb-0.0.1/priv/' already; the overlay duplicates ~25 MB of
-#     NIFs + static HTML);
-#   * the `lib/hb-0.0.1/src/' source tree (ships with .erl sources for
-#     debug; BEAM only needs the .beam files in ebin/);
-#   * the hyperbuddy web UI bundle (~15 MB of JS/CSS — the LapEE guest
-#     serves attestation, not a browser UI);
-#   * full debug symbols on `beam.smp' (~35 MB stripped).
-rm -rf /ramfs/usr/lib/hyperbeam/bin/priv   # overlay duplicate of lib priv/
-rm -rf /ramfs/usr/lib/hyperbeam/lib/hb-0.0.1/src
-rm -rf /ramfs/usr/lib/hyperbeam/lib/hb-0.0.1/priv/html
-rm -rf /ramfs/usr/lib/hyperbeam/lib/hb-0.0.1/priv/static
-# Strip BEAM and any shared libs the NIFs ship.
-find /ramfs/usr/lib/hyperbeam/erts-*/bin/beam.smp \
-     /ramfs/usr/lib/hyperbeam/lib -name '*.so' -type f 2>/dev/null \
+#   * `bin/priv/' -- overlay duplicate of `lib/hb-0.0.1/priv/' (~25 MB)
+#   * `lib/hb-0.0.1/src/' -- .erl sources only needed for debug builds
+#   * `lib/hb-0.0.1/priv/html` / `priv/static` -- hyperbuddy web UI
+#     (~15 MB JS/CSS; LapEE serves attestation, not a browser UI)
+#   * `priv/tpm-interpret/fixtures/` -- test vectors for the parser
+#     eunit suite (~40 MB of TCG event-log samples), consumed only by
+#     `rebar3 eunit' on the verifier host; never accessed at runtime.
+#   * `lib/*/doc/`, `lib/*/examples/`, `lib/*/man/` -- docs / examples
+#     that ship with OTP and some deps; not needed on a thin guest.
+#   * `.beam.debug_info`-heavy debug symbols on `beam.smp` (~35 MB
+#     stripped).
+HB=/ramfs/usr/lib/hyperbeam
+rm -rf $HB/bin/priv
+rm -rf $HB/lib/hb-0.0.1/src
+rm -rf $HB/lib/hb-0.0.1/priv/html
+rm -rf $HB/lib/hb-0.0.1/priv/static
+rm -rf $HB/lib/hb-0.0.1/priv/tpm-interpret/fixtures
+# Trim OTP docs/examples from every shipped lib.
+for d in $HB/lib/*; do
+    rm -rf "$d/doc" "$d/examples" "$d/man"
+done
+# Strip BEAM + every shared lib the NIFs ship.
+find $HB/erts-*/bin/beam.smp \
+     $HB/lib -name '*.so' -type f 2>/dev/null \
     | xargs -r strip -s 2>/dev/null || true
+# Report so we can see v1.2 slim progress on every rebuild.
+echo "--- post-slim HB size ---"
+du -sh $HB /ramfs/usr/lib 2>/dev/null || true
 
 # LapEE-specific sys.config overlay. The OTP os_mon app (disksup,
 # memsup, cpu_sup, os_sup) expects a host-ish filesystem, and under the

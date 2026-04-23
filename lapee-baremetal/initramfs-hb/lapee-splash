@@ -1,0 +1,34 @@
+#!/bin/sh
+# lapee-splash -- print a centred HyperBEAM ASCII logo + a status
+# line. Called once from init at boot (blank status) and once
+# more after HB is live (with the node URL).
+set -eu
+
+LOGO=${LAPEE_LOGO:-/etc/lapee/logo.ascii}
+COLS=$(stty size 2>/dev/null | awk '{print $2}' || echo 80)
+[ -z "$COLS" ] && COLS=80
+
+status=${1-}
+
+center() {
+    awk -v cols="$COLS" '{
+        n = length($0);
+        if (n >= cols) { print; next; }
+        pad = int((cols - n) / 2);
+        s = "";
+        for (i = 0; i < pad; i++) s = s " ";
+        print s $0;
+    }'
+}
+
+echo
+if [ -f "$LOGO" ]; then
+    center < "$LOGO"
+fi
+
+if [ -n "$status" ]; then
+    printf "%s\n" "$status" | center
+else
+    echo
+fi
+echo

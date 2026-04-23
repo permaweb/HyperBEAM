@@ -22,36 +22,54 @@ mkdir -p /dev/pts
 mount -t devpts -o nosuid,noexec devpts /dev/pts
 mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 
-echo
-echo "==============================================="
-echo "LapEE — kernel $(uname -r), HyperBEAM as PID 2"
-echo "==============================================="
+# v1.2: Boot splash -- centred HyperBEAM ASCII art + empty status
+# slot. The lapee-dhcp-hook overwrites the status line with
+# `http://<ip>:8734' once any interface gets a DHCP lease.
+# Kernel messages may scroll past but the splash re-renders on
+# first DHCP bound event, so the final frame is clean.
+if [ -x /usr/local/bin/lapee-splash ]; then
+    /usr/local/bin/lapee-splash > /dev/console 2>/dev/null || true
+fi
+echo "[init] kernel=$(uname -r)"
 
-# Bring up loopback and whichever Ethernet-ish interface QEMU/Linux
-# enumerated for the virtio-net-pci device. Debian's kernel uses
-# systemd-style predictable naming (enpXsY / ensN), not eth0, so we
-# walk /sys/class/net/ and pick the first interface whose name is
-# neither `lo' nor a virtual device.
+# --- Networking (v1.2 A2-A5) -------------------------------------
+#
+# Enumerate every physical NIC, bring it up, and fork a udhcpc in
+# the background. The first interface to get a lease wins -- it
+# becomes the default gateway (see /usr/local/bin/lapee-dhcp-hook).
+# This matches the precedence Sam asked for:
+#   (a) built-in wired Ethernet (enp*, eth*)
+#   (b) USB-C Ethernet dongle (enp*u*, usb*)
+#   (c) Thunderbolt-bridge via USB4_NET (thunderbolt*)
+#   (d) USB RNDIS tether (rndis*)
+# The kernel assigns ascending names in roughly that order on a
+# real boot, so "first to lease wins" does the right thing without
+# explicit ranking. Secondary interfaces keep their IP for
+# diagnostics and hot-swap but don't overwrite the default route.
+#
+# QEMU compatibility: slirp (`-netdev user') includes a DHCP
+# server at 10.0.2.2, so this path works unchanged in QEMU --
+# no more hard-coded 10.0.2.15 fallback.
+
 ip link set lo up 2>/dev/null || true
+
+NIC_COUNT=0
 for iface in /sys/class/net/*; do
     name=$(basename "$iface")
     case "$name" in
-        lo|bonding_masters) continue ;;
+        lo|bonding_masters|bonding|ip6tnl0|tunl0|sit0) continue ;;
     esac
-    # Skip anything that is not a real NIC (no `device' symlink).
     [ -e "$iface/device" ] || continue
-    echo "[init] net: bringing up $name"
+    echo "[init] net: up $name"
     ip link set "$name" up 2>/dev/null || true
-    # Slirp's default guest network is 10.0.2.0/24 with gateway
-    # 10.0.2.2. DHCP would also work, but we hard-code to avoid
-    # pulling udhcpc / dhclient into the initramfs.
-    ip addr add 10.0.2.15/24 dev "$name" 2>/dev/null || true
-    ip route add default via 10.0.2.2 dev "$name" 2>/dev/null || true
-    GUEST_IFACE=$name
-    break
+    udhcpc -i "$name" -b -t 5 -T 1 -A 2 \
+           -p "/run/udhcpc.$name.pid" \
+           -s /usr/local/bin/lapee-dhcp-hook \
+           >> /run/lapee/udhcpc.log 2>&1 \
+           || echo "[net] $name: udhcpc launch failed"
+    NIC_COUNT=$((NIC_COUNT + 1))
 done
-: "${GUEST_IFACE:=<none-found>}"
-echo "[init] net: primary interface = $GUEST_IFACE"
+echo "[init] net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
 
 # Default config files (shipped with image).
 ENFORCED_CFG=/etc/lapee/lapee-enforced.flat

@@ -1,0 +1,75 @@
+#!/bin/sh
+# lapee-dhcp-hook -- udhcpc action script. Called by udhcpc on
+# deconfig / bound / renew / nak / leasefail events. Busybox's
+# udhcpc passes state via $1 (action) and the lease as env vars
+# (ip, subnet, router, dns, lease).
+#
+# Policy: the FIRST interface to get a lease wins and becomes the
+# default route; later interfaces keep their IP for diagnostics
+# but do NOT overwrite the default. This implements the v1.2
+# precedence spec: whichever wired interface appears first with
+# carrier gets promoted; later (or slower) ones stay in the
+# background. iproute2 accepts a dotted-decimal subnet mask
+# directly (`ip addr add 1.2.3.4/255.255.255.0'), which keeps
+# this hook small + dependency-free.
+
+set -eu
+: "${interface:=unknown}"
+
+PRIMARY=/run/lapee/primary-net
+mkdir -p /run/lapee
+
+case "${1:-unknown}" in
+    deconfig)
+        ip -4 addr flush dev "$interface" 2>/dev/null || true
+        ip link set "$interface" up 2>/dev/null || true
+        ;;
+
+    bound|renew)
+        if [ -z "${ip:-}" ]; then
+            echo "[net] $interface: bound event without ip= -- skipping"
+            exit 0
+        fi
+        mask=${subnet:-255.255.255.0}
+        ip -4 addr flush dev "$interface" 2>/dev/null || true
+        ip -4 addr add "$ip/$mask" dev "$interface" \
+            2>/dev/null || true
+        ip link set "$interface" up 2>/dev/null || true
+
+        if [ ! -s "$PRIMARY" ]; then
+            for gw in ${router:-}; do
+                ip -4 route replace default via "$gw" \
+                    dev "$interface" 2>/dev/null || true
+            done
+            if [ -n "${dns:-}" ]; then
+                : > /etc/resolv.conf || true
+                for n in $dns; do
+                    echo "nameserver $n" >> /etc/resolv.conf
+                done
+            fi
+            printf "iface=%s\nip=%s\ngw=%s\ndns=%s\n" \
+                "$interface" "$ip" "${router:-}" "${dns:-}" \
+                > "$PRIMARY"
+            echo "[net] $interface: bound ip=$ip" \
+                 "gw=${router:-none} dns=${dns:-none}  (primary)"
+            if [ -x /usr/local/bin/lapee-splash ]; then
+                /usr/local/bin/lapee-splash \
+                    "node:  http://$ip:8734" \
+                    > /dev/console 2>/dev/null || true
+            fi
+        else
+            echo "[net] $interface: bound ip=$ip  (secondary;" \
+                 "keeping default route from $(cat "$PRIMARY" \
+                    | sed -n 's/^iface=//p'))"
+        fi
+        ;;
+
+    nak|leasefail)
+        echo "[net] $interface: $1 (no lease)"
+        ;;
+
+    *)
+        ;;
+esac
+
+exit 0
