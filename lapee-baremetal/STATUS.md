@@ -1,7 +1,11 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 ~06:00 EDT -- v1.2 overnight pass
-shipped through reviewer pass 6 (paper-to-code correctness).
+**Latest update:** 2026-04-23 ~05:50 EDT -- v1.2 overnight pass
+shipped through reviewer pass 7 (security-delta on batch 9).
+USB image (v1.2 + batch 10) rebuilt and QEMU-smoke-tested end-
+to-end: LAPEE-WRITEBACK-OK + a 104 KB attestation envelope
+carrying `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' at seq 1 in PCR 15,
+`ak-pubkey-extend-verified = true' on the verifier side.
 
 > **USB re-flash required before morning demo.** Batch 9 adds the
 > producer-side `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event in
@@ -10,9 +14,15 @@ shipped through reviewer pass 6 (paper-to-code correctness).
 > NOT emit this event; booting it with a batch-9-or-later
 > verifier would produce verdict=untrusted.
 >
+> Batch 10 (`8f9748c34') also adds a JSON-safety fix --
+> without it, the batch 9 producer crashes `json:encode/1' on
+> the `/attestation' response because the event description
+> contained a U+00A7 section-sign byte invalid under UTF-8.
+> Use the batch-10-or-later image, not the batch-9-only one.
+>
 > ```
 > cd lapee-baremetal
-> make hb-usb-image    # rebuilds; ~5 min incremental, ~25 min cold
+> make hb-release hb-initramfs hb-usb-image   # full rebuild
 > make hb-usb-write DEV=/dev/disk4
 > ```
 
@@ -34,12 +44,13 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Fifteen commits on `agent/lapee' pushed to Permagit:
+Sixteen commits on `agent/lapee' pushed to Permagit:
 
 ```
-(batch 9, pending push) v1.2 batch 9: paper-to-code P5
-           (key-pubkey-extend in init_chain + chk_ak_pubkey_binding
-           verifier check + ak-pubkey-extend-verified signal) +
+8f9748c34  v1.2 batch 10: JSON-safe binary literals + reviewer 7
+           follow-ups (pcr=15 filter in verify_ak_pubkey_extend,
+           stale-comment sequencing caveat, seq-ordering doc)
+04050f25c  v1.2 batch 9: paper-to-code P5 key-pubkey-extend +
            verdict hardening (HIGH-2 lockdown-off-or-unknown warn,
            MEDIUM-4 ek-chain-unknown critical, LOW-1 freshness-
            indicator-unknown warn)
@@ -79,15 +90,54 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
            (E1, E4, E5, E6)
 ```
 
-Six independent code reviewers spoken to (curmudgeonly
+Seven independent code reviewers spoken to (curmudgeonly
 firmware-security; pragmatic demo-ops; fresh-eyes first-time-
 contributor; adversarial red-team; Erlang/OTP canon; paper-to-
-code correctness). Verdicts: SHIP (batches 4/5/6), SHIP-after-
-batch-7 (red-team pre-fix: "verifier can be bypassed"), SHIP
-(batch 8 Erlang canon), SHIP-WITH-NOTES (paper-to-code:
-CRITICAL-1 key-pubkey-extend fixed in batch 9; CRITICAL-2/3/4/5
-paper-divergence items deferred to v1.3). See "Review findings
-acted on" at the bottom of this report for the full ledger.
+code correctness; security-delta on batch 9). Verdicts:
+SHIP (batches 4/5/6), SHIP-after-batch-7 (red-team pre-fix:
+"verifier can be bypassed"), SHIP (batch 8 Erlang canon),
+SHIP-WITH-NOTES (paper-to-code pass 6: CRITICAL-1 fixed in
+batch 9, CRITICAL-2/3/4/5 deferred to v1.3 with paper amendments),
+CLOSED (security-delta pass 7: CRITICAL-1 closure validated,
+two cleanups applied in batch 10). See "Review findings acted
+on" at the bottom of this report for the full ledger.
+
+**Live evidence of end-to-end working (2026-04-23 05:44 EDT):**
+
+```
+$ make hb-release hb-initramfs hb-usb-image     # batch 10 build
+$ bash scripts/boot-usb-image.sh                 # QEMU smoke
+... >> LAPEE-WRITEBACK-OK detected in serial log
+... === QEMU boot test PASSED ===
+... attestation-latest.json  (104 244 bytes, 2026-04-23 05:41)
+
+$ bash scripts/interpret-local-capture.sh \
+      --label 'QEMU batch 9 smoke' \
+      out/qemu-usb-test/attestation-latest.json
+... verdict  = untrusted (score 0)
+... criticals= 2  warnings= 4
+
+Signals (live envelope, batch-10 verifier):
+   ak-pubkey-extend-verified = true       # paper P5 NOW ENFORCED
+   quote-signature-verified  = true       # batch 7 still intact
+
+Runtime event log (PCR 15, from envelope body):
+   seq=0  EV_HYPERBEAM_NODE_IDENTITY_EXTEND
+   seq=1  EV_HYPERBEAM_KEY_PUBKEY_EXTEND   # batch 9 producer
+
+Criticals (both QEMU-context expected, NOT batch regressions):
+   ek-cert-missing           # swtpm has no vendor EK cert
+   sb-policy-setup-mode      # OVMF default SB setup mode
+
+Warnings (all explainable for QEMU, not regressions):
+   pcr-replay-multi-mismatch             # SeaBIOS quirk (v1.3
+                                         #   MEDIUM 3 tolerate)
+   freshness-indicator-unknown           # batch 9 LOW-1 fix
+                                         #   surfacing swtpm gap
+   ek-ak-binding-not-implemented         # batch 7 honest warn
+                                         #   (v1.3 target)
+   lockdown-integrity-not-confidentiality # QEMU kernel default
+```
 
 **Known v1.3 gap (surfaced by red-team reviewer, batch 7):**
 the v1.2 verifier does NOT cryptographically prove that the AK
@@ -650,6 +700,48 @@ noted):
   MEDIUM-5    RSASSA-PSS for result signatures (paper P9).
               Separate from TPM quote sig; audit item flagged
               but not verified in review window.
+
+**Pass 7 -- security-delta auditor on batch 9** (against commit
+04050f25c). Verdict before fixes: **CLOSED** for the stated
+scope ("AK-pub must be extended into PCR 15 before attestation,
+and the verifier must reject an envelope without it"). Two
+surgical cleanups recommended, both landed in batch 10 (commit
+8f9748c34):
+
+  Cleanup A  Comment at `dev_tpm2.erl:1464-1471' claimed the
+             `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event "lands at
+             seq 0, BEFORE any on/start node-identity-extend."
+             In reality the on/start hook fires FIRST at BEAM
+             startup (seq 0), then `init_chain' (triggered by
+             the first `/attestation' request) runs
+             `extend_with_ak_pubkey' which lands at seq 1. The
+             verifier does NOT pin seq position, so this is a
+             documentation correctness issue, not an enforcement
+             one. Comment rewritten; an explicit sequencing-
+             caveat note added to `extend_with_ak_pubkey/1' doc
+             header.
+
+  Cleanup B  `dev_tpm_interpret:verify_ak_pubkey_extend/1' did
+             not filter by `pcr = 15' -- a well-formed
+             `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event in the wrong
+             PCR would have set `ak-pubkey-extend-verified =
+             true' on the interpret path. The core
+             `dev_tpm2:chk_ak_pubkey_binding/1' already
+             filtered pcr=15; the mirror now matches it. Added
+             `ev_pcr/1' helper tolerant of integer vs binary
+             PCR encoding (JSON round-trip may stringify keys).
+             Two new assertions in `v1_2_verify_ak_pubkey_
+             extend_shapes_test': wrong PCR -> false; binary
+             "15" -> true.
+
+Also in batch 10: five UTF-8 section-sign bytes (U+00A7)
+embedded in binary literals crashed `json:encode/1' with
+`{invalid_byte, 167}' on the first `/attestation' response --
+Erlang source is latin-1 by default, so `<<"§">>' becomes
+`<<16#A7>>' (a bare 0xA7 is an invalid UTF-8 byte). All five
+replaced with ASCII. Without this fix, no batch-9 envelope
+would ever serialise over HTTP -- the QEMU smoke-test caught
+it.
 
 ---
 
