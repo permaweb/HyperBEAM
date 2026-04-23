@@ -215,6 +215,44 @@ extend(Base, Req, Opts) ->
             }}
     end.
 
+%% @doc Extend PCR 15 with the attestation-key public key PEM,
+%% emitting an `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event at seq 0 of the
+%% runtime event log.
+%%
+%% This is the producer side of the paper's P5 property: a verifier
+%% replaying the event log observes the AK pub hash land in PCR 15
+%% BEFORE any node-message extends, so every subsequent AK-signed
+%% quote cryptographically proves the AK pub was bound into this
+%% specific measured-boot session's PCR 15 trajectory.
+%%
+%% Digest is `sha256(AKPem)' -- the same byte-for-byte text that the
+%% envelope later ships as `ak-pub-pem', so the verifier
+%% (`chk_ak_pubkey_binding/1') can recompute and compare without
+%% format-conversion surprises.
+%%
+%% Returns `ok' on success; on failure returns the NIF error (which
+%% `init_chain/1' in turn bubbles up so the node refuses to start).
+extend_with_ak_pubkey(AKPem) when is_binary(AKPem) ->
+    Digest = crypto:hash(sha256, AKPem),
+    case nif_pcr_extend(?NODE_IDENTITY_PCR, Digest) of
+        ok ->
+            _ = append_event(?NODE_IDENTITY_PCR,
+                #{
+                    <<"event-type">> =>
+                        <<"EV_HYPERBEAM_KEY_PUBKEY_EXTEND">>,
+                    <<"description">> =>
+                        <<"TPM2 attestation-key public-key PEM "
+                          "extend (paper §Ephemeral-node-key-binding "
+                          "P5: binds AK pub into this measured-boot "
+                          "session's PCR 15 trajectory).">>,
+                    <<"digest">> => hb_util:encode(Digest),
+                    <<"subject">> => hb_util:encode(AKPem),
+                    <<"subject-is-message">> => false
+                }),
+            ok;
+        {error, _} = E -> E
+    end.
+
 %%%============================================================================
 %%% quote/3
 %%%============================================================================
@@ -308,6 +346,10 @@ verify(Base, Req, Opts) ->
                    <<"core">>),
         safely_run(fun() -> chk_event_log_replay(Envelope) end,
                    <<"Runtime event log replay of PCR 15 matches quoted value">>,
+                   <<"core">>),
+        safely_run(fun() -> chk_ak_pubkey_binding(Envelope) end,
+                   <<"PCR 15 extension commits to AK pub PEM "
+                     "(paper P5 key-pubkey-extend)">>,
                    <<"core">>),
         safely_run(fun() -> chk_binding(Envelope) end,
                    <<"PCR 15 extension commits to node_message_id">>,
@@ -748,7 +790,62 @@ chk_event_log_replay(Envelope) ->
 int_pcr(V) when is_integer(V) -> V;
 int_pcr(V) when is_binary(V)  -> binary_to_integer(V).
 
-%%---- check 4: PCR 15 event commits to node_message_id ----------------
+%%---- check 4a: PCR 15 event commits to AK pub PEM ---------------------
+%%
+%% Paper §Ephemeral-node-key-binding P5 requires that the AK pub is
+%% extended into PCR 15 at init_chain time BEFORE any node-identity
+%% extends, so every subsequent AK-signed quote cryptographically
+%% proves the AK pub was bound into this measured-boot session's
+%% PCR 15 trajectory.
+%%
+%% Verifier: find an event in the runtime event log with
+%% event-type = `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' whose decoded digest
+%% equals `sha256(envelope.ak-pub-pem)'. The producer emits this at
+%% seq 0 via `extend_with_ak_pubkey/1' from `init_chain/1'.
+%%
+%% Absent = paper property violated. An envelope without this event
+%% has no cryptographic proof that the AK pub is tied to the
+%% measured-boot session it claims to be from -- an attacker
+%% presenting a freshly-generated AK pub + a quote over a TPM they
+%% control is not refuted.
+chk_ak_pubkey_binding(Envelope) ->
+    AkPem = hb_maps:get(<<"ak-pub-pem">>, Envelope, <<>>, #{}),
+    Events = [E || E <- hb_maps:get(<<"runtime-event-log">>, Envelope, [],
+                                    #{}),
+                   int_pcr(hb_maps:get(<<"pcr">>, E, 0, #{})) =:=
+                       ?NODE_IDENTITY_PCR,
+                   hb_maps:get(<<"event-type">>, E, <<>>, #{}) =:=
+                       <<"EV_HYPERBEAM_KEY_PUBKEY_EXTEND">>],
+    case {AkPem, Events} of
+        {<<>>, _} ->
+            {error, <<"no ak_pub_pem in envelope">>};
+        {_, []} ->
+            {error, <<"no EV_HYPERBEAM_KEY_PUBKEY_EXTEND event in "
+                      "runtime_event_log -- paper §Ephemeral-node-"
+                      "key-binding P5 violated">>};
+        {Pem, _} ->
+            Expected = crypto:hash(sha256, Pem),
+            Match = [E || E <- Events,
+                          hb_util:decode(
+                            hb_maps:get(<<"digest">>, E, <<>>, #{}))
+                              =:= Expected],
+            case Match of
+                [] ->
+                    {error, iolist_to_binary(io_lib:format(
+                        "EV_HYPERBEAM_KEY_PUBKEY_EXTEND event(s) "
+                        "present but none carry "
+                        "sha256(ak_pub_pem)=~s",
+                        [binary:part(
+                            hb_util:encode(Expected), 0, 16)]))};
+                [E|_] ->
+                    Seq = hb_maps:get(<<"seq">>, E, <<>>, #{}),
+                    {ok, iolist_to_binary(io_lib:format(
+                        "AK pub PEM bound into PCR 15 at seq=~p",
+                        [Seq]))}
+            end
+    end.
+
+%%---- check 4b: PCR 15 event commits to node_message_id ----------------
 chk_binding(Envelope) ->
     ExpectedId =
         hb_maps:get(<<"node-message-id">>, Envelope, undefined, #{}),
@@ -1364,7 +1461,16 @@ init_chain(Opts) ->
                         {ok, #{esys_tr := AKTr, public_pem := AKPem}} ->
                             persistent_term:put({dev_tpm2, ak_tr}, AKTr),
                             persistent_term:put({dev_tpm2, ak_pub_pem}, AKPem),
-                            ok;
+                            %% Paper §Ephemeral-node-key-binding P5:
+                            %% "as the last step before attestation,
+                            %% HyperBEAM extends PCR 15 with the public
+                            %% half [of the AK]". Fires ONCE at
+                            %% init_chain time, BEFORE any on/start
+                            %% node-identity-extend; the event lands
+                            %% at seq 0 and every subsequent quote
+                            %% cryptographically covers
+                            %% sha256(ak_pub_pem) via PCR 15.
+                            extend_with_ak_pubkey(AKPem);
                         {error, _} = E -> E
                     end;
                 {error, _} = E -> E
@@ -2203,6 +2309,63 @@ chk_event_log_replay_rejects_empty_events_test() ->
         }
     },
     ?assertMatch({error, _}, chk_event_log_replay(Envelope)).
+
+%% v1.2 batch 9 / paper-to-code pass P5: `chk_ak_pubkey_binding' must
+%% verify that the envelope carries an EV_HYPERBEAM_KEY_PUBKEY_EXTEND
+%% event whose decoded digest matches sha256(ak-pub-pem). Missing AK
+%% pub, missing event, event with wrong type, and event with wrong
+%% digest all reject; a correctly-shaped event accepts.
+chk_ak_pubkey_binding_enforces_p5_test() ->
+    %% Dummy AK PEM text -- chk_ak_pubkey_binding does not decode
+    %% the PEM, it only hashes the bytes to match against the event
+    %% digest.
+    AkPem = <<"-----BEGIN PUBLIC KEY-----\nMOCK\n-----END PUBLIC KEY-----\n">>,
+    Digest = crypto:hash(sha256, AkPem),
+    DigestB64 = hb_util:encode(Digest),
+    GoodEvent = #{<<"pcr">> => 15,
+                  <<"event-type">> =>
+                      <<"EV_HYPERBEAM_KEY_PUBKEY_EXTEND">>,
+                  <<"digest">> => DigestB64,
+                  <<"seq">> => 0},
+    %% (1) Missing ak-pub-pem -> error.
+    ?assertMatch({error, _},
+                 chk_ak_pubkey_binding(#{<<"runtime-event-log">> =>
+                                             [GoodEvent]})),
+    %% (2) AK pub present but no EV_HYPERBEAM_KEY_PUBKEY_EXTEND
+    %% event in the log -> error (paper P5 violated).
+    ?assertMatch({error, _},
+                 chk_ak_pubkey_binding(#{<<"ak-pub-pem">> => AkPem,
+                                         <<"runtime-event-log">> => []})),
+    %% (3) Event present but wrong event-type -> error.
+    WrongTypeEvent =
+        GoodEvent#{<<"event-type">> =>
+                       <<"EV_HYPERBEAM_NODE_IDENTITY_EXTEND">>},
+    ?assertMatch({error, _},
+                 chk_ak_pubkey_binding(#{<<"ak-pub-pem">> => AkPem,
+                                         <<"runtime-event-log">> =>
+                                             [WrongTypeEvent]})),
+    %% (4) Event present with correct type but wrong digest -> error.
+    WrongDigestEvent =
+        GoodEvent#{<<"digest">> =>
+                       hb_util:encode(
+                           crypto:hash(sha256, <<"forged">>))},
+    ?assertMatch({error, _},
+                 chk_ak_pubkey_binding(#{<<"ak-pub-pem">> => AkPem,
+                                         <<"runtime-event-log">> =>
+                                             [WrongDigestEvent]})),
+    %% (5) Correct event -> ok.
+    ?assertMatch({ok, _},
+                 chk_ak_pubkey_binding(#{<<"ak-pub-pem">> => AkPem,
+                                         <<"runtime-event-log">> =>
+                                             [GoodEvent]})),
+    %% (6) Event in wrong PCR (not 15) -> error (paper P5 is
+    %% specifically about PCR 15).
+    WrongPcrEvent = GoodEvent#{<<"pcr">> => 11},
+    ?assertMatch({error, _},
+                 chk_ak_pubkey_binding(#{<<"ak-pub-pem">> => AkPem,
+                                         <<"runtime-event-log">> =>
+                                             [WrongPcrEvent]})),
+    ok.
 
 %% Regression test: `chk_binding' must refuse to treat an empty /
 %% malformed node_message_id as matching an empty event digest
