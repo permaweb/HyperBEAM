@@ -22,3 +22,23 @@ following:
    code must actually work in-production.
 5. Always attempt to leave the codebase in a better state than you found it. More
    precise, clear, and minimal -- while maintaining the existing featureset.
+
+## LapEE
+
+If the task touches `lapee-baremetal/`, `src/dev_tpm2.erl`,
+`src/dev_tpm_interpret.erl`, `src/dev_tpm_tcg.erl`, or
+`native/lapee_tpm_nif/`, you're in the LapEE (Laptop Execution
+Environment) subsystem -- the TPM-attested bare-metal HyperBEAM
+appliance that boots a real laptop from a USB stick. Read
+`lapee-baremetal/STATUS.md` for the current mission brief and
+`lapee-baremetal/HISTORY.md` for how it got built. Principles:
+
+- Never synthesize attestation data. If the TPM doesn't provide
+  a value (e.g. NV has no EK cert), record it as absent. No
+  fakes, no test-CA synthesis at runtime.
+- All binary fields in attestation envelopes are base64url, kebab-
+  case on the wire, matching the HyperBEAM canon.
+- The parser (`dev_tpm_interpret`) must survive any envelope
+  shape -- stripped, malformed, adversarially re-ordered. Every
+  claim.* field populates to a concrete value OR an explicit
+  "unknown" / "absent" with a reason string; no crashes.

@@ -1,4 +1,13 @@
-# LapEE — feature coverage + hardware requirements
+# LapEE -- feature coverage + hardware requirements
+
+> **Note:** body of this doc was written 2026-04-19 (pre-v1.0).
+> Substantive features have been shipped since (v1.0 Framework
+> boot, v1.1 real-EK-cert pipeline, v1.2 networking + boot
+> splash + parser follow-ups). For the canonical current state
+> see [`STATUS.md`](STATUS.md) "Security property coverage"
+> table. This file is preserved for the hardware-compatibility
+> + feature-matrix framing; accuracy of specific rows may be
+> stale relative to the code.
 
 The commander's-intent question: *does a LapEE node have every
 feature it needs to be practically useful? on what subset of
@@ -7,8 +16,10 @@ the code so it can be re-audited each release.
 
 Conventions below:
 
-- **Shipped** = in the code + exercised by `make
-  hb-final-acceptance`.
+- **Shipped** = in the code + exercised by the acceptance suite.
+  (Acceptance moved from `make hb-final-acceptance' (legacy) to
+  `make hb-usb-image' + QEMU smoke + Framework iron test in
+  v1.2; see STATUS.md for the current procedure.)
 - **Partial** = enough to work in the common case but missing
   something for harder use.
 - **Parked** = deliberate gap, documented in STATUS.md with

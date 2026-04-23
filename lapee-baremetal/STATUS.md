@@ -1,10 +1,21 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 ~03:00 EDT -- v1.2 overnight pass
+**Latest update:** 2026-04-23 ~04:00 EDT -- v1.2 overnight pass
 shipped. USB image ready for Sam's morning Framework reboot.
 
 For the full history (M0 -> v1.0 -> v1.1, every checkpoint, every
 bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
+
+## Quick links
+
+| Reader                    | Start here                             |
+|---------------------------|----------------------------------------|
+| Just want to try it?      | [README.md](README.md) "Quick start"   |
+| What changed tonight?     | Section below: "v1.2 overnight report" |
+| What's still open?        | Section: "v1.2 acceptance" + "TODO list" |
+| How did we get here?      | [HISTORY.md](HISTORY.md)               |
+| Security model            | [SECURITY.md](SECURITY.md)             |
+| Paper-committed properties | [`../lapee-paper/main.tex`](../lapee-paper/main.tex) |
 
 ---
 

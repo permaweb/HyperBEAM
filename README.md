@@ -24,6 +24,17 @@ representations regarding the programs that operate inside the AO-Core protocol.
 models (`devices`) to be executed inside the AO-Core protocol, while enabling their
 states and inputs to be calculated and committed to in a unified format.
 
+## LapEE — attested bare-metal HyperBEAM appliance
+
+Looking for the laptop-as-TPM-attested-appliance reference
+implementation? See [`lapee-baremetal/`](lapee-baremetal/). A
+single USB stick boots a real laptop (Framework 13 validated on
+iron, other UEFI+TPM2 laptops expected to work via the `\EFI\Boot\BootX64.efi`
+fallback path), produces a signed TPM quote + full measured-boot
+event-log envelope, and parses end-to-end on a verifier Mac.
+`../lapee-paper/main.tex` is the specification; `lapee-baremetal/
+STATUS.md` is the current mission + TODO list.
+
 ## Contributing
 
 HyperBEAM is developed as an open source implementation of the AO-Core protocol 

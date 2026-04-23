@@ -1,4 +1,12 @@
-# LapEE guest — hardening + size audit (2026-04-19)
+# LapEE guest -- hardening + size audit (2026-04-19)
+
+> **Note:** figures below are the 2026-04-19 baseline. v1.2
+> (2026-04-23) added more NIC drivers to the kernel (negligible
+> size impact) and shrank the initramfs via fixtures-removal
+> + doc-dir pruning (115 MB HB tree -> 60 MB compressed
+> initramfs). See [`STATUS.md`](STATUS.md) "Image slim" for
+> the current post-v1.2 numbers. The threat model + hardening
+> stance described below is unchanged through v1.2.
 
 Audit of the guest the paper-aligned `~tpm2@2.0a` flow actually boots
 (Buildroot-built `vmlinuz-lapee` + `initramfs-hb.cpio.gz`).

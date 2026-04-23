@@ -1,3 +1,10 @@
+> **ARCHIVED.** This document describes a historical phase of
+> LapEE and is preserved for continuity. It does NOT describe
+> the current architecture -- see
+> [`../../STATUS.md`](../../STATUS.md) and
+> [`../../README.md`](../../README.md) for the v1.2
+> Framework-boot path that is the current reference.
+
 # Overnight pass -- TPM2 interpreter, world-class coverage
 
 **Start:** 2026-04-20 ~18:00 EDT

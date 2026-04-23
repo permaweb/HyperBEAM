@@ -1,29 +1,39 @@
 # LapEE bare-metal orchestration.
 #
-# Short path (software stack only, no QEMU):
-#   make builders       build Docker images (one-time, ~3 min)
-#   make nif-linux      cross-compile the NIF for x86_64 Linux
-#   make demo           run lapee_node inside a container against swtpm
-#   make verify         offline verify the resulting attestation.json
+# === v1.2 hot path (current; see STATUS.md for mission brief) ===
 #
-# Real-guest path (a Debian Linux kernel boots under QEMU, real TPM
-# driver attaches, our NIF runs as init inside the guest, attestation
-# comes out the serial port):
-#   make fetch-debian-kernel   pull Debian linux-image-amd64 .deb, extract vmlinuz
-#   make initramfs             build the 63 MB cpio initramfs
-#   make boot-real             boot guest under QEMU, capture attestation
-#   make verify                run verifier on captured attestation
-#   make real-all              chain: fetch-debian-kernel + initramfs + boot-real + verify
+#   make builders          one-time Docker amd64 builders (~3 min)
+#   make buildroot         kernel + minimal rootfs; first build
+#                          ~30-60 min on Rosetta, incremental ~3 min
+#   make hb-release        HB release with dev_tpm2 NIF + v1.2 devices
+#   make hb-initramfs      assemble guest image with HB + splash + DHCP
+#   make hb-usb-image      wrap kernel + initramfs into a bootable
+#                          UEFI USB image at work/lapee-usb.img
+#   make hb-usb-write DEV=/dev/diskN
+#                          dd to a physical USB stick (asks for YES
+#                          confirmation; detects non-disk devices)
+#   make hb-cross-node-verify
+#                          run verify-peer against a live peer HB
 #
-# dev_tpm2 path (the paper-aligned flow: real kernel, HB release,
-# ~tpm2@2.0a device, /~tpm2@2.0a/attestation-json, verifier_hb.py):
-#   make buildroot         build the LapEE kernel + minimal rootfs
-#   make hb-release        build the HB release with the dev_tpm2 NIF
-#   make hb-initramfs      assemble the guest image
-#   make hb-all            initramfs + boot + verify, one envelope
-#   make hb-acceptance     three-envelope positive battery
-#   make hb-tamper-test    seven-way verifier completeness probe
-#   make hb-interpret-demo end-to-end demo of ~tpm-interpret@1.0
+#   Verifier side (after writing + booting the target laptop):
+#     ./scripts/interpret-local-capture.sh \
+#         --label 'my laptop' \
+#         /Volumes/LAPEE_ESP/attestation-latest.json
+#
+# === Legacy (pre-v1.0; scripts under scripts/legacy/) ===
+#
+# These targets still run but are kept for historical repro only.
+# Not on the Framework USB-boot path.
+#
+#   make demo / verify / all
+#     M3-era container-based flow (lapee_node inside Docker vs swtpm)
+#   make real-all
+#     Debian-kernel-under-QEMU milestone ladder (M2-M5)
+#   make hb-all / hb-acceptance / hb-tamper-test / hb-interpret-demo
+#     Pre-v1.0 QEMU+swtpm acceptance batteries. The v1.2 equivalent
+#     is `make hb-usb-image' -> QEMU smoke-boot or iron reflash.
+#
+# See README.md and STATUS.md for documentation.
 
 LAPEE_ROOT := $(shell pwd)
 export LAPEE_ROOT

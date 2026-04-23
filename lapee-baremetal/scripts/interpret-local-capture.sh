@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
-# interpret-local-capture.sh — run the ~tpm-interpret@1.0 parser
+# interpret-local-capture.sh -- run the ~tpm-interpret@1.0 parser
 # on a TCG event log captured from a real machine, and produce
 # a per-machine HTML dashboard.
+#
+# Prerequisites (one-time install on the verifier Mac):
+#   brew install erlang rebar3 docker python@3
+#   # The parent HyperBEAM tree must be buildable -- this script
+#   # runs `rebar3 as test compile' from REPO (see line ~155) to
+#   # pick up the latest src/dev_tpm_interpret.erl.
+#
+# Output goes to out/local-capture/<slug>/. If the input file is
+# older than 30 minutes the script bails (override via
+# LAPEE_ACCEPT_STALE=1) -- this catches the case where a verifier
+# Mac has a stale ESP mounted from a previous boot and someone
+# unwittingly parses yesterday's envelope against today's parser.
 #
 # Usage:
 #   ./scripts/interpret-local-capture.sh path/to/eventlog.bin
