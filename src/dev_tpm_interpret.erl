@@ -2280,13 +2280,14 @@ enrich_cpu_from_cpuinfo(Base, E) ->
             Base1#{<<"brand-range">> => BrandRange}
     end.
 
-binary_to_int_or(<<>>, Default) -> Default;
-binary_to_int_or(Bin, Default) when is_binary(Bin) ->
-    case (catch binary_to_integer(Bin)) of
-        N when is_integer(N) -> N;
-        _ -> Default
-    end;
-binary_to_int_or(_, Default) -> Default.
+%% Delegates to `safe_int/1' so the binary-to-integer try/catch
+%% lives in exactly one place; callers that want a specific default
+%% instead of `undefined' wrap it here.
+binary_to_int_or(Bin, Default) ->
+    case safe_int(Bin) of
+        undefined -> Default;
+        N         -> N
+    end.
 
 extract_brand_range(<<>>, Default) -> Default;
 extract_brand_range(ModelName, Default) when is_binary(ModelName) ->
@@ -3092,12 +3093,6 @@ fresh_boot_classify(R, RC)
 fresh_boot_classify(_, _) ->
     tamper.
 
-%% Legacy boolean-returning helper kept for callers that only want
-%% the "is this first-cold-boot?" yes/no. Narrower contract than
-%% fresh_boot_classify/2: requires both counts present.
-is_fresh_boot(R, RC) ->
-    fresh_boot_classify(R, RC) =:= fresh_boot.
-
 ima_policy_finding(
   #{<<"ima-policy-violations">> := N}) when N > 0 ->
     finding(warn, <<"ima-policy-violations">>,
@@ -3313,7 +3308,7 @@ decode_rsa_pub_pem(Pem) when is_binary(Pem) ->
             [Entry | _] ->
                 case public_key:pem_entry_decode(Entry) of
                     #'RSAPublicKey'{} = K -> {ok, K};
-                    {#'SubjectPublicKeyInfo'{}, _} = _SPKI ->
+                    {#'SubjectPublicKeyInfo'{}, _} ->
                         %% Fall through to second-pass decode below.
                         decode_rsa_pub_spki(Entry);
                     Other ->

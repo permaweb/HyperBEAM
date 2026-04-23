@@ -566,16 +566,50 @@ diagnose_chain_failure(Why, EkDer, CaDer) ->
 %% be unit-tested in isolation -- the previous implementation
 %% returned `{valid, State}' for every event and that rubber-stamped
 %% `{bad_cert, selfsigned_peer}', `{bad_cert, unknown_ca}' et al.
-%% Here, only `{extension, _}' events (unknown TCG TPM OIDs) are
-%% silently accepted; every `{bad_cert, _}' is a hard reject.
+%%
+%% Mirrors `dev_tpm_interpret:ek_verify_fun/3' semantics (kept in
+%% sync deliberately; a divergence here would mean `dev_tpm2:verify/3'
+%% accepts a chain the parser-side `validate_ek_chain/3' rejects, or
+%% vice-versa). Two TCG OIDs are whitelisted as critical extensions
+%% that real-world EK certs always carry:
+%%
+%%   2.23.133.8.1    id-tcg-kp-EKCertificate  (EKU)
+%%   2.23.133.2.16   id-tcg-tpmSpecification  (spec-version attr)
+%%
+%% OTP's default path validator treats critical extensions it doesn't
+%% recognise as `{bad_cert, {not_supported_extension, _}}' -- without
+%% this whitelist, real Nuvoton / Infineon / STMicro EK certs all
+%% fail. Non-TCG critical extensions still fail. Non-critical
+%% extensions under the TCG arc `2.23.133.*' are accepted;
+%% non-TCG non-critical extensions fall through as `unknown' so
+%% pkix's own defaults apply.
 ek_chain_verify_fun() ->
-    {fun
-        (_, {bad_cert, _} = Reason, _) -> {fail, Reason};
-        (_, {extension, _}, State)     -> {unknown, State};
-        (_, valid, State)              -> {valid, State};
-        (_, valid_peer, State)         -> {valid, State};
-        (_, _Other, State)             -> {unknown, State}
-     end, []}.
+    {fun ek_chain_verify_fun/3, []}.
+
+ek_chain_verify_fun(_, {bad_cert, {not_supported_extension, Ext}},
+                    UserState) ->
+    ExtId = case Ext of
+        #'Extension'{extnID = Id} -> Id;
+        _ -> undefined
+    end,
+    case ExtId of
+        {2, 23, 133, 8, 1}   -> {valid, UserState};
+        {2, 23, 133, 2, 16}  -> {valid, UserState};
+        _ -> {fail, {not_supported_extension, Ext}}
+    end;
+ek_chain_verify_fun(_, {bad_cert, Reason}, _UserState) ->
+    {fail, Reason};
+ek_chain_verify_fun(_, {extension, #'Extension'{extnID = ExtId}},
+                    UserState) ->
+    %% Called for each non-critical unknown extension. Accept any
+    %% OID under the TCG arc 2.23.133.x (EK metadata attributes).
+    case ExtId of
+        {2, 23, 133, _, _}    -> {valid, UserState};
+        {2, 23, 133, _, _, _} -> {valid, UserState};
+        _                     -> {unknown, UserState}
+    end;
+ek_chain_verify_fun(_, valid, UserState)      -> {valid, UserState};
+ek_chain_verify_fun(_, valid_peer, UserState) -> {valid, UserState}.
 
 %%---- check 2: quote signature + extraData + pcrDigest -----------------
 chk_quote(Envelope) ->
@@ -1516,9 +1550,18 @@ normalise_kv_key(K) ->
 count_iommu_groups() ->
     case file:list_dir(<<"/sys/kernel/iommu_groups">>) of
         {ok, Entries} ->
-            length([E || E <- Entries,
-                         is_integer(element(1, string:to_integer(E)))]);
+            length([E || E <- Entries, is_group_dir(E)]);
         _ -> null
+    end.
+
+%% True iff `E' is an all-digits directory name (a single IOMMU
+%% group ID). Filters out stray non-numeric entries that some
+%% kernels expose under /sys/kernel/iommu_groups/.
+is_group_dir(E) ->
+    case string:to_integer(E) of
+        {N, <<>>} when is_integer(N) -> true;
+        {N, ""}   when is_integer(N) -> true;
+        _                            -> false
     end.
 
 %% Read a file and trim trailing whitespace (including the
@@ -2184,28 +2227,58 @@ chk_binding_rejects_empty_id_test() ->
     ?assertMatch({error, _}, chk_binding(EnvelopeShortId)).
 
 %% Regression test: the verify_fun used in chk_ek_chain must reject
-%% every structural / trust failure pkix can report, and only let
-%% through unknown-extension events. A previous implementation
-%% returned {valid, _} for every event, which rubber-stamped rogue
-%% self-signed EK certs as "OpenSSL pkix_path_validation ok".
+%% every structural / trust failure pkix can report, while letting
+%% real-world TPM EK cert extensions through so vendor certs from
+%% Nuvoton / Infineon / STMicro validate. Keeps this in lock-step
+%% with `dev_tpm_interpret:ek_verify_fun/3' -- the two live in
+%% different modules (device vs parser) per the LapEE architecture
+%% but must accept identical chains.
 ek_chain_verify_fun_rejects_bad_certs_test() ->
     {F, []} = ek_chain_verify_fun(),
-    %% Any {bad_cert, _} must fail hard.
-    ?assertMatch({fail, {bad_cert, unknown_ca}},
+    %% Non-TCG {bad_cert, _} events: hard fail. pkix re-wraps the
+    %% inner reason as `{error, {bad_cert, Reason}}', so returning
+    %% the unwrapped atom is the canonical convention (matches
+    %% `dev_tpm_interpret:ek_verify_fun/3').
+    ?assertMatch({fail, unknown_ca},
                  F(ignored, {bad_cert, unknown_ca},    state)),
-    ?assertMatch({fail, {bad_cert, selfsigned_peer}},
+    ?assertMatch({fail, selfsigned_peer},
                  F(ignored, {bad_cert, selfsigned_peer}, state)),
-    ?assertMatch({fail, {bad_cert, invalid_issuer}},
+    ?assertMatch({fail, invalid_issuer},
                  F(ignored, {bad_cert, invalid_issuer}, state)),
-    ?assertMatch({fail, {bad_cert, invalid_signature}},
+    ?assertMatch({fail, invalid_signature},
                  F(ignored, {bad_cert, invalid_signature}, state)),
-    ?assertMatch({fail, {bad_cert, cert_expired}},
+    ?assertMatch({fail, cert_expired},
                  F(ignored, {bad_cert, cert_expired},   state)),
-    %% Unknown TCG TPM extensions (tpmManufacturer /
-    %% tpmModel / tpmVersion / tpmSpecification OIDs) are
-    %% informational; let pkix decide.
+    %% Critical unknown extensions carrying TCG OIDs must pass: real
+    %% EK certs mark id-tcg-kp-EKCertificate (2.23.133.8.1) and
+    %% id-tcg-tpmSpecification (2.23.133.2.16) critical, which OTP's
+    %% default validator would otherwise reject.
+    EkuExt = #'Extension'{extnID = {2, 23, 133, 8, 1}},
+    ?assertMatch({valid, state},
+                 F(ignored,
+                   {bad_cert, {not_supported_extension, EkuExt}},
+                   state)),
+    SpecExt = #'Extension'{extnID = {2, 23, 133, 2, 16}},
+    ?assertMatch({valid, state},
+                 F(ignored,
+                   {bad_cert, {not_supported_extension, SpecExt}},
+                   state)),
+    %% Critical unknown extensions outside the TCG whitelist still
+    %% fail -- a rogue EK carrying a truly-unrecognised critical
+    %% extension must not slip through.
+    RogueExt = #'Extension'{extnID = {1, 2, 3, 4}},
+    ?assertMatch({fail, {not_supported_extension, _}},
+                 F(ignored,
+                   {bad_cert, {not_supported_extension, RogueExt}},
+                   state)),
+    %% Non-critical extensions under the TCG arc are informational.
+    TcgNonCrit = #'Extension'{extnID = {2, 23, 133, 2, 1}},
+    ?assertMatch({valid, state},
+                 F(ignored, {extension, TcgNonCrit}, state)),
+    %% Non-TCG non-critical extensions: unknown (let pkix decide).
+    NonTcgNonCrit = #'Extension'{extnID = {1, 2, 3, 4, 5}},
     ?assertMatch({unknown, state},
-                 F(ignored, {extension, some_tcg_ext}, state)),
+                 F(ignored, {extension, NonTcgNonCrit}, state)),
     %% Valid events pass through.
     ?assertMatch({valid, state}, F(ignored, valid, state)),
     ?assertMatch({valid, state}, F(ignored, valid_peer, state)),
