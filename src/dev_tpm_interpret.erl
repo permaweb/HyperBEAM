@@ -8927,4 +8927,18 @@ v1_1_tme_cross_link_idempotent_test() ->
     TEE = maps:get(<<"tee-support">>, maps:get(<<"cpu">>, Claim1)),
     ?assertEqual(1, length([X || X <- TEE, X =:= <<"amd-sme">>])).
 
+%% v1.1: vendor lookup via U32 manufacturer code (AMD -> "AMD\0" ->
+%% 0x414D4400). The capability path uses this before falling back to
+%% ASCII; the existing manufacturers.json key is the 8-char hex form.
+v1_1_vendor_lookup_by_u32_test() ->
+    Db = hb_db_tpm:load(#{}),
+    case maps:get(<<"vendors">>, Db, #{}) of
+        V when is_map(V), map_size(V) > 0 ->
+            Amd = lookup_vendor_by_u32(16#414D4400, Db),
+            ?assertEqual(<<"AMD">>, maps:get(<<"name">>, Amd)),
+            Ifx = lookup_vendor_by_u32(16#49465800, Db),
+            ?assertEqual(<<"Infineon">>, maps:get(<<"name">>, Ifx));
+        _ -> ok
+    end.
+
 -endif.

@@ -792,8 +792,10 @@ nif_nv_read_public(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         /* TPM2_RC_HANDLE at the formatter level means "no such handle".
          * Map that to an explicit atom so callers can distinguish
          * "NV not provisioned" from real TPM errors. */
-        if ((rc & 0xFFF) == TPM2_RC_HANDLE ||
-            (rc & 0xFFFF) == TPM2_RC_HANDLE)
+        /* TPM2_RC_HANDLE is a FMT1 response (bit 7 set). On the
+         * wire it may have handle/parameter/session position bits
+         * set in 0xF00; mask those out before comparing. */
+        if ((rc & 0x0BF) == (TPM2_RC_HANDLE & 0x0BF))
             return lapee_make_error(env, "nv_index_undefined");
         return lapee_make_tss_error(env, "Esys_TR_FromTPMPublic", rc);
     }
@@ -872,8 +874,10 @@ nif_nv_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
         &nv_tr);
     if (rc != TSS2_RC_SUCCESS) {
-        if ((rc & 0xFFF) == TPM2_RC_HANDLE ||
-            (rc & 0xFFFF) == TPM2_RC_HANDLE)
+        /* TPM2_RC_HANDLE is a FMT1 response (bit 7 set). On the
+         * wire it may have handle/parameter/session position bits
+         * set in 0xF00; mask those out before comparing. */
+        if ((rc & 0x0BF) == (TPM2_RC_HANDLE & 0x0BF))
             return lapee_make_error(env, "nv_index_undefined");
         return lapee_make_tss_error(env, "Esys_TR_FromTPMPublic", rc);
     }

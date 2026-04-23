@@ -1500,10 +1500,24 @@ try_nv_handles([H | Rest], Acc) ->
     end.
 
 format_probe_attempts(Attempts) ->
+    %% The NIF's error Reason can be either an atom
+    %% (lapee_make_error, e.g. 'nv_index_undefined') OR a nested
+    %% tuple {tss2_rc, <<"op: 0x... (decoded)">>} from
+    %% lapee_make_tss_error on any TSS2 failure we didn't
+    %% specifically map to an atom. Render both shapes without
+    %% assuming the inner structure -- a ~p fallback keeps the
+    %% envelope shape stable even when the TPM returns an
+    %% unexpected code.
     [iolist_to_binary(
         io_lib:format("0x~8.16.0B: ~s (~p bytes read)",
-                      [H, R, Sz]))
+                      [H, reason_to_text(R), Sz]))
      || {H, R, Sz} <- Attempts].
+
+reason_to_text(R) when is_atom(R) -> atom_to_binary(R, utf8);
+reason_to_text(R) when is_binary(R) -> R;
+reason_to_text({tss2_rc, Bin}) when is_binary(Bin) -> Bin;
+reason_to_text(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
 
 %% Quick PEM re-encoder for a DER-encoded X.509 cert. Matches the
 %% wire format the rest of the stack expects (PEM with "CERTIFICATE"
