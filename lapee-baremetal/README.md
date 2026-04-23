@@ -3,7 +3,40 @@
 Working reference implementation of the LapEE attested-appliance
 architecture for HyperBEAM, as described in `../lapee-paper/main.tex`.
 
-## Status — paper-aligned chain works end-to-end
+## v1.0 -- Framework bare-metal boot PASSED (2026-04-22)
+
+A commodity USB stick, written from `make hb-usb-image`, booted on
+Sam's Framework 13 AMD Ryzen laptop (Insyde H2O BIOS `IFR30.03.04`)
+through the firmware's real UEFI + AMD fTPM, produced a real signed
+quote over PCRs `[0, 1, 7, 10, 11, 14, 15]`, wrote the attestation
+envelope back to the ESP, and parsed end-to-end on the verifier side
+(CRTM version, TME on, Secure Boot state, UKI hash, quote integrity
+all extracted with tiered evidence). Full trace preserved at
+`../out/local-capture/framework-13-v1-0-usb-roundtrip/`; end-to-end
+narrative in [`STATUS.md` -> v1.0 Framework bare-metal bookend](STATUS.md#v10-framework-bare-metal-bookend-2026-04-22).
+
+USB image build + write:
+
+```bash
+make hb-usb-image                          # build work/lapee-usb.img
+make hb-usb-write DEV=/dev/diskN           # dd to real USB
+# boot target laptop from that USB, then:
+./scripts/interpret-local-capture.sh \
+    --label 'my laptop' \
+    /Volumes/LAPEE_ESP/attestation-latest.json
+```
+
+Pre-flight firmware checklist (Framework 13 / 16):
+
+1. Disable Secure Boot in Insyde H2O (requires a Supervisor Password
+   before the SB toggle appears -- this is the one firmware-settings
+   gotcha).
+2. Leave TPM 2.0 on (default).
+3. Leave Memory Encryption (AMD SME / Intel TME) on if available.
+4. Boot from USB; the image uses the UEFI fallback path
+   `\EFI\Boot\BootX64.efi` so no NVRAM BootOrder entry is needed.
+
+## Status -- paper-aligned chain works end-to-end
 
 A real Linux kernel (Buildroot-built) boots under QEMU with a real
 TPM 2.0 (swtpm), a HyperBEAM release runs as PID 2, the enforced

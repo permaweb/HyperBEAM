@@ -1,0 +1,29 @@
+{
+  "schema-version": 1,
+  "name": "Framework Laptop 13 (AMD Ryzen 7040) -- Insyde H2O IFR30.03.04 + LapEE UKI v1.0",
+  "match-pcrs": {
+    "sha256": {
+      "0": "e3SglSp_DwR_0NQCn4ZyWsYbtLi6_pAGXuSfbfxXago",
+      "1": "xZr_UK4UqFc6avet1KJgFiL_8YjqzgF5unXdvom9Sfg",
+      "7": "bYTQXhkIWrVmYHVXwgi1oLM5Di_AWuBqfCCbuaCo5L4",
+      "11": "56JuhtjdhWCEcQ_6enkTeTWh6UvESO6zPL-ukEcBbIU"
+    }
+  },
+  "attributes": {
+    "platform-vendor": "Framework Computer, Inc.",
+    "platform-model": "Framework Laptop 13 (AMD Ryzen 7040 series)",
+    "firmware-crtm-version": "IFR30.03.04",
+    "firmware-vendor": "Insyde H2O",
+    "boot-loader": "systemd-stub UKI (LapEE v1.0)",
+    "boot-medium": "USB-stick (UEFI fallback path / EFI/Boot/BootX64.efi)",
+    "secure-boot-enabled": false,
+    "tme-enabled": true,
+    "tpm-vendor": "AMD fTPM (firmware TPM, part of PSP)",
+    "log-format": "crypto-agile",
+    "record-count": 50,
+    "pcr-11-note": "Measures the UKI image hash when booted via systemd-stub; this value is the LapEE v1.0 USB-image UKI (kernel+initrd+cmdline PE-section digest).",
+    "pcr-7-note": "Secure Boot is DISABLED on this capture; PCR 7 therefore reflects the 'no-SB' well-known state (MokListTrusted / EV_EFI_VARIABLE_AUTHORITY with Framework Platform Key entries present in db but not enforced).",
+    "trust-tier": "real-hardware"
+  },
+  "notes": "Captured 2026-04-22 from Sam's Framework 13 AMD Ryzen laptop (Insyde H2O BIOS IFR30.03.04) booting the LapEE v1.0 USB image. The USB boot sequence: UEFI -> \\EFI\\Boot\\BootX64.efi (systemd-stub UKI) -> Linux kernel -> initramfs-hb init -> HyperBEAM foreground -> /~tpm2@2.0a/attestation -> ESP writeback -> extracted here. The quoted PCR set was [0,1,7,10,11,14,15] with sha256 digest XNmjDaR7ttYFK8dwgjE8DTcf_CQqD6fFUvoKpKjomDY. This profile is the first `real-hardware` Framework firmware fingerprint in the corpus and enables pcr-match confidence to jump from `no-match` to `high` on subsequent Framework 13 IFR30.03.04 captures."
+}

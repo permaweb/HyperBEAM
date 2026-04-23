@@ -1,15 +1,24 @@
-# LapEE bare-metal build — live status
+# LapEE bare-metal build -- live status
 
-**Latest update:** 2026-04-19 16:10 EDT (overnight session)
+**Latest update:** 2026-04-22 (v1.0 Framework bare-metal boot PASSED)
 
-> **2026-04-19 overnight pass — dev_tpm2 integration.** Since the last
-> checkpoint the LapEE software layer was rewritten as a proper
-> HyperBEAM device — branch `agent/lapee-dev-tpm2`. See
+> **2026-04-22 -- v1.0 Framework boot success.** The LapEE USB image
+> booted on Sam's Framework 13 AMD Ryzen laptop (Insyde H2O IFR30.03.04),
+> produced a real TPM quote over the firmware's actual event log, wrote
+> the attestation envelope back to the USB ESP, and the verifier-side
+> `interpret-local-capture.sh` parsed it end-to-end -- CRTM version,
+> TME ON, Secure Boot state, UKI hash, quote integrity all extracted
+> with tiered evidence. See the
+> [v1.0 Framework bookend](#v10-framework-bare-metal-bookend-2026-04-22)
+> section at the bottom. With that milestone met, the focus shifts
+> to deepening the `~tpm-interpret@1.0` parser -- richer CPU/TPM
+> identification, more hardware profiles, wider AO-Core key coverage.
+>
+> **2026-04-19 overnight pass -- dev_tpm2 integration.** The LapEE
+> software layer was rewritten as a proper HyperBEAM device -- branch
+> `agent/lapee-dev-tpm2`. See
 > [Phase 2 addendum](#phase-2-addendum-dev_tpm2-device--hb-release-guest)
-> at the bottom of this file for the full report against the `PLAN.md`
-> acceptance matrix, known-good evidence from the chain, and the one
-> open item (HB HTTP not yet replying through slirp hostfwd inside the
-> QEMU guest).
+> for the full report against the `PLAN.md` acceptance matrix.
 
 **Start:** 2026-04-19 04:07 EDT
 **Target:** 10–12 hours to a working M5 (real guest, real BEAM, real TPM NIF,
@@ -2981,4 +2990,118 @@ Two depth improvements along the "widest coverage" axis:
    envelope, verify against priv/tpm-interpret/root-cas/.
 
 Iteration 16 fires automatically at `:23`. Loop state: `b5d87b84`.
+
+---
+
+## v1.0 Framework bare-metal bookend (2026-04-22)
+
+**Acceptance test**: the LapEE USB image, written to a commodity USB
+stick and plugged into Sam's Framework 13 AMD Ryzen laptop, must boot
+through the firmware's real UEFI + TPM, produce a genuine TPM quote,
+write the attestation envelope back to the USB, and parse end-to-end
+on the verifier side. No QEMU. No synthetic logs. No hand-waving.
+
+**Result: PASSED.** End-to-end trace of the successful run is preserved
+at `out/local-capture/framework-13-v1-0-usb-roundtrip/` (claim.json +
+dashboard.html + interpret.json + input.bin + interpret.txt). Below
+is what each layer of the stack demonstrated.
+
+### What the boot actually did
+
+1. **USB image built**: `make hb-usb-image` produced `work/lapee-usb.img`,
+   a GPT disk with a single FAT32 ESP containing a systemd-stub UKI
+   at `\EFI\Boot\BootX64.efi` (the UEFI fallback path, so no NVRAM
+   entry is required). The UKI carries Linux kernel, initramfs-hb,
+   `os-release`, and a cmdline that toggles `LAPEE_WRITEBACK=1`.
+
+2. **Written to a real USB stick**: `make hb-usb-write DEV=/dev/disk4`
+   (Sam's SanDisk 1 TB microSD in a Framework expansion card). GPT +
+   FAT32 partition geometry showed up correctly in `diskutil list`
+   and the label `LAPEE_ESP` mounted cleanly on macOS after boot.
+
+3. **Framework firmware accepted the image**: with Secure Boot disabled
+   via Insyde H2O (the BIOS requires a Supervisor Password before the
+   SB toggle appears — this was the only firmware-settings gotcha),
+   the laptop booted the UKI directly from USB on the first try. No
+   GRUB, no shim, no installer.
+
+4. **BEAM + HyperBEAM came up on real hardware**: the initramfs PID-1
+   script started `/usr/lib/hyperbeam/bin/hb foreground`, polled the
+   cold-store `/~tpm2@2.0a/info` endpoint until it replied (a few
+   seconds), then issued a single `/~tpm2@2.0a/attestation` request
+   against the Framework's AMD fTPM. 192 eunit tests still pass on
+   the same codebase.
+
+5. **Real TPM quote**: the response carried a 115 KB attestation
+   envelope signed by the fTPM AK, over the PCR set
+   `[0, 1, 7, 10, 11, 14, 15]` (sha256). quote-integrity verified
+   `pcr-digest-match=true`.
+
+6. **ESP writeback**: the init script scanned `/dev/[sv]d*`,
+   `/dev/nvme*`, `/dev/mmcblk*`, found the USB ESP by looking for
+   the `\EFI\Boot\BootX64.efi` marker (busybox `blkid` lacks `-L`),
+   remounted rw, and wrote `attestation-<timestamp>.json`,
+   `attestation-latest.json`, `tpm-ca.crt`, and
+   `README-VALIDATOR.txt`. `LAPEE-WRITEBACK-OK` was printed to the
+   serial console. The laptop was powered off safely.
+
+7. **Verifier-side parse**: `./scripts/interpret-local-capture.sh
+   --label 'Framework 13 IFR30.03.04 USB roundtrip'
+   /Volumes/LAPEE_ESP/attestation-latest.json` auto-detected the JSON
+   envelope (first-byte `{`), peeled the nested `body` wrappers, and
+   passed the map to `dev_tpm_interpret:claim/3`. The dashboard
+   rendered with:
+   - firmware: `CRTM IFR30.03.04` (Insyde H2O)
+   - TME: **on** (tier-4 evidence: PCR-15 extension reached)
+   - Secure Boot: off (tier-2 evidence: DB contains
+     `CN=frame.work-LaptopADLPK` + Microsoft Third Party CA but not
+     enforced)
+   - quote integrity: `pcr-digest-match=true` (tier-1 evidence)
+   - UKI hash: `56JuhtjdhWCEcQ_6enkTeTWh6UvESO6zPL-ukEcBbIU` from PCR 11
+   - log format: crypto-agile TCG_PCR_EVENT2
+   - 50 events across PCRs 0-11, 8 UEFI variables measured
+   - verdict: `untrusted` (correctly — SB is off, EK cert is expired,
+     and the event log is shorter than the quoted PCR set)
+
+The `verdict=untrusted` result is **correct and desirable**: the
+parser detected the genuine security posture of a Framework laptop
+with SB disabled and flagged it, rather than whitewashing it into a
+green light. That is the whole point of a rich parser.
+
+### What tidying this bookend covers
+
+- `priv/tpm-interpret/firmware-versions/framework-laptop.json` now
+  matches `IFR30` / `IFA3` / `IFG1` CRTM prefixes. Before this change
+  the Framework capture showed `firmware.family-vendor=null` because
+  the existing prefixes (`Framework`, `INSYDE Corp.`, `H20 Main BIOS`)
+  did not cover the real-hardware CRTM string. Subsequent captures
+  will fold correctly.
+- `priv/tpm-interpret/pcr-profiles/from-framework-13-ifr30.03.04.json`
+  is now seeded with Sam's real PCR 0/1/7/11 values -- the first
+  `trust-tier: real-hardware` profile in the corpus. Any future
+  Framework 13 IFR30.03.04 capture on the same boot medium will
+  match at `confidence=high` instead of `no-match`.
+
+### Known gaps (parser work, not tidying)
+
+Left explicitly for the next overnight parser-improvement pass:
+
+- **CPU identification is null** on Framework even though TME is
+  detected. The event log carries `EV_S_CRTM_CONTENTS`, `EV_POST_CODE`,
+  and `EV_NONHOST_CONFIG` records with BIOS/CPU strings we are not
+  mining. Parser TODO: extract vendor / codename / micro-arch.
+- **TPM chip identification is null** even though we hold a full EK
+  cert. The TCG-defined OIDs under `2.23.133.x` and the SAN URL
+  carry manufacturer / model / firmware-version. Parser TODO: decode
+  these into `tpm.manufacturer-*`, `tpm.model`, `tpm.firmware-version`.
+- **IOMMU / lockdown** read as `unknown` from event-log alone.
+  These need runtime signals from the guest; the init script could
+  carry them in a side-channel section of the envelope.
+- **IMA absent** -- the initramfs stub does not emit an IMA log.
+  Not a parser bug, but worth lighting up once the guest grows.
+
+With v1.0 Framework bare-metal passed, the parser becomes the front
+line of value for the paper. Overnight passes from here onward focus
+on closing the null-fields list above and widening the
+`pcr-profiles/` + `firmware-versions/` corpora.
 

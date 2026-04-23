@@ -3,8 +3,8 @@
     "name": "Framework Laptop (13 / 16, AMD Ryzen / Intel Core)",
     "description": "Framework laptops ship Insyde H2O UEFI firmware with Framework-customised splash + board-specific modules. Both the Intel and AMD variants use Nuvoton NPCT7xx discrete TPMs.",
     "match": {
-        "crtm-version-prefix": ["Framework", "INSYDE Corp.", "H20 Main BIOS"],
-        "crtm-version-regex": "^(Framework|INSYDE Corp\\.|H20 Main BIOS).*$"
+        "crtm-version-prefix": ["Framework", "INSYDE Corp.", "H20 Main BIOS", "IFR30", "IFA3", "IFG1"],
+        "crtm-version-regex": "^(Framework|INSYDE Corp\\.|H20 Main BIOS|IFR30|IFA3|IFG1).*$"
     },
     "vendor": "Framework Computer, Inc.",
     "bios-vendor": "Insyde H2O",

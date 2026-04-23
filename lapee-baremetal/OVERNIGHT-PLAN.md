@@ -1,10 +1,19 @@
-# Overnight pass — TPM2 interpreter, world-class coverage
+# Overnight pass -- TPM2 interpreter, world-class coverage
 
 **Start:** 2026-04-20 ~18:00 EDT
-**Brief:** Sam's directive — produce *the* most comprehensive public
+**Brief:** Sam's directive -- produce *the* most comprehensive public
 TPM2 event-log interpretation library. No time pressure, no scope
 cuts, no early returns. Ship when further improvement is genuinely
 diminishing.
+
+**2026-04-22 -- v1.0 Framework bare-metal boot PASSED.** The LapEE
+USB image booted successfully on Sam's Framework 13 (Insyde H2O
+IFR30.03.04, AMD fTPM), produced a real signed quote, and parsed
+end-to-end on the verifier. See
+[STATUS.md -> v1.0 Framework bookend](STATUS.md#v10-framework-bare-metal-bookend-2026-04-22).
+The parser-improvement loop described below is now the primary
+workstream; each overnight iteration closes null fields observed
+on real hardware.
 
 **Acceptance**
 1. Library exceeds every existing public TPM interpretation parser
