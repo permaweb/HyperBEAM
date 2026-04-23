@@ -1427,10 +1427,53 @@ capture_platform_probes() ->
             <<"/sys/class/dmi/id/bios_version">>),
         dmi_bios_release => read_trim(
             <<"/sys/class/dmi/id/bios_release">>),
-        probed_at_unix   => erlang:system_time(second)
+        %% v1.2 review addendum: three runtime-visible signals
+        %% that strengthen the claim without changing the threat
+        %% model:
+        %%
+        %%   kernel-cmdline  verbatim /proc/cmdline so the
+        %%                    verifier can cross-check claim
+        %%                    flags (iommu=, lockdown=, ...)
+        %%                    against ground truth.
+        %%
+        %%   secure-boot     1-byte data octet from the SecureBoot
+        %%                    EFI variable (GUID constant per
+        %%                    UEFI spec 2.10 Table 3-1). 0x01 =
+        %%                    enabled, 0x00 = disabled, null if
+        %%                    the firmware isn't UEFI / efivarfs
+        %%                    isn't mounted.
+        %%
+        %%   tpm-version-major  /sys/class/tpm/tpm0/tpm_version_major
+        %%                       (1 or 2; complements the
+        %%                        TPM2_GetCapability spec-family
+        %%                        field).
+        kernel_cmdline     => read_trim(<<"/proc/cmdline">>),
+        secure_boot        => read_secure_boot_state(),
+        tpm_version_major  => read_trim(
+            <<"/sys/class/tpm/tpm0/tpm_version_major">>),
+        ima_count          => read_trim(
+            <<"/sys/kernel/security/integrity/ima/"
+              "runtime_measurements_count">>),
+        probed_at_unix     => erlang:system_time(second)
     },
     persistent_term:put({dev_tpm2, platform_probes}, Probes),
     ok.
+
+%% Read the one-byte data octet from the EFI SecureBoot variable.
+%% The efivarfs file layout is `<attributes:4><data:N>', where N=1
+%% for SecureBoot. GUID suffix `8be4df61-93ca-11d2-aa0d-00e098032b8c'
+%% is the EFI_GLOBAL_VARIABLE GUID per UEFI spec. Returns an atom
+%% `enabled' / `disabled' / `unknown'; the atom is converted to
+%% a binary in platform_probes/0.
+read_secure_boot_state() ->
+    Path = <<"/sys/firmware/efi/efivars/"
+             "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c">>,
+    case file:read_file(Path) of
+        {ok, <<_Attrs:4/binary, 1:8>>} -> enabled;
+        {ok, <<_Attrs:4/binary, 0:8>>} -> disabled;
+        {ok, _}                         -> unknown;
+        _                               -> not_readable
+    end.
 
 %% Read the first `processor' stanza of /proc/cpuinfo into a map
 %% keyed by the normalised field name (kebab-case binary). Returns
@@ -1568,10 +1611,23 @@ platform_probes() ->
                     or_bin_null(maps:get(dmi_bios_version, P, null)),
                 <<"dmi-bios-release">>   =>
                     or_bin_null(maps:get(dmi_bios_release, P, null)),
+                <<"kernel-cmdline">>     =>
+                    or_bin_null(maps:get(kernel_cmdline, P, null)),
+                <<"secure-boot">>        =>
+                    atom_or_bin_null(maps:get(secure_boot, P, null)),
+                <<"tpm-version-major">>  =>
+                    or_bin_null(maps:get(tpm_version_major, P, null)),
+                <<"ima-measurement-count">> =>
+                    or_bin_null(maps:get(ima_count, P, null)),
                 <<"probed-at-unix">>     =>
                     maps:get(probed_at_unix, P, 0)
              }
     end.
+
+atom_or_bin_null(null) -> null;
+atom_or_bin_null(A) when is_atom(A) -> atom_to_binary(A, utf8);
+atom_or_bin_null(B) when is_binary(B) -> B;
+atom_or_bin_null(_) -> null.
 
 or_bin_null(null) -> null;
 or_bin_null(<<>>) -> null;

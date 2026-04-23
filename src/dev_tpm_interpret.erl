@@ -1922,30 +1922,74 @@ validate_against_one_root(DerCert, Intermediates, RootCert) ->
     try
         RootDer = public_key:pkix_encode(
                     'OTPCertificate', RootCert, otp),
-        %% pkix_path_validation/3 expects the CertPath as a list
-        %% of DER bytes in leaf->...->root order, EXCLUDING the
-        %% trust anchor. So we pass intermediates in whatever
-        %% order the TPM gave them (TCG says leaf->root) followed
-        %% by the leaf (which is pkix's final link). Wait -- spec
-        %% is: first element of CertPath is the cert signed BY
-        %% the trust anchor (i.e. closest to root), last is the
-        %% leaf. So we reverse the intermediates list + append the
-        %% leaf. But many TPMs ship chain as leaf-first already.
-        %% Try both orderings to be defensive.
+        %% CertPath ordering per OTP public_key docs: first
+        %% element is signed BY the trust anchor (closest-to-root),
+        %% last is the leaf. TCG ships NV chains as
+        %% [leaf, ..., closest-to-root], so we reverse the
+        %% intermediates and append the leaf to get the right
+        %% OTP order. Also try the straight-leaf-first form
+        %% defensively -- a few vendor NV layouts write root-first.
         Orders = [
-            lists:reverse(Intermediates) ++ [DerCert],  %% root-last
-            Intermediates ++ [DerCert]                    %% root-first
+            lists:reverse(Intermediates) ++ [DerCert],  %% OTP form
+            Intermediates ++ [DerCert]                    %% defensive
         ],
+        %% Pass `verify_fun' that whitelists TCG EK EKU and spec-
+        %% version extensions which OTP's default path validator
+        %% treats as unrecognised-critical and rejects. A real
+        %% Nuvoton / Infineon / AMD EK cert will carry one or
+        %% more of these, so without the whitelist we'd see
+        %% {bad_cert, {not_supported_extension, ...}} on every
+        %% in-the-wild EK chain. See TCG EK Credential Profile
+        %% section 3.5 and the OID registry at
+        %% https://www.iana.org/assignments/smi-numbers.
+        VerifyOpts = [{verify_fun, {fun ek_verify_fun/3, []}}],
         lists:any(
             fun(Path) ->
                 case public_key:pkix_path_validation(
-                       RootDer, Path, []) of
+                       RootDer, Path, VerifyOpts) of
                     {ok, _} -> true;
                     _ -> false
                 end
             end, Orders)
     catch _:_ -> false
     end.
+
+%% verify_fun for pkix_path_validation. Whitelists the TCG-defined
+%% OIDs that appear in real-world TPM EK certificates as critical
+%% extensions but aren't in OTP's baseline X.509 extension
+%% recognition set:
+%%
+%%   2.23.133.8.1   id-tcg-kp-EKCertificate
+%%                   (extendedKeyUsage entry; EK certs always
+%%                    carry this to signal they're TPM endorsement
+%%                    certs rather than general-purpose certs)
+%%   2.23.133.2.16  id-tcg-tpmSpecification
+%%                   (non-EKU spec-version attribute; marked
+%%                    critical by some vendors' profiles)
+%%
+%% Everything else uses the default path-validation semantics.
+ek_verify_fun(_, {bad_cert, {not_supported_extension, Ext}}, UserState) ->
+    ExtId = case Ext of
+        #'Extension'{extnID = Id} -> Id;
+        _ -> undefined
+    end,
+    case ExtId of
+        {2, 23, 133, 8, 1}   -> {valid, UserState};
+        {2, 23, 133, 2, 16}  -> {valid, UserState};
+        _ -> {fail, {not_supported_extension, Ext}}
+    end;
+ek_verify_fun(_, {bad_cert, Reason}, _UserState) ->
+    {fail, Reason};
+ek_verify_fun(_, {extension, #'Extension'{extnID = ExtId}}, UserState) ->
+    %% Called for each non-critical unknown extension. Accept any
+    %% OID under the TCG arc 2.23.133.x (all EK metadata).
+    case ExtId of
+        {2, 23, 133, _, _}    -> {valid, UserState};
+        {2, 23, 133, _, _, _} -> {valid, UserState};
+        _                     -> {unknown, UserState}
+    end;
+ek_verify_fun(_, valid, UserState)      -> {valid, UserState};
+ek_verify_fun(_, valid_peer, UserState) -> {valid, UserState}.
 
 %% @doc Structured decode of the Attestation Key public blob on
 %% the flat claim surface. AK is an RSA-2048 or RSA-3072 key
@@ -2960,15 +3004,26 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
     %% seen a clean shutdown-with-state since the last cold reset.
     %% On a freshly-flashed / freshly-provisioned device this is
     %% the NORMAL first-boot state -- not evidence of tampering.
-    %% Only treat it as critical when we can see non-first-boot
-    %% reset/restart counts (indicating the TPM HAS been cleanly
-    %% shut down before and the safe bit is still unset, which IS
-    %% the tamper signal). See HyperBEAM section Architecture
-    %% table "TPM clock", and TPM 2.0 Part 1 section "Safe".
+    %%
+    %% Three-way classification based on the TPM's reset / restart
+    %% counters:
+    %%
+    %%   BOTH counts present AND ≤ 1 -> fresh boot. Warn, not
+    %%       critical. Counts WILL rise on clean shutdowns.
+    %%
+    %%   counts missing from the quote entirely -> separate
+    %%       "counts-missing" finding at critical severity.
+    %%       Reason: an adversary who strips reset-count /
+    %%       restart-count from an otherwise valid envelope would
+    %%       otherwise slip past the tamper signal; we refuse to
+    %%       downgrade severity on blind faith.
+    %%
+    %%   counts present AND not-fresh-boot pattern -> critical
+    %%       tamper signal.
     R  = maps:get(<<"reset-count">>,  S, null),
     RC = maps:get(<<"restart-count">>, S, null),
-    case is_fresh_boot(R, RC) of
-        true ->
+    case fresh_boot_classify(R, RC) of
+        fresh_boot ->
             finding(warn, <<"freshness-safe-false-first-boot">>,
                     <<"freshness">>,
                     <<"TPM clock `safe' flag is false. The TPM's "
@@ -2978,7 +3033,17 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
                       "unset `safe' bit is the expected state -- "
                       "not a tamper signal. Will be set on the "
                       "next clean reboot.">>);
-        false ->
+        counts_missing ->
+            finding(critical, <<"freshness-safe-false-counts-missing">>,
+                    <<"freshness">>,
+                    <<"TPM clock `safe' flag is false AND the "
+                      "envelope does not carry reset-count / "
+                      "restart-count so we cannot distinguish a "
+                      "legitimate first-cold-boot from a tampered "
+                      "quote. Defaulting to critical so the "
+                      "verifier cannot be fooled by a stripped "
+                      "envelope.">>);
+        tamper ->
             finding(critical, <<"freshness-safe-false">>,
                     <<"freshness">>,
                     <<"TPM clock `safe' flag is false -- clock has "
@@ -2992,17 +3057,29 @@ freshness_finding(
               "-- replayable.">>);
 freshness_finding(_) -> ok.
 
-%% Heuristic: `reset-count <= 1' AND `restart-count <= 1' means
-%% the TPM is within its first boot epoch, so no clean shutdown
-%% has been performed yet. `null' counts mean the quote didn't
-%% surface them; that's a missing data case, not a tamper case,
-%% so treat it as fresh-boot equivalent (the old behaviour of
-%% flagging it critical would have over-triggered on envelopes
-%% with a stripped quote block).
+%% Three-way classifier for the freshness heuristic. Both counts
+%% must be integers AND ≤ 1 to qualify as fresh-boot; anything else
+%% is either counts-missing (when either or both are null) or
+%% tamper (when both are integers but one exceeds the fresh-boot
+%% threshold). This is tightened from the v1.2 batch-1 version
+%% which collapsed null + fresh into a single "fresh" bucket --
+%% that collapse was a footgun because an adversary stripping
+%% counts from a quote looked indistinguishable from a genuine
+%% first boot.
+fresh_boot_classify(R, RC)
+        when is_integer(R), is_integer(RC), R =< 1, RC =< 1 ->
+    fresh_boot;
+fresh_boot_classify(R, RC)
+        when R =:= null orelse RC =:= null ->
+    counts_missing;
+fresh_boot_classify(_, _) ->
+    tamper.
+
+%% Legacy boolean-returning helper kept for callers that only want
+%% the "is this first-cold-boot?" yes/no. Narrower contract than
+%% fresh_boot_classify/2: requires both counts present.
 is_fresh_boot(R, RC) ->
-    Rok = (R =:= null) orelse (is_integer(R) andalso R =< 1),
-    RCok = (RC =:= null) orelse (is_integer(RC) andalso RC =< 1),
-    Rok andalso RCok.
+    fresh_boot_classify(R, RC) =:= fresh_boot.
 
 ima_policy_finding(
   #{<<"ima-policy-violations">> := N}) when N > 0 ->
@@ -9416,14 +9493,35 @@ v1_2_freshness_safe_false_tamper_stays_critical_test() ->
     ?assertEqual(<<"freshness-safe-false">>,
                  maps:get(<<"code">>, F)).
 
-v1_2_freshness_safe_false_missing_counts_warns_test() ->
-    %% Counts absent from the quote (stripped envelope) should NOT
-    %% over-trigger as critical. Treat as best-effort warning.
+v1_2_freshness_safe_false_missing_counts_is_critical_test() ->
+    %% Counts absent from the quote are DISTINCT from fresh-boot:
+    %% an adversary stripping counts from an envelope produces the
+    %% same missing-counts pattern, so we refuse to downgrade
+    %% tamper severity. Stays critical, different code.
     S = #{<<"freshness-indicator">> => <<"safe-false">>,
           <<"reset-count">>         => null,
           <<"restart-count">>       => null},
     F = freshness_finding(S),
-    ?assertEqual(warn, maps:get(<<"severity">>, F)).
+    ?assertEqual(critical, maps:get(<<"severity">>, F)),
+    ?assertEqual(<<"freshness-safe-false-counts-missing">>,
+                 maps:get(<<"code">>, F)).
+
+v1_2_freshness_safe_false_partial_counts_is_critical_test() ->
+    %% Only one of the two counts present. Treat as missing --
+    %% same reason: adversary could strip just one to confuse
+    %% the classifier.
+    S1 = #{<<"freshness-indicator">> => <<"safe-false">>,
+           <<"reset-count">>         => 1,
+           <<"restart-count">>       => null},
+    F1 = freshness_finding(S1),
+    ?assertEqual(critical, maps:get(<<"severity">>, F1)),
+    ?assertEqual(<<"freshness-safe-false-counts-missing">>,
+                 maps:get(<<"code">>, F1)),
+    S2 = #{<<"freshness-indicator">> => <<"safe-false">>,
+           <<"reset-count">>         => null,
+           <<"restart-count">>       => 0},
+    F2 = freshness_finding(S2),
+    ?assertEqual(critical, maps:get(<<"severity">>, F2)).
 
 %% v1.2 E3: platform-probes.cpuinfo resolves `claim.cpu.vendor' +
 %% brand-range on real hardware where the TCG event log doesn't
