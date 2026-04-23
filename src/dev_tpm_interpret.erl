@@ -1406,7 +1406,12 @@ interpret_tpm_capabilities(E, Db) ->
     case Caps of
         #{<<"available">> := true} ->
             ManuId = maps:get(<<"manufacturer">>, Caps, <<>>),
-            VendorEntry = lookup_vendor_by_ascii(ManuId, Db),
+            ManuU32 = maps:get(<<"manufacturer-u32">>, Caps, 0),
+            VendorEntry =
+                case lookup_vendor_by_u32(ManuU32, Db) of
+                    #{} = V0 when map_size(V0) > 0 -> V0;
+                    _ -> lookup_vendor_by_ascii(ManuId, Db)
+                end,
             FW1 = maps:get(<<"firmware-version-1">>, Caps, 0),
             FW2 = maps:get(<<"firmware-version-2">>, Caps, 0),
             FWU = (FW1 bsl 32) bor (FW2 band 16#FFFFFFFF),
@@ -1500,16 +1505,37 @@ build_tpm_evidence(FromCert, FromCaps) ->
     end,
     lists:flatten(CertEv ++ CapsEv).
 
-%% Vendor lookup by 4-char ASCII manufacturer ID (e.g. <<"AMD">>,
-%% <<"INTC">>, <<"IFX">>, <<"NTC">>, <<"STM">>). The top-level vendor
-%% catalogue is keyed by the hex form of the ID (e.g. <<"49465800">>
-%% for "IFX\0"); for capability-sourced IDs we match on the ASCII
-%% form so we find a hit even when the hex encoding differs between
-%% sources.
+%% Vendor lookup by the TPM-reported U32 manufacturer ID (the raw
+%% 4-byte big-endian form of TPM_PT_MANUFACTURER). manufacturers.json
+%% keys are always the 8-char hex string, e.g. <<"414D4400">> for
+%% "AMD\0". This is the PRIMARY match path for capability-sourced
+%% IDs because it preserves trailing-NUL bytes that would be dropped
+%% by ASCII trimming.
+lookup_vendor_by_u32(0, _Db) -> #{};
+lookup_vendor_by_u32(U32, #{<<"vendors">> := V}) when is_integer(U32),
+                                                       is_map(V) ->
+    HexKey = iolist_to_binary(
+        io_lib:format("~8.16.0B", [U32])),
+    case maps:get(HexKey, V, undefined) of
+        undefined ->
+            %% Case-insensitive fallback: some manufacturers.json
+            %% entries use lower-case hex.
+            LowerKey = string:lowercase(HexKey),
+            case maps:get(LowerKey, V, undefined) of
+                undefined -> #{};
+                E when is_map(E) -> E
+            end;
+        E when is_map(E) -> E
+    end;
+lookup_vendor_by_u32(_, _) -> #{}.
+
+%% Secondary vendor lookup by ASCII manufacturer ID (3-4 char, NUL-
+%% stripped form, e.g. <<"AMD">>). Tries (a) any `ascii-id' /
+%% `id-ascii' fields on individual vendor entries, then (b) the hex
+%% form with an RH-NUL pad to 4 bytes so <<"AMD">> -> <<"414D4400">>
+%% matches the standard JSON key.
 lookup_vendor_by_ascii(<<>>, _Db) -> #{};
 lookup_vendor_by_ascii(Ascii, #{<<"vendors">> := V}) when is_map(V) ->
-    %% Primary match: any vendor whose `ascii-id' or `id-ascii' field
-    %% equals the probe value.
     Found = maps:fold(
         fun(_K, E, none) when is_map(E) ->
                 IdA = maps:get(<<"ascii-id">>, E,
@@ -1522,12 +1548,17 @@ lookup_vendor_by_ascii(Ascii, #{<<"vendors">> := V}) when is_map(V) ->
         end, none, V),
     case Found of
         none ->
-            %% Secondary match: hex-encode the ASCII and look up
-            %% by hex. Many manufacturer.json entries key on the
-            %% 8-char hex.
+            %% Pad the ASCII to 4 bytes with trailing NUL and
+            %% hex-encode. manufacturers.json keys are 8-char hex.
+            Padded =
+                case byte_size(Ascii) of
+                    Sz when Sz < 4 ->
+                        <<Ascii/binary, 0:((4 - Sz) * 8)>>;
+                    _ -> binary:part(Ascii, {0, 4})
+                end,
             HexKey = iolist_to_binary(
                 [io_lib:format("~2.16.0B", [B])
-                 || <<B:8>> <= Ascii]),
+                 || <<B:8>> <= Padded]),
             case maps:get(HexKey, V, undefined) of
                 undefined -> #{};
                 E when is_map(E) -> E
