@@ -1074,10 +1074,28 @@ attestation(_Base, Req, Opts) ->
                                         hb_message:id(NodeMsg, all, Opts)))
                         end,
                     Envelope = #{
-                        <<"lapee-attestation-version">> => <<"0.3">>,
+                        <<"lapee-attestation-version">> => <<"0.4">>,
                         <<"issued-at-unix">> =>
                             erlang:system_time(second),
                         <<"ek-cert-pem">> => EKCertPem,
+                        %% Provenance of the EK cert -- tpm-nv (real,
+                        %% with which handle + byte count) or absent
+                        %% (with the probe-attempt list). This is the
+                        %% hook that lets the verifier distinguish a
+                        %% legitimate hardware EK from a missing one.
+                        %% We never inject synthetic values; if the
+                        %% TPM has no EK cert, the field is empty and
+                        %% source.kind is "absent".
+                        <<"ek-cert-source">> =>
+                            ek_cert_source(),
+                        %% Real TPM identity straight from
+                        %% TPM2_GetCapability -- manufacturer, vendor
+                        %% string, spec level/revision, firmware
+                        %% version. Populated even when the EK cert
+                        %% is absent, so the verifier always gets
+                        %% "what chip is this" from ground truth.
+                        <<"tpm-properties">> =>
+                            tpm_properties(),
                         <<"ak-pub-pem">> => AKPubPem,
                         <<"tpm-quote">> => #{
                             <<"pcr-selection">> => Pcrs,
@@ -1269,11 +1287,23 @@ ensure_ak(Opts) ->
 init_chain(Opts) ->
     case nif_startup() of
         ok ->
+            %% Snapshot TPM-reported identity via TPM2_GetCapability.
+            %% This is the primary manufacturer / firmware-version
+            %% signal and works even when NV has no EK cert. The
+            %% TCG-OID attributes on a real EK cert, when present,
+            %% act as cross-check at the claim layer.
+            capture_tpm_properties(),
             case nif_create_ek() of
                 {ok, #{esys_tr := EKTr, public_pem := EKPem}} ->
                     persistent_term:put({dev_tpm2, ek_tr}, EKTr),
                     persistent_term:put({dev_tpm2, ek_pub_pem}, EKPem),
-                    ensure_ek_cert(EKPem, Opts),
+                    %% Pull the TPM's real EK certificate out of NV
+                    %% storage. If no EK cert is provisioned we record
+                    %% the absence explicitly -- we do NOT fabricate a
+                    %% substitute. A missing EK cert is meaningful
+                    %% evidence on the claim, not a condition to paper
+                    %% over. See fetch_ek_cert_from_nv/1.
+                    fetch_ek_cert_from_nv(Opts),
                     case nif_create_signing_key(EKTr) of
                         {ok, #{esys_tr := AKTr, public_pem := AKPem}} ->
                             persistent_term:put({dev_tpm2, ak_tr}, AKTr),
@@ -1302,41 +1332,195 @@ ak_pub_pem(Opts) ->
         P -> P
     end.
 
-%% Issue a test-CA-signed cert over the EK's public key. Matches the
-%% existing lapee verifier contract.
-ensure_ek_cert(EKPem, Opts) ->
-    CaCert = hb_opts:get(lapee_tpm_ca_cert,
-                         <<"/etc/lapee/tpm-ca.crt">>, Opts),
-    CaKey = hb_opts:get(lapee_tpm_ca_key,
-                         <<"/etc/lapee/tpm-ca.key">>, Opts),
-    Out = hb_opts:get(lapee_tpm_ek_cert,
-                         <<"/run/lapee/ek.crt">>, Opts),
-    _ = filelib:ensure_dir(binary_to_list(Out)),
-    PubPath = <<Out/binary, ".pub.pem">>,
-    ok = file:write_file(PubPath, EKPem),
-    TmpKey = <<Out/binary, ".tmp.key">>,
-    TmpCsr = <<Out/binary, ".csr">>,
-    TmpCnf = <<Out/binary, ".cnf">>,
-    ok = file:write_file(TmpCnf,
-        <<"[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=LapEE Test EK\n">>),
-    _ = os:cmd(io_lib:format("openssl genrsa -out ~s 2048 2>/dev/null",
-                             [TmpKey])),
-    _ = os:cmd(io_lib:format("openssl req -new -key ~s -out ~s -config ~s 2>&1",
-                             [TmpKey, TmpCsr, TmpCnf])),
-    _ = os:cmd(io_lib:format(
-        "openssl x509 -req -in ~s -CA ~s -CAkey ~s -CAcreateserial "
-        "-out ~s -days 3650 -force_pubkey ~s 2>&1",
-        [TmpCsr, CaCert, CaKey, Out, PubPath])),
-    case file:read_file(Out) of
-        {ok, Pem} ->
-            persistent_term:put({dev_tpm2, ek_cert_pem}, Pem);
-        _ -> ok
-    end,
-    _ = file:delete(TmpKey),
-    _ = file:delete(TmpCsr),
-    _ = file:delete(TmpCnf),
-    _ = file:delete(PubPath),
-    ok.
+%% Capture TPM identity via TPM2_GetCapability (TPM_PT_MANUFACTURER,
+%% TPM_PT_VENDOR_STRING_*, TPM_PT_FIRMWARE_VERSION_*, ...). These
+%% values come straight from the TPM hardware regardless of EK-cert
+%% provisioning -- that's what makes them the primary identification
+%% source. On failure we stamp a structured "capability-probe-failed"
+%% entry rather than dropping the field: silent absence would blur
+%% the line between "no TPM" and "TPM didn't answer".
+capture_tpm_properties() ->
+    try lapee_tpm_nif:tpm_properties() of
+        {ok, Props} ->
+            persistent_term:put({dev_tpm2, tpm_properties}, Props),
+            ok;
+        {error, Reason} ->
+            persistent_term:put(
+                {dev_tpm2, tpm_properties},
+                #{error => to_bin(Reason)}),
+            ok
+    catch C:E ->
+        persistent_term:put(
+            {dev_tpm2, tpm_properties},
+            #{error => iolist_to_binary(
+                io_lib:format("~p:~p", [C, E]))}),
+        ok
+    end.
+
+to_bin(B) when is_binary(B) -> B;
+to_bin(L) when is_list(L) -> iolist_to_binary(L);
+to_bin(A) when is_atom(A) -> atom_to_binary(A);
+to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+
+%% Pretty the cached TPM properties for the /attestation envelope.
+%% Integers for firmware-version halves let the verifier reconstruct
+%% the full 64-bit revision (fw1 << 32 | fw2) without ambiguity; the
+%% binary manufacturer / vendor-string fields are kebab-cased on the
+%% wire.
+tpm_properties() ->
+    case persistent_term:get({dev_tpm2, tpm_properties}, undefined) of
+        undefined ->
+            #{<<"available">> => false,
+              <<"reason">>    => <<"init_chain has not executed yet">>};
+        #{error := Why} ->
+            #{<<"available">> => false,
+              <<"reason">>    => Why};
+        #{} = P ->
+            FW1 = maps:get(firmware_version_1, P, 0),
+            FW2 = maps:get(firmware_version_2, P, 0),
+            #{
+              <<"available">>            => true,
+              <<"manufacturer">>         =>
+                  maps:get(manufacturer, P, <<>>),
+              <<"manufacturer-u32">>     =>
+                  maps:get(manufacturer_u32, P, 0),
+              <<"vendor-string">>        =>
+                  maps:get(vendor_string, P, <<>>),
+              <<"spec-family">>          =>
+                  maps:get(spec_family, P, <<>>),
+              <<"spec-level">>           =>
+                  maps:get(spec_level, P, 0),
+              <<"spec-revision">>        =>
+                  maps:get(spec_revision, P, 0),
+              <<"firmware-version-1">>   => FW1,
+              <<"firmware-version-2">>   => FW2,
+              <<"firmware-version-u64">> =>
+                  (FW1 bsl 32) bor (FW2 band 16#FFFFFFFF),
+              <<"day-of-year">>          =>
+                  maps:get(day_of_year, P, 0),
+              <<"year">>                 =>
+                  maps:get(year, P, 0)
+             }
+    end.
+
+%% Return the provenance map for the currently-cached EK cert. The
+%% ensure_ak -> init_chain -> fetch_ek_cert_from_nv pipeline populates
+%% this; if it hasn't run yet we return an "unknown" placeholder so
+%% the attestation envelope shape stays stable.
+ek_cert_source() ->
+    case persistent_term:get({dev_tpm2, ek_cert_source}, undefined) of
+        undefined ->
+            #{<<"kind">> => <<"unknown">>,
+              <<"reason">> =>
+                  <<"ensure_ak/1 has not executed yet">>};
+        #{} = M ->
+            %% Keys in the raw map are atoms so we're always producing
+            %% the same one-hop shape. Re-key to binary here so the
+            %% wire-format stays kebab-case-on-binary-keys throughout.
+            maps:fold(
+                fun(K, V, Acc) when is_atom(K) ->
+                       Acc#{atom_to_binary(K) => V};
+                   (K, V, Acc) -> Acc#{K => V}
+                end, #{}, M)
+    end.
+
+%% TCG EK Credential Profile -- standard NV indices for EK certificates.
+%% https://trustedcomputinggroup.org/resource/tcg-ek-credential-profile/
+-define(EK_NV_RSA_2048, 16#01C00002).  %% low-range RSA-2048 EK cert
+-define(EK_NV_RSA_3072, 16#01C0000A).  %% low-range RSA-3072 EK cert
+-define(EK_NV_ECC_P256, 16#01C00004).  %% low-range ECC NIST P-256
+-define(EK_NV_ECC_P384, 16#01C00006).  %% low-range ECC NIST P-384
+%% High-range (vendor-specific templates) -- checked as a fallback.
+-define(EK_NV_HIGH_RSA_2048, 16#01C00012).
+-define(EK_NV_HIGH_RSA_3072, 16#01C0001A).
+
+%% Fetch the EK certificate from TPM NV storage and cache it. The list
+%% below is iterated in order; the first NV index that yields a valid
+%% certificate wins. If none do, the EK cert is recorded as ABSENT --
+%% a first-class signal that the verifier must see. We never synthesize
+%% a stand-in: this codepath is what makes the attestation chain
+%% legitimate rather than cosmetic.
+%%
+%% Override the probe list via `lapee_tpm_ek_nv_handles' for TPMs
+%% whose manufacturer publishes certs at non-standard indices.
+fetch_ek_cert_from_nv(Opts) ->
+    Handles = hb_opts:get(
+        lapee_tpm_ek_nv_handles,
+        [?EK_NV_RSA_2048,
+         ?EK_NV_RSA_3072,
+         ?EK_NV_ECC_P256,
+         ?EK_NV_ECC_P384,
+         ?EK_NV_HIGH_RSA_2048,
+         ?EK_NV_HIGH_RSA_3072],
+        Opts),
+    case try_nv_handles(Handles, []) of
+        {ok, Handle, Der} ->
+            Pem = der_to_pem(Der),
+            persistent_term:put({dev_tpm2, ek_cert_pem}, Pem),
+            persistent_term:put(
+                {dev_tpm2, ek_cert_source},
+                #{kind => <<"tpm-nv">>,
+                  handle => iolist_to_binary(
+                      io_lib:format("0x~8.16.0B", [Handle])),
+                  bytes => byte_size(Der)}),
+            ok;
+        {error, Attempts} ->
+            persistent_term:put({dev_tpm2, ek_cert_pem}, <<>>),
+            persistent_term:put(
+                {dev_tpm2, ek_cert_source},
+                #{kind => <<"absent">>,
+                  reason => <<
+                    "no EK certificate provisioned in TPM NV storage; "
+                    "attestation proceeds without one so the verifier "
+                    "can see the gap">>,
+                  probed => format_probe_attempts(Attempts)}),
+            ok
+    end.
+
+try_nv_handles([], Acc) -> {error, lists:reverse(Acc)};
+try_nv_handles([H | Rest], Acc) ->
+    case lapee_tpm_nif:nv_read(H) of
+        {ok, Der} when is_binary(Der), byte_size(Der) > 0 ->
+            %% Sanity-check: does it look like an X.509 DER cert? The
+            %% first byte should be 0x30 (ASN.1 SEQUENCE). TCG says NV
+            %% 0x01C0000x indices hold exactly one DER cert with no
+            %% length prefix. If the TPM put something else here we
+            %% prefer to record it as "unrecognised" rather than feed
+            %% mystery bytes to the verifier as an "EK cert".
+            case Der of
+                <<16#30, _/binary>> ->
+                    {ok, H, Der};
+                _ ->
+                    try_nv_handles(
+                        Rest,
+                        [{H, <<"nv-content-not-der">>, byte_size(Der)} | Acc])
+            end;
+        {error, Reason} ->
+            try_nv_handles(Rest, [{H, Reason, 0} | Acc])
+    end.
+
+format_probe_attempts(Attempts) ->
+    [iolist_to_binary(
+        io_lib:format("0x~8.16.0B: ~s (~p bytes read)",
+                      [H, R, Sz]))
+     || {H, R, Sz} <- Attempts].
+
+%% Quick PEM re-encoder for a DER-encoded X.509 cert. Matches the
+%% wire format the rest of the stack expects (PEM with "CERTIFICATE"
+%% labels and 64-char base64 lines).
+der_to_pem(Der) when is_binary(Der) ->
+    B64 = base64:encode(Der),
+    Wrapped = wrap_64(B64),
+    iolist_to_binary([
+        <<"-----BEGIN CERTIFICATE-----\n">>,
+        Wrapped,
+        <<"-----END CERTIFICATE-----\n">>]).
+
+wrap_64(<<>>) -> <<>>;
+wrap_64(Bin) when byte_size(Bin) =< 64 ->
+    <<Bin/binary, "\n">>;
+wrap_64(<<Line:64/binary, Rest/binary>>) ->
+    <<Line/binary, "\n", (wrap_64(Rest))/binary>>.
 
 %%----------------------------------------------------------------------------
 %% NIF-facing wrappers. We resolve the NIF lazily: first a runtime module

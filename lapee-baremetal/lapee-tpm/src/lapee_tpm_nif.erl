@@ -14,6 +14,9 @@
     create_signing_key/1,
     quote/3,
     sign/2,
+    tpm_properties/0,
+    nv_read_public/1,
+    nv_read/1,
     flush_context/1,
     set_tcti/1
 ]).
@@ -70,6 +73,12 @@ create_signing_key(_ParentHandle) -> erlang:nif_error(nif_not_loaded).
 quote(_SignHandle, _PcrList, _Nonce) -> erlang:nif_error(nif_not_loaded).
 
 sign(_SignHandle, _Message) -> erlang:nif_error(nif_not_loaded).
+
+tpm_properties() -> erlang:nif_error(nif_not_loaded).
+
+nv_read_public(_TpmHandle) -> erlang:nif_error(nif_not_loaded).
+
+nv_read(_TpmHandle) -> erlang:nif_error(nif_not_loaded).
 
 flush_context(_Handle) -> erlang:nif_error(nif_not_loaded).
 

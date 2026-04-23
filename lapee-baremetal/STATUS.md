@@ -1,7 +1,61 @@
 # LapEE bare-metal build -- live status
 
-**Latest update:** 2026-04-22 (v1.0 Framework bare-metal boot PASSED)
+**Latest update:** 2026-04-23 (v1.1: fakes ripped out, real EK + TPM
+identity wired; USB ready to reflash)
 
+> **2026-04-23 -- v1.1: legitimate end-to-end.** The v1.0 boot
+> technically worked but the EK certificate embedded in the
+> attestation envelope was `CN=LapEE Test EK` -- a cert that
+> `dev_tpm2:ensure_ek_cert/2` synthesized at runtime with
+> `openssl x509 -req` against a throwaway `LapEE Test TPM Vendor
+> Root CA` generated in the initramfs on first boot. Rich parser
+> output, but nothing to anchor against.
+>
+> v1.1 rips every piece of that fakery out of the runtime path and
+> replaces it with real hardware reads:
+>
+> - `lapee_tpm_nif` gains `nv_read/1` + `nv_read_public/1` (TSS2
+>   ESAPI) + `tpm_properties/0` (TPM2_GetCapability).
+> - `dev_tpm2:ek_cert_pem/1` now fetches the real EK certificate
+>   from TPM NV storage (probing `0x01C00002` / `0x01C0000A` /
+>   `0x01C00004` / `0x01C00006` / `0x01C00012` / `0x01C0001A` in
+>   order); if none are provisioned the envelope records
+>   `ek-cert-source.kind = "absent"` with the full probe list.
+> - A new `tpm-properties` envelope field carries real manufacturer
+>   / vendor-string / spec-family / spec-level / spec-revision /
+>   firmware-version straight from `TPM2_GetCapability` -- present
+>   whether or not the EK cert is.
+> - The initramfs no longer synthesizes a test CA via `openssl req`;
+>   the openssl binary is gone from `/ramfs/usr/bin/` entirely
+>   (~4MB initramfs shrink).
+> - 51 real vendor EK root CAs now ship under
+>   `priv/tpm-interpret/root-cas/` (keylime's curated bundle:
+>   Infineon, Intel, Nuvoton, STMicro + a pair of direct
+>   Infineon Optiga CA030 fetches). `claim_ek.chain-validation`
+>   will now actually chain-check against something real.
+> - The parser learns to (a) prefer live TPM2_GetCapability over
+>   EK-cert TCG OIDs, (b) infer CPU vendor from event-log
+>   strings (EV_S_CRTM_CONTENTS / _VERSION / EV_POST_CODE /
+>   EV_EFI_PLATFORM_FIRMWARE_BLOB / EV_NONHOST_CONFIG) when the
+>   TPM doesn't emit an `EV_CPU_MICROCODE` record, and
+>   (c) cross-link `tme.enabled=true` + `cpu.vendor` into
+>   `cpu.tee-support = ["amd-sme"] | ["intel-tme"] |
+>   ["memory-encryption"]`.
+>
+> 201 eunit tests pass (98 `dev_tpm_tcg` + 20 `dev_tpm2` + 83
+> `dev_tpm_interpret`; 9 new for v1.1).
+>
+> USB image ready to reflash. On reboot we expect the envelope to
+> carry either the Framework's real AMD fTPM EK cert from NV (if
+> the PSP populated it on this generation) or `ek-cert-source.kind
+> = "absent"` with probe-attempt evidence; either way
+> `tpm.manufacturer-id`, `tpm.spec-revision`, and
+> `tpm.firmware-version` populate from `TPM2_GetCapability` --
+> real hardware ground truth, zero synthesis.
+>
+> See [v1.1 real-EK bookend](#v11-legitimate-end-to-end-2026-04-23)
+> at the bottom.
+>
 > **2026-04-22 -- v1.0 Framework boot success.** The LapEE USB image
 > booted on Sam's Framework 13 AMD Ryzen laptop (Insyde H2O IFR30.03.04),
 > produced a real TPM quote over the firmware's actual event log, wrote
@@ -3104,4 +3158,127 @@ With v1.0 Framework bare-metal passed, the parser becomes the front
 line of value for the paper. Overnight passes from here onward focus
 on closing the null-fields list above and widening the
 `pcr-profiles/` + `firmware-versions/` corpora.
+
+---
+
+## v1.1 legitimate end-to-end (2026-04-23)
+
+v1.0 booted, wrote back, and parsed -- but the `ek-cert-pem` in the
+envelope was a `CN=LapEE Test EK` synthesized at runtime against
+a throwaway `LapEE Test TPM Vendor Root CA` the init script freshly
+minted with `openssl req -x509` on every boot. A technically-working
+pipeline, but nothing legitimate to anchor against. v1.1's charter
+was to rip out every synthetic data path and replace it with real
+hardware reads.
+
+### Acceptance
+
+- No runtime path in the Framework boot fabricates a cert, key, or
+  vendor identity. If the hardware doesn't provide a value, the
+  envelope records the absence -- it never substitutes a stand-in.
+- Real EK certificate, when the platform TPM has one provisioned,
+  reads out of NV storage at TCG-standard indices.
+- Real TPM identity (manufacturer, vendor string, spec
+  level/revision, firmware version) comes from
+  `TPM2_GetCapability` regardless of EK-cert provisioning.
+- Real vendor root CAs shipped under
+  `priv/tpm-interpret/root-cas/` so EK chain validation has
+  something to match against.
+- Eunit health preserved and extended (201 tests pass, incl. 9 new).
+
+### Fakery audit -- every hot-path fake ripped
+
+| # | File:line (pre-v1.1)                         | What it faked                                         | Status |
+|---|----------------------------------------------|-------------------------------------------------------|--------|
+| 1 | `src/dev_tpm2.erl:1307 ensure_ek_cert/2`     | synthesized `CN=LapEE Test EK` via `openssl x509 -req` | RIPPED |
+| 2 | `lapee-baremetal/initramfs-hb/init:107-115`  | generated test TPM Vendor Root CA via `openssl req -x509` | RIPPED |
+| 3 | `lapee-baremetal/initramfs-hb/init:285-286`  | copied fake tpm-ca.crt to ESP                         | RIPPED |
+| 4 | `scripts/build-initramfs-hb.sh:73-75`        | baked `/usr/bin/openssl` + cnf into initramfs         | RIPPED |
+| 5 | `initramfs-hb/init` README-VALIDATOR.txt body | described `tpm-ca.crt` as "the test-TPM root"        | RIPPED |
+
+### New real-hardware surface
+
+- `lapee_tpm_nif:nv_read/1` / `nv_read_public/1` -- TSS2 ESAPI
+  `Esys_NV_ReadPublic` + `Esys_NV_Read` with chunked reads +
+  attribute-aware auth-handle selection (AUTHREAD / OWNERREAD /
+  PPREAD). Returns `{error, nv_index_undefined}` when the handle
+  isn't provisioned.
+- `lapee_tpm_nif:tpm_properties/0` -- TPM2_GetCapability over the
+  standard property range (MANUFACTURER, VENDOR_STRING_1..4,
+  FAMILY_INDICATOR, LEVEL, REVISION, FIRMWARE_VERSION_1/2,
+  DAY_OF_YEAR, YEAR). Works even with no EK cert.
+- `dev_tpm2:fetch_ek_cert_from_nv/1` -- probes handles
+  `0x01C00002`, `0x01C0000A`, `0x01C00004`, `0x01C00006`,
+  `0x01C00012`, `0x01C0001A` in order. DER bytes are re-wrapped
+  as PEM for the envelope. On miss we record
+  `ek-cert-source.kind = "absent"` with the full probe list,
+  explicitly -- no synthesis.
+- `<<"ek-cert-source">>` + `<<"tpm-properties">>` stamped into
+  the `/attestation` envelope (schema version bumped 0.3 -> 0.4).
+- 51 real vendor EK root CAs shipped under
+  `priv/tpm-interpret/root-cas/` via the new
+  `scripts/fetch-ek-root-cas.sh` (pulls from keylime's curated
+  store + direct Infineon Optiga CA030 fetches). Covers Infineon,
+  Intel PTT, Nuvoton, STMicroelectronics, GlobalSign, Alibaba.
+  AMD fTPM intentionally absent from this bundle -- AMD's EK
+  chain is per-chip and PSP-fetched, not a single stable root;
+  the script's comments call that out.
+
+### Parser enrichments (the part that shows up in the dashboard)
+
+- `claim_tpm` now prefers live `TPM2_GetCapability` values over
+  EK-cert TCG OIDs. When both sources are present they cross-check;
+  when only one is, it fills in. When neither, the fields render
+  as `null` -- the honest answer.
+- `claim_cpu` gains an event-string scan over EV_S_CRTM_CONTENTS /
+  _VERSION, EV_POST_CODE, EV_EFI_PLATFORM_FIRMWARE_BLOB,
+  EV_NONHOST_CONFIG, EV_EVENT_TAG so `cpu.vendor` populates even
+  on TPMs where the firmware never emits an EV_CPU_MICROCODE
+  record (including Sam's Framework 13).
+- New cross-link post-processing step: when `tme.enabled = true`
+  the claim promotes `cpu.tee-support` with the vendor-specific
+  feature name: `amd-sme` / `intel-tme` / `memory-encryption`.
+  Runs after all per-section claims are built so neither
+  `claim_cpu` nor `claim_tme` need to know about the other.
+
+### Expected output shift on the next Framework boot
+
+- **If AMD PSP has provisioned an EK cert in NV on this chip**:
+  `ek-cert-source.kind = "tpm-nv"`, `ek-cert-pem` is the real AMD
+  fTPM cert, chain validation reports `no matching root CA
+  loaded` (AMD root not in keylime's bundle -- follow-up work
+  to add it is on the parser-loop backlog).
+- **If NV is empty (historical AMD fTPM default)**:
+  `ek-cert-source.kind = "absent"` with a probe-attempt list
+  under `ek-cert-source.probed`. `claim.ek.chain-validation`
+  reports `no ek-cert-pem on envelope`. This is the honest state.
+- **Either way**: `tpm-properties` in the envelope carries live
+  `manufacturer` / `vendor-string` / `spec-family` /
+  `spec-revision` / `firmware-version-u64` from
+  `TPM2_GetCapability`. `claim.tpm.manufacturer-id` populates
+  with the real AMD / Nuvoton / etc identifier.
+- **CPU**: `claim.cpu.vendor` resolves to `amd` via event-string
+  scan (AGESA / AMD substrings in the Framework firmware blobs).
+  `cpu.tee-support` includes `"amd-sme"` (cross-link from
+  `tme.enabled = true`).
+- **attestation-summary.machine-identity**: shifts from
+  "unknown-vendor unknown-model with unknown-cpu" to something
+  that names the actual silicon.
+
+### Reboot + capture procedure
+
+```bash
+# Rebuild release + initramfs + USB image (builder containers
+# already warm from v1.0; these are incremental).
+make hb-release hb-initramfs hb-usb-image
+
+# Write to the USB stick (same stick Sam used for v1.0).
+make hb-usb-write DEV=/dev/diskN
+
+# Boot Framework from the stick.
+# Extract + interpret the writeback:
+./scripts/interpret-local-capture.sh \
+    --label 'Framework 13 IFR30.03.04 v1.1 roundtrip' \
+    /Volumes/LAPEE_ESP/attestation-latest.json
+```
 

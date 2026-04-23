@@ -598,6 +598,373 @@ nif_sign(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), out);
 }
 
+/*-------------------------------- tpm_properties/0 --------------------------*/
+
+/* Decode a 32-bit TPMU property value as a 4-char ASCII string and
+ * drop it into `out' (4 bytes). Manufacturer ID + vendor string chunks
+ * are conventionally four ASCII bytes packed big-endian into a U32. */
+static void
+u32_to_ascii4(uint32_t v, char out[4])
+{
+    out[0] = (char)((v >> 24) & 0xFF);
+    out[1] = (char)((v >> 16) & 0xFF);
+    out[2] = (char)((v >> 8)  & 0xFF);
+    out[3] = (char)(v & 0xFF);
+}
+
+/* Query a single TPM_PT_* property via Esys_GetCapability. Returns the
+ * UINT32 value (0 on failure) and writes the rc to *out_rc. We call
+ * one property at a time because ESYS's GetCapability API is quirky
+ * about batching -- the cleaner path is property-at-a-time and assemble
+ * the result map in C.
+ */
+static UINT32
+tpm_pt_get(TPM2_PT prop, TSS2_RC *out_rc)
+{
+    TPMS_CAPABILITY_DATA *cap_data = NULL;
+    TPMI_YES_NO more = TPM2_NO;
+    TSS2_RC rc = Esys_GetCapability(
+        g_esys_ctx,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        TPM2_CAP_TPM_PROPERTIES, prop, 1,
+        &more, &cap_data);
+    if (out_rc) *out_rc = rc;
+    if (rc != TSS2_RC_SUCCESS || cap_data == NULL) {
+        if (cap_data) Esys_Free(cap_data);
+        return 0;
+    }
+    UINT32 val = 0;
+    if (cap_data->capability == TPM2_CAP_TPM_PROPERTIES &&
+        cap_data->data.tpmProperties.count > 0) {
+        const TPMS_TAGGED_PROPERTY *p =
+            &cap_data->data.tpmProperties.tpmProperty[0];
+        if (p->property == prop) {
+            val = p->value;
+        }
+    }
+    Esys_Free(cap_data);
+    return val;
+}
+
+/*
+ * tpm_properties() -> {ok, #{manufacturer, vendor_string,
+ *                            spec_family, spec_level, spec_revision,
+ *                            firmware_version_1, firmware_version_2,
+ *                            tpm_family}} | {error, Reason}
+ *
+ * Query TPM2_GetCapability for the standard manufacturer /
+ * vendor-string / spec-version / firmware-version properties. This is
+ * the PRIMARY TPM-identification path because it works even on TPMs
+ * without a provisioned EK cert in NV -- which is currently the
+ * default state for most AMD fTPMs. The EK cert's TCG-OID attributes,
+ * when present, act as a CROSS-CHECK rather than the sole source.
+ *
+ * Field semantics (from TPM 2.0 Part 2, Table 22):
+ *   manufacturer        -- TPM_PT_MANUFACTURER, 4-char ASCII
+ *   vendor_string       -- TPM_PT_VENDOR_STRING_1..4, up to 16 ASCII
+ *                          bytes of vendor-defined model text
+ *   spec_family         -- TPM_PT_FAMILY_INDICATOR, "2.0" etc
+ *   spec_level          -- TPM_PT_LEVEL
+ *   spec_revision       -- TPM_PT_REVISION (hundredths, e.g. 138 = 1.38)
+ *   firmware_version_1  -- TPM_PT_FIRMWARE_VERSION_1 (vendor-meaningful)
+ *   firmware_version_2  -- TPM_PT_FIRMWARE_VERSION_2
+ */
+static ERL_NIF_TERM
+nif_tpm_properties(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    (void)argc; (void)argv;
+
+    TSS2_RC rc;
+    UINT32 manu = tpm_pt_get(TPM2_PT_MANUFACTURER, &rc);
+    if (rc != TSS2_RC_SUCCESS) {
+        return lapee_make_tss_error(env, "Esys_GetCapability(MANUFACTURER)", rc);
+    }
+    UINT32 vs1 = tpm_pt_get(TPM2_PT_VENDOR_STRING_1, NULL);
+    UINT32 vs2 = tpm_pt_get(TPM2_PT_VENDOR_STRING_2, NULL);
+    UINT32 vs3 = tpm_pt_get(TPM2_PT_VENDOR_STRING_3, NULL);
+    UINT32 vs4 = tpm_pt_get(TPM2_PT_VENDOR_STRING_4, NULL);
+    UINT32 fam = tpm_pt_get(TPM2_PT_FAMILY_INDICATOR, NULL);
+    UINT32 lvl = tpm_pt_get(TPM2_PT_LEVEL, NULL);
+    UINT32 rev = tpm_pt_get(TPM2_PT_REVISION, NULL);
+    UINT32 fw1 = tpm_pt_get(TPM2_PT_FIRMWARE_VERSION_1, NULL);
+    UINT32 fw2 = tpm_pt_get(TPM2_PT_FIRMWARE_VERSION_2, NULL);
+    UINT32 daymonth = tpm_pt_get(TPM2_PT_DAY_OF_YEAR, NULL);
+    UINT32 year     = tpm_pt_get(TPM2_PT_YEAR, NULL);
+
+    char manu_s[5] = {0};     u32_to_ascii4(manu, manu_s);
+    char vs_s[17] = {0};
+    u32_to_ascii4(vs1, vs_s);
+    u32_to_ascii4(vs2, vs_s + 4);
+    u32_to_ascii4(vs3, vs_s + 8);
+    u32_to_ascii4(vs4, vs_s + 12);
+    char fam_s[5] = {0};     u32_to_ascii4(fam, fam_s);
+
+    /* Trim NUL bytes off vendor string (manufacturers that have a
+     * short string pad with zeros; presenting "AMD\0\0\0\0\0" as a
+     * 16-byte binary would be a foot-gun). */
+    size_t vs_len = 16;
+    while (vs_len > 0 && vs_s[vs_len - 1] == '\0') vs_len--;
+
+    /* Local "length until NUL, cap at MAX" -- avoids the strnlen
+     * extension which isn't available on all libcs we target. */
+    size_t manu_len = 0;
+    while (manu_len < 4 && manu_s[manu_len] != '\0') manu_len++;
+    size_t fam_len = 0;
+    while (fam_len < 4 && fam_s[fam_len] != '\0') fam_len++;
+
+    ERL_NIF_TERM manu_bin;
+    {
+        unsigned char *b = enif_make_new_binary(env, manu_len, &manu_bin);
+        memcpy(b, manu_s, manu_len);
+    }
+    ERL_NIF_TERM vs_bin;
+    {
+        unsigned char *b = enif_make_new_binary(env, vs_len, &vs_bin);
+        memcpy(b, vs_s, vs_len);
+    }
+    ERL_NIF_TERM fam_bin;
+    {
+        unsigned char *b = enif_make_new_binary(env, fam_len, &fam_bin);
+        memcpy(b, fam_s, fam_len);
+    }
+
+    ERL_NIF_TERM map = enif_make_new_map(env);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "manufacturer"), manu_bin, &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "manufacturer_u32"),
+        enif_make_uint(env, manu), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "vendor_string"), vs_bin, &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "spec_family"), fam_bin, &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "spec_level"),
+        enif_make_uint(env, lvl), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "spec_revision"),
+        enif_make_uint(env, rev), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "firmware_version_1"),
+        enif_make_uint(env, fw1), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "firmware_version_2"),
+        enif_make_uint(env, fw2), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "day_of_year"),
+        enif_make_uint(env, daymonth), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "year"),
+        enif_make_uint(env, year), &map);
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), map);
+}
+
+/*-------------------------------- nv_read_public/1 --------------------------*/
+
+/*
+ * nv_read_public(TpmHandle) -> {ok, #{data_size, attributes, name_alg,
+ *                                     auth_policy_len}} | {error, Reason}
+ *
+ * Look up an NV index by its TPM handle and return its public metadata.
+ * Returns {error, nv_index_undefined} when the handle is not defined on
+ * this TPM (the canonical signal that e.g. there is no EK cert in NV).
+ * Any other TSS2 failure is surfaced with its decoded RC string.
+ *
+ * This is the read-only half of the EK-cert-from-NV flow and is useful
+ * on its own for diagnostics ("what NV indices does this TPM actually
+ * provision?"). For fetching the bytes, see nv_read/1.
+ */
+static ERL_NIF_TERM
+nif_nv_read_public(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    (void)argc;
+    unsigned handle_u;
+    if (!enif_get_uint(env, argv[0], &handle_u))
+        return enif_make_badarg(env);
+    TPM2_HANDLE tpm_handle = (TPM2_HANDLE)handle_u;
+
+    ESYS_TR nv_tr = ESYS_TR_NONE;
+    TSS2_RC rc = Esys_TR_FromTPMPublic(
+        g_esys_ctx, tpm_handle,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &nv_tr);
+    if (rc != TSS2_RC_SUCCESS) {
+        /* TPM2_RC_HANDLE at the formatter level means "no such handle".
+         * Map that to an explicit atom so callers can distinguish
+         * "NV not provisioned" from real TPM errors. */
+        if ((rc & 0xFFF) == TPM2_RC_HANDLE ||
+            (rc & 0xFFFF) == TPM2_RC_HANDLE)
+            return lapee_make_error(env, "nv_index_undefined");
+        return lapee_make_tss_error(env, "Esys_TR_FromTPMPublic", rc);
+    }
+
+    TPM2B_NV_PUBLIC *nv_public = NULL;
+    rc = Esys_NV_ReadPublic(
+        g_esys_ctx, nv_tr,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &nv_public, NULL);
+    if (rc != TSS2_RC_SUCCESS) {
+        /* Drop our ESYS_TR reference to the NV index before returning.
+         * The TPM-side handle is untouched. */
+        Esys_TR_Close(g_esys_ctx, &nv_tr);
+        return lapee_make_tss_error(env, "Esys_NV_ReadPublic", rc);
+    }
+
+    UINT16 data_size     = nv_public->nvPublic.dataSize;
+    UINT32 attributes    = nv_public->nvPublic.attributes;
+    TPMI_ALG_HASH nmalg  = nv_public->nvPublic.nameAlg;
+    UINT16 pol_len       = nv_public->nvPublic.authPolicy.size;
+    Esys_Free(nv_public);
+    Esys_TR_Close(g_esys_ctx, &nv_tr);
+
+    ERL_NIF_TERM map = enif_make_new_map(env);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "data_size"),
+        enif_make_uint(env, (unsigned)data_size), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "attributes"),
+        enif_make_uint(env, (unsigned)attributes), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "name_alg"),
+        enif_make_uint(env, (unsigned)nmalg), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "auth_policy_len"),
+        enif_make_uint(env, (unsigned)pol_len), &map);
+    enif_make_map_put(env, map,
+        enif_make_atom(env, "handle"),
+        enif_make_uint(env, (unsigned)tpm_handle), &map);
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), map);
+}
+
+/*-------------------------------- nv_read/1 ---------------------------------*/
+
+/*
+ * nv_read(TpmHandle) -> {ok, Bytes::binary()} | {error, Reason}
+ *
+ * Read the full contents of an NV index addressed by its TPM handle.
+ * Reads are chunked at TPM2_MAX_NV_BUFFER_SIZE (conservative 512 B)
+ * because the TPM's own per-call buffer limit is platform-dependent.
+ *
+ * Auth handle is picked from TPMA_NV attributes in the same order a
+ * well-behaved TSS client would: if TPMA_NV_AUTHREAD is set we auth
+ * against the NV index itself (empty auth, which is the convention
+ * for EK-cert indices); else TPMA_NV_OWNERREAD -> RH_OWNER;
+ * else TPMA_NV_PPREAD -> RH_PLATFORM. If none of those bits is set
+ * or a read returns TPM2_RC_BAD_AUTH we fall back through the list
+ * before giving up, because real TPMs (notably AMD fTPM) sometimes
+ * set OWNERREAD but accept AUTHREAD too.
+ *
+ * {error, nv_index_undefined} on missing handle, same as
+ * nv_read_public/1. Any other TSS2 failure is surfaced verbatim.
+ */
+static ERL_NIF_TERM
+nif_nv_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    (void)argc;
+    unsigned handle_u;
+    if (!enif_get_uint(env, argv[0], &handle_u))
+        return enif_make_badarg(env);
+    TPM2_HANDLE tpm_handle = (TPM2_HANDLE)handle_u;
+
+    ESYS_TR nv_tr = ESYS_TR_NONE;
+    TSS2_RC rc = Esys_TR_FromTPMPublic(
+        g_esys_ctx, tpm_handle,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &nv_tr);
+    if (rc != TSS2_RC_SUCCESS) {
+        if ((rc & 0xFFF) == TPM2_RC_HANDLE ||
+            (rc & 0xFFFF) == TPM2_RC_HANDLE)
+            return lapee_make_error(env, "nv_index_undefined");
+        return lapee_make_tss_error(env, "Esys_TR_FromTPMPublic", rc);
+    }
+
+    TPM2B_NV_PUBLIC *nv_public = NULL;
+    rc = Esys_NV_ReadPublic(
+        g_esys_ctx, nv_tr,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &nv_public, NULL);
+    if (rc != TSS2_RC_SUCCESS) {
+        Esys_TR_Close(g_esys_ctx, &nv_tr);
+        return lapee_make_tss_error(env, "Esys_NV_ReadPublic", rc);
+    }
+
+    UINT16 data_size = nv_public->nvPublic.dataSize;
+    UINT32 attrs     = nv_public->nvPublic.attributes;
+    Esys_Free(nv_public);
+
+    if (data_size == 0) {
+        Esys_TR_Close(g_esys_ctx, &nv_tr);
+        return lapee_make_error(env, "nv_index_empty");
+    }
+
+    /* Candidate auth handles, in decreasing order of "what EK-cert
+     * conventions say". The read loop below tries each in turn when
+     * it sees TPM2_RC_BAD_AUTH / TPM2_RC_AUTH_UNAVAILABLE. */
+    ESYS_TR auth_candidates[3] = { ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE };
+    int n_candidates = 0;
+    if (attrs & TPMA_NV_AUTHREAD)  auth_candidates[n_candidates++] = nv_tr;
+    if (attrs & TPMA_NV_OWNERREAD) auth_candidates[n_candidates++] = ESYS_TR_RH_OWNER;
+    if (attrs & TPMA_NV_PPREAD)    auth_candidates[n_candidates++] = ESYS_TR_RH_PLATFORM;
+    if (n_candidates == 0) {
+        /* No read bits set in attributes -- the index is write-only
+         * or policy-protected. Report explicitly. */
+        Esys_TR_Close(g_esys_ctx, &nv_tr);
+        return lapee_make_error(env, "nv_index_not_readable");
+    }
+
+    ERL_NIF_TERM out_bin;
+    unsigned char *out_buf = enif_make_new_binary(env, data_size, &out_bin);
+
+    int success = 0;
+    TSS2_RC last_rc = TSS2_RC_SUCCESS;
+    const char *last_op = "Esys_NV_Read";
+    for (int i = 0; i < n_candidates && !success; i++) {
+        ESYS_TR auth = auth_candidates[i];
+        UINT16 offset = 0;
+        /* Conservative chunk size. TCG allows up to TPM2_MAX_NV_BUFFER_SIZE
+         * but many TPMs respect a smaller firmware-advertised limit
+         * (TPM_PT_NV_BUFFER_MAX). 512 is a safe lower bound. */
+        const UINT16 CHUNK = 512;
+        int attempt_ok = 1;
+        while (offset < data_size && attempt_ok) {
+            UINT16 want = (UINT16)(data_size - offset);
+            if (want > CHUNK) want = CHUNK;
+            TPM2B_MAX_NV_BUFFER *data = NULL;
+            rc = Esys_NV_Read(
+                g_esys_ctx,
+                auth, nv_tr,
+                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                want, offset, &data);
+            if (rc != TSS2_RC_SUCCESS) {
+                attempt_ok = 0;
+                last_rc = rc;
+                last_op = "Esys_NV_Read";
+                break;
+            }
+            if (data->size == 0) {
+                Esys_Free(data);
+                attempt_ok = 0;
+                last_rc = TPM2_RC_NO_RESULT;
+                last_op = "Esys_NV_Read(short-read)";
+                break;
+            }
+            memcpy(out_buf + offset, data->buffer, data->size);
+            offset = (UINT16)(offset + data->size);
+            Esys_Free(data);
+        }
+        if (attempt_ok && offset == data_size) {
+            success = 1;
+        }
+    }
+
+    Esys_TR_Close(g_esys_ctx, &nv_tr);
+
+    if (!success) {
+        return lapee_make_tss_error(env, last_op, last_rc);
+    }
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), out_bin);
+}
+
 /*-------------------------------- flush_context/1 ---------------------------*/
 
 static ERL_NIF_TERM
@@ -647,6 +1014,9 @@ static ErlNifFunc nif_funcs[] = {
     {"create_signing_key", 1, nif_create_signing_key, 0},
     {"quote", 3, nif_quote, 0},
     {"sign", 2, nif_sign, 0},
+    {"tpm_properties", 0, nif_tpm_properties, 0},
+    {"nv_read_public", 1, nif_nv_read_public, 0},
+    {"nv_read", 1, nif_nv_read, 0},
     {"flush_context", 1, nif_flush_context, 0},
     {"set_tcti", 1, nif_set_tcti, 0}
 };

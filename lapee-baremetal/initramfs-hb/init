@@ -99,21 +99,14 @@ fi
 # world in a useful way for attestation demos).
 export HB_MODE=${HB_MODE:-debug}
 
-# Ensure /etc/lapee dirs + a test CA exist. dev_tpm2 issues an EK cert
-# signed by this CA; the host verifier needs the matching public root
-# to check the chain, so we emit it on the serial console with
-# LAPEE-CA-BEGIN/END markers.
+# /etc/lapee exists so dev_tpm2 has a writable scratch dir; /run/lapee
+# is the per-boot runtime location the NIF wrapper uses. The real EK
+# certificate (if the platform TPM has one provisioned) is read from
+# NV storage by lapee_tpm_nif:nv_read/1 inside dev_tpm2 -- there is
+# no CA to generate here, and no CA file to dump to the console. If
+# the TPM's NV has no EK cert, the attestation envelope records that
+# explicitly in `ek-cert-source.kind = "absent"'. No fakes.
 mkdir -p /etc/lapee /run/lapee
-if [ ! -f /etc/lapee/tpm-ca.crt ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -subj '/CN=LapEE Test TPM Vendor Root CA' \
-        -keyout /etc/lapee/tpm-ca.key -out /etc/lapee/tpm-ca.crt >/dev/null 2>&1 || true
-fi
-if [ -f /etc/lapee/tpm-ca.crt ]; then
-    echo "---LAPEE-CA-BEGIN---"
-    cat /etc/lapee/tpm-ca.crt
-    echo "---LAPEE-CA-END---"
-fi
 
 # Quick boot-state report (helps debugging).
 echo "[init] /sys/class/tpm:"
@@ -282,8 +275,6 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
                 if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
                     rm -f "$LINK"
                     cp "$OUT" "$LINK"
-                    cp /etc/lapee/tpm-ca.crt \
-                       /mnt/esp/tpm-ca.crt 2>/dev/null || true
                     cat > /mnt/esp/README-VALIDATOR.txt <<RV
 LapEE attestation written on boot $STAMP.
 
@@ -294,9 +285,25 @@ On your verifier host (with the USB stick plugged in):
         /Volumes/LAPEE_ESP/attestation-latest.json
 
 The JSON is the full envelope returned by
-\`~tpm2@2.0a/attestation\`. tpm-ca.crt is the test-TPM root
-CA this LapEE node minted so a downstream EK-chain check
-has something to anchor against.
+\`~tpm2@2.0a/attestation\`. The EK certificate (when the
+platform TPM has one provisioned in NV storage) is embedded
+inline as the \`ek-cert-pem\` field. Its provenance is
+recorded under \`ek-cert-source\`:
+
+    {"kind": "tpm-nv", "handle": "0x01C00002", "bytes": 1234}
+        EK cert read from the TPM's NV storage at the TCG-
+        standard low-range index. Chain-valid against the
+        matching vendor EK root CA shipped in the verifier.
+
+    {"kind": "absent", "reason": ...}
+        The TPM has no EK cert provisioned at any of the
+        TCG-standard indices. The attestation still carries
+        the live TPM quote + PCR set; the EK chain check
+        will fail because there is nothing to chain. This
+        is expected on some AMD fTPM configurations where
+        the cert is fetched out-of-band from AMD PSP. It is
+        NOT an error from LapEE -- we deliberately never
+        substitute a synthetic cert.
 RV
                     sync
                     SZ=$(stat -c %s "$OUT" 2>/dev/null || \

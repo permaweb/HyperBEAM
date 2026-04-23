@@ -1131,7 +1131,14 @@ is_printable_ascii(_) -> false.
 interpret_claim(Events, E, Db) ->
     EvList = event_list(Events),
     Context = detect_context(Events, EvList),
-    BaseClaim = interpret_claim_body(Events, EvList, E, Db, Context),
+    BaseClaim0 = interpret_claim_body(Events, EvList, E, Db, Context),
+    %% v1.1 cross-links: fold post-construction signals that need
+    %% two already-built sections. Today's only example is
+    %%   cpu.tee-support += [ tme-for-vendor ] when tme.enabled=true
+    %% but this is the place to add future tme <-> iommu or
+    %% firmware <-> cpu cross-references without threading them
+    %% through every claim_* function.
+    BaseClaim = cross_link_tme_into_cpu(BaseClaim0),
     %% Hour-13 + Hour-14: bolt meta layers onto the base
     %% claim tree in dependency order --
     %%   timeline        depends only on events + quote
@@ -1153,6 +1160,37 @@ interpret_claim(Events, E, Db) ->
     WithSummary#{
         <<"evidence-digest">> => claim_evidence_digest(WithSummary)
     }.
+
+%% When tme.enabled=true and cpu.vendor identifies the silicon, name
+%% the concrete TEE feature in cpu.tee-support. AMD silicon advertises
+%% "amd-sme" (Secure Memory Encryption; the Zen-specific name for the
+%% same broad capability); Intel silicon advertises "intel-tme"
+%% (Total Memory Encryption). If the vendor is unknown we still record
+%% tee-support: ["memory-encryption"] so the claim shows the generic
+%% capability rather than an empty list.
+cross_link_tme_into_cpu(Claim) ->
+    TME = maps:get(<<"tme">>, Claim, #{}),
+    CPU = maps:get(<<"cpu">>, Claim, #{}),
+    case maps:get(<<"enabled">>, TME, undefined) of
+        <<"true">>  -> add_tee_for_vendor(Claim, CPU);
+        true        -> add_tee_for_vendor(Claim, CPU);
+        _           -> Claim
+    end.
+
+add_tee_for_vendor(Claim, CPU) ->
+    Vendor = maps:get(<<"vendor">>, CPU, <<"unknown">>),
+    Existing = maps:get(<<"tee-support">>, CPU, []),
+    Feature = case Vendor of
+        <<"amd">>   -> <<"amd-sme">>;
+        <<"intel">> -> <<"intel-tme">>;
+        _           -> <<"memory-encryption">>
+    end,
+    case lists:member(Feature, Existing) of
+        true -> Claim;
+        false ->
+            Claim#{<<"cpu">> =>
+                CPU#{<<"tee-support">> => [Feature | Existing]}}
+    end.
 
 interpret_claim_body(Events, EvList, E, Db, Context) ->
     #{
@@ -1312,43 +1350,191 @@ has_sev_snp_tag(EvList) ->
 
 %%---- Paper field #2: claim.tpm (vendor + model + spec + CVEs) --------
 claim_tpm(E, Db) ->
-    Tpm = interpret_tpm_identity(E, Db),
-    %% Known CVEs list: from the vendor catalogue (`known_cves' or
-    %% `known-cves' key). If the vendor had a known ROCA or TPM-FAIL
-    %% hit and our EK cert matches their fingerprint, surface it.
-    Cves = maps:get(<<"known_cves">>, Tpm,
-              maps:get(<<"known-cves">>, Tpm, [])),
-    %% Trust-tier: discrete > fTPM-cpu > server-platform > virtual.
-    Kind = maps:get(<<"manufacturer-kind">>, Tpm, null),
+    %% Two independent sources. The CERT source pulls
+    %% tpmManufacturer / tpmModel / tpmVersion from the EK cert's
+    %% TCG-registered OIDs (2.23.133.2.1/.2/.3) + the specInfo
+    %% extension (2.23.133.2.16). The CAPS source is a live
+    %% TPM2_GetCapability snapshot (TPM_PT_MANUFACTURER +
+    %% TPM_PT_VENDOR_STRING_* + TPM_PT_FIRMWARE_VERSION_* +
+    %% TPM_PT_FAMILY_INDICATOR + TPM_PT_LEVEL + TPM_PT_REVISION)
+    %% taken by dev_tpm2 at attestation time and carried on the
+    %% envelope under `tpm-properties'.
+    %%
+    %% Capabilities win when both are present -- the EK cert is
+    %% potentially vendor-signed-at-manufacture stale, whereas
+    %% GetCapability returns today's firmware revision. When one
+    %% is absent the other fills in; when both are absent we
+    %% record null explicitly (no synthesis).
+    FromCert = interpret_tpm_identity(E, Db),
+    FromCaps = interpret_tpm_capabilities(E, Db),
+    Merged = merge_tpm_sources(FromCert, FromCaps),
+    Cves = maps:get(<<"known_cves">>, Merged,
+              maps:get(<<"known-cves">>, Merged, [])),
+    Kind = maps:get(<<"manufacturer-kind">>, Merged, null),
     TrustTier = tpm_trust_tier(Kind),
-    %% Evidence: the EK cert chain validation result lives in
-    %% dev_tpm2's checks layer; here we record just the cert-level
-    %% facts.
-    CertEv = case maps:get(<<"ek-cert-subject">>, Tpm, null) of
-        null -> [];
-        _ ->
-            [{<<"tier">>, 1},
-             {<<"source">>, <<"ek-cert-tcg-oids">>}]
-    end,
+    Evidence = build_tpm_evidence(FromCert, FromCaps),
     #{
         <<"manufacturer-id">>    => maps:get(<<"manufacturer-id">>,
-                                              Tpm, null),
+                                              Merged, null),
         <<"manufacturer-name">>  => maps:get(<<"manufacturer-name">>,
-                                              Tpm, null),
+                                              Merged, null),
         <<"manufacturer-kind">>  => Kind,
-        <<"model">>              => maps:get(<<"model">>, Tpm, null),
+        <<"model">>              => maps:get(<<"model">>, Merged, null),
         <<"firmware-version">>   => maps:get(<<"firmware-version">>,
-                                              Tpm, null),
-        <<"spec-family">>        => maps:get(<<"spec-family">>, Tpm,
+                                              Merged, null),
+        <<"firmware-version-u64">> =>
+            maps:get(<<"firmware-version-u64">>, Merged, null),
+        <<"spec-family">>        => maps:get(<<"spec-family">>, Merged,
                                               null),
-        <<"spec-level">>         => maps:get(<<"spec-level">>, Tpm,
+        <<"spec-level">>         => maps:get(<<"spec-level">>, Merged,
                                               null),
-        <<"spec-revision">>      => maps:get(<<"spec-revision">>, Tpm,
+        <<"spec-revision">>      => maps:get(<<"spec-revision">>, Merged,
+                                              null),
+        <<"vendor-string">>      => maps:get(<<"vendor-string">>, Merged,
                                               null),
         <<"trust-tier">>         => TrustTier,
         <<"known-cves">>         => Cves,
-        <<"evidence">>           => CertEv
+        <<"evidence">>           => Evidence
     }.
+
+%% Read tpm-properties from the envelope (stamped by dev_tpm2 via
+%% TPM2_GetCapability) and flatten it onto the same field names the
+%% EK-cert path uses, so merge_tpm_sources/2 can combine them
+%% key-for-key.
+interpret_tpm_capabilities(E, Db) ->
+    Caps = hb_maps:get(<<"tpm-properties">>, E, undefined, #{}),
+    case Caps of
+        #{<<"available">> := true} ->
+            ManuId = maps:get(<<"manufacturer">>, Caps, <<>>),
+            VendorEntry = lookup_vendor_by_ascii(ManuId, Db),
+            FW1 = maps:get(<<"firmware-version-1">>, Caps, 0),
+            FW2 = maps:get(<<"firmware-version-2">>, Caps, 0),
+            FWU = (FW1 bsl 32) bor (FW2 band 16#FFFFFFFF),
+            FWStr = iolist_to_binary(
+                io_lib:format("~8.16.0B.~8.16.0B", [FW1, FW2])),
+            Rev = maps:get(<<"spec-revision">>, Caps, 0),
+            SpecRev =
+                case Rev of
+                    0 -> null;
+                    _ ->
+                        iolist_to_binary(
+                            io_lib:format("~.2f",
+                                [float(Rev) / 100]))
+                end,
+            maps:merge(
+                #{
+                    <<"manufacturer-id">>    => maybe_bin_null(ManuId),
+                    <<"manufacturer-name">>  =>
+                        maps:get(<<"name">>, VendorEntry, null),
+                    <<"manufacturer-kind">>  =>
+                        maps:get(<<"kind">>, VendorEntry, null),
+                    <<"model">>              =>
+                        maybe_bin_null(
+                            maps:get(<<"vendor-string">>, Caps, <<>>)),
+                    <<"vendor-string">>      =>
+                        maybe_bin_null(
+                            maps:get(<<"vendor-string">>, Caps, <<>>)),
+                    <<"firmware-version">>   => FWStr,
+                    <<"firmware-version-u64">> => FWU,
+                    <<"spec-family">>        =>
+                        maybe_bin_null(
+                            maps:get(<<"spec-family">>, Caps, <<>>)),
+                    <<"spec-level">>         =>
+                        maybe_zero_null(
+                            maps:get(<<"spec-level">>, Caps, 0)),
+                    <<"spec-revision">>      => SpecRev
+                },
+                extra_vendor_fields(VendorEntry));
+        #{<<"available">> := false} = M ->
+            #{<<"caps-unavailable-reason">> =>
+                  maps:get(<<"reason">>, M,
+                           <<"tpm-properties absent from envelope">>)};
+        undefined ->
+            #{};
+        _ ->
+            #{}
+    end.
+
+%% Prefer capability-sourced values; fall back to cert-sourced.
+%% Any non-null / non-empty capability value wins over the cert value
+%% for the same key. We also keep the cert's fields around (under
+%% `ek-cert-*' prefixes) so claim_ek can surface them; the caller
+%% projects the top-level flat fields for claim_tpm.
+merge_tpm_sources(FromCert, FromCaps) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            case is_useful(V) of
+                true  -> Acc#{K => V};
+                false -> Acc
+            end
+        end,
+        FromCert,
+        FromCaps).
+
+is_useful(null) -> false;
+is_useful(<<>>) -> false;
+is_useful(0) -> false;
+is_useful(_) -> true.
+
+maybe_bin_null(<<>>) -> null;
+maybe_bin_null(B) when is_binary(B) -> B;
+maybe_bin_null(_) -> null.
+
+maybe_zero_null(0) -> null;
+maybe_zero_null(N) when is_integer(N) -> N;
+maybe_zero_null(_) -> null.
+
+build_tpm_evidence(FromCert, FromCaps) ->
+    CertEv = case maps:get(<<"ek-cert-subject">>, FromCert, null) of
+        null -> [];
+        _ ->
+            [[{<<"tier">>, 1},
+              {<<"source">>, <<"ek-cert-tcg-oids">>}]]
+    end,
+    CapsEv = case FromCaps of
+        #{<<"caps-unavailable-reason">> := _} -> [];
+        #{} when map_size(FromCaps) > 0 ->
+            [[{<<"tier">>, 1},
+              {<<"source">>, <<"tpm2-get-capability">>}]];
+        _ -> []
+    end,
+    lists:flatten(CertEv ++ CapsEv).
+
+%% Vendor lookup by 4-char ASCII manufacturer ID (e.g. <<"AMD">>,
+%% <<"INTC">>, <<"IFX">>, <<"NTC">>, <<"STM">>). The top-level vendor
+%% catalogue is keyed by the hex form of the ID (e.g. <<"49465800">>
+%% for "IFX\0"); for capability-sourced IDs we match on the ASCII
+%% form so we find a hit even when the hex encoding differs between
+%% sources.
+lookup_vendor_by_ascii(<<>>, _Db) -> #{};
+lookup_vendor_by_ascii(Ascii, #{<<"vendors">> := V}) when is_map(V) ->
+    %% Primary match: any vendor whose `ascii-id' or `id-ascii' field
+    %% equals the probe value.
+    Found = maps:fold(
+        fun(_K, E, none) when is_map(E) ->
+                IdA = maps:get(<<"ascii-id">>, E,
+                     maps:get(<<"id-ascii">>, E, undefined)),
+                case IdA of
+                    Ascii -> E;
+                    _ -> none
+                end;
+           (_K, _, Acc) -> Acc
+        end, none, V),
+    case Found of
+        none ->
+            %% Secondary match: hex-encode the ASCII and look up
+            %% by hex. Many manufacturer.json entries key on the
+            %% 8-char hex.
+            HexKey = iolist_to_binary(
+                [io_lib:format("~2.16.0B", [B])
+                 || <<B:8>> <= Ascii]),
+            case maps:get(HexKey, V, undefined) of
+                undefined -> #{};
+                E when is_map(E) -> E
+            end;
+        E -> E
+    end;
+lookup_vendor_by_ascii(_, _) -> #{}.
 
 %% @doc Structured decode of the Endorsement Key certificate,
 %% projected onto the flat `claim' surface.
@@ -1685,7 +1871,7 @@ claim_cpu(Events) -> claim_cpu(Events, #{}).
 claim_cpu(Events, Db) ->
     UcodeEvs = [Ev || Ev <- Events,
                       maps:get(<<"event-type-code">>, Ev, 0) =:= 16#09],
-    case UcodeEvs of
+    Base0 = case UcodeEvs of
         [] ->
             unknown_cpu_claim();
         [Ev | _] ->
@@ -1707,6 +1893,148 @@ claim_cpu(Events, Db) ->
                     family_model_key(Family, Model)
             },
             merge_cpu_lookup(Base, Lookup, Ev)
+    end,
+    %% Firmware event strings often carry vendor hints even on TPMs
+    %% where the firmware never emitted an EV_CPU_MICROCODE event.
+    %% We mine EV_S_CRTM_CONTENTS / _VERSION, EV_POST_CODE,
+    %% EV_EFI_PLATFORM_FIRMWARE_BLOB, EV_NONHOST_CONFIG,
+    %% EV_EVENT_TAG, and EV_NO_ACTION for "Intel", "AMD", "Ryzen",
+    %% "EPYC", "Xeon", "Core" substrings. The microcode path wins
+    %% when both fire (exact CPUID is richer than a string hint)
+    %% but we promote the string hint to populate `vendor' when
+    %% microcode is absent.
+    enrich_cpu_from_strings(Base0, Events).
+
+%% Event-string vendor hint. Returns #{vendor => ..., brand-range => ...}
+%% or #{} if no hint found.
+cpu_hint_from_events(Events) ->
+    Substrings = [
+        <<"GenuineIntel">>, <<"Intel">>, <<"Xeon">>, <<"Core">>, <<"Pentium">>, <<"Celeron">>,
+        <<"AuthenticAMD">>, <<"AMD">>, <<"Ryzen">>, <<"EPYC">>, <<"Athlon">>, <<"Threadripper">>,
+        <<"AGESA">>  %% AMD-specific reference code family
+    ],
+    InterestingCodes = [16#01,  %% EV_POST_CODE
+                        16#07,  %% EV_S_CRTM_CONTENTS
+                        16#08,  %% EV_S_CRTM_VERSION
+                        16#0A,  %% EV_NONHOST_CONFIG
+                        16#0B,  %% EV_NONHOST_INFO
+                        16#0C,  %% EV_OMIT_BOOT_DEVICE_EVENTS
+                        16#80000008, %% EV_EFI_PLATFORM_FIRMWARE_BLOB
+                        16#80000006, %% EV_EFI_HANDOFF_TABLES
+                        16#80000007, %% EV_EFI_PLATFORM_CONFIG_FLAGS
+                        16#80000010, %% EV_EVENT_TAG
+                        16#03        %% EV_NO_ACTION (SpecID payload)
+                        ],
+    Hits = lists:foldl(
+        fun(Ev, Acc) ->
+            case lists:member(maps:get(<<"event-type-code">>, Ev, 0),
+                              InterestingCodes) of
+                true ->
+                    Hay = event_text_candidate(Ev),
+                    lists:foldl(
+                        fun(S, In) -> match_if_substring(S, Hay, Ev, In) end,
+                        Acc, Substrings);
+                false -> Acc
+            end
+        end, [], Events),
+    hits_to_cpu_hint(Hits).
+
+%% Collect any readable strings from an event -- parsed.value, parsed.description,
+%% parsed.string, parsed.blob-description, parsed.event-data, raw, ...
+event_text_candidate(Ev) ->
+    Parsed = maps:get(<<"parsed">>, Ev, #{}),
+    Pieces =
+        [maps:get(K, Parsed, <<>>) || K <-
+            [<<"value">>, <<"description">>, <<"string">>,
+             <<"blob-description">>, <<"event-data">>, <<"text">>,
+             <<"family-id">>, <<"platform-class">>, <<"signer">>]]
+        ++ [maps:get(<<"event-data-ascii">>, Ev, <<>>),
+            maps:get(<<"event-data">>, Ev, <<>>)],
+    Filtered = [P || P <- Pieces, is_binary(P), byte_size(P) > 0],
+    iolist_to_binary(lists:join(<<" | ">>, Filtered)).
+
+match_if_substring(Needle, Haystack, Ev, Acc) ->
+    case binary:match(Haystack, Needle) of
+        nomatch -> Acc;
+        _ -> [{Needle, Ev} | Acc]
+    end.
+
+%% Roll the accumulated substring hits into a vendor-plus-brand hint.
+%% Intel hits win over AMD only if there's a direct Intel substring;
+%% an "AGESA" hit (AMD's reference-code bundle) alone maps to AMD.
+hits_to_cpu_hint([]) -> #{};
+hits_to_cpu_hint(Hits) ->
+    Needles = [N || {N, _} <- Hits],
+    IsIntel = lists:any(
+        fun(N) ->
+            lists:member(N, [<<"GenuineIntel">>, <<"Intel">>,
+                             <<"Xeon">>, <<"Core">>,
+                             <<"Pentium">>, <<"Celeron">>])
+        end, Needles),
+    IsAmd = lists:any(
+        fun(N) ->
+            lists:member(N, [<<"AuthenticAMD">>, <<"AMD">>,
+                             <<"Ryzen">>, <<"EPYC">>,
+                             <<"Athlon">>, <<"Threadripper">>,
+                             <<"AGESA">>])
+        end, Needles),
+    Vendor = case {IsIntel, IsAmd} of
+        {true, _} -> <<"intel">>;
+        {_, true} -> <<"amd">>;
+        _         -> <<"unknown">>
+    end,
+    Brand = pick_brand_range(Needles),
+    Prov = [{_, Ev} | _] = Hits,
+    _ = Prov,
+    FirstEv = element(2, hd(Hits)),
+    #{<<"vendor">>            => Vendor,
+      <<"vendor-provenance">> => [event_provenance(FirstEv),
+                                   {<<"source">>, <<"event-string-scan">>}],
+      <<"brand-range">>       => Brand,
+      <<"brand-range-provenance">> =>
+          [event_provenance(FirstEv),
+           {<<"source">>, <<"event-string-scan">>}]}.
+
+pick_brand_range(Needles) ->
+    Ranked = [<<"Ryzen">>, <<"EPYC">>, <<"Threadripper">>, <<"Athlon">>,
+              <<"Xeon">>, <<"Core">>, <<"Pentium">>, <<"Celeron">>,
+              <<"AMD">>, <<"Intel">>, <<"AGESA">>],
+    case lists:filter(fun(N) -> lists:member(N, Needles) end, Ranked) of
+        [] -> null;
+        [Best | _] -> Best
+    end.
+
+%% Fold an event-string hint into the CPU claim. When the microcode
+%% path already produced a real vendor (`intel' | `amd'), we leave
+%% the core identity alone and only annotate `brand-range' if it's
+%% still null. When the microcode path produced `unknown', the hint
+%% gets promoted so the claim surface populates instead of staying
+%% blank.
+enrich_cpu_from_strings(Base, Events) ->
+    case cpu_hint_from_events(Events) of
+        Hint when map_size(Hint) == 0 -> Base;
+        Hint ->
+            BaseVendor = maps:get(<<"vendor">>, Base, <<"unknown">>),
+            B1 = case BaseVendor of
+                <<"unknown">> ->
+                    Base#{
+                        <<"vendor">> =>
+                            maps:get(<<"vendor">>, Hint, <<"unknown">>),
+                        <<"vendor-provenance">> =>
+                            maps:get(<<"vendor-provenance">>, Hint, [])
+                    };
+                _ -> Base
+            end,
+            case maps:get(<<"brand-range">>, B1, null) of
+                null ->
+                    B1#{
+                        <<"brand-range">> =>
+                            maps:get(<<"brand-range">>, Hint, null),
+                        <<"brand-range-provenance">> =>
+                            maps:get(<<"brand-range-provenance">>, Hint, [])
+                    };
+                _ -> B1
+            end
     end.
 
 unknown_cpu_claim() ->
@@ -8420,5 +8748,152 @@ manufacturer_db_lookup_test() ->
             %% Priv dir not present in eunit layout -- skip.
             ok
     end.
+
+%% v1.1: when the envelope carries tpm-properties (from
+%% TPM2_GetCapability via lapee_tpm_nif:tpm_properties/0), claim.tpm
+%% populates manufacturer / vendor-string / spec-* / firmware-version
+%% straight from the TPM hardware -- no EK cert needed.
+v1_1_claim_tpm_from_capabilities_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"tpm-properties">> => #{
+            <<"available">>          => true,
+            <<"manufacturer">>       => <<"AMD">>,
+            <<"manufacturer-u32">>   => 16#414D4400,
+            <<"vendor-string">>      => <<"AMD">>,
+            <<"spec-family">>        => <<"2.0">>,
+            <<"spec-level">>         => 0,
+            <<"spec-revision">>      => 138,
+            <<"firmware-version-1">> => 16#00030055,
+            <<"firmware-version-2">> => 16#00000002,
+            <<"day-of-year">>        => 235,
+            <<"year">>               => 2023
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    TPM = maps:get(<<"tpm">>, Claim),
+    ?assertEqual(<<"AMD">>, maps:get(<<"manufacturer-id">>, TPM)),
+    ?assertEqual(<<"AMD">>, maps:get(<<"vendor-string">>, TPM)),
+    ?assertEqual(<<"2.0">>, maps:get(<<"spec-family">>, TPM)),
+    ?assertEqual(<<"1.38">>, maps:get(<<"spec-revision">>, TPM)),
+    ?assert(maps:get(<<"firmware-version-u64">>, TPM) > 0),
+    Evidence = maps:get(<<"evidence">>, TPM),
+    ?assert(lists:member({<<"source">>, <<"tpm2-get-capability">>},
+                         Evidence)).
+
+%% v1.1: an envelope with NO EK cert and NO tpm-properties block
+%% must still produce a well-shaped claim.tpm with null fields and
+%% an empty evidence list. No synthesis of stand-in values.
+v1_1_claim_tpm_absent_both_sources_test() ->
+    Envelope = #{<<"tcg-event-log">> => <<>>},
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    TPM = maps:get(<<"tpm">>, Claim),
+    ?assertEqual(null, maps:get(<<"manufacturer-id">>, TPM)),
+    ?assertEqual(null, maps:get(<<"manufacturer-name">>, TPM)),
+    ?assertEqual(null, maps:get(<<"firmware-version">>, TPM)),
+    ?assertEqual([], maps:get(<<"evidence">>, TPM)).
+
+%% v1.1: event-log string scan promotes cpu.vendor when the
+%% microcode event is missing. We build a minimal TCG_PCR_EVENT2
+%% log with a single EV_S_CRTM_CONTENTS carrying an "AMD AGESA"
+%% blob description. The microcode path stays empty, so the
+%% string hint must win.
+v1_1_cpu_vendor_hint_from_crtm_strings_test() ->
+    %% Fabricate the smallest possible crypto-agile log carrying
+    %% one EV_S_CRTM_CONTENTS with the string we want the scanner
+    %% to pick up. The log parser pre-populates `parsed.value' /
+    %% `parsed.description' on CRTM events; for directness we
+    %% hand-build a parsed-events map the claim layer consumes.
+    Events = #{
+        <<"0">> => #{
+            <<"event-type-code">> => 16#07,  %% EV_S_CRTM_CONTENTS
+            <<"event-type">>      => <<"EV_S_CRTM_CONTENTS">>,
+            <<"pcr">>             => 0,
+            <<"seq">>             => 0,
+            <<"parsed">>          => #{
+                <<"description">> => <<"AMD AGESA PinnacleRidge-PI 0.0.7.B">>
+            }
+        }
+    },
+    CPU = claim_cpu(event_list(Events), #{}),
+    ?assertEqual(<<"amd">>, maps:get(<<"vendor">>, CPU)),
+    %% The brand ranker prefers specific product lines (Ryzen/EPYC/
+    %% Core/Xeon/...) over the bare vendor name. When only "AMD"
+    %% and "AGESA" are visible, we take the vendor name itself as
+    %% a best-effort brand hint -- it's honest about what we saw
+    %% without over-claiming a specific product line.
+    ?assert(lists:member(maps:get(<<"brand-range">>, CPU),
+                         [<<"AMD">>, <<"AGESA">>])).
+
+v1_1_cpu_vendor_hint_intel_test() ->
+    Events = #{
+        <<"0">> => #{
+            <<"event-type-code">> => 16#08,  %% EV_S_CRTM_VERSION
+            <<"event-type">>      => <<"EV_S_CRTM_VERSION">>,
+            <<"pcr">>             => 0,
+            <<"seq">>             => 0,
+            <<"parsed">>          => #{
+                <<"value">> =>
+                    <<"Intel(R) Xeon(R) E-2288G firmware v2.1.4">>
+            }
+        }
+    },
+    CPU = claim_cpu(event_list(Events), #{}),
+    ?assertEqual(<<"intel">>, maps:get(<<"vendor">>, CPU)),
+    ?assertEqual(<<"Xeon">>, maps:get(<<"brand-range">>, CPU)).
+
+%% v1.1: when claim.tme.enabled = true the claim pipeline cross-
+%% links tme into cpu.tee-support based on cpu.vendor. An AMD
+%% CPU gets "amd-sme"; Intel gets "intel-tme"; unknown gets the
+%% generic "memory-encryption" fallback.
+v1_1_tme_cross_link_amd_sme_test() ->
+    Claim0 = #{
+        <<"tme">> => #{<<"enabled">> => <<"true">>},
+        <<"cpu">> => #{<<"vendor">> => <<"amd">>, <<"tee-support">> => []}
+    },
+    Claim1 = cross_link_tme_into_cpu(Claim0),
+    CPU1 = maps:get(<<"cpu">>, Claim1),
+    ?assert(lists:member(<<"amd-sme">>,
+                         maps:get(<<"tee-support">>, CPU1))).
+
+v1_1_tme_cross_link_intel_tme_test() ->
+    Claim0 = #{
+        <<"tme">> => #{<<"enabled">> => true},  %% also accept atom true
+        <<"cpu">> => #{<<"vendor">> => <<"intel">>, <<"tee-support">> => []}
+    },
+    CPU1 = maps:get(<<"cpu">>,
+                    cross_link_tme_into_cpu(Claim0)),
+    ?assert(lists:member(<<"intel-tme">>,
+                         maps:get(<<"tee-support">>, CPU1))).
+
+v1_1_tme_cross_link_unknown_vendor_test() ->
+    Claim0 = #{
+        <<"tme">> => #{<<"enabled">> => <<"true">>},
+        <<"cpu">> => #{<<"vendor">> => <<"unknown">>, <<"tee-support">> => []}
+    },
+    CPU1 = maps:get(<<"cpu">>,
+                    cross_link_tme_into_cpu(Claim0)),
+    ?assert(lists:member(<<"memory-encryption">>,
+                         maps:get(<<"tee-support">>, CPU1))).
+
+%% v1.1: when tme.enabled is false the cross-link is a no-op.
+v1_1_tme_cross_link_noop_when_disabled_test() ->
+    Claim0 = #{
+        <<"tme">> => #{<<"enabled">> => <<"false">>},
+        <<"cpu">> => #{<<"vendor">> => <<"amd">>, <<"tee-support">> => []}
+    },
+    ?assertEqual(Claim0, cross_link_tme_into_cpu(Claim0)).
+
+%% v1.1: if the cpu section already lists the vendor-specific TEE
+%% feature (e.g. microcode event resolved it), don't double-insert.
+v1_1_tme_cross_link_idempotent_test() ->
+    Claim0 = #{
+        <<"tme">> => #{<<"enabled">> => <<"true">>},
+        <<"cpu">> => #{<<"vendor">> => <<"amd">>,
+                        <<"tee-support">> => [<<"amd-sme">>]}
+    },
+    Claim1 = cross_link_tme_into_cpu(Claim0),
+    TEE = maps:get(<<"tee-support">>, maps:get(<<"cpu">>, Claim1)),
+    ?assertEqual(1, length([X || X <- TEE, X =:= <<"amd-sme">>])).
 
 -endif.

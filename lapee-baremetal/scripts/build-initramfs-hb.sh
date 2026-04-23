@@ -70,10 +70,13 @@ cp -L /usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0 $LIB/ 2>/dev/null || tr
 cp -L /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 $LIB/
 ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /ramfs/lib64/ld-linux-x86-64.so.2
 
-# OpenSSL binary for EK cert issuance.
-cp /usr/bin/openssl /ramfs/usr/bin/openssl
-cp /etc/ssl/openssl.cnf /ramfs/usr/lib/ssl/openssl.cnf
-cp -r /etc/ssl /ramfs/etc/
+# The openssl BINARY is deliberately NOT copied into the initramfs.
+# Earlier revisions used it at boot to synthesize a "LapEE Test EK"
+# certificate via `openssl x509 -req'. That path has been ripped out:
+# dev_tpm2 now reads the real EK certificate from TPM NV storage and
+# never fabricates one. The OpenSSL SHARED LIBRARIES (libcrypto /
+# libssl, pulled in above) stay -- HyperBEAM's crypto NIFs still need
+# them; what is gone is the userspace CLI tool + its default config.
 
 # HyperBEAM release.
 cp -r /opt/hb/. /ramfs/usr/lib/hyperbeam/
