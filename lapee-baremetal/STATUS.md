@@ -1471,6 +1471,108 @@ if the review/publishing context rewards precision.
 
 ---
 
+## v1.3 delivery plan (from reviewer pass 15)
+
+Reviewer pass 15 (v1.3 planning advisor) read the accumulated
+backlog and produced a concrete, ordered delivery plan. Gist:
+
+**Scope.** The morning demo proves v1.2 (P5 key-pubkey-extend
+enforced, RSA-PSS verifies, EK pulled live from NV). v1.3 must
+close the four CRITICAL paper-code gaps plus the deferred
+concurrency (B2-B5), NIF robustness (B7/B8), and verdict-
+quality items from passes 4/6/11/12.
+
+**Total estimate: 6-7 developer-weeks.**
+
+### P0 -- post-demo week (~2d bundled)
+
+  1. B8 `0x0BF' -> `0xBF' mask cosmetic (reviewer 12 residual).
+  2. B7 `nif_set_tcti' cleanup-on-error (reviewer 12 residual).
+  3. Apply reviewer 9's drafted paper amendments to
+     `lapee-paper/main.tex'.
+  4. Demo-ops M1-M5 bundle (DHCP multi-router, IP-flush gap,
+     count_iommu_groups readability, lockdown late-escalation
+     snapshot, GeneralizedTime fractional seconds).
+
+### P1 -- core v1.3 features (6 weeks)
+
+  P1-A  TPM2_MakeCredential/ActivateCredential EK<->AK
+        binding. 2w. Blocks nothing further; depends on P1-B.
+        **High risk** (AK-creation hot path; batch-13 lock).
+        Source: red-team CRITICAL 2 + paper pass 6 CRITICAL-3.
+  P1-B  AK under Endorsement hierarchy (ESYS_TR_RH_OWNER ->
+        ESYS_TR_RH_ENDORSEMENT). 2d standalone; folds into
+        P1-A. **Medium risk** (AK-Name changes; envelope
+        schema bump). Source: pass 6 CRITICAL-3.
+  P1-C  HMAC + parameter-encrypted TPM sessions. 1w. No
+        dependencies; orthogonal. **Medium risk**. Source:
+        pass 6 CRITICAL-4.
+  P1-D  TME-at-init MSR enforcement in initramfs (IA32_TME_
+        ACTIVATE / SYSCFG bit 23). 1w. Needs msr-tools OR a
+        ~40-LoC C helper; init-side only. **Low risk**.
+        Source: pass 6 CRITICAL-2.
+  P1-E  AO-Core hashpath continuity via `attestation-at-
+        hashpath-tip' envelope field + init-time seed. 1w.
+        Envelope schema bump. **Medium risk**. Source: pass 6
+        CRITICAL-5.
+  P1-F  Concurrency hardening (B2 ETS event log, B3 unified
+        lock, B4 Esys gen_server dispatcher, B5 O(N^2) churn
+        elimination). 1w. Depends on P1-A/B landing first so
+        the gen_server is the single MakeCredential routing
+        point. **Medium risk**. Source: passes 11 + 12.
+  P1-G  Verdict-quality hardening: pcr_replay_finding strict
+        N>=1 critical, firmware version floor, positive-
+        signal floor for verdict=trusted, `commitments'
+        verification, per-first-load PCR-15 extend via
+        `dev_trusted_signers'. 1w. Verifier-side only. **Low
+        risk**. Source: passes 4 HIGH 1-4 + 6 HIGH-1/3 +
+        MEDIUM-1/2/3.
+
+### P2 -- v1.4+ followup
+
+  - trust-tier derived from EK cert TCG OID not
+    platform-probes (pass 4 HIGH 4).
+  - interpret-local-capture `--url` mode calls
+    /verify-peer (pass 4 HIGH 2).
+  - lockdown cross-check against EV_IPL cmdline (pass 6
+    HIGH-2 escalation).
+  - hb_message:sign/2 RSASSA-PSS audit (pass 6 MEDIUM-5).
+  - producer-side fuzzer expansion (pass 10 scope extension).
+
+### Recommended v1.3 delivery sequence
+
+```
+Week 1: P0 bundle + P1-D (TME-at-init).
+        Gate: paper amendments applied; initramfs panics on
+              TME-disabled boot.
+
+Week 2-3: P1-B (Endorsement) -> P1-A (MakeCredential).
+        Gate: stolen-EK test envelope verifies false; batch-13
+              concurrent-AK regression test still green.
+
+Week 4: P1-F (concurrency B2-B5).
+        Gate: 100-caller extend+quote stress for 10 min with
+              zero replay divergence and zero TSS2 corruption.
+              Must precede P1-C (Esys gen_server is the session-
+              handle sync point).
+
+Week 5: P1-C (encrypted sessions).
+        Gate: swtpm trace shows encrypted quote traffic;
+              Framework iron /attestation still < 3s.
+
+Week 6: P1-E (AO-Core hashpath) + P1-G (verdict-quality).
+        Gate: every v1.3 envelope carries attestation-at-
+              hashpath-tip; v1.2 envelope rejected by v1.3
+              verifier with verifier-version-floor OR
+              ao-core-hashpath-unlinked. Paper P11 + P12 move
+              from "forthcoming" to "delivered".
+```
+
+**Ship target:** 6-7 weeks from morning demo. P2 slots into
+a subsequent v1.4 window.
+
+---
+
 ## v1.3 open-question ledger (from reviewer pass 6)
 
 | # | Paper claim                                  | Code path           | Resolution       |
