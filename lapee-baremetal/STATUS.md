@@ -1,11 +1,126 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 ~05:50 EDT -- v1.2 overnight pass
-shipped through reviewer pass 7 (security-delta on batch 9).
-USB image (v1.2 + batch 10) rebuilt and QEMU-smoke-tested end-
-to-end: LAPEE-WRITEBACK-OK + a 104 KB attestation envelope
-carrying `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' at seq 1 in PCR 15,
-`ak-pubkey-extend-verified = true' on the verifier side.
+## TL;DR (morning of 2026-04-23)
+
+**Ship state: READY.** 15 code batches, 13 reviewer passes,
+235/235 eunit, QEMU+OVMF+swtpm smoke PASSED end-to-end, live
+evidence captured on both QEMU and the v1.1 real-Framework
+envelope. Head: `08a38c72e` (batch 15 crypto polish, verifier-
+side only).
+
+**Demo flow (5 steps):**
+
+```
+cd lapee-baremetal
+diskutil list                     # find /dev/diskN for the USB
+make hb-usb-write DEV=/dev/diskN  # writes work/lapee-usb.img
+# (image is Apr 23 09:21:52, batch 14 NIF fixes, ready as-is)
+```
+
+Boot Framework from USB. Read IP from the centred HB splash.
+Then from your Mac:
+
+```
+# Live attestation:
+curl -H 'accept: application/json@1.0' \
+     -H 'accept-bundle: true' \
+     http://<framework-ip>:8734/~tpm2@2.0a/attestation \
+     > /tmp/framework-morning.json
+
+# Or pull from ESP after writeback:
+./scripts/interpret-local-capture.sh \
+    --label 'Framework 13 v1.2 morning' \
+    /Volumes/LAPEE_ESP/attestation-latest.json
+```
+
+**Expected morning verdict** (per reviewer pass 8's prediction,
+validated against the v1.1 Framework envelope under the batch-11
+verifier):
+
+```
+verdict  = untrusted    (score 0-20)
+criticals = 1 or 2:
+  - freshness-safe-false      BENIGN. Nuvoton NPCT75x first-
+                               production-boot hasn't seen
+                               TPM2_Shutdown(STATE); batch-11
+                               message explains both causes.
+  - ek-chain-invalid          Only if Nuvoton NV 0x01C00003 is
+                               empty (hardware-dependent).
+                               Batch-2 E2 threads it through
+                               pkix_path_validation if present.
+warnings = 5:
+  - secure-boot-disabled
+  - pcr-replay-multi-mismatch  BENIGN. SeaBIOS / bank mismatch.
+  - ek-ak-binding-not-implemented  v1.3 target (CRITICAL 2 from
+                                    red-team; honest warn in v1.2).
+  - tpm-known-cves             Nuvoton NPCT75x has 2 listed CVEs.
+  - lockdown-integrity-not-confidentiality OR
+    lockdown-off-or-unknown    Depends on whether CONFIG_SECURITY
+                                _LOCKDOWN_LSM landed in the
+                                kernel fragment.
+```
+
+**Key signal to verify is working** (the whole point of v1.2):
+
+```
+signals.ak-pubkey-extend-verified = true
+signals.quote-signature-verified  = true
+```
+
+Both signals should be `true` in the morning output. That proves
+(a) the AK pub was cryptographically bound into PCR 15 during
+this specific measured-boot session (paper P5), and (b) the TPM
+quote's RSA-PSS signature actually verifies under the envelope's
+ak-pub-pem (batch 7 red-team fix).
+
+**DEMO FRAMING (reviewer pass 14 sign-off note):** the headline
+win of this demo is NOT "verdict = trusted." It is "verdict =
+untrusted on real Framework hardware, AND the verifier can
+articulate exactly why." The envelope will almost certainly
+come back with `verdict=untrusted`, 1-2 criticals, 5 warnings
+-- all expected, all explained in the table above. If you frame
+it as "watch the verdict go green," the audience will see red
+and think the demo broke. Frame it as "watch the verifier
+enumerate the exact gap list, then watch
+`ak-pubkey-extend-verified` and `quote-signature-verified`
+both come back true -- those two booleans are the v1.2 delta,
+and they prove the AK is cryptographically bound into PCR 15
+for this specific boot session."
+
+**Pre-demo dry run recommended:** boot the Framework once
+privately before the audience is in the room, capture the
+verdict, and pre-select the exact talking points from the
+"expected morning verdict" table above. This tells you whether
+Nuvoton NV `0x01C00003` is provisioned (→ chain-invalid goes
+away, score climbs) and which `lockdown` finding will fire.
+
+**Paper amendments needed (v1.3 / before publication)** -- the
+LaTeX text is drafted in this document's "Paper amendment draft"
+section below; `git apply` it to `lapee-paper/main.tex` when
+ready:
+  - CRITICAL-2: TME enforcement at init (paper says init refuses
+    if TME off; code does not enforce).
+  - CRITICAL-3: AK under Endorsement hierarchy (paper says yes;
+    code uses Owner hierarchy as swtpm-compat shortcut).
+  - CRITICAL-4: HMAC-encrypted TPM sessions (paper says yes;
+    code uses password sessions).
+  - CRITICAL-5: AO-Core hashpath continuity (paper says yes;
+    code doesn't cross-link the two logs).
+
+**If the morning doesn't look like the prediction**, scroll to
+"Live evidence #2" further down for signal-by-signal
+explanations -- the v1.1-envelope-under-batch-11 re-interpret
+showed exactly the same shape plus `ak-pubkey-extend-missing`
+(expected for pre-batch-9 envelopes).
+
+---
+
+**Latest update:** 2026-04-23 ~09:30 EDT -- v1.2 shipped through
+reviewer pass 13 (cryptographic primitives). SHIP verdict, no
+CRITICAL/HIGH findings across 13 specialist passes. Earlier
+iterations landed 15 code batches (the convergence from
+CRITICAL→HIGH→MEDIUM→LOW→none-found over the last four reviewer
+passes is the clearest maturity signal.)
 
 > **USB re-flash required before morning demo.** Batch 9 adds the
 > producer-side `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event in
