@@ -3073,10 +3073,31 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
                       "verifier cannot be fooled by a stripped "
                       "envelope.">>);
         tamper ->
+            %% Reviewer pass 8 (Framework envelope predictor) noted
+            %% that the v1.1 Framework capture hits this branch
+            %% purely because the Nuvoton NPCT75x has never seen a
+            %% clean TPM2_Shutdown(STATE) -- its reset/restart
+            %% counts are both large integers (neither <= 1), so
+            %% fresh_boot_classify/2 returns `tamper' even though
+            %% no tampering has occurred. Severity stays critical
+            %% (the adversary could also hit this branch, and we
+            %% cannot distinguish benign-never-shutdown from
+            %% tampered-clock from the envelope alone), but the
+            %% message now names both causes so a demo audience
+            %% doesn't read "tampered" and panic.
             finding(critical, <<"freshness-safe-false">>,
                     <<"freshness">>,
-                    <<"TPM clock `safe' flag is false -- clock has "
-                      "been tampered with since last reset.">>)
+                    <<"TPM clock `safe' flag is false. Either the "
+                      "TPM's clock has been tampered with since "
+                      "last reset, OR the TPM has never successfully "
+                      "executed TPM2_Shutdown(STATE) (a benign "
+                      "first-production-boot state common on "
+                      "discrete TPMs that have only ever seen "
+                      "power-cycle resets). Inspect the freshness "
+                      "section's reset-count / restart-count: "
+                      "values >> 1 plus no orderly-shutdown history "
+                      "is the benign case; anything else suggests "
+                      "investigation.">>)
     end;
 freshness_finding(
   #{<<"freshness-indicator">> := <<"no-nonce">>}) ->

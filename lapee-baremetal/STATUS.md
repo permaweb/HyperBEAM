@@ -743,6 +743,68 @@ replaced with ASCII. Without this fix, no batch-9 envelope
 would ever serialise over HTTP -- the QEMU smoke-test caught
 it.
 
+**Pass 8 -- Framework envelope predictor** (against batch-10
+HEAD 88fda48b2 + the v1.1 Framework capture at
+`out/local-capture/framework-13-v1-1-real-ek-roundtrip/`).
+Reviewer's task: predict the morning Framework verdict
+signal-by-signal + finding-by-finding, based on the v1.1 real-
+hardware envelope shape + the batch-9/10 verifier code. Verdict:
+**no further code fixes required before demo**, BUT one
+cosmetic pre-land landed as **batch 11** (commit pending at
+time of writing):
+
+  Batch 11 -- narrative softening on `freshness-safe-false'
+  message (VERIFIER-SIDE ONLY; no USB rebuild needed):
+    Reviewer observed the v1.1 capture's reset-count=2.7e9 /
+    restart-count=3.6e8 drives `fresh_boot_classify/2' to the
+    `tamper' branch purely because the Nuvoton NPCT75x has
+    never successfully executed `TPM2_Shutdown(STATE)' (a
+    benign first-production-boot state common on discrete
+    TPMs). Severity stays critical (an adversary could also
+    hit this branch; we cannot distinguish from the envelope
+    alone), but the message text now names BOTH causes so a
+    demo audience doesn't read "clock has been tampered with"
+    and panic. Tests don't pin the exact wording (they check
+    the `code' field only); all 229 still pass.
+
+Predictions from reviewer pass 8 (likely morning outcome):
+
+  verdict  = untrusted
+  criticals= 1 (freshness-safe-false)    -- the batch 11
+                                            narrative-softened
+                                            message
+             or 2 if Nuvoton NV 0x01C00003 is empty
+             (ek-chain-invalid; hardware-dependent -- will
+             know in the morning)
+  warnings = 5
+    - secure-boot-disabled        (Framework ships SB off,
+                                    LapEE kernel not enrolled
+                                    into PK)
+    - pcr-replay-multi-mismatch   (SeaBIOS-style BIOS log vs
+                                    quoted-PCR bank mismatch)
+    - ek-ak-binding-not-implemented (batch 7 honest warn;
+                                    v1.3 MakeCredential target)
+    - tpm-known-cves              (Nuvoton has 2 CVEs listed)
+    - lockdown-integrity-not-confidentiality
+                                  (Linux 6.x default) OR
+      lockdown-off-or-unknown     (if lockdown LSM not
+                                    compiled)
+  score    = 0-20
+
+The three notable surprises to watch for (per reviewer pass 8):
+
+  (1) `freshness-safe-false' critical fires by design; the
+      batch 11 message now explains the benign cause.
+  (2) `ek-chain-invalid' may or may not fire depending on
+      whether Nuvoton provisioned the intermediate CA at NV
+      `0x01C00003'. v1.1 hit this; batch 2 E2 pulls the
+      intermediate from NV handle+1 IF it's there.
+  (3) `lockdown-off-or-unknown' vs `integrity-not-conf' depends
+      on whether `CONFIG_SECURITY_LOCKDOWN_LSM=y' landed in the
+      LapEE kernel fragment. Check
+      `lapee-baremetal/buildroot-external/board/lapee/linux-m1-fragment.config'
+      before boot.
+
 ---
 
 ## v1.3 open-question ledger (from reviewer pass 6)
