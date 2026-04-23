@@ -21,9 +21,13 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Nine commits on `agent/lapee' pushed to Permagit:
+Eleven commits on `agent/lapee' pushed to Permagit:
 
 ```
+7ead6b02f  v1.2 batch 7: red-team review-fix (signature check
+           on claim path, missing-EK/AK upgraded to critical,
+           EK<->AK binding warning)
+b2d029e5d  v1.2 STATUS: record reviewer pass 3 + batch 6 doc UX
 ec794b353  v1.2 batch 6: doc UX pass (newcomer-readable, v1.2
            quick-start canonical, archived banners, legacy
            Makefile separation)
@@ -47,11 +51,25 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
            (E1, E4, E5, E6)
 ```
 
-Three independent code reviewers spoken to (curmudgeonly
+Four independent code reviewers spoken to (curmudgeonly
 firmware-security; pragmatic demo-ops; fresh-eyes first-time-
-contributor). All three verdicts: SHIP. Findings from all three
-acted on in the corresponding batch. See "Review findings acted
-on" at the bottom of this report.
+contributor; adversarial red-team). All four verdicts: SHIP
+(red-team's verdict: "verifier can be bypassed -- fix before
+demo", addressed in batch 7). Findings from all four acted on
+in the corresponding batch. See "Review findings acted on" at
+the bottom of this report.
+
+**Known v1.3 gap (surfaced by red-team reviewer, batch 7):**
+the v1.2 verifier does NOT cryptographically prove that the AK
+(signer of the quote) lives in the same TPM as the EK (anchor
+of the cert chain). An attacker with a stolen EK + chain could
+generate their own AK keypair and forge quotes that pass
+verification. v1.2 surfaces this explicitly as a WARN-severity
+finding `ek-ak-binding-not-implemented` on every verdict --
+verdict=trusted from v1.2 means "cryptographically sound
+given the envelope is authentic," NOT "sound against an active
+MITM." Full TCG TPM2_MakeCredential / TPM2_ActivateCredential
+provisioning handshake is the v1.3 fix.
 
 ### What's done from the TODO list
 
@@ -325,6 +343,57 @@ landed as v1.2 batch 6 (commit ec794b353):
 Plus MEDIUM-11 from pass 3: STATUS.md gains a Quick-links
 table at the top so a newcomer skimming can jump straight to
 the right starting point without reading the full 900+ lines.
+
+**Pass 4 -- adversarial / red-team reviewer** (against full
+6c21..b2d029). Verdict before fixes: "verifier can be bypassed
+-- fix before demo." Two CRITICAL attack trees both confirmed
+against the live code:
+
+  CRITICAL 1  `claim/3' performed NO cryptographic checks.
+              dashboard.html's verdict=trusted badge was
+              attacker-writeable: swap `quoted' bytes +
+              recompute sha256 over your chosen PCR values,
+              verdict reports trusted with zero TPM
+              participation. Fixed in batch 7 via new
+              quote-signature-verified signal that invokes
+              rsa_pss:verify/4 (salt=32, MGF1=SHA-256)
+              identically to dev_tpm2:chk_quote/1. A bad /
+              missing signature is now CRITICAL, driving
+              verdict=untrusted.
+  CRITICAL 2  no EK<->AK binding (see "Known v1.3 gap" up
+              top). v1.2 mitigates by surfacing a honest
+              warning finding on every envelope so the gap
+              is explicit in the verdict output.
+
+Also upgraded in batch 7 (reviewer's MEDIUM 1, 2):
+
+  ek-cert-missing    warn -> CRITICAL
+  ak-pub-missing     warn -> CRITICAL
+
+  Pre-v1.2 these were warnings; an attacker stripping the
+  EK or AK fields from an envelope would produce an
+  attested-with-warnings verdict. Missing either one means
+  no TPM-rooted crypto identity exists in the envelope at
+  all -- cannot be trusted, must be critical.
+
+v1.3 backlog from red-team pass 4:
+
+  - TPM2_MakeCredential / TPM2_ActivateCredential provisioning
+    handshake (CRITICAL 2 full fix)
+  - HIGH 1: verify the `commitments' field or drop it (currently
+    never verified by dev_tpm_interpret)
+  - HIGH 2: interpret-local-capture.sh --url mode should call
+    /~tpm-interpret@1.0/verify-peer (crypto gate) instead of
+    fetching /attestation directly (plaintext interpret)
+  - HIGH 3: lockdown string cross-check against EV_IPL cmdline
+    event or UKI-hash profile before trusting
+    `platform-probes.lockdown' verbatim
+  - HIGH 4: derive `tpm.trust-tier' from the EK cert's TCG OID
+    (2.23.133.2.1-4) rather than `tpm-properties.manufacturer'
+    so a forged platform-probes block can't move trust tier
+  - MEDIUM 3: treat any pcr-replay mismatch as critical when
+    the initramfs is expected to emit a complete log (today
+    we tolerate it because our stub initramfs is short)
 
 ---
 
