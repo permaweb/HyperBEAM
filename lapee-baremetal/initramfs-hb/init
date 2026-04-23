@@ -94,6 +94,12 @@ if [ -x /usr/local/bin/lapee-splash ]; then
 fi
 
 # Default config files (shipped with image).
+# v1.2.1: LAPEE_JSON is the JSON-formatted base config (preloaded_devices
+# list with snp@1.0 / hyperbuddy@1.0 excluded, render_index_page=false).
+# ENFORCED_CFG is the flat-format overlay that wires the on/start hook.
+# HB_CONFIG reads a comma-separated list in first-to-last override order;
+# we put JSON first (base), enforced LAST so the hook-wiring always wins.
+LAPEE_JSON=/etc/lapee/lapee.json
 ENFORCED_CFG=/etc/lapee/lapee-enforced.flat
 USER_CFG_DEFAULT=/etc/lapee/user.flat
 
@@ -113,10 +119,21 @@ elif [ -f "$USER_CFG_DEFAULT" ]; then
     USER_CFG=$USER_CFG_DEFAULT
 fi
 
-# Build HB_CONFIG; enforced LAST so its keys win.
-if [ -n "$USER_CFG" ]; then
+# Build HB_CONFIG as an ordered chain:
+#   lapee.json (base: preloaded_devices minus snp/hyperbuddy, no index
+#               page render) -> [user.flat if present] -> lapee-enforced
+#               (wins on any collision; wires on/start -> extend)
+BASE_CFG=""
+[ -f "$LAPEE_JSON" ] && BASE_CFG="$LAPEE_JSON"
+
+if [ -n "$USER_CFG" ] && [ -n "$BASE_CFG" ]; then
+    HB_CONFIG="$BASE_CFG,$USER_CFG,$ENFORCED_CFG"
+    echo "[init] user config: $USER_CFG (+ lapee.json base)"
+elif [ -n "$USER_CFG" ]; then
     HB_CONFIG="$USER_CFG,$ENFORCED_CFG"
-    echo "[init] user config: $USER_CFG"
+    echo "[init] user config: $USER_CFG (no lapee.json)"
+elif [ -n "$BASE_CFG" ]; then
+    HB_CONFIG="$BASE_CFG,$ENFORCED_CFG"
 else
     HB_CONFIG="$ENFORCED_CFG"
 fi

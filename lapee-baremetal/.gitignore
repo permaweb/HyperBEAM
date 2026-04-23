@@ -35,3 +35,4 @@ __pycache__/
 # from the *.json/*.crt/*.txt files above. 1.6+ MB, churns every
 # run — exclude from git; use `make hb-dashboard-open' to view it.
 out/evidence/dashboard.html
+/secureboot/

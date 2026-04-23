@@ -117,22 +117,65 @@ chmod +x /ramfs/usr/lib/hyperbeam/bin/hb 2>/dev/null || true
 #   * `.beam.debug_info`-heavy debug symbols on `beam.smp` (~35 MB
 #     stripped).
 HB=/ramfs/usr/lib/hyperbeam
+
+# ---- v1.2.1 aggressive slim (post-demo task list) ------------------
+# Target: initramfs << 20 MB compressed (was ~60 MB in batch 14).
+# Three categories removed:
+#   (a) verifier-side-only artefacts: priv/tpm-interpret/ is the static
+#       JSON DB + root CAs consumed by dev_tpm_interpret on the MAC.
+#       The guest PRODUCES envelopes; it does not INTERPRET them, so
+#       none of this is needed at runtime on the Framework. 1.3 MB saved.
+#   (b) static UI: priv/html (already removed) + priv/static + the
+#       index-page render path. LapEE serves /~tpm2@2.0a/attestation,
+#       not a browser UI. Set via config.json -> render_index = false.
+#   (c) unused devices: dev_snp (AMD SEV-SNP, not applicable on
+#       Ryzen-TPM), dev_hyperbuddy (serves the static UI we just
+#       removed). Corresponding .beam files deleted so HB's
+#       preload_device skips them. priv/crates/ (Rust NIFs for
+#       dev_snp) gone entirely.
+#   (d) OTP weight: .erl sources on EVERY shipped lib (was only
+#       hb-0.0.1); OTP boot-tools binaries not needed at runtime
+#       (erlc, dialyzer, typer, ct_run); BEAM + every .so
+#       aggressively stripped.
 rm -rf $HB/bin/priv
-rm -rf $HB/lib/hb-0.0.1/src
 rm -rf $HB/lib/hb-0.0.1/priv/html
 rm -rf $HB/lib/hb-0.0.1/priv/static
-rm -rf $HB/lib/hb-0.0.1/priv/tpm-interpret/fixtures
-# Trim OTP docs/examples from every shipped lib.
-for d in $HB/lib/*; do
-    rm -rf "$d/doc" "$d/examples" "$d/man"
+rm -rf $HB/lib/hb-0.0.1/priv/tpm-interpret
+rm -rf $HB/lib/hb-0.0.1/priv/crates
+# Remove the device .beam files for deps we're not running on LapEE
+# (dev_snp + dev_hyperbuddy). HB's preload_device tolerates missing
+# modules -- they just won't resolve when a request asks for them.
+# Keeps the binary footprint honest: if code is in the image, it can
+# run; if not, it can't.
+for mod in dev_snp dev_snp_lib dev_snp_nif dev_hyperbuddy \
+           dev_hyperbuddy_cache dev_hyperbuddy_assets; do
+    find $HB/lib -name "$mod.beam" -delete 2>/dev/null || true
 done
-# Strip BEAM + every shared lib the NIFs ship.
+# .erl sources across all libs -- were only hb-0.0.1 before. None of
+# these are loaded at runtime (compiled .beam is the runtime artefact).
+find $HB/lib -type d -name src -exec rm -rf {} + 2>/dev/null || true
+# Trim OTP docs/examples/include-dev from every shipped lib.
+for d in $HB/lib/*; do
+    rm -rf "$d/doc" "$d/examples" "$d/man" "$d/c_src"
+done
+# Build-time tools that don't belong in a runtime release. `erl` +
+# `erlexec` + `run_erl` + `to_erl` + `erl_call` + `erl_child_setup` +
+# `inet_gethost` + `heart` + `epmd` + `beam.smp` + `dyn_erl` +
+# `start`/`erl.src`/`start_erl.src`/`start.src` are retained.
+for tool in ct_run dialyzer typer erlc escript; do
+    find $HB/erts-* -name "$tool" -delete 2>/dev/null || true
+done
+# Strip BEAM aggressively + every shared lib the NIFs ship.
 find $HB/erts-*/bin/beam.smp \
      $HB/lib -name '*.so' -type f 2>/dev/null \
-    | xargs -r strip -s 2>/dev/null || true
-# Report so we can see v1.2 slim progress on every rebuild.
+    | xargs -r strip --strip-all 2>/dev/null || true
+# Report per-lib so any future regression to HB footprint is visible.
 echo "--- post-slim HB size ---"
 du -sh $HB /ramfs/usr/lib 2>/dev/null || true
+echo "--- top 10 libs by size after slim ---"
+du -sh $HB/lib/*/ 2>/dev/null | sort -hr | head -10
+echo "--- top erts binaries ---"
+du -sh $HB/erts-*/bin/* 2>/dev/null | sort -hr | head -5
 
 # LapEE-specific sys.config overlay. The OTP os_mon app (disksup,
 # memsup, cpu_sup, os_sup) expects a host-ish filesystem, and under the
@@ -158,6 +201,56 @@ CFG
 # Enforced LapEE config.
 cp /opt/lapee-enforced.flat /ramfs/etc/lapee/lapee-enforced.flat
 
+# LapEE-specific HB config.json. Loaded at boot via HB_CONFIG in the
+# init script. Disables the hyperbuddy index-page render (no
+# priv/static in this image anyway), and narrows preloaded_devices
+# to the ~25 the LapEE appliance actually uses -- excluding
+# dev_snp (AMD SEV-SNP, not Ryzen-TPM), dev_hyperbuddy (browser UI),
+# dev_wasi / dev_wasm / dev_genesis_wasm (no WASM on this deploy),
+# dev_green_zone (SEV-SNP-adjacent), dev_profile / dev_monitor /
+# dev_rate_limit (runtime ops tooling, not demo path), and
+# dev_copycat / dev_delegated_compute / dev_poda / dev_bundler /
+# dev_json_iface / dev_codec_ans104 / dev_codec_tx (non-demo).
+cat > /ramfs/etc/lapee/lapee.json <<'JSON'
+{
+    "render_index_page": false,
+    "preloaded_devices": [
+        {"name": "apply@1.0",        "module": "dev_apply"},
+        {"name": "arweave@2.9",      "module": "dev_arweave"},
+        {"name": "auth-hook@1.0",    "module": "dev_auth_hook"},
+        {"name": "b32-name@1.0",     "module": "dev_b32_name"},
+        {"name": "blacklist@1.0",    "module": "dev_blacklist"},
+        {"name": "cache@1.0",        "module": "dev_cache"},
+        {"name": "compute@1.0",      "module": "dev_cu"},
+        {"name": "cookie@1.0",       "module": "dev_codec_cookie"},
+        {"name": "cron@1.0",         "module": "dev_cron"},
+        {"name": "faff@1.0",         "module": "dev_faff"},
+        {"name": "flat@1.0",         "module": "dev_codec_flat"},
+        {"name": "gzip@1.0",         "module": "dev_gzip"},
+        {"name": "hook@1.0",         "module": "dev_hook"},
+        {"name": "httpsig@1.0",      "module": "dev_codec_httpsig"},
+        {"name": "http-auth@1.0",    "module": "dev_codec_http_auth"},
+        {"name": "json@1.0",         "module": "dev_codec_json"},
+        {"name": "local-name@1.0",   "module": "dev_local_name"},
+        {"name": "location@1.0",     "module": "dev_location"},
+        {"name": "lookup@1.0",       "module": "dev_lookup"},
+        {"name": "lua@5.3a",         "module": "dev_lua"},
+        {"name": "manifest@1.0",     "module": "dev_manifest"},
+        {"name": "message@1.0",      "module": "dev_message"},
+        {"name": "meta@1.0",         "module": "dev_meta"},
+        {"name": "p4@1.0",           "module": "dev_p4"},
+        {"name": "relay@1.0",        "module": "dev_relay"},
+        {"name": "router@1.0",       "module": "dev_router"},
+        {"name": "scheduler@1.0",    "module": "dev_scheduler"},
+        {"name": "simple-pay@1.0",   "module": "dev_simple_pay"},
+        {"name": "stack@1.0",        "module": "dev_stack"},
+        {"name": "structured@1.0",   "module": "dev_codec_structured"},
+        {"name": "tpm2@2.0a",        "module": "dev_tpm2"},
+        {"name": "tpm-interpret@1.0","module": "dev_tpm_interpret"}
+    ]
+}
+JSON
+
 # Our init.
 cp /init-hb /ramfs/init
 chmod +x /ramfs/init
@@ -169,5 +262,23 @@ rm -rf /tmp/lapee-hb-ramfs && mkdir /tmp/lapee-hb-ramfs
 docker cp lapee-hb-mini:/ramfs /tmp/lapee-hb-ramfs
 docker rm -f lapee-hb-mini >/dev/null
 
-cd /tmp/lapee-hb-ramfs/ramfs && find . | cpio -o -H newc 2>/dev/null | gzip -1 > "$LAPEE/work/initramfs-hb.cpio.gz"
-ls -lh "$LAPEE/work/initramfs-hb.cpio.gz"
+# v1.2.1 slim: switch cpio compression from gzip to zstd (kernel has
+# CONFIG_RD_ZSTD=y in our fragment). zstd -19 at these sizes is
+# 30-40 % smaller than gzip -1 for the same uncompressed corpus.
+# Kernel-side decompression is faster too; the "gzip ->  zstd" swap
+# actually saves a few ms of boot time as a bonus.
+cd /tmp/lapee-hb-ramfs/ramfs
+if command -v zstd >/dev/null 2>&1; then
+    find . | cpio -o -H newc 2>/dev/null | zstd -19 -T0 --ultra -q > "$LAPEE/work/initramfs-hb.cpio.zst"
+    # Kernel looks for the initramfs at `initramfs-hb.cpio.gz' by
+    # default (Makefile INITRAMFS var); keep a gzip-wrapped copy too
+    # so changes here don't break unrelated build steps. The real
+    # artefact shipped in the UKI is the .zst one (see build-usb-
+    # image.sh, which is taught to prefer .zst when present).
+    find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$LAPEE/work/initramfs-hb.cpio.gz"
+    ls -lh "$LAPEE/work/initramfs-hb.cpio.zst" "$LAPEE/work/initramfs-hb.cpio.gz"
+else
+    echo "zstd not installed on host; falling back to gzip -9" >&2
+    find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$LAPEE/work/initramfs-hb.cpio.gz"
+    ls -lh "$LAPEE/work/initramfs-hb.cpio.gz"
+fi

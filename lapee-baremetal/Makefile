@@ -184,7 +184,30 @@ INITRAMFS  ?= work/initramfs-hb.cpio.gz
 # emit an IMA log, so PCR 10 reads as zero anyway. Re-add when
 # the guest grows an IMA runtime; keeping the default off saves
 # kernel time on every exec.
-CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=1 panic=10 rdinit=/init LAPEE_WRITEBACK=1
+CMDLINE    ?= console=tty0 console=ttyS0 video=efifb:mtrr,nowc fbcon=nodefer loglevel=4 panic=10 rdinit=/init LAPEE_WRITEBACK=1
+# v1.2.1 cmdline changes (matches the kernel-fragment update that
+# enables CONFIG_FB_EFI + CONFIG_FRAMEBUFFER_CONSOLE):
+#
+#   video=efifb:mtrr,nowc  -- keep the EFI-stub-lit framebuffer
+#                             active when the kernel takes over.
+#                             Without this, Framework 13 boot after
+#                             EFI stub goes dark because no DRM
+#                             driver claims the display. The `mtrr'
+#                             param re-enables write-combining
+#                             through MTRR; `nowc' disables it inside
+#                             the framebuffer as a minimum-compat
+#                             setting (works on every tested board).
+#   fbcon=nodefer          -- tell fbcon to bind IMMEDIATELY on the
+#                             efifb; no "deferred takeover" phase
+#                             that waits for a nonexistent KMS.
+#   loglevel=1 -> 4        -- was PANIC/ALERT/CRIT/ERR only (too
+#                             quiet; hid the post-stub hang on iron).
+#                             4 also emits WARNING (needed to see
+#                             NIC probe + DHCP lines) but suppresses
+#                             the INFO/DEBUG firehose. Demo-friendly.
+#   `quiet' removed        -- the quiet flag overrides loglevel=4
+#                             by also filtering KERN_WARNING. We want
+#                             warnings visible.
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
 hb-usb-image:

@@ -122,13 +122,31 @@ done
 EXTRA=(
   "infineon-optiga-rsa-ca030.pem|https://pki.infineon.com/OptigaRsaMfrCA030/OptigaRsaMfrCA030.crt"
   "infineon-optiga-ecc-ca030.pem|https://pki.infineon.com/OptigaEccMfrCA030/OptigaEccMfrCA030.crt"
+  # Nuvoton NPCTxxx EK chain -- v1.2.1 addition after Sam's
+  # Framework 13 v1.1 capture showed EK chain broken because
+  # keylime's bundle doesn't include the NPCT75x-family LeafCA +
+  # ECC521 RootCA. Discovered via the Authority-Information-Access
+  # URI in Sam's EK cert itself:
+  #   AIA -> www.nuvoton.com/security/NTC-TPM-EK-Cert/
+  # Nuvoton's CDN serves these over HTTPS but their cert chain
+  # doesn't validate from a standard trust store (self-signed
+  # intermediate), so --insecure is required. Content integrity is
+  # verified by the chain-to-trusted-root test at the end of this
+  # block, not by TLS to Nuvoton.
+  "NUVOTON_NPCTxxx_ECC384_LeafCA_012110.pem|insecure:https://www.nuvoton.com/security/NTC-TPM-EK-Cert/NPCTxxxECC384LeafCA012110.cer"
+  "NUVOTON_NPCTxxx_ECC521_RootCA.pem|insecure:https://www.nuvoton.com/security/NTC-TPM-EK-Cert/NPCTxxxECC521RootCA.cer"
 )
 for spec in "${EXTRA[@]}"; do
     IFS='|' read -r name url <<< "$spec"
     out="$DEST/$name"
     tmp="$out.tmp.$$"
-    if curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$tmp" \
-            2>/dev/null; then
+    # `insecure:' prefix on the URL tells us to pass -k to curl. Used
+    # for the Nuvoton NPCTxxx chain (see comment in EXTRA list above).
+    curl_opts="-fsSL --connect-timeout 10 --max-time 60"
+    case "$url" in
+        insecure:*) curl_opts="$curl_opts --insecure"; url="${url#insecure:}" ;;
+    esac
+    if curl $curl_opts "$url" -o "$tmp" 2>/dev/null; then
         if head -1 "$tmp" | grep -q "BEGIN CERTIFICATE"; then
             mv "$tmp" "$out"
         elif openssl x509 -inform DER -in "$tmp" -out "$out" 2>/dev/null; then
