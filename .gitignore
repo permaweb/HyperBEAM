@@ -31,6 +31,11 @@ rebar3.crashdump
 native/hb_beamr/*.o
 native/hb_beamr/*.d
 
+# Verifier-side capture output -- interpret-local-capture.sh writes
+# claim.json / dashboard.html / input.bin per machine label under
+# out/local-capture/<slug>/. Real captures, not checked in.
+/out/
+
 priv/*
 # Keep the static ~tpm-interpret@1.0 database checked in. Everything
 # else under priv/ is a build artefact (NIFs, HTML bundles).
